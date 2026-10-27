@@ -22,6 +22,7 @@
 
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -67,6 +68,40 @@ impl Default for StandardDeviation {
     }
 }
 
+impl StandardDeviation {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        if data.is_empty() {
+            return values;
+        }
+
+        for i in 0..data.len() {
+            if i + 1 < self.period {
+                values.push(IndicatorValue::None);
+            } else {
+                let start = i + 1 - self.period;
+
+                // Calculate mean (SMA)
+                let sum: f64 = data[start..=i].iter().map(|b| b.close).sum();
+                let mean = sum / self.period as f64;
+
+                // Calculate variance
+                let variance: f64 = data[start..=i]
+                    .iter()
+                    .map(|b| (b.close - mean).powi(2))
+                    .sum::<f64>()
+                    / self.period as f64;
+
+                // Standard deviation is square root of variance
+                let std_dev = variance.sqrt();
+                values.push(IndicatorValue::Single(std_dev));
+            }
+        }
+        values
+    }
+}
+
 impl Indicator for StandardDeviation {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -91,34 +126,23 @@ impl Indicator for StandardDeviation {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.is_empty() {
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-        for i in 0..data.len() {
-            if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let start = i + 1 - self.period;
-
-                // Calculate mean (SMA)
-                let sum: f64 = data[start..=i].iter().map(|b| b.close).sum();
-                let mean = sum / self.period as f64;
-
-                // Calculate variance
-                let variance: f64 = data[start..=i]
-                    .iter()
-                    .map(|b| (b.close - mean).powi(2))
-                    .sum::<f64>()
-                    / self.period as f64;
-
-                // Standard deviation is square root of variance
-                let std_dev = variance.sqrt();
-                self.values.push(IndicatorValue::Single(std_dev));
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -5,7 +5,7 @@
 //! per-timeframe visibility ([`TimeframeVisibility`]), Fibonacci level
 //! configuration ([`FibonacciConfig`], [`FibonacciLevel`]), and the settings of
 //! the volume profile, regression trend and position drawings
-//! ([`VolumeProfileConfig`](crate::data::VolumeProfileConfig), [`RegressionTrendConfig`], [`PositionSize`]).
+//! ([`VolumeProfileConfig`](crate::data::VolumeProfileConfig), [`RegressionTrendConfig`], [`PositionSize`], [`PositionSizing`]).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -372,16 +372,69 @@ impl Default for RegressionTrendConfig {
     }
 }
 
+/// Instrument economics used by long and short position drawings.
+/// Quantities are lots; one lot contains `lot_size` units, each worth `point_value`
+/// in the account currency per price point. Defaults retain unit sizing without rounding.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PositionSizing {
+    /// Account-currency value of one price point per underlying unit.
+    pub point_value: f64,
+    /// Underlying units per displayed lot.
+    pub lot_size: f64,
+    /// Permitted lot increment; zero leaves the quantity unrounded.
+    pub quantity_step: f64,
+    /// Notional value divided by required capital; positive and finite.
+    pub leverage: f64,
+}
+
+impl Default for PositionSizing {
+    fn default() -> Self {
+        Self {
+            point_value: 1.0,
+            lot_size: 1.0,
+            quantity_step: 0.0,
+            leverage: 1.0,
+        }
+    }
+}
+
+impl PositionSizing {
+    /// Whether the economics are finite and positive, with a nonnegative quantity step.
+    pub fn is_valid(&self) -> bool {
+        [
+            self.point_value,
+            self.lot_size,
+            self.leverage,
+            self.point_value * self.lot_size,
+        ]
+        .into_iter()
+        .all(|v| v.is_finite() && v > 0.0)
+            && self.quantity_step.is_finite()
+            && self.quantity_step >= 0.0
+    }
+
+    /// Required capital: absolute entry notional divided by leverage, in account currency.
+    /// Returns `None` for invalid settings or a nonpositive or nonfinite quantity.
+    pub fn required_capital(&self, entry: f64, quantity: f64) -> Option<f64> {
+        if !self.is_valid() || !quantity.is_finite() || quantity <= 0.0 {
+            return None;
+        }
+        let capital = entry.abs() * self.point_value * self.lot_size * quantity / self.leverage;
+        capital.is_finite().then_some(capital)
+    }
+}
+
 /// How a long or short position drawing sizes its quantity.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PositionSize {
-    /// A fixed quantity.
+    /// A fixed quantity, interpreted as lots by [`Self::quantity_with_sizing`].
     Quantity(f64),
     /// The quantity that loses this amount if the stop is hit.
     RiskAmount(f64),
     /// The quantity that loses `percent` of `account_size` if the stop is hit.
     RiskPercent {
-        /// Account size, in the currency of the instrument's prices.
+        /// Account size, in the same currency as risk amounts and the configured point value.
         account_size: f64,
         /// Share of the account risked, in percent (above 0, at most 100).
         percent: f64,
@@ -389,7 +442,39 @@ pub enum PositionSize {
 }
 
 impl PositionSize {
-    /// The quantity of a position entered at `entry` with its stop at `stop`;
+    /// Size in lots using the instrument's point value and lot size. Risk-based sizes and
+    /// fixed lot quantities round down to `quantity_step`, so rounding cannot increase risk.
+    /// Returns `None` if no positive permitted quantity fits, or inputs are invalid.
+    pub fn quantity_with_sizing(
+        &self,
+        entry: f64,
+        stop: f64,
+        sizing: &PositionSizing,
+    ) -> Option<f64> {
+        if !sizing.is_valid() {
+            return None;
+        }
+        let mut quantity = self.quantity(entry, stop)?;
+        if !matches!(self, Self::Quantity(_)) {
+            quantity /= sizing.point_value * sizing.lot_size;
+        }
+        if sizing.quantity_step > 0.0 {
+            let steps = quantity / sizing.quantity_step;
+            // Decimal steps can put an exact multiple just below its integer quotient.
+            let nearest = steps.round();
+            let steps = if (steps - nearest).abs() <= 4.0 * f64::EPSILON * steps.abs() {
+                nearest
+            } else {
+                steps.floor()
+            };
+            quantity = steps * sizing.quantity_step;
+        }
+        (quantity.is_finite() && quantity > 0.0).then_some(quantity)
+    }
+
+    /// Unit quantity at `entry` with its stop at `stop`, without instrument conversion.
+    /// Use [`Self::quantity_with_sizing`] for lot sizing and quantity-step rounding.
+    ///
     /// `None` when a size from the risk has its stop at the entry, or a
     /// setting is out of bounds (not positive and finite, or a percent above 100).
     pub fn quantity(&self, entry: f64, stop: f64) -> Option<f64> {
@@ -401,7 +486,7 @@ impl PositionSize {
                 account_size,
                 percent,
             } if positive(account_size) && positive(percent) && percent <= 100.0 => {
-                account_size * percent / 100.0
+                account_size * (percent / 100.0)
             }
             Self::RiskPercent { .. } => return None,
         };
@@ -441,6 +526,7 @@ mod tests {
             (PositionSize::Quantity(f64::NAN), 50.0, 48.0, None),
             (percent(10_000.0, 150.0), 50.0, 48.0, None),
             (percent(-10_000.0, -1.0), 50.0, 48.0, None),
+            (percent(1e308, 100.0), 1.0, 0.0, Some(1e308)),
         ] {
             let got = size.quantity(entry, stop);
             assert!(
@@ -448,6 +534,83 @@ mod tests {
                     .map_or(got == want, |(got, want)| (got - want).abs() < 1e-6),
                 "{size:?}: got {got:?}, want {want:?}"
             );
+        }
+
+        // Hand calculations in lots, independent of the renderer's label formatting.
+        let sizing = PositionSizing {
+            point_value: 50.0,
+            lot_size: 10.0,
+            quantity_step: 0.01,
+            leverage: 5.0,
+        };
+        for (size, stop, expected) in [
+            (PositionSize::RiskAmount(230.0), 97.5, Some(0.18)),
+            (PositionSize::RiskAmount(230.0), 102.5, Some(0.18)),
+            (
+                PositionSize::RiskPercent {
+                    account_size: 23000.0,
+                    percent: 1.0,
+                },
+                97.5,
+                Some(0.18),
+            ),
+            (PositionSize::Quantity(0.189), 97.5, Some(0.18)),
+            (PositionSize::Quantity(0.29), 97.5, Some(0.29)),
+            (PositionSize::Quantity(0.009), 97.5, None),
+            (PositionSize::RiskAmount(230.0), 100.0, None),
+        ] {
+            let quantity = size.quantity_with_sizing(100.0, stop, &sizing);
+            assert_eq!(quantity, expected, "{size:?}, stop {stop}");
+            let unleveraged = PositionSizing {
+                leverage: 1.0,
+                ..sizing
+            };
+            assert_eq!(
+                quantity,
+                size.quantity_with_sizing(100.0, stop, &unleveraged)
+            );
+        }
+        assert_eq!(sizing.required_capital(100.0, 0.18), Some(1800.0));
+        assert_eq!(
+            PositionSize::Quantity(2.13).quantity_with_sizing(
+                100.0,
+                97.5,
+                &PositionSizing {
+                    quantity_step: 0.25,
+                    ..sizing
+                }
+            ),
+            Some(2.0)
+        );
+        for sizing in [
+            PositionSizing {
+                point_value: 0.0,
+                ..sizing
+            },
+            PositionSizing {
+                lot_size: -1.0,
+                ..sizing
+            },
+            PositionSizing {
+                point_value: 1e-200,
+                lot_size: 1e-200,
+                ..sizing
+            },
+            PositionSizing {
+                quantity_step: -0.01,
+                ..sizing
+            },
+            PositionSizing {
+                leverage: f64::NAN,
+                ..sizing
+            },
+        ] {
+            assert!(
+                PositionSize::default()
+                    .quantity_with_sizing(100.0, 97.5, &sizing)
+                    .is_none()
+            );
+            assert!(sizing.required_capital(100.0, 0.18).is_none());
         }
     }
 

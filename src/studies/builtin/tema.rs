@@ -19,10 +19,10 @@
 //! tema.calculate(&bars);
 //! ```
 
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -31,6 +31,7 @@ use egui::Color32;
 pub struct TEMA {
     period: usize,
     values: IndicatorValues,
+    stepper: Stepper<[Smoothing; 3]>,
     color: Color32,
     visible: bool,
 }
@@ -44,6 +45,7 @@ impl TEMA {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::PINK, // Pink
             visible: true,
         }
@@ -53,39 +55,6 @@ impl TEMA {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.is_empty() {
-            return values;
-        }
-
-        // Extract close prices
-        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
-
-        // Calculate first EMA
-        let ema1 = helpers::ema_sma(&closes, self.period);
-
-        // Calculate second EMA (EMA of EMA)
-        let ema2 = helpers::ema_sma(&ema1, self.period);
-
-        // Calculate third EMA (EMA of EMA of EMA)
-        let ema3 = helpers::ema_sma(&ema2, self.period);
-
-        // Calculate TEMA = 3 * EMA1 - 3 * EMA2 + EMA3
-        for i in 0..data.len() {
-            if ema3[i].is_nan() {
-                values.push(IndicatorValue::None);
-            } else {
-                let tema = 3.0 * ema1[i] - 3.0 * ema2[i] + ema3[i];
-                values.push(IndicatorValue::Single(tema));
-            }
-        }
-
-        values
     }
 }
 
@@ -116,7 +85,25 @@ impl Indicator for TEMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let alpha = 2.0 / (self.period as f64 + 1.0);
+                let ema1 = state[0].next(bar.close, self.period, alpha);
+                let ema2 = state[1].next(ema1, self.period, alpha);
+                let ema3 = state[2].next(ema2, self.period, alpha);
+                IndicatorValue::Single(3.0 * ema1 - 3.0 * ema2 + ema3)
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

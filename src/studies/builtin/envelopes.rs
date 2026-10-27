@@ -1,7 +1,9 @@
 use super::clamp_param;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
 use crate::studies::palette;
-use crate::studies::{Indicator, IndicatorValues};
+use crate::studies::stepper::Stepper;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Moving Average Envelopes
@@ -11,8 +13,15 @@ pub struct Envelopes {
     percent: f64,
     ma_type: String,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     colors: Vec<Color32>,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    ema: Smoothing,
+    window: std::collections::VecDeque<f64>,
 }
 
 impl Envelopes {
@@ -23,6 +32,7 @@ impl Envelopes {
             percent: clamp_param(percent, 0.0, f64::MAX),
             ma_type: ma_type.to_string(),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 palette::GREEN, // Green - Upper
                 palette::BLUE,  // Blue - Middle
@@ -61,24 +71,36 @@ impl Indicator for Envelopes {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.is_empty() {
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let ma = if self.ma_type == "EMA" {
+                    state
+                        .ema
+                        .next(bar.close, 1, 2.0 / (self.period as f64 + 1.0))
+                } else {
+                    state.window.push_back(bar.close);
+                    if state.window.len() > self.period {
+                        state.window.pop_front();
+                    }
+                    if state.window.len() < self.period
+                        || state.window.iter().any(|v| !v.is_finite())
+                    {
+                        f64::NAN
+                    } else {
+                        state.window.iter().sum::<f64>() / self.period as f64
+                    }
+                };
+                let multiplier = self.percent / 100.0;
+                IndicatorValue::Multiple(vec![ma * (1.0 + multiplier), ma, ma * (1.0 - multiplier)])
+            });
+    }
 
-        let closes: Vec<_> = data.iter().map(|bar| bar.close).collect();
-        let ma_values = match self.ma_type.as_str() {
-            "EMA" => crate::studies::helpers::ema(&closes, self.period),
-            _ => crate::studies::helpers::sma(&closes, self.period),
-        };
-
-        let multiplier = self.percent / 100.0;
-
-        for ma in ma_values {
-            self.values
-                .push_lines(&[ma * (1.0 + multiplier), ma, ma * (1.0 - multiplier)]);
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -225,13 +225,25 @@ impl Chart {
                 next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
                 std::mem::swap(&mut self.drawings, &mut next.0);
                 std::mem::swap(&mut self.marks, &mut next.1);
-                self.symbol_drawings.insert(self.symbol.clone(), next);
+                if !next.0.drawings.is_empty()
+                    || !next.1.is_empty()
+                    || !next
+                        .0
+                        .pending_sync
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .is_empty()
+                {
+                    self.symbol_drawings.insert(self.symbol.clone(), next);
+                }
             }
             #[cfg(not(feature = "drawings"))]
             {
                 let mut next_marks = self.symbol_markers.remove(&symbol).unwrap_or_default();
                 std::mem::swap(&mut self.marks, &mut next_marks);
-                self.symbol_markers.insert(self.symbol.clone(), next_marks);
+                if !next_marks.is_empty() {
+                    self.symbol_markers.insert(self.symbol.clone(), next_marks);
+                }
             }
             self.history.clear();
             self.history.edits += 1;
@@ -252,6 +264,33 @@ impl Chart {
             self.state.price_scale_mut().set_price_precision(None);
         }
         self.symbol = symbol;
+    }
+
+    /// Drops the cached drawings, markers and storage reader of an inactive symbol.
+    /// Returns `false` for the current symbol or while local drawing edits await a storage
+    /// read or write acknowledgement. Otherwise returns `true`, also for an uncached symbol.
+    /// Stored documents are left in host storage and read again on the next visit. Without
+    /// storage, forgotten drawings and markers are lost, including pending sync notifications.
+    pub fn forget_symbol(&mut self, symbol: &str) -> bool {
+        if symbol == self.symbol {
+            return false;
+        }
+        #[cfg(feature = "drawings")]
+        {
+            if let Some(store) = &mut self.drawing_store
+                && !store.forget(symbol)
+            {
+                return false;
+            }
+            self.symbol_drawings.remove(symbol);
+            self.symbol_drawings.shrink_to_fit();
+        }
+        #[cfg(not(feature = "drawings"))]
+        {
+            self.symbol_markers.remove(symbol);
+            self.symbol_markers.shrink_to_fit();
+        }
+        true
     }
 
     /// Shows bars of `timeframe` from the next [`show`](Self::show), by the rules of
@@ -939,12 +978,13 @@ impl Chart {
     fn apply_page(&mut self, link: &FeedLink, page: HistoryPage, scroll_back: bool) {
         let oldest = self.bars(SeriesId::MAIN).first().map(|bar| bar.time);
         let empty = page.bars.is_empty();
+        self.feed.history_complete |= (page.end_of_history || empty) && !self.bar_limit_reached();
         let incoming = page.bars.into_iter().map(|bar| (bar, Origin::History));
         self.apply_by(&link.clock, incoming.collect());
         let older = self.bars(SeriesId::MAIN).first().map(|bar| bar.time) < oldest;
         // A feed that ignores `before` answers the newest bars again, and would be asked again
         // on every frame.
-        let stale = scroll_back && !empty && !older;
+        let stale = scroll_back && !empty && !older && !self.bar_limit_reached();
         if stale {
             log::warn!(
                 "the feed of {} sent no bar older than the oldest one held; scroll-back ended",
@@ -952,7 +992,7 @@ impl Chart {
             );
         }
         self.feed.loading_history = false;
-        self.feed.history_complete |= page.end_of_history || empty || stale;
+        self.feed.history_complete |= stale;
         self.data_loaded(SeriesId::MAIN);
     }
 
@@ -1042,6 +1082,11 @@ impl Chart {
         link.feed.depth_history(request, reply);
     }
 
+    fn bar_limit_reached(&self) -> bool {
+        self.bar_limit(SeriesId::MAIN)
+            .is_some_and(|limit| self.bars(SeriesId::MAIN).len() >= limit.get())
+    }
+
     /// Asks for the page before the oldest bar once the view nears it.
     fn scroll_back(&mut self, link: &mut FeedLink) {
         let feed = &self.feed;
@@ -1053,6 +1098,7 @@ impl Chart {
                 .any(|(_, request, _)| matches!(request, Request::History { .. }))
             || link.paging_stopped
             || !self.older_bars_drawn
+            || self.bar_limit_reached()
         {
             return;
         }
@@ -1196,6 +1242,33 @@ mod tests {
         }
     }
 
+    /// Scanners retain no empty managers; marked symbols survive revisits until forgotten.
+    #[test]
+    fn inactive_symbol_state_can_be_forgotten() {
+        let mut chart = Chart::new(crate::model::BarData::from_bars(bars(2)));
+        for i in 0..10_000 {
+            chart.set_symbol(format!("SYMBOL-{i}"));
+            chart.drain_events().for_each(drop);
+        }
+        #[cfg(feature = "drawings")]
+        assert!(chart.symbol_drawings.is_empty());
+        #[cfg(not(feature = "drawings"))]
+        assert!(chart.symbol_markers.is_empty());
+        chart.set_symbol("marked");
+        chart.set_markers(
+            SeriesId::MAIN,
+            vec![crate::model::Marker::new(bars(1)[0].time)],
+        );
+        chart.set_symbol("other");
+        chart.set_symbol("marked");
+        assert_eq!(chart.markers(SeriesId::MAIN).len(), 1);
+        assert!(!chart.forget_symbol("marked"));
+        chart.set_symbol("other");
+        assert!(chart.forget_symbol("marked"));
+        chart.set_symbol("marked");
+        assert!(chart.markers(SeriesId::MAIN).is_empty());
+    }
+
     /// `count` one-minute bars from 00:00 on 15 March 2024, closing at 100 plus their index.
     fn bars(count: usize) -> Vec<Bar> {
         let start = "2024-03-15T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
@@ -1250,6 +1323,105 @@ mod tests {
         match symbol {
             Some(symbol) => builder.with_symbol(symbol).build(),
             None => builder.build(),
+        }
+    }
+
+    /// A full retention window stops paging without claiming the feed has no more history.
+    /// Time and trade-count bars both keep their newest slots across per-frame tick batches.
+    #[test]
+    fn bar_limits_bound_feed_history_and_ticks() {
+        use crate::widget::ChartEvent;
+        use std::num::NonZeroUsize;
+        for (timeframe, end, limit_after_load) in [
+            (Timeframe::Min1, false, false),
+            ("1t".parse().unwrap(), false, false),
+            ("2t".parse().unwrap(), false, false),
+            (Timeframe::Min1, true, false),
+            (Timeframe::Min1, true, true),
+        ] {
+            let feed = Arc::new(Script::default());
+            let mut chart = fed(&feed, Some("A"));
+            chart.set_timeframe(timeframe);
+            if !limit_after_load {
+                chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(3));
+            }
+            let mut frames = Frames::new();
+            frames.run(&mut chart);
+            chart.drain_events().for_each(drop);
+            feed.resolve().send(Ok(Instrument::new("A")));
+            feed.page().send(page(bars(5), end));
+            frames.run(&mut chart);
+            if limit_after_load {
+                chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(3));
+            }
+            assert_eq!(chart.bars(SeriesId::MAIN), &bars(5)[2..]);
+            assert_eq!(
+                chart
+                    .drain_events()
+                    .filter(|event| matches!(
+                        event,
+                        ChartEvent::DataLoaded { .. } | ChartEvent::DataUpdated { .. }
+                    ))
+                    .collect::<Vec<_>>(),
+                if limit_after_load {
+                    vec![
+                        ChartEvent::DataLoaded {
+                            series: SeriesId::MAIN,
+                            bars: 5,
+                        },
+                        ChartEvent::DataUpdated {
+                            series: SeriesId::MAIN,
+                            bars: 3,
+                        },
+                    ]
+                } else {
+                    vec![ChartEvent::DataLoaded {
+                        series: SeriesId::MAIN,
+                        bars: 3,
+                    }]
+                },
+                "history eviction must not report a live update"
+            );
+            assert!(!chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
+            assert!(
+                feed.pages.lock().unwrap().is_empty(),
+                "full window must not page"
+            );
+            chart.set_bar_limit(SeriesId::MAIN, None);
+            chart.set_start_idx(0);
+            frames.run(&mut chart);
+            assert_eq!(
+                feed.pages.lock().unwrap().len(),
+                1,
+                "clearing the limit resumes paging"
+            );
+            // This page was already in flight when the limit was restored.
+            chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(3));
+            feed.page()
+                .send(page(if end { Vec::new() } else { bars(2) }, end));
+            frames.run(&mut chart);
+            assert!(!chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
+            let sink = feed.sink();
+            let start = bars(5)[4].time;
+            for batch in 0..10 {
+                for i in 0..10 {
+                    let at = batch * 10 + i + 1;
+                    sink.push_tick(Tick::new(
+                        start + TimeDelta::minutes(at),
+                        1000.0 + at as f64,
+                        1.0,
+                        None,
+                    ));
+                }
+                frames.run(&mut chart);
+                assert_eq!(chart.bars(SeriesId::MAIN).len(), 3, "{timeframe}");
+                assert!(
+                    chart.from_ticks.len() <= 3,
+                    "tick provenance must also be evicted"
+                );
+            }
+            assert_eq!(chart.bars(SeriesId::MAIN).last().unwrap().close, 1100.0);
+            assert_eq!(chart.trades(SeriesId::MAIN).count(), 100);
         }
     }
 

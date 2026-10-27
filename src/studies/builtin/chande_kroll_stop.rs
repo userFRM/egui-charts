@@ -22,10 +22,10 @@
 //! stops.calculate(&bars);
 //! ```
 
-use super::{clamp_param, over_finite_bars};
+use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
-use crate::studies::stepper::{rolling_max, rolling_min};
+use crate::studies::stepper::Stepper;
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -36,8 +36,18 @@ pub struct ChandeKrollStop {
     multiplier: f64,
     stop_length: usize,
     values: IndicatorValues,
+    atr: ATR,
+    stepper: Stepper<State>,
     colors: [Color32; 2],
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    index: usize,
+    count: usize,
+    prices: std::collections::VecDeque<[f64; 2]>,
+    stops: std::collections::VecDeque<[f64; 2]>,
 }
 
 impl ChandeKrollStop {
@@ -50,38 +60,11 @@ impl ChandeKrollStop {
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             stop_length: stop_length.max(1),
             values: IndicatorValues::new(),
+            atr: ATR::new(atr_length),
+            stepper: Stepper::default(),
             colors: [palette::RED, palette::GREEN],
             visible: true,
         }
-    }
-
-    /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let (p, q) = (self.atr_length, self.stop_length);
-        let mut atr = ATR::new(p);
-        atr.calculate(data);
-        let highest = rolling_max(data.iter().map(|b| b.high), p);
-        let lowest = rolling_min(data.iter().map(|b| b.low), p);
-        let band = |i: usize| atr.values().value(0, i).map(|atr| self.multiplier * atr);
-        let first_high: Vec<f64> = (0..data.len())
-            .map(|i| band(i).map_or(f64::NAN, |band| highest[i] - band))
-            .collect();
-        let first_low: Vec<f64> = (0..data.len())
-            .map(|i| band(i).map_or(f64::NAN, |band| lowest[i] + band))
-            .collect();
-        let short = rolling_max(first_high, q);
-        let long = rolling_min(first_low, q);
-        // Both stops need q preliminary stops, the first of which needs p bars.
-        let first = (p - 1).saturating_add(q - 1);
-        (0..data.len())
-            .map(|i| {
-                if i < first {
-                    IndicatorValue::None
-                } else {
-                    IndicatorValue::Multiple(vec![short[i], long[i]])
-                }
-            })
-            .collect()
     }
 }
 
@@ -108,11 +91,67 @@ impl Indicator for ChandeKrollStop {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| [b.high, b.low, b.close].iter().all(|p| p.is_finite()),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        if from == 0 {
+            self.atr = ATR::new(self.atr_length);
+        }
+        self.atr.update(data, from);
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.index;
+                state.index += 1;
+                if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                state.count += 1;
+                state.prices.push_back([bar.high, bar.low]);
+                if state.prices.len() > self.atr_length {
+                    state.prices.pop_front();
+                }
+                let high = state
+                    .prices
+                    .iter()
+                    .map(|v| v[0])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let low = state
+                    .prices
+                    .iter()
+                    .map(|v| v[1])
+                    .fold(f64::INFINITY, f64::min);
+                let band = self
+                    .atr
+                    .values()
+                    .value(0, index)
+                    .map(|atr| self.multiplier * atr);
+                state.stops.push_back([
+                    band.map_or(f64::NAN, |band| high - band),
+                    band.map_or(f64::NAN, |band| low + band),
+                ]);
+                if state.stops.len() > self.stop_length {
+                    state.stops.pop_front();
+                }
+                if state.count - 1 < (self.atr_length - 1).saturating_add(self.stop_length - 1) {
+                    return IndicatorValue::None;
+                }
+                let short = state
+                    .stops
+                    .iter()
+                    .map(|v| v[0])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let long = state
+                    .stops
+                    .iter()
+                    .map(|v| v[1])
+                    .fold(f64::INFINITY, f64::min);
+                IndicatorValue::Multiple(vec![short, long])
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

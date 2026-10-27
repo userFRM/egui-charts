@@ -10,7 +10,7 @@
 
 use super::{
     ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig,
-    PitchforkConfig, PositionSize, RegressionTrendConfig, TimeframeVisibility,
+    PitchforkConfig, PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -131,6 +131,9 @@ pub struct Drawing {
     // === Tool-specific configuration (None uses the defaults) ===
     /// Quantity of the long and short position tools
     pub position_size: Option<PositionSize>,
+    /// Instrument economics for long and short position sizing. Older drawings use unit sizing.
+    #[serde(default)]
+    pub position_sizing: PositionSizing,
     /// Customizable Fibonacci levels for Fib tools
     pub fib_config: Option<FibonacciConfig>,
     /// Rows and value area of the volume profile tools
@@ -209,6 +212,7 @@ impl Drawing {
             },
             timeframe_visibility: TimeframeVisibility::all(),
             position_size: None,
+            position_sizing: PositionSizing::default(),
             fib_config: None,
             volume_profile: None,
             regression_trend: None,
