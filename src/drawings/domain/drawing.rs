@@ -14,7 +14,7 @@ use super::{
 };
 
 use crate::data::VolumeProfileConfig;
-use crate::model::LineStyle;
+use crate::model::{AlertSource, LineStyle};
 use serde::{Deserialize, Serialize};
 
 /// A drawing on the chart
@@ -101,7 +101,9 @@ pub struct Drawing {
     /// Whether the drawing is complete
     #[serde(skip)]
     pub completed: bool,
-    /// Optional text content (for text labels, notes, etc.)
+    /// Optional annotation content, preserved with the drawing. Tables use one row per line
+    /// and tab-separated cells. Images use an image URI resolved by the host's egui image
+    /// loaders. Posts and ideas use the first line as author or title and the rest as body.
     pub text: Option<String>,
 
     // === Styling properties ===
@@ -317,6 +319,105 @@ impl Drawing {
         Some((config, prices))
     }
 
+    /// The price levels an alert can follow at the fractional bar index `bar`, each with its
+    /// level number, name and price: a line's price extended through its two anchors (linear in
+    /// price), a horizontal level, a rectangle's top and bottom, a position's entry, target and
+    /// stop, and each visible Fibonacci retracement or extension level, numbered by its place
+    /// in the level settings. Empty for other drawings.
+    pub fn alert_levels(&self, bar: f64) -> Vec<(usize, String, f64)> {
+        use DrawingToolType as T;
+        let named = |names: &[&str], prices: &[f64]| {
+            names
+                .iter()
+                .zip(prices)
+                .enumerate()
+                .map(|(level, (name, price))| (level, (*name).to_owned(), *price))
+                .collect()
+        };
+        match (self.tool_type, &self.chart_points[..]) {
+            (T::HorizontalLine | T::HorizontalRay, [level, ..]) => named(&["Line"], &[level.price]),
+            (
+                T::TrendLine | T::Ray | T::ExtendedLine | T::InfoLine | T::TrendAngle,
+                [start, end, ..],
+            ) if start.bar_idx != end.bar_idx => {
+                let slope = (end.price - start.price) / f64::from(end.bar_idx - start.bar_idx);
+                named(
+                    &["Line"],
+                    &[start.price + (bar - f64::from(start.bar_idx)) * slope],
+                )
+            }
+            (T::Rect, [a, b, ..]) => named(
+                &["Top", "Bottom"],
+                &[a.price.max(b.price), a.price.min(b.price)],
+            ),
+            (T::LongPos | T::ShortPos, [entry, target, rest @ ..]) => named(
+                &["Entry", "Target", "Stop"],
+                &[
+                    entry.price,
+                    target.price,
+                    // Until the stop is placed it mirrors the target around the entry.
+                    rest.first()
+                        .map_or(2.0 * entry.price - target.price, |stop| stop.price),
+                ],
+            ),
+            _ => self
+                .fib_levels()
+                .map(|(config, prices)| {
+                    config
+                        .levels
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, level)| level.visible)
+                        .zip(prices)
+                        .map(|((index, level), price)| (index, level.label.clone(), price))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The alert source of level `level` of [`Self::alert_levels`]: the drawing's stored id, or
+    /// its id when it was never stored, followed by `#` and the level for levels after the
+    /// first. `%` and `#` in the id are escaped as `%25` and `%23` so distinct drawings cannot
+    /// share a source. It names the same level after the drawing is saved and restored.
+    pub fn alert_source(&self, level: usize) -> AlertSource {
+        let id = self.stable_id();
+        AlertSource::Drawing(if level == 0 {
+            id.into_owned()
+        } else {
+            format!("{id}#{level}")
+        })
+    }
+
+    /// The level of this drawing that `source`, from [`Self::alert_source`], names.
+    pub fn alert_level(&self, source: &AlertSource) -> Option<usize> {
+        let AlertSource::Drawing(source) = source else {
+            return None;
+        };
+        let id = self.stable_id();
+        if *source == id {
+            return Some(0);
+        }
+        source
+            .strip_prefix(id.as_ref())?
+            .strip_prefix('#')?
+            .parse()
+            .ok()
+            .filter(|level| *level > 0)
+    }
+
+    fn stable_id(&self) -> std::borrow::Cow<'_, str> {
+        let id: std::borrow::Cow<'_, str> = self
+            .stored_id
+            .as_deref()
+            .map_or_else(|| self.id.to_string().into(), Into::into);
+        if id.contains('%') || id.contains('#') {
+            id.replace('%', "%25").replace('#', "%23").into()
+        } else {
+            id
+        }
+    }
+
     /// Add a point with both screen and chart coordinates
     pub fn add_point_with_chart_coords<F, G>(
         &mut self,
@@ -499,6 +600,104 @@ mod tests {
             drawing.chart_points,
             [ChartPoint::new(10.0, 700.0), ChartPoint::new(20.0, 950.0)]
         );
+    }
+
+    /// Alerts follow each level the drawing shows at the evaluated bar, under a source that
+    /// names the same level once the drawing is stored.
+    #[test]
+    fn alert_levels_follow_the_drawing_geometry() {
+        use DrawingToolType as T;
+        let drawing = |tool, points: &[(f32, f64)]| {
+            let mut drawing = Drawing::new(7, tool);
+            drawing.chart_points = points.iter().map(|&(b, p)| ChartPoint::new(b, p)).collect();
+            drawing
+        };
+        let mut fib = drawing(T::FibonacciRetracement, &[(0.0, 100.0), (10.0, 200.0)]);
+        let mut config = FibonacciConfig::default();
+        config.levels[1].visible = false;
+        fib.fib_config = Some(config);
+        // (drawing, bar) -> (level, name, price); prices by hand.
+        for (drawing, bar, expected) in [
+            // 100 + (25 - 10) * (120 - 100) / (20 - 10).
+            (
+                drawing(T::TrendLine, &[(10.0, 100.0), (20.0, 120.0)]),
+                25.0,
+                vec![(0, "Line", 130.0)],
+            ),
+            (
+                drawing(T::TrendLine, &[(10.0, 100.0), (10.0, 120.0)]),
+                25.0,
+                vec![],
+            ),
+            (
+                drawing(T::HorizontalRay, &[(3.0, 50.0)]),
+                9.0,
+                vec![(0, "Line", 50.0)],
+            ),
+            (
+                drawing(T::Rect, &[(5.0, 90.0), (8.0, 110.0)]),
+                9.0,
+                vec![(0, "Top", 110.0), (1, "Bottom", 90.0)],
+            ),
+            (
+                drawing(T::LongPos, &[(5.0, 100.0), (9.0, 110.0)]),
+                9.0,
+                vec![(0, "Entry", 100.0), (1, "Target", 110.0), (2, "Stop", 90.0)],
+            ),
+            (
+                drawing(T::ShortPos, &[(5.0, 100.0), (9.0, 90.0), (9.0, 104.0)]),
+                9.0,
+                vec![(0, "Entry", 100.0), (1, "Target", 90.0), (2, "Stop", 104.0)],
+            ),
+            // Level 0 is on the second anchor; the hidden 23.6% level keeps the numbers after it.
+            (
+                fib,
+                9.0,
+                vec![
+                    (0, "0%", 200.0),
+                    (2, "38.2%", 161.8),
+                    (3, "50%", 150.0),
+                    (4, "61.8%", 138.2),
+                    (5, "78.6%", 121.4),
+                    (6, "100%", 100.0),
+                ],
+            ),
+            (drawing(T::Brush, &[(1.0, 1.0), (2.0, 2.0)]), 9.0, vec![]),
+        ] {
+            let levels = drawing.alert_levels(bar);
+            assert_eq!(levels.len(), expected.len(), "{:?}", drawing.tool_type);
+            for ((level, name, price), (want_level, want_name, want_price)) in
+                levels.into_iter().zip(expected)
+            {
+                assert_eq!((level, name.as_str()), (want_level, want_name));
+                // Fibonacci ratios are stored as `f32`, good to about 1e-5 at these prices.
+                assert!((price - want_price).abs() < 1e-4, "{name}: {price}");
+            }
+        }
+
+        let mut line = drawing(T::TrendLine, &[(10.0, 100.0), (20.0, 120.0)]);
+        for (stored, level, source) in [
+            (None, 0, "7"),
+            (None, 2, "7#2"),
+            (Some("a%231"), 0, "a%25231"),
+            (Some("a#1"), 3, "a%231#3"),
+        ] {
+            line.stored_id = stored.map(Into::into);
+            assert_eq!(
+                line.alert_source(level),
+                AlertSource::Drawing(source.into())
+            );
+            assert_eq!(line.alert_level(&line.alert_source(level)), Some(level));
+        }
+        for other in ["a", "a#1#0", "a#1#x", "7"] {
+            assert_eq!(line.alert_level(&AlertSource::Drawing(other.into())), None);
+        }
+        assert_eq!(line.alert_level(&AlertSource::Price), None);
+
+        // A stored id containing the level separator must not alias another drawing's level.
+        let mut other = line.clone();
+        other.stored_id = Some("a".into());
+        assert_ne!(line.alert_source(0), other.alert_source(1));
     }
 
     #[test]

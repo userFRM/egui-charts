@@ -2,7 +2,9 @@
 
 use crate::drawings::domain::Drawing;
 use crate::drawings::rendering::utils::draw_dashed_line;
+use crate::localization as l10n;
 use crate::styles::{stroke, typography};
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 
@@ -34,7 +36,7 @@ impl Drawing {
         self.draw_ghost_path(painter, ghost_alpha);
 
         // Anchor point at start (solid)
-        self.draw_ghost_anchor(painter, base_color, ghost_color);
+        self.draw_ghost_anchor(painter, base_color);
 
         // End point indicator
         if let Some(&last) = self.points.last() {
@@ -84,12 +86,7 @@ impl Drawing {
         }
     }
 
-    fn draw_ghost_anchor(
-        &self,
-        painter: &egui::Painter,
-        base_color: Color32,
-        ghost_color: Color32,
-    ) {
+    fn draw_ghost_anchor(&self, painter: &egui::Painter, base_color: Color32) {
         if let Some(&first) = self.points.first() {
             painter.circle_filled(first, DESIGN_TOKENS.rounding.lg, base_color);
             painter.circle_stroke(
@@ -98,27 +95,20 @@ impl Drawing {
                 Stroke::new(stroke::MEDIUM, Color32::WHITE),
             );
 
-            // Ghost label
+            // The path fades, but its label must stay readable.
+            let chart = painter.ctx().active_theme().chart;
             let font = egui::FontId::proportional(typography::XS);
             let label_bg = Rect::from_center_size(
                 Pos2::new(first.x + 35.0, first.y - 12.0),
                 egui::vec2(60.0, 16.0),
             );
-            painter.rect_filled(
-                label_bg,
-                DESIGN_TOKENS.rounding.sm,
-                DESIGN_TOKENS
-                    .semantic
-                    .extended
-                    .chart_axis_bg
-                    .gamma_multiply(0.7),
-            );
+            painter.rect_filled(label_bg, DESIGN_TOKENS.rounding.sm, chart.bg_tooltip);
             painter.text(
                 label_bg.center(),
                 egui::Align2::CENTER_CENTER,
-                "Ghost",
+                l10n::text(painter.ctx(), "Ghost"),
                 font,
-                ghost_color,
+                chart.axis_text,
             );
         }
     }

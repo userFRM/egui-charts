@@ -848,7 +848,17 @@ impl DemoApp {
     // --- alerts ------------------------------------------------------------
 
     fn open_alert(&mut self, price: Option<f64>) {
+        self.list_alert_sources();
+        let price = price
+            .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
+            .unwrap_or(0.0);
+        self.alert_dialog.open(self.state.symbol.clone(), price);
+    }
+
+    /// Offers the studies' outputs and every level of the drawings as alert sources.
+    fn list_alert_sources(&mut self) {
         use egui_charts::model::AlertSource;
+        let bar = self.chart.bars(SeriesId::MAIN).len().saturating_sub(1) as f64;
         self.alert_dialog.sources = self
             .chart
             .indicators()
@@ -872,32 +882,30 @@ impl DemoApp {
                     .drawings()
                     .drawings
                     .iter()
-                    .filter(|d| {
-                        use egui_charts::drawings::DrawingToolType::*;
-                        d.completed
-                            && matches!(
-                                d.tool_type,
-                                HorizontalLine | HorizontalRay | TrendLine | Ray | ExtendedLine
+                    .filter(|d| d.completed)
+                    .flat_map(|d| {
+                        let levels = d.alert_levels(bar);
+                        let single = levels.len() == 1;
+                        levels.into_iter().map(move |(level, name, _)| {
+                            let drawing = format!("{} {}", d.tool_type.as_str(), d.id);
+                            (
+                                d.alert_source(level),
+                                if single {
+                                    drawing
+                                } else {
+                                    format!("{drawing}: {name}")
+                                },
                             )
-                    })
-                    .map(|d| {
-                        (
-                            AlertSource::Drawing(d.id.to_string()),
-                            format!("Drawing {}", d.id),
-                        )
+                        })
                     }),
             )
             .collect();
-        let price = price
-            .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
-            .unwrap_or(0.0);
         self.alert_dialog.watchlists = self
             .watchlist
             .lists()
             .iter()
             .map(|list| (list.name.clone(), list.name.clone()))
             .collect();
-        self.alert_dialog.open(self.state.symbol.clone(), price);
     }
 
     fn quick_price_alert(&mut self, symbol: String, price: f64) {
@@ -2000,7 +2008,8 @@ impl DemoApp {
 
         // Live drawings.
         for d in self.chart.drawings().listed_drawings() {
-            let mut item = SourceItem::drawing(d.id, d.tool_type, d.color32());
+            let mut item =
+                SourceItem::drawing(d.id, d.tool_type, d.color32()).with_panes(&self.chart);
             item.visible = d.visible;
             item.locked = d.locked;
             item.z_index = d.z_order;
@@ -2800,6 +2809,13 @@ impl DemoApp {
             DrawingContextMenuAction::Hide => dm.edit_drawing(id, |d| d.visible = !d.visible),
             DrawingContextMenuAction::BringToFront => dm.bring_to_front(id),
             DrawingContextMenuAction::SendToBack => dm.send_to_back(id),
+            DrawingContextMenuAction::MoveTo(pane) => {
+                self.chart.move_drawing_to_pane(id, pane);
+            }
+            DrawingContextMenuAction::AddAlert(alert) => {
+                self.list_alert_sources();
+                self.alert_dialog.edit(*alert);
+            }
             DrawingContextMenuAction::None => {}
             _ => {}
         }
