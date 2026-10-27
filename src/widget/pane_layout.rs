@@ -351,6 +351,48 @@ impl Chart {
         }
     }
 
+    /// The pane of `other` that corresponds to the study pane `pane` of this chart, for linking
+    /// the drawings of charts in a [`ChartLayout`](super::ChartLayout).
+    ///
+    /// Panes correspond when they hold the same studies, with equal names and input values in
+    /// the same order. Of several such panes the n-th here corresponds to the n-th there. The
+    /// price pane and panes without studies have no counterpart.
+    pub fn linked_pane(&self, pane: PaneId, other: &Chart) -> Option<PaneId> {
+        let studies = self.pane_studies(pane);
+        if pane == PaneId::MAIN || studies.is_empty() {
+            return None;
+        }
+        let nth = self
+            .panes()
+            .into_iter()
+            .take_while(|other| *other != pane)
+            .filter(|other| self.pane_studies(*other) == studies)
+            .count();
+        other
+            .panes()
+            .into_iter()
+            .filter(|pane| other.pane_studies(*pane) == studies)
+            .nth(nth)
+    }
+
+    /// The name and input values of each study in `pane`, in legend order.
+    fn pane_studies(
+        &self,
+        pane: PaneId,
+    ) -> Vec<(String, Vec<(String, crate::studies::InputValue)>)> {
+        self.pane_series(pane)
+            .into_iter()
+            .filter_map(|id| self.indicators().find(|(study, _)| *study == id))
+            .map(|(_, study)| {
+                let inputs = study
+                    .inputs()
+                    .into_iter()
+                    .map(|input| (input.id, input.value));
+                (study.name().to_owned(), inputs.collect())
+            })
+            .collect()
+    }
+
     /// The pane drawing the bar series or study `series`, or `None` for an unknown id.
     pub fn series_pane(&self, series: SeriesId) -> Option<PaneId> {
         if let Some(pane) = self
