@@ -250,6 +250,11 @@ fn alert_sources(alert: &Alert) -> impl Iterator<Item = &AlertSource> {
 impl DemoApp {
     pub(super) fn monitor_alerts(&mut self, ctx: &egui::Context) {
         let now = chrono::Utc::now();
+        let paused = if self.replay.is_some() {
+            self.live_was_paused
+        } else {
+            self.live.paused()
+        };
         self.alert_host.expire(now);
         let alerts = self.alerts.alerts();
         self.alert_monitors
@@ -314,7 +319,7 @@ impl DemoApp {
                 {
                     monitor.chart.drawings_mut().drawings = self.chart.drawings().drawings.clone();
                 }
-                let delay = monitor.refresh(now, self.live.paused() && self.replay.is_none());
+                let delay = monitor.refresh(now, paused);
                 if !monitor.live.paused() {
                     ctx.request_repaint_after(delay);
                 }
@@ -326,6 +331,29 @@ impl DemoApp {
                     &monitor.studies,
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replay_preserves_alert_pause_state() {
+        for paused in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(paused);
+            app.alerts
+                .save(Alert::new(app.chart.symbol(), AlertCondition::Above(0.0)));
+            app.alerts.poll(&ctx, &mut app.toasts);
+            app.start_replay();
+            assert!(app.replay.is_some());
+            app.monitor_alerts(&ctx);
+            assert_eq!(app.alert_monitors.len(), 1);
+            let monitor = app.alert_monitors.values().next().unwrap();
+            assert_eq!(monitor.live.paused(), paused);
         }
     }
 }
