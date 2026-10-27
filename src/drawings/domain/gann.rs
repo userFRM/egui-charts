@@ -6,11 +6,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum GannFanDirection {
     /// From the first anchor towards the opposite corner.
+    #[default]
     Forward,
     /// From the opposite corner back towards the first anchor.
     Reverse,
     /// From both corners.
-    #[default]
     Both,
 }
 
