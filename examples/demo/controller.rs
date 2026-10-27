@@ -952,7 +952,7 @@ impl DemoApp {
 
         // Chart settings.
         match self.settings_dialog.show(ctx, &self.theme) {
-            SettingsAction::Apply(state) => self.apply_chart_settings(state),
+            SettingsAction::Apply(state) => self.apply_chart_settings(*state),
             SettingsAction::Cancel => {}
             _ => {}
         }

@@ -913,7 +913,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
-- Migration for scale settings: `ScalesAndLinesSettings`, `ChartConfig` and `PriceAxisOptions` literals add the new display fields or use `..Default::default()`. Older saved settings take their defaults. `chart::render_axis_currency` takes an optional unit before the currency choices; pass `None` for the previous header. `PriceScale::set_bar_ratio` accepts a positive finite number of scale units per bar, with `None` unlocking it; logarithmic axes measure log10 price units.
+- Migration for scale settings: `ScalesAndLinesSettings`, `ChartConfig` and `PriceAxisOptions` literals add the new display fields or use `..Default::default()`. Older saved settings take their defaults. `chart::render_axis_currency` takes an optional unit before the currency choices; pass `None` for the previous header. `PriceScale::set_bar_ratio` accepts a positive finite number of scale units per bar, with `None` unlocking it; logarithmic axes measure natural logarithms of prices. `SettingsAction::Apply` now carries `Box<ChartSettingsState>`; construct it with `Box::new(settings)` and move the state out with `*settings` when the host applies it.
 
 - `EventVisibility` struct literals add `show_earnings_breaks`, `show_news_notifications` and `show_ideas` or end with `..Default::default()`; saved visibility without them takes the defaults.
 

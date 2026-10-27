@@ -406,7 +406,19 @@ mod tests {
     #[test]
     fn scale_settings_render_values_and_preserve_the_entered_ratio() {
         for theme in [Theme::light(), Theme::dark()] {
-            for left in [false, true] {
+            for (left, mode) in [
+                (false, PriceScaleMode::Normal),
+                (true, PriceScaleMode::Normal),
+                (false, PriceScaleMode::Logarithmic),
+                (true, PriceScaleMode::Logarithmic),
+                (false, PriceScaleMode::Percentage),
+                (true, PriceScaleMode::Percentage),
+            ] {
+                let locked_ratio = if mode == PriceScaleMode::Logarithmic {
+                    0.005
+                } else {
+                    0.5
+                };
                 let ctx = Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let bars = (0..10)
@@ -441,12 +453,14 @@ mod tests {
                 let mut settings = ChartSettingsState::from_chart(&chart);
                 let scales = &mut settings.scales_and_lines;
                 scales.price_scale_left = left;
+                scales.log_scale = mode == PriceScaleMode::Logarithmic;
+                scales.percentage_scale = mode == PriceScaleMode::Percentage;
                 scales.show_scale_mode_buttons = false;
                 scales.show_plus_button = false;
                 scales.allow_label_overlap = true;
                 scales.auto_scale = false;
                 scales.lock_price_to_bar_ratio = true;
-                scales.price_to_bar_ratio = 0.5;
+                scales.price_to_bar_ratio = locked_ratio;
                 scales.symbol_price_color = Some(Color32::GOLD);
                 scales.study_value_color = Some(Color32::PURPLE);
                 scales.extended_session_price_color = Color32::LIGHT_RED;
@@ -501,7 +515,18 @@ mod tests {
                                 * f64::from(
                                     chart.state().time_scale().bar_spacing() / plot.height(),
                                 );
-                            assert!((ratio - 0.5).abs() < 1e-6, "{ratio}");
+                            assert!((ratio - locked_ratio).abs() < 1e-6, "{ratio}");
+                            if mode == PriceScaleMode::Logarithmic {
+                                assert!(
+                                    (chart
+                                        .last_price_map
+                                        .transform()
+                                        .to_scale(std::f64::consts::E)
+                                        - 1.0)
+                                        .abs()
+                                        < 1e-12
+                                );
+                            }
                         }
                         output.drop_without_applying_deltas();
                     }
@@ -509,7 +534,7 @@ mod tests {
                 for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY] {
                     settings.scales_and_lines.price_to_bar_ratio = invalid;
                     assert!(settings.apply_to_chart(&mut chart).is_err());
-                    assert_eq!(chart.state().price_scale().bar_ratio(), Some(0.5));
+                    assert_eq!(chart.state().price_scale().bar_ratio(), Some(locked_ratio));
                 }
             }
         }

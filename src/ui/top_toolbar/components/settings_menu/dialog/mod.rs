@@ -400,7 +400,7 @@ impl SettingsDialog {
                 }
             });
         if ok {
-            action = SettingsAction::Apply(self.settings.clone());
+            action = SettingsAction::Apply(Box::new(self.settings.clone()));
             self.is_open = false;
         } else if cancel {
             action = SettingsAction::Cancel;

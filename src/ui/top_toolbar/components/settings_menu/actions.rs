@@ -9,7 +9,7 @@ pub enum SettingsAction {
     /// No action taken
     None,
     /// Apply the given settings state to the chart
-    Apply(ChartSettingsState),
+    Apply(Box<ChartSettingsState>),
     /// Cancel and discard pending settings changes
     Cancel,
     /// Save current settings as a named template
