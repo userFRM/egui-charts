@@ -71,7 +71,9 @@ type Intercept = Box<dyn FnMut(&Action) -> bool>;
 /// host intercepts it.
 ///
 /// Every chart slot loads from the same [`Datafeed`]. Each service is handed to the components
-/// that consume it; a control whose service or output is absent is hidden.
+/// that consume it; a control whose service or output is absent is hidden. So far the terminal
+/// performs chart type, undo, redo, theme and fullscreen: the controls of other features stay
+/// hidden and the services passed for them are kept unused.
 pub struct Terminal {
     charts: Vec<Chart>,
     layout: ChartLayout,
