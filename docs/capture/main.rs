@@ -450,8 +450,9 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
                     }
                 }
                 if position && scene.name != "replay" {
-                    h.state_mut()
-                        .advance_sample_to("2026-10-27T19:31:50Z".parse().unwrap());
+                    let now = "2026-10-27T19:31:50Z".parse().unwrap();
+                    h.state_mut().paper.set_replay_time(Some(now));
+                    h.state_mut().advance_sample_to(now);
                 }
             }
             Step::Ticket => {
