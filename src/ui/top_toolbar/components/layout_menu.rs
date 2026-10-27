@@ -6,6 +6,7 @@ use crate::data::inbox::Inbox;
 use crate::localization as l10n;
 use crate::services::{Storage, StoreKind};
 use crate::theme::ThemeExt;
+use crate::ui_kit::list_item::{LabelContent, ListItem};
 use crate::widget::SavedLayout;
 use egui::Ui;
 use std::collections::VecDeque;
@@ -454,11 +455,9 @@ impl LayoutMenu {
             ("Create new layout", LayoutAction::CreateNew),
             ("Open layout", LayoutAction::OpenLayout),
         ] {
-            if ui
-                .add_sized(
-                    [ui.available_width(), 32.0],
-                    egui::Button::new(l10n::text(ui.ctx(), label)),
-                )
+            if ListItem::new()
+                .height(32.0)
+                .show(ui, LabelContent::new(label))
                 .clicked()
             {
                 action = value;
@@ -467,17 +466,13 @@ impl LayoutMenu {
         }
         ui.separator();
         let curr = self.curr_layout.clone().unwrap_or_default();
-        let rename = ui
-            .add_sized(
-                [ui.available_width(), 32.0],
-                egui::Button::new(l10n::text(ui.ctx(), "Rename…")),
-            )
+        let rename = ListItem::new()
+            .height(32.0)
+            .show(ui, LabelContent::new("Rename…"))
             .clicked();
-        let save_as = ui
-            .add_sized(
-                [ui.available_width(), 32.0],
-                egui::Button::new(l10n::text(ui.ctx(), "Save layout as…")),
-            )
+        let save_as = ListItem::new()
+            .height(32.0)
+            .show(ui, LabelContent::new("Save layout as…"))
             .clicked();
         if rename {
             self.editing = Some(true);
