@@ -82,7 +82,8 @@ pub enum ChartType {
     /// Time Price Opportunity (Market Profile)
     TimePriceOpportunity,
     /// Bid and ask volume at each price of every bar, summed from the trades the feed sends on
-    /// the instrument's tick size. Bars before the first held trade draw as candles.
+    /// the instrument's tick size. Requires a time-based interval and an instrument tick size;
+    /// otherwise draws candles, as do bars before the first held trade.
     VolumeFootprint,
     /// Volume at each price of every session of the visible bars, with its point of control and
     /// value area, summed like [`VolumeFootprint`](Self::VolumeFootprint). Draws candles without

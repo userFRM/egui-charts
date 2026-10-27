@@ -559,8 +559,11 @@ impl Chart {
     /// first in [`show`](Self::show); does nothing without a feed.
     pub(crate) fn pump(&mut self, ctx: &egui::Context) {
         // Session profiles are summed by the studies' code.
-        let executions = self.chart_type == ChartType::VolumeFootprint
-            || (self.chart_type == ChartType::SessionVolumeProfile && cfg!(feature = "studies"));
+        let executions = (self.chart_type == ChartType::VolumeFootprint
+            || (self.chart_type == ChartType::SessionVolumeProfile && cfg!(feature = "studies")))
+            && self
+                .timeframe
+                .is_none_or(|timeframe| !timeframe.is_trade_based());
         if let Some(link) = self
             .feed_link
             .as_mut()
@@ -1342,13 +1345,15 @@ mod tests {
             let feed = Arc::new(Script::default());
             let mut chart = fed(&feed, Some("A"));
             chart.set_timeframe(timeframe);
+            chart.set_chart_type(ChartType::VolumeFootprint);
             if !limit_after_load {
                 chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(3));
             }
             let mut frames = Frames::new();
             frames.run(&mut chart);
             chart.drain_events().for_each(drop);
-            feed.resolve().send(Ok(Instrument::new("A")));
+            feed.resolve()
+                .send(Ok(Instrument::new("A").with_tick_size(1.0)));
             feed.page().send(page(bars(5), end));
             frames.run(&mut chart);
             if limit_after_load {
@@ -1422,6 +1427,11 @@ mod tests {
             }
             assert_eq!(chart.bars(SeriesId::MAIN).last().unwrap().close, 1100.0);
             assert_eq!(chart.trades(SeriesId::MAIN).count(), 100);
+            assert_eq!(
+                chart.feed_link.as_ref().unwrap().footprint.is_some(),
+                !timeframe.is_trade_based(),
+                "execution charts retain candles when the interval has no time slots"
+            );
         }
     }
 
