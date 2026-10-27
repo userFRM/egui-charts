@@ -916,6 +916,19 @@ All notable changes to this project are documented in this file. The format is b
 - `ChartTypeStyles`, `CandleColorConfig`, `StatusLineOptions` and `ChartSettingsState` have new public fields for candle part visibility, previous-close colouring, the legend logo, the last day change, the study backdrop and dividend adjustment. Struct literals add the fields or end with `..Default::default()`; saved settings without them take the defaults.
 
 - The chart settings dialog has a pictogram for each of its seven tabs in a 206 point sidebar of 40 point rows. The selected row takes the hover fill and a semibold label in the text colour, and the chart behind the dialog is no longer dimmed. Dialog titles are semibold at the `dialog_title` size, now 20 points instead of 18. `DialogFooter` buttons are 34 points tall with 14 point side padding, and the primary button is filled with the theme's text colour, so the confirming action has the strongest contrast in every theme.
+- Symbol details inset the title and price by 10 points inside the host panel and enlarge the main price to 26 points. The supplied `SymbolDetails::category` appears below the name, key statistics sit on a tinted card, and prices use the watchlist's thousands grouping. ([#990](https://github.com/userFRM/egui-charts/issues/990))
+
+- Watchlist rows are 30 points high with an 18 point symbol mark and aligned names. `WatchlistPanel::set_mark` supplies a mark; rows without one show an initial on a neutral disc. Prices and changes use thousands grouping, so 43237.45 reads 43,237.45, and changes omit the sign when they round to zero. ([#989](https://github.com/userFRM/egui-charts/issues/989))
+
+- Chart layout uses the shared dark toolbar tooltip with consistent padding and no shortcut chip when no shortcut is bound. ([#1011](https://github.com/userFRM/egui-charts/issues/1011))
+
+- Sell and Buy quote buttons use outlines and matching text on the chart background, with a minimum width of 59 points. Bid and Ask axis tags default to hidden while saved choices remain intact; volume shows a compact last-value tag when study values are enabled. ([#988](https://github.com/userFRM/egui-charts/issues/988))
+
+- The demo allocates 25% of the price pane to overlay volume, keeping the columns on the plot bottom and the height configurable through `ChartConfig::volume_height_fraction`. ([#987](https://github.com/userFRM/egui-charts/issues/987))
+
+- Light crosshair tags use black fills and white text, with dashed crosshair ink at approximately #9C9C9C on the white plot. ([#1007](https://github.com/userFRM/egui-charts/issues/1007))
+
+- The light preset draws grid lines in #D1D1D1 instead of #DCDCDC, so the dotted grid stays visible on the white plot. Horizontal and vertical grid lines keep their separate visibility settings. ([#1010](https://github.com/userFRM/egui-charts/issues/1010))
 
 - Crate and public API documentation now describe host-supplied history and streaming data, current feature boundaries and a populated quick start. Stale capability claims, counts and implementation inventories are removed, and the README and package description use the same scope. ([#933](https://github.com/userFRM/egui-charts/issues/933))
 

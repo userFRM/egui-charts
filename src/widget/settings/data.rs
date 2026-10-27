@@ -355,7 +355,7 @@ impl Default for TradingSettings {
     fn default() -> Self {
         Self {
             instant_orders: false,
-            bid_ask_labels: true,
+            bid_ask_labels: false,
             play_execution_sound: false,
             execution_sound: String::new(),
             notifications: TradingNotifications::All,

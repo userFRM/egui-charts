@@ -3,7 +3,8 @@
 use crate::icons::{Icon, icons};
 use crate::localization as l10n;
 use crate::ui::model::ChartLayoutMode;
-use crate::ui_kit::buttons::IconButton;
+use crate::ui::top_toolbar::TopToolbarConfig;
+use crate::ui::top_toolbar::buttons::ToolbarIconButton;
 use crate::widget::ChartSyncOptions;
 use egui::Ui;
 
@@ -36,11 +37,13 @@ impl ChartGridSelector {
 
     /// Shows the trigger and returns a changed grid or tab preset.
     pub fn show(&mut self, ui: &mut Ui) -> Option<ChartLayoutMode> {
-        // The toolbar's 24 px icon size, so the cells read at the size of the glyphs beside them.
-        let button = IconButton::new(layout_icon(self.current))
-            .icon_scale(24.0 / 28.0)
-            .tooltip("Chart layout")
-            .show(ui);
+        // Sized and labelled like the toolbar buttons beside it, with their tooltip.
+        let button = ToolbarIconButton::new(
+            layout_icon(self.current),
+            "Chart layout",
+            &TopToolbarConfig::default(),
+        )
+        .show(ui);
         let mut selected = None;
         egui::Popup::menu(&button)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
