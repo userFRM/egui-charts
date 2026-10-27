@@ -41,8 +41,8 @@ pub use settings_menu::{
 
 // From symbol_search
 pub use symbol_search::{
-    CompareAction, CompareSymbol, CompareSymbolsConfig, CompareSymbolsDialog, SymbolSearchConfig,
-    SymbolSearchDialog,
+    CompareAction, ComparePlacement, CompareSymbol, CompareSymbolsConfig, CompareSymbolsDialog,
+    SymbolSearchConfig, SymbolSearchDialog,
 };
 
 // From timeframe_selector

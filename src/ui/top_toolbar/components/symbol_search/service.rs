@@ -13,9 +13,10 @@ pub(super) struct Recent {
     description: String,
     exchange: String,
     kind: Option<SymbolType>,
-    /// Marks, absent from lists saved before they were kept.
+    /// Marks and country, absent from lists saved before they were kept.
     logo: Option<String>,
     exchange_logo: Option<String>,
+    country: Option<String>,
 }
 
 impl Recent {
@@ -25,6 +26,7 @@ impl Recent {
         symbol.symbol_type = self.kind;
         symbol.logo = self.logo.clone();
         symbol.exchange_logo = self.exchange_logo.clone();
+        symbol.country = self.country.clone();
         symbol
     }
 }
@@ -93,6 +95,7 @@ impl Search {
             kind: symbol.symbol_type,
             logo: symbol.logo.clone(),
             exchange_logo: symbol.exchange_logo.clone(),
+            country: symbol.country.clone(),
         });
     }
 
@@ -325,7 +328,7 @@ mod tests {
         search.recents.set_storage(vault.clone());
         for symbol in ["A", "B", "A"] {
             let symbol = Instrument::new(symbol).with_description("Host name");
-            search.record(&symbol.with_logo("bytes://logo"));
+            search.record(&symbol.with_logo("bytes://logo").with_country("US"));
         }
         for _ in 0..4 {
             search.poll(&ctx);
@@ -349,8 +352,12 @@ mod tests {
         );
         let row = &restored.rows[0];
         assert_eq!(
-            (row.description.as_deref(), row.logo.as_deref()),
-            (Some("Host name"), Some("bytes://logo"))
+            (
+                row.description.as_deref(),
+                row.logo.as_deref(),
+                row.country.as_deref()
+            ),
+            (Some("Host name"), Some("bytes://logo"), Some("US"))
         );
         let source = Arc::new(Source::default());
         restored.set_service(Some(source.clone()));

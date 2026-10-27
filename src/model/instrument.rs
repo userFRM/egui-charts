@@ -83,6 +83,8 @@ pub struct Instrument {
     /// URI of the exchange's mark, for egui's installed image loaders. Symbol search shows the
     /// exchange name alone while it is unknown, loading or unreadable.
     pub exchange_logo: Option<String>,
+    /// Country of the listing, as an ISO 3166-1 alpha-2 code such as "US".
+    pub country: Option<String>,
     /// Instrument type.
     pub symbol_type: Option<SymbolType>,
     /// Smallest price increment: positive and finite. Consumers ignore any other value.
@@ -120,6 +122,7 @@ impl Instrument {
             exchange: None,
             logo: None,
             exchange_logo: None,
+            country: None,
             symbol_type: None,
             tick_size: None,
             pip_size: None,
@@ -155,6 +158,12 @@ impl Instrument {
     /// Sets [`exchange_logo`](Self::exchange_logo).
     pub fn with_exchange_logo(mut self, uri: impl Into<String>) -> Self {
         self.exchange_logo = Some(uri.into());
+        self
+    }
+
+    /// Sets [`country`](Self::country).
+    pub fn with_country(mut self, country: impl Into<String>) -> Self {
+        self.country = Some(country.into());
         self
     }
 

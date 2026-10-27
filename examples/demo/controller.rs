@@ -656,6 +656,7 @@ impl DemoApp {
         app.symbol_search.set_search_service(Some(search.clone()));
         app.compare_dialog.set_search_service(Some(search));
         app.symbol_search.set_storage(app.storage.clone());
+        app.compare_dialog.set_storage(app.storage.clone());
         if let Some(row) = DemoSymbol::symbols()
             .into_iter()
             .find(|row| row.symbol == symbol)

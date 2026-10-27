@@ -21,6 +21,7 @@ pub use components::{
     ChartTypeSelectorConfig,
     ChartTypeUiExt,
     CompareAction,
+    ComparePlacement,
     CompareSymbol,
     CompareSymbolsConfig,
     CompareSymbolsDialog,

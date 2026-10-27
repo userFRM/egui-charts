@@ -3,7 +3,7 @@
 
 use super::{DemoApp, DemoSymbol, LiveFeed};
 use egui_charts::model::{BarClock, ChartType, SeriesScale, Timeframe};
-use egui_charts::ui::top_toolbar::{CompareAction, CompareSymbol};
+use egui_charts::ui::top_toolbar::{CompareAction, ComparePlacement, CompareSymbol};
 use egui_charts::widget::{Chart, PaneId, SeriesId, SeriesOptions};
 use std::sync::Arc;
 
@@ -106,7 +106,7 @@ impl DemoApp {
 
     pub(super) fn handle_comparison(&mut self, action: CompareAction) {
         match action {
-            CompareAction::AddSymbol(symbol) => {
+            CompareAction::AddSymbol(symbol, placement) => {
                 if self
                     .comparisons
                     .iter()
@@ -124,7 +124,32 @@ impl DemoApp {
                     self.theme.ui.success,
                 ];
                 let color = colors[self.comparisons.len() % colors.len()];
-                let id = self.chart.add_comparison(symbol.clone(), color);
+                let scale = match placement {
+                    // The lowest additional scale id no series uses yet.
+                    ComparePlacement::NewPriceScale => {
+                        (1..).map(SeriesScale::Separate).find(|scale| {
+                            !self
+                                .chart
+                                .series()
+                                .any(|(_, series)| series.scale == *scale)
+                        })
+                    }
+                    ComparePlacement::NewPane => Some(SeriesScale::Right),
+                    _ => None,
+                };
+                let id = match scale {
+                    Some(scale) => self.chart.add_series(SeriesOptions {
+                        name: symbol.clone(),
+                        color,
+                        scale,
+                        ..Default::default()
+                    }),
+                    None => self.chart.add_comparison(symbol.clone(), color),
+                };
+                if placement == ComparePlacement::NewPane {
+                    let pane = self.chart.add_pane();
+                    self.chart.move_series_to_pane(id, pane);
+                }
                 refresh(&mut self.chart, id, &feed);
                 self.comparisons.push((symbol, id, feed));
             }

@@ -36,7 +36,7 @@
 //! // The symbols your data source offers
 //! let symbols = vec![Instrument::new("ETHUSDT").with_description("Ethereum / Tether")];
 //! match compare.show(ctx, &symbols) {
-//!     CompareAction::AddSymbol(sym) => println!("Add: {}", sym),
+//!     CompareAction::AddSymbol(sym, placement) => println!("Add: {sym} ({placement:?})"),
 //!     CompareAction::RemoveSymbol(sym) => println!("Remove: {}", sym),
 //!     _ => {}
 //! }
@@ -901,14 +901,42 @@ impl CompareSymbolsConfig {
     }
 }
 
+/// Where a symbol added from the compare dialog goes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ComparePlacement {
+    /// On the main price scale, which then shows every series as a percentage change.
+    #[default]
+    SamePercentScale,
+    /// On a price scale of its own, beside the main one.
+    NewPriceScale,
+    /// In a pane of its own.
+    NewPane,
+}
+
+impl ComparePlacement {
+    /// Every placement, in the order the dialog offers them.
+    pub const ALL: [Self; 3] = [Self::SamePercentScale, Self::NewPriceScale, Self::NewPane];
+
+    /// The label of the placement's button.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::SamePercentScale => "Same % scale",
+            Self::NewPriceScale => "New price scale",
+            Self::NewPane => "New pane",
+        }
+    }
+}
+
 /// Action from compare symbols dialog
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum CompareAction {
     /// No action
     None,
-    /// Add symbol to comparison
-    AddSymbol(String),
+    /// Add the symbol to the comparison, placed as the user chose. A click on the row itself
+    /// chooses [`ComparePlacement::SamePercentScale`].
+    AddSymbol(String, ComparePlacement),
     /// Remove symbol from comparison
     RemoveSymbol(String),
     /// Toggle symbol visibility
@@ -937,8 +965,8 @@ pub enum CompareAction {
 ///
 /// let symbols = vec![Instrument::new("ETHUSDT").with_description("Ethereum / Tether")];
 /// match compare.show(ctx, &symbols) {
-///     CompareAction::AddSymbol(sym) => {
-///         // Add symbol to chart overlay
+///     CompareAction::AddSymbol(sym, placement) => {
+///         // Add the symbol to the chart where `placement` says
 ///     }
 ///     CompareAction::RemoveSymbol(sym) => {
 ///         // Remove symbol from chart
@@ -983,6 +1011,12 @@ impl CompareSymbolsDialog {
         self.search.set_service(service);
     }
 
+    /// Lists the instruments symbol search recently opened, from the same host storage, while
+    /// the query is empty.
+    pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
+        self.search.recents.set_storage(storage);
+    }
+
     /// Create with custom configuration
     pub fn with_config(mut self, config: CompareSymbolsConfig) -> Self {
         self.config = config;
@@ -994,6 +1028,8 @@ impl CompareSymbolsDialog {
         self.is_open = true;
         self.search_query.clear();
         self.search.reset();
+        // Symbol search writes the recent list through its own store.
+        self.search.recents.reload();
     }
 
     /// Close the dialog
@@ -1118,7 +1154,14 @@ impl CompareSymbolsDialog {
         self.search.status(ui);
         let mut next_page = false;
         // Suggestions
-        ui.label(RichText::new(l10n::text(ui.ctx(), "Symbols")).color(config.muted_color));
+        let heading =
+            if self.search.connected() && self.search_query.is_empty() && self.search.has_recents()
+            {
+                "Recent symbols"
+            } else {
+                "Symbols"
+            };
+        ui.label(RichText::new(l10n::text(ui.ctx(), heading)).color(config.muted_color));
         ui.space_lg();
 
         if symbols.is_empty() {
@@ -1129,6 +1172,7 @@ impl CompareSymbolsDialog {
             .id_salt("comparison_suggestions")
             .max_height(ui.available_height())
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
                 let query = self.search_query.to_lowercase();
                 for symbol in symbols.iter().filter(|symbol| {
                     self.search.connected()
@@ -1162,6 +1206,7 @@ impl CompareSymbolsDialog {
         symbol: &Instrument,
         config: &CompareSymbolsConfig,
     ) -> Option<CompareAction> {
+        let theme = ui.active_theme();
         let is_compared = self
             .compared_symbols
             .iter()
@@ -1178,51 +1223,154 @@ impl CompareSymbolsDialog {
         });
         ui.ctx()
             .accesskit_node_builder(response.id, |node| node.set_selected(is_compared));
-        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.md);
+        crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.md);
 
-        // Background on hover
-        if response.hovered() && !is_compared {
+        // The placement buttons follow the pointer or the keyboard focus into the row.
+        let placement_ids = ComparePlacement::ALL.map(|placement| response.id.with(placement));
+        let engaged = response.contains_pointer()
+            || response.has_focus()
+            || ui.memory(|m| placement_ids.iter().any(|id| m.has_focus(*id)));
+        if engaged && !is_compared {
             ui.painter()
-                .rect_filled(rect, ui.active_theme().radius.md, config.hover_color);
+                .rect_filled(rect, theme.radius.md, config.hover_color);
         }
 
-        // Checkmark if compared
-        let indicator_pos = Pos2::new(rect.min.x + 12.0, rect.center().y);
+        // Every row reserves the mark, so text lines up whatever the host supplies.
+        let mark = egui::Rect::from_center_size(
+            Pos2::new(rect.min.x + 4.0 + 18.0, rect.center().y),
+            Vec2::splat(36.0),
+        );
+        paint_symbol_mark(ui, symbol, mark);
+        let left = mark.right() + 8.0;
+
+        // Right-hand column, from the edge: country, then the comparison check.
+        let mut right = rect.max.x - 12.0;
+        if let Some(country) = &symbol.country {
+            let galley = ui.painter().layout_no_wrap(
+                country.to_uppercase(),
+                egui::FontId::proportional(theme.text.small),
+                config.muted_color,
+            );
+            let pos = Pos2::new(
+                right - galley.size().x,
+                rect.center().y - galley.size().y / 2.0,
+            );
+            right = pos.x - 12.0;
+            ui.painter().galley(pos, galley, config.muted_color);
+        }
         if is_compared {
-            ui.painter()
-                .circle_filled(indicator_pos, 5.0, ui.active_theme().ui.success);
+            let center = Pos2::new(right - 8.0, rect.center().y);
+            ui.painter().circle_filled(center, 8.0, theme.ui.success);
             ui.painter().text(
-                indicator_pos,
+                center,
                 egui::Align2::CENTER_CENTER,
                 l10n::text(ui.ctx(), "v"),
-                egui::FontId::proportional(ui.active_theme().text.micro),
-                ui.active_theme().ui.panel_bg,
+                egui::FontId::proportional(theme.text.micro),
+                theme.ui.panel_bg,
             );
+            right = center.x - 20.0;
         }
 
-        // Instrument
-        ui.painter().text(
-            Pos2::new(rect.min.x + 40.0, rect.center().y - 10.0),
-            egui::Align2::LEFT_CENTER,
-            &symbol.symbol,
-            egui::FontId::proportional(16.0),
+        let mut action = None;
+        if engaged && !is_compared {
+            for (placement, id) in ComparePlacement::ALL.into_iter().zip(placement_ids).rev() {
+                let galley = ui.painter().layout_no_wrap(
+                    l10n::text(ui.ctx(), placement.label()),
+                    egui::FontId::proportional(theme.text.small),
+                    config.text_color,
+                );
+                let button = egui::Rect::from_min_max(
+                    Pos2::new(right - galley.size().x - 16.0, rect.center().y - 12.0),
+                    Pos2::new(right, rect.center().y + 12.0),
+                );
+                right = button.left() - 4.0;
+                let clicked = ui.interact(button, id, Sense::click());
+                clicked.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Button, true, galley.text())
+                });
+                let fill = if clicked.hovered() {
+                    theme.ui.btn_bg_hover
+                } else {
+                    config.bg_color
+                };
+                ui.painter().rect(
+                    button,
+                    button.height() / 2.0,
+                    fill,
+                    ui.visuals().widgets.inactive.bg_stroke,
+                    egui::StrokeKind::Inside,
+                );
+                crate::styles::focus::draw_focus_ring(ui, &clicked, button.height() / 2.0);
+                ui.painter().galley(
+                    button.center() - galley.size() / 2.0,
+                    galley,
+                    config.text_color,
+                );
+                if clicked.clicked() {
+                    action = Some(CompareAction::AddSymbol(symbol.symbol.clone(), placement));
+                }
+            }
+        }
+
+        // Instrument, then its description and type badge
+        let width = (right - 12.0 - left).max(0.0);
+        let line = |text: &str, size: f32, color: Color32, width: f32| {
+            egui::WidgetText::from(RichText::new(text).size(size).color(color)).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                width,
+                egui::TextStyle::Body,
+            )
+        };
+        let name = line(&symbol.symbol, 16.0, config.text_color, width);
+        ui.painter().galley(
+            Pos2::new(left, rect.center().y - 1.0 - name.size().y),
+            name,
             config.text_color,
         );
-
-        // Description
-        ui.painter().text(
-            Pos2::new(rect.min.x + 40.0, rect.center().y + 10.0),
-            egui::Align2::LEFT_CENTER,
+        let kind = symbol
+            .symbol_type
+            .map(|kind| l10n::text(ui.ctx(), kind.to_string()).to_uppercase());
+        let badge = kind.map(|kind| {
+            ui.painter().layout_no_wrap(
+                kind,
+                egui::FontId::proportional(theme.text.micro),
+                config.muted_color,
+            )
+        });
+        let badge_width = badge.as_ref().map_or(0.0, |badge| badge.size().x + 14.0);
+        let description = line(
             symbol.description.as_deref().unwrap_or(&symbol.symbol),
-            egui::FontId::proportional(12.0),
+            12.0,
             config.muted_color,
+            (width - badge_width).max(0.0),
         );
-
-        if response.clicked() && !is_compared {
-            return Some(CompareAction::AddSymbol(symbol.symbol.clone()));
+        let top = rect.center().y + 3.0;
+        let badge_left = left + description.size().x + 6.0;
+        let description_height = description.size().y;
+        ui.painter()
+            .galley(Pos2::new(left, top), description, config.muted_color);
+        if let Some(badge) = badge {
+            let frame = egui::Rect::from_min_size(
+                Pos2::new(
+                    badge_left,
+                    top + (description_height - badge.size().y - 4.0) / 2.0,
+                ),
+                badge.size() + Vec2::new(8.0, 4.0),
+            );
+            ui.painter()
+                .rect_filled(frame, theme.radius.xs, theme.ui.btn_bg_hover);
+            ui.painter()
+                .galley(frame.min + Vec2::new(4.0, 2.0), badge, config.muted_color);
         }
 
-        None
+        if action.is_none() && response.clicked() && !is_compared {
+            action = Some(CompareAction::AddSymbol(
+                symbol.symbol.clone(),
+                ComparePlacement::SamePercentScale,
+            ));
+        }
+        action
     }
 }
 
@@ -1568,10 +1716,28 @@ mod tests {
         dialog.close();
         assert!(!dialog.is_open);
         let symbols = create_test_symbols();
-        for (label, expected, populated) in [
-            ("AAPL", CompareAction::AddSymbol("AAPL".into()), false),
-            ("X", CompareAction::RemoveSymbol("AAPL".into()), true),
-            ("Hide", CompareAction::ToggleVisibility("AAPL".into()), true),
+        let add = |placement| CompareAction::AddSymbol("AAPL".into(), placement);
+        for (hover, label, expected, populated) in [
+            (None, "AAPL", add(ComparePlacement::SamePercentScale), false),
+            (
+                Some("AAPL"),
+                "New price scale",
+                add(ComparePlacement::NewPriceScale),
+                false,
+            ),
+            (
+                Some("AAPL"),
+                "New pane",
+                add(ComparePlacement::NewPane),
+                false,
+            ),
+            (None, "X", CompareAction::RemoveSymbol("AAPL".into()), true),
+            (
+                None,
+                "Hide",
+                CompareAction::ToggleVisibility("AAPL".into()),
+                true,
+            ),
         ] {
             let ctx = Context::default();
             let mut dialog = CompareSymbolsDialog::new();
@@ -1584,7 +1750,7 @@ mod tests {
                 ));
             }
             let config = dialog.config.resolved(&ctx.global_style().visuals);
-            let mut frame = |events| {
+            let mut frame = |events, label| {
                 let mut action = CompareAction::None;
                 let output = ctx.run_ui(
                     egui::RawInput {
@@ -1604,17 +1770,21 @@ mod tests {
                 output.drop_without_applying_deltas();
                 (action, pos)
             };
-            frame(vec![]);
-            let pos = frame(vec![]).1.unwrap();
-            frame(vec![egui::Event::PointerMoved(pos)]);
+            frame(vec![], label);
+            if let Some(row) = hover {
+                let pos = frame(vec![], row).1.unwrap();
+                frame(vec![egui::Event::PointerMoved(pos)], row);
+            }
+            let pos = frame(vec![], label).1.unwrap();
+            frame(vec![egui::Event::PointerMoved(pos)], label);
             let button = |pressed| egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed,
                 modifiers: Default::default(),
             };
-            frame(vec![button(true)]);
-            assert_eq!(frame(vec![button(false)]).0, expected);
+            frame(vec![button(true)], label);
+            assert_eq!(frame(vec![button(false)], label).0, expected);
             assert_eq!(
                 dialog.compared_symbols.len(),
                 usize::from(populated),

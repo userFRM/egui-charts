@@ -864,7 +864,10 @@ mod tests {
                 show_economic_events: true,
                 ..Default::default()
             });
-        app.handle_comparison(super::super::CompareAction::AddSymbol("AAPL".into()));
+        app.handle_comparison(super::super::CompareAction::AddSymbol(
+            "AAPL".into(),
+            Default::default(),
+        ));
         app.layout.sync.sync_drawings = true;
         app.ensure_chart_slots(ChartLayoutMode::Four);
         for copy in &mut app.extra_charts {
