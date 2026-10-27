@@ -101,7 +101,9 @@ pub struct Drawing {
     /// Whether the drawing is complete
     #[serde(skip)]
     pub completed: bool,
-    /// Optional text content (for text labels, notes, etc.)
+    /// Optional annotation content, preserved with the drawing. Tables use one row per line
+    /// and tab-separated cells. Images use an image URI resolved by the host's egui image
+    /// loaders. Posts and ideas use the first line as author or title and the rest as body.
     pub text: Option<String>,
 
     // === Styling properties ===

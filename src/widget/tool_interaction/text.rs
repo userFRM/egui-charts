@@ -80,7 +80,7 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
     let request_focus = std::mem::take(&mut editor.focus);
     let font_size = drawing.font_size;
     let hint = match drawing.tool_type {
-        DrawingToolType::Image => "Image address, such as file:///home/me/chart.png",
+        DrawingToolType::Image => "Image address (https://… or file://…)",
         DrawingToolType::Tweet => "Author on the first line, then the post",
         DrawingToolType::Idea => "Title on the first line, then the idea",
         _ => "",
