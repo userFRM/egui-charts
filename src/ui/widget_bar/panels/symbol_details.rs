@@ -69,7 +69,9 @@ enum Request {
 /// are kept in memory per symbol, and with a storage service attached they are read from and
 /// written to one [`StoreKind::SymbolNotes`] document per symbol as they are edited, one write per
 /// document at a time. Call [`poll`](Self::poll) each frame, even while the panel is hidden, then
-/// [`show`](Self::show) while it is open.
+/// [`show`](Self::show) while it is open. The More menu's Financials item is reported by
+/// [`take_financials_request`](Self::take_financials_request), for the host to open a
+/// [`FinancialsPanel`](crate::ui::financials::FinancialsPanel) with the company's figures.
 #[derive(Default)]
 pub struct SymbolDetailsPanel {
     instrument: Option<Instrument>,
@@ -86,6 +88,7 @@ pub struct SymbolDetailsPanel {
     inbox: Arc<Inbox>,
     requests: HashMap<u64, Request>,
     next: u64,
+    financials_requested: bool,
 }
 
 impl SymbolDetailsPanel {
@@ -155,6 +158,11 @@ impl SymbolDetailsPanel {
     /// Shows update times in `timezone`, such as the chart's.
     pub fn set_timezone(&mut self, timezone: TimezoneId) {
         self.timezone = timezone;
+    }
+
+    /// Whether the user chose Financials in the More menu since the last call.
+    pub fn take_financials_request(&mut self) -> bool {
+        std::mem::take(&mut self.financials_requested)
     }
 
     /// The shown symbol, if any.
@@ -311,6 +319,7 @@ impl SymbolDetailsPanel {
             details,
             error,
             notes,
+            financials_requested,
             ..
         } = self;
         let Some(instrument) = instrument else {
@@ -326,6 +335,9 @@ impl SymbolDetailsPanel {
                 .tooltip("More")
                 .show(ui);
             egui::Popup::menu(&more).show(|ui| {
+                if ui.button(l10n::text(ui.ctx(), "Financials")).clicked() {
+                    *financials_requested = true;
+                }
                 if ui.button(l10n::text(ui.ctx(), "Copy symbol")).clicked() {
                     ui.ctx().copy_text(instrument.symbol.clone());
                 }

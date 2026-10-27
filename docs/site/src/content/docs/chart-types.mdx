@@ -4,7 +4,9 @@ title: Chart types and series
 
 `ChartType` selects the main series renderer. The available types include
 candlesticks, OHLC bars, line and area charts, Heikin Ashi, Renko, Kagi,
-Point & Figure, Line Break, range bars and Market Profile (TPO).
+Point & Figure, Line Break, range bars, Market Profile (TPO), Volume Footprint and Session Volume Profile.
+
+The two execution chart types use retained and incoming feed trades on time-based intervals and require the instrument's tick size. Without those inputs they draw candles, as do bars before the first retained execution. Session Volume Profile also requires the `studies` feature.
 
 ```rust
 use egui_charts::{Chart, ChartType, model::BarData};

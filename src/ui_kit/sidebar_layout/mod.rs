@@ -118,32 +118,31 @@ impl<'a> SidebarTab<'a> {
     }
 
     /// Show the sidebar tab. Returns `true` if clicked.
+    ///
+    /// The selected tab has a neutral fill and a semibold label in the text colour.
     pub fn show(self, ui: &mut Ui) -> bool {
         let theme = ui.active_theme();
         let width = ui.available_width();
-        let height = DESIGN_TOKENS.sizing.button_lg;
+        let height = DESIGN_TOKENS.sizing.button_xl;
         let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
         let translated_label = l10n::text(ui.ctx(), self.label);
         response.widget_info(|| WidgetInfo::labeled(Role::Tab, ui.is_enabled(), &translated_label));
         ui.ctx()
             .accesskit_node_builder(response.id, |node| node.set_selected(self.is_active));
 
-        let is_hovered = response.hovered();
-
-        // Background
-        if self.is_active {
-            ui.painter()
-                .rect_filled(rect, 0.0, ui.style().visuals.selection.bg_fill);
-        } else if is_hovered {
-            ui.painter()
-                .rect_filled(rect, 0.0, ui.style().visuals.widgets.hovered.bg_fill);
+        if self.is_active || response.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                theme.radius.md,
+                if self.is_active && !theme.dark {
+                    theme.ui.text.gamma_multiply(0.06)
+                } else {
+                    ui.style().visuals.widgets.hovered.bg_fill
+                },
+            );
         }
 
-        let text_color = if self.is_active {
-            ui.style().visuals.selection.stroke.color
-        } else {
-            ui.style().visuals.text_color()
-        };
+        let text_color = ui.style().visuals.text_color();
 
         // Every tab reserves the icon slot, so labels line up with or without an icon.
         let icon_size = DESIGN_TOKENS.sizing.icon_md;
@@ -158,14 +157,18 @@ impl<'a> SidebarTab<'a> {
         }
 
         // Label
-        ui.painter().text(
-            Pos2::new(icon_x + icon_size + theme.spacing.sm, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            l10n::text(ui.ctx(), self.label),
-            egui::FontId::proportional(theme.text.body),
-            text_color,
-        );
-        crate::styles::focus::draw_focus_ring(ui, &response, 0.0);
+        let mut format =
+            egui::TextFormat::simple(egui::FontId::proportional(theme.text.body), text_color);
+        if self.is_active {
+            format.coords.push("wght", 600.0);
+        }
+        let label_x = icon_x + icon_size + theme.spacing.sm;
+        let mut job = egui::text::LayoutJob::single_section(translated_label, format);
+        job.wrap = egui::text::TextWrapping::truncate_at_width((rect.right() - label_x).max(0.0));
+        let galley = ui.painter().layout_job(job);
+        let label_pos = Pos2::new(label_x, rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(label_pos, galley, text_color);
+        crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.md);
 
         response.clicked()
     }

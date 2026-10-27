@@ -1,5 +1,9 @@
 //! Symbol search.
 
+mod expression;
+
+pub use expression::{ExpressionError, SymbolExpression};
+
 use crate::data::{MaybeSend, Reply};
 use crate::model::{Instrument, SymbolType};
 

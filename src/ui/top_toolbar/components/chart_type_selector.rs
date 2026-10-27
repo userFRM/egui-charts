@@ -16,6 +16,8 @@ use egui::{Color32, Rect, Role, Ui, WidgetInfo, pos2, vec2};
 
 /// Height of a chart type row.
 const ROW_H: f32 = 40.0;
+/// Space between two groups of rows, with the separator line in its middle.
+const GROUP_GAP: f32 = 13.0;
 
 /// Extension trait for ChartType to provide UI-specific functionality
 pub trait ChartTypeUiExt {
@@ -39,6 +41,8 @@ impl ChartTypeUiExt for ChartType {
             ChartType::Columns => &embedded_icons::CHART_COLUMNS,
             ChartType::HighLow => &embedded_icons::CHART_HIGH_LOW,
             ChartType::TimePriceOpportunity => &embedded_icons::CHART_TPO,
+            ChartType::VolumeFootprint => &embedded_icons::CHART_VOLUME_FOOTPRINT,
+            ChartType::SessionVolumeProfile => &embedded_icons::CHART_SESSION_VOLUME_PROFILE,
             ChartType::LineBreak => &embedded_icons::CHART_LINE_BREAK,
             ChartType::Kagi => &embedded_icons::CHART_KAGI,
             ChartType::Range => &embedded_icons::CHART_RANGE,
@@ -188,12 +192,10 @@ impl ChartTypeSelector {
                         ChartType::Line
                             | ChartType::Area
                             | ChartType::Columns
-                            | ChartType::TimePriceOpportunity
-                            | ChartType::LineBreak
+                            | ChartType::VolumeFootprint
+                            | ChartType::Heikin
                     ) {
-                        ui.add_space(12.0);
-                        ui.separator();
-                        ui.add_space(12.0);
+                        ui.add(egui::Separator::default().spacing(GROUP_GAP));
                     }
                     let content = ChartTypeRow {
                         chart_type: *chart_type,

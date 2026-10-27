@@ -238,7 +238,7 @@ impl Default for TextSizes {
         Self {
             micro: 8.0,
             marker: 9.0,
-            dialog_title: 18.0,
+            dialog_title: 20.0,
             tiny: 10.0,
             small: 11.0,
             label: 12.0,
@@ -747,7 +747,7 @@ mod tests {
         for (role, default) in [
             ("micro", 8.0),
             ("marker", 9.0),
-            ("dialog_title", 18.0),
+            ("dialog_title", 20.0),
             ("chart_title", 16.0),
             ("toolbar", 14.0),
             ("ohlc", 13.0),

@@ -13,7 +13,7 @@ use crate::model::{Alert, AlertId, AlertStatus};
 use crate::services::{AlertEvent, Alerts, Listener};
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::Button;
-use crate::ui_kit::notifications::Toasts;
+use crate::ui_kit::notifications::{Toast, Toasts};
 use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
 
 /// Configuration for the alerts panel.
@@ -73,6 +73,7 @@ pub struct AlertsPanel {
     log: VecDeque<AlertTrigger>,
     error: Option<FeedError>,
     show_log: bool,
+    notification_seconds: f32,
 }
 
 impl Default for AlertsPanel {
@@ -94,7 +95,17 @@ impl AlertsPanel {
             log: VecDeque::new(),
             error: None,
             show_log: false,
+            notification_seconds: 5.0,
         }
+    }
+
+    /// Keep each trigger notification on screen for this many seconds, five by default.
+    pub fn set_notification_seconds(&mut self, seconds: f32) {
+        self.notification_seconds = if seconds.is_finite() {
+            seconds.max(0.0)
+        } else {
+            5.0
+        };
     }
 
     /// Attach a host service, clearing the previous account's alerts and log.
@@ -210,10 +221,13 @@ impl AlertsPanel {
         price: Option<f64>,
         toasts: &mut Toasts,
     ) {
-        toasts.info(format!(
-            "Alert triggered: {}",
-            if symbol.is_empty() { &id.0 } else { &symbol }
-        ));
+        toasts.add(
+            Toast::info(format!(
+                "Alert triggered: {}",
+                if symbol.is_empty() { &id.0 } else { &symbol }
+            ))
+            .duration(self.notification_seconds),
+        );
         let extra = toasts.len().saturating_sub(5);
         toasts.toasts_mut().drain(..extra);
         self.log.push_back(AlertTrigger {
@@ -428,6 +442,7 @@ mod tests {
         let host = Arc::new(Host::default());
         let mut panel = AlertsPanel::default();
         panel.set_service(host.clone());
+        panel.set_notification_seconds(12.0);
         let events = host.events.lock().unwrap().clone().unwrap();
         let ctx = egui::Context::default();
         let mut toasts = Toasts::new();
@@ -491,6 +506,18 @@ mod tests {
         frame(&mut panel);
         assert_eq!(panel.error, Some(FeedError::Unanswered));
         assert_eq!(panel.log().len(), 1);
+        assert_eq!(toasts.toasts()[0].duration, 12.0);
+        panel.apply_event(
+            AlertEvent::TriggeredForSymbol {
+                id: AlertId("watchlist".into()),
+                symbol: "AAPL".into(),
+                time: Utc::now(),
+                price: Some(123.0),
+            },
+            &mut toasts,
+        );
+        assert!(toasts.toasts().iter().all(|toast| toast.duration == 12.0));
+        assert_eq!(panel.log().back().unwrap().symbol, "AAPL");
         drop(panel);
         assert!(!renewed.is_active());
     }
