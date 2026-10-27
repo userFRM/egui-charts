@@ -183,16 +183,24 @@ mod tests {
                             if tape {
                                 matches!(text.as_str(), "12:34:56" | "123456789.12" | "123.46K")
                             } else {
-                                [symbol, "123456.789", "+23456.789", "+23.46%"]
+                                [symbol, "123,456.789", "+23,456.789", "+23.46%"]
                                     .contains(&text.as_str())
                             }
                         })
                         .collect();
                     assert_eq!(row.len(), if tape { 3 } else { 4 }, "{texts:?}");
-                    let bounds =
-                        |label: &str| texts.iter().find(|(text, _)| text == label).unwrap().1;
+                    // The last match, so a symbol's name wins over its mark's initial.
+                    let bounds = |label: &str| {
+                        texts
+                            .iter()
+                            .rev()
+                            .find(|(text, _)| text == label)
+                            .unwrap()
+                            .1
+                    };
                     if !tape {
-                        assert!((bounds("A").left() - 10.0).abs() < 2.0, "{texts:?}");
+                        // The name follows the 18 point mark at the symbol column's edge.
+                        assert!((bounds("A").left() - 34.0).abs() < 2.0, "{texts:?}");
                     }
                     let (value, heading) = if tape {
                         ("2.00", "Price")
