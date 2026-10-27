@@ -302,17 +302,15 @@ impl ExecutionRanges {
         }
         let key = (params.range_size, trades_revision, cutoff);
         if self.key != Some(key) {
-            let trades: Vec<_> = trades
-                .filter(|t| cutoff.is_none_or(|c| t.ts < c))
-                .cloned()
+            let mut builder = RangeBarBuilder::new(params.range_size);
+            for trade in trades.filter(|t| cutoff.is_none_or(|c| t.ts < c)) {
+                builder.push_tick(trade);
+            }
+            let bars: Arc<[Bar]> = builder
+                .elements()
+                .iter()
+                .map(range_bar::RangeBar::to_bar)
                 .collect();
-            let bars: Arc<[Bar]> = range_bar::to_range_bars_from_ticks(
-                &trades,
-                &crate::model::RangeBarConfig::new(params.range_size),
-            )
-            .iter()
-            .map(range_bar::RangeBar::to_bar)
-            .collect();
             self.built = (!bars.is_empty()).then(|| {
                 let trimmed = bars.len() >= range_bar::MAX_BARS;
                 (bars, trimmed)
