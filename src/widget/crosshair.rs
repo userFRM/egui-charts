@@ -1,7 +1,7 @@
 //! Crosshair snapping and study legend actions shared by the chart panes.
 
-use super::{Chart, ChartElementId, RightClickTarget};
-use crate::chart::renderers::{StudyAction, snap_to_values};
+use super::{Chart, ChartElementId, RightClickTarget, SeriesId};
+use crate::chart::renderers::{SeriesAction, StudyAction, snap_to_values};
 use crate::config::CrosshairMode;
 use crate::scales::PriceMap;
 use crate::studies::Indicator;
@@ -64,6 +64,20 @@ impl Chart {
             pos.y = map.price_to_y(value);
         }
         pos
+    }
+
+    /// Applies a legend control of the main series to the chart's typed operations. Settings are
+    /// reported to the host, as for a study, with [`SeriesId::MAIN`].
+    pub(super) fn apply_main_series_action(&mut self, action: SeriesAction) {
+        self.user_action(|chart| match action {
+            SeriesAction::Settings => chart.indicator_settings_request = Some(SeriesId::MAIN),
+            SeriesAction::ToggleVisibility => {
+                chart.set_main_series_visible(!chart.main_series_visible);
+            }
+            SeriesAction::Remove => {
+                chart.remove_series(SeriesId::MAIN);
+            }
+        });
     }
 
     pub(super) fn apply_study_action(&mut self, action: StudyAction) {

@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Floating, held and tracking data readouts lead with the instrument's symbol, and follow a change of instrument. The main series' legend title row offers hide or show, settings and remove buttons that run the chart's typed operations on `SeriesId::MAIN`, leaving studies and other series in place; settings arrive through `Chart::take_indicator_settings_request` as `SeriesId::MAIN`. A hidden main series keeps its dimmed title and buttons so it can be shown again, and the buttons are reachable with Tab. ([#1063](https://github.com/userFRM/egui-charts/issues/1063))
+
+- `PriceAxisOptions::show_symbol_name` and `show_study_names`, and the Scales and lines settings checkboxes of the same names, write the symbol or study name before its last value tag on the price scale, so equal values of different series stay apart. They are off by default, independent of the legend titles and the value visibility flags, and persist with the settings. Added series write their own name on their tags. Migration: `PriceAxisOptions` and `ScalesAndLinesSettings` literals add `show_symbol_name: false` and `show_study_names: false` or use defaults. ([#1064](https://github.com/userFRM/egui-charts/issues/1064))
+
+- Point and Figure builds from high/low input, as before, or from closes through `ChartTypeParams::pnf_source` and the series settings Symbol tab. The choice is part of the cached build, so a change rebuilds the columns, and it persists with the chart type parameters. Migration: `ChartTypeParams` literals add `pnf_source: PriceBasedSource::HighLow` or use `..Default::default()`. ([#1062](https://github.com/userFRM/egui-charts/issues/1062))
+
+- The HLC area chart's fill opacity and close line width are set through `ChartTypeStyles::hlc_area` and the series settings Symbol tab, and persist with the chart type parameters. Defaults keep the former look; opacities outside 0 to 1 are clamped and a non-positive width hides the line. Migration: `ChartTypeStyles` literals add `hlc_area: HlcAreaStyle::default()` or use `..Default::default()`. ([#1103](https://github.com/userFRM/egui-charts/issues/1103))
 - A star on each chart type menu row adds the type to the favourites or removes it. The toolbar then shows a button for each favourite in menu order, the last selected non-favourite and a menu chevron, with the same rules as the interval buttons. A new selector has no favourites. `ChartTypeSelector::preferences` and `set_preferences` exchange serializable `ChartTypePreferences` for host user settings, and `ChartTypeAction::ToggleFavorite` reports a toggle; the demo saves and restores them through application storage. ([#1042](https://github.com/userFRM/egui-charts/issues/1042))
 
 - The documentation status page shows feature completion by area from the maintained feature list, as a feature map coloured by status and one table per area. The same build produces per-area status badges and the feature map image for embedding. ([#1129](https://github.com/userFRM/egui-charts/issues/1129))
@@ -350,6 +357,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Value tags and legend values of added series use their own price scale's decimals instead of a fixed two, while a host formatter set for the series still writes them. ([#1064](https://github.com/userFRM/egui-charts/issues/1064))
+
+- Volume candle bodies are as wide as the bar's volume over the largest visible volume, with no hidden minimum: a zero or missing volume draws a body as thin as the wick, and without any visible volume every body keeps the full width. ([#1104](https://github.com/userFRM/egui-charts/issues/1104))
 - The demo page declares the project icon, so the tab shows it and no favicon request fails. The module preload no longer carries an integrity attribute, which browsers ignore for that destination and warn about. ([#1044](https://github.com/userFRM/egui-charts/issues/1044))
 - Range charts build their bars from the executions the feed supplied, in order with their timestamps and volume and with the incomplete last bar, so two execution paths with the same open, high, low and close show their own bars. History pages, corrections, live trades and the replay cursor rebuild them. Charts without executions keep the approximation from the bars' open, high, low and close, and `Chart::range_bar_source` reports which one is shown as `model::RangeBarSource`. ([#1105](https://github.com/userFRM/egui-charts/issues/1105))
 

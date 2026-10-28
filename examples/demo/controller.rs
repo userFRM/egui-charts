@@ -989,7 +989,9 @@ impl DemoApp {
     }
 
     fn open_indicator_settings(&mut self, id: SeriesId) {
-        if !self.indicator_settings.open_for_chart(&self.chart, id)
+        if id == SeriesId::MAIN {
+            self.open_chart_settings_dialog();
+        } else if !self.indicator_settings.open_for_chart(&self.chart, id)
             && self.chart.series().any(|(series, _)| series == id)
         {
             self.compare_dialog.open();
