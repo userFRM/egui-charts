@@ -269,6 +269,24 @@ jobs:
           WGPU_BACKEND: vulkan
         run: xvfb-run -a examples/demo/smoke-native.sh examples/demo/target/debug/egui-charts-demo
 
+  terminal:
+    if: github.event.pull_request.draft != true
+    name: Terminal package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: terminal
+      - name: Clippy
+        run: cargo clippy --locked --manifest-path terminal/Cargo.toml --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked --manifest-path terminal/Cargo.toml
+
   fmt:
     if: github.event.pull_request.draft != true
     name: Format
@@ -281,7 +299,7 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
       - name: Check the crates outside the workspace
-        run: for m in examples/demo docs/capture fuzz; do cargo fmt --manifest-path $m/Cargo.toml -- --check || exit 1; done
+        run: for m in examples/demo terminal docs/capture fuzz; do cargo fmt --manifest-path $m/Cargo.toml -- --check || exit 1; done
 
   doc:
     if: github.event.pull_request.draft != true
