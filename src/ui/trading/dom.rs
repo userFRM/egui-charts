@@ -50,7 +50,7 @@ enum Accumulation {
 
 /// The optional columns right of the ladder: the order count and the size change of each side, and
 /// the volume traded at the bid and the ask.
-const EXTRAS: [&str; 3] = ["Orders", "Obs. change", "Traded"];
+const EXTRAS: [&str; 3] = ["Orders", "Obs. chg", "Traded"];
 
 /// Width of one optional column.
 const EXTRA: f32 = 48.0;
