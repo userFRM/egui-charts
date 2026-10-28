@@ -1856,7 +1856,7 @@ impl Chart {
             .filter(|_| time_based && self.main_series_visible && self.replay.is_none())
         {
             let x = |i| idx_to_coord(start_idx + i, chart_rect.min.x);
-            bubbles.render(&clipped_painter, visible_data, x, |p| {
+            bubbles.render(&clipped_painter, visible_data, coords.bar_spacing, x, |p| {
                 price_map.price_to_y(p)
             });
         }

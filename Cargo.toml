@@ -133,6 +133,12 @@ path = "benches/order_flow.rs"
 harness = false
 required-features = ["widget"]
 
+[[bench]]
+name = "heatmap"
+path = "benches/heatmap.rs"
+harness = false
+required-features = ["widget"]
+
 [features]
 default = ["ui", "locales", "timezones"]
 ## The egui chart widget: `Chart`, `ChartBuilder`, configuration,

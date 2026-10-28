@@ -95,6 +95,8 @@ A second table prints the first frame and the median and 95th percentile of stea
 
 `benches/order_flow.rs` pushes the order flow of a busy instrument, 18,000 trades, depth deltas and quotes a second from the demo's synthetic book, into one chart with a depth history and draws a frame per 1/60 s of market time. It prints the messages pushed per second, the frame time, the heap allocations per message and the heap the chart holds: `cargo bench --bench order_flow`. `ORDER_FLOW_SECONDS` sets the market time simulated (default 300).
 
+`benches/heatmap.rs` feeds one chart 400 depth deltas a second into a book of 1,000 levels a side and draws the liquidity heatmap in a 1440 by 900 window. It prints the sampling cadence, the time the sink takes per delta, the frame time, the texture data uploaded, and the textures and heap held, for the default history of 100 levels at one second, for 1,000 levels at 50 ms, and for the latter with its history filled to every resolution: `cargo bench --bench heatmap`. `HEATMAP_SECONDS` sets the market time simulated (default 60). `docs/order-flow.md` quotes its results.
+
 To compare two commits, build the bench on each and run the two binaries in turn, so that changes in machine load and clock speed affect both alike. `cargo bench --no-run` prints the path of the binary it builds:
 
 ```sh
