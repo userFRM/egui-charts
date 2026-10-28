@@ -130,6 +130,7 @@ impl FeedLink {
             retries: Vec::new(),
             subscription: None,
             instrument: self.instrument.clone(),
+            capabilities: self.capabilities.clone(),
             trades: Trades::new(TRADE_CAPACITY),
             bubbles: self
                 .bubbles
@@ -140,6 +141,10 @@ impl FeedLink {
             order_queue: self.order_queue.clone(),
             depth_history: self.depth_history.clone(),
             depth_complete: self.depth_complete,
+            bar_cursor: None,
+            trade_cursor: None,
+            depth_cursor: None,
+            trades_complete: false,
             heatmap: self.heatmap.is_some().then(Default::default),
             book_view: self.book_view.clone(),
             study_inputs: Vec::new(),
