@@ -111,7 +111,6 @@ pub struct Terminal {
     strategy_report: Option<StrategyReport>,
     #[expect(dead_code, reason = "the group keeps its state here")]
     drawings: drawings::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     studies: studies::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
     time: time::State,
