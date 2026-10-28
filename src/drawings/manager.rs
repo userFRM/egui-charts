@@ -1818,6 +1818,10 @@ impl DrawingManager {
             && self.owns_pane(drawing)
         {
             self.render_drawing(drawing, painter, price_rect, view);
+            if drawing.tool_type == DrawingToolType::Rect {
+                drawing.render_rect_guides(painter);
+                self.render_handles(painter, drawing);
+            }
         }
 
         // Render handles for every visible selected drawing.
@@ -1827,6 +1831,9 @@ impl DrawingManager {
                 && self.owns_pane(d)
                 && d.is_visible_on_timeframe(&self.curr_timeframe)
         }) {
+            if drawing.tool_type == DrawingToolType::Rect {
+                drawing.render_rect_guides(painter);
+            }
             self.render_handles(painter, drawing);
         }
     }
