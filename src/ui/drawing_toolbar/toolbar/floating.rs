@@ -17,11 +17,15 @@ impl DrawingToolbar {
     /// a tool picked on it; call this only to place the strip elsewhere, before them, as a
     /// second call in the same pass draws nothing.
     ///
-    /// The strip lists [`ToolbarState::favorites`], so starring or unstarring a tool changes it
+    /// The strip lists [`ToolbarState::favorites`][favorites], so starring or unstarring a tool changes it
     /// at once, and it is hidden while there are none. `position` places it until it has been
-    /// moved; afterwards [`ToolbarState::floating_pos`] holds its position. Its grip drags it, kept
-    /// on screen, and its close button clears [`ToolbarState::floating_visible`], as the
+    /// moved; afterwards [`ToolbarState::floating_pos`][floating_pos] holds its position. Its grip drags it, kept
+    /// on screen, and its close button clears [`ToolbarState::floating_visible`][floating_visible], as the
     /// favourites button of the toolbar does.
+    ///
+    /// [favorites]: super::super::state::ToolbarState::favorites
+    /// [floating_pos]: super::super::state::ToolbarState::floating_pos
+    /// [floating_visible]: super::super::state::ToolbarState::floating_visible
     pub fn show_floating(&mut self, ui: &mut Ui, position: Pos2) -> Option<DrawingToolType> {
         let pass = ui.ctx().cumulative_pass_nr();
         if self.strip_pass == Some(pass) {
