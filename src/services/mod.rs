@@ -46,4 +46,4 @@ pub use search::{ExpressionError, SymbolExpression, SymbolQuery, SymbolSearch};
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub use settings::{SettingsStore, UserSettings};
 pub use signals::{SignalEvent, Signals};
-pub use storage::{Storage, StoreKind};
+pub use storage::{ConflictChoice, Revision, SaveOutcome, Storage, StoreKind, Versioned};

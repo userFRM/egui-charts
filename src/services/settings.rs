@@ -1,7 +1,7 @@
 //! The user's settings, kept in one document of the host's storage.
 
 use super::document::{Received, StoredDocument};
-use super::{Storage, StoreKind};
+use super::{ConflictChoice, Storage, StoreKind};
 use crate::config::DrawingToolType;
 use crate::model::{ReplaySession, Timeframe, Watchlist};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -92,7 +92,9 @@ impl UserSettings {
 /// Keeps [`UserSettings`] in the host's [`Storage`]: reads them once, then writes them a second
 /// after they last changed. A failed write keeps the settings in memory and is reported once by
 /// [`take_error`](Self::take_error); a later poll or explicit flush retries it. Settings that
-/// could not be read are never written over.
+/// could not be read are never written over. If the host keeps revisions of documents (see
+/// [`Storage`]), a change by another client is read while nothing is unsaved, and a write over a
+/// newer version is refused and left to [`resolve_conflict`](Self::resolve_conflict).
 pub struct SettingsStore {
     storage: Arc<dyn Storage>,
     document: StoredDocument,
@@ -109,8 +111,10 @@ impl SettingsStore {
 
     /// Starts reading the settings from `storage`.
     pub fn new(storage: Arc<dyn Storage>) -> Self {
+        let mut document = StoredDocument::open(&*storage, StoreKind::Settings, "settings");
+        document.follow_changes(&*storage);
         Self {
-            document: StoredDocument::open(&*storage, StoreKind::Settings, "settings"),
+            document,
             storage,
             written: None,
             changed: None,
@@ -193,6 +197,20 @@ impl SettingsStore {
                 }
             }
         }
+    }
+
+    /// Whether the host refused to write the settings because another client changed them. The
+    /// settings stay in memory and nothing is written until
+    /// [`resolve_conflict`](Self::resolve_conflict) settles it.
+    pub fn conflict(&self) -> bool {
+        self.document.conflicted()
+    }
+
+    /// Settles a refused write with the user's choice. Reloading the stored settings returns them
+    /// from the next [`poll`](Self::poll), like the first read; keeping a local copy saves the
+    /// unsaved settings as the document `settings (local copy)` first.
+    pub fn resolve_conflict(&mut self, choice: ConflictChoice) {
+        self.document.resolve(&*self.storage, choice);
     }
 
     /// The error of a failed read or write since the last call, to show to the user.
