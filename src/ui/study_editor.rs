@@ -11,7 +11,7 @@ use crate::localization as l10n;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 use egui::text::{CCursor, CCursorRange};
-use egui::{Align, Color32, RichText, ScrollArea, TextEdit, Ui};
+use egui::{Align, RichText, ScrollArea, TextEdit, Ui};
 use std::ops::Range;
 
 /// How serious a [`Diagnostic`] is.
@@ -141,7 +141,7 @@ impl StudyEditor {
         });
     }
 
-    /// Selects the span of `diagnostic` in the text and scrolls to it in the next frame.
+    /// Selects the byte `span` in the text and scrolls to it in the next frame.
     pub fn reveal(&mut self, span: Range<usize>) {
         self.reveal = Some(span);
     }
@@ -169,11 +169,7 @@ impl StudyEditor {
                 ui.label(RichText::new(l10n::text(ui.ctx(), "Unsaved changes")).color(weak));
             }
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if Button::new("Apply")
-                    .enabled(!self.has_errors())
-                    .show(ui)
-                    .clicked()
-                {
+                if Button::new("Apply").show(ui).clicked() {
                     action = StudyEditorAction::Apply {
                         title: self.title.clone(),
                         text: self.text.clone(),
@@ -231,8 +227,8 @@ impl StudyEditor {
         let mut reveal = None;
         for diagnostic in &self.diagnostics {
             let color = match diagnostic.severity {
-                Severity::Error => Color32::from_rgb(242, 54, 69),
-                Severity::Warning => Color32::from_rgb(255, 152, 0),
+                Severity::Error => ui.visuals().error_fg_color,
+                Severity::Warning => ui.visuals().warn_fg_color,
                 Severity::Info => weak,
             };
             let label = match diagnostic.severity {
@@ -258,12 +254,6 @@ impl StudyEditor {
             ui.ctx().request_repaint();
         }
         action
-    }
-
-    fn has_errors(&self) -> bool {
-        self.diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == Severity::Error)
     }
 
     /// Room kept below the text for the diagnostics list.
