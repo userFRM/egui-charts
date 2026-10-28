@@ -298,6 +298,7 @@ impl Signals for OrderFlowDetectors {
             subscriptions,
             ..
         } = &mut *state;
+        let new = !subscriptions.contains_key(symbol);
         let subscription = subscriptions
             .entry(symbol.to_owned())
             .or_insert_with(|| Subscription {
@@ -308,7 +309,7 @@ impl Signals for OrderFlowDetectors {
             for signal in &tracked.detections {
                 events.push(SignalEvent::Upsert(signal.clone()));
             }
-            if subscription.timeframe != timeframe || subscription.streams.is_empty() {
+            if new || subscription.timeframe != timeframe {
                 let clock = clock(&tracked.instrument, timeframe);
                 tracked.big_trades.set_clock(clock);
             }
@@ -475,7 +476,7 @@ mod tests {
     struct Host {
         detectors: OrderFlowDetectors,
         inbox: Arc<Inbox>,
-        _listeners: Vec<Listener>,
+        listeners: Vec<Listener>,
     }
 
     impl Host {
@@ -492,7 +493,7 @@ mod tests {
             let mut host = Self {
                 detectors,
                 inbox: Arc::new(Inbox::default()),
-                _listeners: Vec::new(),
+                listeners: Vec::new(),
             };
             host.subscribe();
             host
@@ -500,7 +501,7 @@ mod tests {
 
         fn subscribe(&mut self) {
             let (listener, events) = Listener::new(&self.inbox, 1);
-            self._listeners.push(listener);
+            self.listeners.push(listener);
             self.detectors.subscribe("ES", Timeframe::Min1, events);
         }
 
@@ -557,23 +558,37 @@ mod tests {
     #[test]
     fn zones_are_kept_by_where_they_traded_in_their_bar() {
         use OrderSide::{Buy, Sell};
-        let host = Host::new(Some(10.0));
+        let mut host = Host::new(Some(10.0));
         let mut settings = host.detectors.settings();
         settings.big_trades.rule.wick_zones = false;
         host.detectors.set_settings(settings);
-        // The bar opens at 100 and closes at 101: a big sell at 100.5 in the body and a big
+        let mut removed = Vec::new();
+        let mut trade = |host: &Host, fill| {
+            let events = host.push(MarketEvent::Trade(fill));
+            removed.extend(
+                events
+                    .into_iter()
+                    .filter(|event| matches!(event, SignalEvent::Remove(_))),
+            );
+        };
+        // The first bar was not seen from its open, so its big buy in the upper wick stays.
+        trade(&host, fill(-30, 100.0, 1.0, Buy, None));
+        trade(&host, fill(-20, 103.0, 10.0, Buy, None));
+        trade(&host, fill(-10, 101.0, 1.0, Buy, None));
+        // The next bar opens at 100 and closes at 101: a big sell at 100.5 in the body and a big
         // buy at 103 in the upper wick.
-        for fill in [
-            fill(0, 100.0, 1.0, Buy, None),
-            fill(10, 100.5, 10.0, Sell, None),
-            fill(20, 103.0, 10.0, Buy, None),
-            fill(30, 101.0, 1.0, Buy, None),
-        ] {
-            host.push(MarketEvent::Trade(fill));
-        }
+        trade(&host, fill(0, 100.0, 1.0, Buy, None));
+        trade(&host, fill(10, 100.5, 10.0, Sell, None));
+        trade(&host, fill(20, 103.0, 10.0, Buy, None));
+        // A new subscription at the same interval, once the old stream stopped, keeps the bar.
+        host.listeners.clear();
+        trade(&host, fill(25, 101.0, 1.0, Buy, None));
+        host.subscribe();
+        trade(&host, fill(30, 101.0, 1.0, Buy, None));
+        trade(&host, fill(60, 101.0, 1.0, Buy, None));
         assert_eq!(
-            host.push(MarketEvent::Trade(fill(60, 101.0, 1.0, Buy, None))),
-            [SignalEvent::Remove(SignalId("big-trade-zone-2".into()))]
+            removed,
+            [SignalEvent::Remove(SignalId("big-trade-zone-3".into()))]
         );
     }
 

@@ -34,7 +34,8 @@ const CALIBRATE_EVERY: u64 = 100;
 /// When the bar of the subscribed time interval that contains the first fill closes, the trade
 /// is in the body of that bar if its volume-weighted price lies between the bar's open and close,
 /// both included, and in a wick otherwise. Zones of the kinds not kept are then removed. Zones
-/// whose bar the service did not see open, or under a trade-based interval, stay.
+/// in a bar the service did not see open, the first one after tracking starts or the interval
+/// changes, or under a trade-based interval, stay.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct BigTradeRule {
@@ -99,6 +100,8 @@ struct Bar {
     open_time: DateTime<Utc>,
     open: f64,
     close: f64,
+    /// Whether the service saw the bar's first trade.
+    whole: bool,
 }
 
 impl BigTrades {
@@ -232,6 +235,7 @@ impl BigTrades {
                     open_time: open,
                     open: fill.price,
                     close: fill.price,
+                    whole: bar.is_some(),
                 });
             }
             _ => {}
@@ -251,7 +255,8 @@ impl BigTrades {
             zone.classified = true;
             // A zone older than the bar lies in a bar the service did not see open.
             let body = (bottom..=top).contains(&zone.price);
-            if zone.from < bar.open_time
+            if !bar.whole
+                || zone.from < bar.open_time
                 || if body {
                     rule.body_zones
                 } else {
