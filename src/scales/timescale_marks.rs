@@ -1348,8 +1348,7 @@ mod tests {
             (
                 2,
                 vec![
-                    0, 1, 3, 8, 9, 11, 14, 15, 17, 21, 23, 25, 28, 29, 31, 35, 37, 39, 42, 43, 45,
-                    49,
+                    0, 1, 3, 8, 9, 11, 14, 15, 17, 21, 23, 25, 28, 29, 35, 37, 39, 42, 43, 45, 49,
                 ],
             ),
             (7, vec![0, 8, 14, 21, 28, 35, 42, 49]),
@@ -1357,13 +1356,12 @@ mod tests {
         ] {
             let marks =
                 generator.generate_bar_marks(&bars, Duration::days(days), TickMarkType::DayOfMonth);
-            // The first February bar is a stronger calendar boundary, independent of the stride.
+            // The first February bar, day 31, is a stronger boundary whatever the stride.
             let actual: Vec<_> = marks
                 .iter()
                 .filter(|mark| mark.weight < TickMarkWeight::MONTH)
                 .map(|mark| (mark.time - start).num_days())
                 .collect();
-            let expected: Vec<_> = expected.into_iter().filter(|day| *day != 31).collect();
             assert_eq!(actual, expected, "{days}-day buckets");
             assert!(
                 marks
@@ -1416,18 +1414,15 @@ mod tests {
                 .iter()
                 .filter(|mark| mark.time.timestamp_subsec_millis() == 0)
             {
-                let kind = if mark.time == start && start.month() == 1 {
-                    TickMarkType::Year
+                let (kind, pattern) = if mark.time == start && start.month() == 1 {
+                    (TickMarkType::Year, "%Y")
                 } else if mark.time.second() == 0 {
-                    TickMarkType::Time
+                    (TickMarkType::Time, "%H:%M")
                 } else {
-                    TickMarkType::TimeWithSeconds
+                    (TickMarkType::TimeWithSeconds, "%H:%M:%S")
                 };
                 assert_eq!(mark.mark_type, kind);
-                assert_eq!(
-                    mark.label,
-                    DefaultTimeFormatter::default().format(mark.time, kind)
-                );
+                assert_eq!(mark.label, mark.time.format(pattern).to_string());
             }
             for mark in marks
                 .iter()
