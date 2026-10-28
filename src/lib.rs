@@ -56,6 +56,7 @@
 //! | [`services`] | Host storage, symbol search, quotes, alerts, signals and broker contracts |
 //! | [`theme`], [`tokens`], [`styles`] | Theme presets, design tokens and UI styling helpers |
 //! | `ui`, `ui_kit` | Chart controls and reusable UI components placed in the host's layout |
+//! | `ui::terminal` | The assembled terminal: toolbars, menus and charts that perform their actions |
 //! | `icons` | Embedded SVG icons |
 //! | [`localization`] | Host translations scoped to an egui context |
 //! | [`prelude`] | Common types and traits for chart integration |
@@ -80,8 +81,9 @@
 //! # Application integration
 //!
 //! Keep a chart across frames so its viewport, studies and drawings persist.
-//! Application UI components return actions for the host to apply; the crate does
-//! not assemble an application or connect to a market data provider on its own.
+//! Application UI components return actions for the host to apply, or
+//! `ui::terminal::Terminal` assembles them and performs their actions. The crate does
+//! not connect to a market data provider on its own.
 //!
 //! Apply [`theme::apply_to_egui`] at startup and after changing the theme. It installs
 //! the bundled font and applies UI colors and spacing. Use

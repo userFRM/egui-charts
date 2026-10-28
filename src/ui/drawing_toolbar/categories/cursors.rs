@@ -26,6 +26,8 @@ pub enum CursorType {
     Arrow,
     /// Pointer with a presentation halo.
     Demonstration,
+    /// Trail that follows the pointer while the button is held, then fades.
+    Magic,
     /// Click a drawing to delete it.
     Eraser,
 }
@@ -38,6 +40,7 @@ impl CursorType {
             CursorType::Dot,
             CursorType::Arrow,
             CursorType::Demonstration,
+            CursorType::Magic,
             CursorType::Eraser,
         ]
     }
@@ -49,6 +52,7 @@ impl CursorType {
             CursorType::Dot => "Dot",
             CursorType::Arrow => "Arrow",
             CursorType::Demonstration => "Demonstration",
+            CursorType::Magic => "Magic",
             CursorType::Eraser => "Eraser",
         }
     }
@@ -60,6 +64,7 @@ impl CursorType {
             CursorType::Dot => &icons::DOT,
             CursorType::Arrow => &icons::ARROW,
             CursorType::Demonstration => &icons::DEMONSTRATION,
+            CursorType::Magic => &icons::MAGIC_CURSOR,
             CursorType::Eraser => &icons::ERASER,
         }
     }
@@ -71,6 +76,7 @@ impl CursorType {
             CursorType::Dot => None,
             CursorType::Arrow => None,
             CursorType::Demonstration => None,
+            CursorType::Magic => None,
             CursorType::Eraser => None,
         }
     }

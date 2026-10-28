@@ -3,13 +3,14 @@
 //! Includes: impulse, correction, triangle, double combo, and triple combo waves.
 
 use crate::drawings::domain::Drawing;
+use crate::drawings::rendering::ChartView;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 
 impl Drawing {
     /// Render Elliott Impulse Wave - 5-wave motive pattern (0-1-2-3-4-5)
-    pub(crate) fn render_elliott_impulse(&self, painter: &egui::Painter) {
+    pub(crate) fn render_elliott_impulse(&self, painter: &egui::Painter, view: &ChartView) {
         let color = Color32::from_rgba_unmultiplied(
             self.color[0],
             self.color[1],
@@ -73,41 +74,28 @@ impl Drawing {
             );
         }
 
-        // Draw Fibonacci extensions between key waves if we have enough points
-        if self.points.len() >= 4 {
-            // Wave 1 length for Fibonacci projections
-            let wave1_length = ((self.points[2].x - self.points[1].x).powi(2)
-                + (self.points[2].y - self.points[1].y).powi(2))
-            .sqrt();
+        // Wave 3 target, projected from the wave 2 end in price
+        if let Some(target) = self.impulse_target() {
+            let fib_color = DESIGN_TOKENS.semantic.indicators.ma.gamma_multiply(0.47); // Orange with alpha
+            let wave2_end = self.points[2];
+            let target_y = (view.price_to_y)(target);
 
-            // Show 1.618 extension from wave 2 end (common wave 3 target)
-            if self.points.len() >= 3 {
-                let fib_color = DESIGN_TOKENS.semantic.indicators.ma.gamma_multiply(0.47); // Orange with alpha
-                let wave2_end = self.points[2];
-                let is_up = self.points[1].y > self.points[0].y;
-                let extension_y = if is_up {
-                    wave2_end.y - wave1_length * 1.618
-                } else {
-                    wave2_end.y + wave1_length * 1.618
-                };
+            super::utils::draw_dashed_line(
+                painter,
+                wave2_end,
+                Pos2::new(wave2_end.x + 40.0, target_y),
+                Stroke::new(stroke::HAIRLINE, fib_color),
+                3.0,
+                2.0,
+            );
 
-                super::utils::draw_dashed_line(
-                    painter,
-                    Pos2::new(wave2_end.x, wave2_end.y),
-                    Pos2::new(wave2_end.x + 40.0, extension_y),
-                    Stroke::new(stroke::HAIRLINE, fib_color),
-                    3.0,
-                    2.0,
-                );
-
-                painter.text(
-                    Pos2::new(wave2_end.x + 45.0, extension_y),
-                    egui::Align2::LEFT_CENTER,
-                    "1.618",
-                    egui::FontId::proportional(typography::XS),
-                    fib_color,
-                );
-            }
+            painter.text(
+                Pos2::new(wave2_end.x + 45.0, target_y),
+                egui::Align2::LEFT_CENTER,
+                "1.618",
+                egui::FontId::proportional(typography::XS),
+                fib_color,
+            );
         }
 
         // Draw points and labels
@@ -323,14 +311,14 @@ impl Drawing {
             self.color[3],
         );
 
-        let labels = ["A", "B", "C", "D", "E"];
+        let labels = ["0", "A", "B", "C", "D", "E"];
 
-        // Draw fill
-        if self.points.len() >= 3 {
+        // Draw fill between the waves, without the origin
+        if self.points.len() >= 4 {
             let fill_color =
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 20);
             painter.add(egui::epaint::PathShape::convex_polygon(
-                self.points.clone(),
+                self.points[1..].to_vec(),
                 fill_color,
                 Stroke::NONE,
             ));
@@ -349,12 +337,12 @@ impl Drawing {
             let line_color =
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 120);
 
-            // Upper trendline (A-C-E or similar peaks)
+            // Trendline through A, C and E
             let upper_points: Vec<&Pos2> = self
                 .points
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| i % 2 == 0)
+                .filter(|(i, _)| i % 2 == 1)
                 .map(|(_, p)| p)
                 .collect();
 
@@ -376,12 +364,13 @@ impl Drawing {
                 );
             }
 
-            // Lower trendline (B-D or similar troughs)
+            // Trendline through B and D
             let lower_points: Vec<&Pos2> = self
                 .points
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| i % 2 == 1)
+                .skip(1)
+                .filter(|(i, _)| i % 2 == 0)
                 .map(|(_, p)| p)
                 .collect();
 
@@ -404,9 +393,10 @@ impl Drawing {
             }
         }
 
-        // Draw points and labels
+        // Draw points and labels: A, C and E lie on the side of the origin that A moves to
+        let a_is_peak = self.points.len() < 2 || self.points[1].y < self.points[0].y;
         for (i, &point) in self.points.iter().enumerate() {
-            let is_peak = i % 2 == 0;
+            let is_peak = (i % 2 == 1) == a_is_peak;
             let label_offset = if is_peak {
                 -DESIGN_TOKENS.spacing.xxl - DESIGN_TOKENS.spacing.sm
             } else {
@@ -449,9 +439,9 @@ impl Drawing {
         }
 
         // Triangle label
-        if self.points.len() >= 5 {
+        if self.points.len() >= 6 {
             let label_pos = Pos2::new(
-                (self.points[0].x + self.points[4].x) / 2.0,
+                (self.points[1].x + self.points[5].x) / 2.0,
                 self.points
                     .iter()
                     .map(|p| p.y)
@@ -712,6 +702,84 @@ impl Drawing {
                 egui::FontId::proportional(typography::XS),
                 color,
             );
+        }
+    }
+}
+
+/// The wave 3 target as a multiple of wave 1, projected from the wave 2 end.
+const WAVE_3_TARGET: f64 = 1.618;
+
+impl Drawing {
+    /// The price of the wave 3 target: the 0 to 1 price leg times [`WAVE_3_TARGET`] from the
+    /// wave 2 end, in the direction of wave 1. A logarithmic construction (the drawing's
+    /// `fib_config`) scales the wave 2 end by the same multiple of the leg's log return. `None`
+    /// until wave 2 is placed or while wave 1 is flat.
+    fn impulse_target(&self) -> Option<f64> {
+        let [wave0, wave1, wave2, ..] = self.chart_points.as_slice() else {
+            return None;
+        };
+        let (from, to, end) = (wave0.price, wave1.price, wave2.price);
+        if from == to {
+            return None;
+        }
+        if self.fib_config.as_ref().is_some_and(|c| c.logarithmic)
+            && from > 0.0
+            && to > 0.0
+            && end > 0.0
+        {
+            Some((end.ln() + (to.ln() - from.ln()) * WAVE_3_TARGET).exp())
+        } else {
+            Some(end + (to - from) * WAVE_3_TARGET)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::domain::{ChartPoint, DrawingToolType, FibonacciConfig};
+
+    #[test]
+    fn impulse_target_projects_the_first_wave_from_the_wave_2_end_in_price() {
+        let target = |prices: &[f64], logarithmic: bool| {
+            let mut drawing = Drawing::new(0, DrawingToolType::ElliottImpulse);
+            drawing.chart_points = prices
+                .iter()
+                .enumerate()
+                .map(|(i, &price)| ChartPoint::new(10.0 * i as f32, price))
+                .collect();
+            drawing.fib_config = Some(FibonacciConfig {
+                logarithmic,
+                ..FibonacciConfig::default()
+            });
+            drawing.impulse_target()
+        };
+        // Wave 1 is 100 to 150: 120 + 50 * 1.618 above wave 2, or 120 * 1.5^1.618 on a log scale.
+        // The falling impulse mirrors it. A flat wave 1, or no wave 2 yet, has no target.
+        let cases = [
+            (&[100.0, 150.0, 120.0][..], false, Some(200.9)),
+            (
+                &[100.0, 150.0, 120.0],
+                true,
+                Some(120.0 * 1.5f64.powf(1.618)),
+            ),
+            (&[150.0, 100.0, 130.0], false, Some(49.1)),
+            (
+                &[150.0, 100.0, 130.0],
+                true,
+                Some(130.0 * (2.0f64 / 3.0).powf(1.618)),
+            ),
+            (&[-10.0, 10.0, 0.0], true, Some(32.36)),
+            (&[100.0, 100.0, 90.0], false, None),
+            (&[100.0, 150.0], false, None),
+        ];
+        for (prices, logarithmic, want) in cases {
+            match (target(prices, logarithmic), want) {
+                (Some(got), Some(want)) => {
+                    assert!((got - want).abs() < 1e-9, "{prices:?}: {got} != {want}")
+                }
+                (got, want) => assert_eq!(got, want, "{prices:?}"),
+            }
         }
     }
 }

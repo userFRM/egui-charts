@@ -49,6 +49,18 @@ pub enum StudyAction {
     },
 }
 
+/// An action on the series a legend reads, from the controls of its title row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "icons"), allow(dead_code))]
+pub(crate) enum SeriesAction {
+    /// Open the series' settings in the host.
+    Settings,
+    /// Show or hide the series.
+    ToggleVisibility,
+    /// Remove the series.
+    Remove,
+}
+
 /// An in-pane legend. Historical readout data and current quotes are supplied independently.
 pub struct Legend<'a> {
     /// Host number formatting for this series' readouts.
@@ -79,6 +91,9 @@ pub struct Legend<'a> {
     pub show_volume: bool,
     /// Display the instrument title and its host status marks.
     pub show_title: bool,
+    /// Whether the series is shown. A hidden series keeps its title and controls, dimmed, so it
+    /// can be shown again.
+    pub(crate) series_visible: bool,
     /// Prefer the host description over the ticker.
     pub title_as_description: bool,
     /// Display OHLC fields, or the close alone in a compact plot.
@@ -121,6 +136,7 @@ impl<'a> Legend<'a> {
             bar_index: 0,
             show_volume: true,
             show_title: true,
+            series_visible: true,
             title_as_description: true,
             show_ohlc: true,
             show_change: true,
@@ -158,7 +174,7 @@ impl<'a> Legend<'a> {
             bearish_wick: None,
             candle_border_width: 0.0,
         };
-        let (quote, study, _, _) = self.show_with_colors(ui, plot, &colors);
+        let (quote, study, ..) = self.show_with_colors(ui, plot, &colors);
         (quote, study)
     }
 
@@ -168,12 +184,20 @@ impl<'a> Legend<'a> {
         ui: &mut Ui,
         plot: Rect,
         colors: &StyleColors,
-    ) -> (Option<QuoteSide>, Option<StudyAction>, f32, Option<Rect>) {
+    ) -> (
+        Option<QuoteSide>,
+        Option<StudyAction>,
+        f32,
+        Option<Rect>,
+        Option<SeriesAction>,
+    ) {
         let theme = ui.active_theme();
         let bounds = plot.shrink(theme.spacing.md);
         if !bounds.is_positive() {
-            return (None, None, plot.top(), None);
+            return (None, None, plot.top(), None, None);
         }
+        #[cfg_attr(not(feature = "icons"), allow(unused_mut))]
+        let mut series_action = None;
         let id = ui.next_auto_id().with(("series_legend", self.symbol));
         ui.skip_ahead_auto_ids(1);
         let painter = ui.painter().with_clip_rect(bounds);
@@ -229,7 +253,16 @@ impl<'a> Legend<'a> {
                 })
                 .sum::<f32>();
             let title_width = (bounds.right() - layout.pos.x - status_width - 64.0).max(0.0);
-            layout.text(title, theme.text.chart_title, colors.text, title_width);
+            layout.text(
+                title,
+                theme.text.chart_title,
+                if self.series_visible {
+                    colors.text
+                } else {
+                    theme.ui.text_muted
+                },
+                title_width,
+            );
             for (status, hint) in statuses {
                 let galley = painter.layout_no_wrap(
                     status.text.to_owned(),
@@ -302,7 +335,7 @@ impl<'a> Legend<'a> {
         // Values follow the title directly; the controls take the space after them on hover.
         #[cfg(feature = "icons")]
         if self.show_title {
-            let size = Vec2::new(48.0, 20.0);
+            let size = Vec2::new(116.0, 20.0);
             // On a full row the controls cover its end instead of opening an empty row.
             let controls = if layout.pos.x + size.x > bounds.right() {
                 Rect::from_min_size(
@@ -326,8 +359,27 @@ impl<'a> Legend<'a> {
             let flagged = ui
                 .ctx()
                 .data(|data| data.get_temp::<bool>(id.with("flag")).unwrap_or(false));
+            // Tab reaches the controls through the title, which stays revealed while one of
+            // them has focus. It takes focus only, so clicks on it still reach the chart.
+            let title_response = ui.interact(
+                title_rect,
+                id.with("title"),
+                Sense::focusable_noninteractive(),
+            );
+            title_response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, true, "Series controls")
+            });
+            let focused = title_response.has_focus()
+                || title_response.lost_focus()
+                || ui.memory(|memory| {
+                    memory.has_focus(id.with("flag"))
+                        || memory.has_focus(id.with("more"))
+                        || (0..3_usize)
+                            .any(|index| memory.has_focus(id.with(("series_control", index))))
+                });
             if hovered
                 || flagged
+                || focused
                 || egui::Popup::is_id_open(ui.ctx(), id.with("more").with("popup"))
             {
                 let flag = Rect::from_min_size(controls.min, Vec2::splat(20.0)).intersect(bounds);
@@ -379,6 +431,54 @@ impl<'a> Legend<'a> {
                         ui.close();
                     }
                 });
+                for (index, (action, icon, label)) in [
+                    (
+                        SeriesAction::ToggleVisibility,
+                        if self.series_visible {
+                            &crate::icons::icons::EYE
+                        } else {
+                            &crate::icons::icons::EYE_HIDE
+                        },
+                        if self.series_visible {
+                            "Hide series"
+                        } else {
+                            "Show series"
+                        },
+                    ),
+                    (
+                        SeriesAction::Settings,
+                        &crate::icons::icons::SETTINGS,
+                        "Series settings",
+                    ),
+                    (
+                        SeriesAction::Remove,
+                        &crate::icons::icons::TRASH,
+                        "Remove series",
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let rect = Rect::from_min_size(
+                        controls.min + Vec2::new(56.0 + index as f32 * 20.0, 0.0),
+                        Vec2::splat(20.0),
+                    )
+                    .intersect(bounds);
+                    let response = ui
+                        .interact(rect, id.with(("series_control", index)), Sense::click())
+                        .on_hover_text(label);
+                    response
+                        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+                    if response.hovered() {
+                        painter.rect_filled(rect, theme.radius.sm, theme.ui.btn_bg_hover);
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    icon.as_image_tinted(Vec2::splat(14.0), theme.ui.text_secondary)
+                        .paint_at(ui, rect.shrink(3.0));
+                    if response.clicked() {
+                        series_action = Some(action);
+                    }
+                }
             }
         }
         if self.show_title
@@ -611,6 +711,7 @@ impl<'a> Legend<'a> {
             study_settings,
             layout.pos.y + layout.height,
             quantity,
+            series_action,
         )
     }
 
@@ -1482,6 +1583,90 @@ mod tests {
                 texts(&restored).iter().filter(|text| *text == "BB").count(),
                 2
             );
+        }
+    }
+
+    /// The title's hide, settings and remove buttons are keyboard reachable and report their
+    /// action, and a hidden series keeps its title and buttons so it can be shown again.
+    #[cfg(feature = "icons")]
+    #[test]
+    fn title_controls_report_series_actions_for_a_hidden_series_too() {
+        use egui::{Event, Key};
+        let bar = Bar::new(
+            Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            100.0,
+            110.0,
+            90.0,
+            95.0,
+            1.0,
+        );
+        let colors = StyleColors {
+            bullish: Color32::GREEN,
+            bearish: Color32::RED,
+            text: Color32::WHITE,
+            bullish_border: None,
+            bearish_border: None,
+            bullish_wick: None,
+            bearish_wick: None,
+            candle_border_width: 0.0,
+        };
+        for series_visible in [true, false] {
+            let ctx = Context::default();
+            let frame = |events| {
+                let mut action = None;
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let mut legend = Legend::new("SAMPLE", "1h", &bar);
+                        legend.series_visible = series_visible;
+                        let plot = Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0));
+                        action = legend.show_with_colors(ui, plot, &colors).4;
+                    },
+                );
+                let title = output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, Shape::Text(text) if text.galley.text() == "SAMPLE · 1h")
+                });
+                output.drop_without_applying_deltas();
+                (action, title)
+            };
+            let key = |pressed| Event::Key {
+                key: Key::Tab,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: Default::default(),
+            };
+            assert!(
+                frame(vec![]).1,
+                "the title stays while the series is hidden"
+            );
+            // Tab stops: title, flag, more, then the series buttons.
+            for stop in 0..3 {
+                frame(vec![key(true)]);
+                frame(vec![key(false)]);
+                assert_eq!(frame(vec![]).0, None, "stop {stop}");
+            }
+            for expected in [
+                SeriesAction::ToggleVisibility,
+                SeriesAction::Settings,
+                SeriesAction::Remove,
+            ] {
+                frame(vec![key(true)]);
+                frame(vec![key(false)]);
+                let enter = |pressed| Event::Key {
+                    key: Key::Enter,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: Default::default(),
+                };
+                let (action, _) = frame(vec![enter(true)]);
+                frame(vec![enter(false)]);
+                assert_eq!(action, Some(expected), "visible: {series_visible}");
+            }
         }
     }
 }

@@ -233,6 +233,37 @@ impl SettingsDialog {
                     }
                 });
 
+                self.draw_setting_row_with_controls(ui, "Lines", theme, |ui, dialog| {
+                    if let Some(color) = ColorPicker::new(
+                        &mut dialog.color_picker_states.scales_lines,
+                        "scales_lines",
+                    )
+                    .show(ui)
+                    .inner
+                    {
+                        dialog.settings.scales_appearance.lines_color = color;
+                    }
+                });
+
+                self.draw_setting_row_with_controls(ui, "Font size", theme, |ui, dialog| {
+                    styled_dropdown(
+                        ui,
+                        "scales_font_size",
+                        DESIGN_TOKENS.sizing.settings_dialog.dropdown_width,
+                        theme.ui.text,
+                        &dialog.settings.scales_appearance.font_size.to_string(),
+                        |ui| {
+                            for size in [10, 11, 12, 14, 16, 20] {
+                                ui.selectable_value(
+                                    &mut dialog.settings.scales_appearance.font_size,
+                                    size,
+                                    size.to_string(),
+                                );
+                            }
+                        },
+                    );
+                });
+
                 ui.add_space(ui.active_theme().spacing.xxl);
 
                 // MARGINS (Pixel input fields)
@@ -297,6 +328,25 @@ impl SettingsDialog {
                             for vis in ButtonVisibility::all() {
                                 ui.selectable_value(
                                     &mut dialog.settings.btns.navigation,
+                                    *vis,
+                                    l10n::text(ui.ctx(), vis.name()),
+                                );
+                            }
+                        },
+                    );
+                });
+
+                self.draw_setting_row_with_controls(ui, "Pane buttons", theme, |ui, dialog| {
+                    styled_dropdown(
+                        ui,
+                        "pane_visibility",
+                        DESIGN_TOKENS.sizing.settings_dialog.dropdown_width,
+                        theme.ui.text,
+                        dialog.settings.btns.pane.name(),
+                        |ui| {
+                            for vis in ButtonVisibility::all() {
+                                ui.selectable_value(
+                                    &mut dialog.settings.btns.pane,
                                     *vis,
                                     l10n::text(ui.ctx(), vis.name()),
                                 );
@@ -698,6 +748,18 @@ impl SettingsDialog {
                         dialog.settings.scales_and_lines.symbol_price_color = None;
                     }
                 });
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.scales_and_lines.show_symbol_name,
+                    "Symbol name on scale",
+                    theme.ui.text,
+                );
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.scales_and_lines.show_study_names,
+                    "Study names on scale",
+                    theme.ui.text,
+                );
                 self.draw_setting_row_with_controls(ui, "Study values", theme, |ui, dialog| {
                     styled_checkbox(
                         ui,

@@ -6,7 +6,9 @@ use super::studies::refresh_values;
 use super::{Chart, ChartElementId, SeriesId};
 use crate::data::FeedState;
 use crate::data::merge::{Merged, Origin, merge, valid};
-use crate::model::{Bar, BarClock, BarData, LogicalRange, Marker, MarkerOptions, PriceLine};
+use crate::model::{
+    Bar, BarClock, BarData, ChartType, LogicalRange, Marker, MarkerOptions, PriceLine,
+};
 use crate::studies::Indicator;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
@@ -42,8 +44,9 @@ pub struct BarsInRange {
 pub struct PriceLineId(u64);
 
 impl Chart {
-    /// Take the settings request from a legend button or a double-click in a pane: a study, or
-    /// a bar series shown in a pane other than the main one.
+    /// Take the settings request from a legend button or a double-click in a pane: a study, a
+    /// bar series shown in a pane other than the main one, or [`SeriesId::MAIN`] from the main
+    /// series' legend button.
     pub fn take_indicator_settings_request(&mut self) -> Option<SeriesId> {
         self.indicator_settings_request.take()
     }
@@ -629,7 +632,8 @@ impl Chart {
             return true;
         }
         if let Some(at) = self.price_series.iter().position(|item| item.id == id) {
-            self.price_series.remove(at);
+            let removed = self.price_series.remove(at);
+            self.retain_removed_series(removed);
             if self.selection.selected_id() == Some(ChartElementId::Series(id)) {
                 self.selection.deselect();
             }
@@ -837,12 +841,29 @@ impl Chart {
         self.anchor_drawing_points();
         self.chart_type_params
             .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
-        let built = crate::chart::rendering::candles::price_based::elements(
-            self.chart_type,
-            &self.chart_type_params,
-            &self.state.data().bars,
-            self.state.revision(),
-        );
+        // Range bars come from the held trades, as of the replay cutoff, while there are any.
+        let cutoff = self.replay_time();
+        let ranges = &mut self.execution_ranges;
+        let executions = self
+            .feed_link
+            .as_ref()
+            .filter(|_| self.chart_type == ChartType::Range)
+            .and_then(|link| {
+                ranges.bars(
+                    &self.chart_type_params,
+                    link.trades.revision(),
+                    link.trades.iter(),
+                    cutoff,
+                )
+            });
+        let built = executions.or_else(|| {
+            crate::chart::rendering::candles::price_based::elements(
+                self.chart_type,
+                &self.chart_type_params,
+                &self.state.data().bars,
+                self.state.revision(),
+            )
+        });
         self.older_bars_drawn = built.as_ref().is_none_or(|(_, trimmed)| !trimmed);
         if self.chart_type.is_time_independent() {
             self.element_studies.sync(

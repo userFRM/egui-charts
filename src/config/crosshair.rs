@@ -39,6 +39,9 @@ pub enum CrosshairStyle {
     Arrow,
     /// A fading pointer trail for presentations, with axis readouts.
     Demonstration,
+    /// A trail that follows the pointer while the primary button is held and fades after it is
+    /// released, with axis readouts. It creates no drawings.
+    Magic,
     /// No crosshair lines or axis labels. Legends, the data window and tooltips still follow
     /// the pointer.
     Hidden,

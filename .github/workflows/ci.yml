@@ -9,8 +9,10 @@ on:
   workflow_call:
 
 # A newer push to a pull request supersedes its running checks; every main commit keeps its run.
+# Draft state is part of the group: marking a draft ready fires a run that still carries the draft
+# payload, and that run only skips its jobs, so it must not cancel the real run beside it.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.event.pull_request.number || github.sha }}-${{ github.event.pull_request.draft }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:

@@ -41,6 +41,7 @@ pub mod multi_chart;
 pub mod replay_status;
 pub mod strategy_report;
 pub mod symbol_header;
+pub mod terminal;
 mod tpo_context_menu;
 pub mod trading;
 

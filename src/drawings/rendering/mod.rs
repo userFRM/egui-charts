@@ -179,7 +179,13 @@ impl Drawing {
                 outline.lines = path(false);
                 outline.lines.extend(self.neckline().map(|(line, _)| line));
             }
-            T::TrianglePattern => outline.lines = path(true),
+            T::TrianglePattern => match patterns::triangle_boundaries(p, f32::INFINITY) {
+                Some((lines, _)) => {
+                    outline.lines = path(false);
+                    outline.lines.extend(lines);
+                }
+                None => outline.lines = path(p.len() == 3),
+            },
             T::Sector => {
                 let points = self.sector_points()?;
                 outline.lines = edges(&points);
@@ -388,10 +394,10 @@ impl Drawing {
             DrawingToolType::HeadAndShoulders => self.render_head_and_shoulders(painter),
             DrawingToolType::ABCDPattern => self.render_abcd_pattern(painter),
             DrawingToolType::TrianglePattern => self.render_triangle_pattern(painter),
-            DrawingToolType::ThreeDrivesPattern => self.render_three_drives_pattern(painter),
+            DrawingToolType::ThreeDrivesPattern => self.render_three_drives_pattern(painter, view),
 
             // Elliott Wave (5 tools)
-            DrawingToolType::ElliottImpulse => self.render_elliott_impulse(painter),
+            DrawingToolType::ElliottImpulse => self.render_elliott_impulse(painter, view),
             DrawingToolType::ElliottCorrection => self.render_elliott_correction(painter),
             DrawingToolType::ElliottTriangle => self.render_elliott_triangle(painter),
             DrawingToolType::ElliottDoubleCombo => self.render_elliott_double_combo(painter),
@@ -510,7 +516,6 @@ impl Drawing {
                 | T::HeadAndShoulders
                 | T::ABCDPattern
                 | T::TrianglePattern
-                | T::ThreeDrivesPattern
                 | T::ElliottImpulse
                 | T::ElliottCorrection
                 | T::ElliottTriangle
