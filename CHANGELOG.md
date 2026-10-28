@@ -403,6 +403,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Price scale labels that sit closer than a label is high, such as price lines, order and position lines, the previous close and the values of one study, stack in the order of their prices instead of in the order they were added, centred on where they wanted to be. The last price, extended session and volume labels keep their place, and labels further apart keep their exact positions. ([#1172](https://github.com/userFRM/egui-charts/issues/1172))
+- Long and short position tools keep their target and stop labels inside the plot: a label that would pass the right edge flips to the inner side of the line's end, and placement elsewhere is unchanged. ([#1171](https://github.com/userFRM/egui-charts/issues/1171))
 - The upside and downside Tasuki gap patterns need the third candle to open strictly inside the second candle's body and close strictly inside the gap, so an open outside the body, a close on either gap edge or a closed gap is no longer marked. ([#1083](https://github.com/userFRM/egui-charts/issues/1083))
 
 - A deselected rectangle draws its border, fill and label only. Its centre guides and size labels appear while it is selected or being drawn, and its corner dots, which duplicated the selection handles, are gone. ([#1169](https://github.com/userFRM/egui-charts/issues/1169))

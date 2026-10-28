@@ -6666,7 +6666,14 @@ mod tests {
     fn settings_entry_points_open_the_same_chart_dialog() {
         for entry in ["top", "axis", "double-click", "series"] {
             let ctx = egui::Context::default();
-            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            // The sample is generated from the clock; at a fixed time no study line crosses the
+            // close that the double click aims at, which would take the click from the series.
+            let start = "2026-10-28T16:14:00Z".parse().unwrap();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                start,
+                true,
+            );
             app.live.set_paused(true);
             app.chart.set_feed_paused(true);
             let frame = |app: &mut DemoApp, events| {

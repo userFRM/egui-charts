@@ -8,7 +8,7 @@ Builder API,Broker API,Buy and sell buttons on the chart,done,host,src/chart/ren
 Builder API,Broker API,Depth of market trading ladder,done,host,src/ui/trading/ticket.rs;src/ui/trading/dom.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Executions shown on the chart,done,host,src/ui/trading/mod.rs;src/ui/trading/executions.rs
 Builder API,Broker API,Instrument trading info and formatters,partial,host,src/model/trading.rs;src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/ticket.rs;src/ui/trading/account_panel.rs
-Builder API,Broker API,Order and position lines on the chart,done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs
+Builder API,Broker API,Order and position lines on the chart,done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Builder API,Broker API,"Order placement, modification and cancellation",done,host,src/services/broker.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Order ticket and order or position dialogs,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket.rs;src/ui/trading/account_panel.rs
 Builder API,Broker API,"Order, position and execution queries",partial,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs
@@ -881,11 +881,11 @@ Terminal,Trading panel,Buy/Sell buttons on the chart,done,host,src/ui/symbol_hea
 Terminal,Trading panel,DOM / depth-of-market ladder with click-to-trade,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket.rs;src/ui/trading/dom.rs;src/widget/feed.rs
 Terminal,Trading panel,"Drag orders, take-profit and stop-loss on the chart to modify",done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs
 Terminal,Trading panel,Execution markers on the chart,done,library,src/ui/trading/mod.rs;src/ui/trading/executions.rs
-Terminal,Trading panel,Order and position lines on the chart,done,library,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs
+Terminal,Trading panel,Order and position lines on the chart,done,library,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Terminal,Trading panel,Order ticket,partial,library,src/ui/trading/ticket.rs;src/ui/trading/mod.rs
 Terminal,Trading panel,Paper trading account,done,library,src/services/paper.rs
 Terminal,Trading panel,Place an order from the chart context menu,done,host,src/ui/context_menu.rs;src/ui/trading/mod.rs
-Terminal,Trading panel,"Position line with P&L, close and reverse",done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs
+Terminal,Trading panel,"Position line with P&L, close and reverse",done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Terminal,Trading panel,"Show/hide positions, orders and executions",done,library,src/ui/trading/mod.rs
 Terminal,Trading panel,Time in force and order presets,done,library,src/ui/trading/ticket.rs
 Terminal,Trading panel,Trade button and broker / paper account picker,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/broker_picker.rs
