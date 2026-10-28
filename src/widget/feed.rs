@@ -386,7 +386,7 @@ impl Chart {
     /// previous choice and reloads, resolving through [`Datafeed::resolve_converted`] and
     /// carrying the choice in every history, trade and depth request and subscription,
     /// including those of studies on other symbols. A feed that cannot convert answers
-    /// [`FeedError::NotSupported`] and the chart shows no data. Without a feed it has no effect.
+    /// [`FeedError::NotSupported`] and the chart shows no data. A feed attached later uses it.
     pub fn set_conversion(&mut self, conversion: Option<String>) {
         if self.conversion != conversion {
             self.conversion = conversion;
