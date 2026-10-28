@@ -507,6 +507,7 @@ impl DemoApp {
         chart.set_timeframe(timeframe);
         let storage = Arc::new(storage::DemoStorage::restore(cc.storage));
         chart.set_storage(storage.clone());
+        let notification_host: Arc<feeds::DemoNotifications> = Arc::default();
 
         let mut top_toolbar = TopToolbar::new().with_config(
             egui_charts::ui::top_toolbar::TopToolbarConfig::default().with_height(38.0),
@@ -621,7 +622,19 @@ impl DemoApp {
             open_panel: Some(SidePanel::Watchlist),
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
-            alert_host: Arc::default(),
+            alert_host: {
+                let alerts = cc
+                    .storage
+                    .and_then(|storage| eframe::get_value(storage, "alerts"))
+                    .unwrap_or_default();
+                let notifications = notification_host.clone();
+                Arc::new(crate::panel_alerts::DemoAlerts::new(
+                    alerts,
+                    move |symbol| {
+                        notifications.notify(format!("Alert triggered: {symbol}"), Some(symbol));
+                    },
+                ))
+            },
             audio: Default::default(),
             alert_monitors: Default::default(),
             trading: Default::default(),
@@ -663,7 +676,7 @@ impl DemoApp {
                 ..Default::default()
             },
             notifications: NotificationsPanel::new(),
-            notification_host: Arc::default(),
+            notification_host,
             chats: ChatsPanel::new(),
             products: ProductsPanel::new(vec![
                 product(
@@ -918,54 +931,12 @@ impl DemoApp {
             .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
             .unwrap_or(0.0);
         self.alert_dialog.open(self.state.symbol.clone(), price);
+        self.alert_dialog.alert.timeframe = Some(self.state.timeframe);
     }
 
     /// Offers the studies' outputs and every level of the drawings as alert sources.
     fn list_alert_sources(&mut self) {
-        use egui_charts::model::AlertSource;
-        let bar = self.chart.bars(SeriesId::MAIN).len().saturating_sub(1) as f64;
-        let scale = self.chart.config().right_axis_scale_mode;
-        self.alert_dialog.sources = self
-            .chart
-            .indicators()
-            .flat_map(|(id, study)| {
-                study
-                    .line_names()
-                    .into_iter()
-                    .enumerate()
-                    .map(move |(output, name)| {
-                        (
-                            AlertSource::Study {
-                                id: id.0.to_string(),
-                                output,
-                            },
-                            format!("{}: {name}", study.name()),
-                        )
-                    })
-            })
-            .chain(
-                self.chart
-                    .drawings()
-                    .drawings
-                    .iter()
-                    .filter(|d| d.completed)
-                    .flat_map(|d| {
-                        let levels = d.alert_levels(bar, scale);
-                        let single = levels.len() == 1;
-                        levels.into_iter().map(move |(level, name, _)| {
-                            let drawing = format!("{} {}", d.tool_type.as_str(), d.id);
-                            (
-                                d.alert_source(level),
-                                if single {
-                                    drawing
-                                } else {
-                                    format!("{drawing}: {name}")
-                                },
-                            )
-                        })
-                    }),
-            )
-            .collect();
+        self.alert_dialog.sources = self.chart.alert_sources();
         self.alert_dialog.watchlists = self
             .watchlist
             .lists()
@@ -975,8 +946,9 @@ impl DemoApp {
     }
 
     fn quick_price_alert(&mut self, symbol: String, price: f64) {
-        self.alerts
-            .save(Alert::new(symbol, AlertCondition::Crossing(price)));
+        let mut alert = Alert::new(symbol, AlertCondition::Crossing(price));
+        alert.timeframe = Some(self.state.timeframe);
+        self.alerts.save(alert);
     }
 
     // --- selection / context helpers --------------------------------------
@@ -1253,6 +1225,7 @@ impl eframe::App for DemoApp {
             &self.chart.drawings().tool_defaults,
         );
         eframe::set_value(storage, "watchlists", &self.watchlist.lists());
+        eframe::set_value(storage, "alerts", &self.alert_host.engine().alerts());
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
         self.storage.persist(storage);
@@ -1277,14 +1250,12 @@ impl eframe::App for DemoApp {
 
         // Fulfil requests from the previous frame, before a dialog can submit another.
         self.handle_screenshot(&ctx);
+        let alerts = &self.settings_state.alerts;
+        self.alerts
+            .set_sound(alerts.play_sound.then(|| alerts.sound.clone()));
         self.alerts.poll(&ctx, &mut self.toasts);
         self.monitor_alerts(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
-        let triggers = self.alert_host.take_triggers();
-        for symbol in &triggers {
-            self.notification_host
-                .notify(format!("Alert triggered: {symbol}"), Some(symbol));
-        }
         self.symbol_details.poll(&ctx);
         self.highlights.poll(&ctx);
         self.news.poll(&ctx);
@@ -1306,8 +1277,7 @@ impl eframe::App for DemoApp {
                 false,
             );
         }
-        if !triggers.is_empty() && self.settings_state.alerts.play_sound {
-            let name = self.settings_state.alerts.sound.clone();
+        if let Some(name) = self.alerts.take_sound() {
             self.play_sound(&ctx, &name, self.settings_state.alerts.sound_volume, false);
         }
         if let Some(error) = self.audio.take_error() {
@@ -3377,6 +3347,55 @@ mod tests {
                 "replay fills must be marked on their historical bars"
             );
         }
+    }
+
+    /// A starred tool shows on the strip over the chart, and a click on it arms the tool.
+    #[test]
+    fn starred_tool_shows_on_the_favorites_strip_and_arms_on_click() {
+        use eframe::App;
+        use egui_charts::drawings::DrawingToolType;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.drawing_toolbar
+            .toggle_favorite(DrawingToolType::TrendLine);
+        let frame = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+            .drop_without_applying_deltas();
+        };
+        frame(&mut app, vec![]);
+        frame(&mut app, vec![]);
+        let strip = ctx
+            .memory(|memory| memory.area_rect(egui::Id::NULL.with("floating_drawing_toolbar")))
+            .expect("a starred tool shows the strip");
+        // Past the grip, inside the first tool button.
+        let pos = egui::pos2(strip.left() + 28.0, strip.center().y);
+        frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        assert_eq!(
+            app.chart.drawings().active_tool,
+            Some(DrawingToolType::TrendLine)
+        );
     }
 
     #[test]
@@ -6705,7 +6724,14 @@ mod tests {
     fn settings_entry_points_open_the_same_chart_dialog() {
         for entry in ["top", "axis", "double-click", "series"] {
             let ctx = egui::Context::default();
-            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            // The sample is generated from the clock; at a fixed time no study line crosses the
+            // close that the double click aims at, which would take the click from the series.
+            let start = "2026-10-28T16:14:00Z".parse().unwrap();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                start,
+                true,
+            );
             app.live.set_paused(true);
             app.chart.set_feed_paused(true);
             let frame = |app: &mut DemoApp, events| {

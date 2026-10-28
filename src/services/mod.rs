@@ -3,13 +3,16 @@
 //! panel `Alerts`, the watchlist `Quotes`, the notifications panel `Notifications` and the chats
 //! panel `Chats`. `SettingsStore` and the layout menu keep settings and layouts in `Storage`;
 //! other contracts define the host side of the assembled terminal. [`PaperAccount`] is a
-//! ready-made [`Broker`] that simulates an account.
+//! ready-made [`Broker`] that simulates an account, and `AlertEngine`, with the `alert-engine`
+//! feature, an [`Alerts`] service that evaluates alerts on the bars the host feeds it.
 //!
 //! Like [`Datafeed`](crate::data::Datafeed), every service is held as an `Arc<dyn Trait>` and
 //! called on the UI thread. Its methods return at once and answer later through a
 //! [`Reply`](crate::data::Reply), or push updates through an [`Events`] stream, from any thread,
 //! runtime or browser task.
 
+#[cfg(feature = "alert-engine")]
+mod alert_engine;
 mod alerts;
 mod broker;
 mod chats;
@@ -31,6 +34,9 @@ mod settings;
 mod signals;
 mod storage;
 
+#[cfg(feature = "alert-engine")]
+#[cfg_attr(docsrs, doc(cfg(feature = "alert-engine")))]
+pub use alert_engine::AlertEngine;
 pub use alerts::{AlertEvent, Alerts};
 pub use broker::{AccountEvent, Broker};
 pub use chats::{

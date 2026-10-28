@@ -186,13 +186,21 @@ pub(crate) struct Market<'a> {
     pub capabilities: Capabilities,
     pub rules: &'a TradingRules,
     pub rules_ready: bool,
-    /// The order book of the chart's symbol, for the depth ladder.
-    pub book: Option<&'a OrderBook>,
+    /// The sizes the depth ladder shows: the book summed over the orders the chart's order book
+    /// view accepts.
+    pub ladder: Option<std::borrow::Cow<'a, OrderBook>>,
+    /// Why the ladder has no sizes when the view needs orders the feed does not send.
+    pub ladder_unavailable: Option<crate::data::OrderFilterUnavailable>,
+    /// Prices whose largest known individual order reaches a tier of the view, as (is bid,
+    /// price, colour).
+    pub highlights: Vec<(bool, f64, egui::Color32)>,
     /// The account's working orders and open positions, of every symbol.
     pub orders: &'a [Order],
     pub positions: &'a [Position],
     /// The retained feed trades, oldest first.
     pub trades: &'a [&'a Tick],
+    /// Opening instant of the exchange session of the newest retained trade.
+    pub session_open: Option<chrono::DateTime<chrono::Utc>>,
     /// The latest account fill for this symbol.
     pub last_fill: Option<f64>,
 }
@@ -1695,10 +1703,13 @@ mod tests {
                         brackets: true,
                         ..Capabilities::default()
                     },
-                    book: None,
+                    ladder: None,
+                    ladder_unavailable: None,
+                    highlights: Vec::new(),
                     orders: &[],
                     positions: &[],
                     trades: &[],
+                    session_open: None,
                     last_fill: None,
                 };
                 ticket.tab = tab;
@@ -1792,10 +1803,13 @@ mod tests {
             capabilities,
             rules: &rules,
             rules_ready: true,
-            book: None,
+            ladder: None,
+            ladder_unavailable: None,
+            highlights: Vec::new(),
             orders: &working,
             positions: &[],
             trades: &[],
+            session_open: None,
             last_fill: None,
         };
         let cases = [
@@ -1945,10 +1959,13 @@ mod tests {
             capabilities,
             rules: &rules,
             rules_ready: true,
-            book: None,
+            ladder: None,
+            ladder_unavailable: None,
+            highlights: Vec::new(),
             orders: &[],
             positions: &[],
             trades: &[],
+            session_open: None,
             last_fill: None,
         };
         let ticks = |value| Bracket {

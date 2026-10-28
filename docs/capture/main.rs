@@ -214,6 +214,14 @@ fn scenes() -> Vec<Scene> {
         ),
         scene("liquidity", vec![ClearStudies, Visible(45), Heatmap]),
         scene(
+            "footprint",
+            vec![
+                ClearStudies,
+                ChartType(ModelChartType::VolumeFootprint),
+                Visible(14),
+            ],
+        ),
+        scene(
             "profile",
             vec![
                 ClearStudies,
@@ -305,7 +313,13 @@ fn analysis(bars: &[Bar]) -> Vec<Drawing> {
         &[e, (n - 18, e.1 + 1.2)],
     );
     callout.text = Some("Watch the retest".into());
-    vec![fork, fib, pattern, callout]
+    let mut zone = drawing(
+        DrawingToolType::Rect,
+        [38, 166, 154, 255],
+        &[(n - 32, e.1 - 0.15), (n - 3, e.1 + 0.45)],
+    );
+    zone.fill_color = Some([38, 166, 154, 24]);
+    vec![fork, fib, pattern, zone, callout]
 }
 
 // ---------------------------------------------------------------- capture
@@ -320,8 +334,10 @@ fn apply(app: &mut DemoApp, ctx: &Context, step: &Step) {
             params.kagi_reversal = 0.65;
             app.chart.set_chart_type_params(params);
             app.handle_top_toolbar(ctx, TopToolbarAction::ChartStyleSelected(*t));
-            app.chart.config_mut().show_volume =
-                !matches!(t, ModelChartType::Renko | ModelChartType::Kagi);
+            app.chart.config_mut().show_volume = !matches!(
+                t,
+                ModelChartType::Renko | ModelChartType::Kagi | ModelChartType::VolumeFootprint
+            );
         }
         Step::ClearStudies => {
             app.handle_drawing_toolbar(DrawingToolbarAction::RemoveAllIndicators);
@@ -510,6 +526,9 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
             .options_mut()
             .scale_margins
             .top = 0.28;
+    }
+    if scene.name == "footprint" {
+        h.state_mut().chart.scroll_to_position(0.5, false);
     }
     if scene.name == "hero" {
         h.run_steps(3);

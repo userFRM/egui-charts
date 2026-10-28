@@ -526,6 +526,27 @@ impl Trading {
             .filter(|(quoted, _)| quoted == symbol && !replay)
             .map(|(_, quote)| quote);
         let book = chart.order_book(SeriesId::MAIN).filter(|_| !replay);
+        let view = chart.order_book_view();
+        let queue = chart.order_queue(SeriesId::MAIN).filter(|_| !replay);
+        let filtered = view.filter != crate::data::OrderFilter::default();
+        let ladder = match (queue, filtered) {
+            (Some(queue), true) => queue
+                .filtered(symbol, &view.filter)
+                .map(|b| Some(std::borrow::Cow::Owned(b))),
+            (None, true) if !replay => Err(crate::data::OrderFilterUnavailable::AggregateDepth),
+            _ => Ok(book.map(std::borrow::Cow::Borrowed)),
+        };
+        let highlights = queue
+            .zip(view.tiers)
+            .map(|(queue, tiers)| {
+                (queue.largest_orders(&view.filter).into_iter())
+                    .filter_map(|o| {
+                        let tier = tiers.tier(o.size)?;
+                        Some((o.side == OrderSide::Buy, o.price, view.tier_color(tier)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Market {
             last: crate::model::last_with_value(chart.bars(SeriesId::MAIN)).map(|bar| bar.close),
             bid: book
@@ -544,10 +565,13 @@ impl Trading {
             capabilities: self.capabilities(),
             rules: &self.rules,
             rules_ready: self.rules_ready && self.rules.symbol == symbol,
-            book,
+            ladder_unavailable: ladder.as_ref().err().copied(),
+            ladder: ladder.unwrap_or(None),
+            highlights,
             orders: &self.orders,
             positions: &self.positions,
             trades: &[],
+            session_open: None,
             last_fill: self.account_panel.fills.price(symbol),
         }
     }
@@ -579,6 +603,9 @@ impl Trading {
         let mut market = self.market(chart);
         market.last = trades.last().map(|trade| trade.price).or(market.last);
         market.trades = &trades;
+        market.session_open = trades
+            .last()
+            .and_then(|trade| session_open(chart, trade.ts));
         let theme = ui.active_theme();
         let action = egui::Panel::right("order_ticket")
             .resizable(false)
@@ -885,6 +912,17 @@ impl Trading {
             self.placing.push((self.request_key, position, order));
         }
     }
+}
+
+/// The open of the exchange session containing `time`, by the chart's trading hours and zone.
+fn session_open(
+    chart: &Chart,
+    time: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let sessions = (chart.bar_clock().sessions()).with_timeframe(crate::model::Timeframe::Min1);
+    (sessions.opens([time]).into_iter().rev())
+        .find(|(open, _)| *open <= time)
+        .map(|(open, _)| open)
 }
 
 fn order_name(request: &OrderRequest) -> &'static str {

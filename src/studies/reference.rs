@@ -177,6 +177,121 @@ fn bands_store_aligned_columns_through_warmup_and_corrections() {
     );
 }
 
+/// Bollinger Bands with a weighted or exponential basis on closes 2, 4, 8 and then 2, 4, 10:
+/// the middle is the chosen average, the deviation stays the population deviation about the
+/// window's simple mean (1, then 2 or 3), batch, incremental and as an edited input agree.
+#[test]
+fn bollinger_basis_replaces_the_middle_and_keeps_the_deviation() {
+    use crate::studies::{AverageType, InputValue};
+    let close = |closes: [f64; 3]| -> Vec<Bar> {
+        closes
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), p, p, p, p, 1.0))
+            .collect()
+    };
+    let (mut bars, near) = (close([2.0, 4.0, 8.0]), |a: f64, b: f64| {
+        (a - b).abs() < 1e-12
+    });
+    // Middles at bars 1 and 2, then at bar 2 once its close is 10. WMA(2) weighs 1 and 2:
+    // (2 + 8) / 3, (4 + 16) / 3, (4 + 20) / 3. EMA(2) has alpha 2/3 and the first close as
+    // seed: 10/3, 10/3 + (8 - 10/3) * 2/3 = 58/9, 10/3 + (10 - 10/3) * 2/3 = 70/9.
+    let cases = [
+        (AverageType::Weighted, 2, [10.0 / 3.0, 20.0 / 3.0, 8.0]),
+        (
+            AverageType::Exponential,
+            1,
+            [10.0 / 3.0, 58.0 / 9.0, 70.0 / 9.0],
+        ),
+    ];
+    for (basis, choice, [first, second, corrected]) in cases {
+        let mut study = BollingerBands::new(2, 2.0).with_basis(basis);
+        study.calculate(&bars);
+        let mut edited = BollingerBands::new(2, 2.0);
+        edited
+            .set_input("basis", InputValue::Choice(choice))
+            .unwrap();
+        edited.calculate(&bars);
+        for study in [&study, &edited] {
+            assert!(study.values().value(1, 0).is_none());
+            for (bar, middle, deviation) in [(1, first, 1.0), (2, second, 2.0)] {
+                assert!(near(study.values().value(1, bar).unwrap(), middle));
+                assert!(near(
+                    study.values().value(0, bar).unwrap(),
+                    middle + 2.0 * deviation
+                ));
+                assert!(near(
+                    study.values().value(2, bar).unwrap(),
+                    middle - 2.0 * deviation
+                ));
+            }
+        }
+        bars[2].close = 10.0;
+        study.update(&bars, 2);
+        assert!(near(study.values().value(1, 2).unwrap(), corrected));
+        assert!(near(study.values().value(0, 2).unwrap(), corrected + 6.0));
+        assert!(near(study.values().value(2, 2).unwrap(), corrected - 6.0));
+        bars = close([2.0, 4.0, 8.0]);
+    }
+}
+
+/// The width of Bollinger Bands(2, 2) over closes 2, 4, 10, 10, 12 is 4 * deviation / mean:
+/// 400/3, 1200/7, 0 and 400/11 from bar 1. Its highest over 2 bars and lowest over 3 bars, each
+/// window ending at the bar, are read off by hand, and a bar with no close is skipped as if
+/// absent.
+#[test]
+fn bollinger_width_extrema_match_hand_windows() {
+    let (a, b, c) = (400.0 / 3.0, 1200.0 / 7.0, 400.0 / 11.0);
+    let nan = f64::NAN;
+    let bars = |closes: [f64; 5]| -> Vec<Bar> {
+        closes
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), p, p, p, p, 1.0))
+            .collect()
+    };
+    let check = |study: &BollingerBandsWidth, expected: [[f64; 5]; 3]| {
+        for (line, expected) in expected.iter().enumerate() {
+            for (bar, want) in expected.iter().enumerate() {
+                let got = study.values().value(line, bar);
+                match got {
+                    Some(got) => assert!((got - want).abs() < 1e-9, "line {line} bar {bar}"),
+                    None => assert!(want.is_nan(), "line {line} bar {bar}"),
+                }
+            }
+        }
+    };
+    let mut data = bars([2.0, 4.0, 10.0, 10.0, 12.0]);
+    let mut study = BollingerBandsWidth::new(2, 2.0).with_lookbacks(2, 3);
+    study.calculate(&data);
+    check(
+        &study,
+        [
+            [nan, a, b, 0.0, c],
+            [nan, a, b, b, c],
+            [nan, a, a, 0.0, 0.0],
+        ],
+    );
+    // A corrected bar 3 gives widths nan, a, b, c, 0.
+    data[3].close = 12.0;
+    study.update(&data, 3);
+    check(
+        &study,
+        [[nan, a, b, c, 0.0], [nan, a, b, b, c], [nan, a, a, c, 0.0]],
+    );
+    // Without bar 2 the widths of the kept bars 0, 1, 3, 4 are nan, a, b, c.
+    let skipped = bars([2.0, 4.0, nan, 10.0, 12.0]);
+    study.calculate(&skipped);
+    check(
+        &study,
+        [
+            [nan, a, nan, b, c],
+            [nan, a, nan, b, b],
+            [nan, a, nan, a, c],
+        ],
+    );
+}
+
 /// 150 bars of a seeded 64-bit LCG walk in whole ticks of 0.25, so every price is exact in binary:
 /// rising to bar 74, falling after, a random opening offset on bars ending in 5 (so the true range
 /// exceeds the bar range on some of them), flat on bars 110 to 114.
@@ -588,7 +703,14 @@ fn staple_studies_match_published_definitions() {
             closes.push(closes[closes.len() - 1] + step);
         }
     }
-    let divergence_bars = hand(closes.into_iter().map(|c| (c + 1.0, c - 1.0, c)).collect());
+    let divergence_bars = hand(closes.iter().map(|c| (c + 1.0, c - 1.0, *c)).collect());
+    // The same divergences at prices a trillion times smaller: the RSI does not depend on scale.
+    let tiny_divergence_bars = hand(
+        closes
+            .iter()
+            .map(|c| ((c + 1.0) * 1e-12, (c - 1.0) * 1e-12, c * 1e-12))
+            .collect(),
+    );
     use crate::studies::{AverageLine, AverageType, MACombination};
     let combination_bars: Vec<_> = [2.0, 4.0, 8.0, 6.0, 10.0, 5.0]
         .into_iter()
@@ -755,6 +877,11 @@ fn staple_studies_match_published_definitions() {
             "RSIDiv-hand",
             Box::new(RsiDivergence::default()),
             divergence_bars.clone(),
+        ),
+        (
+            "RSIDiv-hand-tiny",
+            Box::new(RsiDivergence::default()),
+            tiny_divergence_bars,
         ),
         // 18 bars lie between the bullish pivots and 23 between the bearish ones.
         (

@@ -3,7 +3,7 @@
 use super::FeedError;
 use super::depth::{Lost, MAX_LEVELS, key};
 use crate::model::{OrderBook, OrderBookLevel, OrderSide, Tick};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet, VecDeque};
 
@@ -19,16 +19,128 @@ pub struct RestingOrder {
     pub price: f64,
     /// Remaining size, finite and strictly positive.
     pub size: f64,
+    /// Host-defined identity of the participant that placed the order, such as a broker or
+    /// market maker number, when the feed supplies one. Never inferred.
+    #[serde(default)]
+    pub participant: Option<u64>,
+    /// When the venue placed the order, when the feed supplies it. A price change that costs
+    /// priority is still the same order unless the venue says otherwise by sending a new one.
+    #[serde(default)]
+    pub placed: Option<DateTime<Utc>>,
 }
 
 impl RestingOrder {
-    /// A resting order with its remaining size.
+    /// A resting order with its remaining size and no participant or placement time.
     pub fn new(id: u64, side: OrderSide, price: f64, size: f64) -> Self {
         Self {
             id,
             side,
             price,
             size,
+            participant: None,
+            placed: None,
+        }
+    }
+
+    /// The same order, placed by `participant`.
+    pub fn with_participant(mut self, participant: u64) -> Self {
+        self.participant = Some(participant);
+        self
+    }
+
+    /// The same order, placed at `time`.
+    pub fn with_placed(mut self, time: DateTime<Utc>) -> Self {
+        self.placed = Some(time);
+        self
+    }
+}
+
+/// Which resting orders count when they are summed into levels, for ladders, heatmaps and the
+/// book size study. Every field narrows the set. Filters are exact: an order whose placement
+/// time or participant the feed did not supply is neither guessed at nor dropped for lacking the
+/// field it is not filtered on.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OrderFilter {
+    /// Orders smaller than this are left out before aggregation. Must be finite and not
+    /// negative, else no order counts.
+    pub min_size: f64,
+    /// Only orders that have rested at least this long at the time of the book, measured from
+    /// the placement time the feed supplied. Orders without one cannot be shown to have rested
+    /// that long and are left out. A negative age counts as zero.
+    pub min_age: Option<TimeDelta>,
+    /// Orders of these participants are left out. Orders without a participant stay.
+    pub exclude_participants: Vec<u64>,
+}
+
+impl OrderFilter {
+    /// Whether `order` counts in a book as it stood at `now`.
+    pub fn accepts(&self, order: &RestingOrder, now: DateTime<Utc>) -> bool {
+        self.min_size.is_finite()
+            && self.min_size >= 0.0
+            && order.size >= self.min_size
+            && self.min_age.is_none_or(|age| {
+                order
+                    .placed
+                    .is_some_and(|placed| now - placed >= age.max(TimeDelta::zero()))
+            })
+            && order
+                .participant
+                .is_none_or(|p| !self.exclude_participants.contains(&p))
+    }
+}
+
+/// Why an order-level view cannot be built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OrderFilterUnavailable {
+    /// The feed sends aggregate depth only, so no order is known.
+    AggregateDepth,
+    /// The filter excludes participants but no held order names one.
+    Participants,
+    /// The filter has a minimum age but no held order has a placement time.
+    PlacementTimes,
+}
+
+impl std::fmt::Display for OrderFilterUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::AggregateDepth => "the feed sends aggregate depth only",
+            Self::Participants => "no order names its participant",
+            Self::PlacementTimes => "no order has a placement time",
+        })
+    }
+}
+
+impl std::error::Error for OrderFilterUnavailable {}
+
+/// Two sizes that mark an individual resting order as notable and as large.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OrderSizeTiers {
+    /// Orders of at least this size are notable.
+    pub notable: f64,
+    /// Orders of at least this size are large, whatever `notable` is.
+    pub large: f64,
+}
+
+/// How an order's size compares with [`OrderSizeTiers`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrderSizeTier {
+    /// At least the notable size and below the large size.
+    Notable,
+    /// At least the large size.
+    Large,
+}
+
+impl OrderSizeTiers {
+    /// The tier of an order of `size`, or `None` below both. Sizes that are not numbers have none.
+    pub fn tier(&self, size: f64) -> Option<OrderSizeTier> {
+        if size >= self.large {
+            Some(OrderSizeTier::Large)
+        } else if size >= self.notable {
+            Some(OrderSizeTier::Notable)
+        } else {
+            None
         }
     }
 }
@@ -129,13 +241,63 @@ impl OrderQueue {
     /// Aggregated levels for ladders and heatmaps, counting only orders at least `minimum_size`.
     /// Invalid thresholds return an empty book. Counts and totals refer to the selected orders.
     pub fn aggregate(&self, symbol: impl Into<String>, minimum_size: f64) -> OrderBook {
+        let filter = OrderFilter {
+            min_size: minimum_size,
+            ..OrderFilter::default()
+        };
+        self.sum(symbol.into(), &filter)
+    }
+
+    /// The levels of the orders `filter` accepts, as the book stood at its last update: what a
+    /// ladder, heatmap and book size study built on the same filter show. Fails when the held
+    /// orders carry none of the metadata a filter field needs, rather than showing the unfiltered
+    /// book as if it were filtered. An empty book is never unavailable.
+    pub fn filtered(
+        &self,
+        symbol: impl Into<String>,
+        filter: &OrderFilter,
+    ) -> Result<OrderBook, OrderFilterUnavailable> {
+        if !self.orders.is_empty() {
+            if !filter.exclude_participants.is_empty()
+                && self.orders.iter().all(|o| o.participant.is_none())
+            {
+                return Err(OrderFilterUnavailable::Participants);
+            }
+            if filter.min_age.is_some() && self.orders.iter().all(|o| o.placed.is_none()) {
+                return Err(OrderFilterUnavailable::PlacementTimes);
+            }
+        }
+        Ok(self.sum(symbol.into(), filter))
+    }
+
+    /// The largest order `filter` accepts at each price of each side, bids from the highest
+    /// price down and then asks from the lowest up. Ties keep the earliest queue priority.
+    pub fn largest_orders(&self, filter: &OrderFilter) -> Vec<&RestingOrder> {
+        let mut largest: BTreeMap<(bool, u64), &RestingOrder> = BTreeMap::new();
+        for order in self.orders.iter().filter(|o| filter.accepts(o, self.time)) {
+            let bid = order.side == OrderSide::Buy;
+            let level = largest.entry((!bid, key(self.tick, order.price)));
+            level
+                .and_modify(|held| {
+                    if order.size > held.size {
+                        *held = order;
+                    }
+                })
+                .or_insert(order);
+        }
+        let (mut bids, asks): (Vec<_>, Vec<_>) =
+            largest.into_iter().partition(|((ask, _), _)| !ask);
+        bids.reverse();
+        bids.into_iter()
+            .chain(asks)
+            .map(|(_, order)| order)
+            .collect()
+    }
+
+    fn sum(&self, symbol: String, filter: &OrderFilter) -> OrderBook {
         let mut bids: BTreeMap<u64, OrderBookLevel> = BTreeMap::new();
         let mut asks: BTreeMap<u64, OrderBookLevel> = BTreeMap::new();
-        for order in self
-            .orders
-            .iter()
-            .filter(|o| minimum_size.is_finite() && minimum_size >= 0.0 && o.size >= minimum_size)
-        {
+        for order in self.orders.iter().filter(|o| filter.accepts(o, self.time)) {
             let side = if order.side == OrderSide::Buy {
                 &mut bids
             } else {
@@ -153,7 +315,7 @@ impl OrderQueue {
         }
         OrderBook {
             ts: self.time,
-            symbol: symbol.into(),
+            symbol,
             bids: bids.into_values().rev().collect(),
             asks: asks.into_values().collect(),
         }

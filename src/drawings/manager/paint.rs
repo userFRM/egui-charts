@@ -1,7 +1,7 @@
 //! The painted-geometry cache, painting and hit testing of the drawings.
 
 use super::{DrawingManager, PaintedDrawing};
-use crate::drawings::domain::Drawing;
+use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::drawings::rendering::ChartView;
 use crate::drawings::services::{DrawingInteraction, HandleService, in_z_order};
 use egui::epaint::{ClippedShape, Mesh, TessellationOptions, Tessellator, emath::TSTransform};
@@ -240,6 +240,10 @@ impl DrawingManager {
             && self.owns_pane(drawing)
         {
             self.render_drawing(drawing, painter, price_rect, view);
+            if drawing.tool_type == DrawingToolType::Rect {
+                drawing.render_rect_guides(painter);
+                self.render_handles(painter, drawing);
+            }
         }
 
         // Render handles for every visible selected drawing.
@@ -249,6 +253,9 @@ impl DrawingManager {
                 && self.owns_pane(d)
                 && d.is_visible_on_timeframe(&self.curr_timeframe)
         }) {
+            if drawing.tool_type == DrawingToolType::Rect {
+                drawing.render_rect_guides(painter);
+            }
             self.render_handles(painter, drawing);
         }
     }
@@ -257,7 +264,7 @@ impl DrawingManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::drawings::domain::{ChartPoint, DrawingToolType};
+    use crate::drawings::domain::ChartPoint;
 
     /// Text extents, position zones, Fibonacci rings and repeating cycle lines are
     /// selectable away from every anchor, using their actual paint geometry.
@@ -344,6 +351,7 @@ mod tests {
                         bar_to_x: &|b| b * 10.0,
                         price_to_y: &|p| 500.0 - p as f32,
                         time_axis: true,
+                        executions: None,
                     };
                     manager.render_all(ui.painter(), pane, &view);
                 })
@@ -423,6 +431,7 @@ mod tests {
                     bar_to_x: &|b| b * 10.0,
                     price_to_y: &|p| 500.0 - p as f32,
                     time_axis: true,
+                    executions: None,
                 };
                 manager.render_all(ui.painter(), pane, &view);
             });
