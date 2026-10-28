@@ -589,6 +589,15 @@ pub struct ChartBuilder {
     visible_candles: usize,
     /// Bars asked for in the first page of history.
     initial_bars: usize,
+    locale: Option<String>,
+    time_formatter: Option<Arc<dyn crate::scales::TimeFormatter>>,
+    price_formatter: Option<Arc<dyn crate::scales::PriceFormatter>>,
+    percentage_formatter: Option<Arc<dyn crate::scales::PriceFormatter>>,
+    volume_formatter: Option<Arc<dyn crate::scales::PriceFormatter>>,
+    #[cfg(feature = "drawings")]
+    storage: Option<Arc<dyn crate::services::Storage>>,
+    #[cfg(feature = "ui")]
+    study_factory: Option<crate::studies::IndicatorFactory>,
 }
 
 impl ChartBuilder {
@@ -610,6 +619,15 @@ impl ChartBuilder {
             drawing_registry: Default::default(),
             visible_candles: 100,
             initial_bars: 1000,
+            locale: None,
+            time_formatter: None,
+            price_formatter: None,
+            percentage_formatter: None,
+            volume_formatter: None,
+            #[cfg(feature = "drawings")]
+            storage: None,
+            #[cfg(feature = "ui")]
+            study_factory: None,
         }
     }
 
@@ -797,6 +815,70 @@ impl ChartBuilder {
         self
     }
 
+    /// Name months and weekdays in `locale`'s language, as [`Chart::set_locale`] does.
+    #[must_use]
+    pub fn with_locale(mut self, locale: impl Into<String>) -> Self {
+        self.locale = Some(locale.into());
+        self
+    }
+
+    /// Format time labels, as [`Chart::set_time_formatter`] does.
+    #[must_use]
+    pub fn with_time_formatter(mut self, formatter: Arc<dyn crate::scales::TimeFormatter>) -> Self {
+        self.time_formatter = Some(formatter);
+        self
+    }
+
+    /// Format price labels, as [`Chart::set_price_formatter`] does.
+    #[must_use]
+    pub fn with_price_formatter(
+        mut self,
+        formatter: Arc<dyn crate::scales::PriceFormatter>,
+    ) -> Self {
+        self.price_formatter = Some(formatter);
+        self
+    }
+
+    /// Format percentage and indexed price labels, as [`Chart::set_percentage_formatter`] does.
+    #[must_use]
+    pub fn with_percentage_formatter(
+        mut self,
+        formatter: Arc<dyn crate::scales::PriceFormatter>,
+    ) -> Self {
+        self.percentage_formatter = Some(formatter);
+        self
+    }
+
+    /// Format volumes, as [`Chart::set_volume_formatter`] does.
+    #[must_use]
+    pub fn with_volume_formatter(
+        mut self,
+        formatter: Arc<dyn crate::scales::PriceFormatter>,
+    ) -> Self {
+        self.volume_formatter = Some(formatter);
+        self
+    }
+
+    /// Keep the drawings of each symbol in `storage`, as [`Chart::set_storage`] does.
+    #[cfg(feature = "drawings")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+    #[must_use]
+    pub fn with_storage(mut self, storage: Arc<dyn crate::services::Storage>) -> Self {
+        self.storage = Some(storage);
+        self
+    }
+
+    /// Build the studies of a saved chart passed to [`build_restored`](Self::build_restored)
+    /// through `factory`, so that studies it registers are restored. Without one only the
+    /// built-in studies are.
+    #[cfg(feature = "ui")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
+    #[must_use]
+    pub fn with_study_factory(mut self, factory: crate::studies::IndicatorFactory) -> Self {
+        self.study_factory = Some(factory);
+        self
+    }
+
     /// Set the number of bars visible in the initial viewport (default: 100).
     ///
     /// This controls the initial bar spacing so that approximately `count` bars
@@ -897,6 +979,11 @@ impl ChartBuilder {
             Chart::with_config(BarData::new(), self.config).with_chart_options(self.chart_options);
 
         chart.theme_override = self.theme;
+        chart.set_locale(self.locale);
+        chart.set_time_formatter(self.time_formatter);
+        chart.set_price_formatter(self.price_formatter);
+        chart.set_percentage_formatter(self.percentage_formatter);
+        chart.set_volume_formatter(self.volume_formatter);
         chart.set_chart_type(self.chart_type);
         chart.set_visible_bars(self.visible_candles);
         chart.set_symbol(self.symbol.unwrap_or_default());
@@ -904,6 +991,9 @@ impl ChartBuilder {
         #[cfg(feature = "drawings")]
         {
             chart.drawings.registry = self.drawing_registry;
+            if let Some(storage) = self.storage {
+                chart.set_storage(storage);
+            }
         }
         if let Some(feed) = self.feed {
             chart.attach_feed(feed, self.initial_bars);
@@ -914,6 +1004,26 @@ impl ChartBuilder {
             chart.add_indicator(study);
         }
         chart
+    }
+
+    /// Consume the builder and show the saved chart `snapshot` on the new chart.
+    ///
+    /// The chart is built as by [`build`](Self::build) with the locale, formatters, storage,
+    /// feed and studies of the builder, and `snapshot` is then restored with
+    /// [`with_study_factory`](Self::with_study_factory)'s factory, as
+    /// [`Chart::restore_with`] does, before the chart is returned. The host then binds data to
+    /// the restored series with [`Chart::restored_series_id`]. Returns the drawings that could
+    /// not be read with the chart. A snapshot that cannot be restored is an error and no chart.
+    #[cfg(feature = "ui")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
+    pub fn build_restored(
+        mut self,
+        snapshot: &super::ChartSnapshot,
+    ) -> Result<(Chart, Vec<crate::drawings::persistence::SkippedDrawing>), String> {
+        let factory = self.study_factory.take().unwrap_or_default();
+        let mut chart = self.build();
+        let skipped = chart.restore_with(snapshot, &factory)?;
+        Ok((chart, skipped))
     }
 }
 
@@ -928,6 +1038,45 @@ mod tests {
     use super::*;
     use crate::model::Bar;
     use chrono::{Duration, TimeZone, Utc};
+
+    /// The host's formatters and studies are in place when the saved chart is restored, and a
+    /// saved chart that cannot be restored yields an error and no chart.
+    #[test]
+    #[cfg(feature = "ui")]
+    fn build_restored_applies_bindings_then_state_or_fails_without_a_chart() {
+        let saved = ChartBuilder::new()
+            .with_symbol("SAVED")
+            .with_indicators({
+                let mut studies = IndicatorRegistry::default();
+                studies.add_indicator(Box::new(crate::studies::SMA::new(5)));
+                studies
+            })
+            .build()
+            .snapshot()
+            .unwrap();
+        let formatter = Arc::new(crate::scales::CustomPriceFormatter::new(|price| {
+            format!("host {price:.1}")
+        }));
+        let (chart, skipped) = ChartBuilder::new()
+            .with_symbol("OTHER")
+            .with_price_formatter(formatter)
+            .build_restored(&saved)
+            .unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(chart.symbol(), "SAVED");
+        assert_eq!(chart.indicators().count(), 1);
+        let labelled = chart
+            .series_label_formatter(
+                crate::widget::SeriesId::MAIN,
+                crate::scales::PriceScaleMode::Normal,
+            )
+            .map(|formatter| formatter.format(1.5));
+        assert_eq!(labelled.as_deref(), Some("host 1.5"));
+
+        let mut invalid = saved;
+        invalid.bar_spacing = 0.0;
+        assert!(ChartBuilder::new().build_restored(&invalid).is_err());
+    }
 
     #[test]
     #[cfg(feature = "drawings")]
