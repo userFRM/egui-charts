@@ -89,11 +89,7 @@ impl Drawing {
             .filter(|amount| amount.is_finite())
         };
 
-        // Calculate width - extend across chart
-        let width = (target.x - entry.x)
-            .abs()
-            .max(DESIGN_TOKENS.sizing.position_tool.min_width);
-        let right = entry.x + width;
+        let right = Self::position_right(entry, target);
 
         self.draw_zone(painter, entry, target.y, right, profit_color);
         self.draw_zone(painter, entry, stop_y, right, loss_color);
@@ -207,6 +203,15 @@ impl Drawing {
             stop_edge,
             stop_below,
         );
+    }
+
+    /// Screen x of the right edge of a position's box: as far right of the entry as the target
+    /// anchor is, and at least the minimum width.
+    pub(crate) fn position_right(entry: Pos2, target: Pos2) -> f32 {
+        entry.x
+            + (target.x - entry.x)
+                .abs()
+                .max(DESIGN_TOKENS.sizing.position_tool.min_width)
     }
 
     /// Fills the band between the entry line and `level_y`, from the entry to `right`.
