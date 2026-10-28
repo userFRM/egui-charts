@@ -417,9 +417,19 @@ fn small_range_studies_are_invariant_to_price_and_volume_units() {
             }
         }
     }
-    // Direct rational calculations at bar 100 of the quarter-tick fixture: the 14-bar
-    // high/low range gives K = 200/9 and R = K - 100; CCI uses the last 20 typical prices.
-    let bars = fixture();
+    // Direct rational calculations at bar 100 of the quarter-tick fixture, every price in units
+    // of 1e-12 so that its ranges sit below the former absolute floors: the 14-bar high/low
+    // range gives K = 200/9 and R = K - 100; CCI uses the last 20 typical prices.
+    let bars: Vec<_> = fixture()
+        .into_iter()
+        .map(|b| Bar {
+            open: b.open * 1e-12,
+            high: b.high * 1e-12,
+            low: b.low * 1e-12,
+            close: b.close * 1e-12,
+            ..b
+        })
+        .collect();
     for (mut study, want) in [
         (
             Box::new(WilliamsR::default()) as Box<dyn Indicator>,
