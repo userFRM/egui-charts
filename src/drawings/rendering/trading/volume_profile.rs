@@ -4,6 +4,7 @@ use crate::data::{ProfileSource, VolumeProfile};
 use crate::drawings::domain::Drawing;
 use crate::drawings::domain::DrawingToolType;
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
+use crate::localization as l10n;
 use crate::model::{Bar, SpanCache};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
@@ -200,7 +201,7 @@ impl Drawing {
             painter.text(
                 Pos2::new(left + 3.0, (view.price_to_y)(profile.high())),
                 egui::Align2::LEFT_TOP,
-                note,
+                l10n::text(painter.ctx(), note),
                 egui::FontId::proportional(typography::XS),
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 200),
             );

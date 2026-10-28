@@ -271,23 +271,38 @@ impl TimeAndSalesPanel {
         };
         let size =
             |size| StudyFormat::Volume.format(size, self.config.size_decimals.map(usize::from));
-        ui.label(format!(
-            "Order {id}: {} in {} fills",
-            size(order.size),
-            order.fills
+        ui.label(l10n::format_text(
+            ui.ctx(),
+            "Order {0}: {1} in {2} fills",
+            &[
+                ("0", id.to_string()),
+                ("1", size(order.size)),
+                ("2", order.fills.to_string()),
+            ],
         ));
         for consumed in &order.consumed {
-            let name = consumed
-                .resting_order_id
-                .map_or_else(|| "Unidentified".to_owned(), |id| format!("Order {id}"));
-            ui.label(format!(
-                "{name}: {} at {}",
-                size(consumed.size),
-                format_price(consumed.price, self.config.price_decimals)
+            let name = consumed.resting_order_id.map_or_else(
+                || l10n::text(ui.ctx(), "Unidentified"),
+                |id| l10n::format_text(ui.ctx(), "Order {0}", &[("0", id.to_string())]),
+            );
+            ui.label(l10n::format_text(
+                ui.ctx(),
+                "{0}: {1} at {2}",
+                &[
+                    ("0", name),
+                    ("1", size(consumed.size)),
+                    (
+                        "2",
+                        format_price(consumed.price, self.config.price_decimals),
+                    ),
+                ],
             ));
         }
         if !order.complete {
-            ui.weak("Incomplete: some fills do not name their resting order");
+            ui.weak(l10n::text(
+                ui.ctx(),
+                "Incomplete: some fills do not name their resting order",
+            ));
         }
     }
 }

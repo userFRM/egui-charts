@@ -15,6 +15,7 @@
 
 use std::{cell::RefCell, ops::Range, rc::Rc};
 
+use crate::localization as l10n;
 use crate::scales::PriceMap;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
@@ -550,7 +551,11 @@ fn draw_session_profile(
                     row,
                 )
                 .show(|ui| {
-                    ui.label(format!("Single print {price:.decimals$}"));
+                    ui.label(l10n::format_text(
+                        ui.ctx(),
+                        "Single print {0}",
+                        &[("0", format!("{price:.decimals$}"))],
+                    ));
                 });
             }
         }
