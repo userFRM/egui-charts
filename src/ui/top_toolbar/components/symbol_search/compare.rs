@@ -1,7 +1,7 @@
 //! Compare symbols dialog.
 
+use super::row::{SEARCH_RADIUS, paint_symbol_mark, search_backdrop};
 use super::service::Search;
-use super::{SEARCH_RADIUS, paint_symbol_mark, search_backdrop};
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::model::Instrument;
