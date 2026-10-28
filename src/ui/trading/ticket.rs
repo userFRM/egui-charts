@@ -739,7 +739,7 @@ impl OrderTicket {
                     if let Some(touch) = touch {
                         swapped = swap(ui, "Enter the price or its distance in ticks");
                         let suffix = if in_ticks {
-                            market.numbers().price(*price)
+                            numbers.price(*price)
                         } else {
                             let reference = match (self.side, market.ask, market.bid) {
                                 (OrderSide::Buy, Some(_), _) => "Ask",

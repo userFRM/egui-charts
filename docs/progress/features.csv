@@ -7,7 +7,7 @@ Builder API,Broker API,Broker host callbacks,done,host,src/services/broker.rs;sr
 Builder API,Broker API,Buy and sell buttons on the chart,done,host,src/chart/renderers/legend/mod.rs;src/widget/mod.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Depth of market trading ladder,done,host,src/ui/trading/ticket.rs;src/ui/trading/dom.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Executions shown on the chart,done,host,src/ui/trading/mod.rs;src/ui/trading/executions.rs
-Builder API,Broker API,Instrument trading info and formatters,partial,host,src/model/trading.rs;src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/ticket.rs;src/ui/trading/account_panel.rs
+Builder API,Broker API,Instrument trading info and formatters,partial,host,src/model/trading.rs;src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/ticket.rs;src/ui/trading/account_panel.rs;src/ui/trading/format.rs;src/ui/trading/dom.rs
 Builder API,Broker API,Order and position lines on the chart,done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs
 Builder API,Broker API,"Order placement, modification and cancellation",done,host,src/services/broker.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Order ticket and order or position dialogs,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket.rs;src/ui/trading/account_panel.rs
@@ -21,7 +21,7 @@ Builder API,Builder integration,Desktop webview integration,missing,library,
 Builder API,Builder integration,Embedding with a data feed,done,host,src/widget/builder.rs;src/widget/frame.rs;src/widget/feed.rs
 Builder API,Builder integration,Full trading-terminal UI around the chart,partial,library,src/ui/app_state.rs;src/ui/trading/mod.rs
 Builder API,Builder integration,Minimal embedding,done,library,src/widget/builder.rs;src/widget/frame.rs
-Builder API,Builder integration,Pluggable formatters and session rules,done,library,src/widget/frame.rs
+Builder API,Builder integration,Pluggable formatters and session rules,done,library,src/widget/frame.rs;src/widget/builder.rs
 Builder API,Builder integration,Public API surface and structure,done,library,src/prelude.rs;src/lib.rs;src/widget/mod.rs
 Builder API,Builder integration,Threading model for feeding data,done,library,src/data/mod.rs;src/data/inbox.rs;src/widget/feed.rs
 Builder API,Builder integration,WebAssembly target,done,library,src/data/mod.rs
@@ -64,7 +64,7 @@ Builder API,Save/load adapter,Chart templates,done,library,src/ui/top_toolbar/co
 Builder API,Save/load adapter,Drawing templates,done,library,src/drawings/domain/template.rs;src/ui/dialogs/templates/dialog.rs;src/ui/dialogs/templates/store.rs
 Builder API,Save/load adapter,Drawings persistence,done,library,src/widget/anchors.rs;src/widget/stored_drawings.rs;src/widget/frame.rs
 Builder API,Save/load adapter,Save and load layout UI,done,library,src/ui/top_toolbar/components/layout_menu.rs
-Builder API,Save/load adapter,Save and restore the complete chart state,partial,library,src/widget/snapshot.rs;src/studies/template.rs
+Builder API,Save/load adapter,Save and restore the complete chart state,partial,library,src/widget/snapshot.rs;src/studies/template.rs;src/widget/builder.rs
 Builder API,Save/load adapter,Storage adapter contract,done,host,src/services/storage.rs;src/services/document.rs;src/ui/dialogs/templates/store.rs;src/ui/top_toolbar/components/layout_menu.rs
 Builder API,Save/load adapter,Study templates,partial,library,src/studies/template.rs;src/ui/dialogs/templates/store.rs
 Builder API,Save/load adapter,User settings persistence,done,host,src/services/settings.rs
