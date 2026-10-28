@@ -78,7 +78,6 @@ pub struct Terminal {
     charts: Vec<Chart>,
     layout: ChartLayout,
     active: usize,
-    #[expect(dead_code, reason = "the chart slots added later load from it")]
     feed: Arc<dyn Datafeed>,
     services: services::Services,
     intercept: Option<Intercept>,
@@ -123,7 +122,6 @@ pub struct Terminal {
     panels: panels::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
     trading: trading::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     layouts: layouts::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
     compare: compare::State,
