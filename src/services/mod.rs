@@ -23,6 +23,9 @@ mod events;
 mod marks;
 mod notifications;
 mod paper;
+#[cfg(feature = "widget")]
+mod profile_directory;
+mod profiles;
 mod quotes;
 mod search;
 #[cfg(feature = "widget")]
@@ -38,8 +41,12 @@ pub use events::Events;
 #[cfg(feature = "widget")]
 pub(crate) use events::Listener;
 pub use marks::{Marks, MarksPage, MarksRequest};
-pub use notifications::{Notification, Notifications};
+pub use notifications::{Notification, NotificationTarget, Notifications};
 pub use paper::PaperAccount;
+#[cfg(feature = "widget")]
+#[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
+pub use profile_directory::{FollowOperation, FollowStatus, ProfileDirectory};
+pub use profiles::{Profile, ProfileEvent, ProfileId, Profiles};
 pub use quotes::Quotes;
 pub use search::{ExpressionError, SymbolExpression, SymbolQuery, SymbolSearch};
 #[cfg(feature = "widget")]
