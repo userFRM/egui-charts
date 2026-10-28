@@ -343,8 +343,9 @@ impl Chart {
     }
 
     /// Renders the image of [`Self::export_image`] on the CPU and encodes it as PNG, so the host
-    /// needs no renderer or GPU readback. Images whose textures the host binds itself, such as a
-    /// legend badge from a user texture, are left out.
+    /// needs no renderer or GPU readback. Fails with the reason for content it cannot draw, host
+    /// paint callbacks and images whose textures the host binds itself, such as a legend badge
+    /// from a user texture, instead of leaving it out.
     pub fn export_png(
         &self,
         ctx: &egui::Context,
@@ -362,7 +363,7 @@ impl Chart {
         let mut image = self.export_image_with(ctx, options, overlay)?;
         let pixels = super::raster::rasterize(image.size, &image.primitives, &image.textures_delta);
         image.textures_delta.clear();
-        super::raster::png(image.size, &pixels)
+        super::raster::png(image.size, &pixels?)
     }
 
     /// Renders the frame of [`Self::export_image`] as an SVG document of the options' size, with
@@ -896,8 +897,36 @@ mod tests {
                 callback: std::sync::Arc::new(()),
             });
         };
-        let error = chart.export_svg_with(&ctx, &base, callback).unwrap_err();
-        assert!(error.contains("callbacks"), "{error}");
+        let host_texture = |ui: &mut egui::Ui, _: &mut Chart| {
+            ui.painter().image(
+                egui::TextureId::User(7),
+                ui.max_rect(),
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        };
+        for (error, reason) in [
+            (chart.export_svg_with(&ctx, &base, callback), "callbacks"),
+            (
+                chart
+                    .export_png_with(&ctx, &base, callback)
+                    .map(|_| String::new()),
+                "callbacks",
+            ),
+            (
+                chart.export_svg_with(&ctx, &base, host_texture),
+                "host textures",
+            ),
+            (
+                chart
+                    .export_png_with(&ctx, &base, host_texture)
+                    .map(|_| String::new()),
+                "host textures",
+            ),
+        ] {
+            let error = error.unwrap_err();
+            assert!(error.contains(reason), "{error}");
+        }
     }
 
     #[test]

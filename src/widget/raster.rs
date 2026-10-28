@@ -78,12 +78,13 @@ pub(super) fn textures(delta: &TexturesDelta) -> HashMap<TextureId, Texture> {
 
 /// Draws `primitives` over transparent black at one pixel per point, sampling at pixel centres
 /// and blending premultiplied colours in gamma space as egui's renderers do, and returns the
-/// premultiplied pixels row by row. Meshes with a texture that `delta` does not set are skipped.
+/// premultiplied pixels row by row. Fails on host paint callbacks and on meshes with a texture
+/// that `delta` does not set, such as one the host binds itself, instead of leaving them out.
 pub(super) fn rasterize(
     size: [u32; 2],
     primitives: &[ClippedPrimitive],
     delta: &TexturesDelta,
-) -> Vec<Color32> {
+) -> Result<Vec<Color32>, String> {
     let [width, height] = size.map(|side| side as usize);
     let textures = textures(delta);
     let mut pixels = vec![Color32::TRANSPARENT; width * height];
@@ -93,10 +94,13 @@ pub(super) fn rasterize(
     } in primitives
     {
         let Primitive::Mesh(mesh) = primitive else {
-            continue;
+            return Err("Host paint callbacks cannot be drawn into PNG".into());
         };
         let Some(texture) = textures.get(&mesh.texture_id) else {
-            continue;
+            return Err(format!(
+                "{:?} is not a texture of the frame; host textures cannot be drawn into PNG",
+                mesh.texture_id
+            ));
         };
         // The scissor rectangle, rounded to pixels as egui's renderers round it.
         let clip_x = clip_rect.min.x.round().max(0.0) as usize..clip_rect.max.x.round() as usize;
@@ -111,7 +115,7 @@ pub(super) fn rasterize(
             }
         }
     }
-    pixels
+    Ok(pixels)
 }
 
 /// Twice the signed area of `a`, `b`, `p`: positive when `p` is on the inner side of `a` to `b`
