@@ -677,10 +677,16 @@ impl SymbolDetailsPanel {
                                             );
                                             let share = month.positive_share.map_or_else(
                                                 || "-".to_owned(),
-                                                |share| format!("{:.0}% up", share * 100.0),
+                                                |share| {
+                                                    l10n::format_text(
+                                                        ui.ctx(),
+                                                        "{0}% up",
+                                                        &[("0", format!("{:.0}", share * 100.0))],
+                                                    )
+                                                },
                                             );
                                             ui.label(
-                                                RichText::new(l10n::text(ui.ctx(), share))
+                                                RichText::new(share)
                                                     .size(theme.text.small)
                                                     .color(theme.ui.text_secondary),
                                             );
