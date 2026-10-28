@@ -183,7 +183,7 @@ impl PriceMarkGenerator {
                 let precision = map.price_precision().unwrap_or_else(|| {
                     let mut decimals = self.calculate_precision(nice_step);
                     if min_step.is_some() {
-                        while decimals < 10 {
+                        while decimals < 8 {
                             let scaled = nice_step * 10f64.powi(decimals as i32);
                             if (scaled - scaled.round()).abs() <= scaled * f64::EPSILON * 4.0 {
                                 break;
