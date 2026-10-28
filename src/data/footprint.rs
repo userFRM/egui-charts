@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
+/// Inclusive thresholds allow rounding error from floating-point products and quotients.
+pub(crate) fn meets_threshold(value: f64, threshold: f64) -> bool {
+    value >= threshold * (1.0 - 4.0 * f64::EPSILON)
+}
+
 /// Executed volume at one grouped price, with sells on the bid and buys on the ask.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FootprintLevel {
@@ -209,7 +214,7 @@ impl FootprintBar {
         if !ratio.is_finite() || ratio < 1.0 {
             return (false, false);
         }
-        let dominant = |a: f64, b: f64| a > b && a / ratio >= b;
+        let dominant = |a: f64, b: f64| a > b && meets_threshold(a / ratio, b);
         if !diagonal {
             return (dominant(row.bid, row.ask), dominant(row.ask, row.bid));
         }

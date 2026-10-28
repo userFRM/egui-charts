@@ -428,6 +428,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Footprint delta-percentage markers, level imbalances and bar bid/ask-ratio markers include exact threshold equality despite floating-point rounding, including fractional execution sizes. All three comparisons use the same relative tolerance; genuinely lower values remain below the threshold. ([#1287](https://github.com/userFRM/egui-charts/issues/1287))
+
 - Equal-row volume profiles that start flat rebuild as soon as a later bar changes the traded range, even inside the first row's padding. Studies and drawings then use the requested rows and actual price boundaries, including a one-row configuration; repeated bars at the original flat price still extend without a rebuild. ([#1283](https://github.com/userFRM/egui-charts/issues/1283))
 
 - A footprint built from the feed's trades drops the contribution of each trade the bounded store evicts, summing the bar that lost trades again from those held so its delta high and low agree with them, and keeps at most 5,000 bars and 50,000 price rows, the oldest bars first. `Footprint::complete_from` gives the open of the oldest bar whose executions are all held; bars before it, cut by eviction or the budget, are drawn as candles instead of as complete footprint bars. ([#1114](https://github.com/userFRM/egui-charts/issues/1114))

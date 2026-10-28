@@ -1,6 +1,6 @@
 //! Levels and zones derived only from executed volume.
 
-use crate::data::Footprint;
+use crate::data::{Footprint, meets_threshold};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -214,7 +214,7 @@ pub fn footprint_studies(flow: &Footprint, config: &FootprintStudyConfig) -> Vec
             .delta_percent()
             .zip(config.delta_percent.filter(|t| *t >= 0.0))
             && percent != 0.0
-            && percent.abs() >= threshold
+            && meets_threshold(percent.abs(), threshold)
         {
             let kind = if percent > 0.0 {
                 FootprintStudyKind::DeltaAsk
@@ -224,7 +224,7 @@ pub fn footprint_studies(flow: &Footprint, config: &FootprintStudyConfig) -> Vec
             add(first, last, kind, false);
         }
         if let Some(ratio) = config.ratio.filter(|r| *r >= 1.0) {
-            let dominant = |a: f64, b: f64| a > b && a >= b * ratio;
+            let dominant = |a: f64, b: f64| a > b && meets_threshold(a, b * ratio);
             if dominant(bar.ask, bar.bid) {
                 add(first, last, FootprintStudyKind::RatioAsk, false);
             }
@@ -428,6 +428,55 @@ mod tests {
         ));
         assert!(!marked(&[(0, 100.0, 5.0, None)], &ratio(1.0), RatioAsk));
         assert!(!marked(&flat, &ratio(1.0), RatioAsk) && !marked(&flat, &ratio(1.0), RatioBid));
+        // 29/100 is 29%, 33/30 and 55/50 are 1.1; fractional sizes obey the same rules.
+        for scale in [1.0, 0.1, 1e-12] {
+            for (side, opposite, delta_kind, ratio_kind) in [
+                (buy, sell, DeltaAsk, RatioAsk),
+                (sell, buy, DeltaBid, RatioBid),
+            ] {
+                let percentage = [
+                    (0, 100.0, 29.0 * scale, side),
+                    (1, 100.0, 71.0 * scale, None),
+                ];
+                let level = flow(&[
+                    (0, 100.0, 33.0 * scale, side),
+                    (1, 100.0, 30.0 * scale, opposite),
+                ]);
+                let bar = level.bars().values().next().unwrap();
+                let imbalance = bar.imbalance(100, 1.1, false);
+                let at_ratio = [
+                    (0, 100.0, 55.0 * scale, side),
+                    (1, 100.0, 50.0 * scale, opposite),
+                ];
+                assert_eq!(
+                    (
+                        marked(&percentage, &delta(29.0), delta_kind),
+                        imbalance,
+                        marked(&at_ratio, &ratio(1.1), ratio_kind)
+                    ),
+                    (true, (side == sell, side == buy), true),
+                    "inclusive thresholds, scale {scale}, side {side:?}"
+                );
+                let below = [
+                    (0, 100.0, 54.0 * scale, side),
+                    (1, 100.0, 50.0 * scale, opposite),
+                ];
+                assert!(!marked(&below, &ratio(1.1), ratio_kind));
+                let below_level = flow(&[
+                    (0, 100.0, 32.0 * scale, side),
+                    (1, 100.0, 30.0 * scale, opposite),
+                ]);
+                assert_eq!(
+                    below_level
+                        .bars()
+                        .values()
+                        .next()
+                        .unwrap()
+                        .imbalance(100, 1.1, false),
+                    (false, false)
+                );
+            }
+        }
         // Delta POC: 100 nets +2 and 101 nets -3; at a tie of 3 the lower price wins.
         let rows = [(0, 100.0, 2.0, buy), (1, 101.0, 3.0, sell)];
         let tied = [(0, 100.0, 3.0, buy), (1, 101.0, 3.0, sell)];

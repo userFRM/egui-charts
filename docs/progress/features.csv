@@ -401,7 +401,7 @@ Order flow,Order flow,Depth ladder with configurable visible levels,done,library
 Order flow,Order flow,Developing POC line through the session,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs
 Order flow,Order flow,Diagonal imbalance detection and highlighting,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Execution volume bubbles at trade prices and times,done,library,src/widget/feed.rs;src/chart/overlays/volume_bubbles.rs;src/widget/frame.rs
-Order flow,Order flow,Footprint cell colour and intensity modes,done,library,src/chart/overlays/footprint.rs
+Order flow,Order flow,Footprint cell colour and intensity modes,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs
 Order flow,Order flow,Footprint chart type: bid x ask traded volume at every price inside each bar,done,library,src/data/footprint.rs;src/widget/feed.rs;src/widget/frame.rs;src/chart/overlays/footprint.rs;src/ui/top_toolbar/components/chart_type_selector.rs
 Order flow,Order flow,"Footprint display modes: bid/ask split, total volume, delta, delta plus volume",done,library,src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Footprint histogram and numeric styles,done,library,src/chart/overlays/footprint.rs;src/widget/frame.rs
