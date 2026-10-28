@@ -50,7 +50,7 @@ pub struct Alert {
     /// When notifications may be delivered; `None` delivers at any time. The schedule restricts
     /// delivery only: the alert is still evaluated, and fires, outside it.
     #[serde(default)]
-    pub schedule: Option<NotificationSchedule>,
+    pub schedule: Option<Box<NotificationSchedule>>,
     /// Text the host shows or sends when the alert fires.
     #[serde(default)]
     pub message: String,
@@ -294,7 +294,7 @@ impl Alert {
             && self
                 .schedule
                 .as_ref()
-                .is_none_or(NotificationSchedule::is_valid)
+                .is_none_or(|schedule| schedule.is_valid())
     }
 }
 
@@ -451,27 +451,27 @@ mod tests {
             ),
             (
                 |a| {
-                    a.schedule = Some(NotificationSchedule {
+                    a.schedule = Some(Box::new(NotificationSchedule {
                         timezone: TimezoneId::utc(),
                         days: Vec::new(),
                         windows: vec![NotificationWindow {
                             start: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
                             end: NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
                         }],
-                    })
+                    }))
                 },
                 false,
             ),
             (
                 |a| {
-                    a.schedule = Some(NotificationSchedule {
+                    a.schedule = Some(Box::new(NotificationSchedule {
                         timezone: TimezoneId::utc(),
                         days: vec![Weekday::Mon],
                         windows: vec![NotificationWindow {
                             start: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
                             end: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
                         }],
-                    })
+                    }))
                 },
                 false,
             ),

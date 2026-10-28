@@ -483,7 +483,10 @@ mod tests {
 
     /// A host that keeps revisions as a counter and pushes every change to its watchers.
     #[derive(Default)]
-    struct Revised(Mutex<(HashMap<String, (String, u64)>, Vec<Events<Revision>>)>);
+    struct Revised(Mutex<Remote>);
+
+    /// The documents with their counters, and the watchers.
+    type Remote = (HashMap<String, (String, u64)>, Vec<Events<Revision>>);
 
     impl Revised {
         fn put(&self, name: &str, document: &str) -> Revision {

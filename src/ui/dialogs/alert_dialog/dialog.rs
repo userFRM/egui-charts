@@ -110,7 +110,7 @@ impl AlertDialog {
     pub fn edit(&mut self, alert: Alert) {
         self.expires = alert.expires.is_some();
         self.set_expiry_fields(alert.expires);
-        self.set_schedule_fields(alert.schedule.as_ref());
+        self.set_schedule_fields(alert.schedule.as_deref());
         self.alert = alert;
         self.is_open = true;
     }
@@ -353,7 +353,7 @@ impl AlertDialog {
                 }
                 if save {
                     self.alert.expires = expiry.unwrap();
-                    self.alert.schedule = schedule.unwrap();
+                    self.alert.schedule = schedule.unwrap().map(Box::new);
                     action = AlertDialogAction::Create(Box::new(self.alert.clone()));
                     self.close();
                 }
@@ -587,7 +587,7 @@ impl AlertDialog {
                     && let (Ok(expiry), Ok(schedule)) = (self.expiry(Utc::now()), self.schedule())
                 {
                     self.alert.expires = expiry;
-                    self.alert.schedule = schedule;
+                    self.alert.schedule = schedule.map(Box::new);
                     self.save_preset();
                 }
             });
@@ -1098,7 +1098,7 @@ mod tests {
         assert_eq!(schedule.days, [Weekday::Fri]);
         // Editing a saved alert shows the same fields.
         let mut alert = Alert::new("SAMPLE", AlertCondition::Crossing(1.0));
-        alert.schedule = Some(schedule.clone());
+        alert.schedule = Some(Box::new(schedule.clone()));
         let mut other = AlertDialog::new();
         other.edit(alert);
         assert_eq!(other.schedule(), Ok(Some(schedule)));

@@ -175,7 +175,10 @@ mod tests {
 
     /// A host that pushes one profile and holds the follow answers for the test to send.
     #[derive(Default)]
-    struct Host(Mutex<(Option<Events<ProfileEvent>>, Vec<(bool, Reply<()>)>)>);
+    struct Host(Mutex<Held>);
+
+    /// The stream, and the follow answers held back.
+    type Held = (Option<Events<ProfileEvent>>, Vec<(bool, Reply<()>)>);
 
     impl Profiles for Host {
         fn watch(&self, events: Events<ProfileEvent>) {
