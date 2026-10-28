@@ -231,7 +231,7 @@ impl Footprint {
     /// Keeps at most `bars` bars and `rows` price rows in all, dropping the oldest bars first.
     /// The newest bar is always kept, whole. Dropped bars are counted as incomplete.
     #[cfg_attr(
-        not(feature = "widget"),
+        all(not(feature = "widget"), not(test)),
         expect(dead_code, reason = "only the chart widget bounds its footprint")
     )]
     pub(crate) fn set_budget(&mut self, bars: usize, rows: usize) {
@@ -256,7 +256,7 @@ impl Footprint {
     /// rebuilds the bar containing it from `held`, the executions still held in order. Earlier
     /// bars go. Delta extrema cannot be recovered by subtraction, so the bar is summed again.
     #[cfg_attr(
-        not(feature = "widget"),
+        all(not(feature = "widget"), not(test)),
         expect(dead_code, reason = "only the chart widget evicts from its footprint")
     )]
     pub(crate) fn drop_through<'a>(
