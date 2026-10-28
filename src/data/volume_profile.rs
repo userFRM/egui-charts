@@ -156,8 +156,7 @@ pub enum ProfileSource {
     },
 }
 
-/// The executions behind an exact profile, whose POC and value area follow
-/// [`FootprintBar`] rather than the estimated profile's rule.
+/// The executions behind an exact profile, whose POC and value area follow [`FootprintBar`].
 #[derive(Clone, Debug, PartialEq)]
 struct Executions {
     first_level: i64,
@@ -461,7 +460,8 @@ impl VolumeProfile {
 
     /// The row with the most volume (point of control), and the lowest and
     /// highest row of the value area, which holds `share` of the volume;
-    /// `None` when no volume traded.
+    /// `None` when no volume traded. POC ties take the lower row; value-area
+    /// ties add one row on each side.
     pub fn poc_and_value_area(&self, share: f64) -> Option<(usize, (usize, usize))> {
         if !share.is_finite() || share <= 0.0 || share > 1.0 {
             return None;
@@ -476,7 +476,8 @@ impl VolumeProfile {
             let (low, high) = e.bar.value_area(share)?;
             return Some((row(e.bar.poc()?), (row(low), row(high))));
         }
-        let poc = (0..volume.len()).max_by(|&a, &b| volume[a].total_cmp(&volume[b]))?;
+        let poc = (0..volume.len())
+            .max_by(|&a, &b| volume[a].total_cmp(&volume[b]).then_with(|| b.cmp(&a)))?;
         Some((poc, value_area(volume, poc, total * share)))
     }
 }
@@ -517,12 +518,18 @@ fn fixed_grid(low: f64, high: f64, height: f64) -> Option<(f64, f64, usize)> {
 
 /// Rows around the POC that hold `target` volume. Market Profile rule: grow
 /// toward whichever of the next two rows above or the next two rows below
-/// holds more volume, one row at a time.
+/// holds more volume, one row at a time. Equal sums add one row on each side.
 fn value_area(volume: &[f64], poc: usize, target: f64) -> (usize, usize) {
     let (mut low, mut high, mut sum) = (poc, poc, volume[poc]);
     while sum < target && (low > 0 || high + 1 < volume.len()) {
         let above: f64 = volume[high + 1..].iter().take(2).sum();
         let below: f64 = volume[..low].iter().rev().take(2).sum();
+        if low > 0 && high + 1 < volume.len() && above == below {
+            low -= 1;
+            high += 1;
+            sum += volume[low] + volume[high];
+            continue;
+        }
         let up = high + 1 < volume.len() && (low == 0 || above >= below);
         for _ in 0..2 {
             if up && high + 1 < volume.len() {
@@ -617,6 +624,54 @@ mod tests {
                 profile.poc_and_value_area(share),
                 Some((2, value_area)),
                 "share {share}"
+            );
+        }
+    }
+
+    /// Equal-volume POCs take the lowest row; tied expansion adds a row on each side.
+    #[test]
+    fn estimated_and_executed_profiles_agree_on_ties() {
+        use crate::data::Footprint;
+        use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+        let time = chrono::DateTime::UNIX_EPOCH;
+        for (volumes, share, expected) in [
+            (vec![1.0; 24], 0.7, (0, (0, 16))),
+            (vec![1.0, 1.0, 2.0, 1.0, 1.0], 0.6, (2, (1, 3))),
+        ] {
+            let bars: Vec<_> = if volumes.len() == 24 {
+                vec![Bar::new(time, 100.0, 124.0, 100.0, 124.0, 24.0)]
+            } else {
+                volumes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &volume)| {
+                        let low = 100.0 + i as f64;
+                        Bar::new(time, low, low + 1.0, low, low + 1.0, volume)
+                    })
+                    .collect()
+            };
+            let estimated = VolumeProfile::of(&bars, volumes.len(), None).unwrap();
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for (i, &volume) in volumes.iter().enumerate() {
+                flow.push(&Tick::new(
+                    time,
+                    100.0 + i as f64,
+                    volume,
+                    Some(OrderSide::Buy),
+                ))
+                .unwrap();
+            }
+            let executed =
+                VolumeProfile::from_executions(flow.bar_at(time).unwrap(), 1.0, true).unwrap();
+            assert_eq!(estimated.volume(), executed.volume());
+            // 70% of 24 needs 17 unit rows. 60% of 6 needs the POC's 2 plus both tied 1s.
+            assert_eq!(
+                (
+                    estimated.poc_and_value_area(share),
+                    executed.poc_and_value_area(share)
+                ),
+                (Some(expected), Some(expected)),
+                "rows {volumes:?}, share {share}"
             );
         }
     }

@@ -137,7 +137,8 @@ impl FootprintBar {
     }
 
     /// Contiguous value area grown from the POC toward the larger adjacent volume.
-    /// Ties add both sides. `share` is clamped to 0..=1, NaN to zero. Gaps hold zero volume.
+    /// Ties add one row on each side. `share` is clamped to 0..=1, NaN to zero.
+    /// Gaps hold zero volume.
     /// Returns inclusive lower and upper level keys; a zero-volume bar has no area.
     pub fn value_area(&self, share: f64) -> Option<(i64, i64)> {
         if self.volume() <= 0.0 {
