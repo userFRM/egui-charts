@@ -587,6 +587,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "timezones")]
     #[test]
     fn a_stored_schedule_round_trips_and_a_window_may_cross_midnight() {
         let stored = serde_json::json!({
