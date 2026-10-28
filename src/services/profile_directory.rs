@@ -39,12 +39,11 @@ pub struct ProfileDirectory {
     service: Option<Arc<dyn Profiles>>,
     inbox: Arc<Inbox>,
     listener: Option<Listener>,
-    generation: u64,
     profiles: BTreeMap<ProfileId, Profile>,
     operations: HashMap<ProfileId, FollowOperation>,
     /// The key of each reply awaited, with the profile it concerns.
     requests: HashMap<u64, ProfileId>,
-    /// Requests sent to the current service, which numbers their keys.
+    /// Requests sent since the last watch, which numbers their keys after the stream's 0.
     sent: u64,
 }
 
@@ -65,10 +64,9 @@ impl ProfileDirectory {
         self.operations.clear();
         self.requests.clear();
         self.sent = 0;
+        // A new inbox, so answers to the previous stream and requests are never read.
         self.inbox = Arc::default();
-        // Stream keys are even and request keys odd, so they never meet.
-        self.generation += 2;
-        let (listener, events) = Listener::new(&self.inbox, self.generation);
+        let (listener, events) = Listener::new(&self.inbox, 0);
         self.listener = Some(listener);
         if let Some(service) = &self.service {
             service.watch(events);
@@ -83,7 +81,7 @@ impl ProfileDirectory {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
         for (key, answer) in self.inbox.drain().answers {
-            if key == self.generation {
+            if key == 0 {
                 match answer.downcast::<ProfileEvent>().map(|event| *event) {
                     Ok(ProfileEvent::Upsert(profile)) => {
                         self.profiles.insert(profile.id.clone(), profile);
@@ -142,7 +140,7 @@ impl ProfileDirectory {
             return;
         };
         self.sent += 1;
-        let key = self.generation + 2 * self.sent - 1;
+        let key = self.sent;
         self.requests.insert(key, id.clone());
         self.operations.insert(
             id.clone(),
