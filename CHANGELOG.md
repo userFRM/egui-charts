@@ -363,6 +363,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- RSI divergence pivots and divergences treat RSI values within 1e-9 as equal, so a flat bar, which leaves the RSI unchanged, no longer makes a tie between neighbouring pivots depend on floating-point rounding. ([#1089](https://github.com/userFRM/egui-charts/issues/1089))
+
 - RSI, Connors RSI and the RSI divergence study compute `100 * gain / (gain + loss)` from Wilder's averages, with no absolute loss floor, so rescaling the prices leaves the values unchanged. A window with no loss is 100, one with no gain is 0, and a fully flat window is 50, for the price and streak components of Connors RSI alike. ([#1089](https://github.com/userFRM/egui-charts/issues/1089))
 
 - Value tags and legend values of added series use their own price scale's decimals instead of a fixed two, while a host formatter set for the series still writes them. ([#1064](https://github.com/userFRM/egui-charts/issues/1064))
