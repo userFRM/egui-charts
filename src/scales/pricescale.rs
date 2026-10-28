@@ -411,10 +411,14 @@ impl PriceScale {
     ///
     /// The bounds are in the units of the transform the last fit returned
     /// ([`ChartState::fit_price_scale`](crate::studies::ChartState::fit_price_scale)).
+    /// Non-finite, equal or reversed bounds, or an overflowing span, leave the scale unchanged.
     pub fn set_range(&mut self, min: f64, max: f64) {
+        if !min.is_finite() || !max.is_finite() || min >= max || !(max - min).is_finite() {
+            return;
+        }
         if let Some(ratio) = &mut self.bar_ratio {
             let span = self.range.max - self.range.min;
-            if span > 0.0 && span.is_finite() && (max - min).is_finite() && max > min {
+            if span > 0.0 && span.is_finite() {
                 *ratio *= (max - min) / span;
             } else {
                 self.bar_ratio = None;
@@ -651,6 +655,39 @@ mod tests {
             .find(|m| m.price.abs() < 1e-9)
             .unwrap();
         assert_eq!(zero.label, "+0.000%");
+    }
+
+    #[test]
+    fn invalid_manual_ranges_leave_the_scale_unchanged() {
+        for (min, max) in [
+            (f64::NAN, f64::NAN),
+            (f64::NAN, 100.0),
+            (0.0, f64::NAN),
+            (f64::NEG_INFINITY, 100.0),
+            (0.0, f64::INFINITY),
+            (200.0, 100.0),
+            (100.0, 100.0),
+            (-f64::MAX, f64::MAX),
+        ] {
+            for manual in [false, true] {
+                let mut scale = PriceScale::new(PriceScaleOptions::default());
+                scale.autoscale(100.0, 170.0);
+                if manual {
+                    scale.set_bar_ratio_locked(true, 10.0, 500.0);
+                }
+                let before = serde_json::to_value(&scale).unwrap();
+                scale.set_range(min, max);
+                assert_eq!(
+                    serde_json::to_value(&scale).unwrap(),
+                    before,
+                    "{min}..{max}"
+                );
+                if !manual {
+                    scale.autoscale(200.0, 270.0);
+                    assert!(scale.range().min > 170.0);
+                }
+            }
+        }
     }
 
     /// Hand-computed positions on a pane from y = 0 (top) to y = 100 (bottom).

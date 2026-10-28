@@ -403,6 +403,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `PriceScale::set_range` ignores non-finite, equal or reversed bounds and overflowing spans before changing the range, manual scaling or a locked price-to-bar ratio. Automatic scaling can still fit the next frame after a rejected range. ([#1233](https://github.com/userFRM/egui-charts/issues/1233))
+
 - `VolumeFormatter` promotes a rounded mantissa of 1000 to the next available unit, so values just below the K, M and B boundaries show `1.00K`, `1.00M` and `1.00B` at the default precision, including negative values. ([#1230](https://github.com/userFRM/egui-charts/issues/1230))
 
 - Price-axis tick intervals and logarithmic marks respect multiples of `PriceMarkGeneratorConfig::min_price_step`, including when label precision is set. Tick placement without a minimum step is unchanged. ([#1229](https://github.com/userFRM/egui-charts/issues/1229))
