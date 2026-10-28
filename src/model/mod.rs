@@ -64,8 +64,8 @@ pub(crate) use bar::{index_at, time_at};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub use chart_style::{
-    AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, LastPriceAnimation,
-    LinePlotStyle, LineType,
+    AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, HlcAreaStyle,
+    LastPriceAnimation, LinePlotStyle, LineType,
 };
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
 pub use clock::BarClock;
@@ -87,7 +87,9 @@ pub use quote::{
     ExtendedHoursQuote, ExtendedSession, Level1Quote, OrderBook, OrderBookLevel, Quote, Tick,
     TradeConditions,
 };
-pub use range_bar::{RangeBar, RangeBarConfig, to_range_bars_from_ohlc, to_range_bars_from_ticks};
+pub use range_bar::{
+    RangeBar, RangeBarConfig, RangeBarSource, to_range_bars_from_ohlc, to_range_bars_from_ticks,
+};
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
 pub(crate) use revision::next_revision;
 pub use series_scale::SeriesScale;

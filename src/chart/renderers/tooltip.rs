@@ -134,6 +134,7 @@ pub fn render_tooltip_with_options(
 
 /// Renders the floating tooltip: a label and value grid in the top corner of `price_rect`
 /// on the side away from the pointer, so it never covers the hovered bar.
+/// The `instrument`'s symbol heads the grid.
 /// Held values use time, OHLC and total volume instead of the hover change row;
 /// optional study rows follow these values.
 pub fn render_floating_tooltip(
@@ -222,6 +223,9 @@ pub fn render_floating_tooltip(
 
     if rows.is_empty() {
         return;
+    }
+    if let Some(instrument) = instrument {
+        rows.insert(0, (instrument.symbol.clone(), String::new(), value_color));
     }
 
     let theme = painter.ctx().active_theme();
@@ -341,7 +345,7 @@ pub fn render_floating_tooltip(
 }
 
 /// Renders tracking tooltip as horizontal bar at top of chart
-/// Shows: O: xxx  H: xxx  L: xxx  C: xxx  Vol: xxx  (+x.xx%)
+/// Shows: SYMBOL  O: xxx  H: xxx  L: xxx  C: xxx  Vol: xxx  (+x.xx%)
 pub fn render_tracking_tooltip(
     painter: &Painter,
     chart_rect: Rect,
@@ -369,7 +373,10 @@ pub fn render_tracking_tooltip(
     let precision = instrument
         .and_then(instrument_price_precision)
         .map_or(options.price_precision.min(4), usize::from);
-    let mut parts = Vec::new();
+    let mut parts: Vec<String> = instrument
+        .map(|instrument| instrument.symbol.clone())
+        .into_iter()
+        .collect();
 
     if options.show_time {
         parts.push(scale.format_crosshair(candle.time, bar_seconds));
@@ -647,6 +654,68 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     const HOVER: Pos2 = Pos2::new(400.0, 250.0);
+
+    /// The floating, held and tracking readouts lead with the instrument's symbol, and the
+    /// symbol follows a change of instrument.
+    #[test]
+    fn readouts_lead_with_the_instrument_symbol() {
+        let plot = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(800.0, 300.0));
+        let bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0);
+        let scale = crate::scales::TimeFormatterBuilder::new().build();
+        for (instrument, held, tracking, expected) in [
+            (Some("SAMPLE"), false, false, Some("SAMPLE")),
+            (Some("OTHER"), false, false, Some("OTHER")),
+            (Some("SAMPLE"), true, false, Some("SAMPLE")),
+            (Some("SAMPLE"), false, true, Some("SAMPLE")),
+            (None, false, false, None),
+        ] {
+            let instrument = instrument.map(Instrument::new);
+            let ctx = egui::Context::default();
+            let output = ctx.run_ui(Default::default(), |ui| {
+                if tracking {
+                    render_tracking_tooltip(
+                        ui.painter(),
+                        plot,
+                        &bar,
+                        &TooltipOptions::default(),
+                        &scale,
+                        3600,
+                        &[],
+                        instrument.as_ref(),
+                        ValueFormatters::default(),
+                    );
+                } else {
+                    render_floating_tooltip(
+                        ui.painter(),
+                        Pos2::new(plot.left() + 100.0, plot.center().y),
+                        plot,
+                        &bar,
+                        None,
+                        &TooltipOptions {
+                            on_long_press: held,
+                            ..Default::default()
+                        },
+                        egui::Color32::GREEN,
+                        &scale,
+                        3600,
+                        &[],
+                        instrument.as_ref(),
+                        ValueFormatters::default(),
+                    );
+                }
+            });
+            let first = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            let first = first.unwrap_or_default();
+            match expected {
+                Some(symbol) => assert!(first.starts_with(symbol), "{first:?}"),
+                None => assert!(!first.contains("SAMPLE"), "{first:?}"),
+            }
+        }
+    }
 
     #[test]
     fn study_readouts_fit_narrow_plots() {

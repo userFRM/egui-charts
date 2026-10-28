@@ -16,6 +16,12 @@ Interactive financial charts for [egui](https://github.com/emilk/egui), using yo
 
 `Chart` provides price and volume panes, pan and zoom, crosshairs and live bar updates on native and WebAssembly targets. Optional features add built-in studies, drawing tools, order flow visualizations and application UI such as toolbars, replay controls, trading panels and dialogs. The host supplies market data, external accounts and durable storage through the crate's contracts.
 
+## Status
+
+[![chart](https://userfrm.github.io/egui-charts/docs/progress/badge-chart.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![drawings](https://userfrm.github.io/egui-charts/docs/progress/badge-drawings.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![studies](https://userfrm.github.io/egui-charts/docs/progress/badge-studies.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![order flow](https://userfrm.github.io/egui-charts/docs/progress/badge-order-flow.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![terminal](https://userfrm.github.io/egui-charts/docs/progress/badge-terminal.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![builder api](https://userfrm.github.io/egui-charts/docs/progress/badge-builder-api.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
+
+[![progress map](https://userfrm.github.io/egui-charts/docs/progress/progress.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
+
 ## Quick start
 
 The chart widget alone, without the toolbars, the built-in studies, the icons or `egui_extras`:

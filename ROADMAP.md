@@ -1,5 +1,7 @@
 # egui-charts Roadmap
 
+[Feature status and progress](https://userfrm.github.io/egui-charts/docs/progress/)
+
 The crate provides an engine without egui, an egui 0.37 chart widget, and terminal UI components. Checked items describe working capabilities, including public APIs that applications can compose. Unchecked items describe remaining library work. `ui::terminal::Terminal` assembles the components on the host's feed and services and lets the application intercept their actions; it returns those it does not perform yet, and the demo still routes the components by hand.
 
 ## Chart Rendering Engine
@@ -16,7 +18,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time-based intervals with an instrument tick size; unsupported intervals and bars without retained trades use candles. Session profiles require `studies`.
 - [ ] Change Kagi line thickness at shoulder and waist crossings within a continuing leg.
 - [ ] Expose the standalone point-and-figure close-only source in chart parameters and settings.
-- [ ] Connect execution-based range construction to the Range chart type; it currently reconstructs a path from OHLC bars.
+- [x] Range charts build their bars from the supplied executions, falling back to the OHLC approximation while the chart holds none; `Chart::range_bar_source` reports which one is shown.
 - [ ] Offer proportional volume-candle widths without the current minimum width.
 - [ ] Expose HLC fill opacity and close-line width, and Kagi stroke widths.
 - [ ] Render the TPO single-print highlights already calculated by the engine.
@@ -70,11 +72,11 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Editable text, notes, callouts, price labels, comments, signposts and tables with persistent cell contents.
 - [x] Image annotations load an address through application-installed egui image loaders; local post and idea cards store editable supplied content.
 - [x] Searchable bundled icons, emoji and stickers with size controls and recent selections.
-- [ ] Bound Fibonacci retracement/extension fills to their configured horizontal span and extend channel levels to pane edges.
+- [x] Fibonacci retracement and extension fills share their level lines' horizontal span; channel levels extend to the pane edges.
 - [ ] Build the triangle pattern's two boundaries and apex, and correct its polygon fill.
-- [ ] Calculate three-drives ratios and a price-based reversal zone.
-- [ ] Base Elliott impulse targets on the first price leg with the correct direction, independent of zoom and scale.
-- [ ] Add the origin anchor needed for a complete five-wave Elliott triangle.
+- [x] Three-drives ratios and the reversal zone are measured in price.
+- [x] Elliott impulse targets project the first price leg in its own direction, independent of zoom and scale.
+- [x] Elliott triangles collect an origin and waves A to E.
 - [ ] Render projected bars for Ghost Feed, which currently draws a faded path.
 - [ ] Connect fixed and anchored profile drawings to finer bar data or execution-based profiles.
 - [ ] Expose configurable Gann-square fan and arc construction and visibility.
@@ -93,7 +95,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Drawing templates save, apply and delete reusable styles through `TemplateStore` and `Storage`.
 - [x] Demonstration cursor with a fading pointer trail.
 - [ ] Add nested drawing folders and folder management to the object tree.
-- [ ] Make sloping drawing alert levels agree with logarithmic rendering.
+- [x] Sloping drawing alert levels agree with logarithmic rendering, and parallel, disjoint and flat top/bottom channels expose both lines.
 - [ ] Add a separate magic cursor mode.
 
 ## Technical Indicators

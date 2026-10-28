@@ -131,7 +131,10 @@ impl DrawingContextMenu {
         self.alert = drawing
             .filter(|_| !chart.symbol.is_empty())
             .and_then(|drawing| {
-                let (level, _, _) = drawing.alert_levels(0.0).into_iter().next()?;
+                let (level, _, _) = drawing
+                    .alert_levels(0.0, chart.config().right_axis_scale_mode)
+                    .into_iter()
+                    .next()?;
                 Some(Alert::new(
                     chart.symbol.clone(),
                     AlertCondition::Compare {
