@@ -556,6 +556,13 @@ impl ScreenerPanel {
             changed = true;
         }
         match &self.error {
+            Some(FeedError::NotSupported) if !self.text.is_empty() => {
+                status_message(
+                    ui,
+                    MessageKind::Info,
+                    "This feed takes no screen descriptions.",
+                );
+            }
             Some(FeedError::NotSupported) => {
                 status_message(ui, MessageKind::Info, "This feed supplies no screener.");
             }
@@ -682,6 +689,7 @@ fn op_label(op: ScreenerOp) -> &'static str {
 mod tests {
     use super::*;
     use crate::data::{HistoryPage, HistoryRequest, Reply, ScreenerColumn};
+    use egui_kittest::{Harness, kittest::Queryable};
     use std::sync::Mutex;
 
     #[derive(Default)]
@@ -843,6 +851,16 @@ mod tests {
         }
         restored.load_screen("Cheap");
         assert_eq!(restored.query(0), first);
+        // A feed without descriptions is told apart from one without a screener.
+        restored.set_feed(feed.clone());
+        let (_, reply) = feed.text.lock().unwrap().pop().unwrap();
+        reply.send(Err(FeedError::NotSupported));
+        restored.poll(&ctx);
+        let mut h = Harness::builder()
+            .with_context_setup(|ctx| egui_extras::install_image_loaders(ctx))
+            .build_ui_state(|ui, panel: &mut ScreenerPanel| _ = panel.show(ui), restored);
+        h.run();
+        h.get_by_label("This feed takes no screen descriptions.");
 
         panel.saved.save("Cheaper", panel.saved_screen()).unwrap();
         panel.renaming = Some("Cheap".into());
