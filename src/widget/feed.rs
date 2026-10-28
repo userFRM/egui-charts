@@ -131,6 +131,7 @@ impl FeedLink {
             depth_history: self.depth_history.clone(),
             depth_complete: self.depth_complete,
             heatmap: self.heatmap.is_some().then(Default::default),
+            book_view: self.book_view.clone(),
             study_inputs: Vec::new(),
             time: self.time,
             paging_stopped: true,
