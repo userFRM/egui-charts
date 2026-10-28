@@ -163,6 +163,20 @@ impl Indicator for PriceOscillator {
         signal_average: choice("Signal MA", [OscillatorAverage::Exponential, OscillatorAverage::Simple])
     ; {});
 
+    fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.colors[line],
+            width: 1.0,
+            pattern: crate::model::LineStyle::Solid,
+            plot_type: if line == 2 {
+                crate::studies::PlotType::Columns
+            } else {
+                crate::studies::PlotType::Line
+            },
+            visible: true,
+        }
+    }
+
     fn value_format(&self) -> crate::scales::StudyFormat {
         crate::scales::StudyFormat::Percent
     }

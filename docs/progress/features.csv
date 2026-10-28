@@ -650,7 +650,7 @@ Studies,Indicators,Median,done,library,src/studies/builtin/median.rs;src/studies
 Studies,Indicators,Median Price,done,library,src/studies/builtin/typical_price.rs;src/studies/factory.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Momentum,done,library,src/studies/builtin/momentum.rs;src/studies/factory.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Money Flow,done,library,src/studies/builtin/mfi.rs;src/studies/factory.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Moon Phases,missing,library,
+Studies,Indicators,Moon Phases,done,library,src/studies/builtin/lunar_phases.rs;src/studies/factory.rs
 Studies,Indicators,Moving Average Adaptive,done,library,src/studies/builtin/kama.rs;src/studies/factory.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Moving Average Channel,done,library,src/studies/builtin/ma_channel.rs;src/studies/factory.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Moving Average Convergence Divergence,done,library,src/studies/builtin/macd.rs;src/studies/factory.rs;src/chart/renderers/indicator.rs
