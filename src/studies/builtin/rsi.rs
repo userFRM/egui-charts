@@ -48,6 +48,7 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -134,7 +135,7 @@ impl RSI {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: Color32::from_rgb(41, 98, 255),
+            color: palette::PURPLE,
             visible: true,
         }
     }
@@ -218,8 +219,8 @@ impl Indicator for RSI {
             height: Some(138.0),
             range: Some((0.0, 100.0)),
             levels: vec![
-                (70.0, Color32::from_gray(128), "Overbought"),
-                (30.0, Color32::from_gray(128), "Oversold"),
+                (70.0, palette::MUTED, "Overbought"),
+                (30.0, palette::MUTED, "Oversold"),
             ],
             fill_between_levels: true,
         }

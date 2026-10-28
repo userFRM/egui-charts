@@ -66,9 +66,9 @@ impl KeltnerChannels {
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            upper_color: palette::PINK,    // Pink
-            middle_color: palette::PURPLE, // Purple
-            lower_color: palette::PINK,    // Pink
+            upper_color: palette::BLUE,
+            middle_color: palette::BB_MIDDLE,
+            lower_color: palette::BLUE,
             visible: true,
         }
     }

@@ -207,7 +207,7 @@ impl Indicator for MACD {
         crate::studies::StudyPane {
             height: None,
             range: None,
-            levels: vec![(0.0, palette::WHITE, "Zero Line")],
+            levels: vec![(0.0, palette::MUTED, "Zero Line")],
             fill_between_levels: false,
         }
     }

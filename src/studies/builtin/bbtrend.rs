@@ -55,7 +55,7 @@ impl BBTrend {
             long_length: long_length.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
-            colors: [up, up.gamma_multiply(0.5), down, down.gamma_multiply(0.5)],
+            colors: [up, palette::LIGHT_GREEN, down, palette::LIGHT_RED],
             visible: true,
         }
     }

@@ -26,7 +26,7 @@ impl PercentB {
             period: period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
-            color: palette::CYAN, // Cyan
+            color: palette::PURPLE,
             visible: true,
         }
     }

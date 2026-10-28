@@ -56,7 +56,7 @@ impl AdxBreakout {
             adx: ADX::new(period),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            colors: [palette::GOLD, palette::GREEN, palette::RED],
+            colors: [palette::PURPLE, palette::GREEN, palette::RED],
             visible: true,
         }
     }

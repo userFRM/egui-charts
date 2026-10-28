@@ -125,7 +125,7 @@ impl RsiDivergence {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             undo: Vec::new(),
-            rsi_color: palette::ACCENT,
+            rsi_color: palette::PURPLE,
             bull_color: palette::GREEN,
             bear_color: palette::RED,
             visible: true,

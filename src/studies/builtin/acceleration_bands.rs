@@ -30,9 +30,9 @@ impl AccelerationBands {
             factor: clamp_param(factor, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             colors: vec![
-                palette::GREEN, // Green - Upper
-                palette::GOLD,  // Amber - Middle
-                palette::RED,   // Red - Lower
+                palette::BLUE,      // Upper
+                palette::BB_MIDDLE, // Middle
+                palette::BLUE,      // Lower
             ],
             visible: true,
         }

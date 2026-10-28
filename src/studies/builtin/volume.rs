@@ -1,6 +1,7 @@
 //! Volume columns with an optional moving average on an independent scale.
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues, PlotStyle, PlotType};
 use egui::Color32;
@@ -68,7 +69,7 @@ impl Volume {
             colors: [
                 Color32::from_rgba_unmultiplied(38, 166, 154, 153),
                 Color32::from_rgba_unmultiplied(239, 83, 80, 153),
-                Color32::from_rgb(233, 30, 99),
+                palette::BLUE,
             ],
             visible: true,
             values: IndicatorValues::new(),

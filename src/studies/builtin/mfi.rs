@@ -47,7 +47,7 @@ impl MoneyFlowIndex {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::UP,
+            color: palette::PURPLE,
             visible: true,
         }
     }

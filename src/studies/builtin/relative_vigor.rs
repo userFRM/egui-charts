@@ -25,8 +25,8 @@ impl RelativeVigorIndex {
             period: period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                palette::GREEN, // Green - RVI
-                palette::RED,   // Red - Signal
+                palette::GREEN,  // Green - RVI
+                palette::ORANGE, // Signal
             ],
             visible: true,
         }

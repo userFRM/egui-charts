@@ -21,7 +21,7 @@ impl SmoothedMA {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::ORANGE,
+            color: palette::BLUE,
             visible: true,
         }
     }

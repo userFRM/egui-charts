@@ -12,8 +12,8 @@ impl EMACross {
     /// Create two exponential averages with lengths clamped to at least one.
     pub fn new(fast_period: usize, slow_period: usize) -> Self {
         let inner = MACombination::new(vec![
-            AverageLine::new(AverageType::Exponential, fast_period, palette::GREEN),
-            AverageLine::new(AverageType::Exponential, slow_period, palette::RED),
+            AverageLine::new(AverageType::Exponential, fast_period, palette::BLUE),
+            AverageLine::new(AverageType::Exponential, slow_period, palette::ORANGE),
         ])
         .unwrap();
         Self { inner }

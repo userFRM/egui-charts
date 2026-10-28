@@ -12,8 +12,8 @@ impl MACross {
     /// Create two simple averages with lengths clamped to at least one.
     pub fn new(fast_period: usize, slow_period: usize) -> Self {
         let mut inner = MACombination::new(vec![
-            AverageLine::new(AverageType::Simple, fast_period, palette::GREEN),
-            AverageLine::new(AverageType::Simple, slow_period, palette::RED),
+            AverageLine::new(AverageType::Simple, fast_period, palette::BLUE),
+            AverageLine::new(AverageType::Simple, slow_period, palette::ORANGE),
         ])
         .unwrap();
         inner.wait_for_all = true;

@@ -67,7 +67,7 @@ impl<const OSCILLATOR: bool> SMIErgodic<OSCILLATOR> {
             colors: if OSCILLATOR {
                 vec![palette::RED]
             } else {
-                vec![palette::BLUE, palette::DEEP_RED]
+                vec![palette::BLUE, palette::ORANGE]
             },
             visible: true,
         }

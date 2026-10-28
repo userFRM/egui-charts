@@ -1629,7 +1629,7 @@ mod tests {
             ));
             let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
             let study = crate::studies::RSI::default();
-            assert_eq!(study.colors(), vec![Color32::from_rgb(41, 98, 255)]);
+            assert_eq!(study.colors(), vec![Color32::from_rgb(141, 112, 194)]);
             assert_eq!(study.plot_style(0).width, 2.0);
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 pane.draw_zone_fills(ui.painter(), rect, 0.0, 100.0, &study);
@@ -1657,7 +1657,7 @@ mod tests {
             assert!((bands[0].rect.bottom() - 70.0).abs() < 0.001);
             assert_eq!(
                 bands[0].fill,
-                Color32::from_rgba_unmultiplied(41, 98, 255, 51)
+                Color32::from_rgba_unmultiplied(141, 112, 194, 51)
             );
             let guides: Vec<_> = shapes
                 .iter()

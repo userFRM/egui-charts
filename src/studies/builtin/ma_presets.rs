@@ -12,8 +12,8 @@ impl MixedMACross {
     pub fn new(fast: usize, slow: usize) -> Self {
         Self {
             inner: MACombination::new(vec![
-                AverageLine::new(AverageType::Simple, fast, palette::GREEN),
-                AverageLine::new(AverageType::Exponential, slow, palette::RED),
+                AverageLine::new(AverageType::Simple, fast, palette::BLUE),
+                AverageLine::new(AverageType::Exponential, slow, palette::ORANGE),
             ])
             .unwrap(),
         }
@@ -38,7 +38,7 @@ pub struct TripleMA {
 impl TripleMA {
     /// Three lengths, each clamped to at least one. Marks crossings of the first two.
     pub fn new(fast: usize, middle: usize, slow: usize) -> Self {
-        let colors = [palette::GREEN, palette::ORANGE, palette::RED];
+        let colors = [palette::BLUE, palette::ORANGE, palette::PURPLE];
         Self {
             inner: MACombination::new(
                 [fast, middle, slow]

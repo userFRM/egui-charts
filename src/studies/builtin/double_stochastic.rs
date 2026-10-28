@@ -27,7 +27,7 @@ impl DoubleStochastic {
             period: period.max(1),
             smooth: smooth.max(1),
             values: IndicatorValues::new(),
-            color: palette::ORANGE, // Orange
+            color: palette::PURPLE,
             visible: true,
         }
     }

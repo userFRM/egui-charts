@@ -50,9 +50,9 @@ impl DonchianChannels {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            upper_color: palette::BLUE,    // Blue
-            middle_color: palette::PURPLE, // Purple
-            lower_color: palette::BLUE,    // Blue
+            upper_color: palette::BLUE, // Blue
+            middle_color: palette::BB_MIDDLE,
+            lower_color: palette::BLUE, // Blue
             visible: true,
         }
     }

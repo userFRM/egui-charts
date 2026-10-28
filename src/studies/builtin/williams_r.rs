@@ -45,7 +45,7 @@ impl WilliamsR {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::PINK,
+            color: palette::PURPLE,
             visible: true,
         }
     }

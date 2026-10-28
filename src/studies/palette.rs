@@ -6,85 +6,88 @@
 use egui::Color32;
 
 /// Default accent study colour.
-pub const ACCENT: Color32 = Color32::from_rgb(41, 98, 255);
+pub const ACCENT: Color32 = Color32::from_rgb(53, 109, 224);
 
 /// Default bb middle study colour.
-pub const BB_MIDDLE: Color32 = Color32::from_rgb(255, 167, 38);
+pub const BB_MIDDLE: Color32 = Color32::from_rgb(210, 126, 48);
 
 /// Default blue study colour.
-pub const BLUE: Color32 = Color32::from_rgb(33, 150, 243);
+pub const BLUE: Color32 = Color32::from_rgb(53, 109, 224);
 
 /// Default brown study colour.
-pub const BROWN: Color32 = Color32::from_rgb(121, 85, 72);
+pub const BROWN: Color32 = Color32::from_rgb(151, 118, 97);
 
 /// Default cyan study colour.
-pub const CYAN: Color32 = Color32::from_rgb(0, 188, 212);
+pub const CYAN: Color32 = Color32::from_rgb(54, 150, 170);
 
 /// Default dark green study colour.
-pub const DARK_GREEN: Color32 = Color32::from_rgb(46, 125, 50);
+pub const DARK_GREEN: Color32 = Color32::from_rgb(46, 128, 112);
 
 /// Default dark red study colour.
-pub const DARK_RED: Color32 = Color32::from_rgb(211, 47, 47);
+pub const DARK_RED: Color32 = Color32::from_rgb(191, 78, 90);
 
 /// Default deep green study colour.
-pub const DEEP_GREEN: Color32 = Color32::from_rgb(27, 94, 32);
+pub const DEEP_GREEN: Color32 = Color32::from_rgb(49, 116, 103);
 
 /// Default deep orange study colour.
-pub const DEEP_ORANGE: Color32 = Color32::from_rgb(255, 87, 34);
+pub const DEEP_ORANGE: Color32 = Color32::from_rgb(198, 107, 58);
 
 /// Default deep purple study colour.
-pub const DEEP_PURPLE: Color32 = Color32::from_rgb(103, 58, 183);
+pub const DEEP_PURPLE: Color32 = Color32::from_rgb(125, 98, 178);
 
 /// Default deep red study colour.
-pub const DEEP_RED: Color32 = Color32::from_rgb(183, 28, 28);
+pub const DEEP_RED: Color32 = Color32::from_rgb(171, 71, 83);
 
 /// Default disabled study colour.
-pub const DISABLED: Color32 = Color32::from_rgb(158, 158, 158);
+pub const DISABLED: Color32 = Color32::from_rgb(151, 155, 166);
 
 /// Default down study colour.
-pub const DOWN: Color32 = Color32::from_rgb(242, 54, 69);
+pub const DOWN: Color32 = Color32::from_rgb(211, 86, 98);
 
 /// Default gold study colour.
-pub const GOLD: Color32 = Color32::from_rgb(255, 193, 7);
+pub const GOLD: Color32 = Color32::from_rgb(176, 137, 49);
 
 /// Default gray study colour.
-pub const GRAY: Color32 = Color32::from_rgb(128, 128, 128);
+pub const GRAY: Color32 = Color32::from_rgb(128, 133, 145);
 
 /// Default green study colour.
-pub const GREEN: Color32 = Color32::from_rgb(76, 175, 80);
+pub const GREEN: Color32 = Color32::from_rgb(38, 150, 132);
 
 /// Default indigo study colour.
-pub const INDIGO: Color32 = Color32::from_rgb(63, 81, 181);
+pub const INDIGO: Color32 = Color32::from_rgb(111, 119, 190);
 
 /// Default light blue study colour.
-pub const LIGHT_BLUE: Color32 = Color32::from_rgb(100, 181, 246);
+pub const LIGHT_BLUE: Color32 = Color32::from_rgb(112, 157, 220);
 
 /// Default light green study colour.
-pub const LIGHT_GREEN: Color32 = Color32::from_rgb(139, 195, 74);
+pub const LIGHT_GREEN: Color32 = Color32::from_rgb(122, 181, 160);
+
+/// Default light red study colour.
+pub(crate) const LIGHT_RED: Color32 = Color32::from_rgb(220, 145, 151);
 
 /// Default muted study colour.
-pub const MUTED: Color32 = Color32::from_rgb(131, 137, 151);
+pub const MUTED: Color32 = Color32::from_rgb(128, 133, 145);
 
 /// Default orange study colour.
-pub const ORANGE: Color32 = Color32::from_rgb(255, 152, 0);
+pub const ORANGE: Color32 = Color32::from_rgb(210, 126, 48);
 
 /// Default pink study colour.
-pub const PINK: Color32 = Color32::from_rgb(233, 30, 99);
+pub const PINK: Color32 = Color32::from_rgb(189, 110, 151);
 
 /// Default purple study colour.
-pub const PURPLE: Color32 = Color32::from_rgb(156, 39, 176);
+pub const PURPLE: Color32 = Color32::from_rgb(141, 112, 194);
 
 /// Default red study colour.
-pub const RED: Color32 = Color32::from_rgb(244, 67, 54);
+pub const RED: Color32 = Color32::from_rgb(211, 86, 98);
 
 /// Default teal study colour.
-pub const TEAL: Color32 = Color32::from_rgb(0, 150, 136);
+pub const TEAL: Color32 = Color32::from_rgb(38, 150, 132);
 
 /// Default up study colour.
-pub const UP: Color32 = Color32::from_rgb(8, 153, 129);
+pub const UP: Color32 = Color32::from_rgb(38, 150, 132);
 
 /// Default white study colour.
 pub const WHITE: Color32 = Color32::from_rgb(255, 255, 255);
 
 /// Default yellow study colour.
-pub const YELLOW: Color32 = Color32::from_rgb(255, 235, 59);
+pub const YELLOW: Color32 = Color32::from_rgb(173, 146, 65);

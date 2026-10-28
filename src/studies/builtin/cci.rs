@@ -48,7 +48,7 @@ impl CCI {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::CYAN, // Cyan
+            color: palette::PURPLE,
             visible: true,
         }
     }

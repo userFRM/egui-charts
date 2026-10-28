@@ -70,8 +70,8 @@ impl StochasticRSI {
             smooth_d: smooth_d.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            k_color: palette::BLUE,
-            d_color: palette::RED,
+            k_color: palette::PURPLE,
+            d_color: palette::ORANGE,
             visible: true,
         }
     }

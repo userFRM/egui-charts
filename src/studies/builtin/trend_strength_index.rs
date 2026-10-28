@@ -33,7 +33,7 @@ impl TrendStrengthIndex {
             source: PriceSource::Close,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::BLUE,
+            color: palette::PURPLE,
             visible: true,
         }
     }

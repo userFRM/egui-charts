@@ -25,9 +25,9 @@ impl PriceChannel {
             period: period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                palette::GREEN, // Green - Upper
-                palette::RED,   // Red - Lower
-                palette::GRAY,  // Gray - Middle (neutral)
+                palette::BLUE,      // Upper
+                palette::BLUE,      // Lower
+                palette::BB_MIDDLE, // Middle
             ],
             visible: true,
         }

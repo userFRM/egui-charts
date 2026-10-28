@@ -44,7 +44,7 @@ impl AroonOscillator {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::BLUE,
+            color: palette::PURPLE,
             visible: true,
         }
     }

@@ -62,7 +62,7 @@ impl ADX {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            adx_color: palette::GOLD,      // Amber (ADX)
+            adx_color: palette::PURPLE,
             plus_di_color: palette::GREEN, // Green (+DI)
             minus_di_color: palette::RED,  // Red (-DI)
             visible: true,

@@ -1109,6 +1109,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Built-in studies use a coordinated palette of blue averages and bands, orange signal and basis lines, violet oscillators, muted levels and teal/red directional plots, with lighter fading histogram bars and translucent fills. The defaults stay readable in dark and light themes; saved study colours are unchanged. ([#1298](https://github.com/userFRM/egui-charts/issues/1298))
+
 - `UserSettings` is `#[non_exhaustive]`, so that fields can be added without a breaking change. Migration: build `UserSettings` with `Default` and assign fields. `IndicatorDialogAction` implements `Clone` and `Debug`, and `SettingsAction` implements `Debug`.
 
 - Migration for scale settings: `ScalesAndLinesSettings`, `ChartConfig` and `PriceAxisOptions` literals add the new display fields or use `..Default::default()`. Older saved settings take their defaults. `chart::render_axis_currency` takes an optional unit before the currency choices; pass `None` for the previous header. `PriceScale::set_bar_ratio` accepts a positive finite number of scale units per bar, with `None` unlocking it; logarithmic axes measure natural logarithms of prices.

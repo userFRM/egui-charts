@@ -59,7 +59,7 @@ impl ATR {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::CYAN, // Cyan
+            color: palette::PURPLE,
             visible: true,
         }
     }
