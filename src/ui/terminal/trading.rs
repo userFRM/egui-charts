@@ -267,10 +267,11 @@ impl Terminal {
     /// signals of every chart slot, new ones included.
     fn mount_report(&mut self) {
         let trading = &mut self.trading;
-        let changed = self.strategy_report.as_ref() != trading.report.report();
-        if changed {
+        // Taken once: a report holding NaN never equals itself.
+        let changed = self.strategy_report.is_some();
+        if let Some(report) = self.strategy_report.take() {
             let chart = &self.charts[self.active];
-            let bars = match &self.strategy_report {
+            let bars = match &report {
                 Some(report)
                     if report.symbol == chart.symbol()
                         && Some(report.timeframe) == chart.timeframe() =>
@@ -279,18 +280,15 @@ impl Terminal {
                 }
                 _ => &[],
             };
-            trading
-                .report
-                .set_report(self.strategy_report.clone(), bars);
-            trading.trade = None;
-            trading.markers = self
-                .strategy_report
+            trading.markers = report
                 .clone()
                 .map(|report| Arc::new(ReportMarkers { report }));
-            trading.marked_slots = 0;
-            if self.strategy_report.is_some() {
+            if report.is_some() {
                 (trading.dock, trading.tab) = (Dock::Normal, Tab::Report);
             }
+            trading.report.set_report(report, bars);
+            trading.trade = None;
+            trading.marked_slots = 0;
         }
         if changed || trading.markers.is_some() && trading.marked_slots < self.charts.len() {
             let first = trading.marked_slots.min(self.charts.len());
@@ -384,7 +382,7 @@ impl Terminal {
             self.toggle_dock(Dock::Maximised);
         }
         if clear {
-            self.strategy_report = None;
+            self.strategy_report = Some(None);
         }
         if let Some(action) = account {
             self.emit(Action::Account(action));
@@ -660,7 +658,12 @@ mod tests {
                 trade(OrderSide::Buy, 300, 290, 60_000.0, 60_500.0, 500.0),
                 trade(OrderSide::Sell, 20, 10, 61_000.0, 60_800.0, 200.0),
             ],
-            equity: vec![(hours(300), 10_000.0), (hours(10), 10_700.0)],
+            // A point the tester could not value reads as NaN.
+            equity: vec![
+                (hours(300), 10_000.0),
+                (hours(150), f64::NAN),
+                (hours(10), 10_700.0),
+            ],
         }
     }
 
@@ -891,7 +894,7 @@ mod tests {
         let clear = frame(&mut terminal, SIZE, vec![]).text_at("Clear report");
         click(&mut terminal, SIZE, clear.expect("clear button"));
         settle(&mut terminal);
-        assert!(terminal.strategy_report.is_none());
+        assert!(terminal.trading.report.report().is_none());
         let (texts, _) = painted(&mut terminal, SIZE);
         assert_eq!(exits(&texts), 0);
         assert!(texts.iter().all(|(text, _)| text != "Clear report"));

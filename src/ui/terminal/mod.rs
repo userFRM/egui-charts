@@ -108,7 +108,9 @@ pub struct Terminal {
     panel: Option<core::SidePanel>,
     /// Whether a replay is running, so a symbol change stops it.
     replay_active: bool,
-    strategy_report: Option<StrategyReport>,
+    /// The report the host set and the dock has not mounted yet; `Some(None)` removes the
+    /// mounted one.
+    strategy_report: Option<Option<StrategyReport>>,
     #[expect(dead_code, reason = "the group keeps its state here")]
     drawings: drawings::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
@@ -345,7 +347,7 @@ impl Terminal {
 
     /// Shows `report` in the strategy report panel, or closes it with `None`.
     pub fn set_strategy_report(&mut self, report: Option<StrategyReport>) {
-        self.strategy_report = report;
+        self.strategy_report = Some(report);
     }
 
     /// Passes `action` along the groups until one performs it, and returns what is left.
