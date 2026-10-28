@@ -127,11 +127,19 @@ impl Trades {
     }
 
     /// Time of the oldest held trade.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
     pub(crate) fn oldest(&self) -> Option<DateTime<Utc>> {
         self.trades.iter().map(|trade| trade.ts).min()
     }
 
     /// Trades a page can still add before the store evicts live ones.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
     pub(crate) fn room(&self) -> usize {
         self.capacity.saturating_sub(self.trades.len())
     }

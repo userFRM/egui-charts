@@ -367,12 +367,9 @@ impl<'a> Legend<'a> {
                 id.with("title"),
                 Sense::focusable_noninteractive(),
             );
+            let controls_label = l10n::text(ui.ctx(), "Series controls");
             title_response.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::Role::Button,
-                    true,
-                    l10n::text(ui.ctx(), "Series controls"),
-                )
+                egui::WidgetInfo::labeled(egui::Role::Button, true, &controls_label)
             });
             let focused = title_response.has_focus()
                 || title_response.lost_focus()
@@ -685,20 +682,15 @@ impl<'a> Legend<'a> {
         if has_rows {
             let rect = layout.reserve(Vec2::new(29.0, 21.0));
             let response = ui.interact(rect.intersect(bounds), id, Sense::click());
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::Role::Button,
-                    true,
-                    l10n::text(
-                        ui.ctx(),
-                        if collapsed {
-                            "Expand legend"
-                        } else {
-                            "Collapse legend"
-                        },
-                    ),
-                )
-            });
+            let label = l10n::text(
+                ui.ctx(),
+                if collapsed {
+                    "Expand legend"
+                } else {
+                    "Collapse legend"
+                },
+            );
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
             painter.rect(
                 rect,
                 3.0,
@@ -801,13 +793,9 @@ pub(crate) fn study_controls(
         touch
     });
     let row_response = ui.interact(row, id.with("row"), Sense::click());
-    row_response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::Role::Button,
-            true,
-            l10n::text(ui.ctx(), "Study controls"),
-        )
-    });
+    let controls_label = l10n::text(ui.ctx(), "Study controls");
+    row_response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &controls_label));
     let mut menu = row_response
         .secondary_clicked()
         .then(|| row_response.interact_pointer_pos())
@@ -1096,13 +1084,8 @@ fn paint_quotes(
                 Sense::click(),
             )
             .on_hover_text(l10n::text(ui.ctx(), "Order quantity"));
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::Role::Button,
-                true,
-                l10n::text(ui.ctx(), "Order quantity"),
-            )
-        });
+        let label = l10n::text(ui.ctx(), "Order quantity");
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
         let fill = if response.hovered() {
             theme.ui.btn_bg_active
         } else {
@@ -1164,13 +1147,8 @@ fn paint_quotes(
     let dropdown = ui
         .interact(dropdown, id.with("ticket"), Sense::click())
         .on_hover_text(l10n::text(ui.ctx(), "Order ticket"));
-    dropdown.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::Role::Button,
-            true,
-            l10n::text(ui.ctx(), "Order ticket"),
-        )
-    });
+    let label = l10n::text(ui.ctx(), "Order ticket");
+    dropdown.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
     let action = if dropdown.clicked() {
         Some(QuoteSide::Ticket)
     } else if sell_response.clicked() {
