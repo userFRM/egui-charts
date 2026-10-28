@@ -887,7 +887,7 @@ dependencies = [
  "egui_extras",
  "egui_kittest",
  "log",
- "png 0.17.16",
+ "png 0.18.1",
  "rand",
  "resvg",
  "serde",
