@@ -21,7 +21,7 @@ use crate::ui_kit::modal::Modal;
 use crate::widget::{SeriesId, ShortcutRequest, VisibleTimeRange};
 use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, NaiveTime, TimeZone, Utc, Weekday};
 
-/// The zones the time zone menu offers.
+/// The zones the time zone menu offers, when the build can resolve them.
 const ZONES: [&str; 2] = ["UTC", "America/New_York"];
 
 pub(super) struct State {
@@ -384,7 +384,10 @@ impl Terminal {
         Modal::new("timezone", "Chart timezone")
             .width(320.0)
             .show(ctx, &mut open, |ui| {
-                for name in ZONES {
+                for name in ZONES
+                    .into_iter()
+                    .filter(|name| name.parse::<TimezoneId>().is_ok())
+                {
                     if ui.selectable_label(current == name, name).clicked() {
                         choice = Some(name);
                     }
@@ -519,6 +522,7 @@ mod tests {
     }
 
     /// Opens the time zone menu from the bottom bar and picks `name`.
+    #[cfg(feature = "timezones")]
     fn pick_zone(terminal: &mut Terminal, name: &str) {
         assert!(
             terminal
@@ -535,6 +539,7 @@ mod tests {
     /// A bare number enters minutes, Enter applies it through the normal action path, and undo
     /// and redo bring the interval and the clock of the bottom bar back with the chart.
     #[test]
+    #[cfg(feature = "timezones")]
     fn typed_interval_entry_applies_minutes() {
         let mut terminal = terminal("AAPL", Timeframe::Min1);
         frame(&mut terminal, SIZE, vec![Event::Text("15".into())]);
@@ -652,6 +657,7 @@ mod tests {
 
     /// Go to date and a date range count days in the chart's time zone, not in UTC.
     #[test]
+    #[cfg(feature = "timezones")]
     fn date_picker_actions_follow_the_chart_time_zone() {
         let day = |d| NaiveDate::from_ymd_opt(2025, 12, d).unwrap();
         let utc = |d, h| Utc.with_ymd_and_hms(2025, 12, d, h, 0, 0).unwrap();
