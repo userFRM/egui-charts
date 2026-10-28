@@ -37,10 +37,11 @@ pub enum NewsAction {
 ///
 /// Keep it on the chart's symbol with [`set_symbol`](Self::set_symbol); the user switches between
 /// that symbol's stories and the whole market's. With [`set_symbols`](Self::set_symbols) they can
-/// add symbols, and with [`set_topics`](Self::set_topics) and [`set_providers`](Self::set_providers)
-/// narrow the stories by topic and provider. Each change asks the feed again with the complete
-/// selection, and only the answer to the latest request is shown. A story opens to its text, with actions to show the
-/// chart at its time and to open its link. Call [`poll`](Self::poll) each frame, then
+/// add symbols, and with [`set_topics`](Self::set_topics) and
+/// [`set_providers`](Self::set_providers) narrow the stories by topic and provider; offering the
+/// values again keeps the choices still offered. Each change asks the feed again with the
+/// complete selection, and only the answer to the latest request is shown. A story opens to its text, with actions to show the chart at its time and to open its
+/// link. Call [`poll`](Self::poll) each frame, then
 /// [`show`](Self::show) while the panel is open.
 pub struct NewsPanel {
     highlights: bool,
@@ -111,22 +112,25 @@ impl NewsPanel {
     /// Offer `symbols` as further symbols to show stories about, next to the followed one. None is
     /// selected at first; choices still offered stay selected.
     pub fn set_symbols(&mut self, symbols: impl IntoIterator<Item = String>) {
-        offer(&mut self.more_symbols, symbols);
-        self.refresh();
+        if offer(&mut self.more_symbols, symbols) {
+            self.refresh();
+        }
     }
 
     /// Offer `topics`, in the values the feed supports, as a filter. None is selected at first,
     /// which lists every topic; choices still offered stay selected.
     pub fn set_topics(&mut self, topics: impl IntoIterator<Item = String>) {
-        offer(&mut self.topics, topics);
-        self.refresh();
+        if offer(&mut self.topics, topics) {
+            self.refresh();
+        }
     }
 
     /// Offer `providers`, in the identifiers the feed uses, as a filter. None is selected at
     /// first, which lists every provider; choices still offered stay selected.
     pub fn set_providers(&mut self, providers: impl IntoIterator<Item = String>) {
-        offer(&mut self.providers, providers);
-        self.refresh();
+        if offer(&mut self.providers, providers) {
+            self.refresh();
+        }
     }
 
     /// Ask the feed again, such as when the host learns of new stories.
@@ -407,8 +411,9 @@ impl NewsPanel {
     }
 }
 
-/// Replace the offered values with `values`, keeping the choice of those still offered.
-fn offer(choices: &mut Vec<(String, bool)>, values: impl IntoIterator<Item = String>) {
+/// Replace the offered values with `values`, keeping the choice of those still offered, and
+/// tell whether the choice changed.
+fn offer(choices: &mut Vec<(String, bool)>, values: impl IntoIterator<Item = String>) -> bool {
     let kept = std::mem::take(choices);
     *choices = values
         .into_iter()
@@ -417,6 +422,7 @@ fn offer(choices: &mut Vec<(String, bool)>, values: impl IntoIterator<Item = Str
             (value, on)
         })
         .collect();
+    !chosen(&kept).eq(chosen(choices))
 }
 
 /// The values the user ticked.
@@ -482,18 +488,22 @@ mod tests {
         panel.providers[0].1 = true;
         panel.refresh();
         panel.set_topics(["fx".into(), "oil".into()]);
+        panel.set_providers(["other".into()]);
         let queries: Vec<_> = std::mem::take(&mut *feed.0.lock().unwrap())
             .into_iter()
             .map(|(query, _)| (query.symbols, query.topics, query.providers))
             .collect();
-        // The complete selection is sent, and re-offering values keeps the ones still offered.
-        let selected = (
-            vec!["BBB".to_owned(), "DDD".to_owned()],
-            vec!["fx".to_owned()],
-            vec!["wire".to_owned()],
+        // The complete selection is sent. Offering values again keeps the ones still offered and
+        // asks again only when that changes the selection.
+        let symbols = vec!["BBB".to_owned(), "DDD".to_owned()];
+        let fx = vec!["fx".to_owned()];
+        assert_eq!(
+            queries,
+            [
+                (symbols.clone(), fx.clone(), vec!["wire".to_owned()]),
+                (symbols, fx, vec![]),
+            ]
         );
-        assert_eq!(queries[3], selected);
-        assert_eq!(queries[4], selected);
 
         panel.market = true;
         panel.refresh();

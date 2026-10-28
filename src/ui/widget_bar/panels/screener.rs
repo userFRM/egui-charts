@@ -144,6 +144,7 @@ impl ScreenerPanel {
     /// Offer `universes` as the markets to screen, the first at first. The chosen one stays chosen
     /// while it is still offered.
     pub fn set_universes(&mut self, universes: Vec<ScreenerUniverse>) {
+        let before = self.universe.clone();
         if !universes
             .iter()
             .any(|u| Some(&u.id) == self.universe.as_ref())
@@ -151,7 +152,9 @@ impl ScreenerPanel {
             self.universe = universes.first().map(|u| u.id.clone());
         }
         self.universes = universes;
-        self.refresh();
+        if self.universe != before {
+            self.refresh();
+        }
     }
 
     /// Offer a field to describe the screen in words, which the feed interprets in
