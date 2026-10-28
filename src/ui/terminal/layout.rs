@@ -149,22 +149,29 @@ impl Terminal {
         // Performing an action may emit another, which is handled in turn.
         while !self.emitted.is_empty() {
             for action in std::mem::take(&mut self.emitted) {
-                if self
-                    .intercept
-                    .as_mut()
-                    .is_some_and(|intercept| intercept(&action))
-                {
-                    self.returned.push(action);
-                } else if let Some(action) = self.perform(action) {
-                    self.returned.push(action);
-                } else {
-                    performed = true;
-                }
+                performed |= self.dispatch(action);
             }
         }
         if performed {
             ctx.request_repaint();
         }
+    }
+
+    /// Returns `action` to the host if it intercepts it, else performs it and returns what is
+    /// left. True when performed.
+    pub(super) fn dispatch(&mut self, action: Action) -> bool {
+        if self
+            .intercept
+            .as_mut()
+            .is_some_and(|intercept| intercept(&action))
+        {
+            self.returned.push(action);
+        } else if let Some(action) = self.perform(action) {
+            self.returned.push(action);
+        } else {
+            return true;
+        }
+        false
     }
 
     fn show_notice(&mut self, ui: &egui::Ui) {

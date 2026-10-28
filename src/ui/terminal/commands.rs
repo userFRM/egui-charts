@@ -255,15 +255,7 @@ impl Terminal {
             .partition(opens);
         self.emitted = rest;
         for action in opening {
-            if self
-                .intercept
-                .as_mut()
-                .is_some_and(|intercept| intercept(&action))
-            {
-                self.returned.push(action);
-            } else if let Some(action) = self.perform(action) {
-                self.returned.push(action);
-            }
+            self.dispatch(action);
         }
     }
 
@@ -729,7 +721,10 @@ mod tests {
         // With one.
         let files = Rc::new(RefCell::new(Vec::new()));
         let sink = files.clone();
-        let mut terminal = terminal_with_files(sink);
+        let mut terminal = terminal()
+            .with_file_export(&[ExportFormat::Png, ExportFormat::Csv], move |file| {
+                sink.borrow_mut().push(file)
+            });
         frame(&mut terminal, SIZE, vec![]);
         assert!(terminal.run(export(ExportFormat::Png)).is_none());
         assert!(terminal.run(export(ExportFormat::Csv)).is_none());
@@ -746,11 +741,5 @@ mod tests {
             (png.name.as_str(), csv.name.as_str()),
             ("AAPL_chart.png", "AAPL_export.csv")
         );
-    }
-
-    fn terminal_with_files(sink: Rc<RefCell<Vec<ExportFile>>>) -> Terminal {
-        terminal().with_file_export(&[ExportFormat::Png, ExportFormat::Csv], move |file| {
-            sink.borrow_mut().push(file)
-        })
     }
 }
