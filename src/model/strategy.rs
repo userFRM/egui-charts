@@ -544,6 +544,101 @@ impl StrategyReport {
         }
         String::from_utf8(csv.into_inner().expect(IN_MEMORY)).expect("every field is a String")
     }
+
+    /// The summary metrics and the properties of the run as CSV, one header line and one line per
+    /// metric or property, each ending with `\n`. `performance` and `comparison` are this report's
+    /// [`Self::performance`] and [`Self::comparison`], the figures the report panel shows.
+    ///
+    /// Columns: `section` (`summary` or `properties`), `name` (as the panel labels it), `value`,
+    /// `unit` and `currency`. The unit is `money` (in `currency`, empty when the report has none),
+    /// `percent` (100 is 100%), `ratio`, `count` or `text`. Numbers use the shortest form that
+    /// reads back to the same value, and a value that is unavailable is `N/A`, as in the panel.
+    pub fn summary_csv(
+        &self,
+        performance: &StrategyPerformance,
+        comparison: &StrategyComparison,
+    ) -> String {
+        const IN_MEMORY: &str = "writing CSV to memory cannot fail";
+        let currency = self.currency.clone().unwrap_or_default();
+        let mut csv = csv::Writer::from_writer(Vec::new());
+        csv.write_record(["section", "name", "value", "unit", "currency"])
+            .expect(IN_MEMORY);
+        let mut row = |section: &str, name: &str, value: String, unit: &str| {
+            let currency = if unit == "money" { &currency } else { "" };
+            csv.write_record([section, name, &value, unit, currency])
+                .expect(IN_MEMORY);
+        };
+        let number = |value: Option<f64>| {
+            value
+                .filter(|v| v.is_finite())
+                .map_or_else(|| "N/A".into(), |v| v.to_string())
+        };
+        let p = performance;
+        for (name, value, unit) in [
+            ("Net profit", Some(p.net_profit), "money"),
+            ("Net return", p.net_profit_fraction, "percent"),
+            ("Gross profit", Some(p.gross_profit), "money"),
+            ("Gross loss", Some(p.gross_loss), "money"),
+            ("Profit factor", p.profit_factor, "ratio"),
+            ("Win rate", p.win_rate, "percent"),
+            ("Average trade", p.average_trade, "money"),
+            ("Fees", Some(p.total_fees), "money"),
+            ("Maximum drawdown", p.max_drawdown, "money"),
+            ("Maximum drawdown %", p.max_drawdown_fraction, "percent"),
+            ("Sharpe ratio", p.sharpe_ratio, "ratio"),
+            ("Sortino ratio", p.sortino_ratio, "ratio"),
+            (
+                "Buy-and-hold return",
+                comparison.buy_and_hold_return,
+                "percent",
+            ),
+            ("Largest winning trade", p.largest_winning_trade, "money"),
+            ("Largest losing trade", p.largest_losing_trade, "money"),
+        ] {
+            let value = if unit == "percent" {
+                value.map(|v| v * 100.0)
+            } else {
+                value
+            };
+            row("summary", name, number(value), unit);
+        }
+        for (name, count) in [
+            ("Consecutive wins", p.max_consecutive_wins),
+            ("Consecutive losses", p.max_consecutive_losses),
+            ("Closed trades", p.closed_trades),
+            ("Open trades", p.open_trades),
+            ("Skipped trades", p.skipped_trades),
+            ("Skipped equity points", p.skipped_equity_points),
+            ("Skipped source bars", comparison.skipped_bars),
+        ] {
+            row("summary", name, count.to_string(), "count");
+        }
+        row("properties", "Name", self.name.clone(), "text");
+        row("properties", "Symbol", self.symbol.clone(), "text");
+        row("properties", "Interval", self.timeframe.to_string(), "text");
+        row(
+            "properties",
+            "Initial capital",
+            number(Some(self.initial_capital)),
+            "money",
+        );
+        row(
+            "properties",
+            "Currency",
+            self.currency.clone().unwrap_or_else(|| "N/A".into()),
+            "text",
+        );
+        row(
+            "properties",
+            "Risk-free rate",
+            number(Some(self.risk_free_rate * 100.0)),
+            "percent",
+        );
+        for (name, value) in &self.properties {
+            row("properties", name, value.clone(), "text");
+        }
+        String::from_utf8(csv.into_inner().expect(IN_MEMORY)).expect("every field is a String")
+    }
 }
 
 impl StrategyTrade {
@@ -1170,5 +1265,51 @@ mod tests {
              2,long,1,2024-01-02T01:00:00Z,100,2024-01-02T03:00:00Z,101,3,0.5,\n\
              3,short,2,2024-01-02T05:00:00Z,101.5,,,,0,\"Breakout, short\"\n"
         );
+    }
+
+    #[test]
+    fn summary_csv_writes_metrics_and_properties_with_unavailable_values() {
+        let mut r = fixture_a();
+        r.currency = Some("USD".into());
+        r.properties.push(("Fast, length".into(), "say \"hi\"".into()));
+        assert_eq!(
+            r.summary_csv(&r.performance(), &r.comparison(&[])),
+            "section,name,value,unit,currency\n\
+             summary,Net profit,44.5,money,USD\n\
+             summary,Net return,0.445,percent,\n\
+             summary,Gross profit,76.5,money,USD\n\
+             summary,Gross loss,32,money,USD\n\
+             summary,Profit factor,2.390625,ratio,\n\
+             summary,Win rate,40,percent,\n\
+             summary,Average trade,8.9,money,USD\n\
+             summary,Fees,5,money,USD\n\
+             summary,Maximum drawdown,90,money,USD\n\
+             summary,Maximum drawdown %,0.8928571428571428,percent,\n\
+             summary,Sharpe ratio,N/A,ratio,\n\
+             summary,Sortino ratio,N/A,ratio,\n\
+             summary,Buy-and-hold return,N/A,percent,\n\
+             summary,Largest winning trade,48,money,USD\n\
+             summary,Largest losing trade,-21,money,USD\n\
+             summary,Consecutive wins,1,count,\n\
+             summary,Consecutive losses,1,count,\n\
+             summary,Closed trades,5,count,\n\
+             summary,Open trades,1,count,\n\
+             summary,Skipped trades,0,count,\n\
+             summary,Skipped equity points,0,count,\n\
+             summary,Skipped source bars,0,count,\n\
+             properties,Name,Test,text,\n\
+             properties,Symbol,TEST,text,\n\
+             properties,Interval,1h,text,\n\
+             properties,Initial capital,10000,money,USD\n\
+             properties,Currency,USD,text,\n\
+             properties,Risk-free rate,0,percent,\n\
+             properties,\"Fast, length\",\"say \"\"hi\"\"\",text,\n"
+        );
+        // Nothing to compute from: counts are zero, everything else is unavailable, never blank.
+        let empty = report(0.0);
+        let csv = empty.summary_csv(&empty.performance(), &empty.comparison(&[]));
+        assert!(csv.contains("summary,Win rate,N/A,percent,\n"), "{csv}");
+        assert!(csv.contains("summary,Net profit,0,money,\n"), "{csv}");
+        assert!(csv.contains("properties,Currency,N/A,text,\n"), "{csv}");
     }
 }
