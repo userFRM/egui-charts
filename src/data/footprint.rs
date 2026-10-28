@@ -3,6 +3,7 @@
 use super::FeedError;
 use crate::model::{BarClock, OrderSide, Tick};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
@@ -36,6 +37,21 @@ impl FootprintLevel {
     }
 }
 
+/// How [`TradeProfile::nodes`](crate::studies::TradeProfile::nodes) chooses volume nodes.
+///
+/// The default compares each price row with its immediate neighbours, which is the most
+/// sensitive setting. Raising `smoothing` or `prominence` leaves only the broader nodes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NodeSensitivity {
+    /// Rows on each side of a row that are averaged with it before comparing; zero compares
+    /// the rows as traded. Untraded rows count as zero volume.
+    pub smoothing: u32,
+    /// Smallest rise of a peak above, or drop of a valley below, the higher respectively
+    /// lower of its neighbouring plateaus, as a share of the largest smoothed volume. NaN
+    /// counts as zero and values are clamped to 0..=1.
+    pub prominence: f64,
+}
+
 /// One bar's executed volume and intrabar delta path, starting at zero.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FootprintBar {
@@ -56,6 +72,38 @@ pub struct FootprintBar {
 }
 
 impl FootprintBar {
+    /// A bar with no executions, opening at `time`.
+    pub(crate) fn empty(time: DateTime<Utc>) -> Self {
+        Self {
+            time,
+            levels: BTreeMap::new(),
+            bid: 0.0,
+            ask: 0.0,
+            unknown: 0.0,
+            min_delta: 0.0,
+            max_delta: 0.0,
+        }
+    }
+
+    /// Adds the executions of the next bar in time, extending the running delta path.
+    pub(crate) fn absorb(&mut self, next: &FootprintBar) {
+        let open = self.delta();
+        self.min_delta = self.min_delta.min(open + next.min_delta);
+        self.max_delta = self.max_delta.max(open + next.max_delta);
+        self.bid += next.bid;
+        self.ask += next.ask;
+        self.unknown += next.unknown;
+        for (&level, row) in &next.levels {
+            let target = self.levels.entry(level).or_insert_with(|| FootprintLevel {
+                level,
+                ..Default::default()
+            });
+            target.bid += row.bid;
+            target.ask += row.ask;
+            target.unknown += row.unknown;
+        }
+    }
+
     /// Buy volume minus sell volume.
     pub fn delta(&self) -> f64 {
         self.ask - self.bid
@@ -317,6 +365,14 @@ impl Footprint {
         self.step
     }
 
+    /// The level a trade at `price` falls in: the nearest tick, grouped downwards. `None` when
+    /// the price is not finite or the level overflows.
+    pub fn level_of(&self, price: f64) -> Option<i64> {
+        let level = ((price / self.tick_size).round() / self.ticks_per_row as f64).floor();
+        (level.is_finite() && level >= i64::MIN as f64 && level < i64::MAX as f64)
+            .then_some(level as i64)
+    }
+
     /// Aggregated bars in chronological order.
     pub fn bars(&self) -> &BTreeMap<DateTime<Utc>, FootprintBar> {
         &self.bars
@@ -328,27 +384,35 @@ impl Footprint {
         self.bars.get(&self.clock.bar_open(time))
     }
 
+    /// The executions of the bars that contain `first` through `last`, inclusive, as one bar
+    /// opening with the first of them: the exact profile of a span of the chart. Empty when
+    /// nothing traded there or `last` precedes `first`.
+    pub fn profile(&self, first: DateTime<Utc>, last: DateTime<Utc>) -> FootprintBar {
+        let (first, last) = (self.clock.bar_open(first), self.clock.bar_open(last));
+        let mut profile = FootprintBar::empty(first);
+        if first <= last {
+            for bar in self.bars.range(first..=last).map(|(_, bar)| bar) {
+                profile.absorb(bar);
+            }
+        }
+        profile
+    }
+
     /// Adds an execution, returning whether it passed the size filter. Invalid, out-of-order
     /// or overflowing input returns an error and changes nothing. Unknown side stays unknown.
     /// Zero-sized executions are ignored.
     pub fn push(&mut self, trade: &Tick) -> Result<bool, FeedError> {
-        let tick = (trade.price / self.tick_size).round();
-        let level = (tick / self.ticks_per_row as f64).floor();
-        if !super::trades::valid(trade)
-            || !level.is_finite()
-            || level < i64::MIN as f64
-            || level >= i64::MAX as f64
-            || self.last.is_some_and(|last| trade.ts < last)
-        {
+        let Some(level) = self.level_of(trade.price).filter(|_| {
+            super::trades::valid(trade) && self.last.is_none_or(|last| trade.ts >= last)
+        }) else {
             return Err(FeedError::InvalidData(
                 "invalid or out-of-order footprint trade".into(),
             ));
-        }
+        };
         if trade.size < self.min_size || trade.size > self.max_size || trade.size == 0.0 {
             return Ok(false);
         }
         let time = self.clock.bar_open(trade.ts);
-        let level = level as i64;
         if self
             .bars
             .get(&time)

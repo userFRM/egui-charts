@@ -89,6 +89,38 @@ fn price_tag_anchor(plot: Rect, axis_right: f32, y: f32) -> (Pos2, Align2) {
     }
 }
 
+/// Moves the tag centres `ys`, given top to bottom, apart where they are closer than a tag is
+/// high, so the tags stack in the order of their prices. Each stack of tags that touch is
+/// centred on where its tags wanted to be; tags that are far apart stay where they are.
+pub(crate) fn spread_axis_ys(painter: &Painter, ys: &[f32]) -> Vec<f32> {
+    let height = painter
+        .layout_no_wrap("0".into(), axis_font(painter.ctx()), Color32::WHITE)
+        .size()
+        .y
+        + 2.0 * TAG_PADDING.y;
+    // Stacks of (tag count, centre of the stack's first tag).
+    let mut stacks: Vec<(usize, f32)> = Vec::new();
+    for &y in ys {
+        let (mut count, mut first) = (1, y);
+        // Merge while the stack touches the one above it. The first centres of the two are
+        // averaged after lining their tags up in one stack.
+        while let Some(&(above_count, above_first)) = stacks.last() {
+            if first >= above_first + above_count as f32 * height {
+                break;
+            }
+            let (a, b) = (above_count as f32, count as f32);
+            first = (a * above_first + b * first - a * b * height) / (a + b);
+            count += above_count;
+            stacks.pop();
+        }
+        stacks.push((count, first));
+    }
+    stacks
+        .into_iter()
+        .flat_map(|(count, first)| (0..count).map(move |at| first + at as f32 * height))
+        .collect()
+}
+
 /// Paints a later value beside the nearest free vertical slot, preserving earlier tags.
 /// Tags that cannot fit inside the pane are omitted.
 pub(crate) fn render_axis_value(
@@ -154,6 +186,7 @@ pub(crate) fn render_study_tags(
         return;
     };
     let transform = map.transform();
+    let mut tags = Vec::new();
     for line in 0..study.line_count() {
         let plot_style = study.plot_style(line);
         let Some(value) = study.plot_value(line, bar) else {
@@ -181,10 +214,7 @@ pub(crate) fn render_study_tags(
             study.format_value(value)
         };
         let color = axis.study_value_color.unwrap_or(plot_style.color);
-        occupied.push(render_axis_value(
-            painter,
-            plot,
-            axis_right,
+        tags.push((
             map.price_to_y(value),
             named_label(axis.show_study_names, study.name(), label),
             (
@@ -192,6 +222,22 @@ pub(crate) fn render_study_tags(
                     .map_or(Color32::WHITE, tag_text_color),
                 color,
             ),
+        ));
+    }
+    // The lines of one study stack in the order of their prices.
+    tags.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut ys: Vec<_> = tags.iter().map(|tag| tag.0).collect();
+    if !axis.allow_label_overlap {
+        ys = spread_axis_ys(painter, &ys);
+    }
+    for ((_, text, colors), y) in tags.into_iter().zip(ys) {
+        occupied.push(render_axis_value(
+            painter,
+            plot,
+            axis_right,
+            y,
+            text,
+            colors,
             occupied,
             axis.allow_label_overlap,
         ));
@@ -736,6 +782,40 @@ mod tests {
             output.drop_without_applying_deltas();
         }
     }
+
+    /// Price lines within one label height stack on the scale in price order.
+    #[test]
+    fn price_line_tags_stack_in_price_order() {
+        use crate::widget::test_frames::{chart, shapes};
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0], &[120.0]);
+        chart.config.show_volume = false;
+        for price in [110.0, 110.2, 110.1, 109.9] {
+            chart.add_price_line(
+                crate::widget::SeriesId::MAIN,
+                PriceLine::new(price, Color32::GOLD),
+            );
+        }
+        shapes(&ctx, &mut chart, 0.0, vec![]);
+        let mut tags: Vec<_> = shapes(&ctx, &mut chart, 1.0, vec![])
+            .into_iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text)
+                    if ["110.00", "110.20", "110.10", "109.90"].contains(&text.galley.text()) =>
+                {
+                    Some((text.visual_bounding_rect(), text.galley.text().to_owned()))
+                }
+                _ => None,
+            })
+            .collect();
+        tags.sort_by(|a, b| a.0.top().total_cmp(&b.0.top()));
+        let order: Vec<_> = tags.iter().map(|tag| tag.1.as_str()).collect();
+        assert_eq!(order, ["110.20", "110.10", "110.00", "109.90"]);
+        for pair in tags.windows(2) {
+            assert!(pair[0].0.bottom() <= pair[1].0.top() + 0.01, "{tags:?}");
+        }
+    }
+
     /// Current values stay independent and ordered when price coordinates coincide.
     #[test]
     fn quote_tags_separate_colliding_prices_and_volume() {

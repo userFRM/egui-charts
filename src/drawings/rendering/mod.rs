@@ -52,6 +52,10 @@ pub struct ChartView<'a> {
     /// Whether the bar times are times, so measurements show the time between anchors; `false`
     /// on a [horizontal scale](crate::scales::HorizontalScale) other than time.
     pub time_axis: bool,
+    /// The executions behind `bars`, aggregated on the bars' clock. The volume profile drawings
+    /// then show the executed volume at each price, split by aggressor side, instead of
+    /// spreading bar volume over bar ranges; `None` estimates from the bars.
+    pub executions: Option<&'a crate::data::Footprint>,
 }
 
 /// Index of the first bar and the bars from anchor `a` to anchor `b`
@@ -751,6 +755,7 @@ mod tests {
                         bar_to_x: &|b| b * 40.0,
                         price_to_y: &|p| 500.0 - p as f32,
                         time_axis: true,
+                        executions: None,
                     };
                     drawing.render(ui.painter(), pane, &view);
                 });
@@ -1017,6 +1022,7 @@ mod tests {
                 bar_to_x: &|b| b * 10.0,
                 price_to_y: &|p| 500.0 - p as f32,
                 time_axis: true,
+                executions: None,
             };
             drawing.render(
                 ui.painter(),
@@ -1059,6 +1065,7 @@ mod tests {
                 bar_to_x: &|x| x,
                 price_to_y: &|p| p as f32,
                 time_axis: true,
+                executions: None,
             };
             manager.render_all(&ui.painter().with_clip_rect(parent), pane, &view);
         });

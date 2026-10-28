@@ -63,6 +63,8 @@ pub(crate) struct FeedLink {
     depth_history: Option<DepthHistory>,
     depth_complete: bool,
     heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
+    /// How the live book is shown by the heatmap's profile and the depth ladder.
+    book_view: crate::chart::overlays::OrderBookView,
     study_inputs: Vec<(crate::data::OrderFlowInput, u64)>,
     time: Option<chrono::DateTime<chrono::Utc>>,
     /// A permanent history or resolve failure stops paging until the next reload.
@@ -159,6 +161,7 @@ impl Chart {
             depth_history: None,
             depth_complete: false,
             heatmap: None,
+            book_view: Default::default(),
             study_inputs: Vec::new(),
             time: None,
             paging_stopped: false,
@@ -413,11 +416,11 @@ impl Chart {
         crate::data::combine_trades(self.trades(series))
     }
 
-    /// Draws the trades the feed sends as bubbles, one per bar and price level, from the next
-    /// frame, or stops with `None`. A chart without a feed holds no trades and draws none, and
-    /// Renko, Kagi, line break, point and figure and range charts draw none, since their x axis
-    /// is not time. Sums every held trade again: call it when the settings change, not every
-    /// frame.
+    /// Draws the trades the feed sends as bubbles, grouped and coloured as the config says (by
+    /// default one per bar and price level), from the next frame, or stops with `None`. A chart
+    /// without a feed holds no trades and draws none, and Renko, Kagi, line break, point and
+    /// figure and range charts draw none, since their x axis is not time. Sums every held trade
+    /// again: call it when the settings change, not every frame.
     pub fn set_volume_bubbles(&mut self, config: Option<VolumeBubblesConfig>) {
         if let Some(link) = &mut self.feed_link {
             link.bubbles = config.map(|config| link.bubbles(config));
@@ -443,6 +446,25 @@ impl Chart {
             .filter(|_| series == SeriesId::MAIN)?
             .order_queue
             .as_ref()
+    }
+
+    /// How the heatmap's profile and the depth ladder show the live book: which individual orders
+    /// count, what a bar measures and which orders are highlighted. Applies from the next frame.
+    /// A view that needs individual orders on an aggregate feed draws an explicit notice in the
+    /// pane and an empty ladder, rather than aggregate sizes.
+    pub fn set_order_book_view(&mut self, view: crate::chart::overlays::OrderBookView) {
+        if let Some(link) = &mut self.feed_link {
+            link.book_view = view;
+        }
+    }
+
+    /// The view set by [`set_order_book_view`](Self::set_order_book_view), the default of the
+    /// aggregate book without a feed.
+    pub fn order_book_view(&self) -> crate::chart::overlays::OrderBookView {
+        self.feed_link
+            .as_ref()
+            .map(|link| link.book_view.clone())
+            .unwrap_or_default()
     }
 
     /// Loads recorded depth from the feed and keeps `history` of its live book, or stops
@@ -505,38 +527,35 @@ impl Chart {
             |time| self.time_to_index(time).and_then(|i| self.index_to_x(i)),
             [self.config.bullish_color, self.config.bearish_color],
         );
-        if let Some(book) = &link.order_book {
-            let max = book
-                .bids
-                .iter()
-                .chain(&book.asks)
-                .map(|l| l.size)
-                .fold(0.0, f64::max);
-            if max > 0.0 {
-                for (levels, color) in [
-                    (&book.bids, self.config.bullish_color),
-                    (&book.asks, self.config.bearish_color),
-                ] {
-                    for level in levels {
-                        let y0 = mapping.price_to_y(level.price);
-                        let y1 = mapping.price_to_y(level.price + tick);
-                        let rect = egui::Rect::from_min_max(
-                            egui::pos2(
-                                mapping.rect.right() - 60.0 * (level.size / max) as f32,
-                                y0.min(y1),
-                            ),
-                            egui::pos2(mapping.rect.right(), y0.max(y1)),
-                        );
-                        if rect.is_finite() && rect.intersects(mapping.rect) {
-                            painter.with_clip_rect(mapping.rect).rect_filled(
-                                rect,
-                                0.0,
-                                color.gamma_multiply(0.7),
-                            );
-                        }
-                    }
-                }
-            }
+        let shown = crate::chart::overlays::render_book_profile(
+            painter,
+            mapping,
+            link.order_book.as_ref(),
+            link.order_queue.as_ref(),
+            tick,
+            &link.book_view,
+            [self.config.bullish_color, self.config.bearish_color],
+        );
+        // A heatmap of individual orders has no columns without them either.
+        let unavailable = shown.err().or_else(|| {
+            (history.config().orders.is_some() && link.order_queue.is_none())
+                .then_some(crate::data::OrderFilterUnavailable::AggregateDepth)
+        });
+        if let Some(reason) = unavailable {
+            painter.text(
+                mapping.rect.right_top() + egui::vec2(-8.0, 8.0),
+                egui::Align2::RIGHT_TOP,
+                crate::localization::format_text(
+                    painter.ctx(),
+                    "Order-level depth unavailable: {0}",
+                    &[(
+                        "0",
+                        crate::localization::text(painter.ctx(), reason.to_string()),
+                    )],
+                ),
+                egui::FontId::proportional(11.0),
+                crate::tokens::DESIGN_TOKENS.semantic.status.caution,
+            );
         }
     }
 

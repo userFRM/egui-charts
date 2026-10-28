@@ -59,7 +59,7 @@ mod resample;
 mod targets;
 mod volume_profile;
 pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
-pub use footprint::{Footprint, FootprintBar, FootprintLevel};
+pub use footprint::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
 pub use market::{
     CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
     NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,
@@ -76,15 +76,20 @@ pub(crate) mod trades;
 
 pub use inbox::{Reply, Sink, aggregate_trades, aggregate_trades_with_tick_size};
 pub use order_flow::{OrderFlowInput, OrderFlowKind};
-pub use orders::{OrderEvent, OrderQueue, RestingOrder};
+pub use orders::{
+    OrderEvent, OrderFilter, OrderFilterUnavailable, OrderQueue, OrderSizeTier, OrderSizeTiers,
+    RestingOrder,
+};
 pub use recording::{RecordingReader, RecordingWriter};
 pub use replay::{MarketEvent, ReplayClock, ReplayEvent};
 #[cfg(feature = "studies")]
 pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session};
 pub use targets::PriceTargets;
-pub use trades::{CombinedTrade, combine_trades};
-pub use volume_profile::{ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig};
+pub use trades::{CombinedTrade, ConsumedOrder, combine_trades};
+pub use volume_profile::{
+    ProfileDisplay, ProfileSource, StudyProfile, VolumeProfile, VolumeProfileConfig,
+};
 
 /// `Send + Sync` on native targets. No bound on wasm32, where feeds hold JavaScript handles.
 #[cfg(not(target_arch = "wasm32"))]

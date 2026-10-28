@@ -27,6 +27,11 @@ pub struct UserSettings {
     /// does not know is left out when reading.
     #[serde(deserialize_with = "known_tools")]
     pub drawing_favorites: Vec<DrawingToolType>,
+    /// Whether the user hid the favourites strip with its close or toggle button.
+    pub drawing_favorites_hidden: bool,
+    /// The top-left corner of the favourites strip, in logical points, where the user left it;
+    /// `None` until it has been shown, when it starts beside the drawing toolbar.
+    pub drawing_favorites_pos: Option<(f32, f32)>,
     /// The layout open last, to open again on start.
     pub layout: Option<String>,
     /// Whether the open layout is saved after each change.
@@ -310,6 +315,7 @@ mod tests {
         assert_eq!(poll(&mut store, 0.0, &settings), None);
         settings.symbol = Some("AAPL".into());
         settings.drawing_favorites = vec![DrawingToolType::TrendLine];
+        settings.drawing_favorites_pos = Some((12.0, 34.0));
         for time in [0.5, 1.0, 1.4] {
             assert_eq!(poll(&mut store, time, &settings), None);
         }
