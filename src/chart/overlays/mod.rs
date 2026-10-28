@@ -15,7 +15,7 @@ mod volume_bubbles;
 
 pub use heatmap_strip::{HeatmapCell, HeatmapStrip, HeatmapStripConfig};
 pub(crate) use volume_bubbles::VolumeBubbles;
-pub use volume_bubbles::{BubbleColor, BubbleScalingMode, VolumeBubblesConfig};
+pub use volume_bubbles::{BubbleColor, BubbleGrouping, BubbleScalingMode, VolumeBubblesConfig};
 
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]

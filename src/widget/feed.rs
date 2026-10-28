@@ -392,8 +392,8 @@ impl Chart {
         crate::data::combine_trades(self.trades(series))
     }
 
-    /// Draws the trades the feed sends as bubbles, one per bar and price level, from the next
-    /// frame, or stops with `None`. A chart without a feed holds no trades and draws none, and
+    /// Draws the trades the feed sends as bubbles, grouped and coloured as the config says (by
+    /// default one per bar and price level), from the next frame, or stops with `None`. A chart without a feed holds no trades and draws none, and
     /// Renko, Kagi, line break, point and figure and range charts draw none, since their x axis
     /// is not time. Sums every held trade again: call it when the settings change, not every
     /// frame.

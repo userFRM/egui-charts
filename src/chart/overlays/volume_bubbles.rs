@@ -1,18 +1,22 @@
 //! # Volume Bubbles Overlay
 //!
-//! Draws the trades of the chart's series as bubbles, one per bar and price level: the diameter
-//! grows with the volume traded there and the colour shows the aggressor side or the delta.
+//! Draws the trades of the chart's series as bubbles, grouped as [`BubbleGrouping`] says, by
+//! default one per bar and price level: the diameter grows with the volume traded there and the
+//! colour shows the aggressor side or the delta, as [`BubbleColor`] says.
 //! Turn them on with [`Chart::set_volume_bubbles`](crate::widget::Chart::set_volume_bubbles).
 
 use crate::model::{Bar, BarClock, OrderSide, Tick};
 use crate::tokens::DESIGN_TOKENS;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use egui::{Color32, Mesh, Painter, Pos2, Shape, Vec2};
-use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-/// Configuration for volume bubbles overlay
-#[derive(Debug, Clone)]
+/// Configuration for volume bubbles overlay. Serializable, so a host can keep it with its chart
+/// settings; fields missing from older documents take their defaults.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct VolumeBubblesConfig {
     /// Minimum bubble diameter
     pub min_diameter: f32,
@@ -40,9 +44,8 @@ pub struct VolumeBubblesConfig {
     pub border_color: Color32,
     /// Bubbles with less volume are neither drawn nor scaled over
     pub min_size_filter: Option<f64>,
-    /// Height of a price level. `None` takes the instrument's tick size, or gives every traded
-    /// price its own bubble when the feed reports none.
-    pub price_step: Option<f64>,
+    /// Which trades share a bubble.
+    pub grouping: BubbleGrouping,
 }
 
 impl Default for VolumeBubblesConfig {
@@ -60,13 +63,38 @@ impl Default for VolumeBubblesConfig {
             show_border: true,
             border_color: Color32::from_rgba_unmultiplied(255, 255, 255, 100),
             min_size_filter: None,
-            price_step: None,
+            grouping: BubbleGrouping::Automatic,
         }
     }
 }
 
+/// Which trades share a bubble. Each group is one bubble, whatever the chart's bar interval,
+/// except for [`Automatic`](Self::Automatic).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum BubbleGrouping {
+    /// One bubble per bar and price level, the level being the instrument's tick size, or every
+    /// traded price when the feed reports none. Levels of a bar that fall on one pixel row draw
+    /// as one bubble, so the shapes are bounded by the visible bars times the pane height.
+    Automatic,
+    /// One bubble per execution, at its own time and price, so fills of one price and instant
+    /// stay separate bubbles even when they land on one pixel. Draws every visible execution,
+    /// at most the chart's bounded trade store.
+    Ungrouped,
+    /// One bubble per price level and time window. Windows start on multiples of their length
+    /// counted from the Unix epoch, and a bubble sits in the middle of its window. A length
+    /// below a millisecond counts as one millisecond.
+    TimeWindow(TimeDelta),
+    /// One bubble per bar and price level of this height, which must be finite and positive,
+    /// else every traded price has its own bubble.
+    PriceStep(f64),
+    /// One bubble per this many consecutive executions, at the time of the last of them and the
+    /// volume-weighted price of all of them. The newest group grows until it is full. Groups
+    /// count from the oldest held execution, and a count of zero counts as one.
+    Executions(usize),
+}
+
 /// How to scale bubble sizes
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BubbleScalingMode {
     /// Linear scaling
     Linear,
@@ -77,7 +105,7 @@ pub enum BubbleScalingMode {
 }
 
 /// What the colour of a bubble shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BubbleColor {
     /// The aggressor side with more volume, or the neutral colour on a tie and when no trade
     /// has a side.
@@ -85,13 +113,28 @@ pub enum BubbleColor {
     /// The delta as a share of the volume with a side: the sell colour when every trade sold,
     /// the buy colour when every trade bought, and the blend between them in between.
     Delta,
+    /// Two circles on one centre, each sized by its own side's volume, so the smaller one shows
+    /// inside the larger: the sell colour for the bid side, the buy colour for the ask side.
+    /// Volume of unknown side is left out, and a bubble without any volume with a side is one
+    /// neutral circle.
+    Split,
+    /// The sign of the delta picks the buy or sell colour, and its absolute size, relative to
+    /// the largest absolute delta of the visible bubbles, the opacity, down to a fifth of it.
+    /// A zero delta, and a bubble without volume with a side, take the neutral colour.
+    AbsoluteDelta,
+    /// The delta as a share of the whole volume, unknown side included: the neutral colour
+    /// when it is zero, fading to the buy or sell colour as the share nears 100%, so volume of
+    /// unknown side pulls the colour toward neutral.
+    DeltaPercent,
+    /// The neutral colour for every bubble: the diameter alone shows the volume.
+    Volume,
 }
 
-/// The trades of one bar at one price level.
+/// The trades of one bubble.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Bubble {
-    /// Open time of the bar.
-    pub(crate) bar: DateTime<Utc>,
+    /// Open time of the bar, middle of the window, or time of the execution or of the last one.
+    pub(crate) at: DateTime<Utc>,
     /// The price level, or the traded price without a step.
     pub(crate) price: f64,
     /// Volume of the trades that bought.
@@ -117,6 +160,42 @@ impl Bubble {
         self.buys += other.buys;
         self.sells += other.sells;
     }
+
+    /// The bubble of consecutive executions: at the time of the last, at their volume-weighted
+    /// price, or the last price when none has volume.
+    fn of_group<'a>(trades: impl Iterator<Item = &'a Tick>) -> Self {
+        let mut weighted = 0.0;
+        let mut group = Self::default();
+        for trade in trades {
+            weighted += trade.price * trade.size;
+            group.merge(&Self::of(trade));
+            group.at = trade.ts;
+            group.price = trade.price;
+        }
+        if group.volume > 0.0 {
+            group.price = weighted / group.volume;
+        }
+        group
+    }
+
+    /// The bubble of one execution.
+    fn of(trade: &Tick) -> Self {
+        let (buy, sell) = match trade.side {
+            Some(OrderSide::Buy) => (trade.size, 0.0),
+            Some(OrderSide::Sell) => (0.0, trade.size),
+            None => (0.0, 0.0),
+        };
+        Self {
+            at: trade.ts,
+            price: trade.price,
+            buy,
+            sell,
+            volume: trade.size,
+            trades: 1,
+            buys: usize::from(trade.side == Some(OrderSide::Buy)),
+            sells: usize::from(trade.side == Some(OrderSide::Sell)),
+        }
+    }
 }
 
 /// Counts a trade in (`added`) or out, `count` being the trades whose volume `sum` holds.
@@ -128,19 +207,30 @@ fn count(count: &mut usize, sum: &mut f64, size: f64, added: bool) {
     *sum = if *count == 0 { 0.0 } else { *sum + size };
 }
 
-/// The trades the chart holds, summed per bar and price level, and how to draw them.
+/// The trades the chart holds, summed as the grouping says, and how to draw them.
 pub(crate) struct VolumeBubbles {
     pub(crate) config: VolumeBubblesConfig,
     clock: BarClock,
     step: Option<f64>,
-    /// By bar open time, then price level, so the bubbles of a run of bars are one range.
+    /// Milliseconds of a time window, for [`BubbleGrouping::TimeWindow`].
+    window: i64,
+    /// Executions of a group, for [`BubbleGrouping::Executions`].
+    group: usize,
+    /// By bar open time or window start, then price level, so the bubbles of a run of bars are
+    /// one range. Empty for the groupings that keep the trades.
     bubbles: BTreeMap<(DateTime<Utc>, i64), Bubble>,
+    /// The held trades by time, for the groupings that keep them: those of the chart's bounded
+    /// trade store, which says when one is evicted.
+    trades: VecDeque<Tick>,
+    /// Trades evicted from the front of `trades`, so groups of executions keep their edges as
+    /// the oldest trades go.
+    evicted: usize,
     /// The mesh of the last frame, refilled in place once the tessellator has let go of it.
     mesh: Mutex<Arc<Mesh>>,
 }
 
 impl VolumeBubbles {
-    /// Sums `trades` per bar of `clock` and per price level, a level being the configured step
+    /// Sums `trades` as the configured grouping says, a price level being the configured step
     /// high, else `tick_size`.
     pub(crate) fn new<'a>(
         config: VolumeBubblesConfig,
@@ -148,12 +238,28 @@ impl VolumeBubbles {
         tick_size: Option<f64>,
         trades: impl IntoIterator<Item = &'a Tick>,
     ) -> Self {
-        let step = (config.price_step.or(tick_size)).filter(|step| step.is_finite() && *step > 0.0);
+        let step = match config.grouping {
+            BubbleGrouping::PriceStep(step) => Some(step),
+            _ => tick_size,
+        }
+        .filter(|step| step.is_finite() && *step > 0.0);
+        let window = match config.grouping {
+            BubbleGrouping::TimeWindow(window) => window.num_milliseconds().max(1),
+            _ => 1,
+        };
+        let group = match config.grouping {
+            BubbleGrouping::Executions(count) => count.max(1),
+            _ => 1,
+        };
         let mut bubbles = Self {
             config,
             clock,
             step,
+            window,
+            group,
             bubbles: BTreeMap::new(),
+            trades: VecDeque::new(),
+            evicted: 0,
             mesh: Mutex::default(),
         };
         for trade in trades {
@@ -164,6 +270,13 @@ impl VolumeBubbles {
 
     /// Adds a trade the chart took (`added`), or takes out one it dropped.
     pub(crate) fn fold(&mut self, trade: &Tick, added: bool) {
+        if matches!(
+            self.config.grouping,
+            BubbleGrouping::Ungrouped | BubbleGrouping::Executions(_)
+        ) {
+            self.fold_trade(trade, added);
+            return;
+        }
         let (level, price) = match self.step {
             Some(step) => {
                 let level = (trade.price / step).round();
@@ -176,10 +289,21 @@ impl VolumeBubbles {
                 (bits ^ (((bits >> 63) as u64) >> 1) as i64, trade.price)
             }
         };
-        let bar = self.clock.bar_open(trade.ts);
-        let key = (bar, level);
+        let (open, at) = match self.config.grouping {
+            BubbleGrouping::TimeWindow(_) => {
+                let millis = trade.ts.timestamp_millis();
+                let start = millis - millis.rem_euclid(self.window);
+                let start = DateTime::from_timestamp_millis(start).unwrap_or(trade.ts);
+                (start, start + TimeDelta::milliseconds(self.window / 2))
+            }
+            _ => {
+                let bar = self.clock.bar_open(trade.ts);
+                (bar, bar)
+            }
+        };
+        let key = (open, level);
         let bubble = self.bubbles.entry(key).or_insert_with(|| Bubble {
-            bar,
+            at,
             price,
             ..Bubble::default()
         });
@@ -195,45 +319,128 @@ impl VolumeBubbles {
         }
     }
 
-    /// The bubbles of the bars that open from `first` to `last`, by bar then price level.
+    /// Keeps `trade` in time order, after those at the same instant, or drops one equal to it.
+    fn fold_trade(&mut self, trade: &Tick, added: bool) {
+        if added {
+            let at = self.trades.partition_point(|held| held.ts <= trade.ts);
+            self.trades.insert(at, trade.clone());
+            return;
+        }
+        let first = self.trades.partition_point(|held| held.ts < trade.ts);
+        let end = self.trades.partition_point(|held| held.ts <= trade.ts);
+        if let Some(at) = (first..end).find(|&at| self.trades[at] == *trade) {
+            self.trades.remove(at);
+            self.evicted += usize::from(at == 0);
+        }
+    }
+
+    /// The bubbles from the bars that open from `first` to `last`, in time order, by price level
+    /// within a bar. With a time window, those of the windows that start from a window before
+    /// `first`; with executions kept, those of the executions at those times, and of the groups
+    /// they belong to.
     pub(crate) fn between(
         &self,
         first: DateTime<Utc>,
         last: DateTime<Utc>,
-    ) -> impl Iterator<Item = &Bubble> {
-        let range = (first, i64::MIN)..=(last.max(first), i64::MAX);
-        self.bubbles.range(range).map(|(_, bubble)| bubble)
+    ) -> impl Iterator<Item = Bubble> {
+        let last = last.max(first);
+        let mut shown = Vec::new();
+        match self.config.grouping {
+            BubbleGrouping::Ungrouped => {
+                let from = self.trades.partition_point(|t| t.ts < first);
+                shown.extend(
+                    self.trades
+                        .iter()
+                        .skip(from)
+                        .take_while(|t| t.ts <= last)
+                        .map(Bubble::of),
+                );
+            }
+            BubbleGrouping::Executions(_) => {
+                let from = self.trades.partition_point(|t| t.ts < first);
+                let to = self.trades.partition_point(|t| t.ts <= last);
+                // Whole groups: from the edge at or before the first trade to the one after the
+                // last.
+                let mut at = from - ((self.evicted + from) % self.group).min(from);
+                let end = to + (self.group - (self.evicted + to) % self.group) % self.group;
+                while from < to && at < end.min(self.trades.len()) {
+                    let next = (at + self.group - (self.evicted + at) % self.group)
+                        .min(self.trades.len());
+                    shown.push(Bubble::of_group(self.trades.range(at..next)));
+                    at = next;
+                }
+            }
+            _ => {
+                let lower = match self.config.grouping {
+                    BubbleGrouping::TimeWindow(_) => first - TimeDelta::milliseconds(self.window),
+                    _ => first,
+                };
+                let range = (lower, i64::MIN)..=(last, i64::MAX);
+                shown.extend(self.bubbles.range(range).map(|(_, bubble)| bubble.clone()));
+            }
+        }
+        shown.into_iter()
     }
 
-    /// Draws the bubbles of `bars`, the visible bars, the `i`th bar's at `x(i)`. The levels of a
-    /// bar that fall on one pixel row draw as one bubble, so the shapes are bounded by the
-    /// visible bars times the pane height.
+    /// Draws the bubbles of `bars`, the visible bars, the `i`th bar's at `x(i)` and `spacing`
+    /// apart. Bubbles that do not sit on a bar's centre are placed in its slot by their time.
     pub(crate) fn render(
         &self,
         painter: &Painter,
         bars: &[Bar],
+        spacing: f32,
         x: impl Fn(usize) -> f32,
         price_to_y: impl Fn(f64) -> f32,
     ) {
         let (Some(first), Some(last)) = (bars.first(), bars.last()) else {
             return;
         };
+        let slot = self.clock.timeframe().map_or(0, |t| t.duration_ms());
+        let slot_of = |i: usize| match bars.get(i + 1) {
+            Some(next) if slot > 0 => slot.min((next.time - bars[i].time).num_milliseconds()),
+            Some(next) => (next.time - bars[i].time).num_milliseconds(),
+            None => slot,
+        };
+        let end = last.time + TimeDelta::milliseconds(slot_of(bars.len() - 1));
         let min_size = self.config.min_size_filter.unwrap_or(f64::NEG_INFINITY);
-        let mut shown: Vec<(usize, f32, Bubble)> = Vec::new();
-        for bubble in self.between(first.time, last.time) {
-            let i = bars.partition_point(|bar| bar.time < bubble.bar);
-            if bars.get(i).is_none_or(|bar| bar.time != bubble.bar) {
-                continue;
-            }
+        let mut shown: Vec<(f32, f32, Bubble)> = Vec::new();
+        for bubble in self.between(first.time, end) {
+            let i = bars.partition_point(|bar| bar.time <= bubble.at);
+            let Some(i) = i.checked_sub(1) else { continue };
+            let elapsed = (bubble.at - bars[i].time).num_milliseconds();
+            let (x, merges) = match self.config.grouping {
+                BubbleGrouping::Automatic | BubbleGrouping::PriceStep(_) => {
+                    if bars[i].time != bubble.at {
+                        continue;
+                    }
+                    (x(i), self.config.grouping == BubbleGrouping::Automatic)
+                }
+                _ if elapsed < slot_of(i) => {
+                    let share = elapsed as f32 / slot_of(i) as f32;
+                    (x(i) + (share - 0.5) * spacing, false)
+                }
+                _ if slot_of(i) == 0 && elapsed == 0 => (x(i), false),
+                _ => continue,
+            };
             // A bar's levels come in price order, so those on one row are adjacent.
             let y = price_to_y(bubble.price).round();
             match shown.last_mut() {
-                Some((at, row, merged)) if (*at, *row) == (i, y) => merged.merge(bubble),
-                _ => shown.push((i, y, bubble.clone())),
+                Some((at, row, merged)) if merges && (*at, *row) == (x, y) => merged.merge(&bubble),
+                _ => shown.push((x, y, bubble)),
             }
         }
         shown.retain(|(_, _, bubble)| bubble.volume >= min_size);
-        let scale = Scale::new(&self.config, shown.iter().map(|(_, _, b)| b.volume));
+        let scale = Scale::new(
+            &self.config,
+            shown.iter().flat_map(|(_, _, b)| {
+                let (discs, n) = self.discs(b, 0.0);
+                discs.into_iter().take(n).map(|(volume, _)| volume)
+            }),
+        );
+        let max_delta = shown
+            .iter()
+            .map(|(_, _, b)| (b.buy - b.sell).abs())
+            .fold(0.0, f64::max);
         let border = self.config.show_border.then_some(self.config.border_color);
         // One mesh for every bubble: the tessellator takes far longer over a circle shape per
         // bubble than over copying these vertices, and a fresh mesh of this size every frame
@@ -241,38 +448,88 @@ impl VolumeBubbles {
         let mut last = self.mesh.lock().unwrap_or_else(|e| e.into_inner());
         let mut mesh = Arc::try_unwrap(std::mem::take(&mut *last)).unwrap_or_default();
         mesh.clear();
-        for (i, y, bubble) in &shown {
-            let center = Pos2::new(x(*i), *y);
-            let radius = scale.diameter(bubble.volume) / 2.0;
-            let color = self.color(bubble);
-            add_disc(
-                &mut mesh,
-                center,
-                radius,
-                color,
-                border,
-                painter.pixels_per_point(),
-            );
+        for (x, y, bubble) in &shown {
+            let center = Pos2::new(*x, *y);
+            let (discs, n) = self.discs(bubble, max_delta);
+            for &(volume, color) in &discs[..n] {
+                let radius = scale.diameter(volume) / 2.0;
+                add_disc(
+                    &mut mesh,
+                    center,
+                    radius,
+                    color,
+                    border,
+                    painter.pixels_per_point(),
+                );
+            }
         }
         *last = Arc::new(mesh);
         painter.add(Shape::Mesh(Arc::clone(&last)));
     }
 
-    fn color(&self, bubble: &Bubble) -> Color32 {
+    /// The circles of a bubble, the largest first, as the volume that sizes each and its colour,
+    /// and how many of the two there are.
+    fn discs(&self, bubble: &Bubble, max_delta: f64) -> ([(f64, Color32); 2], usize) {
+        let config = &self.config;
+        let mut discs = [(bubble.volume, self.color(bubble, max_delta)); 2];
+        if config.color_by != BubbleColor::Split || bubble.buy + bubble.sell <= 0.0 {
+            return (discs, 1);
+        }
+        let mut sides = [
+            (bubble.sell, bubble.sells, config.sell_color),
+            (bubble.buy, bubble.buys, config.buy_color),
+        ];
+        sides.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut n = 0;
+        for (volume, trades, color) in sides {
+            if trades > 0 {
+                discs[n] = (volume, with_opacity(color, config.opacity));
+                n += 1;
+            }
+        }
+        (discs, n)
+    }
+
+    fn color(&self, bubble: &Bubble, max_delta: f64) -> Color32 {
         let config = &self.config;
         let sided = bubble.buy + bubble.sell;
+        let delta = bubble.buy - bubble.sell;
+        let mut opacity = config.opacity;
         let base = match config.color_by {
+            BubbleColor::Volume => config.neutral_color,
+            BubbleColor::DeltaPercent if bubble.volume > 0.0 => {
+                let share = (delta.abs() / bubble.volume).min(1.0) as f32;
+                let side = if delta >= 0.0 {
+                    config.buy_color
+                } else {
+                    config.sell_color
+                };
+                config.neutral_color.lerp_to_gamma(side, share)
+            }
             _ if bubble.buys + bubble.sells == 0 || sided <= 0.0 => config.neutral_color,
             BubbleColor::Side if bubble.buy > bubble.sell => config.buy_color,
             BubbleColor::Side if bubble.sell > bubble.buy => config.sell_color,
-            BubbleColor::Side => config.neutral_color,
             BubbleColor::Delta => {
                 let buy_share = (bubble.buy / sided) as f32;
                 config.sell_color.lerp_to_gamma(config.buy_color, buy_share)
             }
+            BubbleColor::AbsoluteDelta if delta != 0.0 => {
+                let share = (delta.abs() / max_delta).min(1.0) as f32;
+                opacity = (f32::from(opacity) * (0.2 + 0.8 * share)).round() as u8;
+                if delta > 0.0 {
+                    config.buy_color
+                } else {
+                    config.sell_color
+                }
+            }
+            _ => config.neutral_color,
         };
-        Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), config.opacity)
+        with_opacity(base, opacity)
     }
+}
+
+fn with_opacity(color: Color32, opacity: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), opacity)
 }
 
 /// Appends a disc of `fill` to `mesh`, ringed outside by a hairline of `border`, with edges
@@ -380,7 +637,7 @@ mod tests {
     use super::*;
     use crate::data::trades::Trades;
     use crate::model::Timeframe;
-    use chrono::TimeDelta;
+    use BubbleGrouping::{Automatic, Executions, PriceStep, TimeWindow, Ungrouped};
 
     /// A trade `second` seconds after 10:00.
     fn trade(second: i64, price: f64, size: f64, side: Option<OrderSide>) -> Tick {
@@ -400,26 +657,26 @@ mod tests {
         let ten_one = ten + TimeDelta::minutes(1);
         #[rustfmt::skip]
         let cases = [
-            ("a level and a bar make one bubble", None, Some(0.5), 10,
+            ("a level and a bar make one bubble", Automatic, Some(0.5), 10,
                 vec![trade(1, 100.1, 2.0, buy), trade(50, 99.9, 3.0, sell), trade(59, 100.2, 1.0, None),
                     trade(61, 100.0, 4.0, buy)],
                 vec![(ten, 100.0, 2.0, 3.0, 6.0, 3, 1, 1), (ten_one, 100.0, 4.0, 0.0, 4.0, 1, 1, 0)]),
-            ("the configured step wins over the tick size", Some(1.0), Some(0.5), 10,
+            ("the configured step wins over the tick size", PriceStep(1.0), Some(0.5), 10,
                 vec![trade(1, 100.4, 1.0, buy), trade(2, 99.6, 1.0, buy), trade(3, 101.0, 1.0, sell)],
                 vec![(ten, 100.0, 2.0, 0.0, 2.0, 2, 2, 0), (ten, 101.0, 0.0, 1.0, 1.0, 1, 0, 1)]),
-            ("without a step every price has its own bubble", None, None, 10,
+            ("without a step every price has its own bubble", Automatic, None, 10,
                 vec![trade(1, 100.1, 1.0, buy), trade(2, 100.2, 1.0, buy), trade(3, 100.1, 2.0, buy)],
                 vec![(ten, 100.1, 3.0, 0.0, 3.0, 2, 2, 0), (ten, 100.2, 1.0, 0.0, 1.0, 1, 1, 0)]),
-            ("an evicted trade leaves its bubble", None, Some(1.0), 2,
+            ("an evicted trade leaves its bubble", Automatic, Some(1.0), 2,
                 vec![trade(1, 100.0, 1.0, buy), trade(61, 100.0, 2.0, sell), trade(62, 101.0, 5.0, buy)],
                 vec![(ten_one, 100.0, 0.0, 2.0, 2.0, 1, 0, 1), (ten_one, 101.0, 5.0, 0.0, 5.0, 1, 1, 0)]),
-            ("a side whose trades were all evicted holds no volume", None, Some(1.0), 1,
+            ("a side whose trades were all evicted holds no volume", Automatic, Some(1.0), 1,
                 vec![trade(1, 100.0, 0.1, buy), trade(2, 100.0, 0.2, buy), trade(3, 100.0, 1.0, None)],
                 vec![(ten, 100.0, 0.0, 0.0, 1.0, 1, 0, 0)]),
         ];
-        for (name, price_step, tick_size, capacity, trades, expected) in cases {
+        for (name, grouping, tick_size, capacity, trades, expected) in cases {
             let config = VolumeBubblesConfig {
-                price_step,
+                grouping,
                 ..VolumeBubblesConfig::default()
             };
             let clock = BarClock::new(Timeframe::Min1);
@@ -432,7 +689,7 @@ mod tests {
             }
             let got = Vec::from_iter((bubbles.between(ten, ten_one)).map(|b| {
                 (
-                    b.bar, b.price, b.buy, b.sell, b.volume, b.trades, b.buys, b.sells,
+                    b.at, b.price, b.buy, b.sell, b.volume, b.trades, b.buys, b.sells,
                 )
             }));
             assert_eq!(got, expected, "{name}");
@@ -527,5 +784,159 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Guards the groupings that do not follow the bar interval: fills of one instant and price
+    /// stay separate when ungrouped, a time window and a price level make one bubble, and groups
+    /// of executions keep their edges when the store evicts the oldest trade, so a bubble does
+    /// not change shape as the tape moves. Expected values worked out by hand: `(seconds after
+    /// 10:00, price, buy, sell, volume)`.
+    #[test]
+    fn groupings_other_than_the_bar_make_the_expected_bubbles() {
+        let (buy, sell) = (Some(OrderSide::Buy), Some(OrderSide::Sell));
+        let ten = "2024-03-15T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let tape = || {
+            vec![
+                trade(1, 100.0, 2.0, buy),
+                trade(2, 102.0, 2.0, sell),
+                trade(2, 102.0, 1.0, None),
+                trade(12, 100.0, 3.0, sell),
+            ]
+        };
+        #[rustfmt::skip]
+        let cases = [
+            ("ungrouped keeps fills of one instant and price apart", Ungrouped, 10,
+                vec![(1, 100.0, 2.0, 0.0, 2.0), (2, 102.0, 0.0, 2.0, 2.0),
+                    (2, 102.0, 0.0, 0.0, 1.0), (12, 100.0, 0.0, 3.0, 3.0)]),
+            ("a time window and a level make one bubble, in the middle of the window", TimeWindow(TimeDelta::seconds(10)), 10,
+                vec![(5, 100.0, 2.0, 0.0, 2.0), (5, 102.0, 0.0, 2.0, 3.0), (15, 100.0, 0.0, 3.0, 3.0)]),
+            ("executions group at the volume weighted price and the last time", Executions(2), 10,
+                vec![(2, 101.0, 2.0, 2.0, 4.0), (12, 100.5, 0.0, 3.0, 4.0)]),
+            ("an eviction leaves the other groups as they were", Executions(2), 3,
+                vec![(2, 102.0, 0.0, 2.0, 2.0), (12, 100.5, 0.0, 3.0, 4.0)]),
+        ];
+        for (name, grouping, capacity, expected) in cases {
+            let config = VolumeBubblesConfig {
+                grouping,
+                ..VolumeBubblesConfig::default()
+            };
+            let clock = BarClock::new(Timeframe::Min1);
+            let mut bubbles = VolumeBubbles::new(config, clock, Some(1.0), []);
+            let mut store = Trades::new(capacity);
+            for trade in tape() {
+                let mut pending = store.empty();
+                pending.push(trade);
+                store.append(pending, &mut |trade, added| bubbles.fold(trade, added));
+            }
+            let got = Vec::from_iter(bubbles.between(ten, ten + TimeDelta::minutes(1)).map(|b| {
+                ((b.at - ten).num_seconds(), b.price, b.buy, b.sell, b.volume)
+            }));
+            assert_eq!(got, expected, "{name}");
+        }
+    }
+
+    /// Guards the colour rules: the delta as a share of the volume with a side differs from the
+    /// share of all volume, which unknown-side trades pull toward neutral; the absolute delta
+    /// fades against the largest visible one; split shows both sides in circles of their own
+    /// volume, the larger first; plain volume ignores the side.
+    #[test]
+    fn each_colour_mode_colours_the_bubble_as_documented() {
+        let config = |color_by| VolumeBubblesConfig {
+            color_by,
+            opacity: 200,
+            buy_color: Color32::from_rgb(0, 255, 0),
+            sell_color: Color32::from_rgb(255, 0, 0),
+            neutral_color: Color32::from_rgb(100, 100, 100),
+            ..VolumeBubblesConfig::default()
+        };
+        let bubble = |buy: f64, sell: f64, unknown: f64| Bubble {
+            buy,
+            sell,
+            volume: buy + sell + unknown,
+            buys: usize::from(buy > 0.0),
+            sells: usize::from(sell > 0.0),
+            trades: 1,
+            ..Bubble::default()
+        };
+        let with = |c: Color32, a: u8| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a);
+        let (green, red, gray) = (
+            Color32::from_rgb(0, 255, 0),
+            Color32::from_rgb(255, 0, 0),
+            Color32::from_rgb(100, 100, 100),
+        );
+        #[rustfmt::skip]
+        let cases = [
+            (BubbleColor::Delta, bubble(2.0, 0.0, 2.0), 4.0, vec![(4.0, with(green, 200))]),
+            (BubbleColor::DeltaPercent, bubble(2.0, 0.0, 2.0), 4.0, vec![(4.0, with(Color32::from_rgb(50, 178, 50), 200))]),
+            (BubbleColor::DeltaPercent, bubble(0.0, 3.0, 0.0), 4.0, vec![(3.0, with(red, 200))]),
+            (BubbleColor::DeltaPercent, bubble(0.0, 0.0, 5.0), 4.0, vec![(5.0, with(gray, 200))]),
+            (BubbleColor::AbsoluteDelta, bubble(4.0, 0.0, 1.0), 4.0, vec![(5.0, with(green, 200))]),
+            (BubbleColor::AbsoluteDelta, bubble(0.0, 1.0, 0.0), 4.0, vec![(1.0, with(red, 80))]),
+            (BubbleColor::AbsoluteDelta, bubble(2.0, 2.0, 0.0), 4.0, vec![(4.0, with(gray, 200))]),
+            (BubbleColor::Split, bubble(3.0, 1.0, 9.0), 0.0, vec![(3.0, with(green, 200)), (1.0, with(red, 200))]),
+            (BubbleColor::Split, bubble(1.0, 3.0, 0.0), 0.0, vec![(3.0, with(red, 200)), (1.0, with(green, 200))]),
+            (BubbleColor::Split, bubble(0.0, 0.0, 2.0), 0.0, vec![(2.0, with(gray, 200))]),
+            (BubbleColor::Volume, bubble(4.0, 0.0, 0.0), 0.0, vec![(4.0, with(gray, 200))]),
+        ];
+        for (mode, bubble, max_delta, expected) in cases {
+            let bubbles = VolumeBubbles::new(config(mode), BarClock::new(Timeframe::Min1), None, []);
+            let (discs, n) = bubbles.discs(&bubble, max_delta);
+            assert_eq!(discs[..n], expected[..], "{mode:?} {bubble:?}");
+        }
+    }
+
+    /// Guards the exact position of ungrouped bubbles: a fill sits in its bar's slot at the
+    /// share of the bar interval that had elapsed, and two fills of one instant and price draw
+    /// two circles on one spot instead of one.
+    #[test]
+    fn an_ungrouped_bubble_sits_at_its_time_within_the_bar() {
+        let ten = "2024-03-15T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let bars = [
+            Bar::new(ten, 100.0, 101.0, 99.0, 100.0, 1.0),
+            Bar::new(ten + TimeDelta::minutes(1), 100.0, 101.0, 99.0, 100.0, 1.0),
+        ];
+        let config = VolumeBubblesConfig {
+            grouping: Ungrouped,
+            ..VolumeBubblesConfig::default()
+        };
+        let centres = |fills: &[(i64, f64)]| {
+            let trades = Vec::from_iter(fills.iter().map(|&(s, p)| trade(s, p, 1.0, None)));
+            let bubbles = VolumeBubbles::new(
+                config.clone(),
+                BarClock::new(Timeframe::Min1),
+                Some(1.0),
+                &trades,
+            );
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                bubbles.render(
+                    ui.painter(),
+                    &bars,
+                    50.0,
+                    |i| 100.0 + 50.0 * i as f32,
+                    |price| 200.0 - price as f32,
+                );
+            });
+            output.textures_delta.clear();
+            let mesh = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    Shape::Mesh(mesh) => Some(Arc::clone(mesh)),
+                    _ => None,
+                })
+                .unwrap();
+            let sides = mesh.vertices.len() / fills.len();
+            Vec::from_iter(
+                mesh.vertices
+                    .chunks(sides)
+                    .map(|disc| (disc[0].pos.x, disc[0].pos.y)),
+            )
+        };
+        // A quarter into the first bar, half way, and three quarters into the second.
+        assert_eq!(
+            centres(&[(15, 100.0), (30, 99.0), (75, 99.0), (30, 99.0)]),
+            [(87.5, 100.0), (100.0, 101.0), (100.0, 101.0), (137.5, 101.0)]
+        );
     }
 }
