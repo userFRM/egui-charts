@@ -83,8 +83,8 @@ pub struct FootprintConfig {
     pub show_zero: bool,
     /// Smallest and largest font size of the numbers, in points. A row's size follows its volume
     /// relative to the bar's largest row, and equal values give a fixed size. Both are held
-    /// within 8 and 24 points so that numbers stay readable, and a number taller than its row
-    /// is left out.
+    /// within 8 and 24 points so that numbers stay readable, and a number whose size exceeds
+    /// its row's height is left out.
     pub font_size: [f32; 2],
     /// Write the ask/bid ratio of the highest and lowest row of each bar above and below it,
     /// or `n/a` when the bid is zero and the ratio is undefined.
@@ -289,11 +289,10 @@ pub fn render_footprint(
                     } else {
                         0.0
                     };
-                    let font = FontId::monospace(smallest + (largest - smallest) * share);
-                    let galley = painter.layout_no_wrap(text, font, config.text_color);
-                    if galley.size().x + 4.0 <= rect.width()
-                        && galley.size().y <= rect.height() + 1.0
-                    {
+                    let size = smallest + (largest - smallest) * share;
+                    let galley =
+                        painter.layout_no_wrap(text, FontId::monospace(size), config.text_color);
+                    if galley.size().x + 4.0 <= rect.width() && size <= rect.height() {
                         let center = rect.center().x;
                         let x = match mode {
                             FootprintMode::DominantSide if row.bid > row.ask => rect.left() + 2.0,
@@ -684,21 +683,32 @@ mod tests {
         }
         let bars = [Bar::new(time, 100.0, 100.25, 100.0, 100.25, 9.0)];
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 160.0));
-        let map = ChartMapping::new(
-            rect,
-            240.0,
-            0,
-            0,
-            0.0,
-            PriceMap::new(
-                PriceTransform::default(),
-                PriceRange::new(99.0, 102.0),
+        let mapping = |high| {
+            ChartMapping::new(
+                rect,
+                240.0,
+                0,
+                0,
                 0.0,
-                160.0,
-                false,
-            ),
-        );
-        for (minimum, auto, expected) in [(14.0, None, 0), (10.0, None, 8), (10.0, Some(30.0), 4)] {
+                PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(99.0, high),
+                    0.0,
+                    160.0,
+                    false,
+                ),
+            )
+        };
+        let map = mapping(102.0);
+        // Rows are 13.3 points high, or 10.5 with a top of 102.8: still tall enough for the
+        // default 10-point numbers.
+        for (minimum, auto, high, expected) in [
+            (14.0, None, 102.0, 0),
+            (10.0, None, 102.0, 8),
+            (10.0, Some(30.0), 102.0, 4),
+            (10.0, None, 102.8, 8),
+        ] {
+            let map = mapping(high);
             let ctx = egui::Context::default();
             let config = FootprintConfig {
                 modes: vec![
@@ -730,7 +740,7 @@ mod tests {
             assert_eq!(
                 texts.len(),
                 expected,
-                "minimum {minimum}, auto {auto:?}: {texts:?}"
+                "minimum {minimum}, auto {auto:?}, top {high}: {texts:?}"
             );
             if auto.is_some() {
                 assert_eq!(texts, ["2 × 7", "9", "+5", "+5 / 9"]);
