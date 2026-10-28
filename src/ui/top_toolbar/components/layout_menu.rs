@@ -4,8 +4,9 @@ use crate::config::KeyboardAction;
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
 use crate::localization as l10n;
-use crate::services::{Storage, StoreKind};
+use crate::services::{ShareKind, Sharing, Storage, StoreKind};
 use crate::theme::ThemeExt;
+use crate::ui::share_controls::ShareControls;
 use crate::ui_kit::list_item::{LabelContent, ListItem};
 use crate::widget::SavedLayout;
 use egui::Ui;
@@ -92,6 +93,7 @@ pub struct LayoutMenu {
     /// A changed edit count with the input time it was first seen.
     changed: Option<(u64, f64)>,
     error: Option<String>,
+    share: ShareControls,
 }
 
 impl Default for LayoutMenu {
@@ -120,6 +122,7 @@ impl LayoutMenu {
             observed_layout: None,
             changed: None,
             error: None,
+            share: ShareControls::default(),
         }
     }
 
@@ -137,6 +140,13 @@ impl LayoutMenu {
         self.changed = None;
         self.storage = Some(storage);
         self.request(Request::List);
+    }
+
+    /// Offers copy-link and save-a-copy on the current stored layout, as `sharing` reports them.
+    /// A saved copy is read back from the [`Storage`] given to [`set_storage`](Self::set_storage),
+    /// where the host writes it.
+    pub fn set_sharing(&mut self, sharing: Arc<dyn Sharing>) {
+        self.share.set_service(sharing);
     }
 
     fn request(&mut self, request: Request) {
@@ -215,6 +225,9 @@ impl LayoutMenu {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
         let mut opened = None;
+        if self.share.poll(ctx).is_some() {
+            self.request(Request::List);
+        }
         loop {
             let answers = self.inbox.drain().answers;
             if answers.is_empty() {
@@ -516,6 +529,11 @@ impl LayoutMenu {
                 self.editing = None;
                 ui.close();
             }
+        }
+        if let Some(name) = self.curr_layout.as_deref()
+            && self.layouts.iter().any(|layout| layout == name)
+        {
+            self.share.show(ui, ShareKind::Layout, name);
         }
         if self.layouts.is_empty() {
             return action;
