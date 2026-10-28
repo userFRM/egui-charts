@@ -397,6 +397,14 @@ pub struct Capabilities {
     pub stop_limit: bool,
     /// Accepts a take-profit and a stop-loss with an order.
     pub brackets: bool,
+    /// Closes a position with an opposite market order, so the Close and Flatten controls work.
+    pub close: bool,
+    /// Reverses a position with an opposite market order of twice its size, so the Reverse
+    /// controls work.
+    pub reverse: bool,
+    /// Answers [`Broker::preview`](crate::services::Broker::preview), so the ticket offers to
+    /// preview an order before it is placed.
+    pub preview: bool,
     /// Changes working orders through [`Broker::modify`](crate::services::Broker::modify), so
     /// their lines on the chart can be dragged.
     pub modify: bool,
@@ -412,6 +420,21 @@ impl Capabilities {
             OrderType::StopLimit { .. } => self.stop_limit,
         }
     }
+}
+
+/// What a broker estimates for an order it has not accepted, from
+/// [`Broker::preview`](crate::services::Broker::preview). Every estimate is optional.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct OrderPreview {
+    /// The estimated cost of the order in the account's currency.
+    pub cost: Option<f64>,
+    /// The estimated commission in the account's currency.
+    pub commission: Option<f64>,
+    /// The margin the order would need in the account's currency.
+    pub margin: Option<f64>,
+    /// What the broker warns of, such as a position the order would reverse.
+    pub warnings: Vec<String>,
 }
 
 /// How a symbol trades at the broker. The order ticket sizes orders by these rules.

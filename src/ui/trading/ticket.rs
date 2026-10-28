@@ -13,8 +13,8 @@ use super::dom::Ladder;
 use crate::chart::{TradingLineAction, decimals, to_step};
 use crate::icons::icons;
 use crate::model::{
-    Capabilities, Order, OrderBook, OrderId, OrderRequest, OrderSide, OrderType, Position, Tick,
-    TimeInForce, TradingRules,
+    Capabilities, Order, OrderBook, OrderId, OrderPreview, OrderRequest, OrderSide, OrderType,
+    Position, Tick, TimeInForce, TradingRules,
 };
 use crate::theme::{Theme, ThemeExt};
 use crate::ui_kit::buttons::IconButton;
@@ -210,6 +210,8 @@ pub(crate) struct Market<'a> {
 pub(crate) enum Action {
     /// Send this order now.
     Place(OrderRequest),
+    /// Ask the broker to estimate this order without placing it.
+    Preview(OrderRequest),
     /// Cancel these working orders now.
     Cancel(Vec<OrderId>),
     /// Ask the user to confirm this change before sending it.
@@ -242,6 +244,8 @@ pub(crate) struct OrderTicket {
     /// An order from the ladder, waiting for the user to confirm it.
     confirm: Option<OrderRequest>,
     cancel: Option<Vec<OrderId>>,
+    /// Why the ladder refused its last order, shown on the DOM tab.
+    dom_error: Option<String>,
 }
 
 impl Default for OrderTicket {
@@ -270,6 +274,7 @@ impl Default for OrderTicket {
             ladder: Ladder::default(),
             confirm: None,
             cancel: None,
+            dom_error: None,
         }
     }
 }
@@ -343,6 +348,73 @@ impl OrderTicket {
         .filter(|price| price.is_finite() && *price > 0.0)
     }
 
+    /// The enabled take profit or stop loss of an order entering at `entry`, snapped to the tick,
+    /// or none without brackets. Fails when it is not on its side of the entry. Without a
+    /// `quantity`, a stop loss in money cannot be priced.
+    fn exit(
+        &self,
+        market: &Market<'_>,
+        side: OrderSide,
+        entry: f64,
+        quantity: Option<f64>,
+        profit: bool,
+    ) -> Result<Option<f64>, String> {
+        let (enabled, bracket) = if profit {
+            self.take_profit
+        } else {
+            self.stop_loss
+        };
+        if !(market.capabilities.brackets && enabled) {
+            return Ok(None);
+        }
+        let per_point = match (bracket.mode, quantity) {
+            (BracketMode::Money, None) => {
+                return Err("Sizing by risk needs the stop loss as a price, ticks or %".into());
+            }
+            (_, quantity) => quantity.unwrap_or(1.0) * market.rules.point_value,
+        };
+        let price = to_step(
+            bracket.price(side, entry, market.tick, per_point, profit),
+            market.tick,
+            f64::round,
+        );
+        // A buy exits above its entry for a profit and below it for a loss; a sell the other way.
+        let above = (price > entry) == (side == OrderSide::Buy);
+        if !price.is_finite() || price <= 0.0 || price == entry || above != profit {
+            return Err(if profit {
+                "The take profit must lie on the profit side of the entry"
+            } else {
+                "The stop loss must lie on the loss side of the entry"
+            }
+            .into());
+        }
+        Ok(Some(price))
+    }
+
+    /// `order` from the depth ladder with the ticket's enabled take profit and stop loss, priced
+    /// from the order's own side, entry and quantity.
+    fn with_brackets(
+        &self,
+        mut order: OrderRequest,
+        market: &Market<'_>,
+    ) -> Result<OrderRequest, String> {
+        let entry = match order.order_type {
+            OrderType::Limit(price) | OrderType::Stop(price) => Some(price),
+            OrderType::StopLimit { limit, .. } => Some(limit),
+            OrderType::Market => match order.side {
+                OrderSide::Buy => market.ask,
+                OrderSide::Sell => market.bid,
+            }
+            .or(market.last),
+        }
+        .map(|price| to_step(price, market.tick, f64::round))
+        .filter(|price| price.is_finite() && *price > 0.0)
+        .ok_or("Enter a positive price")?;
+        order.stop_loss = self.exit(market, order.side, entry, Some(order.quantity), false)?;
+        order.take_profit = self.exit(market, order.side, entry, Some(order.quantity), true)?;
+        Ok(order)
+    }
+
     /// The order the ticket describes, or what is wrong with it.
     pub fn request(&self, market: &Market<'_>) -> Result<OrderRequest, String> {
         if !market.rules_ready {
@@ -379,28 +451,7 @@ impl OrderTicket {
             )?),
             Sizing::Risk => None,
         };
-        let brackets = market.capabilities.brackets;
-        let exit = |(enabled, bracket): (bool, Bracket), profit, quantity: Option<f64>| {
-            if !(brackets && enabled) {
-                return Ok(None);
-            }
-            let per_point = match (bracket.mode, quantity) {
-                (BracketMode::Money, None) => {
-                    return Err("Sizing by risk needs the stop loss as a price, ticks or %");
-                }
-                (_, quantity) => quantity.unwrap_or(1.0) * rules.point_value,
-            };
-            let price = bracket.price(self.side, entry, market.tick, per_point, profit);
-            Ok(Some(snap(price)))
-        };
-        // A buy exits above its entry for a profit and below it for a loss; a sell the other way.
-        let above = |price: f64| (price > entry) == (self.side == OrderSide::Buy);
-        let stop_loss = exit(self.stop_loss, false, quantity)?;
-        if stop_loss.is_some_and(|price| {
-            !price.is_finite() || price <= 0.0 || price == entry || above(price)
-        }) {
-            return Err("The stop loss must lie on the loss side of the entry".into());
-        }
+        let stop_loss = self.exit(market, self.side, entry, quantity, false)?;
         let quantity = match quantity.take() {
             Some(quantity) => quantity,
             None => {
@@ -413,12 +464,7 @@ impl OrderTicket {
                 order_quantity(risk / ((entry - stop).abs() * rules.point_value), rules)?
             }
         };
-        let take_profit = exit(self.take_profit, true, Some(quantity))?;
-        if take_profit.is_some_and(|price| {
-            !price.is_finite() || price <= 0.0 || price == entry || !above(price)
-        }) {
-            return Err("The take profit must lie on the profit side of the entry".into());
-        }
+        let take_profit = self.exit(market, self.side, entry, Some(quantity), true)?;
 
         let mut request = OrderRequest::new(&self.symbol, self.side, quantity, order_type);
         request.take_profit = take_profit;
@@ -449,6 +495,7 @@ impl OrderTicket {
         self.switch(ui);
         let mut action = match self.tab {
             Tab::Order => {
+                self.dom_error = None;
                 let action = egui::Panel::bottom(ui.make_persistent_id("order_ticket_send"))
                     .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 8)))
                     .show_separator_line(false)
@@ -460,6 +507,13 @@ impl OrderTicket {
                 action
             }
             Tab::Dom => {
+                if let Some(reason) = &self.dom_error {
+                    ui.label(
+                        RichText::new(l10n::text(ui.ctx(), reason))
+                            .color(ui.active_theme().ui.error)
+                            .size(12.0),
+                    );
+                }
                 let height = ui.available_height().max(360.0);
                 let ladder = egui::ScrollArea::vertical()
                     .auto_shrink(false)
@@ -476,9 +530,17 @@ impl OrderTicket {
                     .inner;
                 // A new order from the ladder waits for confirmation without one-click trading.
                 match ladder {
-                    Some(Action::Place(request)) if !*one_click => {
-                        self.confirm = Some(request);
-                        None
+                    Some(Action::Place(request)) => {
+                        let bracketed = self.with_brackets(request, market);
+                        self.dom_error = bracketed.as_ref().err().cloned();
+                        match bracketed {
+                            Ok(request) if *one_click => Some(Action::Place(request)),
+                            Ok(request) => {
+                                self.confirm = Some(request);
+                                None
+                            }
+                            Err(_) => None,
+                        }
                     }
                     Some(Action::Cancel(ids)) => {
                         self.cancel = Some(ids);
@@ -494,6 +556,8 @@ impl OrderTicket {
                 || !market.capabilities.accepts(&request.order_type)
                 || !market.rules.time_in_force.contains(&request.time_in_force)
                 || order_quantity(request.quantity, market.rules) != Ok(request.quantity)
+                || (request.stop_loss.is_some() || request.take_profit.is_some())
+                    && !market.capabilities.brackets
         }) {
             self.confirm = None;
         }
@@ -521,14 +585,10 @@ impl OrderTicket {
         }
         if let Some(request) = &self.confirm {
             let mut open = true;
-            let message = format!(
-                "{} {}?",
-                side_name(request.side),
-                summary(
-                    request,
-                    market.decimals,
-                    decimals(market.rules.quantity_step)
-                )
+            let message = confirmation(
+                request,
+                market.decimals,
+                decimals(market.rules.quantity_step),
             );
             let result = ConfirmDialog::new("order_ticket_confirm", "Place order", message)
                 .confirm_text("Place order")
@@ -752,7 +812,7 @@ impl OrderTicket {
             }
         }
 
-        // The quantity, and on market orders the risk at the stop loss.
+        // The quantity, and the risk at the stop loss.
         let risk_money = request.as_ref().ok().and_then(|request| {
             Some((entry? - request.stop_loss?).abs() * request.quantity * rules.point_value)
         });
@@ -831,7 +891,7 @@ impl OrderTicket {
                 }
             }
         };
-        if self.kind == Kind::Market && market.capabilities.brackets {
+        if market.capabilities.brackets {
             let risk_enabled = self.stop_loss.0 && market.balance.is_some();
             ui.columns(2, |columns| {
                 units(self, &mut columns[0]);
@@ -1216,6 +1276,19 @@ impl OrderTicket {
                     .size(12.0),
             );
         }
+        let mut preview = None;
+        if market.capabilities.preview
+            && ui
+                .add_enabled(
+                    request.is_ok(),
+                    egui::Button::new(l10n::text(ui.ctx(), "Preview order"))
+                        .min_size(vec2(ui.available_width(), 32.0)),
+                )
+                .on_disabled_hover_text(l10n::text(ui.ctx(), "Fix the order to preview it"))
+                .clicked()
+        {
+            preview = request.clone().ok().map(Action::Preview);
+        }
         let (rect, response) =
             ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::click());
         let name = side_name(self.side);
@@ -1255,6 +1328,7 @@ impl OrderTicket {
             .then_some(request.ok())
             .flatten()
             .map(Action::Place)
+            .or(preview)
     }
 
     fn apply(&mut self, preset: &OrderPreset) {
@@ -1346,6 +1420,52 @@ fn summary(request: &OrderRequest, decimals: usize, quantity_decimals: usize) ->
         grouped(request.quantity, quantity_decimals, false),
         request.symbol
     )
+}
+
+/// The question that confirms an order: "Buy 1 ES @ 4,000.25 LIMIT?", then its exits.
+fn confirmation(request: &OrderRequest, decimals: usize, quantity_decimals: usize) -> String {
+    let mut text = format!(
+        "{} {}?",
+        side_name(request.side),
+        summary(request, decimals, quantity_decimals)
+    );
+    for (label, price) in [
+        ("Take profit", request.take_profit),
+        ("Stop loss", request.stop_loss),
+    ] {
+        if let Some(price) = price {
+            text.push_str(&format!("\n{label} {}", grouped(price, decimals, false)));
+        }
+    }
+    text
+}
+
+/// What the dialog shows for a previewed order: its confirmation, then the broker's estimates
+/// and warnings.
+pub(super) fn preview_message(
+    request: &OrderRequest,
+    estimate: &OrderPreview,
+    rules: &TradingRules,
+    decimals: usize,
+    currency: &str,
+) -> String {
+    let mut text = confirmation(request, decimals, self::decimals(rules.quantity_step));
+    for (label, value) in [
+        ("Cost", estimate.cost),
+        ("Commission", estimate.commission),
+        ("Margin", estimate.margin),
+    ] {
+        if let Some(value) = value.filter(|value| value.is_finite()) {
+            text.push_str(&format!(
+                "\n{label}: {} {currency}",
+                grouped(value, 2, false)
+            ));
+        }
+    }
+    for warning in &estimate.warnings {
+        text.push_str(&format!("\n{warning}"));
+    }
+    text
 }
 
 /// The name of a time in force in the ticket's menu.
@@ -1776,6 +1896,86 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A pending entry is sized by its own price like a market entry, the risk control is offered
+    /// for every order type, and an order from the ladder takes the ticket's brackets from its own
+    /// side, entry and quantity and shows them in its confirmation. A regression sizes pending
+    /// orders from the market price, hides the control, or sends ladder orders without exits.
+    #[test]
+    fn pending_entries_are_sized_by_risk_and_ladder_orders_carry_the_brackets() {
+        let rules = TradingRules::new("ES");
+        let mut capabilities = Capabilities::default();
+        (capabilities.limit, capabilities.stop, capabilities.brackets) = (true, true, true);
+        let market = Market {
+            last: Some(100.0),
+            bid: Some(99.75),
+            ask: Some(100.25),
+            tick: 0.25,
+            decimals: 2,
+            currency: "USD",
+            balance: Some(10_000.0),
+            capabilities,
+            rules: &rules,
+            rules_ready: true,
+            ladder: None,
+            ladder_unavailable: None,
+            highlights: Vec::new(),
+            orders: &[],
+            positions: &[],
+            trades: &[],
+            session_open: None,
+            last_fill: None,
+        };
+        let ticks = |value| {
+            (
+                true,
+                Bracket {
+                    mode: BracketMode::Ticks,
+                    value,
+                },
+            )
+        };
+        // 1% of 10,000 = 100 at a stop 8 ticks = 2 points from the entry: 100 / 2 = 50 units.
+        let mut ticket = OrderTicket {
+            symbol: "ES".into(),
+            kind: Kind::Limit,
+            price: 99.0,
+            sizing: Sizing::Risk,
+            amount: 1.0,
+            take_profit: ticks(16.0),
+            stop_loss: ticks(8.0),
+            ..OrderTicket::default()
+        };
+        let request = ticket.request(&market).unwrap();
+        assert_eq!(
+            (request.quantity, request.take_profit, request.stop_loss),
+            (50.0, Some(103.0), Some(97.0))
+        );
+        // The control is on the Order tab for the pending kind.
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ticket.show(ui, &market, &mut vec![], &mut false);
+        });
+        let risk = output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Risk, % balance")
+        });
+        output.drop_without_applying_deltas();
+        assert!(risk, "limit orders offer the risk control");
+        // A sell stop from the ladder: exits lie the other way from the buy above.
+        let order = OrderRequest::new("ES", OrderSide::Sell, 3.0, OrderType::Stop(98.0));
+        let order = ticket.with_brackets(order, &market).unwrap();
+        assert_eq!(
+            (order.take_profit, order.stop_loss),
+            (Some(94.0), Some(100.0))
+        );
+        assert_eq!(
+            confirmation(&order, 2, 0),
+            "Sell 3 ES @ 98.00 STOP?\nTake profit 94.00\nStop loss 100.00"
+        );
+        ticket.stop_loss = ticks(0.0);
+        let order = OrderRequest::new("ES", OrderSide::Sell, 3.0, OrderType::Stop(98.0));
+        assert!(ticket.with_brackets(order, &market).is_err());
     }
 
     /// Guards the depth ladder's money path: a click in the bid column buys and one in the ask

@@ -533,7 +533,7 @@ fn source_picker(
         ));
 }
 
-fn rule_form(
+pub(crate) fn rule_form(
     ui: &mut Ui,
     source: &mut AlertSource,
     condition: &mut AlertCondition,

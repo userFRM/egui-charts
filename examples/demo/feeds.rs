@@ -1,7 +1,8 @@
 //! Synthetic answers for the market panels, derived from the symbol catalog so every symbol gets
 //! stable, distinct content. A host answers these from its own data vendors.
 
-use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, Utc, Weekday};
+use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, TimeZone, Utc, Weekday};
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use egui_charts::data::{
@@ -9,7 +10,10 @@ use egui_charts::data::{
     NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerOp, ScreenerQuery,
     ScreenerRow,
 };
+use egui_charts::model::Bar;
 use egui_charts::services::{ChatEvent, ChatMessage, Chats, Events, Notification, Notifications};
+
+use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
 
 use crate::sampledata::DemoSymbol;
 
@@ -527,4 +531,72 @@ pub(super) fn financials(symbol: &str) -> Option<egui_charts::ui::financials::Co
         Some("USD".to_owned()),
         vec![income, balance, statistics],
     ))
+}
+
+/// The return in percent from the close at or before each look-back date to the last close.
+/// A period the history does not reach back to has no return.
+pub(super) fn period_returns(bars: &[Bar]) -> Vec<PeriodReturn> {
+    let Some(last) = bars.last() else {
+        return Vec::new();
+    };
+    let year_start = Utc
+        .with_ymd_and_hms(last.time.year(), 1, 1, 0, 0, 0)
+        .single()
+        .unwrap_or(last.time);
+    [
+        ("1W", last.time - TimeDelta::days(7)),
+        ("1M", last.time - TimeDelta::days(30)),
+        ("3M", last.time - TimeDelta::days(91)),
+        ("6M", last.time - TimeDelta::days(182)),
+        ("YTD", year_start),
+        ("1Y", last.time - TimeDelta::days(365)),
+    ]
+    .into_iter()
+    .map(|(period, since)| {
+        let base = bars.iter().rev().find(|bar| bar.time <= since);
+        let percent = base
+            .filter(|base| base.close > 0.0)
+            .map(|base| (last.close / base.close - 1.0) * 100.0);
+        PeriodReturn::new(period, percent)
+    })
+    .collect()
+}
+
+/// The average return of each calendar month, from its first open to its last close, over the
+/// complete months of `bars`; the first and last months may be partial and are left out.
+pub(super) fn seasonality(bars: &[Bar]) -> Seasonality {
+    let mut months: BTreeMap<(i32, u32), (f64, f64)> = BTreeMap::new();
+    for bar in bars {
+        months
+            .entry((bar.time.year(), bar.time.month()))
+            .and_modify(|month| month.1 = bar.close)
+            .or_insert((bar.open, bar.close));
+    }
+    let months: Vec<_> = months.into_iter().collect();
+    let complete = months
+        .get(1..months.len().saturating_sub(1))
+        .unwrap_or_default();
+    let years = complete
+        .iter()
+        .map(|((year, _), _)| *year)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let summaries = (1..=12u8)
+        .filter_map(|month| {
+            let returns: Vec<f64> = complete
+                .iter()
+                .filter(|((_, m), (open, _))| *m == u32::from(month) && *open > 0.0)
+                .map(|(_, (open, close))| (close / open - 1.0) * 100.0)
+                .collect();
+            let count = returns.len() as f64;
+            (count > 0.0).then(|| {
+                SeasonalityMonth::new(
+                    month,
+                    Some(returns.iter().sum::<f64>() / count),
+                    Some(returns.iter().filter(|r| **r > 0.0).count() as f64 / count),
+                )
+            })
+        })
+        .collect();
+    Seasonality::new(years as u32, summaries)
 }

@@ -36,6 +36,8 @@ pub struct UserSettings {
     pub layout: Option<String>,
     /// Whether the open layout is saved after each change.
     pub layout_autosave: bool,
+    /// The names of the starred layouts.
+    pub layout_favorites: Vec<String>,
     /// Factory names of the starred studies of the indicator dialog, in order.
     pub indicator_favorites: Vec<String>,
     /// The intervals starred in the interval menu, in order.

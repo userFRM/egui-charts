@@ -699,6 +699,7 @@ impl DemoApp {
             .clone()
             .filter(|name| menu.layouts.contains(name));
         settings.layout_autosave = menu.autosave;
+        settings.layout_favorites = menu.favorites.clone();
         settings.market_heatmap = self.market_heatmap.selection.clone();
         settings
     }
@@ -726,6 +727,7 @@ impl DemoApp {
             .drawing_favorites_pos
             .map(|(x, y)| egui::pos2(x, y));
         self.top_toolbar.layout_menu.autosave = settings.layout_autosave;
+        self.top_toolbar.layout_menu.favorites = settings.layout_favorites;
         self.market_heatmap.selection = settings.market_heatmap;
         if let Some(layout) = settings.layout {
             self.top_toolbar.layout_menu.open(&layout);

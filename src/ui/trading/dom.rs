@@ -1024,8 +1024,8 @@ impl Ladder {
 
         // Flatten, cancel all and reverse.
         ui.columns(3, |thirds| {
-            let close = market.capabilities.market && position.is_some();
-            let outlined = |ui: &mut Ui, enabled: bool, label: &str| {
+            let open = position.is_some();
+            let outlined = |ui: &mut Ui, enabled: bool, label: &str, why: &str| {
                 let button = egui::Button::new(l10n::text(ui.ctx(), label))
                     .fill(Color32::TRANSPARENT)
                     .stroke(Stroke::new(1.0, theme.ui.border_control))
@@ -1033,20 +1033,47 @@ impl Ladder {
                 let size = [ui.available_width(), 32.0];
                 ui.add_enabled_ui(enabled, |ui| ui.add_sized(size, button))
                     .inner
+                    .on_disabled_hover_text(l10n::text(ui.ctx(), why))
                     .clicked()
             };
-            if outlined(&mut thirds[0], close, "Flatten")
-                && let Some(position) = position
+            let why = |supported: bool, unsupported: &'static str| {
+                if supported {
+                    "There is no open position in this symbol"
+                } else {
+                    unsupported
+                }
+            };
+            if outlined(
+                &mut thirds[0],
+                market.capabilities.close && open,
+                "Flatten",
+                why(
+                    market.capabilities.close,
+                    "The account does not support closing positions",
+                ),
+            ) && let Some(position) = position
             {
                 action = Some(Action::Confirm(TradingLineAction::Close(position.clone())));
             }
-            if outlined(&mut thirds[1], !orders.is_empty(), "CXL All") {
+            if outlined(
+                &mut thirds[1],
+                !orders.is_empty(),
+                "CXL All",
+                "There are no working orders in this symbol",
+            ) {
                 action = Some(Action::Cancel(
                     orders.iter().map(|order| order.id.clone()).collect(),
                 ));
             }
-            if outlined(&mut thirds[2], close, "Reverse")
-                && let Some(position) = position
+            if outlined(
+                &mut thirds[2],
+                market.capabilities.reverse && open,
+                "Reverse",
+                why(
+                    market.capabilities.reverse,
+                    "The account does not support reversing positions",
+                ),
+            ) && let Some(position) = position
             {
                 action = Some(Action::Confirm(TradingLineAction::Reverse(
                     position.clone(),
