@@ -243,7 +243,7 @@ Drawings,Drawing management,Drawing templates,done,library,src/drawings/domain/t
 Drawings,Drawing management,Drawing tool keyboard shortcuts,done,library,src/widget/keyboard.rs;src/ui/drawing_toolbar/toolbar.rs;src/ui/drawing_toolbar/shortcuts.rs
 Drawings,Drawing management,Drawings on a logarithmic price scale,partial,library,src/widget/tool_interaction/mod.rs;src/drawings/domain/drawing.rs;src/drawings/rendering/elliott.rs
 Drawings,Drawing management,Duplicate drawing,done,library,src/drawings/manager.rs
-Drawings,Drawing management,Edit anchors with handles and move a drawing,done,library,src/drawings/services/handle.rs;src/widget/tool_interaction/selection.rs;src/drawings/manager.rs
+Drawings,Drawing management,Edit anchors with handles and move a drawing,done,library,src/drawings/services/handle.rs;src/widget/tool_interaction/selection.rs;src/drawings/manager/interaction.rs
 Drawings,Drawing management,Hide and show drawings,done,library,src/drawings/manager.rs
 Drawings,Drawing management,Lock all drawings,done,library,src/drawings/manager.rs;src/ui/drawing_toolbar/toolbar.rs
 Drawings,Drawing management,Lock and unlock a drawing,done,library,src/drawings/manager.rs;src/widget/tool_interaction/selection.rs

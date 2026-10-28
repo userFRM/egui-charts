@@ -51,7 +51,12 @@ pub fn handle_selection<F1, F2>(
     }
 
     if let Some(pos) = pointer_pos {
-        if !price_rect.contains(pos) {
+        let origin = if response.drag_started() {
+            ui.input(|i| i.pointer.press_origin()).unwrap_or(pos)
+        } else {
+            pos
+        };
+        if !price_rect.contains(origin) {
             cursor_modes.eraser.set_hover(None);
             return;
         }
@@ -82,7 +87,6 @@ pub fn handle_selection<F1, F2>(
         cursor_modes.eraser.set_hover(None);
 
         if response.drag_started() {
-            let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
             let selected: Vec<_> = drawing_manager.selected_ids().collect();
             if selected.len() == 1
                 && let Some(handle) = drawing_manager.hit_test_handle_by_id(origin, selected[0])
@@ -93,7 +97,11 @@ pub fn handle_selection<F1, F2>(
             {
                 drawing_manager.start_drag_body(id, origin);
             }
-            drawing_manager.update_drag_handle_with_coords(pos, x_to_bar, y_to_price);
+            drawing_manager.update_drag_handle_with_coords(
+                price_rect.clamp(pos),
+                x_to_bar,
+                y_to_price,
+            );
         } else if response.clicked() {
             if ui.input(|i| i.modifiers.shift) {
                 if let Some(id) = drawing_manager.hit_test(pos) {
@@ -160,6 +168,98 @@ mod tests {
     use crate::drawings::manager::DrawingSyncAction;
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
     use egui::{Context, Event, Id, PointerButton, Pos2, RawInput, Sense};
+
+    /// Edge handles and bodies follow an outward drag from its first frame, just as inward drags do.
+    #[test]
+    fn edge_drags_start_from_the_press_origin_and_clamp_every_update() {
+        use egui::{pos2, vec2};
+        let pane = Rect::from_min_max(pos2(40.0, 40.0), pos2(540.0, 440.0));
+        for (points, outward) in [
+            ([pos2(537.0, 140.0), pos2(537.0, 340.0)], vec2(1.0, 0.0)),
+            ([pos2(140.0, 43.0), pos2(440.0, 43.0)], vec2(0.0, -1.0)),
+            ([pos2(140.0, 437.0), pos2(440.0, 437.0)], vec2(0.0, 1.0)),
+        ] {
+            for body in [false, true] {
+                for direction in [-1.0, 1.0] {
+                    let ctx = Context::default();
+                    let mut manager = DrawingManager::new();
+                    let mut cursors = CursorModeState::default();
+                    let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+                    drawing.points = points.to_vec();
+                    drawing.chart_points = points
+                        .iter()
+                        .map(|p| ChartPoint::new(p.x, f64::from(p.y)))
+                        .collect();
+                    manager.drawings.push(drawing);
+                    manager.select(7);
+                    let from = if body {
+                        points[0].lerp(points[1], 0.25)
+                    } else {
+                        points[1]
+                    };
+                    let first = from + outward * (9.0 * direction);
+                    let to = from + outward * 30.0 + outward.rot90() * 40.0;
+                    let button = |pos, pressed| Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    };
+                    for (frame, events) in [
+                        vec![Event::PointerMoved(from)],
+                        vec![button(from, true)],
+                        vec![Event::PointerMoved(first)],
+                        vec![Event::PointerMoved(to)],
+                        vec![button(to, false)],
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(pane.expand(40.0)),
+                                events,
+                                ..Default::default()
+                            },
+                            |ui| {
+                                let response = ui.interact(
+                                    pane,
+                                    Id::NULL.with("chart"),
+                                    Sense::click_and_drag(),
+                                );
+                                handle_selection(
+                                    ui,
+                                    &mut manager,
+                                    &mut cursors,
+                                    &response,
+                                    pane,
+                                    &|x| x,
+                                    &f64::from,
+                                );
+                            },
+                        )
+                        .drop_without_applying_deltas();
+                        if frame >= 2 {
+                            let target = pane.clamp(if frame == 2 { first } else { to });
+                            let expected = if body {
+                                points[1] + (target - from)
+                            } else {
+                                target
+                            };
+                            assert_eq!(
+                                manager.drawings[0].points[1], expected,
+                                "body {body}, direction {direction}, edge {outward:?}, frame {frame}"
+                            );
+                        }
+                    }
+                    assert!(manager.dragging_handle.is_none());
+                    assert!(manager.undo());
+                    assert_eq!(manager.drawings[0].points, points);
+                    assert!(!manager.undo());
+                }
+            }
+        }
+    }
 
     /// Editing a field must leave the selection and armed tool alone, while chart keys
     /// still delete and cancel. Drive the real widget so focus ownership is exercised.
