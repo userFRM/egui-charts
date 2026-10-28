@@ -793,6 +793,16 @@ impl Trading {
         chart.export_png_with(ctx, options, |ui, chart| self.draw_export(ui, chart))
     }
 
+    /// Writes [`Self::export_image`] as SVG, as [`Chart::export_svg`] does.
+    pub fn export_svg(
+        &self,
+        chart: &Chart,
+        ctx: &egui::Context,
+        options: &crate::widget::ImageExportOptions,
+    ) -> Result<String, String> {
+        chart.export_svg_with(ctx, options, |ui, chart| self.draw_export(ui, chart))
+    }
+
     fn draw_export(&self, ui: &mut egui::Ui, chart: &mut Chart) {
         if self.display.include_in_image {
             chart.trading_bid_ask = self.display.bid_ask_labels;

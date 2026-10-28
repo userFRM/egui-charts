@@ -65,6 +65,8 @@ pub enum ContextMenuAction {
     OpenSettings,
     /// Open series settings dialog
     OpenSeriesSettings,
+    /// Open the chart data table
+    OpenDataTable,
     /// Export chart data to CSV
     ExportCsv,
     /// Reset the chart view to defaults
@@ -820,6 +822,10 @@ impl ChartContextMenu {
             MenuEntry::Separator,
             // Export data
             MenuEntry::Item(MenuItem::new(
+                "View Data Table…",
+                ContextMenuAction::OpenDataTable,
+            )),
+            MenuEntry::Item(MenuItem::new(
                 "Export Data to CSV…",
                 ContextMenuAction::ExportCsv,
             )),
@@ -842,7 +848,9 @@ impl ChartContextMenu {
                     ContextMenuAction::CopyPrice(_) => Control::CopyPrice,
                     ContextMenuAction::ObjectTree => Control::ObjectTree,
                     ContextMenuAction::RemoveAllIndicators => Control::Indicators,
-                    ContextMenuAction::ExportCsv => Control::ExportData,
+                    ContextMenuAction::OpenDataTable | ContextMenuAction::ExportCsv => {
+                        Control::ExportData
+                    }
                     ContextMenuAction::OpenSettings | ContextMenuAction::OpenSeriesSettings => {
                         Control::Settings
                     }
