@@ -671,10 +671,10 @@ mod tests {
             (100.0, 100.0),
             (-f64::MAX, f64::MAX),
         ] {
-            for manual in [false, true] {
+            for locked in [false, true] {
                 let mut scale = PriceScale::new(PriceScaleOptions::default());
                 scale.autoscale(100.0, 170.0);
-                if manual {
+                if locked {
                     scale.set_bar_ratio_locked(true, 10.0, 500.0);
                 }
                 let before = serde_json::to_value(&scale).unwrap();
@@ -684,7 +684,7 @@ mod tests {
                     before,
                     "{min}..{max}"
                 );
-                if !manual {
+                if !locked {
                     scale.autoscale(200.0, 270.0);
                     assert!(scale.range().min > 170.0);
                 }

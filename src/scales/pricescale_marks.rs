@@ -143,11 +143,8 @@ impl PriceMarkGenerator {
             let unit = 10f64.powi(-(decimals as i32));
             nice_step = (nice_step / unit).ceil().max(1.0) * unit;
         }
-        if let Some(min_step) = self
-            .config
-            .min_price_step
-            .filter(|s| s.is_finite() && *s > 0.0)
-        {
+        let min_step = self.min_step();
+        if let Some(min_step) = min_step {
             nice_step = (nice_step / min_step).ceil().max(1.0) * min_step;
         }
 
@@ -218,7 +215,7 @@ impl PriceMarkGenerator {
             }
 
             iterations += 1;
-            curr_price = if self.config.min_price_step.is_some() {
+            curr_price = if min_step.is_some() {
                 (start_index + iterations as f64) * nice_step
             } else {
                 curr_price + nice_step
@@ -276,10 +273,7 @@ impl PriceMarkGenerator {
             for multiplier in [1.0, 2.0, 5.0] {
                 let price = base * multiplier;
 
-                if let Some(step) = self
-                    .config
-                    .min_price_step
-                    .filter(|s| s.is_finite() && *s > 0.0)
+                if let Some(step) = self.min_step()
                     && (price - (price / step).round() * step).abs()
                         > price.abs().max(step) * f64::EPSILON * 4.0
                 {
@@ -324,10 +318,7 @@ impl PriceMarkGenerator {
             return 1.0;
         }
 
-        if let Some(min_step) = self
-            .config
-            .min_price_step
-            .filter(|s| s.is_finite() && *s > 0.0)
+        if let Some(min_step) = self.min_step()
             && raw_step < min_step
         {
             return min_step;
@@ -375,6 +366,13 @@ impl PriceMarkGenerator {
         } else {
             0
         }
+    }
+
+    /// The configured minimum tick size, unless it is not a positive finite number.
+    fn min_step(&self) -> Option<f64> {
+        self.config
+            .min_price_step
+            .filter(|s| s.is_finite() && *s > 0.0)
     }
 
     /// Format price with given precision
