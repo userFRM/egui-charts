@@ -950,8 +950,10 @@ impl Chart {
             link.inbox.unsubscribe(id);
             link.feed.unsubscribe(id);
         }
-        link.pending.clear();
-        link.retries.clear();
+        // The feed-wide answer does not depend on the symbol or interval.
+        let feed_wide = |request: &Request| matches!(request, Request::Capabilities);
+        link.pending.retain(|(_, request, _)| feed_wide(request));
+        link.retries.retain(|(_, request, _)| feed_wide(request));
         self.legend_instrument = link
             .instrument
             .take()
@@ -979,7 +981,7 @@ impl Chart {
         // Timestamp anchors survive the empty interval between history requests.
         self.replace_main_data(Vec::new());
         self.feed = FeedState::default();
-        if link.capabilities.is_none() {
+        if link.capabilities.is_none() && link.pending.is_empty() && link.retries.is_empty() {
             let reply = link.reply(Request::Capabilities);
             link.feed.capabilities(reply);
         }
@@ -1421,9 +1423,7 @@ mod tests {
         sinks: Mutex<Vec<Sink>>,
         /// `unsubscribe` drops the replies it keeps.
         drop_replies: AtomicBool,
-        /// What `capabilities` reports, and how often it was asked.
-        capabilities: Mutex<FeedCapabilities>,
-        capability_asks: std::sync::atomic::AtomicUsize,
+        capabilities: Mutex<Vec<Reply<FeedCapabilities>>>,
     }
 
     impl Script {
@@ -1443,8 +1443,7 @@ mod tests {
 
     impl Datafeed for Script {
         fn capabilities(&self, reply: Reply<FeedCapabilities>) {
-            self.capability_asks.fetch_add(1, Ordering::Relaxed);
-            reply.send(Ok(self.capabilities.lock().unwrap().clone()));
+            self.capabilities.lock().unwrap().push(reply);
         }
         fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
             self.calls
@@ -1497,26 +1496,34 @@ mod tests {
     }
 
     /// The feed-wide capabilities are known before a symbol resolves, asked once however often
-    /// the symbol or interval changes, and an empty list stays distinct from an unreported one.
+    /// the symbol or interval changes, also while the answer is outstanding, and an empty list
+    /// stays distinct from an unreported one.
     #[test]
     fn capabilities_arrive_before_the_symbol_resolves() {
         let feed = Arc::new(Script::default());
         let reported = FeedCapabilities::new()
             .with_timeframes([])
             .with_exchanges(["NYSE".to_owned()]);
-        *feed.capabilities.lock().unwrap() = reported.clone();
         let mut chart = fed(&feed, Some("A"));
-        assert_eq!(chart.feed_capabilities(), None);
         let mut frames = Frames::new();
+        frames.run(&mut chart);
+        chart.set_symbol("B");
+        frames.run(&mut chart);
+        assert_eq!(chart.feed_capabilities(), None);
+        feed.capabilities
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(reported.clone()));
         frames.run(&mut chart);
         assert_eq!(chart.feed_capabilities(), Some(&reported));
         assert_eq!(chart.feed_capabilities().unwrap().symbol_types, None);
         assert_eq!(chart.feed_capabilities().unwrap().timeframes, Some(vec![]));
-        assert!(feed.resolves.lock().unwrap().len() == 1, "still resolving");
-        chart.set_symbol("B");
+        assert!(feed.resolves.lock().unwrap().len() == 2, "still resolving");
+        chart.set_symbol("C");
         chart.set_timeframe(Timeframe::Min5);
         frames.run(&mut chart);
-        assert_eq!(feed.capability_asks.load(Ordering::Relaxed), 1);
+        assert!(feed.capabilities.lock().unwrap().is_empty(), "asked again");
     }
 
     /// An empty window names where older bars continue, and the next request starts there
