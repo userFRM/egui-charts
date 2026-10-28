@@ -150,11 +150,13 @@ impl AlertEngine {
     }
 
     /// Starts with `alerts` as [`alerts`](Self::alerts) returned them, giving those without an
-    /// id one.
+    /// id one after the others.
     pub fn with_alerts(self, alerts: Vec<Alert>) -> Self {
         {
             let mut state = self.lock();
-            for alert in alerts {
+            // Ids are given once every kept id is known, so that none is given twice.
+            let (kept, new): (Vec<_>, Vec<_>) = alerts.into_iter().partition(|a| a.id.is_some());
+            for alert in kept.into_iter().chain(new) {
                 state.insert(alert);
             }
         }
@@ -950,5 +952,12 @@ mod tests {
             host.save(Alert::new("SYM", AlertCondition::Above(f64::NAN))),
             Err(FeedError::InvalidData(_))
         ));
+
+        // A restored alert without an id never takes the id of a later one.
+        let mut kept = Alert::new("B", AlertCondition::Above(1.0));
+        kept.id = Some(AlertId("1".into()));
+        let restored =
+            AlertEngine::new().with_alerts(vec![Alert::new("A", AlertCondition::Above(1.0)), kept]);
+        assert_eq!(restored.alerts().len(), 2);
     }
 }
