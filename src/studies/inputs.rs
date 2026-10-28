@@ -169,6 +169,14 @@ macro_rules! input_spec {
             crate::studies::InputKind::Toggle,
         )
     };
+    ($id:expr, $value:expr, color($label:expr)) => {
+        crate::studies::StudyInput::new(
+            $id,
+            $label,
+            crate::studies::InputValue::Color($value),
+            crate::studies::InputKind::Color,
+        )
+    };
 }
 
 #[cfg(feature = "studies")]
@@ -203,6 +211,12 @@ macro_rules! input_assign {
     ($value:expr, toggle($label:expr)) => {
         match $value {
             crate::studies::InputValue::Toggle(v) => v,
+            _ => unreachable!(),
+        }
+    };
+    ($value:expr, color($label:expr)) => {
+        match $value {
+            crate::studies::InputValue::Color(v) => v,
             _ => unreachable!(),
         }
     };
