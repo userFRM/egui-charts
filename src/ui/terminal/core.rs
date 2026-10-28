@@ -164,7 +164,6 @@ impl Terminal {
     }
 
     /// Opens `panel` beside the chart.
-    #[expect(dead_code, reason = "the widget bar and commands open panels")]
     pub(super) fn open_panel(&mut self, panel: SidePanel) {
         self.panel = Some(panel);
     }
