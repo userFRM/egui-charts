@@ -297,21 +297,17 @@ impl IdeasPanel {
                     ui.label(RichText::new(&idea.title).strong());
                 }
                 ui.label(&idea.body);
-                ui.label(
-                    RichText::new(format!(
-                        "{} \u{b7} {} \u{b7} {} {} \u{b7} {}",
-                        idea.author,
-                        idea.time.format("%Y-%m-%d %H:%M"),
-                        idea.symbol,
-                        idea.interval,
-                        if idea.attachment.is_some() {
-                            l10n::text(ui.ctx(), "Chart attached")
-                        } else {
-                            String::new()
-                        }
-                    ))
-                    .color(weak),
+                let mut meta = format!(
+                    "{} \u{b7} {} \u{b7} {} {}",
+                    idea.author,
+                    idea.time.format("%Y-%m-%d %H:%M"),
+                    idea.symbol,
+                    idea.interval
                 );
+                if idea.attachment.is_some() {
+                    meta += &format!(" \u{b7} {}", l10n::text(ui.ctx(), "Chart attached"));
+                }
+                ui.label(RichText::new(meta).color(weak));
                 ui.horizontal(|ui| {
                     if ui.link(l10n::text(ui.ctx(), "Open")).clicked() {
                         action = IdeasAction::Open(idea.id.clone());
