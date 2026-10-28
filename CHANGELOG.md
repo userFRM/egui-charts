@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `TrendStrengthIndex` plots the rolling Pearson correlation of the source price with bar position over its own period, from -1 to 1 in its own pane with a zero line, and is listed in the catalogue as "Trend Strength Index". A bar has no value during warmup, when its window holds a missing price, or when the window's prices are all equal; the latest value equals `LinearRegressionChannel::correlation` for the same period. ([#1115](https://github.com/userFRM/egui-charts/issues/1115))
+
 - PPO and PVO choose their short and long averages and their signal line independently as `OscillatorAverage::Exponential` or `Simple` through the "Oscillator MA" and "Signal MA" study inputs and `with_averages`. Both default to exponential, which keeps the former values; the choices persist with the study inputs, templates and snapshots, and changing either recomputes the history. A simple average is the mean of the last `length` defined values and is defined once that many exist, like the exponential one. ([#1116](https://github.com/userFRM/egui-charts/issues/1116))
 
 - Floating, held and tracking data readouts lead with the instrument's symbol, and follow a change of instrument. The main series' legend title row offers hide or show, settings and remove buttons that run the chart's typed operations on `SeriesId::MAIN`, leaving studies and other series in place; settings arrive through `Chart::take_indicator_settings_request` as `SeriesId::MAIN`. A hidden main series keeps its dimmed title and buttons so it can be shown again, and the buttons are reachable with Tab. ([#1063](https://github.com/userFRM/egui-charts/issues/1063))

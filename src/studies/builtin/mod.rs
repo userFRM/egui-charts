@@ -55,7 +55,7 @@
 //! [`CandlestickPatterns`]
 //!
 //! ## Statistics
-//! [`LinearRegression`], [`StandardError`],
+//! [`LinearRegression`], [`TrendStrengthIndex`], [`StandardError`],
 //! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`]
 //!
 //! ## Time
@@ -215,6 +215,7 @@ mod double_stochastic;
 mod elder_impulse;
 mod mcginley_dynamic;
 mod trend_intensity;
+mod trend_strength_index;
 mod true_strength;
 mod vidya;
 mod volume_price_trend;
@@ -405,6 +406,7 @@ pub use percent_b::PercentB;
 pub use price_channel::PriceChannel;
 pub use relative_vigor::RelativeVigorIndex;
 pub use smi::StochasticMomentumIndex;
+pub use trend_strength_index::TrendStrengthIndex;
 pub use typical_price::{MedianPrice, TypicalPrice, WeightedClose};
 pub use ultimate_momentum::UltimateMomentum;
 
