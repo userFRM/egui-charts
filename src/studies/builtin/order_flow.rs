@@ -1,10 +1,11 @@
 //! Fixed aggregations of executions, quotes and synchronized depth, never estimates from bars.
 
-use crate::data::{OrderFlowInput, OrderFlowKind};
+use crate::data::{OrderFilter, OrderFlowInput, OrderFlowKind};
 use crate::model::{Bar, BarClock};
 use crate::studies::{
     Indicator, IndicatorValues, InputKind, InputValue, PlotStyle, PlotType, StudyInput,
 };
+use chrono::TimeDelta;
 use egui::Color32;
 
 /// An order-flow study in a separate pane. Use the factory titles or [`Self::new`].
@@ -15,6 +16,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct OrderFlowStudy {
     kind: OrderFlowKind,
+    filter: OrderFilter,
     input: OrderFlowInput,
     clock: BarClock,
     values: IndicatorValues,
@@ -28,6 +30,7 @@ impl OrderFlowStudy {
         let kind = kind.normalized();
         Self {
             kind,
+            filter: OrderFilter::default(),
             input: OrderFlowInput::new(kind),
             clock: BarClock::new(crate::model::Timeframe::Min1),
             values: IndicatorValues::new(),
@@ -38,6 +41,21 @@ impl OrderFlowStudy {
             ],
             visible: true,
         }
+    }
+
+    /// Book size over the individual orders `filter` accepts: a minimum size, a minimum resting
+    /// age and excluded participants, the first two also set by the study's inputs. Needs a feed
+    /// that sends order events, see [`OrderFlowInput::with_order_filter`]. Starts a fresh source.
+    pub fn with_order_filter(mut self, filter: OrderFilter) -> Self {
+        self.filter = filter;
+        self.reset();
+        self
+    }
+
+    /// A fresh source for the current kind and filter, with no values.
+    fn reset(&mut self) {
+        self.input = OrderFlowInput::new(self.kind).with_order_filter(self.filter.clone());
+        self.values = IndicatorValues::new();
     }
 }
 
@@ -167,6 +185,18 @@ impl Indicator for OrderFlowStudy {
                     InputValue::Number(distance),
                     InputKind::Number(0.0, f64::MAX),
                 ),
+                StudyInput::new(
+                    "min_size",
+                    "Minimum order size (needs order events)",
+                    InputValue::Number(self.filter.min_size),
+                    InputKind::Number(0.0, f64::MAX),
+                ),
+                StudyInput::new(
+                    "min_age",
+                    "Minimum resting seconds (0 for any, needs order events)",
+                    InputValue::Number(self.filter.min_age.map_or(0.0, |age| age.as_seconds_f64())),
+                    InputKind::Number(0.0, 86400.0),
+                ),
             ],
             OrderFlowKind::TradeRate {
                 volume,
@@ -207,6 +237,14 @@ impl Indicator for OrderFlowStudy {
             (OrderFlowKind::BookSize { distance, .. }, "distance", InputValue::Number(v)) => {
                 *distance = v
             }
+            (OrderFlowKind::BookSize { .. }, "min_size", InputValue::Number(v)) => {
+                self.filter.min_size = v;
+                self.reset();
+            }
+            (OrderFlowKind::BookSize { .. }, "min_age", InputValue::Number(v)) => {
+                self.filter.min_age = (v > 0.0).then(|| TimeDelta::milliseconds((v * 1e3) as i64));
+                self.reset();
+            }
             (OrderFlowKind::TradeRate { volume, .. }, "volume", InputValue::Toggle(v)) => {
                 *volume = v
             }
@@ -222,8 +260,7 @@ impl Indicator for OrderFlowStudy {
             _ => return Err("invalid order flow input"),
         }
         if self.kind != before {
-            self.input = OrderFlowInput::new(self.kind);
-            self.values = IndicatorValues::new();
+            self.reset();
         }
         Ok(())
     }

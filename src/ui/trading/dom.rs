@@ -293,15 +293,15 @@ impl Ladder {
             .map(|v| v.iter().sum::<f64>())
             .fold(0.0, f64::max);
         // A missing snapshot is a feed gap, not a cancellation of every resting order.
-        if market.book.is_none() {
+        let book = market.ladder.as_deref();
+        if book.is_none() {
             self.sizes = Default::default();
             self.changes = Default::default();
             self.observed = false;
         }
         // Size changes are between observed book states; unchanged frames retain the last change.
         for side in 0..2 {
-            let current: BTreeMap<_, _> = market
-                .book
+            let current: BTreeMap<_, _> = book
                 .into_iter()
                 .flat_map(|book| if side == 0 { &book.bids } else { &book.asks })
                 .map(|level| (ticks(level.price), level.size))
@@ -321,10 +321,10 @@ impl Ladder {
                 .retain(|level, _| current.contains_key(level) || row_of(*level).is_some());
             self.sizes[side] = current;
         }
-        self.observed = market.book.is_some();
+        self.observed = book.is_some();
         // Size and order count per visible row and side.
         let mut sizes = vec![[(0.0, None::<u32>); 2]; rows as usize];
-        if let Some(book) = market.book {
+        if let Some(book) = book {
             for (side, levels) in [(0, &book.bids), (1, &book.asks)] {
                 for level in levels {
                     if let Some(row) = row_of(ticks(level.price)) {
@@ -340,6 +340,11 @@ impl Ladder {
             }
         }
 
+        let highlights: HashMap<(usize, i64), Color32> = market
+            .highlights
+            .iter()
+            .map(|(bid, price, color)| ((usize::from(!bid), ticks(*price)), *color))
+            .collect();
         let [
             buy_margin,
             bid_column,
@@ -351,10 +356,22 @@ impl Ladder {
         let grid = Stroke::new(1.0, theme.ui.border);
         for (row, [bid, ask]) in sizes.iter().enumerate() {
             let tick_index = top - row as i64;
-            for ((size, _), column, color) in [(bid, bid_column, buy), (ask, ask_column, sell)] {
+            for (side, ((size, _), column, color)) in
+                [(bid, bid_column, buy), (ask, ask_column, sell)]
+                    .into_iter()
+                    .enumerate()
+            {
                 if *size > 0.0 {
                     let cell = row_rect(row, column);
                     painter.rect_filled(cell, 0.0, color.gamma_multiply(0.3));
+                    if let Some(tier) = highlights.get(&(side, tick_index)) {
+                        painter.rect_stroke(
+                            cell.shrink(1.0),
+                            0.0,
+                            Stroke::new(2.0, *tier),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
                     let at = cell.center();
                     text(
                         ui,
@@ -417,6 +434,16 @@ impl Ladder {
             ask_column.right(),
         ] {
             painter.vline(x, rect.y_range(), grid);
+        }
+        if market.ladder_unavailable.is_some() {
+            text(
+                ui,
+                ladder.center(),
+                Align2::CENTER_CENTER,
+                "Order-level depth unavailable",
+                12.0,
+                theme.ui.text_muted,
+            );
         }
 
         if let Some(pos) = response.hover_pos() {
@@ -965,7 +992,9 @@ mod tests {
                             },
                             rules: &rules,
                             rules_ready: true,
-                            book: Some(&book),
+                            ladder: Some(std::borrow::Cow::Borrowed(&book)),
+                            ladder_unavailable: None,
+                            highlights: Vec::new(),
                             orders: &working,
                             positions: &positions,
                             trades: &[],
@@ -1121,7 +1150,9 @@ mod tests {
                 capabilities: Capabilities::default(),
                 rules: &rules,
                 rules_ready: true,
-                book: book.as_ref(),
+                ladder: book.as_ref().map(std::borrow::Cow::Borrowed),
+                ladder_unavailable: None,
+                highlights: Vec::new(),
                 orders: &[],
                 positions: &[],
                 trades: &[],

@@ -670,11 +670,33 @@ impl Live {
     /// feed's time samples nothing: it would hold the open period, and every later column, until
     /// that time passed.
     fn sample_book(&mut self, ts: DateTime<Utc>) {
-        if let Some(sampler) = &mut self.sampler
-            && (Utc::now().checked_add_signed(self.offset + TimeDelta::minutes(1)))
-                .is_some_and(|limit| ts <= limit)
-            && let Some(column) = sampler.sample(ts, &self.book)
+        let Some(sampler) = &mut self.sampler else {
+            return;
+        };
+        if !(Utc::now().checked_add_signed(self.offset + TimeDelta::minutes(1)))
+            .is_some_and(|limit| ts <= limit)
         {
+            return;
+        }
+        // The orders a filtered history samples, summed as they stood before this update, only
+        // when the update opens a period.
+        let mut filtered = Book::new(self.tick_size);
+        let book = match &sampler.config.orders {
+            Some(filter) if sampler.due(ts) => {
+                let levels = self
+                    .orders
+                    .as_ref()
+                    .and_then(|queue| queue.filtered(&self.symbol, filter).ok());
+                let Some(levels) = levels else {
+                    sampler.lose();
+                    return;
+                };
+                let _ = filtered.snapshot(0, levels);
+                &filtered
+            }
+            _ => &self.book,
+        };
+        if let Some(column) = sampler.sample(ts, book) {
             let columns = &mut self.updates.depth_columns;
             if columns.len() == sampler.config.columns {
                 columns.pop_front();
@@ -719,7 +741,17 @@ impl Live {
             .is_some_and(|limit| ts <= limit)
         {
             for input in &self.study_inputs {
-                input.book_levels(&self.clock, ts, self.book.levels().filter(|_| !lost));
+                match input.order_filter() {
+                    None => {
+                        input.book_levels(&self.clock, ts, self.book.levels().filter(|_| !lost))
+                    }
+                    Some(filter) => {
+                        let book = (self.orders.as_ref())
+                            .and_then(|queue| queue.filtered(&self.symbol, &filter).ok())
+                            .filter(|_| !lost);
+                        input.push_book(&self.clock, ts, book.as_ref());
+                    }
+                }
             }
         }
     }

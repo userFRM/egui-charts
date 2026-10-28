@@ -32,6 +32,13 @@ pub struct DepthHistoryConfig {
     /// are more, the two oldest merge into one, and the merged columns overflow into the next
     /// resolution in the same way. At least 2; 600 by default.
     pub columns: usize,
+    /// Sample the individual resting orders this filter accepts, summed into rows, instead of
+    /// the aggregate prices the feed sends. Needs a feed that sends order events, see
+    /// [`Sink::push_order_event`](crate::data::Sink::push_order_event): with aggregate depth only
+    /// no column is sampled, and a period in which the filter cannot be applied (see
+    /// [`OrderFilterUnavailable`](crate::data::OrderFilterUnavailable)) has no column. `None`
+    /// samples the aggregate book.
+    pub orders: Option<crate::data::OrderFilter>,
 }
 
 impl Default for DepthHistoryConfig {
@@ -41,6 +48,7 @@ impl Default for DepthHistoryConfig {
             rows: 100,
             ticks_per_row: 1,
             columns: 600,
+            orders: None,
         }
     }
 }
@@ -234,6 +242,20 @@ pub(crate) struct Sampler {
 impl Sampler {
     pub(crate) fn new(config: DepthHistoryConfig) -> Self {
         Self { config, open: None }
+    }
+
+    /// Whether an update stamped `ts` opens a period after the open one, so that `sample` reads
+    /// the book.
+    pub(crate) fn due(&self, ts: DateTime<Utc>) -> bool {
+        start(ts, self.config.cadence)
+            .zip(self.open)
+            .is_some_and(|(period, open)| period > open)
+    }
+
+    /// The book cannot be sampled: the period that was open has no column, nor does the time until
+    /// the next sample.
+    pub(crate) fn lose(&mut self) {
+        self.open = None;
     }
 
     /// Called before `book` applies an update stamped `ts`. When the update opens a later period,

@@ -526,6 +526,27 @@ impl Trading {
             .filter(|(quoted, _)| quoted == symbol && !replay)
             .map(|(_, quote)| quote);
         let book = chart.order_book(SeriesId::MAIN).filter(|_| !replay);
+        let view = chart.order_book_view();
+        let queue = chart.order_queue(SeriesId::MAIN).filter(|_| !replay);
+        let filtered = view.filter != crate::data::OrderFilter::default();
+        let ladder = match (queue, filtered) {
+            (Some(queue), true) => queue
+                .filtered(symbol, &view.filter)
+                .map(|b| Some(std::borrow::Cow::Owned(b))),
+            (None, true) if !replay => Err(crate::data::OrderFilterUnavailable::AggregateDepth),
+            _ => Ok(book.map(std::borrow::Cow::Borrowed)),
+        };
+        let highlights = queue
+            .zip(view.tiers)
+            .map(|(queue, tiers)| {
+                (queue.largest_orders(&view.filter).into_iter())
+                    .filter_map(|o| {
+                        let tier = tiers.tier(o.size)?;
+                        Some((o.side == OrderSide::Buy, o.price, view.tier_color(tier)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Market {
             last: crate::model::last_with_value(chart.bars(SeriesId::MAIN)).map(|bar| bar.close),
             bid: book
@@ -544,7 +565,9 @@ impl Trading {
             capabilities: self.capabilities(),
             rules: &self.rules,
             rules_ready: self.rules_ready && self.rules.symbol == symbol,
-            book,
+            ladder_unavailable: ladder.as_ref().err().copied(),
+            ladder: ladder.unwrap_or(None),
+            highlights,
             orders: &self.orders,
             positions: &self.positions,
             trades: &[],

@@ -4,6 +4,8 @@
 //! with depth history, or [`HeatmapStrip`] with per-bar delta and volume. The chart
 //! also exposes volume bubble configuration through [`VolumeBubblesConfig`].
 
+mod book_profile;
+pub use book_profile::{BookProfile, OrderBookView, render_book_profile};
 mod footprint;
 pub use footprint::{
     FootprintColor, FootprintConfig, FootprintMode, pullback_range, render_footprint,

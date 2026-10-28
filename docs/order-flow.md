@@ -33,6 +33,35 @@ trades. Disabling the heatmap releases its textures and retains configured depth
 Hosts composing their own panes can retain `chart::overlays::LiquidityHeatmap` and call `render`
 with their price mapping and time-to-x conversion.
 
+### Individual orders
+
+A feed that sends order events through `Sink::push_order_snapshot` and `push_order_event` lets the
+book, the heatmap and the ladder count individual resting orders. `RestingOrder::with_participant`
+and `with_placed` carry the participant id and placement time the venue supplies; neither is ever
+inferred from changes between snapshots. One `OrderFilter` selects the orders everywhere:
+
+- `min_size` leaves out smaller orders before they are summed into levels.
+- `min_age` keeps orders that have rested that long at the time of the book, from their placement
+  time. An order without one cannot be shown to have rested that long and is left out.
+- `exclude_participants` leaves out those participants. Orders without a participant stay.
+
+Book size takes the filter through `OrderFlowStudy::with_order_filter` or the study's Minimum order
+size and Minimum resting seconds inputs, the heatmap through `DepthHistoryConfig::orders`, and the
+ladder and the heatmap's profile through `Chart::set_order_book_view`. `Chart::filtered_order_book`
+and `OrderQueue::filtered` give hosts the same summed book, so all of them show the same sizes.
+
+With aggregate depth only, or when a participant or age filter finds no order that carries the
+field, there is nothing to filter. Book size has no value (NaN), the heatmap samples no column,
+the ladder has no sizes, and the pane says Order-level depth unavailable, instead of showing
+unfiltered sizes as filtered ones. `OrderFilterUnavailable` names the reason.
+
+`OrderBookView::profile` switches the heatmap's profile between the total resting size at a price
+(`BookProfile::Total`) and the largest known individual order there (`LargestOrder`).
+`OrderBookView::tiers` sets two sizes, notable and large: a price whose largest known order
+reaches one is drawn in that tier's colour, in the profile and in the ladder's size cell. A price
+without order data is not highlighted. The heatmap's columns are aggregate sizes per price and are
+not highlighted.
+
 ### Large books at 50 ms
 
 To show 1,000 levels a side with a column every 50 ms, configure the history before enabling the
