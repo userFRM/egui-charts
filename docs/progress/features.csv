@@ -240,12 +240,12 @@ Drawings,Drawing management,Default style per tool,done,library,src/drawings/man
 Drawings,Drawing management,Drawing anchors across timeframe and symbol changes,done,library,src/widget/anchors.rs;src/widget/feed.rs;src/widget/series.rs;src/model/bar/time.rs
 Drawings,Drawing management,Drawing on indicator panes,done,library,src/widget/tool_interaction/mod.rs;src/widget/panes.rs;src/drawings/domain/drawing.rs
 Drawings,Drawing management,Drawing templates,done,library,src/drawings/domain/template.rs;src/ui/dialogs/templates/store.rs;src/ui/dialogs/templates/dialog.rs
-Drawings,Drawing management,Drawing tool keyboard shortcuts,done,library,src/widget/keyboard.rs;src/ui/drawing_toolbar/toolbar.rs;src/ui/drawing_toolbar/shortcuts.rs
+Drawings,Drawing management,Drawing tool keyboard shortcuts,done,library,src/widget/keyboard.rs;src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/shortcuts.rs
 Drawings,Drawing management,Drawings on a logarithmic price scale,partial,library,src/widget/tool_interaction/mod.rs;src/drawings/domain/drawing.rs;src/drawings/rendering/elliott.rs
 Drawings,Drawing management,Duplicate drawing,done,library,src/drawings/manager.rs
 Drawings,Drawing management,Edit anchors with handles and move a drawing,done,library,src/drawings/services/handle.rs;src/widget/tool_interaction/selection.rs;src/drawings/manager.rs
 Drawings,Drawing management,Hide and show drawings,done,library,src/drawings/manager.rs
-Drawings,Drawing management,Lock all drawings,done,library,src/drawings/manager.rs;src/ui/drawing_toolbar/toolbar.rs
+Drawings,Drawing management,Lock all drawings,done,library,src/drawings/manager.rs;src/ui/drawing_toolbar/toolbar/mod.rs
 Drawings,Drawing management,Lock and unlock a drawing,done,library,src/drawings/manager.rs;src/widget/tool_interaction/selection.rs
 Drawings,Drawing management,Magnet modes,done,library,src/widget/tool_interaction/mod.rs;src/drawings/manager.rs;src/drawings/services/snap.rs
 Drawings,Drawing management,Multi-select drawings,done,library,src/drawings/manager.rs;src/widget/tool_interaction/selection.rs
@@ -299,7 +299,7 @@ Drawings,Drawings,Drawing persistence,done,library,src/widget/anchors.rs;src/dra
 Drawings,Drawings,Drawing property access,partial,library,src/drawings/manager.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/drawings/rendering/fibonacci.rs
 Drawings,Drawings,Drawing removal,done,library,src/drawings/manager.rs
 Drawings,Drawings,Drawing stacking order,done,library,src/drawings/manager.rs;src/drawings/services/z_order.rs
-Drawings,Drawings,Drawing tool availability,done,library,src/drawings/registry.rs;src/drawings/manager.rs;src/ui/drawing_toolbar/toolbar.rs
+Drawings,Drawings,Drawing tool availability,done,library,src/drawings/registry.rs;src/drawings/manager.rs;src/ui/drawing_toolbar/toolbar/mod.rs
 Drawings,Drawings,Elliott correction wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Elliott double combo wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Elliott impulse wave,partial,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs
@@ -858,13 +858,13 @@ Terminal,Toolbars and panels,Chart type menu,done,library,src/ui/top_toolbar/too
 Terminal,Toolbars and panels,Compare / add symbol dialog,done,library,src/ui/top_toolbar/components/symbol_search.rs;src/ui/top_toolbar/components/symbol_search/service.rs
 Terminal,Toolbars and panels,Custom intervals,done,library,src/ui/top_toolbar/components/timeframe_selector.rs;src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Data window,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs
-Terminal,Toolbars and panels,Favourite drawing tools floating bar,partial,library,src/ui/drawing_toolbar/toolbar.rs;src/ui/drawing_toolbar/state.rs;src/ui/drawing_toolbar/utilities/favorites.rs;src/services/settings.rs;examples/demo/layouts.rs
+Terminal,Toolbars and panels,Favourite drawing tools floating bar,partial,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/state.rs;src/ui/drawing_toolbar/utilities/favorites.rs;src/services/settings.rs;examples/demo/layouts.rs
 Terminal,Toolbars and panels,Favourite intervals pinned to the toolbar,done,library,src/ui/top_toolbar/components/timeframe_selector.rs;src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Fullscreen,done,library,src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Indicators button,done,library,src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Interval menu presets,done,library,src/ui/top_toolbar/components/timeframe_selector.rs;src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Keyboard shortcuts for application actions,done,library,src/widget/keyboard.rs
-Terminal,Toolbars and panels,Left drawing toolbar shell,done,library,src/ui/drawing_toolbar/toolbar.rs
+Terminal,Toolbars and panels,Left drawing toolbar shell,done,library,src/ui/drawing_toolbar/toolbar/mod.rs
 Terminal,Toolbars and panels,Notifications / toasts,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/trading/mod.rs
 Terminal,Toolbars and panels,Object tree panel,done,library,src/ui/widget_bar/panels/object_tree/chart_actions.rs;src/ui/widget_bar/panels/object_tree/panel.rs
 Terminal,Toolbars and panels,Quick search / command palette,done,library,src/ui/top_toolbar/toolbar.rs
