@@ -259,11 +259,12 @@ impl VolumeProfile {
     pub fn from_bars(bars: &[Bar], config: VolumeProfileConfig) -> Option<Self> {
         Self::of(bars, config.rows(), config.row_size())
     }
+
     /// Group the executions of one span into a row per traded price step, from the lowest
     /// traded row to the highest, so untraded rows between them hold zero. `step` is the
     /// footprint's [`price_step`](super::Footprint::price_step), and `complete` whether
-    /// executions are held from the start of the span. Calls and buys occupy [`Self::up`],
-    /// puts and sells [`Self::down`]; unclassified volume is in [`Self::volume`] only.
+    /// executions are held from the start of the span. Buys occupy [`Self::up`] and sells
+    /// [`Self::down`]; unclassified volume is in [`Self::volume`] only.
     /// Returns no profile without executed volume, or for more than 10,000 rows.
     pub fn from_executions(bar: &FootprintBar, step: f64, complete: bool) -> Option<Self> {
         let (&first, &last) = (bar.levels.keys().next()?, bar.levels.keys().next_back()?);
