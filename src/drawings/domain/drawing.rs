@@ -297,6 +297,7 @@ impl Drawing {
                     high: price_to_y(c.high),
                     low: price_to_y(c.low),
                     close: price_to_y(c.close),
+                    rising: c.close > c.open,
                 })
                 .collect()
         } else {

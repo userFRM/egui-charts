@@ -106,7 +106,7 @@ impl GhostFeedConfig {
 }
 
 /// A projected candle in screen space: the pixel position of its centre and the half width of its
-/// body, and of the prices of its open, high, low and close.
+/// body, and of the prices of its open, high, low and close, and whether it closes above its open.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct GhostCandleScreen {
     pub x: f32,
@@ -115,6 +115,7 @@ pub(crate) struct GhostCandleScreen {
     pub high: f32,
     pub low: f32,
     pub close: f32,
+    pub rising: bool,
 }
 
 #[cfg(test)]

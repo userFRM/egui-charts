@@ -63,7 +63,7 @@ impl Drawing {
                 c.x - c.half_width..=c.x + c.half_width,
                 c.open.min(c.close)..=c.open.max(c.close).max(c.open.min(c.close) + 1.0),
             );
-            if c.close < c.open {
+            if c.rising {
                 painter.rect_filled(body, 0.0, Color32::from_rgba_unmultiplied(r, g, b, 60));
             }
             painter.rect_stroke(body, 0.0, outline, egui::StrokeKind::Inside);
