@@ -60,9 +60,8 @@ pub trait TimeFormatter: Send + Sync {
                 self.format(time, TickMarkType::TimeWithSeconds)
             ),
             _ => format!(
-                "{label} {}{}",
-                self.format(time, TickMarkType::TimeWithSeconds),
-                time.format("%.3f")
+                "{label} {}",
+                self.format(time, TickMarkType::TimeWithMilliseconds)
             ),
         }
     }
@@ -194,6 +193,8 @@ impl Style<'_> {
             (TickMarkType::Year, _) => "%Y",
             (TickMarkType::Month, _) => "%b",
             (TickMarkType::DayOfMonth, _) => "%d",
+            (TickMarkType::TimeWithMilliseconds, true) if self.show_seconds => "%H:%M:%S%.3f",
+            (TickMarkType::TimeWithMilliseconds, false) if self.show_seconds => "%I:%M:%S%.3f %p",
             (TickMarkType::TimeWithSeconds, true) if self.show_seconds => "%H:%M:%S",
             (TickMarkType::TimeWithSeconds, false) if self.show_seconds => "%I:%M:%S %p",
             // Without seconds, second marks show the minute clock.
@@ -229,15 +230,13 @@ impl Style<'_> {
         }
         let kind = if bar_seconds >= 60 {
             TickMarkType::Time
-        } else {
+        } else if bar_seconds >= 1 {
             TickMarkType::TimeWithSeconds
+        } else {
+            TickMarkType::TimeWithMilliseconds
         };
         let clock = self.format(time, kind);
-        if bar_seconds <= 0 && self.show_seconds {
-            format!("{date} {clock}{}", time.format("%.3f"))
-        } else {
-            format!("{date} {clock}")
-        }
+        format!("{date} {clock}")
     }
 }
 
@@ -481,7 +480,9 @@ impl<T: chrono::TimeZone + Send + Sync + 'static> TimeFormatter for TimezoneAwar
         if !self.time_visible
             && matches!(
                 mark_type,
-                TickMarkType::Time | TickMarkType::TimeWithSeconds
+                TickMarkType::Time
+                    | TickMarkType::TimeWithSeconds
+                    | TickMarkType::TimeWithMilliseconds
             )
         {
             self.inner.format_crosshair(converted, 86_400)
@@ -665,6 +666,45 @@ mod tests {
 
         let result = formatter.format(time, TickMarkType::Time);
         assert!(result.contains("PM"));
+    }
+
+    #[test]
+    fn fractional_crosshair_seconds_precede_the_meridiem() {
+        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 45).unwrap()
+            + chrono::Duration::milliseconds(123);
+        for (use_24_hour, seconds, fractional) in [
+            (true, "14:30:45", "14:30:45.123"),
+            (false, "02:30:45 PM", "02:30:45.123 PM"),
+        ] {
+            let formatter = DefaultTimeFormatter {
+                use_24_hour,
+                ..Default::default()
+            };
+            let custom = CustomTimeFormatter::new(move |time, kind| {
+                DefaultTimeFormatter {
+                    use_24_hour,
+                    ..Default::default()
+                }
+                .format(time, kind)
+            });
+            // The style and the trait default share the clock's precision and hour cycle.
+            for formatter in [&formatter as &dyn TimeFormatter, &custom] {
+                for (bar_seconds, clock) in [(0, fractional), (1, seconds)] {
+                    let label = formatter.format_crosshair(time, bar_seconds);
+                    assert!(label.ends_with(clock), "{label}");
+                }
+            }
+        }
+        let hidden_seconds = DefaultTimeFormatter {
+            use_24_hour: false,
+            show_seconds: false,
+            ..Default::default()
+        };
+        assert!(
+            hidden_seconds
+                .format_crosshair(time, 0)
+                .ends_with("02:30 PM")
+        );
     }
 
     #[test]

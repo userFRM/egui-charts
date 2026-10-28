@@ -27,6 +27,9 @@ pub enum TickMarkType {
 
     /// Time mark with seconds (e.g., "12:30:45")
     TimeWithSeconds,
+
+    /// Time mark with milliseconds (e.g., "12:30:45.123")
+    TimeWithMilliseconds,
 }
 
 /// Weight of a tick mark (0-100 scale)
@@ -290,7 +293,7 @@ impl TickMarkGenerator {
             } else {
                 self.classify_time_boundary(local, primary_type)
             };
-            let day = boundary.is_some() || local.time().num_seconds_from_midnight() == 0;
+            let day = boundary.is_some() || local.time() == chrono::NaiveTime::MIN;
             let millis = interval.num_milliseconds().max(1);
             let clock_bucket = |time: DateTime<Utc>| {
                 (i64::from(time.time().num_seconds_from_midnight()) * 1000
@@ -312,7 +315,10 @@ impl TickMarkGenerator {
             if kind == TickMarkType::Year || kind == TickMarkType::Month || day_mark || clock_mark {
                 let (mark_type, weight) = if day && weight < TickMarkWeight::DAY {
                     (TickMarkType::DayOfMonth, TickMarkWeight::DAY)
-                } else if clock_mark && weight < TickMarkWeight::DAY {
+                } else if clock_mark
+                    && weight < TickMarkWeight::DAY
+                    && local.timestamp_subsec_nanos() == 0
+                {
                     let boundary = local
                         - Duration::milliseconds(
                             (i64::from(local.time().num_seconds_from_midnight()) * 1000
@@ -577,6 +583,13 @@ impl TickMarkGenerator {
         time: DateTime<Utc>,
         primary_type: TickMarkType,
     ) -> (TickMarkType, TickMarkWeight) {
+        if time.timestamp_subsec_nanos() != 0 {
+            return (
+                TickMarkType::TimeWithMilliseconds,
+                TickMarkWeight::SUBSECOND,
+            );
+        }
+
         // Check for year boundary
         if time.month() == 1
             && time.day() == 1
@@ -1357,6 +1370,58 @@ mod tests {
         );
         assert!(marks.len() >= 4, "weekly marks: {marks:?}");
         assert!(marks.iter().all(|mark| mark.time == bars[mark.index].0));
+    }
+
+    #[test]
+    fn subsecond_axis_labels_distinguish_instants() {
+        use crate::scales::{HorizontalScale, TickMarkLayout, TimeFormatterBuilder};
+        for start in [
+            Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap(),
+            Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
+        ] {
+            let bars: Vec<_> = (0..30)
+                .map(|i| (start + Duration::milliseconds(100 * i), i as usize))
+                .collect();
+            let formatter = TimeFormatterBuilder::new().build();
+            let marks = formatter.tick_marks(
+                &bars,
+                &TickMarkLayout {
+                    width: 1000.0,
+                    bar_spacing: 1000.0 / 30.0,
+                    min_spacing: 80.0,
+                    uniform_distribution: false,
+                },
+            );
+            assert!(marks.len() >= 5, "{marks:?}");
+            assert!(
+                marks.windows(2).all(|pair| pair[0].label != pair[1].label),
+                "{marks:?}"
+            );
+            for mark in marks
+                .iter()
+                .filter(|mark| mark.time.timestamp_subsec_millis() == 0)
+            {
+                let kind = if mark.time == start && start.month() == 1 {
+                    TickMarkType::Year
+                } else if mark.time.second() == 0 {
+                    TickMarkType::Time
+                } else {
+                    TickMarkType::TimeWithSeconds
+                };
+                assert_eq!(mark.mark_type, kind);
+                assert_eq!(
+                    mark.label,
+                    DefaultTimeFormatter::default().format(mark.time, kind)
+                );
+            }
+            for mark in marks
+                .iter()
+                .filter(|mark| mark.time.timestamp_subsec_millis() != 0)
+            {
+                assert_eq!(mark.label, mark.time.format("%H:%M:%S%.3f").to_string());
+                assert_eq!(mark.weight, TickMarkWeight::SUBSECOND);
+            }
+        }
     }
 
     #[test]

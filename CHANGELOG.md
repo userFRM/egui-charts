@@ -403,6 +403,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Subsecond time-axis labels show milliseconds, including fractions within minute and midnight boundaries; whole-second and coarser marks keep their labels. Subsecond crosshair labels place the fraction before the AM/PM marker in both built-in formatters and the `TimeFormatter` default. Migration: exhaustive `TickMarkType` matches handle `TimeWithMilliseconds`; custom formatters receive it for fractional ticks and subsecond crosshair clocks. ([#1227](https://github.com/userFRM/egui-charts/issues/1227), [#1228](https://github.com/userFRM/egui-charts/issues/1228))
+
 - Intraday time axes with day or longer label intervals mark the first available bar of each Monday-anchored day bucket, including weeks whose opening day has no data. Missing Sunday bars no longer hide weekly labels. ([#1219](https://github.com/userFRM/egui-charts/issues/1219))
 
 - Daily time-axis labels use the first supplied bar at or after each calendar boundary, so weekends and holidays with no bar are not labelled. Candidates sharing a bar keep its strongest boundary, and candidates beyond the last bar are omitted. ([#1234](https://github.com/userFRM/egui-charts/issues/1234))
