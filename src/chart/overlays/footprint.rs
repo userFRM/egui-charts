@@ -316,7 +316,7 @@ fn cell_color(
 /// Draws a compact per-bar statistics table under the footprint at the same x coordinates.
 /// Rows show total, bid, ask, delta, minimum and maximum intrabar delta, cumulative delta,
 /// delta percentage, and ask/bid ratio (undefined for zero volume or bid).
-/// A column too narrow for text is left empty; values are still available in [`FootprintBar`].
+/// A column too narrow for text, or cut by the plot edge, is left empty; values are still available in [`FootprintBar`].
 pub fn render_footprint_statistics(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -354,15 +354,17 @@ pub fn render_footprint_statistics(
                 |value| format!("{label} {}", volume_text(value)),
             );
             let galley = painter.layout_no_wrap(text, FontId::monospace(10.0), text_color);
-            if galley.size().x <= mapping.bar_spacing - 2.0 {
-                painter.galley(
-                    pos2(
-                        x - galley.size().x / 2.0,
-                        mapping.rect.top() + 12.0 * line as f32,
-                    ),
-                    galley,
-                    text_color,
-                );
+            let at = pos2(
+                x - galley.size().x / 2.0,
+                mapping.rect.top() + 12.0 * line as f32,
+            );
+            // Whole or absent, as in the cells: a column cut by the plot edge shows no number.
+            if galley.size().x <= mapping.bar_spacing - 2.0
+                && mapping
+                    .rect
+                    .contains_rect(Rect::from_min_size(at, galley.size()))
+            {
+                painter.galley(at, galley, text_color);
             }
         }
     }
@@ -488,7 +490,21 @@ mod tests {
                 false,
             ),
         );
-        for (minimum, auto, expected) in [(14.0, None, 0), (10.0, None, 8), (10.0, Some(30.0), 4)] {
+        // The last case puts the plot edge through the first column: its numbers are left out.
+        for (minimum, auto, left, expected) in [
+            (14.0, None, 0.0, 0),
+            (10.0, None, 0.0, 8),
+            (10.0, Some(30.0), 0.0, 4),
+            (10.0, None, 30.0, 6),
+        ] {
+            let plot = ChartMapping::new(
+                Rect::from_min_max(pos2(left, 0.0), rect.max),
+                240.0,
+                0,
+                0,
+                0.0,
+                map.price,
+            );
             let ctx = egui::Context::default();
             let config = FootprintConfig {
                 modes: vec![
@@ -506,7 +522,7 @@ mod tests {
                     screen_rect: Some(rect),
                     ..Default::default()
                 },
-                |ui| render_footprint(ui.painter(), &map, &bars, &flow, &config),
+                |ui| render_footprint(ui.painter(), &plot, &bars, &flow, &config),
             );
             output.textures_delta.clear();
             let texts: Vec<_> = output
@@ -520,47 +536,12 @@ mod tests {
             assert_eq!(
                 texts.len(),
                 expected,
-                "minimum {minimum}, auto {auto:?}: {texts:?}"
+                "minimum {minimum}, auto {auto:?}, left {left}: {texts:?}"
             );
             if auto.is_some() {
                 assert_eq!(texts, ["2 × 7", "9", "+5", "+5 / 9"]);
             }
         }
-        // A plot edge through the first column leaves its numbers out rather than cutting them.
-        let cut = ChartMapping::new(
-            Rect::from_min_max(pos2(30.0, 0.0), rect.max),
-            240.0,
-            0,
-            0,
-            0.0,
-            map.price,
-        );
-        let ctx = egui::Context::default();
-        let config = FootprintConfig {
-            modes: vec![
-                FootprintMode::BidAsk,
-                FootprintMode::Volume,
-                FootprintMode::Delta,
-                FootprintMode::DeltaVolume,
-            ],
-            min_text_height: 10.0,
-            auto_row_height: None,
-            ..Default::default()
-        };
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(rect),
-                ..Default::default()
-            },
-            |ui| render_footprint(ui.painter(), &cut, &bars, &flow, &config),
-        );
-        output.textures_delta.clear();
-        let texts = output
-            .shapes
-            .iter()
-            .filter(|shape| matches!(shape.shape, Shape::Text(_)))
-            .count();
-        assert_eq!(texts, 6);
         // Both diagonals can dominate at the same price; keep both side colours.
         let mut dual = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
         for (price, size, side) in [

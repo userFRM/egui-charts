@@ -350,7 +350,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - A deselected rectangle draws its border, fill and label only. Its centre guides and size labels appear while it is selected or being drawn, and its corner dots, which duplicated the selection handles, are gone. ([#1169](https://github.com/userFRM/egui-charts/issues/1169))
 
-- Footprint cells at the left and right edges of the plot show complete numbers or none; a number the plot edge would cut is left out. ([#1170](https://github.com/userFRM/egui-charts/issues/1170))
+- Footprint cells and statistics columns at the edges of the plot show complete numbers or none; a number the plot edge would cut is left out. ([#1170](https://github.com/userFRM/egui-charts/issues/1170))
 
 - Range charts build their bars from the executions the feed supplied, in order with their timestamps and volume and with the incomplete last bar, so two execution paths with the same open, high, low and close show their own bars. History pages, corrections, live trades and the replay cursor rebuild them. Charts without executions keep the approximation from the bars' open, high, low and close, and `Chart::range_bar_source` reports which one is shown as `model::RangeBarSource`. ([#1105](https://github.com/userFRM/egui-charts/issues/1105))
 
