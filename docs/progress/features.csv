@@ -231,7 +231,7 @@ Chart,Scales and axes,Right price scale,done,library,src/widget/mod.rs;src/widge
 Chart,Scales and axes,Scale margins,done,library,src/widget/settings/apply.rs;src/scales/pricescale.rs;src/widget/frame.rs
 Chart,Scales and axes,Session breaks,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/ui/axis_context_menu.rs
 Chart,Scales and axes,Symbol name label on the scale,missing,library,
-Chart,Scales and axes,Time axis labels,done,library,src/widget/frame.rs;src/chart/renderers/labels.rs
+Chart,Scales and axes,Time axis labels,partial,library,src/widget/frame.rs;src/chart/renderers/labels.rs;src/scales/timescale_marks.rs;src/scales/time_formatter.rs
 Chart,Scales and axes,Time zone selection,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/scales/time_formatter.rs
 Drawings,Drawing management,Alerts on drawings,partial,library,src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_context_menu.rs
 Drawings,Drawing management,Copy and paste drawings,done,library,src/widget/clipboard.rs;src/drawings/manager.rs

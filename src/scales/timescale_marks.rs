@@ -666,21 +666,18 @@ impl TickMarkGenerator {
         mut marks: Vec<TickMark>,
         bars: &[(DateTime<Utc>, usize)],
     ) -> Vec<TickMark> {
-        for mark in &mut marks {
-            // Find closest bar
-            let closest = bars.iter().min_by_key(|(time, _)| {
-                let diff = if *time > mark.time {
-                    *time - mark.time
-                } else {
-                    mark.time - *time
-                };
-                diff.num_milliseconds().abs()
-            });
-
-            if let Some((_, index)) = closest {
-                mark.index = *index;
-            }
-        }
+        marks.retain_mut(|mark| {
+            let position = bars.partition_point(|(time, _)| *time < mark.time);
+            let Some(&(time, index)) = bars.get(position) else {
+                return false;
+            };
+            mark.time = time;
+            mark.index = index;
+            true
+        });
+        // A gap can map several candidates to one bar; retain its strongest boundary.
+        marks.sort_by(|a, b| a.time.cmp(&b.time).then_with(|| b.weight.cmp(&a.weight)));
+        marks.dedup_by_key(|mark| mark.index);
 
         marks
     }
@@ -822,7 +819,9 @@ mod tests {
             if interval > Duration::days(365) {
                 let bars = [(start, 0), (start + span, 1)];
                 let marks = generator.generate_marks(start, start + span, 1000.0, &bars);
-                let years: Vec<_> = marks.iter().map(|mark| mark.time.year()).collect();
+                assert!(marks.iter().all(|mark| mark.time == bars[mark.index].0));
+                assert!(marks.len() <= bars.len());
+                let years: Vec<_> = candidates.iter().map(|mark| mark.time.year()).collect();
                 let step = years[1] - years[0];
                 assert!(
                     years.windows(2).all(|pair| pair[1] - pair[0] == step),
@@ -1095,7 +1094,7 @@ mod tests {
                 marks
                     .iter()
                     .all(|mark| formatter.wall_time(mark.time).day() == 1
-                        && formatter.wall_time(mark.time).hour() == 0),
+                        && mark.time == bars[mark.index].0),
                 "{marks:?}"
             );
         }
@@ -1220,6 +1219,46 @@ mod tests {
                 assert!(marks.iter().all(|mark| mark.time.day() == 1));
             }
         }
+        // Weekends and a holiday month opening have no bar to label.
+        let weekdays: Vec<_> = (0..400)
+            .map(|day| start + Duration::days(day))
+            .filter(|time| time.weekday().number_from_monday() <= 5 && time.day() != 1)
+            .enumerate()
+            .map(|(index, time)| (time, index))
+            .collect();
+        use crate::scales::{HorizontalScale, TickMarkLayout, TimeFormatterBuilder};
+        let formatter = TimeFormatterBuilder::new().build();
+        for spacing in [8.0, 14.0, 24.0, 40.0] {
+            let layout = TickMarkLayout {
+                width: 1000.0,
+                bar_spacing: spacing,
+                min_spacing: 80.0,
+                uniform_distribution: false,
+            };
+            let visible = &weekdays[weekdays.len() - (1000.0 / spacing) as usize..];
+            let marks = formatter.tick_marks(visible, &layout);
+            assert!(!marks.is_empty());
+            assert!(
+                marks.iter().all(|mark| weekdays[mark.index].0 == mark.time),
+                "{marks:?}"
+            );
+            assert!(marks.windows(2).all(|pair| pair[0].index < pair[1].index));
+            let february = Utc.with_ymd_and_hms(2025, 2, 3, 0, 0, 0).unwrap();
+            assert!(
+                marks
+                    .iter()
+                    .any(|mark| mark.time == february && mark.label == "Feb"),
+                "{spacing}: {marks:?}"
+            );
+        }
+        // Several calendar candidates in one gap keep the strongest boundary; candidates
+        // beyond the final supplied bar cannot produce a label.
+        let sparse = [(start, 0), (start + Duration::days(35), 1)];
+        let marks = generator.generate_marks(start, start + Duration::days(60), 1000.0, &sparse);
+        assert_eq!(marks.len(), 2);
+        assert_eq!(marks[1].time, sparse[1].0);
+        assert_eq!(marks[1].mark_type, TickMarkType::Month);
+
         for interval in [Duration::days(2), Duration::days(7)] {
             let before = generator.generate_candidate_marks(
                 bars[300].0,
