@@ -38,7 +38,7 @@ pub struct PriceMarkGeneratorConfig {
     /// pixels apart, and no closer than `min_spacing`
     pub target_density: f32,
 
-    /// Min price step (for crypto/forex precision)
+    /// Minimum tick size. Marks lie on multiples of this value; invalid sizes are ignored.
     pub min_price_step: Option<f64>,
 }
 
@@ -143,6 +143,13 @@ impl PriceMarkGenerator {
             let unit = 10f64.powi(-(decimals as i32));
             nice_step = (nice_step / unit).ceil().max(1.0) * unit;
         }
+        if let Some(min_step) = self
+            .config
+            .min_price_step
+            .filter(|s| s.is_finite() && *s > 0.0)
+        {
+            nice_step = (nice_step / min_step).ceil().max(1.0) * min_step;
+        }
 
         // Guard against zero or invalid step (prevents infinite loop)
         if nice_step <= 0.0 || !nice_step.is_finite() {
@@ -150,7 +157,8 @@ impl PriceMarkGenerator {
         }
 
         // Calculate starting price (round down to nice boundary)
-        let start_price = (min_price / nice_step).floor() * nice_step;
+        let start_index = (min_price / nice_step).floor();
+        let start_price = start_index * nice_step;
 
         // Guard against invalid start price
         if !start_price.is_finite() {
@@ -209,8 +217,12 @@ impl PriceMarkGenerator {
                 });
             }
 
-            curr_price += nice_step;
             iterations += 1;
+            curr_price = if self.config.min_price_step.is_some() {
+                (start_index + iterations as f64) * nice_step
+            } else {
+                curr_price + nice_step
+            };
         }
 
         // Apply spacing constraints
@@ -264,6 +276,16 @@ impl PriceMarkGenerator {
             for multiplier in [1.0, 2.0, 5.0] {
                 let price = base * multiplier;
 
+                if let Some(step) = self
+                    .config
+                    .min_price_step
+                    .filter(|s| s.is_finite() && *s > 0.0)
+                    && (price - (price / step).round() * step).abs()
+                        > price.abs().max(step) * f64::EPSILON * 4.0
+                {
+                    continue;
+                }
+
                 if price >= min_price && price <= max_price {
                     let y = map.price_to_y(price);
 
@@ -302,8 +324,10 @@ impl PriceMarkGenerator {
             return 1.0;
         }
 
-        // Check for min step constraint
-        if let Some(min_step) = self.config.min_price_step
+        if let Some(min_step) = self
+            .config
+            .min_price_step
+            .filter(|s| s.is_finite() && *s > 0.0)
             && raw_step < min_step
         {
             return min_step;
@@ -470,6 +494,41 @@ mod tests {
         assert_eq!(generator.calculate_precision(1.0), 2);
         assert_eq!(generator.calculate_precision(10.0), 1);
         assert_eq!(generator.calculate_precision(100.0), 0);
+    }
+
+    #[test]
+    fn ticks_stay_on_the_minimum_price_grid() {
+        use PriceScaleMode::{Logarithmic, Normal};
+        for (mode, min, max, step, precision) in [
+            (Normal, 4500.0, 4503.75, 0.25, None),
+            (Normal, -3.75, 0.5, 0.25, Some(2)),
+            (Normal, 4500.0, 4503.75, 0.05, None),
+            (Normal, 0.01, 0.9, 0.03, Some(2)),
+            (Logarithmic, 4500.0, 4503.75, 0.25, Some(2)),
+            (Logarithmic, 0.01, 1.0, 0.03, None),
+        ] {
+            let (min, max) = if mode == Logarithmic {
+                (f64::ln(min), f64::ln(max))
+            } else {
+                (min, max)
+            };
+            let marks = map(mode, min, max)
+                .with_price_precision(precision)
+                .with_tick_marks(PriceMarkGeneratorConfig {
+                    min_price_step: Some(step),
+                    ..Default::default()
+                })
+                .marks();
+            assert!(marks.len() >= 3, "{mode:?}: {marks:?}");
+            for mark in marks {
+                let ticks = mark.price / step;
+                assert!(
+                    (ticks - ticks.round()).abs() < 1e-9,
+                    "{mode:?}: {} is off the {step} grid",
+                    mark.label
+                );
+            }
+        }
     }
 
     #[test]

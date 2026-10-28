@@ -403,6 +403,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Price-axis tick intervals and logarithmic marks respect multiples of `PriceMarkGeneratorConfig::min_price_step`, including when label precision is set. Tick placement without a minimum step is unchanged. ([#1229](https://github.com/userFRM/egui-charts/issues/1229))
+
 - Percentage axis ticks and price labels show a positive zero when the value rounds to zero at the displayed precision. ([#1226](https://github.com/userFRM/egui-charts/issues/1226))
 
 - The upside and downside Tasuki gap patterns need the third candle to open strictly inside the second candle's body and close strictly inside the gap, so an open outside the body, a close on either gap edge or a closed gap is no longer marked. ([#1083](https://github.com/userFRM/egui-charts/issues/1083))

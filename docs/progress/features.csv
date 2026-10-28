@@ -224,8 +224,8 @@ Chart,Scales and axes,Logarithmic scale,done,library,src/scales/pricescale.rs;sr
 Chart,Scales and axes,Multiple price scales and pin to scale,done,library,src/model/series_scale.rs;src/widget/price_series.rs
 Chart,Scales and axes,Percent scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/scales/price_formatter.rs;src/scales/pricescale_marks.rs
 Chart,Scales and axes,Previous close line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
-Chart,Scales and axes,Price label precision,partial,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/chart/renderers/crosshair.rs;src/widget/price_series.rs;src/widget/frame.rs
-Chart,Scales and axes,Regular price scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/frame.rs
+Chart,Scales and axes,Price label precision,partial,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/chart/renderers/crosshair.rs;src/widget/price_series.rs;src/widget/frame.rs;src/scales/pricescale.rs;src/scales/pricescale_marks.rs
+Chart,Scales and axes,Regular price scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/frame.rs;src/scales/pricescale_marks.rs
 Chart,Scales and axes,Right offset,done,library,src/model/timescale.rs;src/widget/mod.rs;src/widget/time_scale.rs;src/widget/pan_zoom.rs
 Chart,Scales and axes,Right price scale,done,library,src/widget/mod.rs;src/widget/frame.rs;src/chart/renderers/labels.rs
 Chart,Scales and axes,Scale margins,done,library,src/widget/settings/apply.rs;src/scales/pricescale.rs;src/widget/frame.rs
