@@ -7,9 +7,14 @@
 /// Kinetic scroll animation parameters.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct KineticScrollOptions {
-    /// Enable kinetic scrolling (inertial scrolling)
+    /// Continue scrolling after a horizontal touch drag is released
     /// Default: false (chart stops immediately on release)
     pub enabled: bool,
+
+    /// Continue scrolling after a mouse drag is released, independently of `enabled`
+    /// Default: false
+    #[serde(default)]
+    pub mouse: bool,
 
     /// Min scroll speed (pixels/frame)
     /// Default: 0.2
@@ -32,6 +37,7 @@ impl Default for KineticScrollOptions {
     fn default() -> Self {
         Self {
             enabled: false, // Disabled by default (no inertial scrolling)
+            mouse: false,
             min_scroll_speed: 0.2,
             max_scroll_speed: 7.0,
             damping_coeff: 0.997,
