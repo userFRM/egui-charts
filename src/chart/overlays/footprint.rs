@@ -233,7 +233,9 @@ pub fn render_footprint(
                     let at = rect.center() - galley.size() / 2.0;
                     // Text is whole or absent: a cell cut by the plot edge shows no number.
                     if galley.size().x + 4.0 <= rect.width()
-                        && mapping.rect.contains_rect(Rect::from_min_size(at, galley.size()))
+                        && mapping
+                            .rect
+                            .contains_rect(Rect::from_min_size(at, galley.size()))
                     {
                         painter.galley(at, galley, config.text_color);
                     }
