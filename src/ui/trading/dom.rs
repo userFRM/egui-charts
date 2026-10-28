@@ -574,7 +574,7 @@ impl Ladder {
                     1 => [change(row, 0), change(row, 1)],
                     _ => [traded(bid_volume), traded(ask_volume)],
                 };
-                let dash = |value: Option<String>| value.unwrap_or_else(|| "–".to_owned());
+                let dash = |value: Option<String>| value.unwrap_or_else(|| "-".to_owned());
                 let label = format!("{}|{}", dash(bid), dash(ask));
                 text(
                     ui,

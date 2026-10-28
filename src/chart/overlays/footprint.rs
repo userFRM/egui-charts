@@ -121,8 +121,13 @@ pub fn render_footprint(
     let mut mesh = Mesh::default();
     let columns = config.modes.len().min(4);
     let width = (mapping.bar_spacing * 0.92 / columns as f32).max(0.5);
+    // Bars cut by dropped executions are drawn as candles, not as complete footprint bars.
+    let complete_from = flow.complete_from();
     for (index, bar) in bars.iter().enumerate().take(end).skip(first) {
-        let Some(source) = flow.bar_at(bar.time) else {
+        let Some(source) = flow
+            .bar_at(bar.time)
+            .filter(|_| complete_from.is_some_and(|from| bar.time >= from))
+        else {
             continue;
         };
         let x = mapping.idx_to_x(index);
@@ -457,6 +462,47 @@ mod tests {
     use super::*;
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
+
+    /// A bar cut by dropped executions is left to its candle, not drawn as a complete bar.
+    #[test]
+    fn bar_cut_by_dropped_executions_is_not_drawn() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        let trades = [100.0, 100.25].map(|price| Tick::new(time, price, 3.0, Some(OrderSide::Buy)));
+        trades.iter().for_each(|trade| _ = flow.push(trade));
+        flow.drop_through(time, &trades[1..]);
+        assert!(flow.bar_at(time).is_some());
+        let bars = [Bar::new(time, 100.0, 100.25, 100.0, 100.25, 3.0)];
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 160.0));
+        let map = ChartMapping::new(
+            rect,
+            240.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(99.0, 102.0),
+                0.0,
+                160.0,
+                false,
+            ),
+        );
+        let config = FootprintConfig::default();
+        let mut output = egui::Context::default().run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| render_footprint(ui.painter(), &map, &bars, &flow, &config),
+        );
+        output.textures_delta.clear();
+        assert!(output.shapes.iter().all(|shape| match &shape.shape {
+            Shape::Text(_) => false,
+            Shape::Mesh(mesh) => mesh.is_empty(),
+            _ => true,
+        }));
+    }
 
     #[test]
     fn four_modes_hide_small_text_and_group_adjacent_rows() {
