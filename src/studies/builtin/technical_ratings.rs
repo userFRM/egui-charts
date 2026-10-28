@@ -418,7 +418,7 @@ impl Indicator for TechnicalRatings {
         let gray = Color32::from_gray(128);
         crate::studies::StudyPane {
             height: None,
-            range: Some((-1.0, 1.0)),
+            range: Some((-1.1, 1.1)),
             levels: vec![
                 (0.5, gray, "Strong Buy"),
                 (0.1, gray, "Buy"),

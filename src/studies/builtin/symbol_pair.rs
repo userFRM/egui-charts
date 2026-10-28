@@ -318,7 +318,7 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
 
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
-            range: CORRELATION.then_some((-1.0, 1.0)),
+            range: CORRELATION.then_some((-1.1, 1.1)),
             levels: if CORRELATION {
                 vec![(0.0, Color32::from_gray(128), "Zero")]
             } else {

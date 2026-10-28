@@ -293,6 +293,11 @@ impl<const RISING: bool> Indicator for Wedge<RISING> {
                 ]
             }))
             .collect();
+        if self.table.rows.is_empty() {
+            self.table
+                .rows
+                .push(["No wedge", "-", "-"].map(|t| text(t.into())).to_vec());
+        }
         self.stepper = stepper;
         self.values = values;
     }

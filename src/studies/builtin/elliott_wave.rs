@@ -217,6 +217,12 @@ impl Indicator for ElliottWave {
             .chain(&state.confirmed)
             .map(describe)
             .collect();
+        if self.table.rows.is_empty() {
+            let text = |text: &str| StudyCell::Text(text.into());
+            self.table
+                .rows
+                .push(vec![text("No impulse"), text("-"), text("-")]);
+        }
         self.stepper = stepper;
         self.values = values;
     }
@@ -405,6 +411,8 @@ mod tests {
             105.0, 100.0, 105.0, 110.0, 107.0, 104.0, 115.0, 125.0, 120.0, 108.0,
         ]);
         assert_eq!(study.values().value(0, 8), Some(125.0));
-        assert!(study.table().unwrap().rows.is_empty());
+        let rows = &study.table().unwrap().rows;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], StudyCell::Text("No impulse".into()));
     }
 }
