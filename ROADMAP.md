@@ -2,7 +2,7 @@
 
 [Feature status and progress](https://userfrm.github.io/egui-charts/docs/progress/)
 
-The crate provides an engine without egui, an egui 0.37 chart widget, and terminal UI components. Checked items describe working capabilities, including public APIs that applications can compose. Unchecked items describe remaining library work. The demo assembles the components and shows their action routing; an assembled terminal with library-owned action handling is still planned.
+The crate provides an engine without egui, an egui 0.37 chart widget, and terminal UI components. Checked items describe working capabilities, including public APIs that applications can compose. Unchecked items describe remaining library work. `ui::terminal::Terminal` assembles the components on the host's feed and services and lets the application intercept their actions; it returns those it does not perform yet, and the demo still routes the components by hand.
 
 ## Chart Rendering Engine
 
@@ -222,7 +222,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Editable shortcut bindings are shared by chart input, help and menu hints; quick search uses a command palette.
 - [x] Watchlists support named lists, sections, sorting, row reordering, flags, symbol navigation and text import/export.
 - [x] Feed-backed panels render symbol details, news, calendars, hotlists, screener tables and grouped market heatmaps; `FinancialsPanel` charts and tabulates supplied financial figures.
-- [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them.
+- [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them. `Terminal` performs chart type, theme, undo, redo and fullscreen and returns every other action to the application.
 - [ ] Provide a shared docked tab container for account, strategy report, study editor and replay-trading surfaces.
 - [ ] Open the drawing toolbar's colour popup from a visible control and render its saved favourites bar.
 - [ ] Persist and restore indicator favourites in the assembled UI.

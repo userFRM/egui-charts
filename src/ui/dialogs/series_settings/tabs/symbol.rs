@@ -83,6 +83,23 @@ impl SymbolTab {
                     Self::line_style(ui, &mut styles.baseline.below, "below_style");
                     Self::fill_row(ui, "Below fill", &mut styles.baseline.below_fill);
                 }
+                ChartType::Kagi => {
+                    for (name, width) in [
+                        ("Thick line width", &mut styles.kagi.thick_width),
+                        ("Thin line width", &mut styles.kagi.thin_width),
+                    ] {
+                        let label = ui.label(l10n::text(ui.ctx(), name));
+                        ui.add(
+                            egui::DragValue::new(width)
+                                .range(0.0..=10.0)
+                                .speed(0.1)
+                                .suffix(l10n::text(ui.ctx(), " pt")),
+                        )
+                        .labelled_by(label.id);
+                        ui.end_row();
+                    }
+                    Self::candle_colors_section(ui, settings);
+                }
                 _ => Self::candle_colors_section(ui, settings),
             }
         });

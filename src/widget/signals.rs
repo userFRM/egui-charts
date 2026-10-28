@@ -18,16 +18,65 @@ pub(super) struct SignalSource {
     signals: Vec<Signal>,
 }
 
+impl SignalSource {
+    fn pump(&mut self, ctx: &egui::Context, scope: &(String, Timeframe)) {
+        if self.scope.as_ref() != Some(scope)
+            || self.listener.as_ref().is_none_or(|l| !l.is_active())
+        {
+            self.listener = None;
+            self.signals.clear();
+            self.inbox = Arc::default();
+            let repaint = ctx.clone();
+            let viewport = ctx.viewport_id();
+            self.inbox
+                .set_waker(move || repaint.request_repaint_of(viewport));
+            let (listener, events) = Listener::new(&self.inbox, 0);
+            self.listener = Some(listener);
+            self.scope = Some(scope.clone());
+            self.source.subscribe(&scope.0, scope.1, events);
+        }
+        if self.listener.as_ref().is_some_and(|l| !l.is_active()) {
+            self.signals.clear();
+            ctx.request_repaint();
+            return;
+        }
+        for (_, event) in self.inbox.drain().answers {
+            match *event.downcast::<SignalEvent>().expect("signal event") {
+                SignalEvent::Upsert(signal) => {
+                    if let Some(index) = self.signals.iter().position(|old| old.id == signal.id) {
+                        self.signals.remove(index);
+                    }
+                    if valid(&signal.shape) {
+                        self.signals.push(signal);
+                    }
+                }
+                SignalEvent::Remove(id) => self.signals.retain(|signal| signal.id != id),
+                SignalEvent::Clear => self.signals.clear(),
+            }
+        }
+    }
+}
+
 impl Chart {
     /// Connects host analytics. Replacing or removing the service clears its signals and stream.
     pub fn set_signal_source(&mut self, source: Option<Arc<dyn Signals>>) {
-        self.signal_source = source.map(|source| SignalSource {
-            source,
-            inbox: Arc::default(),
-            listener: None,
-            scope: None,
-            signals: Vec::new(),
-        });
+        self.set_signal_sources(source.into_iter().collect());
+    }
+
+    /// Connects several analytics services, each with its own stream and signals, so that one
+    /// source's `Clear` or lagged stream leaves the others' signals in place. Replacing the
+    /// sources clears their signals and streams.
+    pub fn set_signal_sources(&mut self, sources: Vec<Arc<dyn Signals>>) {
+        self.signal_sources = sources
+            .into_iter()
+            .map(|source| SignalSource {
+                source,
+                inbox: Arc::default(),
+                listener: None,
+                scope: None,
+                signals: Vec::new(),
+            })
+            .collect();
     }
 
     /// Hides or restores a category without discarding signals or requesting them again.
@@ -40,7 +89,7 @@ impl Chart {
     }
 
     pub(super) fn clear_source_signals(&mut self) {
-        if let Some(source) = &mut self.signal_source {
+        for source in &mut self.signal_sources {
             source.listener = None;
             source.scope = None;
             source.signals.clear();
@@ -50,50 +99,12 @@ impl Chart {
 
     pub(super) fn pump_signals(&mut self, ctx: &egui::Context) {
         let scope = (self.symbol.clone(), self.timeframe.unwrap_or_default());
-        let Some(source) = &mut self.signal_source else {
-            return;
-        };
-        if source.scope.as_ref() != Some(&scope)
-            || source.listener.as_ref().is_none_or(|l| !l.is_active())
-        {
-            source.listener = None;
-            source.signals.clear();
-            source.inbox = Arc::default();
-            let repaint = ctx.clone();
-            let viewport = ctx.viewport_id();
-            source
-                .inbox
-                .set_waker(move || repaint.request_repaint_of(viewport));
-            let (listener, events) = Listener::new(&source.inbox, 0);
-            source.listener = Some(listener);
-            source.scope = Some(scope.clone());
-            source.source.subscribe(&scope.0, scope.1, events);
-        }
-        if source.listener.as_ref().is_some_and(|l| !l.is_active()) {
-            source.signals.clear();
-            ctx.request_repaint();
-            return;
-        }
-        for (_, event) in source.inbox.drain().answers {
-            match *event.downcast::<SignalEvent>().expect("signal event") {
-                SignalEvent::Upsert(signal) => {
-                    if let Some(index) = source.signals.iter().position(|old| old.id == signal.id) {
-                        source.signals.remove(index);
-                    }
-                    if valid(&signal.shape) {
-                        source.signals.push(signal);
-                    }
-                }
-                SignalEvent::Remove(id) => source.signals.retain(|signal| signal.id != id),
-                SignalEvent::Clear => source.signals.clear(),
-            }
+        for source in &mut self.signal_sources {
+            source.pump(ctx, &scope);
         }
     }
 
     pub(super) fn paint_signals(&self, ui: &mut egui::Ui, coords: &ChartMapping) {
-        let Some(source) = &self.signal_source else {
-            return;
-        };
         let theme = ui.active_theme();
         let painter = ui.painter().with_clip_rect(coords.rect);
         let bars = self.state.shown();
@@ -109,7 +120,17 @@ impl Chart {
             .or_else(|| self.time_to_index(time))
             .map(|index| coords.idx_to_x(0) + index as f32 * coords.bar_spacing)
         };
-        for signal in &source.signals {
+        let signals = self
+            .signal_sources
+            .iter()
+            .enumerate()
+            .flat_map(|(index, source)| {
+                source
+                    .signals
+                    .iter()
+                    .map(move |signal| (index, source, signal))
+            });
+        for (index, source, signal) in signals {
             if self.hidden_signal_categories.contains(&signal.category) {
                 continue;
             }
@@ -269,7 +290,7 @@ impl Chart {
             }
             let response = ui.interact(
                 hit.intersect(coords.rect),
-                ui.scope_id().with(("host_signal", &signal.id.0)),
+                ui.scope_id().with(("host_signal", index, &signal.id.0)),
                 Sense::click(),
             );
             if response.clicked() {
@@ -282,12 +303,10 @@ impl Chart {
     }
 
     pub(super) fn show_signal_menu(&mut self, ui: &mut egui::Ui, rect: Rect) {
-        let Some(source) = &self.signal_source else {
-            return;
-        };
-        let categories: std::collections::BTreeSet<_> = source
-            .signals
+        let categories: std::collections::BTreeSet<_> = self
+            .signal_sources
             .iter()
+            .flat_map(|source| &source.signals)
             .map(|signal| signal.category.clone())
             .collect();
         if !categories.is_empty() {
@@ -483,10 +502,10 @@ mod tests {
         );
         stream.push(SignalEvent::Remove(marker.id.clone()));
         test_frames::frame(&ctx, &mut chart, 0.8, vec![]);
-        assert_eq!(chart.signal_source.as_ref().unwrap().signals.len(), 2);
+        assert_eq!(chart.signal_sources[0].signals.len(), 2);
         stream.push(SignalEvent::Clear);
         test_frames::frame(&ctx, &mut chart, 0.9, vec![]);
-        assert!(chart.signal_source.as_ref().unwrap().signals.is_empty());
+        assert!(chart.signal_sources[0].signals.is_empty());
         chart.set_timeframe(Timeframe::Hour1);
         assert!(!stream.is_active());
         test_frames::frame(&ctx, &mut chart, 1.0, vec![]);
@@ -495,25 +514,68 @@ mod tests {
         stream.push(SignalEvent::Upsert(marker.clone()));
         new.push(SignalEvent::Upsert(marker.clone()));
         test_frames::frame(&ctx, &mut chart, 1.1, vec![]);
-        assert_eq!(chart.signal_source.as_ref().unwrap().signals.len(), 1);
+        assert_eq!(chart.signal_sources[0].signals.len(), 1);
         chart.set_symbol("B");
         assert!(!new.is_active());
         test_frames::frame(&ctx, &mut chart, 1.2, vec![]);
         let (symbol, _, stream) = host.streams.lock().unwrap().pop().unwrap();
         assert_eq!(symbol, "B");
-        assert!(chart.signal_source.as_ref().unwrap().signals.is_empty());
+        assert!(chart.signal_sources[0].signals.is_empty());
         for _ in 0..10_001 {
             stream.push(SignalEvent::Upsert(marker.clone()));
         }
         test_frames::frame(&ctx, &mut chart, 1.3, vec![]);
         assert!(!stream.is_active());
-        assert!(chart.signal_source.as_ref().unwrap().signals.is_empty());
+        assert!(chart.signal_sources[0].signals.is_empty());
         assert_eq!(
             host.streams.lock().unwrap().len(),
             1,
             "lag starts a new stream"
         );
         chart.set_signal_source(None);
-        assert!(chart.signal_source.is_none());
+        assert!(chart.signal_sources.is_empty());
+    }
+
+    #[test]
+    fn a_clear_from_one_source_leaves_the_signals_of_the_others() {
+        let ctx = egui::Context::default();
+        let mut chart = test_frames::chart(&[95.0], &[105.0]);
+        chart.config_mut().show_volume = false;
+        chart.set_timeframe(Timeframe::Day1);
+        chart.set_symbol("A");
+        let hosts = [Arc::new(Host::default()), Arc::new(Host::default())];
+        chart.set_signal_sources(hosts.iter().map(|host| host.clone() as _).collect());
+        test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+        // Both sources use the same identity: it belongs to each subscription.
+        for (host, label) in hosts.iter().zip(["From A", "From B"]) {
+            host.streams.lock().unwrap()[0]
+                .2
+                .push(SignalEvent::Upsert(Signal {
+                    id: SignalId("level".into()),
+                    shape: SignalShape::Level {
+                        price: 100.0,
+                        from: None,
+                    },
+                    category: "Levels".into(),
+                    label: Some(label.into()),
+                    tooltip: None,
+                }));
+        }
+        let labels = |chart: &mut Chart, time| {
+            test_frames::shapes(&ctx, chart, time, vec![])
+                .into_iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text) if text.galley.text().starts_with("From") => {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(labels(&mut chart, 0.1), ["From A", "From B"]);
+        hosts[0].streams.lock().unwrap()[0]
+            .2
+            .push(SignalEvent::Clear);
+        assert_eq!(labels(&mut chart, 0.2), ["From B"]);
     }
 }

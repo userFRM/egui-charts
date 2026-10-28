@@ -129,6 +129,7 @@ impl Chart {
             heikin_ashi: Default::default(),
             series_scales: Default::default(),
             study_ids: Vec::new(),
+            study_limit: None,
             study_inputs: Vec::new(),
             study_autoscale: Vec::new(),
             pending_from: Vec::new(),
@@ -183,17 +184,20 @@ impl Chart {
             scale_settings_requested: false,
             theme_override: None,
             inherited_theme: None,
+            restored_palettes: Vec::new(),
             host_events: Default::default(),
             indicator_source_request: None,
             events: Vec::new(),
             time_scale_events: Vec::new(),
             event_visibility: Default::default(),
             mark_source: None,
-            signal_source: None,
+            signal_sources: Vec::new(),
             targets: Default::default(),
             show_price_targets: false,
             hidden_signal_categories: Default::default(),
             event_click: None,
+            mark_hits: std::cell::RefCell::default(),
+            clickable_marks: Vec::new(),
             timeframe: None,
             feed_link: None,
             #[cfg(feature = "drawings")]
@@ -324,9 +328,18 @@ impl Chart {
         self.start_idx
     }
 
+    /// The configured mode of the axis the main price scale is drawn on.
+    pub(super) fn config_scale_mode(&self) -> crate::scales::PriceScaleMode {
+        if self.config.show_left_axis && !self.config.show_right_axis {
+            self.config.left_axis_scale_mode
+        } else {
+            self.config.right_axis_scale_mode
+        }
+    }
+
     /// Applies a changed configuration mode without overriding direct scale controls.
     pub(super) fn apply_config_scale_mode(&mut self) {
-        let mode = self.config.right_axis_scale_mode;
+        let mode = self.config_scale_mode();
         if self.applied_config_scale_mode != mode {
             if self.state.price_scale().options().mode != mode {
                 self.state.price_scale_mut().reset();
@@ -1055,6 +1068,28 @@ mod tests {
                 "undo restores the range"
             );
             assert_eq!(chart.state.price_scale().range(), range);
+        }
+    }
+
+    /// The mode of the axis the main scale is drawn on sets the scale, whichever side that is.
+    #[test]
+    fn configured_mode_follows_the_axis_of_the_main_scale() {
+        use crate::scales::PriceScaleMode::{Logarithmic, Normal, Percentage};
+        use crate::widget::test_frames::{chart, frame};
+        for (left, expected) in [(false, Percentage), (true, Logarithmic)] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[110.0]);
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            chart.config_mut().show_left_axis = left;
+            chart.config_mut().show_right_axis = !left;
+            chart.config_mut().left_axis_scale_mode = Logarithmic;
+            chart.config_mut().right_axis_scale_mode = Percentage;
+            frame(&ctx, &mut chart, 0.1, Vec::new());
+            assert_eq!(chart.state.price_scale().options().mode, expected);
+            chart.config_mut().left_axis_scale_mode = Normal;
+            chart.config_mut().right_axis_scale_mode = Normal;
+            frame(&ctx, &mut chart, 0.2, Vec::new());
+            assert_eq!(chart.state.price_scale().options().mode, Normal);
         }
     }
 

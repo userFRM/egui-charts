@@ -3,7 +3,8 @@
 //! Includes: Renko, Kagi, Line Break, Point & Figure
 
 use super::helpers::{draw_brick, draw_o_symbol, draw_x_symbol};
-use crate::model::kagi::KagiLine;
+use crate::model::KagiStyle;
+use crate::model::kagi::{KagiLine, KagiThickness};
 use crate::model::line_break::LineBreakLine;
 use crate::model::point_figure::PnfColumn;
 use crate::model::{Bar, ColumnDirection, RenkoBrick};
@@ -48,17 +49,44 @@ pub(super) fn render_kagi(
     painter: &Painter,
     lines: &[KagiLine],
     price_scale: &PriceMap,
+    style: KagiStyle,
     bullish_color: Color32,
     bearish_color: Color32,
     x_of: impl Fn(usize) -> f32,
 ) {
-    let coords = *price_scale;
-    if lines.is_empty() {
-        return;
+    // A non-finite width hides its lines, as a non-positive one does.
+    let width = |w: f32| if w.is_finite() { w } else { 0.0 };
+    let stroke = |thickness| match thickness {
+        KagiThickness::Thick => Stroke::new(width(style.thick_width), bullish_color),
+        KagiThickness::Thin => Stroke::new(width(style.thin_width), bearish_color),
+    };
+    let flip = |thickness| match thickness {
+        KagiThickness::Thick => KagiThickness::Thin,
+        KagiThickness::Thin => KagiThickness::Thick,
+    };
+    let mut prev_x = None;
+    for (i, line) in lines.iter().enumerate() {
+        let x = x_of(i);
+        let y = |price| price_scale.price_to_y(price);
+        let start = Pos2::new(x, y(line.start_price));
+        let start_thickness = line
+            .crossing
+            .map_or(line.thickness, |_| flip(line.thickness));
+        // The shoulder or waist joining the previous line keeps its thickness.
+        if let Some(prev_x) = prev_x {
+            let joint = Pos2::new(prev_x, start.y);
+            painter.add(Shape::line_segment([joint, start], stroke(start_thickness)));
+        }
+        let end = Pos2::new(x, y(line.end_price));
+        if let Some(crossing) = line.crossing {
+            let mid = Pos2::new(x, y(crossing));
+            painter.add(Shape::line_segment([start, mid], stroke(start_thickness)));
+            painter.add(Shape::line_segment([mid, end], stroke(line.thickness)));
+        } else {
+            painter.add(Shape::line_segment([start, end], stroke(line.thickness)));
+        }
+        prev_x = Some(x);
     }
-
-    let points = collect_kagi_points(lines, &coords, x_of);
-    draw_kagi_segments(painter, &points, bullish_color, bearish_color);
 }
 
 /// Line Break chart (Three Line Break)
@@ -149,58 +177,6 @@ fn calc_line_break_rect(x: f32, open: f64, close: f64, coords: &PriceMap, width:
         Pos2::new(x - width / 2.0, top),
         Pos2::new(x + width / 2.0, top + height),
     )
-}
-
-fn collect_kagi_points(
-    lines: &[crate::model::kagi::KagiLine],
-    coords: &PriceMap,
-    x_of: impl Fn(usize) -> f32,
-) -> Vec<(Pos2, crate::model::kagi::KagiThickness)> {
-    use crate::model::kagi::KagiThickness;
-
-    let mut points: Vec<(Pos2, KagiThickness)> = Vec::new();
-
-    for (i, line) in lines.iter().enumerate() {
-        let x = x_of(i);
-
-        let y_start = coords.price_to_y(line.start_price);
-        let y_end = coords.price_to_y(line.end_price);
-
-        if points.is_empty() {
-            points.push((Pos2::new(x, y_start), line.thickness));
-        }
-        points.push((Pos2::new(x, y_end), line.thickness));
-    }
-
-    points
-}
-
-fn draw_kagi_segments(
-    painter: &Painter,
-    points: &[(Pos2, crate::model::kagi::KagiThickness)],
-    bullish_color: Color32,
-    bearish_color: Color32,
-) {
-    use crate::model::kagi::KagiThickness;
-
-    for i in 0..points.len().saturating_sub(1) {
-        let (p1, thickness) = points[i];
-        let (p2, _) = points[i + 1];
-
-        let (stroke_width, color) = match thickness {
-            KagiThickness::Thick => (2.5_f32, bullish_color),
-            KagiThickness::Thin => (1.5_f32, bearish_color),
-        };
-        let stroke = Stroke::new(stroke_width, color);
-
-        if (p1.x - p2.x).abs() < 0.1 || (p1.y - p2.y).abs() < 0.1 {
-            painter.add(Shape::line_segment([p1, p2], stroke));
-        } else {
-            let shoulder = Pos2::new(p2.x, p1.y);
-            painter.add(Shape::line_segment([p1, shoulder], stroke));
-            painter.add(Shape::line_segment([shoulder, p2], stroke));
-        }
-    }
 }
 
 fn draw_pnf_column(
@@ -316,5 +292,66 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn kagi_paints_each_part_of_a_line_with_its_own_thickness() {
+        use KagiThickness::{Thick, Thin};
+        // On a 100..110 axis spanning 100 points, price p maps to y = 10 * (110 - p).
+        let ctx = egui::Context::default();
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(100.0, 110.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let line = |start_price, end_price, thickness, crossing| KagiLine {
+            ts: chrono::Utc::now(),
+            start_price,
+            end_price,
+            thickness,
+            crossing,
+        };
+        let style = KagiStyle {
+            thick_width: 4.0,
+            thin_width: 1.0,
+        };
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            render_kagi(
+                ui.painter(),
+                &[
+                    line(102.0, 105.0, Thin, None),
+                    line(105.0, 103.0, Thin, None),
+                    line(103.0, 107.0, Thick, Some(105.0)),
+                ],
+                &map,
+                style,
+                Color32::GREEN,
+                Color32::RED,
+                |i| 10.0 * i as f32,
+            );
+        });
+        let segments: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::LineSegment { points, stroke } => Some((*points, stroke.width)),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        let p = Pos2::new;
+        assert_eq!(
+            segments,
+            [
+                ([p(0.0, 80.0), p(0.0, 50.0)], 1.0),
+                ([p(0.0, 50.0), p(10.0, 50.0)], 1.0),
+                ([p(10.0, 50.0), p(10.0, 70.0)], 1.0),
+                ([p(10.0, 70.0), p(20.0, 70.0)], 1.0),
+                ([p(20.0, 70.0), p(20.0, 50.0)], 1.0),
+                ([p(20.0, 50.0), p(20.0, 30.0)], 4.0),
+            ]
+        );
     }
 }
