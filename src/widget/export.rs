@@ -16,6 +16,9 @@ pub struct ImageExportOptions {
     pub include_title: bool,
     /// Include the export time in the chart's time zone above the chart.
     pub include_timestamp: bool,
+    /// Draw the symbol watermark and the one set with [`Chart::set_watermark`], as they show on
+    /// screen, independently of the title and timestamp.
+    pub include_watermark: bool,
     /// Omit the chart and header backgrounds, retaining plot and drawing colours.
     pub transparent_background: bool,
     /// Draw the crosshair where the pointer last placed it over the plots, or where
@@ -29,6 +32,7 @@ impl Default for ImageExportOptions {
             size: [1440, 900],
             include_title: true,
             include_timestamp: true,
+            include_watermark: true,
             transparent_background: false,
             include_crosshair: false,
         }
@@ -177,6 +181,29 @@ impl Chart {
         options: &ImageExportOptions,
         overlay: impl Fn(&mut egui::Ui, &mut Chart),
     ) -> Result<ChartImage, String> {
+        let (shapes, textures_delta, image_ctx) = self.export_shapes(ctx, options, overlay)?;
+        Ok(ChartImage {
+            size: options.size,
+            primitives: image_ctx.tessellate(shapes, 1.0),
+            textures_delta,
+        })
+    }
+
+    /// The shapes of the last pass of the offscreen frame, the textures it sets and the context
+    /// whose fonts laid it out.
+    fn export_shapes(
+        &self,
+        ctx: &egui::Context,
+        options: &ImageExportOptions,
+        overlay: impl Fn(&mut egui::Ui, &mut Chart),
+    ) -> Result<
+        (
+            Vec<egui::epaint::ClippedShape>,
+            egui::TexturesDelta,
+            egui::Context,
+        ),
+        String,
+    > {
         let size = options.size;
         if size.iter().any(|&side| !(100..=7680).contains(&side))
             || u64::from(size[0]) * u64::from(size[1]) > 33_177_600
@@ -191,6 +218,10 @@ impl Chart {
         let mut chart = self.export_snapshot();
         chart.config.skip_background = options.transparent_background;
         chart.config.show_symbol_labels &= options.include_title;
+        if !options.include_watermark {
+            chart.config.show_watermark = false;
+            chart.watermark = None;
+        }
         let mut theme = self
             .theme_override
             .clone()
@@ -226,7 +257,7 @@ impl Chart {
         let mut textures_delta = egui::TexturesDelta::default();
         // Resolve pane layout, axis measurement and each pending element study before the final frame.
         let passes = chart.studies.indicators().len() + 3;
-        let mut primitives = Vec::new();
+        let mut shapes = Vec::new();
         for pass in 0..passes {
             let output = image_ctx.run_ui(
                 egui::RawInput {
@@ -254,13 +285,9 @@ impl Chart {
                 },
             );
             textures_delta.append(output.textures_delta);
-            primitives = image_ctx.tessellate(output.shapes, 1.0);
+            shapes = output.shapes;
         }
-        Ok(ChartImage {
-            size,
-            primitives,
-            textures_delta,
-        })
+        Ok((shapes, textures_delta, image_ctx))
     }
 
     /// Renders the image of [`Self::export_image`] on the CPU and encodes it as PNG, so the host
@@ -281,24 +308,34 @@ impl Chart {
         overlay: impl Fn(&mut egui::Ui, &mut Chart),
     ) -> Result<Vec<u8>, String> {
         let mut image = self.export_image_with(ctx, options, overlay)?;
-        let [width, height] = image.size;
         let pixels = super::raster::rasterize(image.size, &image.primitives, &image.textures_delta);
         image.textures_delta.clear();
-        let mut png = Vec::new();
-        let mut encoder = png::Encoder::new(&mut png, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
-        let data: Vec<u8> = pixels
-            .iter()
-            .flat_map(|pixel| pixel.to_srgba_unmultiplied())
-            .collect();
-        writer
-            .write_image_data(&data)
-            .map_err(|error| error.to_string())?;
-        writer.finish().map_err(|error| error.to_string())?;
-        Ok(png)
+        super::raster::png(image.size, &pixels)
+    }
+
+    /// Renders the frame of [`Self::export_image`] as an SVG document of the options' size, with
+    /// the same title, timestamp, watermark and background. Text stays text, in the font family
+    /// class of the on-screen font, and the frame's textures, such as legend icons, are embedded
+    /// as PNG. Fails with the reason for content SVG cannot take over unchanged, such as host
+    /// paint callbacks and textures the host binds itself, instead of leaving it out.
+    pub fn export_svg(
+        &self,
+        ctx: &egui::Context,
+        options: &ImageExportOptions,
+    ) -> Result<String, String> {
+        self.export_svg_with(ctx, options, |_, _| {})
+    }
+
+    pub(crate) fn export_svg_with(
+        &self,
+        ctx: &egui::Context,
+        options: &ImageExportOptions,
+        overlay: impl Fn(&mut egui::Ui, &mut Chart),
+    ) -> Result<String, String> {
+        let (shapes, mut textures_delta, _) = self.export_shapes(ctx, options, overlay)?;
+        let svg = super::svg::svg(options.size, &shapes, &textures_delta);
+        textures_delta.clear();
+        svg
     }
 
     fn export_snapshot(&self) -> Self {
@@ -337,6 +374,7 @@ impl Chart {
         chart.series_scales = self.series_scales.clone();
         chart.symbol = self.symbol.clone();
         chart.timeframe = self.timeframe;
+        chart.feed_link = self.feed_link.as_ref().map(super::feed::FeedLink::frozen);
         chart.legend_instrument = self.instrument().cloned();
         chart.legend_badge = self.legend_badge.clone();
         chart.watermark = self.watermark.clone();
@@ -657,6 +695,7 @@ mod tests {
             size: [480, 320],
             include_title: false,
             include_timestamp: false,
+            include_watermark: true,
             transparent_background: false,
             include_crosshair: false,
         };
@@ -744,6 +783,56 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn svg_images_apply_the_options_and_report_what_they_cannot_hold() {
+        use crate::widget::test_frames::{chart, frame};
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0, 12.0], &[14.0, 13.0]);
+        chart.symbol = "EXPORT TEST".into();
+        chart.config.show_watermark = true;
+        chart.config.watermark_text = Some("WATERMARK".into());
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let base = ImageExportOptions {
+            size: [480, 320],
+            include_title: false,
+            include_timestamp: false,
+            include_watermark: true,
+            transparent_background: false,
+            include_crosshair: false,
+        };
+        let svg = |options: &ImageExportOptions| chart.export_svg(&ctx, options).unwrap();
+        let opaque = svg(&base);
+        assert!(opaque.starts_with("<svg") && opaque.contains(r#"width="480" height="320""#));
+        assert!(opaque.contains("WATERMARK"), "watermark was dropped");
+        assert!(
+            opaque.contains("data:image/png;base64,"),
+            "frame textures were dropped"
+        );
+        assert!(!opaque.contains("EXPORT TEST"));
+        let no_watermark = svg(&ImageExportOptions {
+            include_watermark: false,
+            include_title: true,
+            ..base.clone()
+        });
+        assert!(!no_watermark.contains("WATERMARK") && no_watermark.contains("EXPORT TEST"));
+        let [r, g, b, _] = chart.config.background_color.to_srgba_unmultiplied();
+        let bg = format!(r#"fill="rgb({r},{g},{b})""#);
+        assert!(opaque.contains(&bg));
+        let transparent = svg(&ImageExportOptions {
+            transparent_background: true,
+            ..base.clone()
+        });
+        assert!(!transparent.contains(&bg), "background was retained");
+        let callback = |ui: &mut egui::Ui, _: &mut Chart| {
+            ui.painter().add(egui::PaintCallback {
+                rect: ui.max_rect(),
+                callback: std::sync::Arc::new(()),
+            });
+        };
+        let error = chart.export_svg_with(&ctx, &base, callback).unwrap_err();
+        assert!(error.contains("callbacks"), "{error}");
     }
 
     #[test]

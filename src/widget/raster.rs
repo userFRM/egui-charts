@@ -5,10 +5,10 @@ use egui::{Color32, ImageData, TextureFilter, TextureId, TexturesDelta};
 use std::collections::HashMap;
 
 /// A texture as the frame's deltas leave it.
-struct Texture {
-    size: [usize; 2],
-    pixels: Vec<Color32>,
-    nearest: bool,
+pub(super) struct Texture {
+    pub(super) size: [usize; 2],
+    pub(super) pixels: Vec<Color32>,
+    pub(super) nearest: bool,
 }
 
 impl Texture {
@@ -41,7 +41,7 @@ impl Texture {
 }
 
 /// The textures `delta` sets, applying each full image and patch in order.
-fn textures(delta: &TexturesDelta) -> HashMap<TextureId, Texture> {
+pub(super) fn textures(delta: &TexturesDelta) -> HashMap<TextureId, Texture> {
     let mut textures = HashMap::new();
     for (id, deltas) in &delta.set {
         for delta in deltas {
@@ -186,4 +186,23 @@ fn fill(
                 Color32::from_rgba_premultiplied(blended[0], blended[1], blended[2], blended[3]);
         }
     }
+}
+
+/// Encodes premultiplied `pixels` of `size` as an sRGB PNG.
+pub(super) fn png(size: [u32; 2], pixels: &[Color32]) -> Result<Vec<u8>, String> {
+    let mut png = Vec::new();
+    let mut encoder = png::Encoder::new(&mut png, size[0], size[1]);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+    let data: Vec<u8> = pixels
+        .iter()
+        .flat_map(|pixel| pixel.to_srgba_unmultiplied())
+        .collect();
+    writer
+        .write_image_data(&data)
+        .map_err(|error| error.to_string())?;
+    writer.finish().map_err(|error| error.to_string())?;
+    Ok(png)
 }

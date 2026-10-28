@@ -97,6 +97,39 @@ impl FeedLink {
         }
     }
 
+    /// A paused link for an offscreen image: it holds the visuals the feed built, the footprint,
+    /// bubbles, order book and depth, and never talks to the feed or the live link's inbox.
+    pub(super) fn frozen(&self) -> Self {
+        Self {
+            feed: Arc::clone(&self.feed),
+            inbox: Arc::default(),
+            clock: self.clock.clone(),
+            initial_bars: self.initial_bars,
+            wake: Arc::default(),
+            reload_pending: false,
+            paused: true,
+            next_key: 0,
+            pending: Vec::new(),
+            retries: Vec::new(),
+            subscription: None,
+            instrument: self.instrument.clone(),
+            trades: Trades::new(TRADE_CAPACITY),
+            bubbles: self
+                .bubbles
+                .as_ref()
+                .map(|bubbles| self.bubbles(bubbles.config.clone())),
+            footprint: self.footprint.is_some().then(|| self.footprint()).flatten(),
+            order_book: self.order_book.clone(),
+            order_queue: self.order_queue.clone(),
+            depth_history: self.depth_history.clone(),
+            depth_complete: self.depth_complete,
+            heatmap: self.heatmap.is_some().then(Default::default),
+            study_inputs: Vec::new(),
+            time: self.time,
+            paging_stopped: true,
+        }
+    }
+
     /// The held trades as a footprint, or `None` without the instrument's tick size. A trade
     /// older than the one before it is left out, as it is when it arrives live.
     fn footprint(&self) -> Option<Footprint> {
@@ -2319,6 +2352,23 @@ mod tests {
             Some(1000.0),
             "c: and the footprint"
         );
+        let frozen = chart.feed_link.as_ref().unwrap().frozen();
+        let row = frozen
+            .footprint
+            .as_ref()
+            .and_then(|flow| flow.bar_at(forming.time)?.levels.get(&14));
+        assert_eq!(
+            row.map(|row| row.volume()),
+            Some(1000.0),
+            "c: image footprint"
+        );
+        let shown = frozen
+            .bubbles
+            .as_ref()
+            .unwrap()
+            .between(forming.time, forming.time);
+        assert_eq!(shown.count(), 1, "c: image bubbles");
+        assert!(frozen.paused, "c: an image never loads");
         chart.set_chart_type(ChartType::Candles);
         assert_eq!(chart.feed_state(main).unwrap().repeated_ticks, 1, "c");
         let empty = OrderBook {
