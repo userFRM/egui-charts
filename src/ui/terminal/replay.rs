@@ -4,7 +4,7 @@
 //! of the same synchronization group follows one cutoff, so all of them show the same moment. A
 //! finer update interval is requested through the terminal's [`Datafeed`](crate::data::Datafeed)
 //! and applied to each slot with [`Chart::set_replay_source`](crate::Chart::set_replay_source)
-//! when the feed answers. Every connected broker is told the replay time and close
+//! when the feed answers. Every broker is told the replay time and close
 //! ([`Broker::observe`]), so a simulated account fills at the prices on the chart.
 
 use super::core::Direction;
@@ -118,6 +118,8 @@ impl Terminal {
         let source = self.replay.source;
         if source >= self.charts.len() {
             self.replay_stop();
+            // Otherwise every later frame would close the start picker again.
+            self.replay.source = self.active;
             return;
         }
         if self.replay.selecting || self.replay.controller.is_some() {
