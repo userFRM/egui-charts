@@ -47,6 +47,8 @@ impl Indicator for OrderFlowStudy {
             OrderFlowKind::Spread => "Quoted Spread",
             OrderFlowKind::BookSize { .. } => "Book Size",
             OrderFlowKind::TradeRate { .. } => "Trade Rate",
+            OrderFlowKind::AggressorRate { .. } => "Aggressor Rate",
+            OrderFlowKind::LevelsExecuted { .. } => "Levels Executed",
             OrderFlowKind::LevelsTradedThrough { .. } => "Levels Traded Through",
         }
     }
@@ -128,6 +130,10 @@ impl Indicator for OrderFlowStudy {
             OrderFlowKind::TradeRate { .. } => {
                 ["Bar total", "Rolling / second", "Instant / second"]
             }
+            OrderFlowKind::AggressorRate { .. } => {
+                ["Bar orders", "Rolling / second", "Instant / second"]
+            }
+            OrderFlowKind::LevelsExecuted { .. } => ["Ask levels", "Bid levels", "Total levels"],
             OrderFlowKind::LevelsTradedThrough { .. } => {
                 ["Bid levels", "Ask levels", "Total levels"]
             }
@@ -182,6 +188,19 @@ impl Indicator for OrderFlowStudy {
                 length("seconds", "Rolling seconds", seconds, 1, 86400),
                 length("instant", "Instant seconds", instant, 1, 86400),
             ],
+            OrderFlowKind::AggressorRate { seconds, instant } => vec![
+                length("seconds", "Rolling seconds", seconds, 1, 86400),
+                length("instant", "Instant seconds", instant, 1, 86400),
+            ],
+            OrderFlowKind::LevelsExecuted { seconds, reversal } => vec![
+                length("seconds", "Window seconds (0 uses bar)", seconds, 0, 86400),
+                StudyInput::new(
+                    "reversal",
+                    "Restart on price reversal",
+                    InputValue::Toggle(reversal),
+                    InputKind::Toggle,
+                ),
+            ],
             OrderFlowKind::LevelsTradedThrough { seconds } => vec![length(
                 "seconds",
                 "Window seconds (0 uses bar)",
@@ -212,12 +231,20 @@ impl Indicator for OrderFlowStudy {
             }
             (
                 OrderFlowKind::TradeRate { seconds, .. }
+                | OrderFlowKind::AggressorRate { seconds, .. }
+                | OrderFlowKind::LevelsExecuted { seconds, .. }
                 | OrderFlowKind::LevelsTradedThrough { seconds },
                 "seconds",
                 InputValue::Length(v),
             ) => *seconds = v,
-            (OrderFlowKind::TradeRate { instant, .. }, "instant", InputValue::Length(v)) => {
-                *instant = v
+            (
+                OrderFlowKind::TradeRate { instant, .. }
+                | OrderFlowKind::AggressorRate { instant, .. },
+                "instant",
+                InputValue::Length(v),
+            ) => *instant = v,
+            (OrderFlowKind::LevelsExecuted { reversal, .. }, "reversal", InputValue::Toggle(v)) => {
+                *reversal = v
             }
             _ => return Err("invalid order flow input"),
         }

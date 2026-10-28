@@ -83,7 +83,7 @@ pub use replay::{MarketEvent, ReplayClock, ReplayEvent};
 pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session};
 pub use targets::PriceTargets;
-pub use trades::{CombinedTrade, combine_trades};
+pub use trades::{CombinedTrade, ConsumedOrder, combine_trades};
 pub use volume_profile::{
     ProfileDisplay, ProfileSource, StudyProfile, VolumeProfile, VolumeProfileConfig,
 };

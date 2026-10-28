@@ -8,6 +8,7 @@ use egui::{Align, Align2, Label, Layout, RichText, Sense, Stroke, TextStyle, Ui,
 use serde::{Deserialize, Serialize};
 
 use super::object_tree::format_price;
+use crate::data::combine_trades;
 use crate::icons::icons;
 use crate::model::{OrderSide, Tick, TimezoneId};
 use crate::scales::StudyFormat;
@@ -207,7 +208,7 @@ impl TimeAndSalesPanel {
             .auto_shrink([false, false])
             .show_rows(ui, ROW_HEIGHT, listed.len(), |ui, rows| {
                 for trade in &listed[rows] {
-                    let (rect, _) = ui.allocate_exact_size(
+                    let (rect, response) = ui.allocate_exact_size(
                         vec2(ui.available_width(), ROW_HEIGHT),
                         Sense::hover(),
                     );
@@ -253,8 +254,41 @@ impl TimeAndSalesPanel {
                             .selectable(false),
                         );
                     }
+                    if let Some(id) = trade.aggressor_order_id {
+                        response.on_hover_ui(|ui| self.show_breakdown(ui, id));
+                    }
                 }
             });
+    }
+
+    /// The resting orders that the listed fills of aggressor order `id` consumed.
+    fn show_breakdown(&self, ui: &mut Ui, id: u64) {
+        let Some(order) = combine_trades(&self.trades)
+            .into_iter()
+            .find(|order| order.aggressor_order_id == Some(id))
+        else {
+            return;
+        };
+        let size =
+            |size| StudyFormat::Volume.format(size, self.config.size_decimals.map(usize::from));
+        ui.label(format!(
+            "Order {id}: {} in {} fills",
+            size(order.size),
+            order.fills
+        ));
+        for consumed in &order.consumed {
+            let name = consumed
+                .resting_order_id
+                .map_or_else(|| "Unidentified".to_owned(), |id| format!("Order {id}"));
+            ui.label(format!(
+                "{name}: {} at {}",
+                size(consumed.size),
+                format_price(consumed.price, self.config.price_decimals)
+            ));
+        }
+        if !order.complete {
+            ui.weak("Incomplete: some fills do not name their resting order");
+        }
     }
 }
 

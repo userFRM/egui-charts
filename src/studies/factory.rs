@@ -296,6 +296,14 @@ impl IndicatorFactory {
                 seconds: 60,
                 instant: 3,
             },
+            OrderFlowKind::AggressorRate {
+                seconds: 60,
+                instant: 3,
+            },
+            OrderFlowKind::LevelsExecuted {
+                seconds: 0,
+                reversal: false,
+            },
             OrderFlowKind::LevelsTradedThrough { seconds: 0 },
         ] {
             let name = OrderFlowStudy::new(kind).name().to_owned();
@@ -1178,6 +1186,14 @@ mod tests {
                 volume: false,
                 seconds: l(0),
                 instant: l(1),
+            })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::AggressorRate {
+                seconds: l(0),
+                instant: l(1),
+            })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsExecuted {
+                seconds: l(0),
+                reversal: true,
             })),
             Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsTradedThrough {
                 seconds: l(0),
