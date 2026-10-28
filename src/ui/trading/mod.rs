@@ -1263,8 +1263,10 @@ mod tests {
                 (symbol == "BTC").then(|| format!("{quantity} coins"))
             }
         }
-        let mut trading = Trading::default();
-        trading.decimals = 5;
+        let mut trading = Trading {
+            decimals: 5,
+            ..Trading::default()
+        };
         trading.set_instrument(
             Instrument::new("USDJPY")
                 .with_price_decimals(3)
