@@ -122,7 +122,9 @@ pub use price_series::SeriesOptions;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId};
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
-pub use snapshot::{ChartSnapshot, SavedLayout, SavedPane, SavedStudy};
+pub use snapshot::{
+    ChartSnapshot, SavedAnnotations, SavedLayout, SavedPane, SavedSeries, SavedStudy,
+};
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 pub(crate) mod sync;
