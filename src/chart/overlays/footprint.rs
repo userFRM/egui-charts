@@ -537,8 +537,11 @@ pub fn render_footprint_statistics(
 }
 
 /// Paints footprint study levels and zones. Compute `studies` only after executions change.
-/// Stacks and naked POCs extend to their first revisit or the last displayed bar; local
-/// annotations remain inside their originating bar. Prices use the aggregation's row step.
+/// Stacks, naked POCs and unfinished levels extend to their first revisit, their expiry or the
+/// last displayed bar, in full colour while unvisited and dimmed once revisited or expired;
+/// local annotations remain inside their originating bar. Delta percentage and ratio markers
+/// are triangles outside the bar: buy markers above it, sell markers below, the delta marker
+/// nearest and the ratio marker beyond it. Prices use the aggregation's row step.
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub fn render_footprint_studies(
@@ -549,7 +552,7 @@ pub fn render_footprint_studies(
     studies: &[crate::studies::FootprintStudy],
     config: &FootprintConfig,
 ) {
-    use crate::studies::FootprintStudyKind;
+    use crate::studies::{FootprintStudyKind, FootprintStudyState};
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
     let indices: BTreeMap<_, _> = bars
         .iter()
@@ -577,10 +580,45 @@ pub fn render_footprint_studies(
             continue;
         }
         let color = match study.kind {
-            FootprintStudyKind::StackedBid => config.bid_color,
-            FootprintStudyKind::StackedAsk => config.ask_color,
+            FootprintStudyKind::StackedBid
+            | FootprintStudyKind::DeltaBid
+            | FootprintStudyKind::RatioBid => config.bid_color,
+            FootprintStudyKind::StackedAsk
+            | FootprintStudyKind::DeltaAsk
+            | FootprintStudyKind::RatioAsk => config.ask_color,
             _ => config.text_color,
         };
+        let color = match study.state {
+            FootprintStudyState::Revisited | FootprintStudyState::Expired => {
+                color.gamma_multiply(0.45)
+            }
+            _ => color,
+        };
+        let marker = match study.kind {
+            FootprintStudyKind::DeltaAsk | FootprintStudyKind::DeltaBid => Some(0.0),
+            FootprintStudyKind::RatioAsk | FootprintStudyKind::RatioBid => Some(1.0),
+            _ => None,
+        };
+        if let Some(order) = marker {
+            let above = matches!(
+                study.kind,
+                FootprintStudyKind::DeltaAsk | FootprintStudyKind::RatioAsk
+            );
+            let (edge, away) = if above {
+                (rect.top(), -1.0)
+            } else {
+                (rect.bottom(), 1.0)
+            };
+            let tip = edge + away * (3.0 + 9.0 * order);
+            let base = tip + away * 6.0;
+            let x = (rect.left() + rect.right()) / 2.0;
+            painter.add(Shape::convex_polygon(
+                vec![pos2(x, tip), pos2(x - 4.0, base), pos2(x + 4.0, base)],
+                color,
+                Stroke::NONE,
+            ));
+            continue;
+        }
         if matches!(
             study.kind,
             FootprintStudyKind::StackedBid
@@ -593,17 +631,21 @@ pub fn render_footprint_studies(
             let label = match study.kind {
                 FootprintStudyKind::StackedBid => "Bid stack",
                 FootprintStudyKind::StackedAsk => "Ask stack",
-                FootprintStudyKind::UnfinishedAuction => "UA",
+                FootprintStudyKind::UnfinishedHigh => "UH",
+                FootprintStudyKind::UnfinishedLow => "UL",
                 FootprintStudyKind::NakedPoc => "POC",
                 FootprintStudyKind::DeltaPoc => "Delta POC",
                 FootprintStudyKind::VolumeCluster => "Cluster",
                 FootprintStudyKind::SinglePrint => "Single",
+                _ => continue,
             };
             let (at, anchor) = if matches!(
                 study.kind,
                 FootprintStudyKind::StackedAsk
                     | FootprintStudyKind::StackedBid
                     | FootprintStudyKind::NakedPoc
+                    | FootprintStudyKind::UnfinishedHigh
+                    | FootprintStudyKind::UnfinishedLow
             ) {
                 (rect.right_top(), Align2::RIGHT_BOTTOM)
             } else {
@@ -894,5 +936,93 @@ mod tests {
             let bar = Bar::new(time, open, 100.5, 100.0, close, 3.0);
             assert_eq!(pullback_range(&bar, &flow), expected, "{open} to {close}");
         }
+    }
+
+    /// Guards that the painted study annotations follow their public state: an unvisited zone
+    /// keeps its colour, a revisited or expired one is dimmed, and a buy marker is a triangle
+    /// above the bar's top row.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn studies_are_painted_as_their_state_and_kind_say() {
+        use crate::studies::{FootprintStudy, FootprintStudyKind, FootprintStudyState};
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        flow.push(&Tick::new(time, 100.0, 1.0, Some(OrderSide::Buy)))
+            .unwrap();
+        let bars = [Bar::new(time, 100.0, 100.25, 100.0, 100.25, 1.0)];
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 160.0));
+        let map = ChartMapping::new(
+            rect,
+            60.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(99.0, 102.0),
+                0.0,
+                160.0,
+                false,
+            ),
+        );
+        let study = |kind, state, low| FootprintStudy {
+            start: time,
+            end: Some(time),
+            low,
+            high: low,
+            kind,
+            state,
+        };
+        let studies = [
+            study(
+                FootprintStudyKind::StackedAsk,
+                FootprintStudyState::Unvisited,
+                400,
+            ),
+            study(
+                FootprintStudyKind::StackedAsk,
+                FootprintStudyState::Revisited,
+                401,
+            ),
+            study(
+                FootprintStudyKind::StackedAsk,
+                FootprintStudyState::Expired,
+                402,
+            ),
+            study(
+                FootprintStudyKind::DeltaAsk,
+                FootprintStudyState::Local,
+                400,
+            ),
+        ];
+        let config = FootprintConfig::default();
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| render_footprint_studies(ui.painter(), &map, &bars, &flow, &studies, &config),
+        );
+        output.textures_delta.clear();
+        let strokes: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Rect(rect) if rect.stroke.width > 0.0 => Some(rect.stroke.color),
+                _ => None,
+            })
+            .collect();
+        let dimmed = config.ask_color.gamma_multiply(0.45);
+        assert_eq!(strokes, [config.ask_color, dimmed, dimmed]);
+        let top = map.price_to_y(100.25);
+        let triangle = output.shapes.iter().find_map(|shape| match &shape.shape {
+            Shape::Path(path) if path.fill == config.ask_color => Some(path.points.clone()),
+            _ => None,
+        });
+        assert!(
+            triangle.is_some_and(|points| points.len() == 3 && points.iter().all(|p| p.y < top)),
+            "buy marker above the bar"
+        );
     }
 }
