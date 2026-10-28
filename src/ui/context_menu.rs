@@ -981,12 +981,9 @@ pub struct ChartMenus {
 }
 
 impl ChartMenus {
-    /// The series and price of the series menu's last right-click, which stay after a pick.
-    pub(crate) fn series_context(&self) -> (SeriesId, f64) {
-        (
-            self.series.series_id.unwrap_or(SeriesId::MAIN),
-            self.series.click_price,
-        )
+    /// The price of the series menu's last right-click, which stays after a pick.
+    pub(crate) fn series_click_price(&self) -> f64 {
+        self.series.click_price
     }
 
     /// Shows or hides named menu entries: Alerts, Trading, Settings, ObjectTree, Indicators,

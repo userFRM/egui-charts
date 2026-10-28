@@ -59,13 +59,15 @@ impl Terminal {
         for control in [
             Control::Indicators,
             Control::Settings,
-            Control::SymbolSearch,
             Control::CopyPrice,
             Control::ResetView,
             Control::Help,
         ] {
             self.set_control_visible(control, true);
         }
+        // Without a search service the dialog would list only the symbols already shown.
+        let search = self.services.symbol_search.is_some();
+        self.set_control_visible(Control::SymbolSearch, search);
         let state = &mut self.studies;
         state.settings_dialog.execution_sounds = self.services.sounds.clone();
         state
@@ -198,7 +200,7 @@ impl Terminal {
             SeriesContextMenuAction::OpenSettings => self.open_chart_settings(),
             SeriesContextMenuAction::AddIndicator => self.open_indicators(None),
             SeriesContextMenuAction::CopyPrice => {
-                let (_, price) = self.menus.series_context();
+                let price = self.menus.series_click_price();
                 self.copy_price(price);
             }
             SeriesContextMenuAction::None => {}
@@ -353,6 +355,9 @@ impl Terminal {
         let state = &mut self.studies;
         let mut emitted = Vec::new();
 
+        state
+            .indicators
+            .set_metric_source(Some(self.feed.clone()), chart.symbol());
         state.indicators.set_full(chart.study_limit_reached());
         match state.indicators.show(ctx, theme) {
             IndicatorDialogAction::None | IndicatorDialogAction::Close => {}
