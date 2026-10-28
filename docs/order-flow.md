@@ -33,6 +33,60 @@ trades. Disabling the heatmap releases its textures and retains configured depth
 Hosts composing their own panes can retain `chart::overlays::LiquidityHeatmap` and call `render`
 with their price mapping and time-to-x conversion.
 
+### Large books at 50 ms
+
+To show 1,000 levels a side with a column every 50 ms, configure the history before enabling the
+heatmap:
+
+```rust
+use chrono::TimeDelta;
+use egui_charts::data::{DepthHistory, DepthHistoryConfig};
+
+let config = DepthHistoryConfig {
+    cadence: TimeDelta::milliseconds(50),
+    rows: 1000,
+    columns: 240,
+    ..Default::default()
+};
+chart.set_depth_history(Some(DepthHistory::new(config).unwrap()));
+chart.set_liquidity_heatmap(true);
+```
+
+The heatmap shows a new column for every 50 ms period in which the host sent an update, so the
+visible cadence is that of the feed, up to 20 columns a second. `cargo bench --bench heatmap`
+measures it: 400 depth deltas a second, each changing 8 levels near the touch, into a book of
+1,000 levels a side, in a 1440 by 900 window showing the last three one-minute bars, on an Intel
+Core i7-10700KF (16 threads, release build, 60 s of market time):
+
+| Scenario | Sink per delta | Frame p50 / p95 / max | Texture upload | Textures | Heap retained |
+|---|---:|---:|---:|---:|---:|
+| 100 levels, 1 s columns (defaults) | 0.4 µs | 0.3 / 0.4 / 1.6 ms | 11 KB/s | 0.8 MB | 0.6 MB |
+| 1,000 levels, 50 ms columns | 1.8 µs | 1.0 / 2.2 / 3.5 ms | 394 KB/s | 7.3 MB | 20 MB |
+| the same, history filled to every resolution | 2.2 µs | 2.1 / 3.9 / 5.8 ms | 367 KB/s | 16.8 MB | 56 MB |
+
+The sink time is the aggregation of a delta into the live book and, once per period, the book
+into a depth column. A frame includes layout, painting, applying the update and tessellation;
+the chart draws about 1,000 columns of 2,000 rows in those frames. The upload of one frame is at
+most 74 KB once the history is full, and the first frame that draws a loaded history uploads all
+of it (2.4 MB here). A filled history holds 1,687 columns covering 50 minutes, bounded by
+`columns * 8 * rows * 2 * 16` bytes, 61 MB for this configuration.
+
+The supported budget is this configuration on a machine of that class: a frame under 5 ms and
+under 60 MB of heap for 1,000 levels at 50 ms. The library degrades by dropping resolution, never
+by skipping updates silently:
+
+- Updates faster than the cadence coalesce. A column holds the book as it stood at the end of
+  its period, and nothing is queued.
+- A column keeps only the `rows` levels nearest each side's inside market. The live book and the
+  order book readers keep all of theirs.
+- When a resolution holds more than `columns` columns, its two oldest merge into one of twice
+  the span, so age lowers the time resolution (50 ms, 100 ms, up to 6.4 s) and never the price
+  resolution. Memory stays bounded.
+- A frame uploads only new or changed columns, in tiles no larger than the backend's texture
+  limit (256 at most), and an unchanged history uploads nothing.
+- The library never changes these settings by itself. A host that cannot afford the budget on its
+  machines raises `cadence`, lowers `rows` or `columns`, or raises `ticks_per_row`.
+
 ## Execution profiles
 
 `TradeProfileRanges::new` takes ordered, non-overlapping half-open ranges of bar opening times.

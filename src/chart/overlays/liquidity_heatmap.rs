@@ -5,11 +5,12 @@ use crate::data::{DepthColumn, DepthHistory};
 use chrono::{DateTime, Utc};
 use egui::{Color32, ColorImage, Painter, Rect, TextureHandle, TextureOptions, pos2};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 type Key = (DateTime<Utc>, chrono::TimeDelta);
 
 struct Column {
-    source: DepthColumn,
+    source: Arc<DepthColumn>,
     slot: usize,
     rows: BTreeSet<i64>,
 }
@@ -54,9 +55,13 @@ impl LiquidityHeatmap {
         let keys: BTreeSet<_> = history.columns().map(|c| (c.time, c.span)).collect();
         self.columns.retain(|key, _| keys.contains(key));
         let mut used: BTreeSet<_> = self.columns.values().map(|c| c.slot).collect();
-        for source in history.columns() {
+        for source in history.shared() {
             let key = (source.time, source.span);
-            if self.columns.get(&key).is_some_and(|c| c.source == *source) {
+            if self
+                .columns
+                .get(&key)
+                .is_some_and(|c| Arc::ptr_eq(&c.source, source))
+            {
                 continue;
             }
             let slot = self.columns.get(&key).map_or_else(
@@ -116,7 +121,7 @@ impl LiquidityHeatmap {
             self.columns.insert(
                 key,
                 Column {
-                    source: source.clone(),
+                    source: Arc::clone(source),
                     slot,
                     rows,
                 },
