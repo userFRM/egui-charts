@@ -374,7 +374,7 @@ pub use trix::TRIX;
 pub use balance_of_power::BalanceOfPower;
 pub use ease_of_movement::EaseOfMovement;
 pub use percentage_volume_oscillator::PercentageVolumeOscillator;
-pub use price_oscillator::PriceOscillator;
+pub use price_oscillator::{OscillatorAverage, PriceOscillator};
 pub use volume_oscillator::VolumeOscillator;
 pub use vroc::VolumeRateOfChange;
 

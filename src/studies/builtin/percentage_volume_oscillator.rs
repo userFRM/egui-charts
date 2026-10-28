@@ -1,5 +1,4 @@
-use super::price_oscillator::percentage_oscillator;
-use super::smoothing::Smoothing;
+use super::price_oscillator::{Mean, OscillatorAverage, percentage_oscillator};
 use crate::model::Bar;
 use crate::studies::IndicatorValues;
 use crate::studies::palette;
@@ -10,21 +9,25 @@ use egui::Color32;
 /// Percentage Volume Oscillator (PVO): the [`PriceOscillator`](super::PriceOscillator)
 /// computed from volume instead of close.
 ///
-/// - PVO = 100 * (EMA(volume, short) - EMA(volume, long)) / EMA(volume, long).
-/// - Signal = EMA(PVO, signal length), computed only over the bars where the PVO is defined
-///   and seeded with the mean of its first `signal` values.
+/// - PVO = 100 * (MA(volume, short) - MA(volume, long)) / MA(volume, long).
+/// - Signal = MA(PVO, signal length), computed only over the bars where the PVO is defined.
+///   An exponential average is seeded with the mean of its first `signal` values; a simple one
+///   is the mean of the last `signal` values.
 /// - Histogram = PVO - signal.
 ///
-/// With lengths 12, 26 and 9 a bar has no value before bar 25, the PVO alone on bars 25 to 32,
-/// and all three lines from bar 33. A bar with a non-finite volume has no value and is skipped
-/// by the averages.
+/// MA is exponential by default; the oscillator's averages and the signal line each choose an
+/// [`OscillatorAverage`] independently. With lengths 12, 26 and 9 a bar has no value before
+/// bar 25, the PVO alone on bars 25 to 32, and all three lines from bar 33, under either
+/// formula. A bar with a non-finite volume has no value and is skipped by the averages.
 #[derive(Clone)]
 pub struct PercentageVolumeOscillator {
     short_period: usize,
     long_period: usize,
     signal_period: usize,
+    oscillator_average: OscillatorAverage,
+    signal_average: OscillatorAverage,
     values: IndicatorValues,
-    stepper: Stepper<[Smoothing; 3]>,
+    stepper: Stepper<[Mean; 3]>,
     /// Colors: [PVO line, Signal line, Histogram]
     colors: Vec<Color32>,
     visible: bool,
@@ -38,6 +41,8 @@ impl PercentageVolumeOscillator {
             short_period: short_period.max(1),
             long_period: long_period.max(1),
             signal_period: signal_period.max(1),
+            oscillator_average: OscillatorAverage::Exponential,
+            signal_average: OscillatorAverage::Exponential,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
@@ -47,6 +52,17 @@ impl PercentageVolumeOscillator {
             ],
             visible: true,
         }
+    }
+
+    /// Choose the formula of the short and long averages and of the signal line.
+    pub fn with_averages(
+        mut self,
+        oscillator: OscillatorAverage,
+        signal: OscillatorAverage,
+    ) -> Self {
+        self.oscillator_average = oscillator;
+        self.signal_average = signal;
+        self
     }
 
     /// Set plot colors in the order returned by [`Indicator::line_names`].
@@ -67,7 +83,9 @@ impl Indicator for PercentageVolumeOscillator {
     crate::studies::inputs::study_inputs!(self;
         short_period: length("Short period", 1, usize::MAX),
         long_period: length("Long period", 1, usize::MAX),
-        signal_period: length("Signal period", 1, usize::MAX)
+        signal_period: length("Signal period", 1, usize::MAX),
+        oscillator_average: choice("Oscillator MA", [OscillatorAverage::Exponential, OscillatorAverage::Simple]),
+        signal_average: choice("Signal MA", [OscillatorAverage::Exponential, OscillatorAverage::Simple])
     ; {});
 
     fn value_format(&self) -> crate::scales::StudyFormat {
@@ -95,9 +113,8 @@ impl Indicator for PercentageVolumeOscillator {
                 percentage_oscillator(
                     state,
                     bar.volume,
-                    self.short_period,
-                    self.long_period,
-                    self.signal_period,
+                    [self.short_period, self.long_period, self.signal_period],
+                    [self.oscillator_average, self.signal_average],
                 )
             });
     }
@@ -147,5 +164,28 @@ impl Indicator for PercentageVolumeOscillator {
             format!("Signal({})", self.signal_period),
             "Histogram".to_string(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::studies::PriceOscillator;
+
+    /// The PVO of a volume series is the PPO of the same series as closes, for a chosen formula.
+    #[test]
+    fn chosen_averages_apply_to_volume() {
+        let bar = |x: f64| Bar::new(chrono::Utc::now(), x, x, x, x, x);
+        let data: Vec<Bar> = [10.0, 12.0, 11.0, 13.0, 14.0]
+            .into_iter()
+            .map(bar)
+            .collect();
+        let averages = (OscillatorAverage::Simple, OscillatorAverage::Exponential);
+        let mut pvo =
+            PercentageVolumeOscillator::new(2, 3, 2).with_averages(averages.0, averages.1);
+        let mut ppo = PriceOscillator::new(2, 3, 2).with_averages(averages.0, averages.1);
+        pvo.calculate(&data);
+        ppo.calculate(&data);
+        assert_eq!(format!("{:?}", pvo.values()), format!("{:?}", ppo.values()));
     }
 }
