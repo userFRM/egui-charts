@@ -212,6 +212,7 @@ impl Terminal {
                 CrosshairStyle::Dot => CursorType::Dot,
                 CrosshairStyle::Arrow | CrosshairStyle::Hidden => CursorType::Arrow,
                 CrosshairStyle::Demonstration => CursorType::Demonstration,
+                CrosshairStyle::Magic => CursorType::Magic,
             },
             eraser_mode_enabled: manager.eraser_mode,
             stay_in_drawing_mode: manager.stay_in_drawing_mode,
@@ -283,6 +284,7 @@ impl Terminal {
                     CursorType::Dot => CrosshairStyle::Dot,
                     CursorType::Arrow | CursorType::Eraser => CrosshairStyle::Arrow,
                     CursorType::Demonstration => CrosshairStyle::Demonstration,
+                    CursorType::Magic => CrosshairStyle::Magic,
                 });
                 chart.drawings_mut().set_active_tool(None);
                 chart

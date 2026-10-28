@@ -367,6 +367,7 @@ mod tests {
             settings.gann = Some(GannConfig {
                 price_levels: vec![0.0, 0.5, 1.0],
                 time_levels: vec![0.25, 0.75],
+                ..Default::default()
             });
             settings.position_size = Some(PositionSize::RiskPercent {
                 account_size: 10_000.0,
