@@ -66,7 +66,7 @@ impl Indicator for Reversal {
     }
 
     fn desc(&self) -> &str {
-        "Reversal - New extreme of the lookback that closes beyond the previous bar's range"
+        "Reversal - New extreme of the lookback that closes beyond the previous close"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
