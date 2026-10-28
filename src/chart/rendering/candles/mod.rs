@@ -281,6 +281,7 @@ pub fn render_chart_type(
                 &idx_to_coord,
                 params.bullish_color(),
                 params.bearish_color(),
+                &params.type_params.styles.hlc_area,
                 params.price_source(),
             );
         }
@@ -379,6 +380,7 @@ pub fn render_chart_type(
                 painter,
                 built.shown(ctx.start_idx, ctx.visible_data.len()),
                 ctx.price_scale,
+                params.type_params.styles.kagi,
                 params.bullish_color(),
                 params.bearish_color(),
                 x_of,

@@ -44,8 +44,9 @@ pub struct BarsInRange {
 pub struct PriceLineId(u64);
 
 impl Chart {
-    /// Take the settings request from a legend button or a double-click in a pane: a study, or
-    /// a bar series shown in a pane other than the main one.
+    /// Take the settings request from a legend button or a double-click in a pane: a study, a
+    /// bar series shown in a pane other than the main one, or [`SeriesId::MAIN`] from the main
+    /// series' legend button.
     pub fn take_indicator_settings_request(&mut self) -> Option<SeriesId> {
         self.indicator_settings_request.take()
     }
@@ -631,7 +632,8 @@ impl Chart {
             return true;
         }
         if let Some(at) = self.price_series.iter().position(|item| item.id == id) {
-            self.price_series.remove(at);
+            let removed = self.price_series.remove(at);
+            self.retain_removed_series(removed);
             if self.selection.selected_id() == Some(ChartElementId::Series(id)) {
                 self.selection.deselect();
             }

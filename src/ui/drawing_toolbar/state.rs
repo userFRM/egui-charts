@@ -30,6 +30,10 @@ pub struct ToolbarState {
     pub expanded_category: Option<String>,
     /// Favorite tools
     pub favorites: Vec<DrawingToolType>,
+    /// Whether the floating strip of favorite tools is shown
+    pub floating_visible: bool,
+    /// Where the user left the floating strip; `None` until it has been shown
+    pub floating_pos: Option<egui::Pos2>,
     /// Recently used tools (max 5)
     pub recent: VecDeque<DrawingToolType>,
     /// Whether drawing anchors snap to nearby chart values and drawing points
@@ -103,6 +107,8 @@ impl Default for ToolbarState {
                 DrawingToolType::HorizontalLine,
                 DrawingToolType::FibonacciRetracement,
             ],
+            floating_visible: true,
+            floating_pos: None,
             recent: VecDeque::with_capacity(5),
             magnet_mode: false,
             magnet_type: MagnetType::Strong, // Default to strong magnet

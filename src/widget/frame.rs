@@ -453,8 +453,15 @@ impl Chart {
     ) -> Response {
         let footprint = footprint.filter(|_| self.replay.is_none());
         let theme = self.theme_override.clone();
-        let _theme_scope = theme
+        // Axis labels take their size from the theme's label text.
+        let scaled = self.config.axis_font_size.map(|size| {
+            let mut scaled = theme.clone().unwrap_or_else(|| ui.ctx().active_theme());
+            scaled.text.label = size;
+            scaled
+        });
+        let _theme_scope = scaled
             .as_ref()
+            .or(theme.as_ref())
             .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
         let size = self.size;
         let show = |ui: &mut Ui| {
@@ -925,8 +932,10 @@ impl Chart {
         let show_volume = self.shows_volume();
         #[cfg(not(feature = "drawings"))]
         let is_drawing_interaction = false;
+        // The Magic cursor marks while the button is held, so a drag paints rather than pans.
         #[cfg(feature = "drawings")]
         let is_drawing_interaction = self.drawings.active_tool.is_some()
+            || self.chart_options.crosshair.style == crate::config::CrosshairStyle::Magic
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
             || self.drawings.curr_drawing.is_some()
@@ -995,7 +1004,10 @@ impl Chart {
                     // Dot mode - default pointer (dot is rendered on chart)
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
-                CrosshairStyle::Arrow | CrosshairStyle::Demonstration | CrosshairStyle::Hidden => {
+                CrosshairStyle::Arrow
+                | CrosshairStyle::Demonstration
+                | CrosshairStyle::Magic
+                | CrosshairStyle::Hidden => {
                     // Arrow mode - default pointer
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
@@ -1179,6 +1191,7 @@ impl Chart {
         self.last_rendered_price_rect = price_rect;
         self.last_rendered_volume_rect = volume_rect;
 
+        self.begin_mark_hits();
         self.pump_marks(ui.ctx());
 
         // Get visible data
@@ -1877,6 +1890,7 @@ impl Chart {
         // where the panes are rendered, outside this rect.
         if response.clicked()
             && let Some(click_pos) = response.interact_pointer_pos()
+            && self.mark_at(click_pos).is_none()
         {
             match element_at(click_pos) {
                 Some((id, bar_idx)) => self.selection.select(id, Some(bar_idx)),
@@ -2174,6 +2188,11 @@ impl Chart {
                 price_formatter.as_deref(),
                 self.volume_formatter.as_deref(),
                 self.config.price_axis.allow_label_overlap,
+                if self.config.price_axis.show_symbol_name {
+                    &self.symbol
+                } else {
+                    ""
+                },
             );
             tags.extend([quote_tags[1], quote_tags[2]]);
             quote_tags[0]
@@ -2216,7 +2235,7 @@ impl Chart {
             }
         }
         if show_price_axis {
-            for (value, colors, map, formatter) in
+            for (value, colors, map, label) in
                 self.secondary_axis_values(self.main_series_scale, price_rect)
             {
                 tags.push(rendering::axes::render_axis_value(
@@ -2224,8 +2243,7 @@ impl Chart {
                     price_rect,
                     axis_edge,
                     map.price_to_y(value),
-                    map.transform()
-                        .label(map.transform().to_scale(value), 2, formatter.as_deref()),
+                    label,
                     colors,
                     &tags,
                     self.config.price_axis.allow_label_overlap,
@@ -2548,14 +2566,22 @@ impl Chart {
         #[cfg(feature = "drawings")]
         {
             self.cursor_modes.update(ui.input(|input| input.stable_dt));
-            if self.chart_options.crosshair.style == crate::config::CrosshairStyle::Demonstration
-                && !eraser_mode
-            {
-                self.cursor_modes
-                    .move_pointer(response.hover_pos().filter(|pos| price_rect.contains(*pos)));
+            let trail = Some(self.chart_options.crosshair.style)
+                .filter(|style| {
+                    matches!(
+                        style,
+                        crate::config::CrosshairStyle::Demonstration
+                            | crate::config::CrosshairStyle::Magic
+                    )
+                })
+                .filter(|_| !eraser_mode);
+            self.cursor_modes.follow(
+                trail,
+                response.hover_pos().filter(|pos| price_rect.contains(*pos)),
+                ui.input(|input| input.pointer.primary_down()),
+            );
+            if trail.is_some() {
                 self.cursor_modes.render(ui, price_rect);
-            } else {
-                self.cursor_modes.move_pointer(None);
             }
         }
         let mut table_rect = price_rect;
@@ -2592,6 +2618,7 @@ impl Chart {
                     .filter(|pos| hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect))
             });
         let mut study_action = None;
+        let mut series_action = None;
         let mut legend_bottom = price_rect.top() + 8.0;
         {
             let visible_data = self.state.visible_data();
@@ -2631,7 +2658,8 @@ impl Chart {
                     .quote
                     .as_ref()
                     .filter(|_| self.main_series_visible && self.config.show_quote_boxes);
-                legend.show_title = self.main_series_visible && self.config.show_symbol_labels;
+                legend.show_title = self.main_series_present && self.config.show_symbol_labels;
+                legend.series_visible = self.main_series_visible;
                 legend.title_as_description = self.config.title_as_description;
                 // A whitespace bar has no values to show.
                 let values = self.main_series_visible && !bar.is_whitespace();
@@ -2657,7 +2685,7 @@ impl Chart {
                 {
                     legend.quantity = order_quantity;
                 }
-                let (quote_action, study_settings, bottom, quantity) = ui
+                let (quote_action, study_settings, bottom, quantity, main_action) = ui
                     .push_id(shown.id, |ui| {
                         legend.show_with_colors(
                             ui,
@@ -2682,6 +2710,7 @@ impl Chart {
                 #[cfg(not(feature = "ui"))]
                 let _ = quantity;
                 study_action = study_settings;
+                series_action = main_action;
                 legend_bottom = bottom;
             }
         }
@@ -2873,6 +2902,9 @@ impl Chart {
                             );
                         }
                     }
+                    // A symbol without metadata still heads the readout.
+                    let heading = (self.instrument().is_none() && !self.symbol.is_empty())
+                        .then(|| crate::model::Instrument::new(self.symbol.as_str()));
                     rendering::render_tooltip_with_options(
                         &price_ctx,
                         hover_pos,
@@ -2902,7 +2934,7 @@ impl Chart {
                             })
                             .map(|(_, row)| row)
                             .collect::<Vec<_>>(),
-                        self.instrument(),
+                        self.instrument().or(heading.as_ref()),
                         self.value_formatters(),
                     );
                 }
@@ -3105,6 +3137,9 @@ impl Chart {
         self.show_signal_menu(ui, price_rect);
         if let Some(action) = study_action {
             self.apply_study_action(action);
+        }
+        if let Some(action) = series_action {
+            self.apply_main_series_action(action);
         }
         self.main_pane_actions(ui, rect, chart_rect);
         self.record_host_click(ui, &response);
@@ -3339,6 +3374,31 @@ mod tests {
         }
     }
 
+    /// The main series' legend actions hide it, request its settings and remove it through the
+    /// chart's typed operations, leaving the studies and other series in place.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn main_series_legend_actions_preserve_studies_and_comparisons() {
+        use crate::chart::renderers::SeriesAction;
+        use crate::widget::{SeriesId, SeriesOptions};
+        let mut chart = chart(&[100.0], &[110.0]);
+        let study = chart.add_indicator(Box::new(crate::studies::SMA::new(1)));
+        let other = chart.add_series(SeriesOptions::default());
+        chart.apply_main_series_action(SeriesAction::ToggleVisibility);
+        assert!(!chart.is_main_series_visible());
+        chart.apply_main_series_action(SeriesAction::ToggleVisibility);
+        assert!(chart.is_main_series_visible());
+        chart.apply_main_series_action(SeriesAction::Settings);
+        assert_eq!(
+            chart.take_indicator_settings_request(),
+            Some(SeriesId::MAIN)
+        );
+        chart.apply_main_series_action(SeriesAction::Remove);
+        assert!(!chart.main_series_present);
+        assert!(chart.indicators().any(|(id, _)| id == study));
+        assert!(chart.series_scale(other).is_some());
+    }
+
     #[cfg(feature = "studies")]
     #[test]
     fn status_visibility_reaches_the_chart_legend() {
@@ -3449,7 +3509,7 @@ mod tests {
             };
             assert_eq!(
                 texts.iter().any(|text| text.starts_with(title)),
-                hidden != 1 && hidden != 11,
+                hidden != 1,
                 "{texts:?}"
             );
             assert_eq!(
