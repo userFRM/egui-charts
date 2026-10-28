@@ -3,7 +3,7 @@
 //! Full Market Profile rendering with support for:
 //! - TPO letters (A, B, C...) at each price level
 //! - Point of Control (POC) highlighting
-//! - Value Area shading (70% of volume)
+//! - Value Area guides and cell emphasis
 //! - Initial Balance range
 //! - Single prints highlighting
 //! - Session separators
@@ -17,12 +17,14 @@ use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
 
 use crate::localization as l10n;
 use crate::scales::PriceMap;
+use egui::emath::GuiRounding as _;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
 use crate::model::{
     Bar, BarClock, ExchangeSessionProvider, SessionProvider, SpanCache, TPOColorMode, TPOConfig,
     TPODisplayMode, TPOProfile, derive_tick_size, to_tpo_profiles,
 };
+use crate::styles::typography;
 use crate::theme::{ChartColors, ThemeExt, readable_color};
 use crate::tokens::DESIGN_TOKENS;
 
@@ -37,7 +39,7 @@ const TARGET_ROWS: usize = 40;
 ///
 /// Letters/blocks for successive periods stack horizontally to the right of
 /// each session's anchor; this is the widest per-period horizontal step.
-const PERIOD_COLUMN_PX: f32 = 9.0;
+const PERIOD_COLUMN_PX: f32 = 24.0;
 
 /// Below this column width letters become unreadable, so we switch to blocks,
 /// following the common convention of blocks when zoomed out and letters when
@@ -51,7 +53,7 @@ pub struct TpoRenderConfig {
     pub letter_font_size: f32,
     /// Height of each price row in pixels
     pub row_height: f32,
-    /// POC line color
+    /// POC row and underline color
     pub poc_color: Color32,
     /// POC line width
     pub poc_line_width: f32,
@@ -71,10 +73,10 @@ impl Default for TpoRenderConfig {
     fn default() -> Self {
         let tpo = &DESIGN_TOKENS.semantic.tpo;
         Self {
-            letter_font_size: 10.0,
-            row_height: 14.0,
+            letter_font_size: typography::XS,
+            row_height: 16.0,
             poc_color: tpo.poc,
-            poc_line_width: 2.0,
+            poc_line_width: DESIGN_TOKENS.stroke.hairline,
             value_area_color: tpo.value_area,
             initial_balance_color: tpo.initial_balance,
             single_print_color: tpo.single_print,
@@ -89,18 +91,18 @@ impl TpoRenderConfig {
     fn default_period_colors() -> Vec<Color32> {
         let tpo = &DESIGN_TOKENS.semantic.tpo;
         vec![
-            tpo.period_1,  // Red
-            tpo.period_2,  // Orange
-            tpo.period_3,  // Yellow
-            tpo.period_4,  // Green
-            tpo.period_5,  // Blue
-            tpo.period_6,  // Deep Purple
-            tpo.period_7,  // Pink
-            tpo.period_8,  // Cyan
-            tpo.period_9,  // Light Green
-            tpo.period_10, // Brown
-            tpo.period_11, // Blue Grey
-            tpo.period_12, // Deep Orange
+            tpo.period_1,
+            tpo.period_2,
+            tpo.period_3,
+            tpo.period_4,
+            tpo.period_5,
+            tpo.period_6,
+            tpo.period_7,
+            tpo.period_8,
+            tpo.period_9,
+            tpo.period_10,
+            tpo.period_11,
+            tpo.period_12,
         ]
     }
 
@@ -422,7 +424,8 @@ fn place_profiles(
             let anchor_x = open_x.max(price_rect.left());
             let widest = profile.price_tpo_count.values().max().copied().unwrap_or(0);
             if end_x > anchor_x && widest > 0 {
-                let fit = (end_x - anchor_x) / widest as f32;
+                // Leave room for the next session's level labels.
+                let fit = (end_x - anchor_x - 40.0).max(1.0) / widest as f32;
                 placed.push((profile, anchor_x, fit, open_x < anchor_x));
             }
         }
@@ -473,6 +476,7 @@ pub(crate) fn profile_at(
         &sessions,
         |i| mapping.idx_to_x(i),
         |profile, anchor, column| {
+            let column = column.min(profile_row_height(profile, &mapping.price));
             let price = mapping.y_to_price(pos.y);
             let row = (price / profile.tick_size).round() * profile.tick_size;
             let count = if config.show_value_area && profile.is_in_value_area(row) {
@@ -509,35 +513,24 @@ fn draw_session_profile(
 
     let chart = painter.ctx().active_theme().chart;
     let tick_size = profile.tick_size;
-    let use_letters = column_width >= LETTER_MIN_COLUMN_PX
+    let use_letters = column_width.min(profile_row_height(profile, coords)) >= LETTER_MIN_COLUMN_PX
         && matches!(
             config.display_mode,
             TPODisplayMode::Letters | TPODisplayMode::Both
         );
 
-    // Row height in pixels for one tick, used to size blocks/letters so they
-    // fill their price bin without overlapping the neighbour above/below.
-    let row_height = {
-        // Measured at the POC: a row is not the same height everywhere on a log scale.
-        let poc = profile.poc_price;
-        let h = (coords.price_to_y(poc) - coords.price_to_y(poc + tick_size)).abs();
-        h.clamp(1.0, render_config.row_height * 1.5)
-    };
-
+    let row_height = profile_row_height(profile, coords).min(render_config.row_height * 1.5);
+    let column_width = column_width.min(row_height);
+    let pixels_per_point = painter.ctx().pixels_per_point();
+    let gap = 1.0 / pixels_per_point;
     let levels = profile.price_levels(tick_size);
-    let mut max_right = anchor_x;
-
-    // Value Area shading first, so letters/blocks paint on top.
-    if config.show_value_area {
-        let va_top = coords.price_to_y(profile.value_area_high + tick_size * 0.5);
-        let va_bottom = coords.price_to_y(profile.value_area_low - tick_size * 0.5);
-        let va_right = anchor_x + widest as f32 * column_width;
-        let va_rect = Rect::from_min_max(
-            Pos2::new(anchor_x, va_top.min(va_bottom)),
-            Pos2::new(va_right, va_top.max(va_bottom)),
-        );
-        painter.rect_filled(va_rect, 0.0, render_config.value_area_color);
-    }
+    let max_right = anchor_x + widest as f32 * column_width;
+    let poc_color = readable_color(
+        render_config.poc_color,
+        chart.axis_text,
+        &[chart.bg],
+        if use_letters { 4.5 } else { 3.0 },
+    );
 
     // Single-print rows are highlighted behind their letter; hovering one names its price.
     if config.show_single_prints {
@@ -588,16 +581,30 @@ fn draw_session_profile(
 
         for (col, letter) in letters_at_price.iter().enumerate() {
             let x = anchor_x + col as f32 * column_width + column_width * 0.5;
-            max_right = max_right.max(x + column_width * 0.5);
 
-            let color = letter_color(
-                render_config,
-                config,
-                letter.period_idx,
-                price,
-                profile,
-                &chart,
-            );
+            let mut color = if use_letters {
+                letter_color(
+                    render_config,
+                    config,
+                    letter.period_idx,
+                    price,
+                    profile,
+                    &chart,
+                )
+            } else {
+                readable_color(
+                    entry_color(render_config, config, letter.period_idx, price, profile),
+                    chart.axis_text,
+                    &[chart.bg],
+                    3.0,
+                )
+            };
+
+            if config.show_poc && (price - profile.poc_price).abs() < tick_size * 0.5 {
+                color = poc_color;
+            } else if !use_letters && config.show_value_area && !profile.is_in_value_area(price) {
+                color = chart.bg.lerp_to_gamma(color, 0.45);
+            }
 
             if use_letters {
                 painter.text(
@@ -610,38 +617,104 @@ fn draw_session_profile(
             } else {
                 let block = Rect::from_center_size(
                     Pos2::new(x, y),
-                    egui::vec2(column_width * 0.9, row_height * 0.9),
-                );
-                painter.rect_filled(block, 0.0, color.gamma_multiply(0.85));
+                    egui::vec2((column_width - gap).max(gap), (row_height - gap).max(gap)),
+                )
+                .round_to_pixels(pixels_per_point);
+                painter.rect_filled(block, 0.0, color);
             }
         }
     }
 
-    // POC line across the drawn width.
-    if config.show_poc {
-        let poc_y = coords.price_to_y(profile.poc_price);
-        if poc_y >= price_rect.top() && poc_y <= price_rect.bottom() {
-            painter.line_segment(
-                [Pos2::new(anchor_x, poc_y), Pos2::new(max_right, poc_y)],
-                Stroke::new(render_config.poc_line_width, render_config.poc_color),
-            );
-        }
+    // Letters retain a fine POC underline; blocks carry the POC in the row itself.
+    if config.show_poc && use_letters {
+        let y = coords.price_to_y(profile.poc_price) + row_height * 0.5;
+        painter.line_segment(
+            [Pos2::new(anchor_x, y), Pos2::new(max_right, y)],
+            Stroke::new(render_config.poc_line_width, poc_color),
+        );
     }
 
-    // Value Area edges as thin guides at VAH / VAL.
+    let guide_color = chart.axis_text_secondary;
     if config.show_value_area {
         for edge in [profile.value_area_high, profile.value_area_low] {
-            let ey = coords.price_to_y(edge);
-            if ey >= price_rect.top() && ey <= price_rect.bottom() {
-                painter.line_segment(
-                    [Pos2::new(anchor_x, ey), Pos2::new(max_right, ey)],
-                    Stroke::new(
-                        DESIGN_TOKENS.stroke.hairline,
-                        render_config.value_area_color.gamma_multiply(2.0),
-                    ),
-                );
+            let y = coords.price_to_y(edge);
+            if price_rect.y_range().contains(y) {
+                painter.extend(Shape::dashed_line(
+                    &[Pos2::new(anchor_x, y), Pos2::new(max_right + 6.0, y)],
+                    Stroke::new(DESIGN_TOKENS.stroke.light, guide_color.gamma_multiply(0.65)),
+                    2.0,
+                    3.0,
+                ));
             }
         }
+    }
+
+    let mut label_rows = Vec::new();
+    for (show, price, text, color) in [
+        (config.show_poc, profile.poc_price, "POC", chart.axis_text),
+        (
+            config.show_value_area,
+            profile.value_area_high,
+            "VAH",
+            guide_color,
+        ),
+        (
+            config.show_value_area,
+            profile.value_area_low,
+            "VAL",
+            guide_color,
+        ),
+        (
+            true,
+            (profile.profile_high + profile.profile_low) * 0.5,
+            "Mid",
+            readable_color(bearish_color, chart.axis_text, &[chart.bg], 4.5),
+        ),
+    ] {
+        let y = coords.price_to_y(price);
+        if !show || !price_rect.y_range().contains(y) || anchor_x - price_rect.left() < 32.0 {
+            continue;
+        }
+        // Displace only the caption when levels coincide; the marker keeps its price.
+        let Some(label_y) = [0.0, -12.0, 12.0, -24.0, 24.0, -36.0, 36.0]
+            .into_iter()
+            .map(|offset| y + offset)
+            .find(|candidate| {
+                *candidate >= price_rect.top() + typography::XS
+                    && *candidate <= price_rect.bottom() - typography::XS
+                    && label_rows
+                        .iter()
+                        .all(|previous: &f32| (candidate - previous).abs() >= typography::XS + 1.0)
+            })
+        else {
+            continue;
+        };
+        label_rows.push(label_y);
+        if label_y != y {
+            painter.line_segment(
+                [
+                    Pos2::new(anchor_x - 8.0, label_y),
+                    Pos2::new(anchor_x - 4.0, y),
+                ],
+                Stroke::new(DESIGN_TOKENS.stroke.extra_thin, color),
+            );
+        }
+        painter.text(
+            Pos2::new(anchor_x - 8.0, label_y),
+            egui::Align2::RIGHT_CENTER,
+            text,
+            FontId::proportional(typography::XS),
+            color,
+        );
+        painter.add(Shape::convex_polygon(
+            vec![
+                Pos2::new(anchor_x - 6.0, y - 2.5),
+                Pos2::new(anchor_x - 3.0, y),
+                Pos2::new(anchor_x - 6.0, y + 2.5),
+            ],
+            color,
+            Stroke::NONE,
+        ));
     }
 
     // Initial balance: a bar beside the profile from its low to its high.
@@ -651,7 +724,12 @@ fn draw_session_profile(
         painter.rect_filled(
             Rect::from_x_y_ranges(anchor_x - 2.0..=anchor_x, top.min(bottom)..=top.max(bottom)),
             0.0,
-            render_config.initial_balance_color,
+            readable_color(
+                render_config.initial_balance_color,
+                chart.axis_text_secondary,
+                &[chart.bg],
+                3.0,
+            ),
         );
     }
 
@@ -664,7 +742,7 @@ fn draw_session_profile(
             } else {
                 bearish_color
             };
-            let s = 5.0;
+            let s = 3.0;
             painter.add(Shape::convex_polygon(
                 vec![
                     Pos2::new(anchor_x - s, open_y),
@@ -678,6 +756,14 @@ fn draw_session_profile(
     }
 }
 
+/// Measure at the POC so logarithmic and inverted scales keep the same geometry.
+fn profile_row_height(profile: &TPOProfile, coords: &PriceMap) -> f32 {
+    (coords.price_to_y(profile.poc_price)
+        - coords.price_to_y(profile.poc_price + profile.tick_size))
+    .abs()
+    .max(1.0)
+}
+
 /// Pick the color for one TPO entry, honouring the configured color mode.
 fn letter_color(
     render_config: &TpoRenderConfig,
@@ -687,8 +773,37 @@ fn letter_color(
     profile: &TPOProfile,
     chart: &ChartColors,
 ) -> Color32 {
-    let color = match config.color_mode {
-        TPOColorMode::ByPeriod => render_config.color_for_period(period_idx),
+    readable_color(
+        entry_color(render_config, config, period_idx, price, profile),
+        chart.axis_text,
+        &[chart.bg, chart.bg.blend(render_config.value_area_color)],
+        4.5,
+    )
+}
+
+fn entry_color(
+    render_config: &TpoRenderConfig,
+    config: &TPOConfig,
+    period_idx: usize,
+    price: f64,
+    profile: &TPOProfile,
+) -> Color32 {
+    match config.color_mode {
+        TPOColorMode::ByPeriod => {
+            let last = profile
+                .letters
+                .last()
+                .map_or(1, |letter| letter.period_idx)
+                .max(1);
+            let position = (period_idx as f32 / last as f32).min(1.0)
+                * (render_config.period_colors.len() - 1) as f32;
+            let index = position as usize;
+            render_config.color_for_period(index).lerp_to_gamma(
+                render_config
+                    .color_for_period((index + 1).min(render_config.period_colors.len() - 1)),
+                position.fract(),
+            )
+        }
         TPOColorMode::Solid => render_config.default_letter_color,
         TPOColorMode::ByValueArea => {
             if profile.is_in_value_area(price) {
@@ -705,13 +820,7 @@ fn letter_color(
                 render_config.default_letter_color
             }
         }
-    };
-    readable_color(
-        color,
-        chart.axis_text,
-        &[chart.bg, chart.bg.blend(render_config.value_area_color)],
-        4.5,
-    )
+    }
 }
 
 #[cfg(test)]

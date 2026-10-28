@@ -1101,6 +1101,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- TPO charts use a smooth period gradient, separated blocks, neutral POC rows and initial balance bars, compact value-area and midpoint labels, and a thin price path. Profiles have clearer session spacing and theme-aware contrast in dark and light views. ([#1296](https://github.com/userFRM/egui-charts/issues/1296))
+
 - `UserSettings` is `#[non_exhaustive]`, so that fields can be added without a breaking change. Migration: build `UserSettings` with `Default` and assign fields. `IndicatorDialogAction` implements `Clone` and `Debug`, and `SettingsAction` implements `Debug`.
 
 - Migration for scale settings: `ScalesAndLinesSettings`, `ChartConfig` and `PriceAxisOptions` literals add the new display fields or use `..Default::default()`. Older saved settings take their defaults. `chart::render_axis_currency` takes an optional unit before the currency choices; pass `None` for the previous header. `PriceScale::set_bar_ratio` accepts a positive finite number of scale units per bar, with `None` unlocking it; logarithmic axes measure natural logarithms of prices.
