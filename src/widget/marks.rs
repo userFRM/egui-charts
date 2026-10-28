@@ -132,7 +132,7 @@ impl Chart {
 
     /// The mark painted on top at `pos`: the last of those painted there. Drawing tools and
     /// the eraser take the click first.
-    fn mark_at(&self, pos: egui::Pos2) -> Option<&MarkHit> {
+    pub(super) fn mark_at(&self, pos: egui::Pos2) -> Option<&MarkHit> {
         #[cfg(feature = "drawings")]
         if self.drawings.active_tool.is_some() || self.drawings.eraser_mode {
             return None;
@@ -143,15 +143,10 @@ impl Chart {
             .find(|hit| hit.rect.contains(pos))
     }
 
-    /// Whether a mark with a host ID lies at `pos`, so that a click there belongs to it.
-    pub(super) fn mark_under(&self, pos: egui::Pos2) -> bool {
-        self.mark_at(pos).is_some()
-    }
-
-    /// Reports a click on a mark with a host ID. Returns whether `pos` was on one.
-    pub(super) fn click_mark(&mut self, pos: egui::Pos2) -> bool {
+    /// Reports a click on a mark with a host ID.
+    pub(super) fn click_mark(&mut self, pos: egui::Pos2) {
         let Some(hit) = self.mark_at(pos) else {
-            return false;
+            return;
         };
         let event = ChartEvent::MarkClick {
             id: hit.id.clone(),
@@ -159,7 +154,6 @@ impl Chart {
             time: hit.time,
         };
         self.host_events.push(event);
-        true
     }
 
     /// Connects a source of bar marks and time-axis events. Replacing or removing the source

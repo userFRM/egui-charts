@@ -13,7 +13,7 @@ pub enum CrosshairMode {
     /// Normal crosshair (snaps x to the bar center and follows the pointer value)
     #[default]
     Normal,
-    /// Magnet crosshair (snaps to the nearest visible OHLC or study value)
+    /// Magnet crosshair (snaps to the nearest visible OHLC, study or comparison value)
     Magnet,
     /// Magnet crosshair that snaps the price pane to the bar's close only. Volume and study
     /// panes snap to their values as with `Magnet`.

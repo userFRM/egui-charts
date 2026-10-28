@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
-- `ChartEvent::MarkClick { id, series, time }` reports a primary click on a bar mark that has a `Marker::id`, through `Chart::drain_events`. The hit area is the one that shows the mark's tooltip, so only visible marks respond; of overlapping marks the one painted on top is reported, and the click neither selects nor deselects a series or study. Drawing tools and the eraser take the click first. `render_markers` now returns the index and hit area of each marker it drew. ([#1106](https://github.com/userFRM/egui-charts/issues/1106))
+- `ChartEvent::MarkClick { id, series, time }` reports a primary click on a bar mark that has a `Marker::id`, through `Chart::drain_events`. The hit area is the one that shows the mark's tooltip, so only visible marks respond; of overlapping marks the one painted on top is reported, and the click neither selects nor deselects a series or study. Drawing tools and the eraser take the click first. ([#1106](https://github.com/userFRM/egui-charts/issues/1106))
 
 - Trading settings persist line extension, left, centre or right label placement, and whether `Trading::export_image` and `export_png` include visible trading overlays. Migration: `TradingSettings` literals add `extend_lines: true`, `label_alignment: TradingLabelAlignment::Right` and `include_in_image: false`, or use defaults; `TradingLineOptions` literals add `extend_lines` and `label_alignment`. ([#994](https://github.com/userFRM/egui-charts/issues/994))
 

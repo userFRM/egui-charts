@@ -1531,6 +1531,36 @@ mod tests {
         assert_eq!(at(&chart, other + 1.0), main);
     }
 
+    /// The magnet reaches a study drawn on its own independent scale through that scale, not
+    /// the main one, so its output near the bottom of the pane attracts the crosshair.
+    #[test]
+    fn magnet_snaps_to_study_values_on_their_own_scale() {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0, 120.0])));
+        chart.set_crosshair_mode(crate::config::CrosshairMode::Magnet);
+        let id = chart.add_indicator(Box::new(
+            crate::studies::CustomIndicator::new("Independent", |bars| {
+                (0..bars.len())
+                    .map(|at| crate::studies::IndicatorValue::Single(30.0 - 10.0 * at as f64))
+                    .collect()
+            })
+            .with_scale(crate::studies::StudyScale::Independent),
+        ));
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let rect = chart.last_rendered_price_rect;
+        let main = chart.last_price_map.price_to_y(120.0);
+        let at = |chart: &Chart, y: f32| {
+            chart
+                .snap_crosshair(egui::pos2(rect.center().x, y), &chart.last_price_map, 2)
+                .y
+        };
+        let study = at(&chart, rect.bottom() - 1.0);
+        assert!(study > rect.center().y, "{study} {main}");
+        assert_eq!(at(&chart, main + 1.0), main);
+        chart.set_indicator_visible(id, false);
+        assert_eq!(at(&chart, rect.bottom() - 1.0), main);
+    }
+
     /// Logarithms are monotone on positive prices. With 10% margins, ln(2)..ln(100)
     /// occupies 80% of the pane; a lone zero-crossing bar instead starts at ln(5).
     #[test]
