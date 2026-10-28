@@ -40,7 +40,7 @@ use crate::model::{Bar, Session, SessionWindow, Timeframe, TimezoneId};
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Offset, TimeZone, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
 use egui::Color32;
 
 /// The period over which [`VolumeWeightedAvgPrice`] accumulates before it restarts.
@@ -70,6 +70,18 @@ const VWAP_ANCHORS: [VwapAnchor; 6] = [
     VwapAnchor::Year,
     VwapAnchor::Events,
 ];
+
+/// The most bands, and the most event anchors, that the study inputs can hold.
+const MAX_BANDS: usize = 10;
+const MAX_EVENTS: usize = 1000;
+
+/// The local date and time of an event anchor in inputs, to the second.
+const EVENT_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+
+/// The index in a slot input id such as `band_2`.
+fn slot(id: &str, prefix: &str) -> Option<usize> {
+    id.strip_prefix(prefix)?.parse().ok()
+}
 
 impl VwapAnchor {
     /// Identifies the period that holds trading day `day`.
@@ -136,6 +148,8 @@ pub struct VolumeWeightedAvgPrice {
     bands: Vec<f64>,
     percentage_bands: bool,
     event_anchors: Vec<DateTime<Utc>>,
+    /// The zone in which the event anchor inputs are written.
+    event_zone: TimezoneId,
 }
 
 #[derive(Clone, Default)]
@@ -165,6 +179,7 @@ impl VolumeWeightedAvgPrice {
             bands: Vec::new(),
             percentage_bands: false,
             event_anchors: Vec::new(),
+            event_zone: TimezoneId::utc(),
         }
     }
 
@@ -193,17 +208,24 @@ impl VolumeWeightedAvgPrice {
 
     /// Adds an upper and a lower band at each multiple of the volume-weighted
     /// standard deviation of the typical price over the period. Multipliers clamp
-    /// to 0 or more, NaN to 0. The bands are drawn in the VWAP colour at half intensity.
+    /// to 0 or more, NaN to 0, and at most ten are kept. The bands are drawn in the VWAP
+    /// colour at half intensity.
     pub fn with_std_dev_bands(mut self, multipliers: impl IntoIterator<Item = f64>) -> Self {
         self.percentage_bands = false;
         self.bands = multipliers
             .into_iter()
+            .take(MAX_BANDS)
             .map(|k| clamp_param(k, 0.0, f64::MAX))
             .collect();
-        let band_color = self.colors[0].gamma_multiply(0.5);
         self.colors.truncate(1);
-        self.colors.resize(self.line_count(), band_color);
+        self.fit_colors();
         self
+    }
+
+    /// One colour per line; lines added by more bands take the VWAP colour at half intensity.
+    fn fit_colors(&mut self) {
+        let band_color = self.colors[0].gamma_multiply(0.5);
+        self.colors.resize(self.line_count(), band_color);
     }
 
     /// Adds symmetric bands at percentages of the absolute VWAP. Percentages
@@ -216,7 +238,8 @@ impl VolumeWeightedAvgPrice {
 
     /// Restart on the first bar at or after each event timestamp. The host supplies
     /// the chosen earnings, dividend or split events; no event feed is requested.
-    /// Timestamps are sorted and deduplicated. Selects `VwapAnchor::Events`.
+    /// Timestamps are sorted and deduplicated. Selects `VwapAnchor::Events`. The study
+    /// inputs write them in the zone of the "Event time zone" input, UTC by default.
     pub fn with_event_anchors(mut self, times: impl IntoIterator<Item = DateTime<Utc>>) -> Self {
         self.event_anchors = times.into_iter().collect();
         self.event_anchors.sort_unstable();
@@ -248,7 +271,7 @@ impl Indicator for VolumeWeightedAvgPrice {
 
     fn inputs(&self) -> Vec<crate::studies::StudyInput> {
         use crate::studies::{InputKind, InputValue, StudyInput};
-        vec![
+        let mut inputs = vec![
             StudyInput::new(
                 "anchor",
                 "Anchor",
@@ -268,9 +291,56 @@ impl Indicator for VolumeWeightedAvgPrice {
                 InputKind::Toggle,
             )
             .with_default(InputValue::Toggle(false)),
-        ]
+            StudyInput::new(
+                "band_count",
+                "Bands",
+                InputValue::Length(self.bands.len()),
+                InputKind::Length(0, MAX_BANDS),
+            )
+            .with_default(InputValue::Length(0)),
+        ];
+        inputs.extend(self.bands.iter().enumerate().map(|(i, k)| {
+            StudyInput::new(
+                format!("band_{i}"),
+                format!("Band {} multiplier", i + 1),
+                InputValue::Number(*k),
+                InputKind::Number(0.0, f64::MAX),
+            )
+            .with_default(InputValue::Number((i + 1) as f64))
+        }));
+        inputs.extend([
+            StudyInput::new(
+                "event_time_zone",
+                "Event time zone",
+                InputValue::Text(self.event_zone.name().to_owned()),
+                InputKind::Text,
+            )
+            .with_default(InputValue::Text("UTC".to_owned())),
+            StudyInput::new(
+                "event_count",
+                "Events",
+                InputValue::Length(self.event_anchors.len()),
+                InputKind::Length(0, MAX_EVENTS),
+            )
+            .with_default(InputValue::Length(0)),
+        ]);
+        inputs.extend(self.event_anchors.iter().enumerate().map(|(i, time)| {
+            let local = time.with_timezone(&self.event_zone).naive_local();
+            StudyInput::new(
+                format!("event_{i}"),
+                format!("Event {} (YYYY-MM-DD HH:MM:SS)", i + 1),
+                InputValue::Text(local.format(EVENT_FORMAT).to_string()),
+                InputKind::Text,
+            )
+            .with_default(InputValue::Text(String::new()))
+        }));
+        inputs
     }
 
+    /// `band_count` and `event_count` resize their lists, so they come first among the slots
+    /// of an applied set of inputs; a slot past the end of its list has nothing to edit and is
+    /// accepted unchanged. Times are read in the current "Event time zone", and a repeated
+    /// local time takes its first occurrence. Events are applied sorted and deduplicated.
     fn set_input(
         &mut self,
         id: &str,
@@ -279,6 +349,12 @@ impl Indicator for VolumeWeightedAvgPrice {
         use crate::studies::InputValue;
         // Older templates stored this inferred flag; it never controlled the calculation.
         if id == "daily" && matches!(value, InputValue::Toggle(_)) {
+            return Ok(());
+        }
+        if slot(id, "band_").is_some_and(|i| (self.bands.len()..MAX_BANDS).contains(&i))
+            || slot(id, "event_")
+                .is_some_and(|i| (self.event_anchors.len()..MAX_EVENTS).contains(&i))
+        {
             return Ok(());
         }
         let schema = self
@@ -292,6 +368,34 @@ impl Indicator for VolumeWeightedAvgPrice {
         match (id, value) {
             ("anchor", InputValue::Choice(index)) => self.anchor = VWAP_ANCHORS[index],
             ("percentage_bands", InputValue::Toggle(value)) => self.percentage_bands = value,
+            ("band_count", InputValue::Length(count)) => {
+                let mut next = self.bands.len();
+                self.bands.resize_with(count, || {
+                    next += 1;
+                    next as f64
+                });
+                self.fit_colors();
+            }
+            ("event_time_zone", InputValue::Text(name)) => {
+                self.event_zone = TimezoneId::named(&name).ok_or("unknown time zone")?;
+            }
+            ("event_count", InputValue::Length(count)) => {
+                self.event_anchors.resize(count, DateTime::UNIX_EPOCH);
+            }
+            (id, InputValue::Number(value)) if slot(id, "band_").is_some() => {
+                self.bands[slot(id, "band_").unwrap()] = value;
+            }
+            (id, InputValue::Text(text)) if slot(id, "event_").is_some() => {
+                let local = NaiveDateTime::parse_from_str(&text, EVENT_FORMAT)
+                    .or_else(|_| NaiveDateTime::parse_from_str(&text, "%Y-%m-%d %H:%M"))
+                    .map_err(|_| "event time must read YYYY-MM-DD HH:MM:SS")?;
+                self.event_anchors[slot(id, "event_").unwrap()] = self
+                    .event_zone
+                    .from_local_datetime(&local)
+                    .earliest()
+                    .ok_or("event time does not exist in the time zone")?
+                    .with_timezone(&Utc);
+            }
             _ => return Err("invalid VWAP input"),
         }
         self.calculate(&[]);
@@ -326,6 +430,10 @@ impl Indicator for VolumeWeightedAvgPrice {
             (&self.time_zone, self.windows.as_slice()),
             |(zone, windows)| (zone, windows.as_slice()),
         );
+        // Inputs keep the events in the order they were written.
+        let mut events = self.event_anchors.clone();
+        events.sort_unstable();
+        events.dedup();
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
                 // A bar with a non-finite price or volume has no value and adds nothing.
@@ -342,7 +450,7 @@ impl Indicator for VolumeWeightedAvgPrice {
                 };
                 let current = Some(self.anchor.period(day));
                 let events = if self.anchor == VwapAnchor::Events {
-                    self.event_anchors.partition_point(|time| *time <= bar.time)
+                    events.partition_point(|time| *time <= bar.time)
                 } else {
                     0
                 };
@@ -469,6 +577,7 @@ impl Indicator for VolumeWeightedAvgPrice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::studies::InputValue;
     use chrono::{NaiveDateTime, NaiveTime, TimeZone, Weekday};
 
     struct Case {
@@ -915,5 +1024,83 @@ mod tests {
             study.calculate(&[Bar::new(time, 1.0, 1.0, 1.0, 1.0, 1.0)]);
             assert_eq!(study.values().len(), 1, "{zone}");
         }
+    }
+
+    /// Hourly bars at 13:00, 14:00 and 15:00 UTC with prices 10, 20, 40 and volumes 1, 1, 2.
+    /// Events typed in New York, five hours behind UTC before 8 March, as 09:00 twice and 08:00
+    /// are the instants 14:00 and 13:00 UTC once each: the average restarts at 14:00, so the last
+    /// bar is (20 + 2 * 40) / 3, where an event read as UTC would leave (10 + 20 + 80) / 4.
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn event_anchors_are_edited_through_inputs_in_their_time_zone() {
+        use crate::studies::InputValue::{Length, Text};
+        let bars: Vec<_> = [(13, 10.0, 1.0), (14, 20.0, 1.0), (15, 40.0, 2.0)]
+            .into_iter()
+            .map(|(hour, price, volume)| {
+                let time = Utc.with_ymd_and_hms(2026, 3, 2, hour, 0, 0).unwrap();
+                Bar::new(time, price, price, price, price, volume)
+            })
+            .collect();
+        let mut study = VolumeWeightedAvgPrice::new();
+        study.set_input("anchor", InputValue::Choice(5)).unwrap();
+        study
+            .set_input("event_time_zone", Text("America/New_York".into()))
+            .unwrap();
+        study.set_input("event_count", Length(3)).unwrap();
+        for (i, time) in [
+            "2026-03-02 09:00:00",
+            "2026-03-02 08:00",
+            "2026-03-02 09:00:00",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            study
+                .set_input(&format!("event_{i}"), Text(time.into()))
+                .unwrap();
+        }
+        assert!(study.set_input("event_0", Text("tomorrow".into())).is_err());
+        study.calculate(&bars);
+        let last = study.values().value(0, 2).unwrap();
+        assert!((last - 100.0 / 3.0).abs() < 1e-12, "{last}");
+    }
+
+    /// Bands and events are inputs that a template restores, with one style per resulting line,
+    /// and editing the number of bands through a chart's settings resizes the styles.
+    #[test]
+    fn bands_and_events_survive_a_template_and_resize_styles() {
+        use crate::studies::{ConfiguredStudy, InputValue::Length, StudyTemplate};
+        let event = Utc.with_ymd_and_hms(2026, 3, 2, 14, 30, 0).unwrap();
+        let study = VolumeWeightedAvgPrice::new()
+            .with_percentage_bands([0.5, 2.5])
+            .with_event_anchors([event]);
+        let study = ConfiguredStudy::new(Box::new(study));
+        let restored = StudyTemplate::from_study(&study).create().unwrap();
+        let inputs = |s: &dyn Indicator| {
+            s.inputs()
+                .into_iter()
+                .map(|i| (i.id, i.value))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(inputs(&study), inputs(&*restored));
+        assert_eq!(restored.line_count(), 5);
+
+        let mut edited = study.clone();
+        let mut settings = edited.settings();
+        settings.plots[0].width = 3.0;
+        edited
+            .apply_settings(&[("band_count".into(), Length(3))], settings)
+            .unwrap();
+        assert_eq!(edited.line_count(), 7);
+        let plots = edited.settings().plots;
+        assert_eq!(plots.len(), 7);
+        assert_eq!(plots[0].width, 3.0);
+        let bands: Vec<_> = edited
+            .inputs()
+            .into_iter()
+            .filter(|i| i.id.starts_with("band_") && i.id != "band_count")
+            .map(|i| i.value)
+            .collect();
+        assert_eq!(bands, [0.5, 2.5, 3.0].map(InputValue::Number));
     }
 }
