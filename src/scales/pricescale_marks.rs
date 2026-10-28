@@ -194,7 +194,7 @@ impl PriceMarkGenerator {
                 let label = if map.price_precision().is_none() && precision > 8 {
                     let mut label = self.format_price(curr_price, precision, true);
                     if map.transform().mode == PriceScaleMode::Percentage {
-                        if !curr_price.is_sign_negative() {
+                        if !label.starts_with('-') {
                             label.insert(0, '+');
                         }
                         label.push('%');
@@ -380,6 +380,7 @@ impl PriceMarkGenerator {
     /// Format price with given precision
     fn format_price(&self, price: f64, precision: usize, automatic: bool) -> String {
         if automatic && precision > 8 {
+            let price = if price == 0.0 { 0.0 } else { price };
             let digits = (price.abs().log10().floor() + precision as f64).clamp(0.0, 17.0) as usize;
             format!("{price:.digits$e}")
         } else {

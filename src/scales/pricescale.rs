@@ -648,13 +648,15 @@ mod tests {
                 expected
             );
         }
-        let map = PriceMap::new(transform, PriceRange::new(-0.35, 0.45), 0.0, 500.0, false);
-        let zero = map
-            .marks()
-            .into_iter()
-            .find(|m| m.price.abs() < 1e-9)
-            .unwrap();
-        assert_eq!(zero.label, "+0.000%");
+        for (min, max, expected) in [(-0.35, 0.45, "+0.000%"), (-0.0, 1e-10, "+0e0%")] {
+            let map = PriceMap::new(transform, PriceRange::new(min, max), 0.0, 500.0, false);
+            let zero = map
+                .marks()
+                .into_iter()
+                .find(|m| m.price.abs() < (max - min) * 1e-9)
+                .unwrap();
+            assert_eq!(zero.label, expected);
+        }
     }
 
     #[test]
