@@ -181,7 +181,16 @@ impl PriceMarkGenerator {
 
                 // Determine precision based on price value and step
                 let precision = map.price_precision().unwrap_or_else(|| {
-                    let decimals = self.calculate_precision(nice_step);
+                    let mut decimals = self.calculate_precision(nice_step);
+                    if min_step.is_some() {
+                        while decimals < 10 {
+                            let scaled = nice_step * 10f64.powi(decimals as i32);
+                            if (scaled - scaled.round()).abs() <= scaled * f64::EPSILON * 4.0 {
+                                break;
+                            }
+                            decimals += 1;
+                        }
+                    }
                     if matches!(
                         map.transform().mode,
                         PriceScaleMode::Normal | PriceScaleMode::Logarithmic
@@ -519,6 +528,7 @@ mod tests {
             (Normal, 0.01, 0.9, 0.03, Some(2), None),
             (Logarithmic, 4500.0, 4503.75, 0.25, Some(2), None),
             (Logarithmic, 0.01, 1.0, 0.03, None, None),
+            (Normal, 100.0, 101.0, 1.0 / 32.0, None, Some("100.125")),
             (Normal, 0.012, 0.013, 1e-6, None, Some("0.01210000")),
         ] {
             let (min, max) = if mode == Logarithmic {
