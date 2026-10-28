@@ -2622,6 +2622,8 @@ impl DemoApp {
         self.drain_chart_events(ui.ctx());
         self.menus
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
+        self.menus
+            .set_watchlists(self.watchlist.lists().iter().map(|list| list.name.as_str()));
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
             self.handle_context_action(ui.ctx(), action);
         }
@@ -2792,6 +2794,11 @@ impl DemoApp {
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
+            ContextMenuAction::AddToWatchlist { list, symbol } => {
+                if !self.watchlist.add_symbol_to(list, &symbol) {
+                    self.notify(format!("{symbol} is already in that watchlist"));
+                }
+            }
             ContextMenuAction::ResetChart => self.chart.reset_chart_view(),
             ContextMenuAction::ExportCsv => self.export_csv(None),
             ContextMenuAction::Order(request) => self.trading.open_ticket(request),
