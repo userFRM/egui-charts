@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The depth ladder's View menu shows columns for the order count of each side, the observed size change of each side and the volume traded at the bid and the ask, independently, beside the resting size and the last account fill. The hover text uses the same values: a change is one observed between book snapshots, not confirmed execution or cancellation, and an order count the feed did not send is shown as unavailable. The price column's profile is total volume, delta or bid and ask volume, summed over the retained trades, the trades since the open of the current exchange session, or the trades since a manual reset, which later live trades extend. ([#1077](https://github.com/userFRM/egui-charts/issues/1077))
+
 - `ChartEvent::MarkClick { id, series, time }` reports a primary click on a bar mark that has a `Marker::id`, through `Chart::drain_events`. The hit area is the one that shows the mark's tooltip, so only visible marks respond; of overlapping marks the one painted on top is reported, and the click neither selects nor deselects a series or study. Drawing tools and the eraser take the click first. ([#1106](https://github.com/userFRM/egui-charts/issues/1106))
 
 - `KineticScrollOptions::mouse` continues a released mouse drag with the same damping, speed limits, minimum movement and cancellation as touch inertia, which `enabled` keeps controlling on its own. Migration: `KineticScrollOptions` literals add `mouse: false` or use defaults. ([#1065](https://github.com/userFRM/egui-charts/issues/1065))
