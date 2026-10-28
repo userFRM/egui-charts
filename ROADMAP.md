@@ -102,7 +102,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 ### Calculations and Rendering
 
-- [x] `IndicatorFactory` registers 179 indicators with default features and accepts downstream registrations; the study picker uses that registry.
+- [x] `IndicatorFactory` registers 189 indicators with default features and accepts downstream registrations; the study picker uses that registry.
 - [x] Moving-average families include SMA, EMA, WMA, HMA, ALMA, KAMA and configurable combinations, ribbons and crossing markers.
 - [x] Momentum and trend studies include RSI, MACD, Stochastic, ADX, SuperTrend, Ichimoku and Parabolic SAR.
 - [x] Volatility and channel studies include Bollinger Bands, ATR, Keltner, Donchian and historical volatility.

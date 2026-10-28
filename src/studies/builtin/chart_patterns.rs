@@ -8,6 +8,7 @@
 //! confirms it.
 
 use super::clamp_param;
+use super::swings::{Swing, Swings};
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
@@ -224,16 +225,6 @@ struct Config {
     handle: f64,
 }
 
-#[derive(Clone, Copy)]
-struct Pivot {
-    /// Position among the finite bars.
-    seq: usize,
-    /// Index in the calculated bars.
-    bar: usize,
-    price: f64,
-    high: bool,
-}
-
 /// A straight line in position and price.
 #[derive(Clone, Copy)]
 struct Line {
@@ -243,11 +234,11 @@ struct Line {
 }
 
 impl Line {
-    fn through(a: &Pivot, b: &Pivot) -> Self {
+    fn through(a: &Swing, b: &Swing) -> Self {
         Self {
-            seq: a.seq as f64,
+            seq: a.position as f64,
             price: a.price,
-            slope: (b.price - a.price) / (b.seq as f64 - a.seq as f64),
+            slope: (b.price - a.price) / (b.position as f64 - a.position as f64),
         }
     }
 
@@ -266,7 +257,7 @@ enum Outcome {
 #[derive(Clone)]
 struct Candidate {
     kind: FormationKind,
-    anchors: Vec<Pivot>,
+    anchors: Vec<Swing>,
     /// Index of the anchor the drawn boundaries start at.
     from: usize,
     upper: Line,
@@ -279,7 +270,7 @@ struct Candidate {
 
 impl Candidate {
     fn resolve(&self, close: f64, seq: usize, max_length: usize) -> Option<Outcome> {
-        if seq - self.anchors[0].seq > max_length {
+        if seq - self.anchors[0].position > max_length {
             Some(Outcome::Fail)
         } else if close > self.upper.at(seq) {
             Some(self.on_up)
@@ -305,12 +296,17 @@ impl Candidate {
                 FormationStatus::Developing
             },
             direction,
-            anchors: self.anchors.iter().map(|p| (p.bar, p.price)).collect(),
+            anchors: self.anchors.iter().map(|p| (p.index, p.price)).collect(),
             boundaries: [self.upper, self.lower]
                 .iter()
                 .zip(self.shown)
                 .filter(|&(_, shown)| shown)
-                .map(|(line, _)| [(start.bar, line.at(start.seq)), (end.1, line.at(end.0))])
+                .map(|(line, _)| {
+                    [
+                        (start.index, line.at(start.position)),
+                        (end.1, line.at(end.0)),
+                    ]
+                })
                 .collect(),
             confirmed_at: confirmed.then_some(end.1),
         }
@@ -322,26 +318,29 @@ fn near(a: f64, b: f64, tolerance: f64) -> bool {
     (a - b).abs() <= tolerance / 100.0 * (a.abs() + b.abs()) / 2.0
 }
 
-fn last_pivots(pivots: &VecDeque<Pivot>, count: usize) -> Option<Vec<Pivot>> {
+fn last_pivots(pivots: &VecDeque<Swing>, count: usize) -> Option<Vec<Swing>> {
     (pivots.len() >= count).then(|| pivots.iter().skip(pivots.len() - count).copied().collect())
 }
 
 /// A flag or pennant: a pole from the first pivot to the second, then lines through the
 /// second and fourth pivots and through the third and fifth.
-fn flag(config: &Config, pivots: &VecDeque<Pivot>, bull: bool, pennant: bool) -> Option<Candidate> {
+fn flag(config: &Config, pivots: &VecDeque<Swing>, bull: bool, pennant: bool) -> Option<Candidate> {
     let w = last_pivots(pivots, 5)?;
     if w[0].high == bull || (w[1].price > w[0].price) != bull {
         return None;
     }
     let pole = (w[1].price - w[0].price).abs() / w[0].price.abs() * 100.0;
-    let length = w[4].seq - w[1].seq;
-    if pole < config.pole || length < config.min_length || w[4].seq - w[0].seq > config.max_length {
+    let length = w[4].position - w[1].position;
+    if pole < config.pole
+        || length < config.min_length
+        || w[4].position - w[0].position > config.max_length
+    {
         return None;
     }
     let (a, b) = (Line::through(&w[1], &w[3]), Line::through(&w[2], &w[4]));
     let (upper, lower) = if bull { (a, b) } else { (b, a) };
     let width = |seq| upper.at(seq) - lower.at(seq);
-    let (start, end) = (width(w[1].seq), width(w[4].seq));
+    let (start, end) = (width(w[1].position), width(w[4].position));
     let middle = (w[0].price + w[1].price) / 2.0;
     if start <= 0.0 || end <= 0.0 || w[2..].iter().step_by(2).any(|p| (p.price > middle) != bull) {
         return None;
@@ -378,19 +377,19 @@ fn flag(config: &Config, pivots: &VecDeque<Pivot>, bull: bool, pennant: bool) ->
 }
 
 /// A rectangle or triangle through the last `2 * touches` pivots.
-fn channel(config: &Config, pivots: &VecDeque<Pivot>) -> Option<Candidate> {
+fn channel(config: &Config, pivots: &VecDeque<Swing>) -> Option<Candidate> {
     let w = last_pivots(pivots, 2 * config.touches)?;
     let side =
-        |high: bool| -> Vec<Pivot> { w.iter().filter(|p| p.high == high).copied().collect() };
+        |high: bool| -> Vec<Swing> { w.iter().filter(|p| p.high == high).copied().collect() };
     let (highs, lows) = (side(true), side(false));
     let upper = Line::through(&highs[0], highs.last()?);
     let lower = Line::through(&lows[0], lows.last()?);
-    let on_line = |pivots: &[Pivot], line: Line| {
+    let on_line = |pivots: &[Swing], line: Line| {
         pivots
             .iter()
-            .all(|p| near(p.price, line.at(p.seq), config.tolerance))
+            .all(|p| near(p.price, line.at(p.position), config.tolerance))
     };
-    let (first, last) = (w[0].seq, w[w.len() - 1].seq);
+    let (first, last) = (w[0].position, w[w.len() - 1].position);
     if !on_line(&highs, upper)
         || !on_line(&lows, lower)
         || !(config.min_length..=config.max_length).contains(&(last - first))
@@ -453,7 +452,7 @@ fn level(price: f64) -> Line {
 /// A double or triple top or bottom through the last three or five pivots.
 fn multiple(
     config: &Config,
-    pivots: &VecDeque<Pivot>,
+    pivots: &VecDeque<Swing>,
     top: bool,
     triple: bool,
 ) -> Option<Candidate> {
@@ -470,12 +469,12 @@ fn multiple(
     let mean = peaks.iter().sum::<f64>() / peaks.len() as f64;
     let apart = w
         .windows(3)
-        .all(|p| p[2].seq - p[0].seq >= config.min_length);
+        .all(|p| p[2].position - p[0].position >= config.min_length);
     // A valley this far below (above) a top (bottom).
     let deep = |valley: f64| (mean - valley) * if top { 1.0 } else { -1.0 } / mean.abs() * 100.0;
     if !near(high, low, config.tolerance)
         || !apart
-        || w[w.len() - 1].seq - w[0].seq > config.max_length
+        || w[w.len() - 1].position - w[0].position > config.max_length
         || valleys.iter().any(|&v| deep(v) < config.depth)
     {
         return None;
@@ -533,14 +532,14 @@ fn multiple(
 }
 
 /// A head and shoulders (or its inverse) through the last five pivots.
-fn head_and_shoulders(config: &Config, pivots: &VecDeque<Pivot>, top: bool) -> Option<Candidate> {
+fn head_and_shoulders(config: &Config, pivots: &VecDeque<Swing>, top: bool) -> Option<Candidate> {
     let w = last_pivots(pivots, 5)?;
     if w[0].high != top {
         return None;
     }
     let side = if top { 1.0 } else { -1.0 };
     let (left, first, head, second, right) = (w[0], w[1], w[2], w[3], w[4]);
-    let above = |shoulder: &Pivot| {
+    let above = |shoulder: &Swing| {
         side * (head.price - shoulder.price) / shoulder.price.abs() * 100.0 >= config.depth
     };
     if !near(left.price, right.price, config.tolerance)
@@ -548,7 +547,7 @@ fn head_and_shoulders(config: &Config, pivots: &VecDeque<Pivot>, top: bool) -> O
         || !above(&right)
         || side * first.price >= side * left.price
         || side * second.price >= side * right.price
-        || !(config.min_length..=config.max_length).contains(&(right.seq - left.seq))
+        || !(config.min_length..=config.max_length).contains(&(right.position - left.position))
     {
         return None;
     }
@@ -587,7 +586,7 @@ fn head_and_shoulders(config: &Config, pivots: &VecDeque<Pivot>, top: bool) -> O
 
 /// A cup and handle (or its inverse) through the last four pivots: the rims, the cup's
 /// extreme between them and the handle's.
-fn cup(config: &Config, pivots: &VecDeque<Pivot>, bull: bool) -> Option<Candidate> {
+fn cup(config: &Config, pivots: &VecDeque<Swing>, bull: bool) -> Option<Candidate> {
     let w = last_pivots(pivots, 4)?;
     if w[0].high != bull {
         return None;
@@ -596,18 +595,18 @@ fn cup(config: &Config, pivots: &VecDeque<Pivot>, bull: bool) -> Option<Candidat
     let (left, base, right, handle) = (w[0], w[1], w[2], w[3]);
     let mean = (left.price + right.price) / 2.0;
     let depth = side * (mean - base.price);
-    let duration = right.seq - left.seq;
+    let duration = right.position - left.position;
     let pullback = side * (right.price - handle.price);
     if !near(left.price, right.price, config.tolerance)
         || depth <= 0.0
         || depth / mean.abs() * 100.0 < config.depth
         || !(config.min_length..=config.max_length).contains(&duration)
-        || handle.seq - left.seq > config.max_length
-        || 4 * (base.seq - left.seq) < duration
-        || 4 * (right.seq - base.seq) < duration
+        || handle.position - left.position > config.max_length
+        || 4 * (base.position - left.position) < duration
+        || 4 * (right.position - base.position) < duration
         || pullback <= 0.0
         || pullback > config.handle / 100.0 * depth
-        || 2 * (handle.seq - right.seq) > duration
+        || 2 * (handle.position - right.position) > duration
     {
         return None;
     }
@@ -648,12 +647,9 @@ fn cup(config: &Config, pivots: &VecDeque<Pivot>, bull: bool) -> Option<Candidat
 struct State {
     /// Bars seen, finite or not.
     index: usize,
-    /// Finite bars seen.
-    seq: usize,
     /// Index of the last finite bar.
     last: usize,
-    recent: VecDeque<(usize, f64, f64)>,
-    pivots: VecDeque<Pivot>,
+    swings: Swings,
     pending: Vec<Candidate>,
     confirmed: Vec<Formation>,
     /// Per kind, the last pivot of the latest formation found.
@@ -675,17 +671,15 @@ impl State {
             .iter()
             .all(|v| v.is_finite())
         {
+            self.swings.skip();
             return marks;
         }
-        let seq = self.seq;
-        self.seq += 1;
+        let seq = self.swings.position;
         self.last = index;
-        let width = config.strength.saturating_mul(2).saturating_add(1);
-        self.recent.push_back((index, bar.high, bar.low));
-        if self.recent.len() > width {
-            self.recent.pop_front();
-        }
-        if self.recent.len() == width && self.find_pivot(config, seq) {
+        if self
+            .swings
+            .push(bar, config.strength, config.strength, MAX_PIVOTS)
+        {
             self.detect(config, family, enabled);
         }
         let mut i = 0;
@@ -714,55 +708,8 @@ impl State {
         marks
     }
 
-    /// Adds the pivot at the middle of the recent bars, if there is one. Returns whether the
-    /// pivots changed.
-    fn find_pivot(&mut self, config: &Config, seq: usize) -> bool {
-        let n = config.strength;
-        let (bar, high, low) = self.recent[n];
-        let others = |keep: fn(f64, f64) -> bool, pick: fn(&(usize, f64, f64)) -> f64, value| {
-            self.recent
-                .iter()
-                .enumerate()
-                .filter(|&(j, _)| j != n)
-                .all(|(j, b)| keep(value, pick(b)) || (j > n && value == pick(b)))
-        };
-        let is_high = others(|v, o| v > o, |b| b.1, high);
-        let is_low = others(|v, o| v < o, |b| b.2, low);
-        let pivot = match (is_high, is_low) {
-            (true, false) => Pivot {
-                seq: seq - n,
-                bar,
-                price: high,
-                high: true,
-            },
-            (false, true) => Pivot {
-                seq: seq - n,
-                bar,
-                price: low,
-                high: false,
-            },
-            _ => return false,
-        };
-        match self.pivots.back_mut() {
-            Some(last) if last.high == pivot.high => {
-                if (pivot.price > last.price) == pivot.high && pivot.price != last.price {
-                    *last = pivot;
-                } else {
-                    return false;
-                }
-            }
-            _ => {
-                self.pivots.push_back(pivot);
-                if self.pivots.len() > MAX_PIVOTS {
-                    self.pivots.pop_front();
-                }
-            }
-        }
-        true
-    }
-
     fn detect(&mut self, config: &Config, family: PatternFamily, enabled: &[bool; 8]) {
-        let pivots = &self.pivots;
+        let pivots = &self.swings.pivots;
         let found: Vec<Option<Candidate>> = match family {
             PatternFamily::Continuation => vec![
                 flag(config, pivots, true, false),
@@ -802,8 +749,8 @@ impl State {
                 .position(|&k| k == candidate.kind)
                 .unwrap();
             let (first, last) = (
-                candidate.anchors[0].seq,
-                candidate.anchors.last().unwrap().seq,
+                candidate.anchors[0].position,
+                candidate.anchors.last().unwrap().position,
             );
             if !enabled[slot] || self.used[slot].is_some_and(|used| first <= used) {
                 continue;
@@ -972,7 +919,7 @@ impl ChartPatterns {
     /// calculation. Developing formations are re-evaluated on every bar.
     pub fn formations(&self) -> Vec<Formation> {
         let state = self.stepper.state();
-        let end = (state.seq.saturating_sub(1), state.last);
+        let end = (state.swings.position.saturating_sub(1), state.last);
         let mut formations = state.confirmed.clone();
         formations.extend(
             state
