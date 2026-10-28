@@ -3,7 +3,7 @@
 use super::document::{Received, StoredDocument};
 use super::{Storage, StoreKind};
 use crate::config::DrawingToolType;
-use crate::model::Timeframe;
+use crate::model::{ReplaySession, Timeframe, Watchlist};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -40,11 +40,9 @@ pub struct UserSettings {
     /// the built-in defaults.
     pub drawing_defaults: BTreeMap<String, serde_json::Value>,
     /// The watchlists, in order.
-    #[cfg(feature = "ui")]
-    pub watchlists: Vec<crate::ui::widget_bar::Watchlist>,
+    pub watchlists: Vec<Watchlist>,
     /// The replay position to resume, with the interval its history was fetched at.
-    #[cfg(feature = "ui")]
-    pub replay_session: Option<(crate::ui::replay::ReplaySession, Timeframe)>,
+    pub replay_session: Option<(ReplaySession, Timeframe)>,
 }
 
 fn known_tools<'de, D: Deserializer<'de>>(
