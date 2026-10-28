@@ -47,7 +47,7 @@ pub(crate) struct FeedLink {
     retries: Vec<(f64, Request, u32)>,
     subscription: Option<SubscriptionId>,
     instrument: Option<Instrument>,
-    trades: Trades,
+    pub(super) trades: Trades,
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
     /// The trades as a footprint on the instrument's tick, while the chart type draws from them.
@@ -186,10 +186,18 @@ impl Chart {
     /// the series and its studies, then resolves, loads and subscribes it, in one load per
     /// `show` however many setters ran; an unchanged one does nothing, also after an error.
     /// Drawings and markers are retained separately for each symbol. A changed symbol clears
-    /// chart undo and zoom history and returns its price scale to autoscaling. Without a feed
-    /// replace the bars with [`set_data`](Self::set_data).
+    /// zoom history and returns its price scale to autoscaling. It also clears chart undo
+    /// history, unless the host makes it inside [`Self::user_action`]: then the navigation is
+    /// an undo step that restores the symbol, interval and viewport, and the steps before it
+    /// stay with their own symbol. Without a feed replace the bars with
+    /// [`set_data`](Self::set_data).
     pub fn set_symbol(&mut self, symbol: impl Into<String>) {
-        let symbol = symbol.into();
+        let keep_history = self.history.recording();
+        self.change_symbol(symbol.into(), keep_history);
+    }
+
+    /// Shows `symbol` from the next frame, keeping chart undo history when asked to.
+    pub(super) fn change_symbol(&mut self, symbol: String, keep_history: bool) {
         if symbol != self.symbol {
             self.clear_source_signals();
             self.reload_price_targets();
@@ -212,6 +220,7 @@ impl Chart {
                 self.drawings.cancel_curr_drawing();
                 self.drawings.end_drag_handle();
                 self.drawings.deselect();
+                self.detach_pending_drawings();
                 let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
                 next.0.set_sync_enabled(self.drawings.sync_enabled);
                 next.0.registry = self.drawings.registry.clone();
@@ -226,6 +235,7 @@ impl Chart {
                 next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
                 std::mem::swap(&mut self.drawings, &mut next.0);
                 std::mem::swap(&mut self.marks, &mut next.1);
+                self.attach_pending_drawings();
                 if !next.0.drawings.is_empty()
                     || !next.1.is_empty()
                     || !next
@@ -246,7 +256,9 @@ impl Chart {
                     self.symbol_markers.insert(self.symbol.clone(), next_marks);
                 }
             }
-            self.history.clear();
+            if !keep_history {
+                self.history.clear();
+            }
             self.history.edits += 1;
             self.state.price_scale_mut().reset();
             self.state.clear_zoom_history();
@@ -1401,6 +1413,33 @@ mod tests {
         }
     }
 
+    /// Undoing a user's symbol navigation asks the feed for the earlier symbol again, and an
+    /// answer still owed for the symbol left behind changes nothing.
+    #[test]
+    fn undone_symbol_navigation_reloads_the_symbol_and_ignores_stale_replies() {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.page().send(page(bars(6), true));
+        frames.run(&mut chart);
+        chart.user_action(|chart| chart.set_symbol("B"));
+        frames.run(&mut chart);
+        let stale = feed.page();
+        feed.calls();
+        assert!(chart.undo());
+        frames.run(&mut chart);
+        assert!(feed.calls().contains(&history("A", Timeframe::Min1, None)));
+        stale.send(page(bars(3), true));
+        feed.page().send(page(bars(6), true));
+        frames.run(&mut chart);
+        assert_eq!(chart.symbol(), "A");
+        assert_eq!(chart.bars(SeriesId::MAIN), bars(6));
+        assert!(chart.redo());
+        frames.run(&mut chart);
+        assert!(feed.calls().contains(&history("B", Timeframe::Min1, None)));
+    }
+
     /// A full retention window stops paging without claiming the feed has no more history.
     /// Time and trade-count bars both keep their newest slots across per-frame tick batches.
     #[test]
@@ -1505,6 +1544,63 @@ mod tests {
                 "execution charts retain candles when the interval has no time slots"
             );
         }
+    }
+
+    /// Range bars follow the order of the supplied executions, not only the OHLC of the bars they
+    /// fall in, and the OHLC approximation stands in while the chart holds none.
+    #[test]
+    fn range_bars_are_built_from_the_held_trades() {
+        use crate::model::RangeBarSource::{Executions, OhlcApproximation};
+        let start = bars(1)[0].time;
+        // Both paths open at 100, high 104, low 96 and close at 100: up first, then down first.
+        let paths = [[100.0, 104.0, 96.0, 100.0], [100.0, 96.0, 104.0, 100.0]];
+        let mut closes = Vec::new();
+        for prices in paths {
+            let feed = Arc::new(Script::default());
+            let mut chart = fed(&feed, Some("A"));
+            chart.set_chart_type(crate::model::ChartType::Range);
+            chart.set_chart_type_params(crate::model::ChartTypeParams {
+                range_size: 4.0,
+                ..Default::default()
+            });
+            let mut frames = Frames::new();
+            frames.run(&mut chart);
+            feed.resolve().send(Ok(Instrument::new("A")));
+            let mut history = bars(1);
+            (history[0].high, history[0].low) = (104.0, 96.0);
+            feed.page().send(page(history, true));
+            frames.run(&mut chart);
+            assert_eq!(chart.range_bar_source(), Some(OhlcApproximation));
+            let sink = feed.sink();
+            for (i, price) in prices.into_iter().enumerate() {
+                sink.push_tick(Tick::new(
+                    start + TimeDelta::seconds(i as i64),
+                    price,
+                    1.0,
+                    None,
+                ));
+            }
+            frames.run(&mut chart);
+            assert_eq!(chart.range_bar_source(), Some(Executions));
+            closes.push(
+                chart
+                    .state
+                    .shown()
+                    .iter()
+                    .map(|bar| bar.close)
+                    .collect::<Vec<_>>(),
+            );
+            // A replay cursor after the second trade leaves only its first range bar.
+            chart.set_replay_time(Some(start + TimeDelta::seconds(2)));
+            frames.run(&mut chart);
+            assert_eq!(chart.range_bar_source(), Some(Executions));
+            let shown: Vec<_> = chart.state.shown().iter().map(|bar| bar.close).collect();
+            assert_eq!(shown, [closes[closes.len() - 1][0]]);
+        }
+        assert_eq!(
+            closes,
+            [[104.0, 100.0, 96.0, 100.0], [96.0, 100.0, 104.0, 100.0]]
+        );
     }
 
     #[test]

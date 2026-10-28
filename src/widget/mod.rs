@@ -257,12 +257,16 @@ pub struct Chart {
     pub(crate) studies: IndicatorRegistry,
     study_data: studies_data::StudyDataCache,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
+    /// Range bars built from the held trades, while the chart type is Range.
+    execution_ranges: crate::chart::rendering::candles::price_based::ExecutionRanges,
     #[cfg(feature = "studies")]
     volume_setting: bool,
     #[cfg(feature = "studies")]
     volume_study: Option<SeriesId>,
     /// Id of each study in `studies`.
     pub(crate) study_ids: Vec<SeriesId>,
+    /// The most studies the chart takes through the interface, if capped.
+    study_limit: Option<usize>,
     /// Whether each study in `studies` contributes to the main price auto-scale.
     pub(crate) study_autoscale: Vec<bool>,
     pub(crate) study_inputs: Vec<String>,
@@ -331,17 +335,23 @@ pub struct Chart {
     scale_settings_requested: bool,
     pub(crate) theme_override: Option<crate::theme::Theme>,
     inherited_theme: Option<crate::theme::Theme>,
+    /// Palettes the colours of a restored configuration may still follow, until the next frame.
+    restored_palettes: Vec<ChartConfig>,
     host_events: events::HostEvents,
     pub(crate) indicator_source_request: Option<crate::studies::StudySource>,
     events: Vec<crate::model::Marker>,
     time_scale_events: Vec<crate::model::TimeScaleEvent>,
     event_visibility: crate::model::EventVisibility,
     mark_source: Option<marks::MarkSource>,
-    signal_source: Option<signals::SignalSource>,
+    signal_sources: Vec<signals::SignalSource>,
     targets: targets::TargetState,
     show_price_targets: bool,
     hidden_signal_categories: std::collections::BTreeSet<String>,
     event_click: Option<String>,
+    /// Bar marks with host IDs painted this frame, and those of the previous frame, which
+    /// clicks resolve against.
+    mark_hits: std::cell::RefCell<Vec<marks::MarkHit>>,
+    clickable_marks: Vec<marks::MarkHit>,
     /// Timeframe of the bars, for the legend, the session breaks and the feed
     pub(crate) timeframe: Option<Timeframe>,
     /// The feed the chart loads from, if it was built with one.
@@ -763,7 +773,7 @@ impl Chart {
         self.zoom_just_applied
     }
 
-    /// Sets the crosshair rendering style (Full, Dot, Arrow or Demonstration).
+    /// Sets the crosshair rendering style (Full, Dot, Arrow, Demonstration or Magic).
     ///
     /// Use this to connect a toolbar cursor-type selector to the chart.
     /// The style controls how the crosshair lines and labels are drawn

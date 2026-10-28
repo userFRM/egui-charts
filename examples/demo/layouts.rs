@@ -180,7 +180,7 @@ impl DemoApp {
         }
     }
 
-    pub(super) fn activate_chart_slot(&mut self, slot: usize) {
+    pub(crate) fn activate_chart_slot(&mut self, slot: usize) {
         if slot == self.layout_slot {
             return;
         }
@@ -684,28 +684,23 @@ impl DemoApp {
     /// The settings the demo keeps between sessions.
     pub(super) fn user_settings(&self) -> UserSettings {
         let menu = &self.top_toolbar.layout_menu;
-        UserSettings {
-            theme: self
-                .theme_choice
-                .map(|dark| if dark { "dark" } else { "light" }.into()),
-            symbol: Some(self.state.symbol.clone()),
-            interval: Some(self.state.timeframe),
-            drawing_favorites: self.drawing_toolbar.state.favorites.clone(),
-            layout: menu
-                .curr_layout
-                .clone()
-                .filter(|name| menu.layouts.contains(name)),
-            layout_autosave: menu.autosave,
-        }
+        let mut settings = UserSettings::default();
+        settings.theme = self
+            .theme_choice
+            .map(|dark| if dark { "dark" } else { "light" }.into());
+        settings.symbol = Some(self.state.symbol.clone());
+        settings.interval = Some(self.state.timeframe);
+        settings.drawing_favorites = self.drawing_toolbar.state.favorites.clone();
+        settings.layout = menu
+            .curr_layout
+            .clone()
+            .filter(|name| menu.layouts.contains(name));
+        settings.layout_autosave = menu.autosave;
+        settings
     }
 
     /// Applies stored settings, opening the layout that was open last.
     pub(super) fn apply_user_settings(&mut self, ctx: &egui::Context, settings: UserSettings) {
-        self.theme_choice = match settings.theme.as_deref() {
-            Some("dark") => Some(true),
-            Some("light") => Some(false),
-            _ => None,
-        };
         self.update_theme(ctx);
         // Switching stops a replay the demo restored from its own storage.
         if let Some(symbol) = settings

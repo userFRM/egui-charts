@@ -302,7 +302,7 @@ impl ChartAppState for DemoAppState {
 /// The full demo application.
 pub struct DemoApp {
     pub chart: Chart,
-    layout: ChartLayout,
+    pub(crate) layout: ChartLayout,
     layout_slot: usize,
     extra_charts: Vec<DemoChart>,
     layout_tabs: Vec<LayoutTab>,
@@ -324,9 +324,9 @@ pub struct DemoApp {
     theme_choice: Option<bool>,
 
     // Persistent toolbars.
-    top_toolbar: TopToolbar,
+    pub(crate) top_toolbar: TopToolbar,
     drawing_toolbar: DrawingToolbar,
-    timeframe_toolbar: TimeframeToolbar,
+    pub(crate) timeframe_toolbar: TimeframeToolbar,
     widget_bar: WidgetBar,
 
     // Dialogs (each owns its open/closed state).
@@ -370,7 +370,7 @@ pub struct DemoApp {
     data_window_expanded: bool,
 
     // Host-owned session-only alerts, shown through the library service connection.
-    alerts: AlertsPanel,
+    pub(crate) alerts: AlertsPanel,
     alert_host: Arc<crate::panel_alerts::DemoAlerts>,
     audio: audio::AudioPlayer,
     alert_monitors: std::collections::HashMap<
@@ -380,8 +380,8 @@ pub struct DemoApp {
 
     // Session-only paper account, connected from the broker picker and traded through the
     // library's order ticket and account panel.
-    trading: egui_charts::ui::trading::Trading,
-    paper: Arc<egui_charts::services::PaperAccount>,
+    pub(crate) trading: egui_charts::ui::trading::Trading,
+    pub(crate) paper: Arc<egui_charts::services::PaperAccount>,
     broker_picker: egui_charts::ui::trading::BrokerPicker,
     account_panel: AccountPanelSize,
     // The account settings ask whether to reset the paper account.
@@ -451,12 +451,21 @@ fn sample_widgets() -> [WidgetBarWidget; 2] {
 
 impl DemoApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        Self::new_at(cc, chrono::Utc::now(), false)
+    }
+
+    pub(crate) fn new_at(
+        cc: &eframe::CreationContext<'_>,
+        now: chrono::DateTime<chrono::Utc>,
+        paused: bool,
+    ) -> Self {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
+        // Earlier releases saved active palettes without an explicit choice.
         let theme_choice = cc
             .storage
-            .and_then(|storage| eframe::get_value(storage, "dark_theme"));
+            .and_then(|storage| eframe::get_value(storage, "theme_choice"));
         let dark = theme_choice
             .or_else(|| {
                 cc.egui_ctx
@@ -478,7 +487,8 @@ impl DemoApp {
         options.time_scale.right_offset_pixels = Some(65.0 - 6.1 * 0.5 - 1.0);
         options.time_scale.time_visible = true;
         options.time_scale.seconds_visible = true;
-        let live = Arc::new(LiveFeed::new(symbol, chrono::Utc::now()));
+        let live = Arc::new(LiveFeed::new(symbol, now));
+        live.set_paused(paused);
         let quotes = Arc::new(live::DemoQuotes::new(live.clone()));
         let mut chart = egui_charts::ChartBuilder::new()
             .with_feed(live.clone())
@@ -535,6 +545,12 @@ impl DemoApp {
             .and_then(|storage| eframe::get_value(storage, "interval_preferences"))
         {
             top_toolbar.timeframe_selector.set_preferences(preferences);
+        }
+        if let Some(preferences) = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, "chart_type_preferences"))
+        {
+            top_toolbar.chart_type_selector.set_preferences(preferences);
         }
         let mut timeframe_toolbar = TimeframeToolbar::default();
         timeframe_toolbar.config.active_bg = egui::Color32::TRANSPARENT;
@@ -906,6 +922,7 @@ impl DemoApp {
     fn list_alert_sources(&mut self) {
         use egui_charts::model::AlertSource;
         let bar = self.chart.bars(SeriesId::MAIN).len().saturating_sub(1) as f64;
+        let scale = self.chart.config().right_axis_scale_mode;
         self.alert_dialog.sources = self
             .chart
             .indicators()
@@ -931,7 +948,7 @@ impl DemoApp {
                     .iter()
                     .filter(|d| d.completed)
                     .flat_map(|d| {
-                        let levels = d.alert_levels(bar);
+                        let levels = d.alert_levels(bar, scale);
                         let single = levels.len() == 1;
                         levels.into_iter().map(move |(level, name, _)| {
                             let drawing = format!("{} {}", d.tool_type.as_str(), d.id);
@@ -981,7 +998,9 @@ impl DemoApp {
     }
 
     fn open_indicator_settings(&mut self, id: SeriesId) {
-        if !self.indicator_settings.open_for_chart(&self.chart, id)
+        if id == SeriesId::MAIN {
+            self.open_chart_settings_dialog();
+        } else if !self.indicator_settings.open_for_chart(&self.chart, id)
             && self.chart.series().any(|(series, _)| series == id)
         {
             self.compare_dialog.open();
@@ -1221,6 +1240,9 @@ impl DemoApp {
 
 impl eframe::App for DemoApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if let Some(dark) = self.theme_choice {
+            eframe::set_value(storage, "theme_choice", &dark);
+        }
         let current = self.user_settings();
         self.settings.flush(&current);
         eframe::set_value(
@@ -1236,6 +1258,11 @@ impl eframe::App for DemoApp {
             storage,
             "interval_preferences",
             &self.top_toolbar.timeframe_selector.preferences(),
+        );
+        eframe::set_value(
+            storage,
+            "chart_type_preferences",
+            &self.top_toolbar.chart_type_selector.preferences(),
         );
     }
 
@@ -1365,6 +1392,13 @@ impl eframe::App for DemoApp {
 
         // Transient status notice.
         self.show_notice(ui);
+        if let Some(dark) = self.theme_choice
+            && let Some(storage) = frame.storage_mut()
+            && eframe::get_value::<bool>(storage, "theme_choice") != Some(dark)
+        {
+            eframe::set_value(storage, "theme_choice", &dark);
+            storage.flush();
+        }
         self.storage.flush(frame.storage_mut());
 
         // Repaint continuously while replay is playing.
@@ -1650,6 +1684,7 @@ impl DemoApp {
                     CrosshairStyle::Dot => CursorType::Dot,
                     CrosshairStyle::Arrow | CrosshairStyle::Hidden => CursorType::Arrow,
                     CrosshairStyle::Demonstration => CursorType::Demonstration,
+                    CrosshairStyle::Magic => CursorType::Magic,
                 },
                 eraser_mode_enabled: dm.eraser_mode,
                 stay_in_drawing_mode: dm.stay_in_drawing_mode,
@@ -1753,6 +1788,7 @@ impl DemoApp {
                     CursorType::Dot => CrosshairStyle::Dot,
                     CursorType::Arrow | CursorType::Eraser => CrosshairStyle::Arrow,
                     CursorType::Demonstration => CrosshairStyle::Demonstration,
+                    CursorType::Magic => CrosshairStyle::Magic,
                 });
                 self.chart.drawings_mut().set_active_tool(None);
                 self.chart
@@ -1870,7 +1906,7 @@ impl DemoApp {
             });
     }
 
-    fn toggle_panel(&mut self, icon: RightBarIcon) {
+    pub(crate) fn toggle_panel(&mut self, icon: RightBarIcon) {
         if icon == RightBarIcon::Help {
             self.keyboard_shortcuts.toggle();
         }
@@ -2270,16 +2306,33 @@ impl DemoApp {
         }
     }
 
+    /// Advance the sample clock explicitly while preparing a paused session.
+    #[allow(dead_code, reason = "used by the documentation captures")]
+    pub(crate) fn advance_sample_to(&mut self, time: chrono::DateTime<chrono::Utc>) {
+        self.live.set_paused(false);
+        let mut cursor = self.live.now();
+        while cursor < time {
+            cursor = (cursor + chrono::Duration::seconds(1)).min(time);
+            self.live.advance(cursor);
+        }
+        self.live.set_paused(true);
+    }
+
+    /// Connects the paper account and opens its panel, as its tile in the broker picker does.
+    pub(crate) fn connect_paper(&mut self) {
+        self.trading.set_service(self.paper.clone());
+        self.trading.account_panel.broker = "Paper Trading".to_owned();
+        self.trading.account_panel.accounts = vec!["Paper 1".to_owned()];
+        self.account_panel = AccountPanelSize::Normal;
+    }
+
     /// The account panel of the connected broker, under the chart and its interval bar.
     fn show_account_panel(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         use egui_charts::ui::trading::{AccountPanelAction, BrokerPickerAction, BrokerTile};
 
         match self.broker_picker.show(ui.ctx()) {
             Some(BrokerPickerAction::Connect(id)) if id == BrokerTile::PAPER => {
-                self.trading.set_service(self.paper.clone());
-                self.trading.account_panel.broker = "Paper Trading".to_owned();
-                self.trading.account_panel.accounts = vec!["Paper 1".to_owned()];
-                self.account_panel = AccountPanelSize::Normal;
+                self.connect_paper()
             }
             Some(BrokerPickerAction::Connect(_)) => {
                 self.notify("Example brokers have no account behind them in this demo");
@@ -3173,6 +3226,31 @@ mod tests {
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
     #[test]
+    fn advancing_a_paused_sample_keeps_intermediate_bars() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx);
+        let start = "2026-10-27T19:29:50Z".parse().unwrap();
+        let mut app = DemoApp::new_at(&cc, start, true);
+        let end = start + chrono::Duration::minutes(3);
+        app.advance_sample_to(end);
+        assert!(app.live.paused());
+        assert_eq!(app.live.now(), end);
+        let bars = app.live.snapshot(
+            Timeframe::Min1,
+            egui_charts::model::BarClock::new(Timeframe::Min1),
+            app.chart.extended_hours(),
+        );
+        let added: Vec<_> = bars.iter().filter(|bar| bar.time > start).collect();
+        assert_eq!(added.len(), 3);
+        assert!(added.iter().all(|bar| bar.volume > 0.0));
+        assert!(
+            added
+                .windows(2)
+                .all(|pair| pair[1].time - pair[0].time == chrono::Duration::minutes(1))
+        );
+    }
+
+    #[test]
     fn replay_prices_fill_the_connected_paper_account() {
         use egui_charts::model::OrderSide;
         let ctx = egui::Context::default();
@@ -3560,9 +3638,22 @@ mod tests {
     }
 
     #[test]
-    fn theme_selection_survives_restart_and_initializes_the_chart() {
+    fn legacy_themes_follow_system_and_new_choices_survive_restart() {
         use eframe::App;
-        for initial in [None, Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
+        use egui_charts::drawings::DrawingToolType;
+        let cases = [None, Some(egui::Theme::Light), Some(egui::Theme::Dark)]
+            .into_iter()
+            .flat_map(|initial| {
+                [
+                    (None, None),
+                    (Some(true), None),
+                    (Some(false), None),
+                    (Some(true), Some("dark")),
+                    (Some(false), Some("light")),
+                ]
+                .map(|(key, document)| (initial, key, document))
+            });
+        for (initial, legacy_key, legacy_document) in cases {
             let ctx = egui::Context::default();
             ctx.run_ui(
                 egui::RawInput {
@@ -3573,10 +3664,36 @@ mod tests {
             )
             .drop_without_applying_deltas();
             let mut storage = AppStorage::default();
+            if let Some(dark) = legacy_key {
+                eframe::set_value(&mut storage, "dark_theme", &dark);
+            }
+            if let Some(theme) = legacy_document {
+                // Earlier releases saved the active theme even without a user choice.
+                let settings = format!(
+                    r#"{{"version":1,"theme":"{theme}","symbol":"AAPL","interval":"Min5","drawing_favorites":["TrendLine"],"layout":null,"layout_autosave":true}}"#
+                );
+                eframe::set_value(
+                    &mut storage,
+                    "templates",
+                    &std::collections::HashMap::from([
+                        ("Settings/settings", settings.as_str()),
+                        ("Layouts/Kept", "saved layout"),
+                    ]),
+                );
+            }
             for explicit in [false, true, true] {
                 let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
                 cc.storage = Some(&storage);
                 let mut app = DemoApp::new(&cc);
+                if legacy_document.is_some() {
+                    assert_eq!(app.state.symbol, "AAPL");
+                    assert_eq!(app.state.timeframe, Timeframe::Min5);
+                    assert_eq!(
+                        app.drawing_toolbar.state.favorites,
+                        [DrawingToolType::TrendLine]
+                    );
+                    assert!(app.top_toolbar.layout_menu.autosave);
+                }
                 if !explicit {
                     assert_eq!(app.theme.dark, initial == Some(egui::Theme::Dark));
                 }
@@ -3612,6 +3729,11 @@ mod tests {
                     assert_eq!(egui_charts::theme::ThemeExt::active_theme(&ctx), expected);
                 }
                 app.save(&mut storage);
+                if legacy_document.is_some() {
+                    let documents: std::collections::HashMap<String, String> =
+                        eframe::get_value(&storage, "templates").unwrap();
+                    assert_eq!(documents["Layouts/Kept"], "saved layout");
+                }
                 drop(app);
                 ctx.run_ui(
                     egui::RawInput {
@@ -5186,6 +5308,7 @@ mod tests {
                 CursorType::Demonstration,
                 MagnetType::Strong,
             ),
+            (CrosshairStyle::Magic, CursorType::Magic, MagnetType::Strong),
             (CrosshairStyle::Dot, CursorType::Dot, MagnetType::OHLC),
         ] {
             if magnet == MagnetType::OHLC {
@@ -5787,6 +5910,7 @@ mod tests {
             settings.gann = Some(GannConfig {
                 price_levels: vec![0.0, 0.5, 1.0],
                 time_levels: vec![0.25, 0.75],
+                ..Default::default()
             });
             settings.position_size = Some(PositionSize::RiskPercent {
                 account_size: 10_000.0,

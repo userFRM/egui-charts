@@ -281,14 +281,21 @@ impl Chart {
             )
         });
 
+        // Touch and mouse drags pan and continue under their own options.
+        let kinetic = if is_touch {
+            self.chart_options.handle_scroll.horz_touch_drag
+                && self.chart_options.kinetic_scroll.enabled
+        } else {
+            self.chart_options.handle_scroll.pressed_mouse_move
+                && self.chart_options.kinetic_scroll.mouse
+        };
+
         if !response.dragged() || multi_touch || has_active_drawing_tool || box_zoom_active {
             // Drag ended - handle kinetic scrolling
             if response.drag_stopped()
                 && !has_active_drawing_tool
                 && !multi_touch
-                && is_touch
-                && self.chart_options.handle_scroll.horz_touch_drag
-                && self.chart_options.kinetic_scroll.enabled
+                && kinetic
                 && self.scroll_start_pos.is_some()
             {
                 let move_distance = self
@@ -383,7 +390,7 @@ impl Chart {
                     let new_offset = start_offset - f64::from(drag_in_bars);
                     self.state.time_scale_mut().set_right_offset(new_offset);
 
-                    if self.chart_options.kinetic_scroll.enabled {
+                    if kinetic {
                         let now = Instant::now();
                         if let (Some(last_pos), Some(last_time)) =
                             (self.kinetic_scroll.last_pos, self.kinetic_scroll.last_time)
@@ -421,7 +428,8 @@ impl Chart {
     /// using the configured damping coefficient. Stops when velocity drops below
     /// the minimum threshold. Requests a repaint to keep the animation running.
     pub fn apply_kinetic_scroll(&mut self, ui: &Ui) {
-        if !self.chart_options.kinetic_scroll.enabled || !self.kinetic_scroll.is_active {
+        let options = self.chart_options.kinetic_scroll;
+        if !(options.enabled || options.mouse) || !self.kinetic_scroll.is_active {
             return;
         }
 
@@ -1143,6 +1151,68 @@ mod tests {
                         "touch={touch}, mouse={mouse}, horizontal={horizontal}, {steps} steps, {distance} pixels: {after_offset}, expected {expected}"
                     );
                 }
+            }
+        }
+    }
+
+    /// A fast horizontal drag continues after release only when inertia is enabled for its
+    /// device, and a new drag stops it.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn released_drag_continues_under_its_device_inertia() {
+        for touch in [false, true] {
+            for (touch_inertia, mouse_inertia) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                chart.chart_options.kinetic_scroll.enabled = touch_inertia;
+                chart.chart_options.kinetic_scroll.mouse = mouse_inertia;
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let start = chart.last_rendered_price_rect.center();
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                };
+                let contact = |phase, pos| Event::Touch {
+                    device_id: egui::TouchDeviceId(1),
+                    id: egui::TouchId(1),
+                    phase,
+                    pos,
+                    force: None,
+                };
+                let input = |pointer: Event, phase, pos| {
+                    let mut events = vec![pointer];
+                    if touch {
+                        events.push(contact(phase, pos));
+                    }
+                    events
+                };
+                frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
+                let press = input(button(start, true), egui::TouchPhase::Start, start);
+                frame(&ctx, &mut chart, 0.04, press);
+                let mut end = start;
+                for i in 1..=4 {
+                    end.x = start.x - 15.0 * i as f32;
+                    let events = input(Event::PointerMoved(end), egui::TouchPhase::Move, end);
+                    frame(&ctx, &mut chart, 0.04 + i as f64 * 0.02, events);
+                }
+                let release = input(button(end, false), egui::TouchPhase::End, end);
+                frame(&ctx, &mut chart, 0.2, release);
+                let expected = if touch { touch_inertia } else { mouse_inertia };
+                assert_eq!(
+                    chart.kinetic_scroll.is_active, expected,
+                    "touch={touch}, touch inertia={touch_inertia}, mouse inertia={mouse_inertia}"
+                );
+
+                let press = input(button(end, true), egui::TouchPhase::Start, end);
+                frame(&ctx, &mut chart, 0.22, press);
+                end.x += 20.0;
+                let events = input(Event::PointerMoved(end), egui::TouchPhase::Move, end);
+                frame(&ctx, &mut chart, 0.24, events);
+                assert!(!chart.kinetic_scroll.is_active);
             }
         }
     }

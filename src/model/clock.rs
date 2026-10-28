@@ -176,8 +176,8 @@ impl BarClock {
                 }
             }
             LocalResult::None => match &self.timezone {
-                Some(zone) => super::session::local_instant(zone.clone(), local),
-                None => super::session::local_instant(chrono::Local, local),
+                Some(zone) => super::local_instant(zone.clone(), local),
+                None => super::local_instant(chrono::Local, local),
             }
             .unwrap_or(at),
         }
@@ -245,8 +245,8 @@ impl BarClock {
     pub(crate) fn open_on_date(&self, date: chrono::NaiveDate) -> Option<DateTime<Utc>> {
         let midnight = date.and_time(NaiveTime::MIN);
         let time = match &self.timezone {
-            Some(zone) => super::session::local_instant(zone.clone(), midnight),
-            None => super::session::local_instant(chrono::Local, midnight),
+            Some(zone) => super::local_instant(zone.clone(), midnight),
+            None => super::local_instant(chrono::Local, midnight),
         }?;
         Some(self.bar_open(time))
     }

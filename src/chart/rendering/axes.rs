@@ -64,6 +64,16 @@ pub(crate) fn paint_axis_tag(
     tag
 }
 
+/// `label` led by `name` when the axis shows names, so equal values of different series stay
+/// apart.
+pub(crate) fn named_label(show_name: bool, name: &str, label: String) -> String {
+    if show_name && !name.is_empty() {
+        format!("{name} {label}")
+    } else {
+        label
+    }
+}
+
 /// The axis ending at the plot's left edge uses right-aligned tags.
 fn price_tag_anchor(plot: Rect, axis_right: f32, y: f32) -> (Pos2, Align2) {
     if axis_right <= plot.left() {
@@ -176,7 +186,7 @@ pub(crate) fn render_study_tags(
             plot,
             axis_right,
             map.price_to_y(value),
-            label,
+            named_label(axis.show_study_names, study.name(), label),
             (
                 axis.study_value_color
                     .map_or(Color32::WHITE, tag_text_color),
@@ -358,11 +368,12 @@ pub fn render_quote_tags(
 ) -> [Option<Rect>; 3] {
     render_quote_tags_with_countdown(
         painter, price_rect, price_map, close, session, volume, axis_right, None, None, 0.0, None,
-        None, false,
+        None, false, "",
     )
 }
 
 /// The chart's current-value stack, optionally including the supplied quote's bar countdown.
+/// A non-empty `close_name` leads the current close's tag.
 pub(crate) fn render_quote_tags_with_countdown(
     painter: &Painter,
     price_rect: Rect,
@@ -377,6 +388,7 @@ pub(crate) fn render_quote_tags_with_countdown(
     formatter: Option<&dyn crate::scales::PriceFormatter>,
     volume_formatter: Option<&dyn crate::scales::PriceFormatter>,
     allow_overlap: bool,
+    close_name: &str,
 ) -> [Option<Rect>; 3] {
     use crate::scales::{PriceFormatter, VolumeFormatter};
     let mut tags = [None; 3];
@@ -406,7 +418,11 @@ pub(crate) fn render_quote_tags_with_countdown(
             0,
             close_y,
             {
-                let price = transform.label(transform.to_scale(close.price), decimals, formatter);
+                let price = named_label(
+                    true,
+                    close_name,
+                    transform.label(transform.to_scale(close.price), decimals, formatter),
+                );
                 countdown.map_or_else(|| price.clone(), |time| format!("{price}\n{time}"))
             },
             close.color,
@@ -811,6 +827,7 @@ mod tests {
                                 None,
                                 volume_formatter,
                                 allow_overlap,
+                                "",
                             );
                         });
                         let labels: Vec<_> = output
@@ -893,5 +910,49 @@ mod tests {
             assert_eq!(actions.last(), Some(&expected));
         }
         assert_eq!(actions, ["add", "settings"]);
+    }
+
+    /// A study's last-value tag carries its name only while the axis shows study names.
+    #[test]
+    fn study_value_tags_lead_with_the_study_name_when_shown() {
+        use crate::studies::{CustomIndicator, Indicator, IndicatorValue};
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let mut study = CustomIndicator::new("Mine", |_| vec![IndicatorValue::Single(50.0)]);
+        study.calculate(&[]);
+        let plot = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 100.0));
+        for (show_study_names, expected) in [(false, "50.00"), (true, "Mine 50.00")] {
+            let ctx = Context::default();
+            let output = ctx.run_ui(RawInput::default(), |ui| {
+                render_study_tags(
+                    ui.painter(),
+                    plot,
+                    &map,
+                    &study,
+                    120.0,
+                    &mut Vec::new(),
+                    None,
+                    &crate::config::PriceAxisOptions {
+                        show_study_names,
+                        ..Default::default()
+                    },
+                );
+            });
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert_eq!(labels, [expected]);
+        }
     }
 }

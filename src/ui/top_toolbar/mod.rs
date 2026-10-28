@@ -17,6 +17,7 @@ pub use buttons::{IconTextButton, TextButton, ToolbarIconButton, separator};
 pub use components::{
     // Upper toolbar components (ChartType re-exported from crate::model)
     ChartTypeAction,
+    ChartTypePreferences,
     ChartTypeSelector,
     ChartTypeSelectorConfig,
     ChartTypeUiExt,
