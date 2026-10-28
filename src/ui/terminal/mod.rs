@@ -113,7 +113,6 @@ pub struct Terminal {
     drawings: drawings::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
     studies: studies::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     time: time::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
     replay: replay::State,
