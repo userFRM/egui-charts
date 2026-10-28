@@ -113,12 +113,21 @@ Financial charts for Rust applications built with egui 0.37.
       Heikin-Ashi, Renko, range bars and Kagi in a four-chart layout.
     </td>
     <td width="50%" valign="top">
-      <strong>Try a session</strong><br>
-      <a href="https://userfrm.github.io/egui-charts/demo/">Open the live demo</a> to draw, add studies, switch layouts and trade the paper account.<br><br>
-      Light and dark appearances follow your colour scheme. Open an image for the full view.
+      <strong>Read the footprint</strong><br>
+      <a href="docs/images/footprint-dark.webp"><picture>
+        <source media="(prefers-color-scheme: light)" srcset="docs/images/footprint-light.webp">
+        <img src="docs/images/footprint-dark.webp" alt="Bid and ask volumes at each price level, from the sample feed’s trades.">
+      </picture></a><br>
+      Bid and ask volumes at each price level, from the sample feed’s trades.
     </td>
   </tr>
 </table>
+
+<p>
+      <strong>Try a session</strong><br>
+      <a href="https://userfrm.github.io/egui-charts/demo/">Open the live demo</a> to draw, add studies, switch layouts and trade the paper account.<br><br>
+      Light and dark appearances follow your colour scheme. Open an image for the full view.
+</p>
 
 egui-charts draws price series, computes studies and handles chart interaction inside your egui application. Start with a `Chart`, or assemble a workspace from the toolbars, panels and dialogs. Your application supplies market data, broker connections and durable storage.
 
