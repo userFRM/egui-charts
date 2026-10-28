@@ -92,10 +92,7 @@ impl Datafeed for TestFeed {
             .filter(|bar| request.before.is_none_or(|before| bar.time < before))
             .collect();
         let start = bars.len().saturating_sub(request.count);
-        reply.send(Ok(HistoryPage {
-            bars: bars[start..].to_vec(),
-            end_of_history: start == 0,
-        }));
+        reply.send(Ok(HistoryPage::new(bars[start..].to_vec(), start == 0)));
     }
 }
 

@@ -126,6 +126,16 @@ impl Trades {
         self.trades.iter()
     }
 
+    /// Time of the oldest held trade.
+    pub(crate) fn oldest(&self) -> Option<DateTime<Utc>> {
+        self.trades.iter().map(|trade| trade.ts).min()
+    }
+
+    /// Trades a page can still add before the store evicts live ones.
+    pub(crate) fn room(&self) -> usize {
+        self.capacity.saturating_sub(self.trades.len())
+    }
+
     /// Appends a trade validated by the caller unless its id is held, evicting the oldest beyond
     /// capacity. Repeated ids can complete missing order ids without counting the fill again.
     pub(crate) fn push(&mut self, trade: Tick) {

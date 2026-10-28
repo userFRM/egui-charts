@@ -114,11 +114,10 @@ impl<T: ?Sized> MaybeSend for T {}
 ///     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
 ///         let before = |bar: &Bar| request.before.is_none_or(|before| bar.time < before);
 ///         let end = self.0.partition_point(before);
-///         let start = end.saturating_sub(request.count);
-///         reply.send(Ok(HistoryPage {
-///             bars: self.0[start..end].to_vec(),
-///             end_of_history: start == 0,
-///         }));
+///         let since = |bar: &Bar| request.since.is_some_and(|since| bar.time < since);
+///         let first = self.0.partition_point(since).min(end);
+///         let start = end.saturating_sub(request.count).max(first);
+///         reply.send(Ok(HistoryPage::new(self.0[start..end].to_vec(), start == 0)));
 ///     }
 /// }
 /// ```
@@ -148,8 +147,9 @@ pub trait Datafeed: MaybeSend + 'static {
         reply.send(Err(FeedError::NotSupported));
     }
 
-    /// Up to `request.count` bars that open before `request.before`, or the latest bars when it
-    /// is `None`.
+    /// Up to `request.count` bars of the range `[request.since, request.before)`, the newest ones
+    /// when there are more. Either end left `None` is unbounded: without `before` the range
+    /// reaches the latest bar.
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>);
 
     /// Starts pushing live updates into `subscription.sink` until `unsubscribe`. The default does
@@ -179,8 +179,9 @@ pub trait Datafeed: MaybeSend + 'static {
         let _ = id;
     }
 
-    /// Up to `request.count` trades older than `request.before`, or the latest trades when it is
-    /// `None`, so order flow survives a reload. The default answers [`FeedError::NotSupported`].
+    /// Up to `request.count` trades of the range `[request.since, request.before)`, the newest
+    /// ones when there are more, so order flow survives a reload and follows the view back in
+    /// time. The default answers [`FeedError::NotSupported`].
     fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
         let _ = request;
         reply.send(Err(FeedError::NotSupported));
@@ -368,8 +369,15 @@ pub struct HistoryRequest {
     pub timeframe: Timeframe,
     /// Calendar boundaries selected by the chart, shared by historical and streaming aggregation.
     pub clock: BarClock,
-    /// Only bars that open strictly before this instant. `None` asks for the latest bars.
+    /// Only bars that open strictly before this instant: the end of the range is exclusive.
+    /// `None` is the initial load and asks for the latest bars.
     pub before: Option<DateTime<Utc>>,
+    /// Only bars that open at or after this instant: the start of the range is inclusive. With
+    /// `before` it bounds the range as `[since, before)`; answer the newest `count` bars of it.
+    /// The chart sets it when it needs bars back to a time it does not hold, such as for
+    /// [`Chart::scroll_to_time`](crate::widget::Chart::scroll_to_time). `None` bounds the range
+    /// by `count` alone.
+    pub since: Option<DateTime<Utc>>,
     /// Bars wanted. Fewer is fine; the chart asks again as the user scrolls back.
     pub count: usize,
     /// Include the instrument's extended trading hours, as well as regular hours.
@@ -379,9 +387,11 @@ pub struct HistoryRequest {
     pub conversion: Option<String>,
 }
 
-/// One page of history. A page without bars ends scroll-back like `end_of_history` does, so a
-/// feed that pages by time window must skip empty windows such as weekends itself.
+/// One page of history. A page without bars ends scroll-back like `end_of_history` does, unless it
+/// names where older bars continue with [`continue_before`](Self::continue_before), so a feed that
+/// pages by time window can answer an empty window such as a weekend.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct HistoryPage {
     /// Any order, each stamped with its open or any instant inside it: a bar stamped with its
     /// close time lands in the next bar. A bar of a day or longer covers a calendar period of
@@ -393,6 +403,28 @@ pub struct HistoryPage {
     /// Nothing exists before the oldest returned bar (or before `request.before` when `bars` is
     /// empty).
     pub end_of_history: bool,
+    /// On a page without bars: the window had none but older bars exist, and the chart asks
+    /// again for the bars before this instant. It must be earlier than `request.before`, or
+    /// the chart stops paging and reports [`FeedError::InvalidData`] instead of repeating the
+    /// request. Ignored on a page with bars, which continues before its oldest bar.
+    pub continue_before: Option<DateTime<Utc>>,
+}
+
+impl HistoryPage {
+    /// A page of `bars`, the last one when `end_of_history`.
+    pub fn new(bars: Vec<Bar>, end_of_history: bool) -> Self {
+        Self {
+            bars,
+            end_of_history,
+            continue_before: None,
+        }
+    }
+
+    /// Sets [`continue_before`](Self::continue_before).
+    pub fn with_continue_before(mut self, before: DateTime<Utc>) -> Self {
+        self.continue_before = Some(before);
+        self
+    }
 }
 
 /// A request for one page of trades.
@@ -401,8 +433,12 @@ pub struct HistoryPage {
 pub struct TradeRequest {
     /// Instrument identifier used by the host.
     pub symbol: String,
-    /// Only trades strictly before this instant. `None` asks for the latest trades.
+    /// Only trades strictly before this instant: the end of the range is exclusive. `None` is the
+    /// initial load and asks for the latest trades.
     pub before: Option<DateTime<Utc>>,
+    /// Only trades at or after this instant: the start of the range is inclusive; see
+    /// [`HistoryRequest::since`]. `None` bounds the range by `count` alone.
+    pub since: Option<DateTime<Utc>>,
     /// Trades wanted. Fewer is fine.
     pub count: usize,
     /// The currency or unit the host chose, in which the prices are wanted; see
@@ -410,7 +446,8 @@ pub struct TradeRequest {
     pub conversion: Option<String>,
 }
 
-/// One page of trades. A page without trades ends scroll-back like `end_of_history` does.
+/// One page of trades. A page without trades ends scroll-back like `end_of_history` does, unless
+/// it names where older trades continue with [`continue_before`](Self::continue_before).
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct TradePage {
@@ -424,6 +461,10 @@ pub struct TradePage {
     pub trades: Vec<Tick>,
     /// Nothing exists before the oldest returned trade.
     pub end_of_history: bool,
+    /// On a page without trades: older trades exist, and the chart asks again for those before
+    /// this instant, which must be earlier than `request.before`; see
+    /// [`HistoryPage::continue_before`].
+    pub continue_before: Option<DateTime<Utc>>,
 }
 
 impl TradePage {
@@ -432,7 +473,14 @@ impl TradePage {
         Self {
             trades,
             end_of_history,
+            continue_before: None,
         }
+    }
+
+    /// Sets [`continue_before`](Self::continue_before).
+    pub fn with_continue_before(mut self, before: DateTime<Utc>) -> Self {
+        self.continue_before = Some(before);
+        self
     }
 }
 
@@ -442,8 +490,12 @@ impl TradePage {
 pub struct DepthRequest {
     /// Instrument requested.
     pub symbol: String,
-    /// Columns opening strictly before this instant, or the latest columns with `None`.
+    /// Columns opening strictly before this instant: the end of the range is exclusive. `None`
+    /// is the initial load and asks for the latest columns.
     pub before: Option<DateTime<Utc>>,
+    /// Columns opening at or after this instant: the start of the range is inclusive; see
+    /// [`HistoryRequest::since`]. `None` bounds the range by `count` alone.
+    pub since: Option<DateTime<Utc>>,
     /// Maximum columns wanted.
     pub count: usize,
     /// Cadence, row grouping and limits of the receiving store.
@@ -466,6 +518,7 @@ impl DepthRequest {
         Self {
             symbol: symbol.into(),
             before: None,
+            since: None,
             count,
             config,
             tick_size,
@@ -474,7 +527,8 @@ impl DepthRequest {
     }
 }
 
-/// Recorded depth columns. Empty pages end paging, including when `end_of_history` is false.
+/// Recorded depth columns. Empty pages end paging, including when `end_of_history` is false,
+/// unless they name where older columns continue with [`continue_before`](Self::continue_before).
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct DepthPage {
@@ -482,6 +536,10 @@ pub struct DepthPage {
     pub columns: Vec<DepthColumn>,
     /// Nothing exists before the oldest returned column.
     pub end_of_history: bool,
+    /// On a page without columns: older columns exist, and the chart asks again for those
+    /// before this instant, which must be earlier than `request.before`; see
+    /// [`HistoryPage::continue_before`].
+    pub continue_before: Option<DateTime<Utc>>,
 }
 
 impl DepthPage {
@@ -490,7 +548,14 @@ impl DepthPage {
         Self {
             columns,
             end_of_history,
+            continue_before: None,
         }
+    }
+
+    /// Sets [`continue_before`](Self::continue_before).
+    pub fn with_continue_before(mut self, before: DateTime<Utc>) -> Self {
+        self.continue_before = Some(before);
+        self
     }
 }
 
@@ -633,6 +698,11 @@ pub struct FeedState {
     pub loading_history: bool,
     /// Whether the feed has reported that no older history remains.
     pub history_complete: bool,
+    /// Whether no older trades remain to be loaded: the feed reported the end, answered nothing
+    /// new, does not offer trades or the trade store is full.
+    pub trade_history_complete: bool,
+    /// Whether no older depth columns remain to be loaded.
+    pub depth_history_complete: bool,
     /// Most recent feed error, when present.
     pub last_error: Option<FeedError>,
     /// Bars and ticks dropped by validation: non-finite values, a high or low on the wrong side of
