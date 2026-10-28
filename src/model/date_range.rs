@@ -143,3 +143,14 @@ impl std::fmt::Display for DateRange {
         write!(f, "{}", self.label())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn estimated_bars_divide_the_span_by_the_bar_duration() {
+        assert_eq!(DateRange::Day1.estimated_bars(60), 24 * 60);
+        assert_eq!(DateRange::Month1.estimated_bars(3600), 30 * 24);
+    }
+}
