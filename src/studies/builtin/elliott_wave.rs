@@ -196,9 +196,9 @@ impl Indicator for ElliottWave {
                 .anchors
                 .iter()
                 .enumerate()
-                .map(|(n, anchor)| format!("{n}: {:.2}", anchor.price))
+                .map(|(n, anchor)| format!("{n}:{:.2}", anchor.price))
                 .collect::<Vec<_>>()
-                .join(", ");
+                .join(" ");
             let direction = if construction.bullish() {
                 "Bullish"
             } else {
@@ -386,10 +386,10 @@ mod tests {
             let expected: Vec<_> = [100.0, 110.0, 104.0, 125.0, 115.0, 130.0]
                 .iter()
                 .enumerate()
-                .map(|(n, p)| format!("{n}: {:.2}", sign * p))
+                .map(|(n, p)| format!("{n}:{:.2}", sign * p))
                 .collect();
             // A bearish impulse starts at a high, so its anchors are the negated prices.
-            assert_eq!(anchors, &expected.join(", "));
+            assert_eq!(anchors, &expected.join(" "));
             assert_eq!(rows[0][1], StudyCell::Text("1970-01-13 00:00".into()));
         }
     }
