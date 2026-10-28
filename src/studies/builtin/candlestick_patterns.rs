@@ -876,6 +876,9 @@ mod tests {
         &'static [Ohlc],
     );
 
+    /// Label, line, abbreviation, the two bars before the third, the third and whether it forms the pattern.
+    type TasukiCase = (&'static str, usize, &'static str, [Ohlc; 2], Ohlc, bool);
+
     /// Bars of body 1 through `closes`, each opening one point away from its close.
     fn walk(closes: impl IntoIterator<Item = f64>) -> Vec<Bar> {
         let mut prev: Option<f64> = None;
@@ -1137,7 +1140,7 @@ mod tests {
             (104.5, 105.25, 104.25, 105.0),
         ];
         #[rustfmt::skip]
-        let cases: [(&str, usize, &str, [Ohlc; 2], Ohlc, bool); 10] = [
+        let cases: [TasukiCase; 10] = [
             ("Downside Tasuki Gap - Bearish", 1, "DTG", down, (99.25, 100.25, 98.75, 99.75), true),
             ("Downside Tasuki Gap - Bearish", 1, "DTG", down, (98.75, 99.75, 98.5, 99.75), false),
             ("Downside Tasuki Gap - Bearish", 1, "DTG", down, (99.75, 100.0, 99.5, 99.875), false),

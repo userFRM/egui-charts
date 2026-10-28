@@ -307,6 +307,16 @@ impl IndicatorFactory {
                 ),
             );
         }
+        for family in PatternFamily::ALL {
+            let name = ChartPatterns::new(family).name().to_owned();
+            self.constructors.insert(
+                name,
+                (
+                    Self::PATTERNS,
+                    Box::new(move || Box::new(ChartPatterns::new(family))),
+                ),
+            );
+        }
         #[cfg(feature = "drawings")]
         for kind in AutoDrawingKind::ALL {
             let name = AutoDrawing::new(kind, 5.0, 10).name().to_owned();
@@ -1257,6 +1267,7 @@ mod tests {
             Box::new(DetrendedPriceOscillator::new(l(0)).with_centered(true)),
             Box::new(TradingSessions::new()),
             Box::new(CandlestickPatterns::default()),
+            Box::new(ChartPatterns::new(PatternFamily::Continuation)),
         ]
     }
 
