@@ -28,7 +28,7 @@
 //! | D | Doji | neutral | a doji that is neither a dragonfly nor a gravestone doji |
 //! | DS | Doji Star | bearish | `b` in an uptrend; `p1` long white; `b` a doji body gapping above `p1`'s body |
 //! | DS | Doji Star | bullish | `b` in a downtrend; `p1` long black; `b` a doji body gapping below `p1`'s body |
-//! | DTG | Downside Tasuki Gap | bearish | `b` in a downtrend; `p2` long black; `p1` small black, its body gapping below `p2`'s; `b` white, its body top inside the gap |
+//! | DTG | Downside Tasuki Gap | bearish | `b` in a downtrend; `p2` long black; `p1` small black, its body gapping below `p2`'s; `b` white, opening inside `p1`'s body and closing inside the gap |
 //! | DD | Dragonfly Doji | bullish | a doji body with an upper shadow no longer than the body |
 //! | BE | Engulfing | bearish | `b` long black in an uptrend; `p1` small white; `b`'s body covers `p1`'s, extending past at least one end |
 //! | BE | Engulfing | bullish | `b` long white in a downtrend; `p1` small black; `b`'s body covers `p1`'s, extending past at least one end |
@@ -65,7 +65,7 @@
 //! | 3S | Tri-Star | bullish | three dojis, `p2` in a downtrend, `p1`'s body gapping below both neighbours' bodies |
 //! | TB | Tweezer Bottom | bullish | `p1` long black in a downtrend; `b` white with a low equal to `p1`'s, not a doji body unless it has both shadows |
 //! | TT | Tweezer Top | bearish | `p1` long white in an uptrend; `b` black with a high equal to `p1`'s, not a doji body unless it has both shadows |
-//! | UTG | Upside Tasuki Gap | bullish | `b` in an uptrend; `p2` long white; `p1` small white, its body gapping above `p2`'s; `b` black, its body bottom inside the gap |
+//! | UTG | Upside Tasuki Gap | bullish | `b` in an uptrend; `p2` long white; `p1` small white, its body gapping above `p2`'s; `b` black, opening inside `p1`'s body and closing inside the gap |
 //!
 //! # Outputs
 //!
@@ -290,7 +290,8 @@ const PATTERNS: [Pattern; 44] = [
     ),
     pattern("Downside Tasuki Gap - Bearish", "DTG", Bearish, 3, |c| {
         matches!(c, [p2, p1, b] if b.down && p2.long() && p2.black() && p1.small() && p1.black()
-            && p1.top() < p2.bottom() && b.white() && b.top() <= p2.bottom() && b.top() >= p1.top())
+            && p1.top() < p2.bottom() && b.white() && b.open > p1.bottom() && b.open < p1.top()
+            && b.close > p1.top() && b.close < p2.bottom())
     }),
     pattern(
         "Dragonfly Doji - Bullish",
@@ -514,7 +515,8 @@ const PATTERNS: [Pattern; 44] = [
     }),
     pattern("Upside Tasuki Gap - Bullish", "UTG", Bullish, 3, |c| {
         matches!(c, [p2, p1, b] if b.up && p2.long() && p2.white() && p1.small() && p1.white()
-            && p1.bottom() > p2.top() && b.black() && b.bottom() >= p2.top() && b.bottom() <= p1.bottom())
+            && p1.bottom() > p2.top() && b.black() && b.open > p1.bottom() && b.open < p1.top()
+            && b.close > p2.top() && b.close < p1.bottom())
     }),
 ];
 
@@ -932,8 +934,8 @@ mod tests {
                 &[(103.0, 103.25, 99.75, 100.0), (99.5, 100.5, 98.5, 99.4375)],
                 &[(103.0, 103.25, 99.75, 100.0), (100.25, 101.25, 99.25, 100.1875)]),
             ("Downside Tasuki Gap - Bearish", 1, "DTG",
-                &[(104.0, 104.25, 99.75, 100.0), (99.5, 99.75, 98.75, 99.0), (99.0, 100.25, 98.75, 99.75)],
-                &[(104.0, 104.25, 99.75, 100.0), (99.5, 99.75, 98.75, 99.0), (99.0, 100.5, 98.75, 100.25)]),
+                &[(104.0, 104.25, 99.75, 100.0), (99.5, 99.75, 98.75, 99.0), (99.25, 100.25, 98.75, 99.75)],
+                &[(104.0, 104.25, 99.75, 100.0), (99.5, 99.75, 98.75, 99.0), (99.25, 100.5, 98.75, 100.25)]),
             ("Dragonfly Doji - Bullish", 0, "DD",
                 &[(100.0, 100.0625, 96.0, 100.0625)], &[(100.0, 100.5, 96.0, 100.0625)]),
             ("Engulfing - Bearish", 1, "BE",
@@ -1025,8 +1027,8 @@ mod tests {
                 &[(100.0, 103.5, 99.75, 103.0), (103.0, 103.5, 101.5, 102.0)],
                 &[(100.0, 103.5, 99.75, 103.0), (103.0, 103.75, 101.5, 102.0)]),
             ("Upside Tasuki Gap - Bullish", 0, "UTG",
-                &[(100.0, 104.25, 99.75, 104.0), (104.5, 105.25, 104.25, 105.0), (105.0, 105.25, 104.0, 104.25)],
-                &[(100.0, 104.25, 99.75, 104.0), (104.5, 105.25, 104.25, 105.0), (105.0, 105.25, 103.5, 103.75)]),
+                &[(100.0, 104.25, 99.75, 104.0), (104.5, 105.25, 104.25, 105.0), (104.75, 105.25, 104.0, 104.25)],
+                &[(100.0, 104.25, 99.75, 104.0), (104.5, 105.25, 104.25, 105.0), (104.75, 105.25, 103.5, 103.75)]),
         ];
         let none = PatternTrend::NoDetection;
         // Bars near 100 are in a downtrend after closes falling to 90 and in an uptrend after
@@ -1121,5 +1123,36 @@ mod tests {
         let last = data.len() - 1;
         assert_eq!(study.plot_text(1, last), None);
         assert_eq!(study.plot_text(2, last), None);
+    }
+
+    /// The third bar of a Tasuki gap opens strictly inside the second body and closes
+    /// strictly inside the gap: an open outside the body or a close on either gap edge is
+    /// no pattern. `calculate` and `update` share the rule.
+    #[test]
+    fn tasuki_gap_needs_open_in_body_and_close_in_gap() {
+        let flat = walk((0..14).map(|i| 100.0 + f64::from(i % 2)));
+        let down: [Ohlc; 2] = [(104.0, 104.25, 99.75, 100.0), (99.5, 99.75, 98.75, 99.0)];
+        let up: [Ohlc; 2] = [(100.0, 104.25, 99.75, 104.0), (104.5, 105.25, 104.25, 105.0)];
+        #[rustfmt::skip]
+        let cases: [(&str, usize, &str, [Ohlc; 2], Ohlc, bool); 10] = [
+            ("Downside Tasuki Gap - Bearish", 1, "DTG", down, (99.25, 100.25, 98.75, 99.75), true),
+            ("Downside Tasuki Gap - Bearish", 1, "DTG", down, (98.75, 99.75, 98.5, 99.75), false),
+            ("Downside Tasuki Gap - Bearish", 1, "DTG", down, (99.75, 100.0, 99.5, 99.875), false),
+            ("Downside Tasuki Gap - Bearish", 1, "DTG", down, (99.25, 99.75, 99.0, 99.5), false),
+            ("Downside Tasuki Gap - Bearish", 1, "DTG", down, (99.25, 100.25, 99.0, 100.0), false),
+            ("Upside Tasuki Gap - Bullish", 0, "UTG", up, (104.75, 105.25, 104.0, 104.25), true),
+            ("Upside Tasuki Gap - Bullish", 0, "UTG", up, (104.25, 104.5, 104.0, 104.125), false),
+            ("Upside Tasuki Gap - Bullish", 0, "UTG", up, (105.5, 105.75, 104.0, 104.25), false),
+            ("Upside Tasuki Gap - Bullish", 0, "UTG", up, (104.75, 105.0, 104.5, 104.5), false),
+            ("Upside Tasuki Gap - Bullish", 0, "UTG", up, (104.75, 105.0, 103.75, 104.0), false),
+        ];
+        for (label, line, abbr, before, third, hit) in cases {
+            let bars = [before[0], before[1], third];
+            assert_eq!(
+                text(PatternTrend::NoDetection, &flat, &bars, label, line).as_deref(),
+                hit.then_some(abbr),
+                "{label} third bar {third:?}"
+            );
+        }
     }
 }

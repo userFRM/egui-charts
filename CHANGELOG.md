@@ -357,6 +357,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The upside and downside Tasuki gap patterns need the third candle to open strictly inside the second candle's body and close strictly inside the gap, so an open outside the body, a close on either gap edge or a closed gap is no longer marked. ([#1083](https://github.com/userFRM/egui-charts/issues/1083))
+
 - Value tags and legend values of added series use their own price scale's decimals instead of a fixed two, while a host formatter set for the series still writes them. ([#1064](https://github.com/userFRM/egui-charts/issues/1064))
 
 - Volume candle bodies are as wide as the bar's volume over the largest visible volume, with no hidden minimum: a zero or missing volume draws a body as thin as the wick, and without any visible volume every body keeps the full width. ([#1104](https://github.com/userFRM/egui-charts/issues/1104))
