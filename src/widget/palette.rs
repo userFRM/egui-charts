@@ -33,6 +33,7 @@ impl Chart {
     /// Lets the colours of a restored configuration that still match the palette they were saved
     /// with follow the active theme from the next frame. Layouts saved without that palette are
     /// compared with both built-in themes.
+    #[cfg(feature = "ui")]
     pub(super) fn follow_restored_palette(&mut self, saved: Option<&ChartConfig>) {
         self.restored_palettes = saved.map_or_else(
             || {
@@ -70,6 +71,7 @@ mod tests {
     use crate::theme::{Theme, apply_to_egui};
     use crate::widget::test_frames::{chart, frame};
 
+    #[cfg(feature = "ui")]
     #[test]
     fn restored_snapshots_follow_the_active_palette_and_keep_edited_colours() {
         let ctx = egui::Context::default();
