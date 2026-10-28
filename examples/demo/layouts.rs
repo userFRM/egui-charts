@@ -2,6 +2,7 @@
 //! the demo's storage, and the user settings kept beside them.
 
 use super::{DemoApp, LiveFeed};
+use crate::sampledata::DemoSymbol;
 use egui_charts::model::Timeframe;
 use egui_charts::services::UserSettings;
 use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
@@ -228,7 +229,7 @@ impl DemoApp {
             egui_charts::ui::Control::DividendAdjustment,
         ] {
             self.timeframe_toolbar
-                .set_control_visible(control, self.state.symbol == "SAMPLE");
+                .set_control_visible(control, DemoSymbol::has_hours(&self.state.symbol));
         }
         let (session, adjusted) = self.live.view(self.chart.extended_hours());
         self.timeframe_toolbar.set_session(session);

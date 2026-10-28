@@ -111,19 +111,31 @@ impl DemoSymbol {
             .unwrap_or(&cat[0])
     }
 
+    fn kind(&self) -> SymbolType {
+        match self.exchange {
+            "Crypto" => SymbolType::Crypto,
+            "Index" => SymbolType::Index,
+            "Forex" => SymbolType::Forex,
+            "CME" => SymbolType::Futures,
+            "Synthetic" => SymbolType::Fund,
+            _ => SymbolType::Stock,
+        }
+    }
+
+    /// Whether the symbol trades in US equity hours and pays a dividend: the stocks and the fund.
+    pub fn has_hours(symbol: &str) -> bool {
+        matches!(
+            Self::find(symbol).kind(),
+            SymbolType::Stock | SymbolType::Fund
+        )
+    }
+
     /// The catalog as `Instrument` rows for the symbol-search dialog.
     pub fn symbols() -> Vec<Instrument> {
         Self::catalog()
             .iter()
             .map(|s| {
-                let kind = match s.exchange {
-                    "Crypto" => SymbolType::Crypto,
-                    "Index" => SymbolType::Index,
-                    "Forex" => SymbolType::Forex,
-                    "CME" => SymbolType::Futures,
-                    "Synthetic" => SymbolType::Fund,
-                    _ => SymbolType::Stock,
-                };
+                let kind = s.kind();
                 let mut instrument = Instrument::new(s.symbol)
                     .with_description(s.company_name)
                     .with_exchange(s.exchange)
@@ -137,59 +149,70 @@ impl DemoSymbol {
     }
 }
 
-/// Trading windows shared by the synthetic feed and its session controls.
-pub fn sample_session() -> egui_charts::model::Session {
+/// US equity hours: weekdays, regular 09:30 to 16:00 and extended 04:00 to 09:30 and 16:00 to
+/// 20:00, in New York time.
+pub fn us_equity_session() -> egui_charts::model::Session {
     use chrono::{
         NaiveTime,
         Weekday::{Fri, Mon, Thu, Tue, Wed},
     };
     use egui_charts::model::{Session, SessionWindow};
-    let clock = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
-    Session::new([SessionWindow::new(
-        [Mon, Tue, Wed, Thu, Fri],
-        clock(14, 30),
-        clock(21, 0),
-    )])
-    .with_extended_windows([SessionWindow::new(
-        [Mon, Tue, Wed, Thu, Fri],
-        clock(8, 30),
-        clock(14, 30),
-    )])
+    let window = |open: (u32, u32), close: (u32, u32)| {
+        SessionWindow::new(
+            [Mon, Tue, Wed, Thu, Fri],
+            NaiveTime::from_hms_opt(open.0, open.1, 0).unwrap(),
+            NaiveTime::from_hms_opt(close.0, close.1, 0).unwrap(),
+        )
+    };
+    Session::new([window((9, 30), (16, 0))])
+        .with_extended_windows([window((4, 0), (9, 30)), window((16, 0), (20, 0))])
+}
+
+/// The exchange zone of [`us_equity_session`], which follows daylight saving.
+pub fn us_equity_zone() -> egui_charts::model::TimezoneId {
+    egui_charts::model::TimezoneId::named("America/New_York").expect("America/New_York is known")
+}
+
+/// The hours of [`us_equity_session`] in [`us_equity_zone`].
+pub fn us_equity_hours() -> egui_charts::model::ExchangeSessionProvider {
+    egui_charts::model::ExchangeSessionProvider::new(us_equity_zone(), Some(us_equity_session()))
 }
 
 /// Derive a displayed session and dividend basis from the unchanged source history.
 ///
-/// SAMPLE supplies weekday extended hours from 08:30 to 21:00 UTC, with regular
-/// hours from 14:30. Its synthetic dividend on January 26 reduces earlier OHLC
-/// prices by 2% when adjusted; volumes and timestamps do not change.
+/// Symbols with [`DemoSymbol::has_hours`] show only the bars inside the selected session of
+/// [`us_equity_hours`]. Their synthetic dividend, a Monday in winter at 09:30 New York time with a
+/// rate of 2% to 4% taken from the symbol's seed, reduces earlier OHLC prices when adjusted;
+/// volumes and timestamps do not change.
 pub fn session_bars(
     symbol: &str,
     source: &[Bar],
     session: egui_charts::ui::timeframe_toolbar::SessionType,
     adjusted: bool,
 ) -> Vec<Bar> {
-    use chrono::{TimeZone, Utc};
+    use chrono::{Duration, TimeZone, Utc};
     use egui_charts::ui::timeframe_toolbar::SessionType;
 
-    let hours = egui_charts::model::ExchangeSessionProvider::new(
-        egui_charts::model::TimezoneId::utc(),
-        Some(sample_session()),
-    );
-    let dividend = Utc.with_ymd_and_hms(2026, 1, 26, 14, 30, 0).unwrap();
+    if !DemoSymbol::has_hours(symbol) {
+        return source.to_vec();
+    }
+    let hours = us_equity_hours();
+    let seed = DemoSymbol::find(symbol).seed;
+    let dividend = Utc.with_ymd_and_hms(2026, 1, 26, 14, 30, 0).unwrap()
+        + Duration::weeks(((seed - 1) % 4) as i64);
+    let factor = 1.0 - 0.01 * (1 + seed % 3) as f64;
     source
         .iter()
         .filter(|bar| {
-            symbol != "SAMPLE"
-                || session == SessionType::Full24x7
-                || hours.is_open(bar.time, session == SessionType::ETH)
+            session == SessionType::Full24x7 || hours.is_open(bar.time, session == SessionType::ETH)
         })
         .map(|bar| {
             let mut bar = bar.clone();
-            if symbol == "SAMPLE" && adjusted && bar.time < dividend {
-                bar.open *= 0.98;
-                bar.high *= 0.98;
-                bar.low *= 0.98;
-                bar.close *= 0.98;
+            if adjusted && bar.time < dividend {
+                bar.open *= factor;
+                bar.high *= factor;
+                bar.low *= factor;
+                bar.close *= factor;
             }
             bar
         })
@@ -230,9 +253,9 @@ mod tests {
     #[test]
     fn synthetic_fixture_preserves_sessions_adjustments_and_ranges() {
         let times = [
-            "2026-01-23T08:30:00Z",
+            "2026-01-23T09:00:00Z",
             "2026-01-23T14:30:00Z",
-            "2026-01-23T21:00:00Z",
+            "2026-01-23T21:30:00Z",
             "2026-01-24T14:30:00Z",
             "2026-01-26T14:30:00Z",
         ];
@@ -242,7 +265,7 @@ mod tests {
             .collect();
         for (session, indices) in [
             (SessionType::RTH, vec![1, 4]),
-            (SessionType::ETH, vec![0, 1, 4]),
+            (SessionType::ETH, vec![0, 1, 2, 4]),
             (SessionType::Full24x7, vec![0, 1, 2, 3, 4]),
         ] {
             let raw = session_bars("SAMPLE", &source, session, false);
@@ -260,6 +283,14 @@ mod tests {
                 assert_eq!((raw.time, raw.volume), (adjusted.time, adjusted.volume));
             }
         }
+        // Stocks keep the same hours with a dividend of their own; continuous markets are untouched.
+        let msft = session_bars("MSFT", &source, SessionType::RTH, true);
+        assert_eq!(msft.len(), 2);
+        assert!((msft[0].close - 101.0 * 0.97).abs() < 1e-9);
+        assert_eq!(
+            session_bars("BTCUSD", &source, SessionType::RTH, true),
+            source
+        );
         for (range, count) in [
             (DateRange::Day1, 1),
             (DateRange::Day5, 5),

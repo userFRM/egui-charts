@@ -18,7 +18,9 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::market::Market;
-use crate::sampledata::{DemoSymbol, sample_session, session_bars};
+use crate::sampledata::{
+    DemoSymbol, session_bars, us_equity_hours, us_equity_session, us_equity_zone,
+};
 use egui_charts::ui::timeframe_toolbar::SessionType;
 
 const RETAINED_TRADES: usize = 100_000;
@@ -210,10 +212,10 @@ impl LiveFeed {
             .with_price_decimals(if sim.tick_size < 0.01 { 4 } else { 2 })
             .with_tick_size(sim.tick_size)
             .with_native_timeframes([Timeframe::Min1]);
-        if sim.symbol == "SAMPLE" && !sim.continuous {
+        if DemoSymbol::has_hours(&sim.symbol) && !sim.continuous {
             instrument = instrument
-                .with_time_zone(egui_charts::model::TimezoneId::utc())
-                .with_session(sample_session());
+                .with_time_zone(us_equity_zone())
+                .with_session(us_equity_session());
         }
         // Index quotes are commonly licensed delayed; the legend marks them.
         if sim.symbol == "SPX" {
@@ -277,20 +279,17 @@ impl LiveFeed {
         Some((last, prev_close))
     }
 
-    /// SAMPLE's last regular-hours price with its time and the regular close of the day before,
-    /// and a later trade outside regular hours: pre-market in its extended window, post-market
-    /// otherwise. `None` for the other symbols, which have no trading hours.
+    /// The last regular-hours price with its time and the regular close of the day before, and a
+    /// later trade outside regular hours: pre-market in its extended window before the open,
+    /// post-market otherwise. `None` for symbols without trading hours.
     pub(super) fn regular_quote(
         &self,
     ) -> Option<(DateTime<Utc>, f64, f64, Option<ExtendedHoursQuote>)> {
         let sim = self.state();
-        if sim.symbol != "SAMPLE" {
+        if !DemoSymbol::has_hours(&sim.symbol) {
             return None;
         }
-        let hours = egui_charts::model::ExchangeSessionProvider::new(
-            egui_charts::model::TimezoneId::utc(),
-            Some(sample_session()),
-        );
+        let hours = us_equity_hours();
         let newest_first = sim
             .trades
             .iter()
@@ -310,7 +309,10 @@ impl LiveFeed {
                 .next()
                 .filter(|&(t, _)| t > time)
                 .map(|(time, last)| ExtendedHoursQuote {
-                    session: if hours.is_open(time, true) {
+                    session: if hours.is_open(time, true)
+                        && time.with_timezone(&us_equity_zone()).time()
+                            < us_equity_session().windows[0].open
+                    {
                         ExtendedSession::PreMarket
                     } else {
                         ExtendedSession::PostMarket
@@ -322,7 +324,7 @@ impl LiveFeed {
     }
 
     /// The quote of the chart's symbol: the last displayed trade and the previous session close,
-    /// or for SAMPLE its regular-hours price and the extended-hours trade after it, with the
+    /// or for a symbol with trading hours its regular-hours price and the extended-hours trade after it, with the
     /// session volume and the book's best bid and ask.
     pub(super) fn quote(&self, now: DateTime<Utc>) -> Option<Quote> {
         let mut quote = watchlist_quote(&self.state().symbol, now)?;
@@ -570,7 +572,7 @@ impl Simulation {
     }
 
     fn shown_trade(&self, trade: &Tick, extended_hours: bool) -> Option<Tick> {
-        if self.symbol != "SAMPLE" || (self.continuous && !self.adjusted) {
+        if !DemoSymbol::has_hours(&self.symbol) || (self.continuous && !self.adjusted) {
             return Some(trade.clone());
         }
         let bar = Bar::new(
@@ -1012,6 +1014,18 @@ mod tests {
         }
     }
 
+    /// A trade after the regular close, at 17:30 New York time, is on the tape only with extended
+    /// hours: the window closes at 20:00, not at the regular close.
+    #[test]
+    fn a_post_market_trade_is_shown_only_with_extended_hours() {
+        let now = "2026-10-23T22:00:00Z".parse().unwrap();
+        let feed = LiveFeed::new("SAMPLE", now);
+        feed.set_view(SessionType::RTH, false);
+        let trade = Tick::new("2026-10-23T21:30:00Z".parse().unwrap(), 100.0, 1.0, None);
+        assert!(feed.state().shown_trade(&trade, true).is_some());
+        assert!(feed.state().shown_trade(&trade, false).is_none());
+    }
+
     /// Minute volume must reflect clustered arrivals and the daily activity profile.
     #[test]
     fn minute_volume_varies_across_a_full_generated_day() {
@@ -1050,7 +1064,7 @@ mod tests {
 
     #[test]
     fn a_subscription_before_the_session_gets_depth_when_trading_starts() {
-        let now = "2026-10-23T14:29:59Z".parse().unwrap();
+        let now = "2026-10-23T13:29:59Z".parse().unwrap();
         let feed = Arc::new(LiveFeed::new("SAMPLE", now));
         feed.set_view(SessionType::RTH, false);
         let mut chart = ChartBuilder::new()
@@ -1171,10 +1185,7 @@ mod tests {
                 .find(|bar| bar.time.date_naive() < last.time.date_naive())
                 .unwrap();
             assert_eq!(feed.day_change(), Some((last.close, previous.close)));
-            let hours = egui_charts::model::ExchangeSessionProvider::new(
-                egui_charts::model::TimezoneId::utc(),
-                Some(sample_session()),
-            );
+            let hours = us_equity_hours();
             assert!(expected.iter().all(|bar| hours.is_open(bar.time, extended)));
         }
         let bars = chart.bars(SeriesId::MAIN).to_vec();
@@ -1351,11 +1362,11 @@ mod tests {
             assert_eq!(frame(&mut panel, after), Duration::MAX);
         }
 
-        // Other live symbols stamp every frame, though details only displays hours and minutes.
-        live.set_symbol("AAPL");
+        // Symbols without trading hours stamp every frame, though details only displays hours and minutes.
+        live.set_symbol("SPX");
         panel = WatchlistPanel::new(vec![Watchlist::new("Watchlist")]);
         panel.set_service(quotes.clone());
-        panel.set_selected("AAPL");
+        panel.set_selected("SPX");
         frame(&mut panel, after);
         frame(&mut panel, after);
         assert_eq!(frame(&mut panel, after), Duration::MAX);
@@ -1365,6 +1376,6 @@ mod tests {
         );
         let next_minute = after + TimeDelta::minutes(1);
         assert!(frame(&mut panel, next_minute) < Duration::MAX);
-        assert_eq!(panel.quote("AAPL"), live.quote(next_minute).as_ref());
+        assert_eq!(panel.quote("SPX"), live.quote(next_minute).as_ref());
     }
 }
