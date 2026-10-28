@@ -230,12 +230,12 @@ pub fn render_footprint(
                     };
                     let galley =
                         painter.layout_no_wrap(text, FontId::monospace(10.0), config.text_color);
-                    if galley.size().x + 4.0 <= rect.width() {
-                        painter.galley(
-                            rect.center() - galley.size() / 2.0,
-                            galley,
-                            config.text_color,
-                        );
+                    let at = rect.center() - galley.size() / 2.0;
+                    // Text is whole or absent: a cell cut by the plot edge shows no number.
+                    if galley.size().x + 4.0 <= rect.width()
+                        && mapping.rect.contains_rect(Rect::from_min_size(at, galley.size()))
+                    {
+                        painter.galley(at, galley, config.text_color);
                     }
                 }
             }
@@ -524,6 +524,41 @@ mod tests {
                 assert_eq!(texts, ["2 × 7", "9", "+5", "+5 / 9"]);
             }
         }
+        // A plot edge through the first column leaves its numbers out rather than cutting them.
+        let cut = ChartMapping::new(
+            Rect::from_min_max(pos2(30.0, 0.0), rect.max),
+            240.0,
+            0,
+            0,
+            0.0,
+            map.price,
+        );
+        let ctx = egui::Context::default();
+        let config = FootprintConfig {
+            modes: vec![
+                FootprintMode::BidAsk,
+                FootprintMode::Volume,
+                FootprintMode::Delta,
+                FootprintMode::DeltaVolume,
+            ],
+            min_text_height: 10.0,
+            auto_row_height: None,
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| render_footprint(ui.painter(), &cut, &bars, &flow, &config),
+        );
+        output.textures_delta.clear();
+        let texts = output
+            .shapes
+            .iter()
+            .filter(|shape| matches!(shape.shape, Shape::Text(_)))
+            .count();
+        assert_eq!(texts, 6);
         // Both diagonals can dominate at the same price; keep both side colours.
         let mut dual = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
         for (price, size, side) in [
