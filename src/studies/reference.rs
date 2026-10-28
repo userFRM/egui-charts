@@ -331,6 +331,112 @@ fn fixture() -> Vec<Bar> {
         .collect()
 }
 
+/// Ratios have price degree zero; CSI has degree one through ATR. Rescaling a price or volume
+/// unit must not change which bars have values, including the studies that read these outputs.
+#[test]
+fn small_range_studies_are_invariant_to_price_and_volume_units() {
+    // Unequal moves avoid ambiguous directional ties introduced by rescaling binary floats.
+    let bars: Vec<_> = (0..600)
+        .map(|i| {
+            let p = 20.0 + (i as f64 * 0.31).sin() * 3.0 + i as f64 * 0.005;
+            Bar::new(
+                Utc.timestamp_opt(1_700_000_000 + i * 300, 0).unwrap(),
+                p - 0.13,
+                p + 0.51,
+                p - 0.73,
+                p,
+                100.0 + (i % 37) as f64,
+            )
+        })
+        .collect();
+    let factory = crate::studies::IndicatorFactory::new();
+    let mut failures = Vec::new();
+    for (name, price_degree) in [
+        ("Stochastic", 0),
+        ("Williams %R", 0),
+        ("UO", 0),
+        ("CCI", 0),
+        ("ADX", 0),
+        ("DMI", 0),
+        ("ADX Breakout", 0),
+        ("CSI", 1),
+        ("StochRSI", 0),
+        ("ROC", 0),
+        ("BBW", 0),
+        ("52W HL%", 0),
+        ("MFI", 0),
+        ("Technical Ratings", 0),
+        ("VWAP", 1),
+        ("AVWAP", 1),
+        ("VWAP Auto Anchored", 1),
+    ] {
+        let mut data = bars.clone();
+        if name == "52W HL%" {
+            for (i, bar) in data.iter_mut().enumerate() {
+                bar.time = bars[0].time + chrono::Duration::days(i as i64 * 4);
+            }
+        }
+        let mut base = factory.create(name).unwrap();
+        base.calculate(&data);
+        assert!((0..data.len()).any(|bar| base.values().value(0, bar).is_some()), "{name}");
+        for (price_scale, volume_scale) in [(1e-12_f64, 1.0), (1e-17, 1.0), (1e12, 1.0)]
+            .into_iter()
+            .chain((price_degree == 1).then_some((1.0, 1e-14)))
+        {
+            let scaled: Vec<_> = data
+                .iter()
+                .map(|b| Bar {
+                    open: b.open * price_scale,
+                    high: b.high * price_scale,
+                    low: b.low * price_scale,
+                    close: b.close * price_scale,
+                    volume: b.volume * volume_scale,
+                    ..b.clone()
+                })
+                .collect();
+            let mut study = factory.create(name).unwrap();
+            study.calculate(&scaled);
+            let factor = price_scale.powi(price_degree);
+            for line in 0..base.line_count() {
+                for bar in 0..data.len() {
+                    let want = base.values().value(line, bar);
+                    let got = study.values().value(line, bar).map(|v| v / factor);
+                    let ok = match (want, got) {
+                        (Some(w), Some(g)) => (g - w).abs() <= 1e-6 * w.abs() + 1e-9,
+                        (None, None) => true,
+                        _ => false,
+                    };
+                    if !ok {
+                        failures.push(format!("{name} line {line}, price {price_scale}, volume {volume_scale}, bar {bar}: {got:?}, expected {want:?}"));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    // Direct rational calculations at bar 100 of the quarter-tick fixture: the 14-bar
+    // high/low range gives K = 200/9 and R = K - 100; CCI uses the last 20 typical prices.
+    let bars = fixture();
+    for (mut study, want) in [
+        (
+            Box::new(WilliamsR::default()) as Box<dyn Indicator>,
+            -700.0 / 9.0,
+        ),
+        (Box::new(Stochastic::new(14, 1, 1)), 200.0 / 9.0),
+        (Box::new(CCI::default()), -62000.0 / 759.0),
+        (Box::new(RateOfChange::default()), -100.0 / 77.0),
+    ] {
+        study.calculate(&bars);
+        assert!((study.values().value(0, 100).unwrap() - want).abs() < 1e-9);
+    }
+    let mut roc = RateOfChange::new(1);
+    let zero = [0.0, 2.0, 4.0].map(|p| Bar::new(chrono::DateTime::UNIX_EPOCH, p, p, p, p, 1.0));
+    roc.calculate(&zero);
+    assert_eq!(roc.values().value(0, 1), None);
+    assert_eq!(roc.values().value(0, 2), Some(100.0));
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
+
 /// The colour bands of the Chop Zone (0 steepest rise to 8 steepest fall) and the trend of the
 /// Volatility Stop on the fixture, computed independently from the same definitions as the
 /// expected rows, one character per bar, `-` where the bar has no colour.

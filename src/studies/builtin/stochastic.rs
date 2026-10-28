@@ -103,7 +103,7 @@ impl Stochastic {
                 let (highest, lowest) = (highest[i], lowest[i]);
                 let range = highest - lowest;
 
-                if range.abs() < 1e-10 {
+                if range == 0.0 {
                     raw_k.push(50.0); // Middle value when no range
                 } else {
                     let k = 100.0 * (data[i].close - lowest) / range;

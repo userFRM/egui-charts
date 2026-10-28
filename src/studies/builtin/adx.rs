@@ -144,7 +144,7 @@ impl Indicator for ADX {
                     state.minus = Self::wilders_smooth(state.minus, minus, self.period);
                     state.tr = Self::wilders_smooth(state.tr, tr, self.period);
                 }
-                let (plus, minus) = if state.tr.abs() > 1e-10 {
+                let (plus, minus) = if state.tr != 0.0 {
                     (
                         100.0 * state.plus / state.tr,
                         100.0 * state.minus / state.tr,

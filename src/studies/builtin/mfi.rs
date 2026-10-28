@@ -241,7 +241,10 @@ mod tests {
                 assert_eq!(study.values().value(0, 1), None);
                 for (bar, want) in expected.into_iter().enumerate() {
                     let got = study.values().value(0, bar + 2).unwrap();
-                    assert!((got - want).abs() < 1e-9, "{closes:?}, {volume}, {scale}: {got}");
+                    assert!(
+                        (got - want).abs() < 1e-9,
+                        "{closes:?}, {volume}, {scale}: {got}"
+                    );
                 }
             }
         }
