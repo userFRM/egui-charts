@@ -399,18 +399,31 @@ impl HandleService {
             } else {
                 Some(theme.chart.bg)
             };
-            let fill = color(if ring.is_some() {
+            let mut fill = color(if ring.is_some() {
                 config.color
             } else {
                 config.selected_color
             });
+            if position && ring.is_some() {
+                fill = fill.lerp_to_gamma(theme.chart.bg, 0.15);
+            }
             if position && matches!(pos, HandlePos::Point(_)) {
                 let square = egui::Rect::from_center_size(point, egui::Vec2::splat(2.0 * radius));
                 let corner = radius / 2.0;
-                painter.rect_filled(square, corner, fill);
-                if let Some(bg) = ring {
-                    painter.rect_filled(square.shrink(RING_WIDTH), corner / 2.0, bg);
-                }
+                painter.rect(
+                    square,
+                    corner,
+                    ring.unwrap_or(fill),
+                    egui::Stroke::new(1.0, fill),
+                    egui::StrokeKind::Inside,
+                );
+            } else if position {
+                painter.circle(
+                    point,
+                    radius - 0.5,
+                    ring.unwrap_or(fill),
+                    egui::Stroke::new(1.0, fill),
+                );
             } else {
                 painter.circle_filled(point, radius, fill);
                 if let Some(bg) = ring {

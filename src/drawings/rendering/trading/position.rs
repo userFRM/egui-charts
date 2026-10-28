@@ -5,16 +5,20 @@ use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::drawings::rendering::{ChartView, bars_between};
 use crate::model::{Bar, percent_change};
 use crate::styles::{stroke, typography};
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
-
-/// Opacity of the target and stop zones, and of the shading added over the part the trade covered.
-const ZONE_ALPHA: f32 = 0.18;
 
 impl Drawing {
     /// Renders a long or short position: entry, target and stop zones, and the
     /// result of replaying the bars after the entry bar up to the right edge.
-    pub(crate) fn render_pos_tool(&self, painter: &egui::Painter, view: &ChartView, is_long: bool) {
+    pub(crate) fn render_pos_tool(
+        &self,
+        painter: &egui::Painter,
+        view: &ChartView,
+        is_long: bool,
+        selected: bool,
+    ) {
         let (&[entry, target, ..], &[entry_at, target_at, ..]) =
             (self.points.as_slice(), self.chart_points.as_slice())
         else {
@@ -24,10 +28,18 @@ impl Drawing {
             return;
         };
 
-        // Position colors
-        let profit_color = DESIGN_TOKENS.semantic.extended.bullish;
-        let loss_color = DESIGN_TOKENS.semantic.extended.bearish;
-        let entry_color = DESIGN_TOKENS.semantic.extended.chart_text_secondary;
+        let theme = painter.ctx().active_theme();
+        let muted = |color: Color32| color.lerp_to_gamma(Color32::from_gray(128), 0.35);
+        let profit_color = muted(DESIGN_TOKENS.semantic.extended.bullish);
+        let loss_color = muted(DESIGN_TOKENS.semantic.extended.bearish);
+        // Opaque, deeper label fills keep white text legible on a light chart too.
+        let label_color = |color: Color32| {
+            color.lerp_to_gamma(Color32::BLACK, if theme.dark { 0.08 } else { 0.18 })
+        };
+        let entry_color = theme.chart.axis_text_secondary;
+        let zone_alpha = if theme.dark { 0.20 } else { 0.12 };
+        let covered_alpha = if theme.dark { 0.14 } else { 0.10 };
+        let line_width = 1.0 / painter.pixels_per_point();
 
         let (entry_price, target_price) = (entry_at.price, target_at.price);
         // The stop anchor is added when the tool is placed; until then (while
@@ -91,8 +103,20 @@ impl Drawing {
 
         let right = Self::position_right(entry, target);
 
-        self.draw_zone(painter, entry, target.y, right, profit_color);
-        self.draw_zone(painter, entry, stop_y, right, loss_color);
+        self.draw_zone(
+            painter,
+            entry,
+            target.y,
+            right,
+            profit_color.gamma_multiply(zone_alpha),
+        );
+        self.draw_zone(
+            painter,
+            entry,
+            stop_y,
+            right,
+            loss_color.gamma_multiply(zone_alpha),
+        );
 
         // The trade's path from the entry to its exit, over the part of the zone it covered.
         if let Some((exit_price, _, exit_bar)) = exit {
@@ -106,22 +130,22 @@ impl Drawing {
                 entry,
                 exit_at.y,
                 exit_x,
-                if won { profit_color } else { loss_color },
+                (if won { profit_color } else { loss_color }).gamma_multiply(covered_alpha),
             );
             draw_dashed_line(
                 painter,
                 entry,
                 exit_at,
-                Stroke::new(stroke::HAIRLINE, entry_color),
+                Stroke::new(line_width, entry_color.gamma_multiply(0.45)),
                 4.0,
-                3.0,
+                5.0,
             );
         }
 
         painter.hline(
             entry.x..=right,
             entry.y,
-            Stroke::new(stroke::HAIRLINE, entry_color),
+            Stroke::new(line_width, entry_color.gamma_multiply(0.65)),
         );
 
         let qty_part = format!("Qty: {qty_text}");
@@ -140,11 +164,11 @@ impl Drawing {
                 } else {
                     loss_color
                 };
-                (summary, fill, Color32::WHITE)
+                (summary, label_color(fill), Color32::WHITE)
             }
             None => (
                 format!("P&L: n/a, {qty_part}\nRisk/Reward: n/a"),
-                DESIGN_TOKENS.semantic.extended.chart_axis_bg,
+                theme.chart.bg_axis,
                 entry_color,
             ),
         };
@@ -180,6 +204,14 @@ impl Drawing {
             entry.y,
             stop_below,
         );
+        if selected && let Some(stats) = stats {
+            painter.rect_stroke(
+                stats,
+                3.0,
+                Stroke::new(stroke::HAIRLINE, Color32::WHITE.gamma_multiply(0.8)),
+                egui::StrokeKind::Inside,
+            );
+        }
         let stop_edge = match stats {
             Some(stats) if stop_below => stop_y.max(stats.bottom()),
             Some(stats) => stop_y.min(stats.top()),
@@ -188,7 +220,7 @@ impl Drawing {
         draw_pill(
             painter,
             target_label,
-            profit_color,
+            label_color(profit_color),
             Color32::WHITE,
             center_x,
             target.y,
@@ -197,7 +229,7 @@ impl Drawing {
         draw_pill(
             painter,
             stop_label,
-            loss_color,
+            label_color(loss_color),
             Color32::WHITE,
             center_x,
             stop_edge,
@@ -228,7 +260,7 @@ impl Drawing {
         if !painter.clip_rect().intersects(zone) {
             return;
         }
-        painter.rect_filled(zone, 0.0, color.gamma_multiply(ZONE_ALPHA));
+        painter.rect_filled(zone, 0.0, color);
     }
 }
 
@@ -248,11 +280,11 @@ fn draw_pill(
     if !clip.is_positive() {
         return None;
     }
-    let padding = egui::vec2(DESIGN_TOKENS.spacing.md, DESIGN_TOKENS.spacing.xs + 1.0);
-    let gap = DESIGN_TOKENS.spacing.sm;
+    let padding = egui::vec2(DESIGN_TOKENS.spacing.sm, DESIGN_TOKENS.spacing.xs);
+    let gap = DESIGN_TOKENS.spacing.lg;
     let mut job = egui::text::LayoutJob::simple(
         text,
-        egui::FontId::proportional(typography::SM_MD),
+        egui::FontId::proportional(typography::SM),
         text_color,
         (clip.width() - 2.0 * padding.x).max(1.0),
     );
@@ -272,7 +304,7 @@ fn draw_pill(
         (clip.right() - pill.right()).min(0.0) + (clip.left() - pill.left()).max(0.0),
         (clip.bottom() - pill.bottom()).min(0.0) + (clip.top() - pill.top()).max(0.0),
     ));
-    painter.rect_filled(pill, DESIGN_TOKENS.rounding.sm, fill);
+    painter.rect_filled(pill, 3.0, fill);
     painter.galley(
         Pos2::new(pill.center().x, pill.top() + padding.y),
         galley,

@@ -322,6 +322,16 @@ impl Drawing {
     /// This method handles rendering for every drawing tool type,
     /// delegating to the appropriate category-specific implementation.
     pub fn render_original(&self, painter: &egui::Painter, rect: Rect, view: &ChartView) {
+        self.render_with_selection(painter, rect, view, false);
+    }
+
+    pub(crate) fn render_with_selection(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        view: &ChartView,
+        selected: bool,
+    ) {
         if self.points.is_empty() {
             return;
         }
@@ -413,8 +423,8 @@ impl Drawing {
             DrawingToolType::SineLine => self.render_sine_line(painter, rect),
 
             // Projection (6 tools)
-            DrawingToolType::LongPos => self.render_pos_tool(painter, view, true),
-            DrawingToolType::ShortPos => self.render_pos_tool(painter, view, false),
+            DrawingToolType::LongPos => self.render_pos_tool(painter, view, true, selected),
+            DrawingToolType::ShortPos => self.render_pos_tool(painter, view, false, selected),
             DrawingToolType::Forecast => self.render_forecast(painter, view),
             DrawingToolType::BarsPattern => self.render_bars_pattern(painter, view),
             DrawingToolType::GhostFeed => self.render_ghost_feed(painter),
