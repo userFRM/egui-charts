@@ -105,7 +105,7 @@ impl Chart {
     /// Between bars the time is interpolated, and in whitespace it is extrapolated, as in
     /// [`Chart::visible_time_range`].
     pub fn index_to_time(&self, index: f64) -> Option<DateTime<Utc>> {
-        crate::model::time_at(self.state.shown(), index)
+        crate::model::time_at_with_timeframe(self.state.shown(), index, self.timeframe())
     }
 
     /// The fractional logical index of a UTC time, `None` without data.
@@ -113,7 +113,7 @@ impl Chart {
     /// The inverse of [`Chart::index_to_time`]: a time between two bars lies between their
     /// indices, and a time outside the data is extrapolated into whitespace.
     pub fn time_to_index(&self, time: DateTime<Utc>) -> Option<f64> {
-        crate::model::index_at(self.state.shown(), time)
+        crate::model::index_at_with_timeframe(self.state.shown(), time, self.timeframe())
     }
 
     /// Gives the horizontal axis a meaning other than time, such as option strikes or bond

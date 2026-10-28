@@ -1286,6 +1286,7 @@ impl Chart {
                 &time_coords,
                 scale,
                 &self.chart_options.time_scale,
+                |index| self.index_to_time(index * factor as f64),
             )
         } else {
             Default::default()
