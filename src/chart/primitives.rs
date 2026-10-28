@@ -118,7 +118,8 @@ impl PrimitiveView<'_> {
     }
 
     /// The x of a UTC time, interpolated between bars and extrapolated into whitespace as
-    /// [`Chart::time_to_index`](crate::widget::Chart::time_to_index) does. `None` without bars.
+    /// [`Chart::time_to_index`](crate::widget::Chart::time_to_index) does, except that calendar
+    /// intervals step at the smallest edge spacing. `None` without bars.
     pub fn time_to_x(&self, time: DateTime<Utc>) -> Option<f32> {
         crate::model::index_at(self.bars, time).map(|index| self.index_to_x(index))
     }

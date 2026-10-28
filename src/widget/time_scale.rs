@@ -103,7 +103,8 @@ impl Chart {
     /// The UTC time at a logical index, `None` without data or for a non-finite index.
     ///
     /// Between bars the time is interpolated, and in whitespace it is extrapolated, as in
-    /// [`Chart::visible_time_range`].
+    /// [`Chart::visible_time_range`], at the smallest positive spacing among the outermost 16
+    /// bars, or by calendar months for a known month or year timeframe.
     pub fn index_to_time(&self, index: f64) -> Option<DateTime<Utc>> {
         crate::model::time_at_with_timeframe(self.state.shown(), index, self.timeframe())
     }

@@ -87,8 +87,9 @@ impl Chart {
     /// Exports the current symbol's drawings with timestamps, using the chart's own mapping.
     /// Between bars time is interpolated; outside them the smallest positive spacing among
     /// the outermost 16 bars is extended (one second if none), retaining repeated-edge ranks.
-    /// Known month and year intervals step by calendar months. Empty charts export retained anchors;
-    /// an index with no loaded mapping returns an error rather than clamping or inventing time.
+    /// Known month and year intervals step by calendar months. Empty charts export retained
+    /// anchors; an index with no loaded mapping returns an error rather than clamping or
+    /// inventing time.
     pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
         self.store_drawings(
             self.drawings

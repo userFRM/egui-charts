@@ -8,7 +8,8 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2, epaint::StrokeKind};
 
 /// Render markers on the chart. Times between bars interpolate; whitespace extends the
-/// nearest distinct pair (one second for a single bar). Vertical placement uses the nearest bar.
+/// smallest positive spacing among the outermost 16 bars (one second if none). Vertical
+/// placement uses the nearest bar.
 /// Returns the index and visible hit area of each marker drawn, in painting order.
 pub fn render_markers(
     context: &RenderContext,
