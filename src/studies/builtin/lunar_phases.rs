@@ -31,7 +31,7 @@
 //!
 //! // The new moon of the total solar eclipse of 2024-04-08 was at 18:21 UTC.
 //! let from = Utc.with_ymd_and_hms(2024, 4, 1, 0, 0, 0).unwrap();
-//! let to = Utc.with_ymd_and_hms(2024, 4, 20, 0, 0, 0).unwrap();
+//! let to = Utc.with_ymd_and_hms(2024, 4, 30, 0, 0, 0).unwrap();
 //! let phases = lunar_phases(from, to);
 //! assert_eq!(phases[0].phase, MoonPhase::New);
 //! let almanac = Utc.with_ymd_and_hms(2024, 4, 8, 18, 21, 0).unwrap();
@@ -188,7 +188,7 @@ fn phase_jd(k: f64) -> f64 {
 }
 
 /// The new and full moons in `from..to`, in time order, over 1900-01-01 to 2100-01-01 UTC; see the
-/// [module documentation](self) for the time basis and accuracy.
+/// module documentation for the time basis and accuracy.
 pub fn lunar_phases(from: DateTime<Utc>, to: DateTime<Utc>) -> Vec<LunarPhase> {
     let from = from.max(Utc.with_ymd_and_hms(1900, 1, 1, 0, 0, 0).unwrap());
     let to = to.min(Utc.with_ymd_and_hms(2100, 1, 1, 0, 0, 0).unwrap());
