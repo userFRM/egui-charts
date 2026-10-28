@@ -286,6 +286,12 @@ impl ConfiguredStudy {
             aligned_bars: Vec::new(),
         }
     }
+    /// Whether the study can be calculated on another interval: it reads one source, or the bars
+    /// alone, without data of its own to request or the chart's trades.
+    fn runs_on_other_bars(&self) -> bool {
+        self.study.source().is_some()
+            || (self.study.data_requests().is_empty() && self.study.order_flow_input().is_none())
+    }
     fn update_price(&mut self, data: &[Bar], from: usize) {
         self.aligned = None;
         match self.source() {
@@ -350,8 +356,8 @@ impl Indicator for ConfiguredStudy {
                 .with_default(InputValue::Source(initial)),
             );
         }
+        use super::{InputKind, StudyInput};
         if self.study.source().is_some() {
-            use super::{InputKind, StudyInput};
             inputs.extend([
                 StudyInput::new(
                     "plot_offset",
@@ -367,6 +373,10 @@ impl Indicator for ConfiguredStudy {
                     InputKind::Symbol,
                 )
                 .with_default(InputValue::Symbol(String::new())),
+            ]);
+        }
+        if self.runs_on_other_bars() {
+            inputs.extend([
                 StudyInput::new(
                     "calculation_timeframe",
                     "Interval",
@@ -395,12 +405,11 @@ impl Indicator for ConfiguredStudy {
             self.study.calculate(&[]);
             return Ok(());
         }
-        if self.study.source().is_some()
-            && matches!(
-                id,
-                "calculation_symbol" | "calculation_timeframe" | "wait_for_close"
-            )
-        {
+        if match id {
+            "calculation_symbol" => self.study.source().is_some(),
+            "calculation_timeframe" | "wait_for_close" => self.runs_on_other_bars(),
+            _ => false,
+        } {
             let schema = self
                 .inputs()
                 .into_iter()
@@ -905,6 +914,46 @@ mod tests {
             study.apply_settings(&[], settings).unwrap();
             assert_eq!(study.plot_style(0).plot_type, PlotType::Area, "{name}");
         }
+    }
+
+    /// Studies that read the bars alone offer the interval and close-wait inputs as well as the
+    /// single-source studies, keep their own inputs, and calculate on the interval they are given.
+    /// A study that requests data of its own, or reads trades, does not.
+    #[test]
+    fn ohlc_studies_offer_a_calculation_interval() {
+        use super::super::{ADX, ATR};
+        let ids = |study: &ConfiguredStudy| -> Vec<String> {
+            study.inputs().into_iter().map(|input| input.id).collect()
+        };
+        for inner in [
+            Box::new(ATR::new(3)) as Box<dyn Indicator>,
+            Box::new(ADX::new(3)),
+        ] {
+            let mut study = ConfiguredStudy::new(inner);
+            let own = study.study.inputs().len();
+            let ids = ids(&study);
+            assert_eq!(
+                &ids[own..],
+                ["calculation_timeframe", "wait_for_close"],
+                "{}",
+                study.name()
+            );
+            assert!(study.data_requests().is_empty());
+            study
+                .set_input(
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(Timeframe::Hour1)),
+                )
+                .unwrap();
+            assert_eq!(study.data_requests().len(), 1);
+            assert!(
+                study
+                    .set_input("calculation_symbol", InputValue::Symbol("X".into()))
+                    .is_err()
+            );
+        }
+        let breadth = ConfiguredStudy::new(Box::new(super::super::AdvanceDeclineRatio::default()));
+        assert!(!ids(&breadth).contains(&"calculation_timeframe".to_owned()));
     }
 
     #[test]

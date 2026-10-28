@@ -173,6 +173,7 @@ impl StudyDataCache {
         requests: Vec<StudyDataRequest>,
         symbol: &str,
         timeframe: Option<Timeframe>,
+        replay: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Vec<StudyData<'_>> {
         requests
             .into_iter()
@@ -181,7 +182,10 @@ impl StudyDataCache {
                 let series = self.series.iter().find(|series| series.request == key)?;
                 Some(StudyData {
                     request,
-                    bars: &series.bars,
+                    bars: match replay {
+                        Some(time) => super::replay::completed(&series.bars, &series.clock, time),
+                        None => &series.bars,
+                    },
                     clock: series.clock.clone(),
                     instrument: series.instrument.as_ref(),
                     timeframe: key.timeframe.unwrap(),
@@ -248,7 +252,7 @@ impl Chart {
             .as_ref()
     }
 
-    fn invalidate_study_data(&mut self) {
+    pub(super) fn invalidate_study_data(&mut self) {
         for (at, study) in self.studies.indicators().iter().enumerate() {
             if !study.data_requests().is_empty() {
                 self.pending_from[at] = Some(0);
@@ -1163,5 +1167,50 @@ mod tests {
             settle(&mut chart);
             assert_eq!(output(&chart), expected, "{name}");
         }
+    }
+
+    /// Under replay, a study on another symbol or interval reads only the bars its history
+    /// completed by the cursor. The chart's unfinished bar must not show the closing value of the
+    /// other history's bar in the same slot, whichever way the cursor moves; leaving replay
+    /// restores the full history.
+    #[test]
+    fn replay_hides_the_future_of_other_histories() {
+        let hourly = bars(&[1.0; 3], 60);
+        let mut chart = Chart::new(crate::model::BarData::from_bars(hourly));
+        chart.set_timeframe(Timeframe::Hour1);
+        let id = chart.add_indicator(Box::new(SMA::new(1)));
+        chart
+            .indicator_mut(id)
+            .unwrap()
+            .set_input("calculation_symbol", InputValue::Symbol("REMOTE".into()))
+            .unwrap();
+        let request = chart.study_data_requests().pop().unwrap();
+        chart.set_study_data(request, bars(&[10.0, 14.0, 24.0], 60), None);
+        let ctx = egui::Context::default();
+        let mut frame = 0.0;
+        let mut values = |chart: &mut Chart| {
+            for _ in 0..4 {
+                frame += 1.0;
+                shapes(&ctx, chart, frame, Vec::new());
+            }
+            let study = chart.indicators().next().unwrap().1;
+            (0..study.values().len())
+                .map(|at| study.values().value(0, at))
+                .collect::<Vec<_>>()
+        };
+        let minute = |m: i64| DateTime::UNIX_EPOCH + Duration::minutes(m);
+        chart.set_replay_time(Some(minute(90)));
+        assert!(chart.set_replay_source(
+            bars(&[1.0; 180], 1),
+            crate::model::BarClock::new(Timeframe::Min1)
+        ));
+        // The other symbol's hour from 01:00 is unfinished at 01:30, so it has no value there.
+        assert_eq!(values(&mut chart), [Some(10.0), None]);
+        chart.set_replay_time(Some(minute(150)));
+        assert_eq!(values(&mut chart), [Some(10.0), Some(14.0), None]);
+        chart.set_replay_time(Some(minute(90)));
+        assert_eq!(values(&mut chart), [Some(10.0), None]);
+        chart.set_replay_time(None);
+        assert_eq!(values(&mut chart), [Some(10.0), Some(14.0), Some(24.0)]);
     }
 }

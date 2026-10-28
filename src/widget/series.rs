@@ -575,9 +575,12 @@ impl Chart {
                 source.map_or(&[], Vec::as_slice),
             );
         } else {
-            let sources =
-                self.study_data
-                    .data(indicator.data_requests(), &self.symbol, self.timeframe);
+            let sources = self.study_data.data(
+                indicator.data_requests(),
+                &self.symbol,
+                self.timeframe,
+                self.replay.as_ref().map(|replay| replay.time),
+            );
             indicator.update_data(&self.state.data().bars, 0, &sources);
         }
         let id = SeriesId(self.next_series);
@@ -770,7 +773,12 @@ impl Chart {
             .iter()
             .flat_map(|study| study.data_requests())
             .collect();
-        let sources = self.study_data.data(requests, &self.symbol, self.timeframe);
+        let sources = self.study_data.data(
+            requests,
+            &self.symbol,
+            self.timeframe,
+            self.replay.as_ref().map(|replay| replay.time),
+        );
         refresh_values(
             self.studies.indicators_mut(),
             &self.study_ids,
@@ -790,7 +798,12 @@ impl Chart {
             .iter()
             .flat_map(|study| study.data_requests())
             .collect();
-        let sources = self.study_data.data(requests, &self.symbol, self.timeframe);
+        let sources = self.study_data.data(
+            requests,
+            &self.symbol,
+            self.timeframe,
+            self.replay.as_ref().map(|replay| replay.time),
+        );
         refresh_values(
             cache.studies.indicators_mut(),
             &self.study_ids,
