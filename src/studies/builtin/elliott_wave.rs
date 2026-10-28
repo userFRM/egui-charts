@@ -155,6 +155,7 @@ impl Indicator for ElliottWave {
         let mut values = std::mem::take(&mut self.values);
         stepper.run(data, from, &mut values, |state, bar| {
             if ![bar.high, bar.low, bar.close].iter().all(|v| v.is_finite()) {
+                state.swings.skip();
                 return IndicatorValue::None;
             }
             let mut row = [f64::NAN; 4];

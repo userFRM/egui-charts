@@ -231,6 +231,7 @@ impl<const RISING: bool> Indicator for Wedge<RISING> {
         let mut values = std::mem::take(&mut self.values);
         stepper.run(data, from, &mut values, |state, bar| {
             if ![bar.high, bar.low, bar.close].iter().all(|v| v.is_finite()) {
+                state.swings.skip();
                 return IndicatorValue::None;
             }
             let x = state.swings.position as f64;
