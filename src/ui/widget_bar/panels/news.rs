@@ -295,28 +295,32 @@ impl NewsPanel {
             self.topics.clone(),
             self.providers.clone(),
         );
-        ui.horizontal_wrapped(|ui| {
-            for (id, noun, choices) in [
-                ("news_symbols", "symbols", &mut self.more_symbols),
-                ("news_topics", "topics", &mut self.topics),
-                ("news_providers", "providers", &mut self.providers),
-            ] {
-                if choices.is_empty() || (id == "news_symbols" && self.market) {
-                    continue;
-                }
-                let count = choices.iter().filter(|(_, on)| *on).count();
-                let text = if count == 0 {
-                    format!("All {noun}")
-                } else {
-                    format!("{count} {noun}")
-                };
-                dropdown(ui, id, &text, |ui| {
-                    for (value, on) in choices.iter_mut() {
-                        ui.checkbox(on, l10n::text(ui.ctx(), value.as_str()));
+        let offered = !(self.topics.is_empty() && self.providers.is_empty())
+            || (!self.more_symbols.is_empty() && !self.market);
+        if offered {
+            ui.horizontal_wrapped(|ui| {
+                for (id, noun, choices) in [
+                    ("news_symbols", "symbols", &mut self.more_symbols),
+                    ("news_topics", "topics", &mut self.topics),
+                    ("news_providers", "providers", &mut self.providers),
+                ] {
+                    if choices.is_empty() || (id == "news_symbols" && self.market) {
+                        continue;
                     }
-                });
-            }
-        });
+                    let count = choices.iter().filter(|(_, on)| *on).count();
+                    let text = if count == 0 {
+                        format!("All {noun}")
+                    } else {
+                        format!("{count} {noun}")
+                    };
+                    dropdown(ui, id, &text, |ui| {
+                        for (value, on) in choices.iter_mut() {
+                            ui.checkbox(on, l10n::text(ui.ctx(), value.as_str()));
+                        }
+                    });
+                }
+            });
+        }
         if refresh
             || market != self.market
             || before

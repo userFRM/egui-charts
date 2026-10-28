@@ -142,6 +142,7 @@ impl MarketHeatmapPanel {
                         );
                     }
                 });
+                ui.end_row();
             }
             for (id, prefix, target, chosen) in [
                 ("heatmap_size", "Size", &mut selection.size, &size),
