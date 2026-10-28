@@ -39,7 +39,9 @@ mod storage;
 pub use alert_engine::AlertEngine;
 pub use alerts::{AlertEvent, Alerts};
 pub use broker::{AccountEvent, Broker};
-pub use chats::{ChatEvent, ChatMessage, Chats};
+pub use chats::{
+    ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, NewChatRoom, NewChatRoomKind,
+};
 pub use events::Events;
 #[cfg(feature = "widget")]
 pub(crate) use events::Listener;
@@ -50,6 +52,6 @@ pub use quotes::Quotes;
 pub use search::{ExpressionError, SymbolExpression, SymbolQuery, SymbolSearch};
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
-pub use settings::{SettingsStore, UserSettings};
+pub use settings::{MarketHeatmapSelection, SettingsStore, UserSettings};
 pub use signals::{SignalEvent, Signals};
 pub use storage::{Storage, StoreKind};
