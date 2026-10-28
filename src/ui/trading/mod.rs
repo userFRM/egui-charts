@@ -548,6 +548,7 @@ impl Trading {
             orders: &self.orders,
             positions: &self.positions,
             trades: &[],
+            session_open: None,
             last_fill: self.account_panel.fills.price(symbol),
         }
     }
@@ -579,6 +580,9 @@ impl Trading {
         let mut market = self.market(chart);
         market.last = trades.last().map(|trade| trade.price).or(market.last);
         market.trades = &trades;
+        market.session_open = trades
+            .last()
+            .and_then(|trade| session_open(chart, trade.ts));
         let theme = ui.active_theme();
         let action = egui::Panel::right("order_ticket")
             .resizable(false)
@@ -885,6 +889,17 @@ impl Trading {
             self.placing.push((self.request_key, position, order));
         }
     }
+}
+
+/// The open of the exchange session containing `time`, by the chart's trading hours and zone.
+fn session_open(
+    chart: &Chart,
+    time: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let sessions = (chart.bar_clock().sessions()).with_timeframe(crate::model::Timeframe::Min1);
+    (sessions.opens([time]).into_iter().rev())
+        .find(|(open, _)| *open <= time)
+        .map(|(open, _)| open)
 }
 
 fn order_name(request: &OrderRequest) -> &'static str {

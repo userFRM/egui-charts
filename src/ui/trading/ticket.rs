@@ -193,6 +193,8 @@ pub(crate) struct Market<'a> {
     pub positions: &'a [Position],
     /// The retained feed trades, oldest first.
     pub trades: &'a [&'a Tick],
+    /// Opening instant of the exchange session of the newest retained trade.
+    pub session_open: Option<chrono::DateTime<chrono::Utc>>,
     /// The latest account fill for this symbol.
     pub last_fill: Option<f64>,
 }
@@ -1699,6 +1701,7 @@ mod tests {
                     orders: &[],
                     positions: &[],
                     trades: &[],
+                    session_open: None,
                     last_fill: None,
                 };
                 ticket.tab = tab;
@@ -1796,6 +1799,7 @@ mod tests {
             orders: &working,
             positions: &[],
             trades: &[],
+            session_open: None,
             last_fill: None,
         };
         let cases = [
@@ -1949,6 +1953,7 @@ mod tests {
             orders: &[],
             positions: &[],
             trades: &[],
+            session_open: None,
             last_fill: None,
         };
         let ticks = |value| Bracket {
