@@ -63,12 +63,18 @@ pub(crate) fn paint_profile(
             ProfileDisplay::Total => paint(left, width, bar_color),
             ProfileDisplay::UpDown => {
                 let up_width = (profile.up[row] / max_volume) as f32 * max_width;
+                let down_width = (profile.down[row] / max_volume) as f32 * max_width;
                 paint(left, up_width, rgba(config.up_color));
-                paint(
-                    left + up_width,
-                    (width - up_width).max(0.0),
-                    rgba(config.down_color),
-                );
+                paint(left + up_width, down_width, rgba(config.down_color));
+                // Volume of unknown side, which only executions can leave over.
+                let unknown = width - up_width - down_width;
+                if unknown > 0.01 {
+                    paint(
+                        left + up_width + down_width,
+                        unknown,
+                        Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 80),
+                    );
+                }
             }
             ProfileDisplay::Delta => {
                 let delta = profile.up[row] - profile.down[row];

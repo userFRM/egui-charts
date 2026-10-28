@@ -67,6 +67,9 @@ use crate::chart::state;
 mod accessibility;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+mod alerts;
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod anchors;
 mod builder;
 mod change_marks;
@@ -266,6 +269,8 @@ pub struct Chart {
     volume_study: Option<SeriesId>,
     /// Id of each study in `studies`.
     pub(crate) study_ids: Vec<SeriesId>,
+    /// The most studies the chart takes through the interface, if capped.
+    study_limit: Option<usize>,
     /// Whether each study in `studies` contributes to the main price auto-scale.
     pub(crate) study_autoscale: Vec<bool>,
     pub(crate) study_inputs: Vec<String>,

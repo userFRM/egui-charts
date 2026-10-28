@@ -756,16 +756,14 @@ mod tests {
         let object_tree = |terminal: &mut Terminal, action| {
             assert!(terminal.run(Action::ObjectTree(action)).is_none());
         };
-        // The main series' settings are handed on as the chart menu's, which is left to the
-        // host until the studies group performs it.
-        assert!(matches!(
-            terminal.run(Action::ObjectTree(ObjectTreeAction::OpenProperties(
-                MAIN_SERIES_ID
-            ))),
-            Some(Action::ChartMenu(ChartContextAction::Chart(
-                ContextMenuAction::OpenSettings
-            )))
-        ));
+        // The main series' settings are handed on as the chart menu's, which the studies group
+        // performs by opening the chart settings.
+        assert!(!terminal.studies_modal());
+        object_tree(
+            &mut terminal,
+            ObjectTreeAction::OpenProperties(MAIN_SERIES_ID),
+        );
+        assert!(terminal.studies_modal());
         // A drawing and a study selected in the tree are deleted, and restored, together.
         let tree = terminal.drawings.object_tree.state_mut();
         tree.select(ids[0]);

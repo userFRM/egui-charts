@@ -46,6 +46,14 @@ pub enum ContextMenuAction {
         /// Price under the pointer when the menu opened.
         price: f64,
     },
+    /// Add the symbol to the watchlist at this index of the panel's lists, with
+    /// [`WatchlistPanel::add_symbol_to`](crate::ui::widget_bar::WatchlistPanel::add_symbol_to).
+    AddToWatchlist {
+        /// Index into the lists given to [`ChartMenus::set_watchlists`].
+        list: usize,
+        /// Instrument identifier used by the host.
+        symbol: String,
+    },
     /// A limit or stop order at the clicked price, for the user to confirm in the order ticket
     /// ([`Trading::open_ticket`](crate::ui::trading::Trading::open_ticket)).
     Order(OrderRequest),
@@ -607,6 +615,9 @@ pub struct ChartContextMenu {
     pub market_price: Option<f64>,
     /// The symbol's tick size, to which order prices are rounded.
     pub tick_size: Option<f64>,
+    /// Names of the watchlists the symbol can be added to; without any, the menu has no such
+    /// entry.
+    pub watchlists: Vec<String>,
     /// The quantity of the order entries.
     pub order_quantity: f64,
     /// The order types the account accepts; entries for the others are left out.
@@ -636,6 +647,7 @@ impl ChartContextMenu {
             indicator_cnt: 0,
             market_price: None,
             tick_size: None,
+            watchlists: Vec::new(),
             order_quantity: 1.0,
             order_types: Capabilities {
                 limit: true,
@@ -718,6 +730,26 @@ impl ChartContextMenu {
                 .with_icon(&embedded_icons::ALERTS)
                 .with_shortcut(shortcuts.shortcut(KeyboardAction::CreateAlert)),
             ));
+        }
+        if !symbol.is_empty() && !self.watchlists.is_empty() {
+            trading.push(MenuEntry::Submenu {
+                label: format!("Add {symbol} to watchlist"),
+                icon: Some(&embedded_icons::WATCHLIST),
+                entries: self
+                    .watchlists
+                    .iter()
+                    .enumerate()
+                    .map(|(list, name)| {
+                        MenuEntry::Item(MenuItem::new(
+                            name.clone(),
+                            ContextMenuAction::AddToWatchlist {
+                                list,
+                                symbol: symbol.clone(),
+                            },
+                        ))
+                    })
+                    .collect(),
+            });
         }
         if !symbol.is_empty()
             && !self.hidden.contains(&Control::Trading)
@@ -989,6 +1021,11 @@ pub struct ChartMenus {
 }
 
 impl ChartMenus {
+    /// The price of the series menu's last right-click, which stays after a pick.
+    pub(crate) fn series_click_price(&self) -> f64 {
+        self.series.click_price
+    }
+
     /// Shows or hides named menu entries: Alerts, Trading, Settings, ObjectTree, Indicators,
     /// ResetView, CopyPrice, ExportData, TimeZone and Session. `ContextMenus` disables all menus,
     /// including drawings and axes. Controls belonging only to toolbars are ignored.
@@ -1006,6 +1043,14 @@ impl ChartMenus {
     pub fn set_order_entries(&mut self, quantity: f64, capabilities: Capabilities) {
         self.chart.order_quantity = quantity;
         self.chart.order_types = capabilities;
+    }
+
+    /// Offers adding the chart's symbol to these watchlists, such as the names of
+    /// [`WatchlistPanel::lists`](crate::ui::widget_bar::WatchlistPanel::lists), in a submenu.
+    /// The choice returns as [`ContextMenuAction::AddToWatchlist`] with the list's index. Without
+    /// names the menu has no such entry.
+    pub fn set_watchlists(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
+        self.chart.watchlists = names.into_iter().map(Into::into).collect();
     }
 
     /// Opens the menu for the chart's last right-click, shows the open one and returns the
@@ -1273,6 +1318,41 @@ mod tests {
                 .collect();
             assert_eq!(entries, expected, "click at {click}");
         }
+    }
+
+    #[test]
+    fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
+        let mut menu = ChartContextMenu::new();
+        let submenu = |menu: &ChartContextMenu| {
+            menu.build_menu_items(&crate::widget::ShortcutMap::default())
+                .into_iter()
+                .find_map(|entry| match entry {
+                    MenuEntry::Submenu { label, entries, .. } => Some((
+                        label,
+                        entries
+                            .into_iter()
+                            .filter_map(|entry| match entry {
+                                MenuEntry::Item(item) => Some(item.action),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>(),
+                    )),
+                    _ => None,
+                })
+        };
+        menu.watchlists = vec!["Tech".into(), "Energy".into()];
+        assert_eq!(submenu(&menu), None, "no symbol");
+        menu.symbol = "AAPL".into();
+        let add = |list| ContextMenuAction::AddToWatchlist {
+            list,
+            symbol: "AAPL".into(),
+        };
+        assert_eq!(
+            submenu(&menu),
+            Some(("Add AAPL to watchlist".into(), vec![add(0), add(1)]))
+        );
+        menu.watchlists.clear();
+        assert_eq!(submenu(&menu), None, "no lists");
     }
 
     /// Each named control removes its row while leaving unrelated entries available; removing

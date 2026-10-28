@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use std::collections::{BTreeSet, HashMap};
 
 pub(super) struct ReplayWindow {
-    time: DateTime<Utc>,
+    pub(super) time: DateTime<Utc>,
     bars: HashMap<SeriesId, Vec<Bar>>,
     source: Option<(Vec<Bar>, BarClock)>,
     feed_paused: bool,
@@ -46,7 +46,8 @@ impl Chart {
     }
 
     /// Enters or seeks replay, retaining the full history inside the chart. Only bars completed
-    /// by `time` reach rendering, studies, auto-scaling and readouts. A bar's close is its
+    /// by `time` reach rendering, studies, auto-scaling and readouts, including the histories
+    /// that studies request for other symbols and intervals. A bar's close is its
     /// `BarClock::next_open`; without a timeframe, timestamps are observation instants and bars
     /// strictly before `time` are available. Supply finer bars with `set_replay_source` to build
     /// the unfinished chart bar. No future OHLC is inferred from a completed coarse bar.
@@ -68,6 +69,7 @@ impl Chart {
                 self.quote = replay.quote;
                 self.session_quote = replay.session_quote;
                 self.set_feed_paused(replay.feed_paused);
+                self.invalidate_study_data();
             }
             return;
         };
@@ -96,6 +98,8 @@ impl Chart {
             self.set_feed_paused(true);
         }
         self.apply_replay_window();
+        // Studies on other histories see the bars completed by the new cursor.
+        self.invalidate_study_data();
         if rewind {
             // A cached value at the cursor may have used the candle's later high or close.
             for study in self.studies.indicators_mut() {
@@ -236,7 +240,7 @@ impl Chart {
     }
 }
 
-fn completed<'a>(bars: &'a [Bar], clock: &BarClock, time: DateTime<Utc>) -> &'a [Bar] {
+pub(super) fn completed<'a>(bars: &'a [Bar], clock: &BarClock, time: DateTime<Utc>) -> &'a [Bar] {
     let end = bars.partition_point(|bar| {
         clock
             .next_open(clock.bar_open(bar.time))
