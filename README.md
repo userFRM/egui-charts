@@ -1,10 +1,23 @@
 <div align="center">
 
-<img src="docs/images/logo.svg" alt="egui-charts" width="480">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
+  <img src="docs/images/logo-light.svg" alt="egui-charts" width="480">
+</picture>
 
 Financial charts for Rust applications built with egui 0.37.
 
-**[Live demo](https://userfrm.github.io/egui-charts/demo/)** · [Guide](https://userfrm.github.io/egui-charts/docs/) · [API docs](https://docs.rs/egui-charts) · [Examples](examples)
+<p>
+  <a href="https://userfrm.github.io/egui-charts/demo/"><img src="https://img.shields.io/badge/Live_demo-0969da?style=flat-square" alt="Live demo"></a>
+  <a href="https://userfrm.github.io/egui-charts/docs/"><img src="https://img.shields.io/badge/Guide-0969da?style=flat-square" alt="Guide"></a>
+  <a href="https://docs.rs/egui-charts"><img src="https://img.shields.io/docsrs/egui-charts?style=flat-square&amp;logo=rust" alt="docs.rs"></a>
+  <a href="https://crates.io/crates/egui-charts"><img src="https://img.shields.io/crates/v/egui-charts?style=flat-square&amp;logo=rust" alt="crates.io"></a>
+  <a href="https://github.com/userFRM/egui-charts/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/userFRM/egui-charts/ci.yml?branch=main&amp;style=flat-square&amp;logo=github&amp;label=CI" alt="CI"></a>
+  <a href="https://github.com/emilk/egui"><img src="https://img.shields.io/badge/egui-0.37-555?style=flat-square" alt="egui 0.37"></a>
+  <a href="Cargo.toml"><img src="https://img.shields.io/badge/MSRV-1.95-555?style=flat-square" alt="MSRV 1.95"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/License-MIT_OR_Apache--2.0-555?style=flat-square" alt="License MIT OR Apache-2.0"></a>
+  <a href="examples"><img src="https://img.shields.io/badge/Examples-0969da?style=flat-square" alt="Examples"></a>
+</p>
 
 </div>
 
