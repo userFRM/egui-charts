@@ -64,6 +64,7 @@ pub struct IndicatorDialog {
     metric_error: Option<FeedError>,
     source: Option<StudySource>,
     source_error: Option<&'static str>,
+    full: bool,
     /// Available indicators, one per factory name
     indicators: Vec<IndicatorInfo>,
     /// Configuration
@@ -108,6 +109,7 @@ impl IndicatorDialog {
             metric_error: None,
             source: None,
             source_error: None,
+            full: false,
             config: IndicatorDialogConfig::default(),
         }
     }
@@ -239,6 +241,12 @@ impl IndicatorDialog {
         self.focus_search = true;
     }
 
+    /// Whether the chart takes no more studies. The dialog then says so and adds none; call it
+    /// before each [`show`](Self::show), as the cap can be reached while the dialog is open.
+    pub fn set_full(&mut self, full: bool) {
+        self.full = full;
+    }
+
     /// Close the dialog
     pub fn close(&mut self) {
         self.source = None;
@@ -306,6 +314,12 @@ impl IndicatorDialog {
         }
         if let Some(error) = self.source_error {
             ui.colored_label(theme.ui.error, l10n::text(ui.ctx(), error));
+        }
+        if self.full {
+            ui.colored_label(
+                theme.ui.error,
+                l10n::text(ui.ctx(), "The chart has reached its study limit"),
+            );
         }
 
         let search = ui
@@ -691,6 +705,9 @@ impl IndicatorDialog {
     /// source the study rejects is reported in the dialog and adds nothing.
     fn add(&mut self, id: &str) -> Option<IndicatorDialogAction> {
         self.source_error = None;
+        if self.full {
+            return None;
+        }
         let mut study = self.factory.create(id)?;
         if let Some(source) = self.source {
             if !study
@@ -857,6 +874,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A chart at its study cap shows the message and adds no study, whichever way a row is chosen.
+    #[test]
+    fn dialog_at_the_study_limit_says_so_and_adds_nothing() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let theme = Theme::light();
+        let mut dialog = IndicatorDialog::new();
+        dialog.open();
+        dialog.set_full(true);
+        let style = theme.clone();
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(640.0, 640.0))
+            .with_context_setup(move |ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::theme::apply_to_egui(ctx, &style);
+            })
+            .build_ui(|ui| {
+                dialog.show(ui.ctx(), &theme);
+            });
+        harness.run();
+        harness.get_by_label("The chart has reached its study limit");
+        drop(harness);
+        assert!(dialog.add("SMA").is_none());
+        dialog.set_full(false);
+        assert!(dialog.add("SMA").is_some());
     }
 
     #[test]

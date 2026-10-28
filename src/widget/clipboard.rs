@@ -101,9 +101,10 @@ impl Chart {
 
     /// Paste study clipboard text from [`Self::copy_indicator`], on this chart or another, as
     /// one undoable addition, and return the new study's id. `factory` creates the study by its
-    /// name. Rejects other text, a name `factory` does not know, and inputs or styles the study
-    /// does not accept, before changing the chart. Study output references need host remapping
-    /// and are rejected; hosts restore those inputs through [`Self::add_indicator`].
+    /// name. Rejects a paste beyond the [study cap](Self::set_study_limit), other text, a name
+    /// `factory` does not know, and inputs or styles the study does not accept, before changing
+    /// the chart. Study output references need host remapping and are rejected; hosts restore
+    /// those inputs through [`Self::add_indicator`].
     #[cfg(feature = "studies")]
     #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
     pub fn paste_indicator(
@@ -113,6 +114,9 @@ impl Chart {
     ) -> Result<SeriesId, serde_json::Error> {
         use crate::studies::Indicator;
         use serde::de::Error;
+        if self.study_limit_reached() {
+            return Err(serde_json::Error::custom(Self::STUDY_LIMIT_REACHED));
+        }
         let json = text
             .strip_prefix(STUDY_PREFIX)
             .ok_or_else(|| serde_json::Error::custom("not a study clipboard"))?;

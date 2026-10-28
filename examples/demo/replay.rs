@@ -242,11 +242,7 @@ impl DemoApp {
                     self.notify("No history on or after the selected date");
                     return;
                 }
-                self.start_replay();
-                if let Some(replay) = &mut self.replay {
-                    replay.handle_action(ReplayAction::JumpToBar(index));
-                }
-                self.push_replay_window_to_chart();
+                self.start_replay_at(index);
             }
         }
         if self.replay_selecting {
@@ -288,6 +284,11 @@ impl DemoApp {
             return;
         }
         self.replay_selecting = false;
+        self.start_replay_at(index);
+    }
+
+    /// Starts replay at bar `index` of the main series, as picking that bar does.
+    pub(crate) fn start_replay_at(&mut self, index: usize) {
         self.start_replay();
         if let Some(replay) = &mut self.replay {
             replay.handle_action(ReplayAction::JumpToBar(index));

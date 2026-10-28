@@ -9,13 +9,15 @@ use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2, epaint::St
 
 /// Render markers on the chart. Times between bars interpolate; whitespace extends the
 /// nearest distinct pair (one second for a single bar). Vertical placement uses the nearest bar.
+/// Returns the index and visible hit area of each marker drawn, in painting order.
 pub fn render_markers(
     context: &RenderContext,
     markers: &[Marker],
     visible_data: &[Bar],
     price_scale: &PriceMap,
     coords: &ChartMapping,
-) {
+) -> Vec<(usize, Rect)> {
+    let mut hits = Vec::new();
     let price_y =
         |marker: &Marker, bar: &Bar| price_scale.price_to_y(marker.price.unwrap_or(bar.close));
     let mut tooltip_shown = false;
@@ -93,6 +95,9 @@ pub fn render_markers(
             let hit_rect = hit_rect
                 .intersect(context.rect)
                 .intersect(context.painter.clip_rect());
+            if hit_rect.is_positive() {
+                hits.push((marker_index, hit_rect));
+            }
             if !tooltip_shown
                 && let Some(tooltip) = &marker.tooltip
                 && ctx.pointer_hover_pos().is_some_and(|p| {
@@ -117,6 +122,7 @@ pub fn render_markers(
             }
         }
     }
+    hits
 }
 
 /// Draws a change mark at `pos`: a dot with a chevron above it for a rise or below it for a

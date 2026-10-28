@@ -152,3 +152,56 @@ impl DrawingToolShortcuts {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, Key, Modifiers, RawInput};
+
+    /// Alt+Shift+R selects the rectangle tool by default, plain Alt+R does not, and a host
+    /// map that rebinds the tool replaces the default.
+    #[test]
+    fn alt_shift_r_selects_the_rectangle_until_rebound() {
+        let alt_shift = Modifiers::ALT.plus(Modifiers::SHIFT);
+        let rebound = ShortcutMap {
+            bindings: vec![(
+                KeyboardShortcut::new(Modifiers::CTRL, Key::J),
+                KeyboardAction::DrawingTool(DrawingToolType::Rect),
+            )],
+        };
+        for (map, key, modifiers, expected) in [
+            (None, Key::R, alt_shift, Some(DrawingToolType::Rect)),
+            (None, Key::R, Modifiers::ALT, None),
+            (Some(&rebound), Key::R, alt_shift, None),
+            (
+                Some(&rebound),
+                Key::J,
+                Modifiers::CTRL,
+                Some(DrawingToolType::Rect),
+            ),
+        ] {
+            let ctx = Context::default();
+            if let Some(map) = map {
+                ctx.data_mut(|data| {
+                    data.insert_temp(egui::Id::NULL.with("chart_shortcuts"), map.clone())
+                });
+            }
+            let input = RawInput {
+                events: vec![Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            };
+            let mut got = None;
+            ctx.run_ui(input, |ui| {
+                got = DrawingToolShortcuts::new().check(ui.ctx())
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(got, expected, "{key:?} {modifiers:?}");
+        }
+    }
+}
