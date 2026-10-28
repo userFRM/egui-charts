@@ -548,9 +548,43 @@ impl Chart {
         merged
     }
 
+    /// Caps the studies at `limit`, or lifts the cap with `None`. The cap applies to
+    /// [`try_add_indicator`](Self::try_add_indicator) and to pasting a copied study, which the
+    /// terminal's dialogs and shortcuts use; studies already on the chart stay.
+    pub fn set_study_limit(&mut self, limit: Option<usize>) {
+        self.study_limit = limit;
+    }
+
+    /// The cap set with [`set_study_limit`](Self::set_study_limit); `None` when uncapped.
+    pub fn study_limit(&self) -> Option<usize> {
+        self.study_limit
+    }
+
+    /// Whether the chart holds as many studies as its cap allows.
+    pub(crate) fn study_limit_reached(&self) -> bool {
+        self.study_limit
+            .is_some_and(|limit| self.study_ids.len() >= limit)
+    }
+
+    /// Adds a study like [`add_indicator`](Self::add_indicator), unless the chart already holds
+    /// as many as [`study_limit`](Self::study_limit) allows. A refused study leaves the chart
+    /// unchanged.
+    pub fn try_add_indicator(
+        &mut self,
+        indicator: Box<dyn Indicator>,
+    ) -> Result<SeriesId, &'static str> {
+        if self.study_limit_reached() {
+            return Err(Self::STUDY_LIMIT_REACHED);
+        }
+        Ok(self.add_indicator(indicator))
+    }
+
+    pub(crate) const STUDY_LIMIT_REACHED: &'static str = "Study limit reached";
+
     /// Adds a study, computed at once from the bars, which [`show`](Self::show) draws: on the
     /// main pane if [`Indicator::is_overlay`], otherwise in a new pane at the bottom. Returns the
-    /// study's id, which stays valid when other studies are removed.
+    /// study's id, which stays valid when other studies are removed. Host code adds past the
+    /// cap; the interface goes through [`try_add_indicator`](Self::try_add_indicator).
     pub fn add_indicator(&mut self, mut indicator: Box<dyn Indicator>) -> SeriesId {
         if !indicator.has_settings() {
             indicator = Box::new(crate::studies::ConfiguredStudy::new(indicator));
@@ -1919,5 +1953,36 @@ mod tests {
             marks(&mut chart).is_empty(),
             "an expired mark is not painted"
         );
+    }
+
+    /// A chart capped at two studies refuses a third from the interface and pastes, and stays
+    /// as it was; host code and lifting the cap still add.
+    #[test]
+    fn the_study_limit_refuses_additions_beyond_it() {
+        let mut chart = super::super::test_frames::chart(&[100.0], &[110.0]);
+        let copied = {
+            let id = chart.add_indicator(Box::new(SMA::new(9)));
+            let text = chart.copy_indicator(id).unwrap();
+            chart.remove_series(id);
+            text
+        };
+        chart.set_study_limit(Some(2));
+        assert_eq!(chart.study_limit(), Some(2));
+        for period in [3, 5] {
+            assert!(chart.try_add_indicator(Box::new(SMA::new(period))).is_ok());
+        }
+        let undoable = chart.can_undo();
+        assert!(chart.try_add_indicator(Box::new(SMA::new(7))).is_err());
+        assert!(
+            chart
+                .paste_indicator(&copied, &crate::studies::IndicatorFactory::new())
+                .is_err()
+        );
+        assert_eq!(chart.indicators().count(), 2);
+        assert_eq!(chart.can_undo(), undoable);
+        chart.add_indicator(Box::new(SMA::new(7)));
+        assert_eq!(chart.indicators().count(), 3);
+        chart.set_study_limit(None);
+        assert!(chart.try_add_indicator(Box::new(SMA::new(8))).is_ok());
     }
 }
