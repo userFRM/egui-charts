@@ -73,6 +73,8 @@ pub struct AlertTrigger {
     pub time: DateTime<Utc>,
     /// Finite trigger price, if supplied.
     pub price: Option<f64>,
+    /// The alert's message with its placeholders filled in, empty if there is none.
+    pub message: String,
 }
 
 /// Reply key of the inline draft's save, apart from the stream generations and other replies.
@@ -102,6 +104,8 @@ pub struct AlertsPanel {
     draft: Alert,
     draft_saving: bool,
     pending: usize,
+    sound_choice: Option<String>,
+    sound: Option<String>,
 }
 
 impl Default for AlertsPanel {
@@ -131,6 +135,8 @@ impl AlertsPanel {
             draft: Alert::new("", AlertCondition::Crossing(0.0)),
             draft_saving: false,
             pending: 0,
+            sound_choice: None,
+            sound: None,
         }
     }
 
@@ -158,8 +164,22 @@ impl AlertsPanel {
         };
     }
 
+    /// The sound to play when an alert fires, as the user chose it in the alert settings: its
+    /// name, empty for the host's first sound, or `None` when the user turned the sound off.
+    pub fn set_sound(&mut self, sound: Option<String>) {
+        self.sound_choice = sound;
+    }
+
+    /// The sound to play for the triggers the last [`poll`](Self::poll) received, if it received
+    /// one and [`set_sound`](Self::set_sound) holds a sound. The host plays it, as with
+    /// `Trading::take_execution_sound`; call this after `poll`.
+    pub fn take_sound(&mut self) -> Option<String> {
+        self.sound.take()
+    }
+
     /// Attach a host service, clearing the previous account's alerts and log.
     pub fn set_service(&mut self, service: Arc<dyn Alerts>) {
+        self.sound = None;
         self.listener = None;
         self.service = Some(service);
         self.alerts.clear();
@@ -290,8 +310,9 @@ impl AlertsPanel {
                 symbol,
                 time,
                 price,
+                message,
             } => {
-                self.record_trigger(id, symbol, time, price, toasts);
+                self.record_trigger(id, symbol, time, price, message, toasts);
             }
             AlertEvent::Triggered { id, time, price } => {
                 let symbol = self
@@ -300,7 +321,7 @@ impl AlertsPanel {
                     .find(|a| a.id.as_ref() == Some(&id))
                     .map(|a| a.symbol.clone())
                     .unwrap_or_default();
-                self.record_trigger(id, symbol, time, price, toasts);
+                self.record_trigger(id, symbol, time, price, String::new(), toasts);
             }
         }
     }
@@ -311,15 +332,22 @@ impl AlertsPanel {
         symbol: String,
         time: DateTime<Utc>,
         price: Option<f64>,
+        message: String,
         toasts: &mut Toasts,
     ) {
+        let title = format!(
+            "Alert triggered: {}",
+            if symbol.is_empty() { &id.0 } else { &symbol }
+        );
         toasts.add(
-            Toast::info(format!(
-                "Alert triggered: {}",
-                if symbol.is_empty() { &id.0 } else { &symbol }
-            ))
+            Toast::info(if message.is_empty() {
+                title
+            } else {
+                format!("{title}\n{message}")
+            })
             .duration(self.notification_seconds),
         );
+        self.sound = self.sound_choice.clone();
         let extra = toasts.len().saturating_sub(5);
         toasts.toasts_mut().drain(..extra);
         self.log.push_back(AlertTrigger {
@@ -327,6 +355,7 @@ impl AlertsPanel {
             symbol,
             time,
             price: price.filter(|p| p.is_finite()),
+            message,
         });
         if self.log.len() > 10_000 {
             self.log.pop_front();
@@ -335,13 +364,14 @@ impl AlertsPanel {
 
     /// Export the retained trigger log. Text fields are quoted and embedded quotes doubled.
     pub fn log_csv(&self) -> String {
-        let mut csv = String::from("id,symbol,time,price\r\n");
+        let mut csv = String::from("id,symbol,time,price,message\r\n");
         for trigger in &self.log {
             let id = trigger.id.0.replace('"', "\"\"");
             let symbol = trigger.symbol.replace('"', "\"\"");
             let price = trigger.price.map(|p| p.to_string()).unwrap_or_default();
+            let message = trigger.message.replace('"', "\"\"");
             csv.push_str(&format!(
-                "\"{id}\",\"{symbol}\",{},{}\r\n",
+                "\"{id}\",\"{symbol}\",{},{},\"{message}\"\r\n",
                 trigger.time.to_rfc3339(),
                 price
             ));
@@ -467,6 +497,9 @@ impl AlertsPanel {
                         ));
                         if let Some(price) = trigger.price {
                             ui.label(l10n::text(ui.ctx(), price.to_string()));
+                        }
+                        if !trigger.message.is_empty() {
+                            ui.label(&trigger.message);
                         }
                         ui.separator();
                     }
@@ -643,7 +676,7 @@ mod tests {
         assert_eq!(panel.log().len(), 1);
         assert_eq!(
             panel.log_csv(),
-            "id,symbol,time,price\r\n\"host,\"\"1\",\"S\"\"IM\",2026-10-23T12:00:00+00:00,12.5\r\n"
+            "id,symbol,time,price,message\r\n\"host,\"\"1\",\"S\"\"IM\",2026-10-23T12:00:00+00:00,12.5,\"\"\r\n"
         );
         alert.status = AlertStatus::Disabled;
         events.push(AlertEvent::Upsert(alert.clone()));
@@ -680,17 +713,37 @@ mod tests {
         assert_eq!(panel.error, Some(FeedError::Unanswered));
         assert_eq!(panel.log().len(), 1);
         assert_eq!(toasts.toasts()[0].duration, 12.0);
+        // The sound the user chose comes with the triggers received, and the message is shown in
+        // the popup and kept in the log and the export.
+        assert_eq!(panel.take_sound(), None);
+        panel.set_sound(Some("Bell".into()));
         panel.apply_event(
             AlertEvent::TriggeredForSymbol {
                 id: AlertId("watchlist".into()),
                 symbol: "AAPL".into(),
                 time: Utc::now(),
                 price: Some(123.0),
+                message: "AAPL closed at \"123\"".into(),
             },
             &mut toasts,
         );
         assert!(toasts.toasts().iter().all(|toast| toast.duration == 12.0));
+        assert_eq!(
+            toasts.toasts().last().unwrap().message,
+            "Alert triggered: AAPL\nAAPL closed at \"123\""
+        );
         assert_eq!(panel.log().back().unwrap().symbol, "AAPL");
+        assert_eq!(
+            panel.log().back().unwrap().message,
+            "AAPL closed at \"123\""
+        );
+        assert!(
+            panel
+                .log_csv()
+                .ends_with(",123,\"AAPL closed at \"\"123\"\"\"\r\n")
+        );
+        assert_eq!(panel.take_sound(), Some("Bell".into()));
+        assert_eq!(panel.take_sound(), None);
         drop(panel);
         assert!(!renewed.is_active());
     }

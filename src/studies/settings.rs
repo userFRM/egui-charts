@@ -34,6 +34,56 @@ pub enum PlotType {
     BackgroundColor,
 }
 
+impl PlotType {
+    /// Every plot type, in the order a style editor lists them.
+    pub const ALL: [Self; 11] = [
+        Self::Line,
+        Self::StepLine,
+        Self::Histogram,
+        Self::Columns,
+        Self::Area,
+        Self::Circles,
+        Self::Crosses,
+        Self::TriangleUp,
+        Self::TriangleDown,
+        Self::BarColor,
+        Self::BackgroundColor,
+    ];
+
+    /// User-facing display name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Line => "Line",
+            Self::StepLine => "Step line",
+            Self::Histogram => "Histogram",
+            Self::Columns => "Columns",
+            Self::Area => "Area",
+            Self::Circles => "Circles",
+            Self::Crosses => "Crosses",
+            Self::TriangleUp => "Triangle up",
+            Self::TriangleDown => "Triangle down",
+            Self::BarColor => "Bar colour",
+            Self::BackgroundColor => "Background colour",
+        }
+    }
+
+    /// Why a plot of this type cannot be drawn for a study, or `None` when it can.
+    /// `overlay` is whether the study is drawn on the price chart, and `price_scale` whether it
+    /// shares the price scale there, which a volume study does not.
+    pub fn incompatibility(self, overlay: bool, price_scale: bool) -> Option<&'static str> {
+        match self {
+            Self::BarColor if !overlay => {
+                Some("Bar colour repaints the price bars, so the study must be on the price chart.")
+            }
+            Self::Histogram | Self::Columns | Self::Area if overlay && price_scale => Some(
+                "This type draws from zero, which is far from the prices on the price scale. \
+                 Give the study its own scale first.",
+            ),
+            _ => None,
+        }
+    }
+}
+
 /// Editable presentation of one output line.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct PlotStyle {
@@ -253,6 +303,12 @@ impl ConfiguredStudy {
             aligned_bars: Vec::new(),
         }
     }
+    /// Whether the study can be calculated on another interval: it reads one source, or the bars
+    /// alone, without data of its own to request or the chart's trades.
+    fn runs_on_other_bars(&self) -> bool {
+        self.study.source().is_some()
+            || (self.study.data_requests().is_empty() && self.study.order_flow_input().is_none())
+    }
     fn update_price(&mut self, data: &[Bar], from: usize) {
         self.aligned = None;
         match self.source() {
@@ -317,8 +373,8 @@ impl Indicator for ConfiguredStudy {
                 .with_default(InputValue::Source(initial)),
             );
         }
+        use super::{InputKind, StudyInput};
         if self.study.source().is_some() {
-            use super::{InputKind, StudyInput};
             inputs.extend([
                 StudyInput::new(
                     "plot_offset",
@@ -334,6 +390,10 @@ impl Indicator for ConfiguredStudy {
                     InputKind::Symbol,
                 )
                 .with_default(InputValue::Symbol(String::new())),
+            ]);
+        }
+        if self.runs_on_other_bars() {
+            inputs.extend([
                 StudyInput::new(
                     "calculation_timeframe",
                     "Interval",
@@ -362,12 +422,11 @@ impl Indicator for ConfiguredStudy {
             self.study.calculate(&[]);
             return Ok(());
         }
-        if self.study.source().is_some()
-            && matches!(
-                id,
-                "calculation_symbol" | "calculation_timeframe" | "wait_for_close"
-            )
-        {
+        if match id {
+            "calculation_symbol" => self.study.source().is_some(),
+            "calculation_timeframe" | "wait_for_close" => self.runs_on_other_bars(),
+            _ => false,
+        } {
             let schema = self
                 .inputs()
                 .into_iter()
@@ -671,7 +730,7 @@ impl Indicator for ConfiguredStudy {
     fn apply_settings(
         &mut self,
         inputs: &[(String, InputValue)],
-        settings: StudySettings,
+        mut settings: StudySettings,
     ) -> Result<(), &'static str> {
         if settings.precision.is_some_and(|precision| precision > 12)
             || settings
@@ -692,6 +751,14 @@ impl Indicator for ConfiguredStudy {
         }
         for (id, value) in inputs {
             edited.set_input(id, value.clone())?;
+        }
+        // Styles of the plots before the inputs changed their number keep their place, and
+        // plots they add start with the study's own style.
+        if settings.plots.len() == self.line_count() && edited.line_count() != self.line_count() {
+            let defaults = edited.study.settings().plots;
+            let kept = settings.plots.len().min(defaults.len());
+            settings.plots.truncate(kept);
+            settings.plots.extend_from_slice(&defaults[kept..]);
         }
         if settings.plots.len() != edited.line_count() {
             return Err("one style is required per study plot");
@@ -844,6 +911,74 @@ mod tests {
             bounded.apply_settings(&[], settings).unwrap();
             assert_eq!(bounded.precision(), precision);
         }
+    }
+
+    /// New Net Volume, PPO and PVO studies draw their signed volume and oscillator differences as
+    /// columns and their oscillator lines as lines, and a saved plot type replaces the default.
+    #[test]
+    fn histogram_defaults_yield_to_a_saved_plot_type() {
+        use super::super::{NetVolume, PercentageVolumeOscillator, PriceOscillator};
+        let (line, columns) = (PlotType::Line, PlotType::Columns);
+        let studies: [(Box<dyn Indicator>, &[PlotType]); 3] = [
+            (Box::new(NetVolume::default()), &[columns]),
+            (Box::new(PriceOscillator::default()), &[line, line, columns]),
+            (
+                Box::new(PercentageVolumeOscillator::default()),
+                &[line, line, columns],
+            ),
+        ];
+        for (study, expected) in studies {
+            let name = study.name().to_owned();
+            let mut study = ConfiguredStudy::new(study);
+            let types = |study: &ConfiguredStudy| -> Vec<_> {
+                study.settings().plots.iter().map(|p| p.plot_type).collect()
+            };
+            assert_eq!(types(&study), expected, "{name}");
+            let mut settings = study.settings();
+            settings.plots[0].plot_type = PlotType::Area;
+            study.apply_settings(&[], settings).unwrap();
+            assert_eq!(study.plot_style(0).plot_type, PlotType::Area, "{name}");
+        }
+    }
+
+    /// Studies that read the bars alone offer the interval and close-wait inputs as well as the
+    /// single-source studies, keep their own inputs, and calculate on the interval they are given.
+    /// A study that requests data of its own, or reads trades, does not.
+    #[test]
+    fn ohlc_studies_offer_a_calculation_interval() {
+        use super::super::{ADX, ATR};
+        let ids = |study: &ConfiguredStudy| -> Vec<String> {
+            study.inputs().into_iter().map(|input| input.id).collect()
+        };
+        for inner in [
+            Box::new(ATR::new(3)) as Box<dyn Indicator>,
+            Box::new(ADX::new(3)),
+        ] {
+            let mut study = ConfiguredStudy::new(inner);
+            let own = study.study.inputs().len();
+            let ids = ids(&study);
+            assert_eq!(
+                &ids[own..],
+                ["calculation_timeframe", "wait_for_close"],
+                "{}",
+                study.name()
+            );
+            assert!(study.data_requests().is_empty());
+            study
+                .set_input(
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(Timeframe::Hour1)),
+                )
+                .unwrap();
+            assert_eq!(study.data_requests().len(), 1);
+            assert!(
+                study
+                    .set_input("calculation_symbol", InputValue::Symbol("X".into()))
+                    .is_err()
+            );
+        }
+        let breadth = ConfiguredStudy::new(Box::new(super::super::AdvanceDeclineRatio::default()));
+        assert!(!ids(&breadth).contains(&"calculation_timeframe".to_owned()));
     }
 
     #[test]

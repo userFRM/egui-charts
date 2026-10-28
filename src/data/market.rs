@@ -2,13 +2,20 @@
 //! calendars, the screener and the hotlists.
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 /// The stories a news or highlights panel asks [`Datafeed::news`](super::Datafeed::news) for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct NewsQuery {
-    /// Stories about this symbol, or about the whole market when `None`.
-    pub symbol: Option<String>,
+    /// Stories about any of these symbols, or about the whole market when empty.
+    pub symbols: Vec<String>,
+    /// Only stories of these topics, in the values the feed supports, or of every topic when
+    /// empty.
+    pub topics: Vec<String>,
+    /// Only stories from these providers, in the identifiers the feed uses, or from every
+    /// provider when empty.
+    pub providers: Vec<String>,
     /// Short summaries of what moves the market or the symbol, instead of headlines.
     pub highlights: bool,
     /// Stories wanted at most.
@@ -187,8 +194,29 @@ impl ScreenerColumnSet {
     }
 }
 
+/// A market the screener screens, such as stocks, funds, bonds, coins or the pairs of one
+/// exchange, as the host names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ScreenerUniverse {
+    /// Identifies the universe to the feed, such as `"coin"`.
+    pub id: String,
+    /// The name shown, such as `"Coins"`.
+    pub name: String,
+}
+
+impl ScreenerUniverse {
+    /// The universe `id` named `name`.
+    pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+        }
+    }
+}
+
 /// How a screener filter compares a column's value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ScreenerOp {
     /// Greater than the filter's value.
     Above,
@@ -197,7 +225,7 @@ pub enum ScreenerOp {
 }
 
 /// One condition every row must meet.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ScreenerFilter {
     /// The [`ScreenerColumn::id`] compared.
     pub column: String,
@@ -212,6 +240,12 @@ pub struct ScreenerFilter {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ScreenerQuery {
+    /// The [`ScreenerUniverse::id`] to screen, or `None` when the host offers no universes.
+    pub universe: Option<String>,
+    /// What the user wrote to describe the screen, or empty for none. The feed interprets it
+    /// together with the other criteria, answering
+    /// [`Datafeed::screen_text`](super::Datafeed::screen_text).
+    pub text: String,
     /// The [`ScreenerColumn::id`]s each row answers a value for, in order.
     pub columns: Vec<String>,
     /// Conditions every row meets.
@@ -220,8 +254,31 @@ pub struct ScreenerQuery {
     pub sort_by: Option<String>,
     /// Sort from the largest value.
     pub descending: bool,
+    /// Rows to skip, for the next page of the same screen.
+    pub offset: usize,
     /// Rows wanted at most.
     pub limit: usize,
+}
+
+/// What a feed answers for a screen that has a text description.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ScreenerTextAnswer {
+    /// The rows that pass the screen, as for [`Datafeed::screen`](super::Datafeed::screen).
+    pub rows: Vec<ScreenerRow>,
+    /// How the feed understood the description, such as the criteria it applied, shown above the
+    /// rows. May be empty.
+    pub explanation: String,
+}
+
+impl ScreenerTextAnswer {
+    /// The answer `rows`, understood as `explanation`.
+    pub fn new(rows: Vec<ScreenerRow>, explanation: impl Into<String>) -> Self {
+        Self {
+            rows,
+            explanation: explanation.into(),
+        }
+    }
 }
 
 /// One symbol that passes the screen, with one formatted value per query column.

@@ -312,19 +312,28 @@ impl Drawing {
             painter.galley(info_rect.min + egui::vec2(5.0, 5.0), galley, summary_color);
         }
 
-        // Target label (on right side of line)
-        let target_bg = Rect::from_min_max(
-            Pos2::new(
-                right + DESIGN_TOKENS.sizing.position_tool.label_offset_x,
-                target_y - DESIGN_TOKENS.sizing.position_tool.label_offset_x,
-            ),
-            Pos2::new(
-                right
-                    + DESIGN_TOKENS.sizing.position_tool.label_offset_x
-                    + DESIGN_TOKENS.sizing.position_tool.label_target_width,
-                target_y + DESIGN_TOKENS.sizing.position_tool.label_offset_x,
-            ),
-        );
+        // The target and stop labels sit right of the line's end; one that would
+        // pass the plot's right edge flips to the inner side, and stays in the plot.
+        let clip = painter.clip_rect();
+        let label_width = sizing.label_target_width;
+        let outer = right + sizing.label_offset_x;
+        let label_left = if outer + label_width > clip.right() {
+            right - sizing.label_offset_x - label_width
+        } else {
+            outer
+        }
+        .min(clip.right() - label_width)
+        .max(clip.left());
+        let text_left = label_left + sizing.text_offset_x - sizing.label_offset_x;
+        let label_bg = |level_y: f32| {
+            Rect::from_min_max(
+                Pos2::new(label_left, level_y - sizing.label_offset_x),
+                Pos2::new(label_left + label_width, level_y + sizing.label_offset_x),
+            )
+        };
+
+        // Target label
+        let target_bg = label_bg(target_y);
 
         // Visibility check for target label
         if painter.clip_rect().intersects(target_bg) {
@@ -338,10 +347,7 @@ impl Drawing {
                     .gamma_multiply(200_f32 / 255.0),
             );
             painter.text(
-                Pos2::new(
-                    right + DESIGN_TOKENS.sizing.position_tool.text_offset_x,
-                    target_y,
-                ),
+                Pos2::new(text_left, target_y),
                 egui::Align2::LEFT_CENTER,
                 target_label,
                 font_small.clone(),
@@ -349,19 +355,8 @@ impl Drawing {
             );
         }
 
-        // Stop label (on right side of line)
-        let stop_bg = Rect::from_min_max(
-            Pos2::new(
-                right + DESIGN_TOKENS.sizing.position_tool.label_offset_x,
-                stop_y - DESIGN_TOKENS.sizing.position_tool.label_offset_x,
-            ),
-            Pos2::new(
-                right
-                    + DESIGN_TOKENS.sizing.position_tool.label_offset_x
-                    + DESIGN_TOKENS.sizing.position_tool.label_target_width,
-                stop_y + DESIGN_TOKENS.sizing.position_tool.label_offset_x,
-            ),
-        );
+        // Stop label
+        let stop_bg = label_bg(stop_y);
 
         // Visibility check for stop label
         if painter.clip_rect().intersects(stop_bg) {
@@ -375,10 +370,7 @@ impl Drawing {
                     .gamma_multiply(200_f32 / 255.0),
             );
             painter.text(
-                Pos2::new(
-                    right + DESIGN_TOKENS.sizing.position_tool.text_offset_x,
-                    stop_y,
-                ),
+                Pos2::new(text_left, stop_y),
                 egui::Align2::LEFT_CENTER,
                 stop_label,
                 font_small,
@@ -534,6 +526,30 @@ mod tests {
                             .contains_rect(summary.visual_bounding_rect()),
                         "{tool:?}, width {width}: {:?}",
                         summary.visual_bounding_rect()
+                    );
+                    output.drop_without_applying_deltas();
+                    // The tool ends at the plot's right edge: its target label stays inside.
+                    chart.set_visible_logical_range(crate::model::LogicalRange {
+                        left: 20.0,
+                        right: 52.0,
+                    });
+                    let output = render(&mut chart);
+                    let label = output
+                        .shapes
+                        .iter()
+                        .find_map(|s| match &s.shape {
+                            egui::Shape::Text(t) if t.galley.job.text.starts_with("Target:") => {
+                                Some(t)
+                            }
+                            _ => None,
+                        })
+                        .expect("target label");
+                    assert!(
+                        chart
+                            .get_rendered_price_rect()
+                            .contains_rect(label.visual_bounding_rect()),
+                        "{tool:?}, width {width}: {:?}",
+                        label.visual_bounding_rect()
                     );
                     output.drop_without_applying_deltas();
                     chart.set_visible_logical_range(crate::model::LogicalRange {

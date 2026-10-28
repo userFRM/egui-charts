@@ -63,12 +63,18 @@ const HIGHLIGHTS: &[(&str, &str)] = &[
 
 /// Up to `query.limit` synthetic stories, newest first, published on the hour before `now`.
 pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
-    let symbols: Vec<&DemoSymbol> = match &query.symbol {
-        Some(symbol) => DemoSymbol::catalog()
+    let symbols: Vec<&DemoSymbol> = if query.symbols.is_empty() {
+        DemoSymbol::catalog().iter().collect()
+    } else {
+        DemoSymbol::catalog()
             .iter()
-            .filter(|spec| spec.symbol.eq_ignore_ascii_case(symbol))
-            .collect(),
-        None => DemoSymbol::catalog().iter().collect(),
+            .filter(|spec| {
+                query
+                    .symbols
+                    .iter()
+                    .any(|symbol| spec.symbol.eq_ignore_ascii_case(symbol))
+            })
+            .collect()
     };
     let templates = if query.highlights {
         HIGHLIGHTS
@@ -436,22 +442,45 @@ impl Chats for DemoChats {
     }
 }
 
-/// Synthetic weights for a host-supplied market heatmap, with live quote changes filled later.
-pub(super) fn heatmap() -> Vec<egui_charts::ui::widget_bar::MarketHeatmapEntry> {
-    DemoSymbol::catalog()
-        .iter()
-        .map(|spec| egui_charts::ui::widget_bar::MarketHeatmapEntry {
-            symbol: spec.symbol.into(),
-            group: match spec.symbol {
-                "AAPL" | "MSFT" | "NVDA" => "Technology",
-                "TSLA" => "Consumer",
-                _ => spec.exchange,
-            }
-            .into(),
-            value: (spec.seed % 4 + 1) as f64,
-            change_percent: 0.0,
-        })
-        .collect()
+/// Synthetic universes for a host-supplied market heatmap, with live quote values filled later.
+pub(super) fn heatmap_universes() -> Vec<egui_charts::ui::widget_bar::MarketHeatmapUniverse> {
+    use egui_charts::ui::widget_bar::{MarketHeatmapEntry, MarketHeatmapUniverse};
+    let entries = |stocks_only: bool| {
+        DemoSymbol::catalog()
+            .iter()
+            .filter(|spec| {
+                !stocks_only || !matches!(spec.exchange, "Crypto" | "Index" | "Forex" | "Synthetic")
+            })
+            .map(|spec| MarketHeatmapEntry {
+                symbol: spec.symbol.into(),
+                group: match spec.symbol {
+                    "AAPL" | "MSFT" | "NVDA" => "Technology",
+                    "TSLA" => "Consumer",
+                    _ => spec.exchange,
+                }
+                .into(),
+                values: [("weight", (spec.seed % 4 + 1) as f64)]
+                    .map(|(id, value)| (id.to_owned(), value))
+                    .into(),
+            })
+            .collect()
+    };
+    vec![
+        MarketHeatmapUniverse::new("catalog", "Demo catalog", entries(false)),
+        MarketHeatmapUniverse::new("stocks", "Demo stocks", entries(true)),
+    ]
+}
+
+/// The metrics of [`heatmap_universes`]: a synthetic weight, and the live change and price.
+pub(super) fn heatmap_metrics() -> Vec<egui_charts::ui::widget_bar::MarketHeatmapMetric> {
+    use egui_charts::ui::widget_bar::MarketHeatmapMetric;
+    let mut change = MarketHeatmapMetric::new("change", "Change", "%");
+    change.saturation = Some(5.0);
+    vec![
+        MarketHeatmapMetric::new("weight", "Weight", ""),
+        change,
+        MarketHeatmapMetric::new("price", "Price", ""),
+    ]
 }
 
 /// Synthetic financials for the catalog's stocks: five fiscal years scaled from the catalog price,

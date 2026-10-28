@@ -6,6 +6,7 @@ use super::FeedError;
 use super::depth::Book;
 use chrono::{DateTime, TimeDelta, Utc};
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// Resolutions a history keeps: the newest columns, then columns merged from two of them, from
 /// four, and so on up to 128.
@@ -31,6 +32,13 @@ pub struct DepthHistoryConfig {
     /// are more, the two oldest merge into one, and the merged columns overflow into the next
     /// resolution in the same way. At least 2; 600 by default.
     pub columns: usize,
+    /// Sample the individual resting orders this filter accepts, summed into rows, instead of
+    /// the aggregate prices the feed sends. Needs a feed that sends order events, see
+    /// [`Sink::push_order_event`](crate::data::Sink::push_order_event): with aggregate depth only
+    /// no column is sampled, and a period in which the filter cannot be applied (see
+    /// [`OrderFilterUnavailable`](crate::data::OrderFilterUnavailable)) has no column. `None`
+    /// samples the aggregate book.
+    pub orders: Option<crate::data::OrderFilter>,
 }
 
 impl Default for DepthHistoryConfig {
@@ -40,6 +48,7 @@ impl Default for DepthHistoryConfig {
             rows: 100,
             ticks_per_row: 1,
             columns: 600,
+            orders: None,
         }
     }
 }
@@ -76,7 +85,9 @@ pub struct DepthHistory {
     config: DepthHistoryConfig,
     /// Column `k` holds columns merged from up to `2^k` samples, oldest first. Every column of a
     /// tier is older than those of the tiers before it.
-    tiers: Vec<VecDeque<DepthColumn>>,
+    /// Shared, so that a heatmap tells a column it drew from a new one by identity instead of
+    /// keeping a copy of every column to compare with.
+    tiers: Vec<VecDeque<Arc<DepthColumn>>>,
 }
 
 impl DepthHistory {
@@ -102,6 +113,12 @@ impl DepthHistory {
 
     /// Every column, oldest first. Consecutive columns are adjacent unless the chart lost columns.
     pub fn columns(&self) -> impl DoubleEndedIterator<Item = &DepthColumn> {
+        self.shared().map(Arc::as_ref)
+    }
+
+    /// The columns of [`columns`](Self::columns), shared. A column is replaced, never changed, so
+    /// a clone of the same `Arc` is the same column.
+    pub(crate) fn shared(&self) -> impl DoubleEndedIterator<Item = &Arc<DepthColumn>> {
         self.tiers.iter().rev().flatten()
     }
 
@@ -140,7 +157,7 @@ impl DepthHistory {
             ));
         }
         page.sort_by_key(|c| c.time);
-        let mut held: Vec<_> = self.columns().cloned().collect();
+        let mut held: Vec<_> = self.shared().cloned().collect();
         let mut accepted = 0;
         for column in page {
             let at = held.partition_point(|c| c.time < column.time);
@@ -149,7 +166,7 @@ impl DepthHistory {
                     .get(at)
                     .is_some_and(|c| c.time < column.time + column.span);
             if !overlaps {
-                held.insert(at, column);
+                held.insert(at, Arc::new(column));
                 accepted += 1;
             }
         }
@@ -165,7 +182,8 @@ impl DepthHistory {
     }
 
     /// Live columns supersede overlapping history, including a page answered in the same drain.
-    pub(crate) fn push(&mut self, column: DepthColumn) {
+    pub(crate) fn push(&mut self, column: impl Into<Arc<DepthColumn>>) {
+        let column = column.into();
         if self
             .columns()
             .next_back()
@@ -173,7 +191,7 @@ impl DepthHistory {
         {
             let end = column.time + column.span;
             let mut held: Vec<_> = self
-                .columns()
+                .shared()
                 .filter(|c| c.time >= end || c.time + c.span <= column.time)
                 .cloned()
                 .collect();
@@ -189,7 +207,7 @@ impl DepthHistory {
     }
 
     /// Appends a newer column and merges the oldest of each full tier.
-    fn push_tail(&mut self, column: DepthColumn) {
+    fn push_tail(&mut self, column: Arc<DepthColumn>) {
         self.tiers[0].push_back(column);
         for tier in 0..TIERS {
             if self.tiers[tier].len() <= self.config.columns {
@@ -200,7 +218,7 @@ impl DepthHistory {
             let merged = match self.tiers[tier].front() {
                 Some(newer) if older.time + older.span == newer.time => {
                     let newer = self.tiers[tier].pop_front().expect("a newer column");
-                    merge(older, newer, self.config.rows)
+                    Arc::new(merge(&older, &newer, self.config.rows))
                 }
                 _ => older,
             };
@@ -221,6 +239,20 @@ pub(crate) struct Sampler {
 impl Sampler {
     pub(crate) fn new(config: DepthHistoryConfig) -> Self {
         Self { config, open: None }
+    }
+
+    /// Whether an update stamped `ts` opens a period after the open one, so that `sample` reads
+    /// the book.
+    pub(crate) fn due(&self, ts: DateTime<Utc>) -> bool {
+        start(ts, self.config.cadence)
+            .zip(self.open)
+            .is_some_and(|(period, open)| period > open)
+    }
+
+    /// The book cannot be sampled: the period that was open has no column, nor does the time until
+    /// the next sample.
+    pub(crate) fn lose(&mut self) {
+        self.open = None;
     }
 
     /// Called before `book` applies an update stamped `ts`. When the update opens a later period,
@@ -252,7 +284,7 @@ fn start(ts: DateTime<Utc>, cadence: TimeDelta) -> Option<DateTime<Utc>> {
 }
 
 /// One column spanning `older` and `newer`, adjacent, each row's size averaged over their spans.
-fn merge(older: DepthColumn, newer: DepthColumn, rows: usize) -> DepthColumn {
+fn merge(older: &DepthColumn, newer: &DepthColumn, rows: usize) -> DepthColumn {
     let span = older.span + newer.span;
     let weight = |part: TimeDelta| part.as_seconds_f64() / span.as_seconds_f64();
     let (a, b) = (weight(older.span), weight(newer.span));
@@ -335,7 +367,7 @@ mod tests {
         };
         // 101: 4 * 1/4; 100: 8 * 3/4; 99: (2 * 1 + 6 * 3) / 4; cut to two rows.
         assert_eq!(
-            merge(older, newer, 2),
+            merge(&older, &newer, 2),
             DepthColumn {
                 time: at(0),
                 span: TimeDelta::milliseconds(2),

@@ -27,6 +27,11 @@ pub struct UserSettings {
     /// does not know is left out when reading.
     #[serde(deserialize_with = "known_tools")]
     pub drawing_favorites: Vec<DrawingToolType>,
+    /// Whether the user hid the favourites strip with its close or toggle button.
+    pub drawing_favorites_hidden: bool,
+    /// The top-left corner of the favourites strip, in logical points, where the user left it;
+    /// `None` until it has been shown, when it starts beside the drawing toolbar.
+    pub drawing_favorites_pos: Option<(f32, f32)>,
     /// The layout open last, to open again on start.
     pub layout: Option<String>,
     /// Whether the open layout is saved after each change.
@@ -43,8 +48,25 @@ pub struct UserSettings {
     pub drawing_defaults: BTreeMap<String, serde_json::Value>,
     /// The watchlists, in order.
     pub watchlists: Vec<Watchlist>,
+    /// The market heatmap's universe, size metric and colour metric.
+    pub market_heatmap: MarketHeatmapSelection,
     /// The replay position to resume, with the interval its history was fetched at.
     pub replay_session: Option<(ReplaySession, Timeframe)>,
+}
+
+/// What the market heatmap shows, by the identifiers the host gave its universes and metrics.
+/// `None` is the panel's default. An identifier the host no longer offers stays chosen, so the
+/// choice returns when the host offers it again.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct MarketHeatmapSelection {
+    /// The universe shown.
+    pub universe: Option<String>,
+    /// The metric that sizes the tiles.
+    pub size: Option<String>,
+    /// The metric that colours the tiles.
+    pub colour: Option<String>,
 }
 
 fn known_tools<'de, D: Deserializer<'de>>(
@@ -312,6 +334,8 @@ mod tests {
         assert_eq!(poll(&mut store, 0.0, &settings), None);
         settings.symbol = Some("AAPL".into());
         settings.drawing_favorites = vec![DrawingToolType::TrendLine];
+        settings.market_heatmap.size = Some("cap".into());
+        settings.drawing_favorites_pos = Some((12.0, 34.0));
         for time in [0.5, 1.0, 1.4] {
             assert_eq!(poll(&mut store, time, &settings), None);
         }
@@ -319,6 +343,13 @@ mod tests {
         poll(&mut store, 1.5, &settings);
         let written = host.0.lock().unwrap().clone().unwrap();
         assert!(written.contains("\"TrendLine\""));
+        assert_eq!(
+            UserSettings::from_json(&written)
+                .unwrap()
+                .market_heatmap
+                .size,
+            Some("cap".into())
+        );
 
         // Exit can follow an inline save before another frame polls its acknowledgement.
         settings.symbol = Some("MSFT".into());

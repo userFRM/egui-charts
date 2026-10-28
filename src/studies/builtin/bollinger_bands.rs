@@ -1,17 +1,26 @@
 //! Bollinger Bands indicator.
 //!
 //! Bollinger Bands are a volatility envelope placed above and below a
-//! simple moving average. The width of the bands is determined by the
-//! standard deviation of closing prices, so they automatically widen
-//! during volatile markets and contract during quiet markets.
+//! moving average, a simple one by default. The width of the bands is
+//! determined by the standard deviation of closing prices, so they
+//! automatically widen during volatile markets and contract during quiet
+//! markets.
 //!
 //! # Components
 //!
-//! 1. **Upper band** = SMA + (K * standard deviation)
-//! 2. **Middle band** = SMA(close, period)
-//! 3. **Lower band** = SMA - (K * standard deviation)
+//! 1. **Upper band** = basis + (K * standard deviation)
+//! 2. **Middle band** = basis = MA(close, period)
+//! 3. **Lower band** = basis - (K * standard deviation)
 //!
-//! where *K* is the `std_dev` multiplier (typically 2.0).
+//! where *K* is the `std_dev` multiplier (typically 2.0) and the standard
+//! deviation is the population deviation of the last `period` closes about
+//! their simple mean, whatever the basis.
+//!
+//! The basis is one of the [`AverageType`] averages, simple by default:
+//! exponential, weighted, smoothed or volume weighted are the others. It
+//! keeps the seed and warm-up of the standalone average, but all three bands
+//! start once a full window of `period` bars exists. A window with a missing
+//! close leaves all three bands missing at that bar.
 //!
 //! # Default parameters
 //!
@@ -43,10 +52,9 @@
 //! }
 //! ```
 
-use super::clamp_param;
+use super::{AverageType, clamp_param};
 use crate::model::Bar;
 use crate::studies::palette;
-use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -57,7 +65,10 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct BollingerBands {
     period: usize,
+    basis: AverageType,
     std_dev: f64,
+    /// The basis average, built when a calculation starts; `None` for the simple mean.
+    average: Option<Box<dyn Indicator>>,
     values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
@@ -68,7 +79,9 @@ impl BollingerBands {
     pub fn new(period: usize, std_dev: f64) -> Self {
         Self {
             period: period.max(1),
+            basis: AverageType::Simple,
             std_dev: clamp_param(std_dev, 0.0, f64::MAX),
+            average: None,
             values: IndicatorValues::new(),
             colors: vec![
                 palette::ACCENT,    // Upper
@@ -79,30 +92,40 @@ impl BollingerBands {
         }
     }
 
-    /// The values over `data`.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                values.push(IndicatorValue::None);
-            } else {
-                let prices: Vec<f64> = data[i + 1 - self.period..=i]
-                    .iter()
-                    .map(|bar| bar.close)
-                    .collect();
-
-                let sma = prices.iter().sum::<f64>() / self.period as f64;
-                let variance =
-                    prices.iter().map(|p| (p - sma).powi(2)).sum::<f64>() / self.period as f64;
-                let std = variance.sqrt();
-
-                let upper = sma + (std * self.std_dev);
-                let lower = sma - (std * self.std_dev);
-
-                values.push_lines(&[upper, sma, lower]);
-            }
+    /// Use `basis` for the middle band. [`AverageType::Hull`] is not a Bollinger basis and
+    /// leaves the basis unchanged.
+    pub fn with_basis(mut self, basis: AverageType) -> Self {
+        if basis != AverageType::Hull {
+            self.basis = basis;
         }
-        values
+        self
+    }
+
+    /// The bands at bar `i` of `data`.
+    fn row(&self, data: &[Bar], i: usize) -> IndicatorValue {
+        if i + 1 < self.period {
+            return IndicatorValue::None;
+        }
+        let prices: Vec<f64> = data[i + 1 - self.period..=i]
+            .iter()
+            .map(|bar| bar.close)
+            .collect();
+
+        let sma = prices.iter().sum::<f64>() / self.period as f64;
+        let variance = prices.iter().map(|p| (p - sma).powi(2)).sum::<f64>() / self.period as f64;
+        let std = variance.sqrt();
+        let middle = self.average.as_ref().map_or(sma, |average| {
+            average.values().value(0, i).unwrap_or(f64::NAN)
+        });
+        if !std.is_finite() {
+            return IndicatorValue::None;
+        }
+
+        IndicatorValue::Multiple(vec![
+            middle + (std * self.std_dev),
+            middle,
+            middle - (std * self.std_dev),
+        ])
     }
 }
 
@@ -122,6 +145,7 @@ impl Indicator for BollingerBands {
 
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
+        basis: choice("Basis MA type", [AverageType::Simple, AverageType::Exponential, AverageType::Weighted, AverageType::Smoothed, AverageType::VolumeWeighted]),
         std_dev: number("Std dev", 0.0, f64::MAX)
     ; {});
 
@@ -148,15 +172,19 @@ impl Indicator for BollingerBands {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let mut values = std::mem::take(&mut self.values);
-        update_window(
-            &mut values,
-            data,
-            from,
-            usable_behind(self.period - 1, |_| true),
-            |data| self.compute(data),
-        );
-        self.values = values;
+        let from = from.min(self.values.len()).min(data.len());
+        if from == 0 {
+            self.average =
+                (self.basis != AverageType::Simple).then(|| self.basis.build(self.period));
+        }
+        if let Some(average) = &mut self.average {
+            average.update(data, from);
+        }
+        self.values.truncate(from);
+        for i in from..data.len() {
+            let row = self.row(data, i);
+            self.values.push(row);
+        }
     }
 
     fn is_incremental(&self) -> bool {

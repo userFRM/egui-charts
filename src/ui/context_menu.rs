@@ -1013,6 +1013,11 @@ pub struct ChartMenus {
 }
 
 impl ChartMenus {
+    /// The price of the series menu's last right-click, which stays after a pick.
+    pub(crate) fn series_click_price(&self) -> f64 {
+        self.series.click_price
+    }
+
     /// Shows or hides named menu entries: Alerts, Trading, Settings, ObjectTree, Indicators,
     /// ResetView, CopyPrice, ExportData, TimeZone and Session. `ContextMenus` disables all menus,
     /// including drawings and axes. Controls belonging only to toolbars are ignored.
