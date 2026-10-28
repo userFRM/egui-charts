@@ -12,8 +12,9 @@ use crate::data::{FeedError, MaybeSend, Reply};
 /// A message the user sends appears once the host pushes it back. Choosing recipients, creating
 /// rooms and changing their members are optional operations: the host turns each on in
 /// [`capabilities`](Self::capabilities), keeps the accounts and decides whether the signed-in
-/// user may do it, and answers a refusal with an error that the panel shows. Methods are called on the UI
-/// thread and must return at once; answer and push from any thread, runtime or browser task.
+/// user may do it, and answers a refusal with an error that the panel shows. Methods are called
+/// on the UI thread and must return at once; answer and push from any thread, runtime or browser
+/// task.
 ///
 /// ```
 /// use std::sync::Mutex;

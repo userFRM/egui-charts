@@ -245,10 +245,11 @@ pub trait Datafeed: MaybeSend + 'static {
         reply.send(Err(FeedError::NotSupported));
     }
 
-    /// As [`screen`](Self::screen), for a query whose `text` describes the screen in words. The feed
-    /// interprets the text with the other criteria and answers the rows with an explanation of how
-    /// it understood them. Answer [`FeedError::NotSupported`] (the default) to have the panel say
-    /// the feed takes no descriptions, and [`FeedError::InvalidData`] for one it cannot interpret.
+    /// As [`screen`](Self::screen), for a query whose `text` describes the screen in words. The
+    /// feed interprets the text with the other criteria and answers the rows with an explanation
+    /// of how it understood them. Answer [`FeedError::NotSupported`] (the default) to have the
+    /// panel say the feed takes no descriptions, and [`FeedError::InvalidData`] for one it cannot
+    /// interpret.
     fn screen_text(&self, query: ScreenerQuery, reply: Reply<ScreenerTextAnswer>) {
         let _ = query;
         reply.send(Err(FeedError::NotSupported));

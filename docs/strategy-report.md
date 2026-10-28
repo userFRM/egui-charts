@@ -53,7 +53,9 @@ Properties includes run metadata and the host's ordered settings. Invalid inputs
 counted visibly. An undefined or non-finite metric displays as `N/A`, including when
 converting a fraction to a displayed percentage overflows.
 CSV exports only valid trades using `StrategyReport::trades_csv`, retaining its existing
-columns, quoting and UTC timestamps. The recomputable summary is not exported.
+columns, quoting and UTC timestamps. Export summary CSV returns
+`StrategyReportAction::ExportSummaryCsv` with a suggested file name and the metrics and
+properties shown, as `StrategyReport::summary_csv` writes them.
 
 ## Metric definitions
 
