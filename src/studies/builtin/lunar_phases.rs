@@ -192,6 +192,10 @@ fn phase_jd(k: f64) -> f64 {
 pub fn lunar_phases(from: DateTime<Utc>, to: DateTime<Utc>) -> Vec<LunarPhase> {
     let from = from.max(Utc.with_ymd_and_hms(1900, 1, 1, 0, 0, 0).unwrap());
     let to = to.min(Utc.with_ymd_and_hms(2100, 1, 1, 0, 0, 0).unwrap());
+    // A lunation near a `from` beyond the range could fall outside the representable times.
+    if from >= to {
+        return Vec::new();
+    }
     let at = |ms: f64| Utc.timestamp_millis_opt(ms.round() as i64).unwrap();
     // Lunations are counted in halves, the new moons at the even ones; start a lunation early.
     let year = 1970.0 + from.timestamp() as f64 / 86_400.0 / GREGORIAN_YEAR_DAYS;
@@ -402,6 +406,7 @@ mod tests {
         );
         assert!(lunar_phases(utc(1899, 1, 1, 0, 0), utc(1900, 1, 1, 0, 0)).is_empty());
         assert!(lunar_phases(utc(2100, 1, 1, 0, 0), utc(2101, 1, 1, 0, 0)).is_empty());
+        assert!(lunar_phases(DateTime::<Utc>::MAX_UTC, DateTime::<Utc>::MAX_UTC).is_empty());
     }
 
     /// The study marks a phase on the bar holding it, new moons at the low and full moons at the
