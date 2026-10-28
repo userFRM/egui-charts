@@ -24,6 +24,22 @@ pub struct SavedStudy {
     pub pane: usize,
 }
 
+/// One comparison or spread of a [`ChartSnapshot`]: a series fed by the chart's feed, which
+/// supplies its bars again once the snapshot is restored.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedComparison {
+    /// Its symbol or spread expression as `name`, with its colours, scale assignment and style.
+    pub options: super::SeriesOptions,
+    /// Whether it is shown.
+    pub visible: bool,
+    /// The position of its pane in [`ChartSnapshot::panes`].
+    pub pane: usize,
+    /// The scale it has in the price pane when that is not the main series' scale, including
+    /// its manual range. A series in another pane takes the pane's scale, which the pane holds.
+    #[serde(default)]
+    pub scale: Option<crate::scales::PriceScale>,
+}
+
 /// One pane of a [`ChartSnapshot`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedPane {
@@ -47,8 +63,8 @@ pub struct SavedPane {
 
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
 /// the host's feed. Take one with [`Chart::snapshot`] and apply it with [`Chart::restore`].
-/// Host series, markers, price lines and the trading and alert settings of the settings dialog
-/// belong to the host and are not part of it.
+/// Series the host supplies, markers, price lines and the trading and alert settings of the
+/// settings dialog belong to the host and are not part of it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChartSnapshot {
     /// The symbol shown.
@@ -83,6 +99,10 @@ pub struct ChartSnapshot {
     pub maximized: Option<usize>,
     /// The studies in the order they were added, including the volume study.
     pub studies: Vec<SavedStudy>,
+    /// The comparisons and spreads the chart's feed supplies, in draw order; absent in older
+    /// layouts.
+    #[serde(default)]
+    pub comparisons: Vec<SavedComparison>,
     /// The panes from top to bottom, including preserved empty panes.
     pub panes: Vec<SavedPane>,
     /// The space between bars in points.
@@ -131,6 +151,33 @@ impl Chart {
                 .create()
                 .map_err(|error| SaveError::Json(serde::ser::Error::custom(error)))?;
         }
+        let comparisons = self
+            .fed_series()
+            .into_iter()
+            .map(|(id, _)| {
+                let item = self
+                    .price_series
+                    .iter()
+                    .find(|item| item.id == id)
+                    .expect("fed series");
+                let pane = self.series_pane(id).unwrap_or(PaneId::MAIN);
+                if item.options.style.autoscale.is_some() {
+                    return Err(SaveError::Json(serde::ser::Error::custom(
+                        "A comparison with a custom autoscale callback cannot be saved",
+                    )));
+                }
+                let own_scale =
+                    pane == PaneId::MAIN && self.series_scale(id) != Some(self.main_series_scale);
+                Ok(SavedComparison {
+                    options: item.options.clone(),
+                    visible: item.visible,
+                    pane: panes.iter().position(|p| *p == pane).unwrap_or(0),
+                    scale: own_scale
+                        .then(|| self.series_price_scale(id).cloned())
+                        .flatten(),
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let (bar_spacing, right_offset) = self.get_time_scale_state();
         Ok(ChartSnapshot {
             symbol: self.symbol.clone(),
@@ -149,6 +196,7 @@ impl Chart {
                 .maximized
                 .and_then(|id| panes.iter().position(|pane| *pane == id)),
             studies,
+            comparisons,
             panes: panes
                 .iter()
                 .map(|id| {
@@ -221,6 +269,17 @@ impl Chart {
                 .studies
                 .iter()
                 .any(|study| study.pane >= snapshot.panes.len())
+            || snapshot.comparisons.iter().any(|saved| {
+                saved.pane >= snapshot.panes.len()
+                    || saved
+                        .options
+                        .columns_base
+                        .is_some_and(|base| !base.is_finite())
+                    || saved
+                        .scale
+                        .as_ref()
+                        .is_some_and(|scale| !valid_scale(scale))
+            })
             || snapshot
                 .panes
                 .iter()
@@ -273,6 +332,9 @@ impl Chart {
             self.remove_series(id);
         }
         self.config.show_volume = show_volume;
+        for (id, _) in self.fed_series() {
+            self.remove_series(id);
+        }
         self.restored_studies.clear();
         self.pane_layout
             .panes
@@ -316,6 +378,16 @@ impl Chart {
                         .set_input(input, crate::studies::InputValue::Source(source))
                         .expect("validated study source");
                 }
+            }
+        }
+        for saved in &snapshot.comparisons {
+            let id = self.add_feed_series(saved.options.clone());
+            self.move_series_to_pane(id, panes[&saved.pane]);
+            self.set_series_visible(id, saved.visible);
+            if let Some(scale) = &saved.scale
+                && let Some(own) = self.series_price_scale_mut(id)
+            {
+                *own = scale.clone();
             }
         }
         self.recalculate_studies();

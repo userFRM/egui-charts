@@ -273,6 +273,10 @@ pub struct HistoryRequest {
     pub count: usize,
     /// Include the instrument's extended trading hours, as well as regular hours.
     pub extended_hours: bool,
+    /// Bars adjusted for dividends, when the feed supports it. A feed that cannot adjust sends
+    /// unadjusted bars; [`Instrument::dividend_adjustment`](crate::model::Instrument::dividend_adjustment)
+    /// tells the chart whether to offer the choice.
+    pub adjusted: bool,
 }
 
 /// One page of history. A page without bars ends scroll-back like `end_of_history` does, so a

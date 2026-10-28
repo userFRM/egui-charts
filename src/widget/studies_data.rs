@@ -259,7 +259,12 @@ impl Chart {
     }
 
     pub(super) fn pump_study_data(&mut self, ctx: &egui::Context, feed: Option<Arc<dyn Datafeed>>) {
-        let requests = self.study_data_requests();
+        let mut requests = self.study_data_requests();
+        for request in self.fed_requests() {
+            if !requests.contains(&request) {
+                requests.push(request);
+            }
+        }
         let previous = self.study_data.series.len();
         self.study_data.series.retain(|series| {
             requests.contains(&series.request)
@@ -316,6 +321,7 @@ impl Chart {
             }
         }
         let extended = self.extended_hours();
+        let adjusted = self.dividend_adjusted();
         let now = ctx.input(|input| input.time);
         let first = self.state.data().bars.first().map(|bar| bar.time);
         let count = self.state.data().bars.len().max(300);
@@ -497,12 +503,14 @@ impl Chart {
                     before: series.bars.first().map(|bar| bar.time),
                     count,
                     extended_hours: extended,
+                    adjusted,
                 });
                 stream.request(&series.request);
             }
         }
         if changed {
             self.invalidate_study_data();
+            self.fill_fed_series();
         }
     }
 }

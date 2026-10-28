@@ -6,7 +6,7 @@ use egui::Color32;
 use std::sync::Arc;
 
 /// The bar whose value a series' price line and last value label show.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum PriceLineSource {
     /// The newest bar, also when it is scrolled out of view.
     #[default]
@@ -58,7 +58,9 @@ impl PartialEq for AutoscaleProvider {
 ///
 /// The chart-wide `ChartConfig::show_symbol_last_val` and `show_price_line` switches hide every
 /// series' labels and price lines.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// A saved style leaves out the [`autoscale`](Self::autoscale) callback: it reads back without one.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SeriesStyle {
     /// Label the last value on the price axis.
     pub last_value_visible: bool,
@@ -77,6 +79,7 @@ pub struct SeriesStyle {
     /// Other scale modes have no base value.
     pub base_line_visible: bool,
     /// Replaces the range the series contributes to its scale's fit.
+    #[serde(skip)]
     pub autoscale: Option<AutoscaleProvider>,
     /// Horizontal distance in logical points from a bar's centre within which a click on its
     /// high to low range selects the main series. Host series do not take clicks.

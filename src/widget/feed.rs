@@ -34,6 +34,10 @@ pub(crate) struct FeedLink {
     /// Slots of the chart's timeframe, by which history, live bars and ticks merge.
     pub(super) clock: BarClock,
     initial_bars: usize,
+    /// Whether history is requested adjusted for dividends.
+    pub(super) adjusted: bool,
+    /// Bar series whose bars the feed supplies, each for the symbol or spread in its name.
+    pub(super) fed: Vec<SeriesId>,
     /// The viewport the chart was last shown in, which the waker wakes. Set by the first `pump`,
     /// which installs the waker, and cleared by `Drop` before it unsubscribes, so the waker does
     /// nothing then.
@@ -134,6 +138,8 @@ impl Chart {
             inbox: Arc::default(),
             clock: BarClock::new(timeframe),
             initial_bars,
+            adjusted: false,
+            fed: Vec::new(),
             wake: Arc::default(),
             reload_pending: true,
             paused: false,
@@ -343,6 +349,25 @@ impl Chart {
                 link.reload_pending = true;
             }
         }
+    }
+
+    /// Requests history adjusted for dividends (`true`) or as traded (`false`, the default), when
+    /// the feed supports it; comparisons are requested the same way. A changed choice reloads
+    /// history and replaces the live subscription on the next frame. Without a feed the host
+    /// supplies the selected bars with `set_data`.
+    pub fn set_dividend_adjusted(&mut self, adjusted: bool) {
+        if let Some(link) = &mut self.feed_link
+            && link.adjusted != adjusted
+        {
+            link.adjusted = adjusted;
+            link.reload_pending = true;
+            self.study_data.clear_feed();
+        }
+    }
+
+    /// Whether history is requested adjusted for dividends.
+    pub fn dividend_adjusted(&self) -> bool {
+        self.feed_link.as_ref().is_some_and(|link| link.adjusted)
     }
 
     /// Reloads the current feed key on the next frame, retaining drawings and chart history.
@@ -908,6 +933,7 @@ impl Chart {
             before: None,
             count: link.initial_bars,
             extended_hours: self.extended_hours,
+            adjusted: link.adjusted,
         };
         let reply = link.reply(Request::History {
             request: request.clone(),
@@ -1123,6 +1149,7 @@ impl Chart {
             before: Some(before),
             count: link.initial_bars.max(MIN_SCROLL_BACK_PAGE),
             extended_hours: self.extended_hours,
+            adjusted: link.adjusted,
         };
         self.feed.loading_history = true;
         let reply = link.reply(Request::History {
@@ -1302,6 +1329,7 @@ mod tests {
             before,
             count: 1000,
             extended_hours: false,
+            adjusted: false,
         })
     }
 
@@ -2835,5 +2863,127 @@ mod tests {
             Some(0.0),
             "new sources retain the idle clock"
         );
+    }
+
+    /// Answers every request at once with bars closing at the symbol's base plus their index:
+    /// AAPL from 100, MSFT from 40. It records the history requests.
+    #[derive(Default)]
+    struct Instant {
+        requests: Mutex<Vec<HistoryRequest>>,
+    }
+
+    impl Datafeed for Instant {
+        fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+            reply.send(Ok(Instrument::new(symbol)));
+        }
+        fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            let base = if request.symbol == "AAPL" {
+                100.0
+            } else {
+                40.0
+            };
+            let bars = bars(6)
+                .into_iter()
+                .map(|bar| {
+                    let close = bar.close - 100.0 + base;
+                    Bar::new(bar.time, close, close, close, close, 1.0)
+                })
+                .collect();
+            self.requests.lock().unwrap().push(request);
+            reply.send(page(bars, true));
+        }
+    }
+
+    fn closes(chart: &Chart, id: SeriesId) -> Vec<f64> {
+        chart.bars(id).iter().map(|bar| bar.close).collect()
+    }
+
+    /// A comparison or spread on a chart with a feed gets its bars from that feed, and a restored
+    /// snapshot gets them again; a chart without a feed leaves the series to the host.
+    #[test]
+    fn comparisons_are_filled_from_the_feed_and_survive_a_snapshot() {
+        use crate::model::SeriesScale;
+        use crate::widget::SeriesOptions;
+        let feed = Arc::new(Instant::default());
+        let mut chart = ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("AAPL")
+            .build();
+        let msft = chart.add_comparison("MSFT", egui::Color32::RED);
+        let spread = chart.add_feed_series(SeriesOptions {
+            name: "AAPL-MSFT".into(),
+            scale: SeriesScale::Left,
+            ..Default::default()
+        });
+        let pane = chart.add_pane();
+        chart.move_series_to_pane(spread, pane);
+        chart.set_series_visible(spread, false);
+        let mut frames = Frames::new();
+        for _ in 0..3 {
+            frames.run(&mut chart);
+        }
+        assert_eq!(closes(&chart, msft), [40.0, 41.0, 42.0, 43.0, 44.0, 45.0]);
+        assert_eq!(closes(&chart, spread), [60.0; 6]);
+
+        #[cfg(feature = "ui")]
+        {
+            use crate::widget::PaneId;
+            let saved = chart.snapshot().unwrap();
+            let saved: crate::widget::ChartSnapshot =
+                serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+            let mut other = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("AAPL")
+                .build();
+            other.restore(&saved).unwrap();
+            for _ in 0..3 {
+                frames.run(&mut other);
+            }
+            let restored: Vec<_> = other.series().collect();
+            assert_eq!(restored.len(), 2);
+            let (msft, spread) = (restored[0].0, restored[1].0);
+            assert_eq!(restored[0].1.name, "MSFT");
+            assert_eq!(restored[0].1.color, egui::Color32::RED);
+            assert_eq!(restored[1].1.scale, SeriesScale::Left);
+            assert_eq!(closes(&other, msft), [40.0, 41.0, 42.0, 43.0, 44.0, 45.0]);
+            assert_eq!(closes(&other, spread), [60.0; 6]);
+            assert!(other.is_fed(msft) && other.is_fed(spread));
+            assert!(other.is_series_visible(msft) && !other.is_series_visible(spread));
+            assert_eq!(other.series_pane(msft), Some(PaneId::MAIN));
+            assert_eq!(other.series_pane(spread), Some(other.panes()[1]));
+        }
+
+        let mut manual = ChartBuilder::new().build();
+        let id = manual.add_comparison("MSFT", egui::Color32::RED);
+        assert!(!manual.is_fed(id));
+    }
+
+    /// Dividend adjustment is asked of the feed for the main series and the comparisons, and
+    /// changing it loads them again.
+    #[test]
+    fn dividend_adjustment_is_requested_for_the_chart_and_its_comparisons() {
+        let feed = Arc::new(Instant::default());
+        let mut chart = ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("AAPL")
+            .build();
+        chart.add_comparison("MSFT", egui::Color32::RED);
+        let mut frames = Frames::new();
+        for adjusted in [false, true] {
+            chart.set_dividend_adjusted(adjusted);
+            for _ in 0..3 {
+                frames.run(&mut chart);
+            }
+            let mut asked: Vec<_> = std::mem::take(&mut *feed.requests.lock().unwrap())
+                .into_iter()
+                .map(|request| (request.symbol, request.adjusted))
+                .collect();
+            asked.sort();
+            assert_eq!(
+                asked,
+                [("AAPL".into(), adjusted), ("MSFT".into(), adjusted)],
+                "adjusted {adjusted}"
+            );
+        }
     }
 }

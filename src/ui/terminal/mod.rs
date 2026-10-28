@@ -125,7 +125,6 @@ pub struct Terminal {
     trading: trading::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
     layouts: layouts::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     compare: compare::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
     commands: commands::State,

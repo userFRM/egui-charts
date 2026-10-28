@@ -117,6 +117,10 @@ pub struct Instrument {
     pub supported_timeframes: Option<Vec<Timeframe>>,
     /// How current the feed's data is. The legend marks delayed and end-of-day data.
     pub data_status: Option<DataStatus>,
+    /// Whether the feed can send bars adjusted for dividends, which
+    /// [`HistoryRequest::adjusted`](crate::data::HistoryRequest::adjusted) asks for. The
+    /// terminal offers the choice only for such instruments.
+    pub dividend_adjustment: bool,
 }
 
 impl Instrument {
@@ -142,6 +146,7 @@ impl Instrument {
             native_timeframes: None,
             supported_timeframes: None,
             data_status: None,
+            dividend_adjustment: false,
         }
     }
 
@@ -250,6 +255,12 @@ impl Instrument {
         timeframes: impl IntoIterator<Item = Timeframe>,
     ) -> Self {
         self.supported_timeframes = Some(timeframes.into_iter().collect());
+        self
+    }
+
+    /// Sets [`dividend_adjustment`](Self::dividend_adjustment).
+    pub fn with_dividend_adjustment(mut self, adjustment: bool) -> Self {
+        self.dividend_adjustment = adjustment;
         self
     }
 
