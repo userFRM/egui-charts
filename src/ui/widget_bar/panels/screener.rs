@@ -850,7 +850,7 @@ mod tests {
         reply.send(Err(FeedError::NotSupported));
         restored.poll(&ctx);
         let mut h = Harness::builder()
-            .with_context_setup(|ctx| egui_extras::install_image_loaders(ctx))
+            .with_context_setup(egui_extras::install_image_loaders)
             .build_ui_state(|ui, panel: &mut ScreenerPanel| _ = panel.show(ui), restored);
         h.run();
         h.get_by_label("This feed takes no screen descriptions.");
