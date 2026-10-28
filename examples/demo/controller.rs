@@ -907,6 +907,7 @@ impl DemoApp {
             .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
             .unwrap_or(0.0);
         self.alert_dialog.open(self.state.symbol.clone(), price);
+        self.alert_dialog.alert.timeframe = Some(self.state.timeframe);
     }
 
     /// Offers the studies' outputs and every level of the drawings as alert sources.
@@ -964,8 +965,9 @@ impl DemoApp {
     }
 
     fn quick_price_alert(&mut self, symbol: String, price: f64) {
-        self.alerts
-            .save(Alert::new(symbol, AlertCondition::Crossing(price)));
+        let mut alert = Alert::new(symbol, AlertCondition::Crossing(price));
+        alert.timeframe = Some(self.state.timeframe);
+        self.alerts.save(alert);
     }
 
     // --- selection / context helpers --------------------------------------

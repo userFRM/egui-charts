@@ -3,6 +3,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::Timeframe;
+
 /// The host's identifier of an alert.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AlertId(
@@ -11,8 +13,8 @@ pub struct AlertId(
 );
 
 /// An alert as the host stores and evaluates it. The library creates and edits alerts through
-/// [`Alerts::save`](crate::services::Alerts::save) and shows the ones the host pushes; it never
-/// evaluates them.
+/// [`Alerts::save`](crate::services::Alerts::save) and shows the ones the host pushes. It evaluates
+/// them only through the host's service; `AlertEngine` (feature `alert-engine`) is one.
 ///
 /// It is serialisable so that a server can store and evaluate the same type. Fields added later
 /// will carry `#[serde(default)]`, so alerts stored by an earlier version keep loading. A
@@ -31,6 +33,10 @@ pub struct Alert {
     /// Host watchlist identifier. When present, evaluate independently on each member symbol.
     #[serde(default)]
     pub watchlist: Option<String>,
+    /// The timeframe whose bars the alert is evaluated on. `None` for an alert that has not been
+    /// fixed to one yet; `AlertEngine` fixes it to the first timeframe it evaluates the alert on.
+    #[serde(default)]
+    pub timeframe: Option<Timeframe>,
     /// Value tested by the first condition.
     #[serde(default)]
     pub source: AlertSource,
@@ -62,6 +68,7 @@ impl Alert {
             condition,
             name: String::new(),
             watchlist: None,
+            timeframe: None,
             source: AlertSource::Price,
             additional_conditions: Vec::new(),
             frequency: AlertFrequency::default(),
@@ -449,6 +456,7 @@ mod tests {
                 name: String::new(),
                 source: AlertSource::Price,
                 watchlist: None,
+                timeframe: None,
                 additional_conditions: Vec::new(),
                 symbol: "AAPL".into(),
                 condition: AlertCondition::CrossingUp(101.5),

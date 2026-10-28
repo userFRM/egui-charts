@@ -181,6 +181,7 @@ With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a
 |---|---|---|
 | Engine | Bars, symbols and timeframes, price and time scales, the `Datafeed` contract and the host service traits (broker, symbol search, storage, alerts, signals), and the `Indicator` trait with `IndicatorRegistry`. No egui dependency. | always on |
 | Studies | The built-in studies and `IndicatorFactory`, also without egui | `studies` |
+| Alert engine | `AlertEngine`, an alerts service that evaluates alerts on the bars the host feeds it, also without egui | `alert-engine` |
 | Chart widget | `Chart` and `ChartBuilder`: rendering, pan and zoom, crosshair, chart types, studies on the chart, theme | `widget` |
 | Drawing tools | Drawing geometry, interaction, undo and persistence | `drawings` |
 | Icons | Embedded SVG icons, drawn through `egui_extras` | `icons` |
