@@ -3,6 +3,7 @@
 use super::FeedError;
 use crate::model::{BarClock, OrderSide, Tick};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Executed volume at one grouped price, with sells on the bid and buys on the ask.
@@ -35,6 +36,21 @@ impl FootprintLevel {
     }
 }
 
+/// How [`TradeProfile::nodes`](crate::studies::TradeProfile::nodes) chooses volume nodes.
+///
+/// The default compares each price row with its immediate neighbours, which is the most
+/// sensitive setting. Raising `smoothing` or `prominence` leaves only the broader nodes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NodeSensitivity {
+    /// Rows on each side of a row that are averaged with it before comparing; zero compares
+    /// the rows as traded. Untraded rows count as zero volume.
+    pub smoothing: u32,
+    /// Smallest rise of a peak above, or drop of a valley below, the higher respectively
+    /// lower of its neighbouring plateaus, as a share of the largest smoothed volume. NaN
+    /// counts as zero and values are clamped to 0..=1.
+    pub prominence: f64,
+}
+
 /// One bar's executed volume and intrabar delta path, starting at zero.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FootprintBar {
@@ -55,6 +71,38 @@ pub struct FootprintBar {
 }
 
 impl FootprintBar {
+    /// A bar with no executions, opening at `time`.
+    pub(crate) fn empty(time: DateTime<Utc>) -> Self {
+        Self {
+            time,
+            levels: BTreeMap::new(),
+            bid: 0.0,
+            ask: 0.0,
+            unknown: 0.0,
+            min_delta: 0.0,
+            max_delta: 0.0,
+        }
+    }
+
+    /// Adds the executions of the next bar in time, extending the running delta path.
+    pub(crate) fn absorb(&mut self, next: &FootprintBar) {
+        let open = self.delta();
+        self.min_delta = self.min_delta.min(open + next.min_delta);
+        self.max_delta = self.max_delta.max(open + next.max_delta);
+        self.bid += next.bid;
+        self.ask += next.ask;
+        self.unknown += next.unknown;
+        for (&level, row) in &next.levels {
+            let target = self.levels.entry(level).or_insert_with(|| FootprintLevel {
+                level,
+                ..Default::default()
+            });
+            target.bid += row.bid;
+            target.ask += row.ask;
+            target.unknown += row.unknown;
+        }
+    }
+
     /// Buy volume minus sell volume.
     pub fn delta(&self) -> f64 {
         self.ask - self.bid
@@ -252,6 +300,20 @@ impl Footprint {
     /// Accepts a bar stamped anywhere inside its slot, as the feed history contract does.
     pub fn bar_at(&self, time: DateTime<Utc>) -> Option<&FootprintBar> {
         self.bars.get(&self.clock.bar_open(time))
+    }
+
+    /// The executions of the bars that contain `first` through `last`, inclusive, as one bar
+    /// opening with the first of them: the exact profile of a span of the chart. Empty when
+    /// nothing traded there or `last` precedes `first`.
+    pub fn profile(&self, first: DateTime<Utc>, last: DateTime<Utc>) -> FootprintBar {
+        let (first, last) = (self.clock.bar_open(first), self.clock.bar_open(last));
+        let mut profile = FootprintBar::empty(first);
+        if first <= last {
+            for bar in self.bars.range(first..=last).map(|(_, bar)| bar) {
+                profile.absorb(bar);
+            }
+        }
+        profile
     }
 
     /// Adds an execution, returning whether it passed the size filter. Invalid, out-of-order

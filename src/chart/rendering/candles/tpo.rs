@@ -15,6 +15,7 @@
 
 use std::{cell::RefCell, ops::Range, rc::Rc};
 
+use crate::localization as l10n;
 use crate::scales::PriceMap;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
@@ -58,6 +59,8 @@ pub struct TpoRenderConfig {
     pub value_area_color: Color32,
     /// Initial Balance bracket color
     pub initial_balance_color: Color32,
+    /// Highlight behind rows touched by a single period (with alpha)
+    pub single_print_color: Color32,
     /// Default letter color
     pub default_letter_color: Color32,
     /// Color palette for period-based coloring
@@ -74,6 +77,7 @@ impl Default for TpoRenderConfig {
             poc_line_width: 2.0,
             value_area_color: tpo.value_area,
             initial_balance_color: tpo.initial_balance,
+            single_print_color: tpo.single_print,
             default_letter_color: tpo.letter_default,
             period_colors: Self::default_period_colors(),
         }
@@ -520,6 +524,43 @@ fn draw_session_profile(
         painter.rect_filled(va_rect, 0.0, render_config.value_area_color);
     }
 
+    // Single-print rows are highlighted behind their letter; hovering one names its price.
+    if config.show_single_prints {
+        let decimals = (-tick_size.log10()).ceil().clamp(0.0, 8.0) as usize;
+        for &price in &profile.single_prints {
+            let top = coords.price_to_y(price + tick_size * 0.5);
+            let bottom = coords.price_to_y(price - tick_size * 0.5);
+            let row = Rect::from_x_y_ranges(
+                anchor_x..=anchor_x + column_width,
+                top.min(bottom)..=top.max(bottom),
+            )
+            .intersect(price_rect);
+            if row.height() <= 0.0 {
+                continue;
+            }
+            painter.rect_filled(row, 0.0, render_config.single_print_color);
+            let ctx = painter.ctx();
+            if ctx
+                .pointer_hover_pos()
+                .is_some_and(|p| row.contains(p) && ctx.layer_id_at(p) == Some(painter.layer_id()))
+            {
+                egui::Tooltip::always_open(
+                    ctx.clone(),
+                    painter.layer_id(),
+                    egui::Id::unique(("tpo-single-print", anchor_x.to_bits(), price.to_bits())),
+                    row,
+                )
+                .show(|ui| {
+                    ui.label(l10n::format_text(
+                        ui.ctx(),
+                        "Single print {0}",
+                        &[("0", format!("{price:.decimals$}"))],
+                    ));
+                });
+            }
+        }
+    }
+
     for price in levels {
         let y = coords.price_to_y(price);
         if y < price_rect.top() - row_height || y > price_rect.bottom() + row_height {
@@ -761,6 +802,59 @@ mod tests {
         let profile = &profiles[0];
         assert!(profile.poc_price > 0.0);
         assert!(profile.value_area_high >= profile.value_area_low);
+    }
+
+    #[test]
+    fn single_print_rows_are_highlighted_only_when_enabled() {
+        let model = TPOConfig {
+            tick_size: 1.0,
+            period_minutes: 30,
+            ..Default::default()
+        };
+        let profile =
+            to_tpo_profiles(&create_test_bars(), &model, &Timeframe::Min1.into()).remove(0);
+        assert!(!profile.single_prints.is_empty());
+        let render_config = TpoRenderConfig::default();
+        let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        let highlighted = |show_single_prints| {
+            let ctx = egui::Context::default();
+            ctx.begin_pass(egui::RawInput::default());
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            let config = TPOConfig {
+                show_single_prints,
+                ..model.clone()
+            };
+            draw_session_profile(
+                &painter,
+                rect,
+                &coords,
+                &profile,
+                &config,
+                &render_config,
+                10.0,
+                20.0,
+                Color32::GREEN,
+                Color32::RED,
+            );
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .filter(|s| {
+                    matches!(&s.shape, Shape::Rect(r) if r.fill == render_config.single_print_color)
+                })
+                .count()
+        };
+        assert_eq!(highlighted(true), profile.single_prints.len());
+        assert_eq!(highlighted(false), 0);
     }
 
     #[test]

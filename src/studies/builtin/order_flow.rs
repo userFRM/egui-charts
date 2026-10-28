@@ -22,6 +22,8 @@ pub struct OrderFlowStudy {
     values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
+    /// Draw the rolling sums as a histogram rather than lines.
+    histogram: bool,
 }
 
 impl OrderFlowStudy {
@@ -40,6 +42,73 @@ impl OrderFlowStudy {
                 Color32::from_rgb(120, 100, 220),
             ],
             visible: true,
+            histogram: true,
+        }
+    }
+
+    /// Raw per-bar rows of the input for `data[start..]`, `None` for a bar without any.
+    fn rows(&self, data: &[Bar], start: usize) -> Vec<Option<[f64; 3]>> {
+        let Some(first) = data.get(start) else {
+            return Vec::new();
+        };
+        let source = self.input.values_from(self.clock.bar_open(first.time));
+        data[start..]
+            .iter()
+            .map(|bar| source.get(&self.clock.bar_open(bar.time)).copied())
+            .collect()
+    }
+
+    /// Recomputes the outputs of `data[from..]`; the bars before `from` are unchanged.
+    /// A rolling sum reads the bars it spans from before `from` and a cumulative sum resumes
+    /// from the last value before it. A bar without input leaves a gap, and a rolling sum
+    /// over one is a gap, as is the warm-up.
+    fn refresh(&mut self, data: &[Bar], from: usize) {
+        let from = from.min(data.len());
+        self.values.truncate(from);
+        self.values
+            .resize(data.len(), crate::studies::IndicatorValue::None);
+        match self.kind {
+            OrderFlowKind::FlowSum { bars } => {
+                let start = from.saturating_sub(bars - 1);
+                let rows = self.rows(data, start);
+                for at in from..data.len() {
+                    let Some(first) = (at + 1).checked_sub(bars) else {
+                        continue;
+                    };
+                    let window = &rows[first - start..=at - start];
+                    if window.iter().all(Option::is_some) {
+                        for line in 0..2 {
+                            let sum = window.iter().flatten().map(|row| row[line]).sum();
+                            self.values.set_value(line, at, sum);
+                        }
+                    }
+                }
+            }
+            OrderFlowKind::FilteredCvd { .. } => {
+                let mut sum = self
+                    .values
+                    .line(0)
+                    .get(..from)
+                    .unwrap_or_default()
+                    .iter()
+                    .rev()
+                    .find(|v| v.is_finite())
+                    .copied();
+                for (at, row) in self.rows(data, from).into_iter().enumerate() {
+                    if let Some(row) = row {
+                        let total = sum.unwrap_or(0.0) + row[0];
+                        sum = Some(total);
+                        self.values.set_value(0, from + at, total);
+                    }
+                }
+            }
+            _ => {
+                for (at, row) in self.rows(data, from).into_iter().enumerate() {
+                    for (line, value) in row.iter().flatten().enumerate() {
+                        self.values.set_value(line, from + at, *value);
+                    }
+                }
+            }
         }
     }
 
@@ -65,6 +134,11 @@ impl Indicator for OrderFlowStudy {
             OrderFlowKind::Spread => "Quoted Spread",
             OrderFlowKind::BookSize { .. } => "Book Size",
             OrderFlowKind::TradeRate { .. } => "Trade Rate",
+            OrderFlowKind::AggressorRate { .. } => "Aggressor Rate",
+            OrderFlowKind::LevelsExecuted { .. } => "Levels Executed",
+            OrderFlowKind::SizeDelta { .. } => "Multi-Range Delta",
+            OrderFlowKind::FlowSum { .. } => "Rolling Volume and Delta",
+            OrderFlowKind::FilteredCvd { .. } => "Size-Filtered CVD",
             OrderFlowKind::LevelsTradedThrough { .. } => "Levels Traded Through",
         }
     }
@@ -80,38 +154,13 @@ impl Indicator for OrderFlowStudy {
         changed
     }
     fn calculate(&mut self, data: &[Bar]) {
-        let source = self.input.values();
-        self.values = IndicatorValues::missing(data.len());
-        for (i, bar) in data.iter().enumerate() {
-            if let Some(row) = source.get(&self.clock.bar_open(bar.time)) {
-                for (line, value) in row.iter().enumerate() {
-                    self.values.set_value(line, i, *value);
-                }
-            }
-        }
+        self.refresh(data, 0);
     }
     fn is_incremental(&self) -> bool {
         true
     }
     fn update(&mut self, data: &[Bar], from: usize) {
-        if from == 0 {
-            self.calculate(data);
-            return;
-        }
-        let from = from.min(data.len());
-        self.values.truncate(from);
-        self.values
-            .resize(data.len(), crate::studies::IndicatorValue::None);
-        if let Some(first) = data.get(from) {
-            let source = self.input.values_from(self.clock.bar_open(first.time));
-            for (i, bar) in data.iter().enumerate().skip(from) {
-                if let Some(row) = source.get(&self.clock.bar_open(bar.time)) {
-                    for (line, value) in row.iter().enumerate() {
-                        self.values.set_value(line, i, *value);
-                    }
-                }
-            }
-        }
+        self.refresh(data, from);
     }
     fn values(&self) -> &IndicatorValues {
         &self.values
@@ -137,26 +186,38 @@ impl Indicator for OrderFlowStudy {
         Box::new(self.clone())
     }
     fn line_count(&self) -> usize {
-        3
+        match self.kind {
+            OrderFlowKind::FlowSum { .. } => 2,
+            OrderFlowKind::FilteredCvd { .. } => 1,
+            _ => 3,
+        }
     }
     fn line_names(&self) -> Vec<String> {
-        match self.kind {
-            OrderFlowKind::Spread => ["Last (ticks)", "Mean (ticks)", "Maximum (ticks)"],
-            OrderFlowKind::BookSize { .. } => ["Bid size", "Ask size", "Difference"],
+        let names: &[&str] = match self.kind {
+            OrderFlowKind::FlowSum { .. } => &["Volume sum", "Delta sum"],
+            OrderFlowKind::FilteredCvd { .. } => &["CVD"],
+            OrderFlowKind::SizeDelta { .. } => &["Delta 1", "Delta 2", "Delta 3"],
+            OrderFlowKind::Spread => &["Last (ticks)", "Mean (ticks)", "Maximum (ticks)"],
+            OrderFlowKind::BookSize { .. } => &["Bid size", "Ask size", "Difference"],
             OrderFlowKind::TradeRate { .. } => {
-                ["Bar total", "Rolling / second", "Instant / second"]
+                &["Bar total", "Rolling / second", "Instant / second"]
             }
+            OrderFlowKind::AggressorRate { .. } => {
+                &["Bar orders", "Rolling / second", "Instant / second"]
+            }
+            OrderFlowKind::LevelsExecuted { .. } => &["Ask levels", "Bid levels", "Total levels"],
             OrderFlowKind::LevelsTradedThrough { .. } => {
-                ["Bid levels", "Ask levels", "Total levels"]
+                &["Bid levels", "Ask levels", "Total levels"]
             }
-        }
-        .map(str::to_owned)
-        .to_vec()
+        };
+        names.iter().map(|name| (*name).to_owned()).collect()
     }
     fn plot_style(&self, line: usize) -> PlotStyle {
         PlotStyle {
             color: self.colors[line.min(2)],
-            plot_type: if line == 2 && matches!(self.kind, OrderFlowKind::BookSize { .. }) {
+            plot_type: if (line == 2 && matches!(self.kind, OrderFlowKind::BookSize { .. }))
+                || (self.histogram && matches!(self.kind, OrderFlowKind::FlowSum { .. }))
+            {
                 PlotType::Histogram
             } else {
                 PlotType::Line
@@ -212,6 +273,68 @@ impl Indicator for OrderFlowStudy {
                 length("seconds", "Rolling seconds", seconds, 1, 86400),
                 length("instant", "Instant seconds", instant, 1, 86400),
             ],
+            OrderFlowKind::SizeDelta { ranges } => {
+                let size = |id: &str, label: String, value| {
+                    StudyInput::new(
+                        id,
+                        label,
+                        InputValue::Number(value),
+                        InputKind::Number(0.0, f64::MAX),
+                    )
+                };
+                ranges
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, [min, max])| {
+                        [
+                            size(
+                                &format!("min{i}"),
+                                format!("Range {} smallest size", i + 1),
+                                *min,
+                            ),
+                            size(
+                                &format!("max{i}"),
+                                format!("Range {} largest size", i + 1),
+                                *max,
+                            ),
+                        ]
+                    })
+                    .collect()
+            }
+            OrderFlowKind::FlowSum { bars } => vec![
+                length("bars", "Bars", bars, 1, 10_000),
+                StudyInput::new(
+                    "histogram",
+                    "Histogram",
+                    InputValue::Toggle(self.histogram),
+                    InputKind::Toggle,
+                ),
+            ],
+            OrderFlowKind::FilteredCvd { min, max } => {
+                [("min", "Smallest size", min), ("max", "Largest size", max)]
+                    .map(|(id, label, value)| {
+                        StudyInput::new(
+                            id,
+                            label,
+                            InputValue::Number(value),
+                            InputKind::Number(0.0, f64::MAX),
+                        )
+                    })
+                    .to_vec()
+            }
+            OrderFlowKind::AggressorRate { seconds, instant } => vec![
+                length("seconds", "Rolling seconds", seconds, 1, 86400),
+                length("instant", "Instant seconds", instant, 1, 86400),
+            ],
+            OrderFlowKind::LevelsExecuted { seconds, reversal } => vec![
+                length("seconds", "Window seconds (0 uses bar)", seconds, 0, 86400),
+                StudyInput::new(
+                    "reversal",
+                    "Restart on price reversal",
+                    InputValue::Toggle(reversal),
+                    InputKind::Toggle,
+                ),
+            ],
             OrderFlowKind::LevelsTradedThrough { seconds } => vec![length(
                 "seconds",
                 "Window seconds (0 uses bar)",
@@ -230,7 +353,20 @@ impl Indicator for OrderFlowStudy {
             return Err("invalid order flow input");
         }
         let before = self.kind;
+        if let ("histogram", InputValue::Toggle(on)) = (id, &value) {
+            self.histogram = *on;
+            return Ok(());
+        }
         match (&mut self.kind, id, value) {
+            (OrderFlowKind::SizeDelta { ranges }, id, InputValue::Number(v)) => {
+                let index = id[3..]
+                    .parse::<usize>()
+                    .map_err(|_| "invalid order flow input")?;
+                ranges[index][usize::from(id.starts_with("max"))] = v;
+            }
+            (OrderFlowKind::FlowSum { bars }, "bars", InputValue::Length(v)) => *bars = v,
+            (OrderFlowKind::FilteredCvd { min, .. }, "min", InputValue::Number(v)) => *min = v,
+            (OrderFlowKind::FilteredCvd { max, .. }, "max", InputValue::Number(v)) => *max = v,
             (OrderFlowKind::BookSize { levels, .. }, "levels", InputValue::Length(v)) => {
                 *levels = v
             }
@@ -250,12 +386,20 @@ impl Indicator for OrderFlowStudy {
             }
             (
                 OrderFlowKind::TradeRate { seconds, .. }
+                | OrderFlowKind::AggressorRate { seconds, .. }
+                | OrderFlowKind::LevelsExecuted { seconds, .. }
                 | OrderFlowKind::LevelsTradedThrough { seconds },
                 "seconds",
                 InputValue::Length(v),
             ) => *seconds = v,
-            (OrderFlowKind::TradeRate { instant, .. }, "instant", InputValue::Length(v)) => {
-                *instant = v
+            (
+                OrderFlowKind::TradeRate { instant, .. }
+                | OrderFlowKind::AggressorRate { instant, .. },
+                "instant",
+                InputValue::Length(v),
+            ) => *instant = v,
+            (OrderFlowKind::LevelsExecuted { reversal, .. }, "reversal", InputValue::Toggle(v)) => {
+                *reversal = v
             }
             _ => return Err("invalid order flow input"),
         }
@@ -263,5 +407,127 @@ impl Indicator for OrderFlowStudy {
             self.reset();
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{OrderSide, Tick};
+    use chrono::{DateTime, TimeDelta, Utc};
+
+    const NAN: f64 = f64::NAN;
+
+    fn start() -> DateTime<Utc> {
+        "2026-01-05T10:00:00Z".parse().unwrap()
+    }
+
+    fn bars() -> Vec<Bar> {
+        (0..6)
+            .map(|i| Bar::new(start() + TimeDelta::minutes(i), 1.0, 1.0, 1.0, 1.0, 0.0))
+            .collect()
+    }
+
+    fn push(study: &OrderFlowStudy, minute: i64, trades: &[(f64, Option<OrderSide>)]) {
+        let input = study.order_flow_input().unwrap();
+        for (second, &(size, side)) in trades.iter().enumerate() {
+            let at = start() + TimeDelta::minutes(minute) + TimeDelta::seconds(second as i64);
+            input.push_trade(&study.clock, &Tick::new(at, 100.0, size, side));
+        }
+    }
+
+    /// The same trades per bar (minute 2 has none): 7 and +3, 20 and +20, then 153 and -147,
+    /// 104 and +100 with 4 of unknown side, and 12 and -12.
+    fn fill(study: &OrderFlowStudy) {
+        use OrderSide::{Buy, Sell};
+        push(study, 0, &[(5.0, Some(Buy)), (2.0, Some(Sell))]);
+        push(study, 1, &[(20.0, Some(Buy))]);
+        push(study, 3, &[(150.0, Some(Sell)), (3.0, Some(Buy))]);
+        push(study, 4, &[(100.0, Some(Buy)), (4.0, None)]);
+        push(study, 5, &[(12.0, Some(Sell))]);
+    }
+
+    fn lines(study: &OrderFlowStudy) -> Vec<Vec<f64>> {
+        study.values().columns().to_vec()
+    }
+
+    fn assert_lines(study: &OrderFlowStudy, want: &[[f64; 6]]) {
+        let got = lines(study);
+        assert_eq!(got.len(), want.len());
+        for (got, want) in got.iter().zip(want) {
+            for (got, want) in got.iter().zip(want) {
+                assert!(
+                    got == want || (got.is_nan() && want.is_nan()),
+                    "{got:?} against {want:?}"
+                );
+            }
+        }
+    }
+
+    /// Hand sums over the bars filled above. Size ranges include both bounds (the 100 buy
+    /// is in the last), a window over the empty bar is a gap as is the warm-up, and a
+    /// cumulative sum carries over the gap.
+    #[test]
+    fn size_ranges_rolling_sums_and_filtered_cvd_follow_the_same_trades() {
+        let mut data = bars();
+        let mut study = OrderFlowStudy::new(OrderFlowKind::SizeDelta {
+            ranges: [[0.0, 9.0], [10.0, 99.0], [100.0, f64::MAX]],
+        });
+        fill(&study);
+        study.calculate(&data);
+        assert_lines(
+            &study,
+            &[
+                [3.0, 0.0, NAN, 3.0, 0.0, 0.0],
+                [0.0, 20.0, NAN, 0.0, 0.0, -12.0],
+                [0.0, 0.0, NAN, -150.0, 100.0, 0.0],
+            ],
+        );
+
+        let mut sums = OrderFlowStudy::new(OrderFlowKind::FlowSum { bars: 2 });
+        fill(&sums);
+        sums.calculate(&data);
+        assert_lines(
+            &sums,
+            &[
+                [NAN, 27.0, NAN, NAN, 257.0, 116.0],
+                [NAN, 23.0, NAN, NAN, -47.0, 88.0],
+            ],
+        );
+
+        let mut cvd = OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
+            min: 100.0,
+            max: f64::MAX,
+        });
+        fill(&cvd);
+        cvd.calculate(&data);
+        assert_lines(&cvd, &[[0.0, 0.0, NAN, -150.0, -50.0, -50.0]]);
+
+        // A trade in the last bar changes only its sums, whether recalculated from the start
+        // or from that bar.
+        for study in [&mut sums, &mut cvd] {
+            push(study, 5, &[(5.0, Some(OrderSide::Sell))]);
+            push(study, 6, &[(7.0, Some(OrderSide::Buy))]);
+            let before = lines(study);
+            data.push(Bar::new(
+                start() + TimeDelta::minutes(6),
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                0.0,
+            ));
+            let mut fresh = study.clone();
+            fresh.calculate(&data);
+            study.update(&data, 5);
+            assert_eq!(
+                format!("{:?}", lines(study)),
+                format!("{:?}", lines(&fresh))
+            );
+            for (old, new) in before.iter().zip(lines(study)) {
+                assert_eq!(format!("{:?}", &old[..5]), format!("{:?}", &new[..5]));
+            }
+            data.pop();
+        }
     }
 }
