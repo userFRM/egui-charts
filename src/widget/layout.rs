@@ -205,6 +205,7 @@ pub struct ChartLayout {
     /// Synchronization controls, applied within each group.
     pub sync: ChartSyncOptions,
     active: usize,
+    /// The chart slot Alt+Enter shows alone in place of the preset.
     maximized: Option<usize>,
     focus_active: bool,
     groups: [Option<String>; 16],
@@ -226,24 +227,6 @@ impl ChartLayout {
         if index < 16 {
             self.active = index;
             self.focus_active = true;
-        }
-    }
-
-    /// The chart slot shown alone in place of the preset, if any.
-    pub fn maximized(&self) -> Option<usize> {
-        self.maximized
-    }
-
-    /// Shows a chart slot alone in the whole layout area, or restores the preset with `None`.
-    /// The slot keeps its place, viewport and synchronization group, and the other charts keep
-    /// synchronizing while hidden. Alt+Enter toggles it for the active chart. Out-of-range
-    /// indices are ignored.
-    pub fn set_maximized(&mut self, index: Option<usize>) {
-        if index.is_none_or(|index| index < 16) {
-            self.maximized = index;
-            if let Some(index) = index {
-                self.set_active(index);
-            }
         }
     }
 
@@ -964,14 +947,14 @@ mod tests {
         // The chart's widget id follows its rect, so focus moves over to it on the next frames.
         frame(&mut layout, &mut charts, false);
         frame(&mut layout, &mut charts, false);
-        assert_eq!((layout.maximized(), layout.active()), (Some(2), 2));
+        assert_eq!((layout.maximized, layout.active()), (Some(2), 2));
         assert!(charts[2].get_rendered_price_rect().width() > tile.width() * 1.8);
         assert_eq!(layout.sync_group(2), Some("B"));
         assert!(charts[2].take_shortcut_requests().is_empty());
         frame(&mut layout, &mut charts, true);
         frame(&mut layout, &mut charts, false);
         frame(&mut layout, &mut charts, false);
-        assert_eq!((layout.maximized(), layout.active()), (None, 2));
+        assert_eq!((layout.maximized, layout.active()), (None, 2));
         assert_eq!(charts[2].get_rendered_price_rect(), tile);
         assert_eq!(charts[2].get_time_scale_state(), viewport);
     }
