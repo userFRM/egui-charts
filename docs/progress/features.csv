@@ -19,7 +19,7 @@ Builder API,Builder integration,Custom indicators from a downstream crate,done,l
 Builder API,Builder integration,Custom series types from a downstream crate,done,library,src/widget/primitives.rs;src/widget/panes.rs;src/chart/primitives.rs
 Builder API,Builder integration,Desktop webview integration,missing,library,
 Builder API,Builder integration,Embedding with a data feed,done,host,src/widget/builder.rs;src/widget/frame.rs;src/widget/feed.rs
-Builder API,Builder integration,Full trading-terminal UI around the chart,partial,library,src/ui/app_state.rs;src/ui/trading/mod.rs
+Builder API,Builder integration,Full trading-terminal UI around the chart,partial,library,src/ui/app_state.rs;src/ui/trading/mod.rs;terminal/src/lib.rs
 Builder API,Builder integration,Minimal embedding,done,library,src/widget/builder.rs;src/widget/frame.rs
 Builder API,Builder integration,Pluggable formatters and session rules,done,library,src/widget/frame.rs
 Builder API,Builder integration,Public API surface and structure,done,library,src/prelude.rs;src/lib.rs;src/widget/mod.rs

@@ -1022,7 +1022,7 @@ pub struct ChartMenus {
 
 impl ChartMenus {
     /// The price of the series menu's last right-click, which stays after a pick.
-    pub(crate) fn series_click_price(&self) -> f64 {
+    pub fn series_click_price(&self) -> f64 {
         self.series.click_price
     }
 
