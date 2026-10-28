@@ -54,9 +54,8 @@ impl Default for OrderBookView {
 }
 
 impl OrderBookView {
-    /// Whether the view needs individual orders: a filter, the largest-order profile or none of
-    /// the defaults of an aggregate book.
-    pub fn needs_orders(&self) -> bool {
+    /// Whether the view needs individual orders: a filter or the largest-order profile.
+    fn needs_orders(&self) -> bool {
         self.filter != OrderFilter::default() || self.profile == BookProfile::LargestOrder
     }
 

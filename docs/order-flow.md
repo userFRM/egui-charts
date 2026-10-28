@@ -47,8 +47,8 @@ inferred from changes between snapshots. One `OrderFilter` selects the orders ev
 
 Book size takes the filter through `OrderFlowStudy::with_order_filter` or the study's Minimum order
 size and Minimum resting seconds inputs, the heatmap through `DepthHistoryConfig::orders`, and the
-ladder and the heatmap's profile through `Chart::set_order_book_view`. `Chart::filtered_order_book`
-and `OrderQueue::filtered` give hosts the same summed book, so all of them show the same sizes.
+ladder and the heatmap's profile through `Chart::set_order_book_view`. `OrderQueue::filtered`, read
+through `Chart::order_queue`, gives hosts the same summed book, so all of them show the same sizes.
 
 With aggregate depth only, or when a participant or age filter finds no order that carries the
 field, there is nothing to filter. Book size has no value (NaN), the heatmap samples no column,

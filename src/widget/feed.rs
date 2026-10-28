@@ -396,10 +396,10 @@ impl Chart {
     }
 
     /// Draws the trades the feed sends as bubbles, grouped and coloured as the config says (by
-    /// default one per bar and price level), from the next frame, or stops with `None`. A chart without a feed holds no trades and draws none, and
-    /// Renko, Kagi, line break, point and figure and range charts draw none, since their x axis
-    /// is not time. Sums every held trade again: call it when the settings change, not every
-    /// frame.
+    /// default one per bar and price level), from the next frame, or stops with `None`. A chart
+    /// without a feed holds no trades and draws none, and Renko, Kagi, line break, point and
+    /// figure and range charts draw none, since their x axis is not time. Sums every held trade
+    /// again: call it when the settings change, not every frame.
     pub fn set_volume_bubbles(&mut self, config: Option<VolumeBubblesConfig>) {
         if let Some(link) = &mut self.feed_link {
             link.bubbles = config.map(|config| link.bubbles(config));
@@ -425,20 +425,6 @@ impl Chart {
             .filter(|_| series == SeriesId::MAIN)?
             .order_queue
             .as_ref()
-    }
-
-    /// The book of `series` summed over the individual orders `filter` accepts, as the ladder
-    /// and the heatmap's profile show it with the same filter. `Err` when the feed sends
-    /// aggregate depth only, or sends no participant or placement time the filter needs, instead
-    /// of an unfiltered book posing as a filtered one.
-    pub fn filtered_order_book(
-        &self,
-        series: SeriesId,
-        filter: &crate::data::OrderFilter,
-    ) -> Result<OrderBook, crate::data::OrderFilterUnavailable> {
-        self.order_queue(series)
-            .ok_or(crate::data::OrderFilterUnavailable::AggregateDepth)?
-            .filtered(self.symbol(), filter)
     }
 
     /// How the heatmap's profile and the depth ladder show the live book: which individual orders
@@ -538,7 +524,14 @@ impl Chart {
             painter.text(
                 mapping.rect.right_top() + egui::vec2(-8.0, 8.0),
                 egui::Align2::RIGHT_TOP,
-                format!("Order-level depth unavailable: {reason}"),
+                crate::localization::format_text(
+                    painter.ctx(),
+                    "Order-level depth unavailable: {0}",
+                    &[(
+                        "0",
+                        crate::localization::text(painter.ctx(), reason.to_string()),
+                    )],
+                ),
                 egui::FontId::proportional(11.0),
                 crate::tokens::DESIGN_TOKENS.semantic.status.caution,
             );
