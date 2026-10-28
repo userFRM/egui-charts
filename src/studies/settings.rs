@@ -730,7 +730,7 @@ impl Indicator for ConfiguredStudy {
     fn apply_settings(
         &mut self,
         inputs: &[(String, InputValue)],
-        settings: StudySettings,
+        mut settings: StudySettings,
     ) -> Result<(), &'static str> {
         if settings.precision.is_some_and(|precision| precision > 12)
             || settings
@@ -751,6 +751,14 @@ impl Indicator for ConfiguredStudy {
         }
         for (id, value) in inputs {
             edited.set_input(id, value.clone())?;
+        }
+        // Styles of the plots before the inputs changed their number keep their place, and
+        // plots they add start with the study's own style.
+        if settings.plots.len() == self.line_count() && edited.line_count() != self.line_count() {
+            let defaults = edited.study.settings().plots;
+            let kept = settings.plots.len().min(defaults.len());
+            settings.plots.truncate(kept);
+            settings.plots.extend_from_slice(&defaults[kept..]);
         }
         if settings.plots.len() != edited.line_count() {
             return Err("one style is required per study plot");

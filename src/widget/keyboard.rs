@@ -140,7 +140,7 @@ pub enum ShortcutRequest {
     PasteDrawing(String),
     /// Open symbol search with the typed text.
     SymbolSearch(String),
-    /// Open interval entry with the typed digits.
+    /// Open interval entry with the typed digits; a comma opens it empty.
     IntervalEntry(String),
 }
 
@@ -282,12 +282,16 @@ impl super::Chart {
             text
         });
         if !text.is_empty() {
-            let interval = text.starts_with(|c: char| c.is_ascii_digit());
-            self.keyboard.requests.push(if interval {
-                ShortcutRequest::IntervalEntry(text)
-            } else {
-                ShortcutRequest::SymbolSearch(text)
-            });
+            // A comma opens interval entry without becoming part of it, as leading digits do.
+            self.keyboard
+                .requests
+                .push(if let Some(rest) = text.strip_prefix(',') {
+                    ShortcutRequest::IntervalEntry(rest.to_owned())
+                } else if text.starts_with(|c: char| c.is_ascii_digit()) {
+                    ShortcutRequest::IntervalEntry(text)
+                } else {
+                    ShortcutRequest::SymbolSearch(text)
+                });
         }
     }
 
@@ -634,6 +638,7 @@ mod tests {
             ),
             (Event::Text("IBM".into()), PriceScaleMode::Logarithmic),
             (Event::Text("15".into()), PriceScaleMode::Logarithmic),
+            (Event::Text(",".into()), PriceScaleMode::Logarithmic),
         ] {
             let before = chart.state.time_scale().right_offset();
             ctx.run_ui(
@@ -651,6 +656,8 @@ mod tests {
             if let Event::Text(text) = event {
                 let request = if text == "15" {
                     ShortcutRequest::IntervalEntry(text)
+                } else if text == "," {
+                    ShortcutRequest::IntervalEntry(String::new())
                 } else {
                     ShortcutRequest::SymbolSearch(text)
                 };

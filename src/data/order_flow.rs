@@ -1,5 +1,6 @@
 //! Stream inputs for studies that cannot be calculated from OHLC bars.
 
+use super::OrderFilter;
 use crate::model::{BarClock, Level1Quote, OrderBook, OrderBookLevel, Tick};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::collections::{BTreeMap, VecDeque};
@@ -13,7 +14,9 @@ pub enum OrderFlowKind {
     Spread,
     /// Last resting bid size, ask size and their difference. `distance == 0` selects the
     /// nearest `levels` on each side; a positive distance selects prices within that many
-    /// price units of each side's inside market, inclusive.
+    /// price units of each side's inside market, inclusive. With an [`OrderFilter`] (see
+    /// [`OrderFlowInput::with_order_filter`]) the sizes are those of the individual orders it
+    /// accepts, and a bar whose feed sends aggregate depth only has no value.
     BookSize {
         /// Maximum levels when distance is zero.
         levels: usize,
@@ -128,6 +131,7 @@ struct State {
     #[cfg(feature = "widget")]
     reset_revision: u64,
     changes: BTreeMap<DateTime<Utc>, u64>,
+    filter: Option<OrderFilter>,
 }
 
 /// A bounded, thread-safe source shared by a stream study and its feed subscription.
@@ -154,7 +158,27 @@ impl OrderFlowInput {
             #[cfg(feature = "widget")]
             reset_revision: 0,
             changes: BTreeMap::new(),
+            filter: None,
         })))
+    }
+
+    /// The same source, with book size summed over the individual orders `filter` accepts. The
+    /// feed must send order events; with aggregate depth only, or when the filter needs a
+    /// participant or placement time that no held order has, a book size bar has no value (NaN),
+    /// instead of an unfiltered one. Other aggregations ignore it. A filter that accepts every
+    /// order is the same as none.
+    pub fn with_order_filter(self, filter: OrderFilter) -> Self {
+        self.state().filter = (filter != OrderFilter::default()).then_some(filter);
+        self
+    }
+
+    /// The filter of book size, if it has one.
+    pub(crate) fn order_filter(&self) -> Option<OrderFilter> {
+        let state = self.state();
+        state
+            .filter
+            .clone()
+            .filter(|_| matches!(state.kind, OrderFlowKind::BookSize { .. }))
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -172,9 +196,11 @@ impl OrderFlowInput {
     pub fn clear(&self) {
         let mut state = self.state();
         let kind = state.kind;
+        let filter = state.filter.take();
         let revision = state.revision.wrapping_add(1);
         *state = State {
             kind,
+            filter,
             bars: BTreeMap::new(),
             last: None,
             inside: None,

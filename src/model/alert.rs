@@ -3,6 +3,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::{Bar, Timeframe};
+
 /// The host's identifier of an alert.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AlertId(
@@ -11,8 +13,8 @@ pub struct AlertId(
 );
 
 /// An alert as the host stores and evaluates it. The library creates and edits alerts through
-/// [`Alerts::save`](crate::services::Alerts::save) and shows the ones the host pushes; it never
-/// evaluates them.
+/// [`Alerts::save`](crate::services::Alerts::save) and shows the ones the host pushes. It evaluates
+/// them only through the host's service; `AlertEngine` (feature `alert-engine`) is one.
 ///
 /// It is serialisable so that a server can store and evaluate the same type. Fields added later
 /// will carry `#[serde(default)]`, so alerts stored by an earlier version keep loading. A
@@ -31,6 +33,10 @@ pub struct Alert {
     /// Host watchlist identifier. When present, evaluate independently on each member symbol.
     #[serde(default)]
     pub watchlist: Option<String>,
+    /// The timeframe whose bars the alert is evaluated on. `None` for an alert that has not been
+    /// fixed to one yet; `AlertEngine` fixes it to the first timeframe it evaluates the alert on.
+    #[serde(default)]
+    pub timeframe: Option<Timeframe>,
     /// Value tested by the first condition.
     #[serde(default)]
     pub source: AlertSource,
@@ -45,7 +51,8 @@ pub struct Alert {
     /// The alert expires at this time; `None` never expires.
     #[serde(default)]
     pub expires: Option<DateTime<Utc>>,
-    /// Text the host shows or sends when the alert fires.
+    /// Text the host shows or sends when the alert fires. [`Alert::expand_message`] fills in the
+    /// placeholders `{{symbol}}`, `{{close}}` and so on when it fires.
     #[serde(default)]
     pub message: String,
     /// Where the alert stands, as the host reports it.
@@ -62,6 +69,7 @@ impl Alert {
             condition,
             name: String::new(),
             watchlist: None,
+            timeframe: None,
             source: AlertSource::Price,
             additional_conditions: Vec::new(),
             frequency: AlertFrequency::default(),
@@ -69,6 +77,81 @@ impl Alert {
             message: String::new(),
             status: AlertStatus::default(),
         }
+    }
+}
+
+impl Alert {
+    /// The message with its placeholders filled in from the trigger: `{{symbol}}` and
+    /// `{{timeframe}}` as given, `{{time}}` the open time of `bar` in RFC 3339, `{{open}}`,
+    /// `{{high}}`, `{{low}}`, `{{close}}` and `{{volume}}` of `bar`, `{{value}}` the value of the
+    /// alert's source and `{{output_N}}` the value of output `N` of the study the source names,
+    /// empty if the source is not a study. `value` gives the value of a source at the bar. A value
+    /// that is missing or not finite becomes empty text, a number is written in the shortest form
+    /// that reads back the same, and a placeholder the alert does not know stays as written.
+    ///
+    /// ```
+    /// use egui_charts::model::{Alert, AlertCondition, Bar, Timeframe};
+    ///
+    /// let mut alert = Alert::new("AAPL", AlertCondition::Above(100.0));
+    /// alert.message = "{{symbol}} closed at {{close}} on {{timeframe}}".into();
+    /// let time = chrono::DateTime::from_timestamp(0, 0).unwrap();
+    /// let bar = Bar::new(time, 99.0, 102.0, 98.0, 101.5, 1000.0);
+    /// assert_eq!(
+    ///     alert.expand_message("AAPL", Timeframe::Min5, &bar, |_| None),
+    ///     "AAPL closed at 101.5 on 5min"
+    /// );
+    /// ```
+    pub fn expand_message(
+        &self,
+        symbol: &str,
+        timeframe: Timeframe,
+        bar: &Bar,
+        value: impl Fn(&AlertSource) -> Option<f64>,
+    ) -> String {
+        let number = |number: Option<f64>| {
+            number
+                .filter(|number| number.is_finite())
+                .map(|number| number.to_string())
+                .unwrap_or_default()
+        };
+        let field = |name: &str| -> Option<String> {
+            Some(match name {
+                "symbol" => symbol.to_owned(),
+                "timeframe" => timeframe.to_string(),
+                "time" => bar.time.to_rfc3339(),
+                "open" => number(Some(bar.open)),
+                "high" => number(Some(bar.high)),
+                "low" => number(Some(bar.low)),
+                "close" => number(Some(bar.close)),
+                "volume" => number(Some(bar.volume)),
+                "value" => number(value(&self.source)),
+                _ => {
+                    let output = name.strip_prefix("output_")?.parse().ok()?;
+                    match &self.source {
+                        AlertSource::Study { id, .. } => number(value(&AlertSource::Study {
+                            id: id.clone(),
+                            output,
+                        })),
+                        _ => String::new(),
+                    }
+                }
+            })
+        };
+        let mut text = String::new();
+        let mut rest = self.message.as_str();
+        while let Some(start) = rest.find("{{")
+            && let Some(length) = rest[start + 2..].find("}}")
+        {
+            let end = start + 2 + length;
+            text.push_str(&rest[..start]);
+            match field(&rest[start + 2..end]) {
+                Some(filled) => text.push_str(&filled),
+                None => text.push_str(&rest[start..end + 2]),
+            }
+            rest = &rest[end + 2..];
+        }
+        text.push_str(rest);
+        text
     }
 }
 
@@ -340,6 +423,53 @@ mod tests {
     }
 
     #[test]
+    fn messages_fill_placeholders_from_the_evaluated_bar() {
+        let time = DateTime::from_timestamp(1_704_067_200, 0).unwrap();
+        let bar = Bar::new(time, 99.0, 102.5, f64::NAN, 101.5, 1000.0);
+        let study = AlertSource::Study {
+            id: "3".into(),
+            output: 0,
+        };
+        // Output 0 of the study is 70.25 and output 1 is 3; no other output has a value.
+        let value = |source: &AlertSource| match source {
+            AlertSource::Study { id, output: 0 } if id == "3" => Some(70.25),
+            AlertSource::Study { id, output: 1 } if id == "3" => Some(3.0),
+            AlertSource::Price => Some(101.5),
+            _ => None,
+        };
+        for (message, source, expected) in [
+            (
+                "{{symbol}} closed at {{close}}",
+                AlertSource::Price,
+                "AAPL closed at 101.5",
+            ),
+            (
+                "{{timeframe}} {{time}} {{open}} {{high}} [{{low}}] {{volume}}",
+                AlertSource::Price,
+                "5min 2024-01-01T00:00:00+00:00 99 102.5 [] 1000",
+            ),
+            ("{{value}}/{{output_1}}", study.clone(), "70.25/3"),
+            ("{{output_2}}.", study.clone(), "."),
+            ("{{value}}{{output_1}}", AlertSource::Price, "101.5"),
+            (
+                "{{ close }} {{nope}} {{output_x}} {{close",
+                AlertSource::Price,
+                "{{ close }} {{nope}} {{output_x}} {{close",
+            ),
+            ("{{{{close}}}}", AlertSource::Price, "{{{{close}}}}"),
+        ] {
+            let mut alert = Alert::new("AAPL", AlertCondition::Above(100.0));
+            alert.source = source;
+            alert.message = message.into();
+            assert_eq!(
+                alert.expand_message("AAPL", Timeframe::Min5, &bar, value),
+                expected,
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
         let rows: [(Edit, bool); 14] = [
@@ -449,6 +579,7 @@ mod tests {
                 name: String::new(),
                 source: AlertSource::Price,
                 watchlist: None,
+                timeframe: None,
                 additional_conditions: Vec::new(),
                 symbol: "AAPL".into(),
                 condition: AlertCondition::CrossingUp(101.5),

@@ -39,6 +39,8 @@ pub enum InputValue {
     Timeframe(Option<Timeframe>),
     /// A host-resolved symbol; an empty string follows the chart.
     Symbol(String),
+    /// Text the study parses itself, such as a date and time.
+    Text(String),
 }
 
 /// The accepted values of a study input.
@@ -63,6 +65,8 @@ pub enum InputKind {
     Timeframe,
     /// A host-resolved symbol, or the chart symbol.
     Symbol,
+    /// Text on one line.
+    Text,
 }
 
 /// An editable input, with a stable study-local id and its current value.
@@ -116,7 +120,8 @@ impl StudyInput {
             | (InputKind::Source, InputValue::Source(_))
             | (InputKind::Color, InputValue::Color(_))
             | (InputKind::Timeframe, InputValue::Timeframe(_)) => true,
-            (InputKind::Symbol, InputValue::Symbol(value)) => {
+            (InputKind::Symbol, InputValue::Symbol(value))
+            | (InputKind::Text, InputValue::Text(value)) => {
                 value.trim() == value && !value.chars().any(char::is_control)
             }
             _ => false,

@@ -72,6 +72,7 @@
 //! | `widget` | via `ui` | The chart widget, rendering, configuration, themes, styling and localization |
 //! | `drawings` | via `ui` | Drawing tools, interaction, undo and persistence; enables `widget` |
 //! | `studies` | via `ui` | Built-in studies, `IndicatorFactory` and study templates; usable without egui |
+//! | `alert-engine` | off | `services::AlertEngine`, an `Alerts` service that evaluates alerts on the bars the host feeds it; needs no egui |
 //! | `icons` | via `ui` | Embedded SVG icons and their image loaders; enables `widget` |
 //! | `ui` | on | Toolbars, panels, dialogs and `ui_kit`; enables `icons`, `studies` and `drawings` |
 //! | `locales` | on | Localized month and weekday names and AM/PM markers through chrono; otherwise English |

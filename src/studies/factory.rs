@@ -131,6 +131,8 @@ impl IndicatorFactory {
                 Aroon,
                 AwesomeOscillator,
                 RsiDivergence,
+                KnoxvilleDivergence,
+                TechnicalRatings,
                 UltimateOscillator,
                 ConnorsRSI,
                 CoppockCurve,
@@ -169,6 +171,7 @@ impl IndicatorFactory {
             ],
             "Trend" => [
                 ADX,
+                AdxBreakout,
                 SuperTrend,
                 IchimokuCloud,
                 ParabolicSAR,
@@ -245,6 +248,14 @@ impl IndicatorFactory {
             "Support and resistance" => [
                 PivotPoints,
                 PivotPointsHighLow,
+                Reversal,
+                ElliottWave,
+                RisingWedge,
+                FallingWedge,
+                MissedPivots,
+                KeyLevels,
+                IntradayPivotPoints,
+                ProjectedPivotPoints,
                 WilliamsFractals,
                 ZigZag,
             ],
@@ -252,9 +263,13 @@ impl IndicatorFactory {
                 LinearRegression,
                 LinearRegressionChannel,
                 LinearRegressionSlope,
+                TrendStrengthIndex,
                 StandardError,
                 StandardErrorBands,
                 RankCorrelationIndex,
+                Ratio,
+                Spread,
+                Correlation,
                 RciRibbon,
                 MajorityRule,
                 AccumulationSwingIndex,
@@ -305,6 +320,16 @@ impl IndicatorFactory {
                 (
                     "Order flow",
                     Box::new(move || Box::new(OrderFlowStudy::new(kind))),
+                ),
+            );
+        }
+        for family in PatternFamily::ALL {
+            let name = ChartPatterns::new(family).name().to_owned();
+            self.constructors.insert(
+                name,
+                (
+                    Self::PATTERNS,
+                    Box::new(move || Box::new(ChartPatterns::new(family))),
                 ),
             );
         }
@@ -998,9 +1023,11 @@ mod tests {
                     .unwrap();
             }
             study.calculate(&bars);
-            // Studies that draw only shapes differ by their zones or profile.
+            // Studies that draw only shapes differ by their zones, projections, table or profile.
             let shapes = vec![
                 format!("{:?}", study.zones()),
+                format!("{:?}", study.projections()),
+                format!("{:?}", study.table()),
                 study.tpo().is_some().to_string(),
                 format!("{:?}", study.volume_profiles(200..400)),
             ];
@@ -1217,18 +1244,34 @@ mod tests {
             #[cfg(feature = "drawings")]
             Box::new(AutoDrawing::new(AutoDrawingKind::Pitchfork, x(5.0), l(0))),
             Box::new(PivotPointsHighLow::new(l(0), l(1), l(2), l(3))),
+            Box::new(MissedPivots::new(l(0), l(1), x(0.1), l(2))),
+            Box::new(KeyLevels::new(l(0), l(1), l(2), x(0.25))),
+            Box::new(IntradayPivotPoints::new(l(0))),
+            Box::new(ProjectedPivotPoints::new().with_pivots_back(l(1))),
             Box::new(WilliamsFractals::new(l(0))),
             Box::new(LunarPhases::new()),
             Box::new(Gaps::new(l(0), x(30.0)).with_trail_limit(Some(l(1)))),
             Box::new(Gaps::new(l(0), x(30.0)).with_partial_closing(true)),
             Box::new(RsiDivergence::new(l(0), l(1), l(2), l(3), 60)),
+            Box::new(TechnicalRatings::new(l(0), l(1), l(2))),
+            Box::new(Reversal::new(l(0))),
+            Box::new(ElliottWave::new(l(0), l(1), l(2))),
+            Box::new(RisingWedge::new(l(0), l(1), l(2), l(3), l(4), l(5))),
+            Box::new(FallingWedge::new(l(0), l(1), l(2), l(3), l(4), l(5))),
+            Box::new(KnoxvilleDivergence::new(l(0), l(1), l(2), l(3), l(4))),
+            Box::new(AdxBreakout::new(l(0), l(1), l(2))),
             Box::new(PriceChannel::new(l(0))),
             Box::new(LinearRegression::new(l(0))),
             Box::new(LinearRegressionChannel::new(l(0), x(2.0))),
             Box::new(LinearRegressionSlope::new(l(0))),
+            Box::new(TrendStrengthIndex::new(l(0))),
             Box::new(StandardError::new(l(0))),
             Box::new(StandardErrorBands::new(l(0), x(2.0))),
             Box::new(RankCorrelationIndex::new(l(0))),
+            Box::new(Ratio::default()),
+            Box::new(Spread::default()),
+            Box::new(Correlation::new(l(0))),
+            Box::new(Correlation::new(l(0)).with_log_returns(true)),
             Box::new(RciRibbon::new(l(0), l(1), l(2))),
             Box::new(MajorityRule::new(l(0))),
             Box::new(AccumulationSwingIndex::new(x(0.5))),
@@ -1259,6 +1302,8 @@ mod tests {
             Box::new(DetrendedPriceOscillator::new(l(0)).with_centered(true)),
             Box::new(TradingSessions::new()),
             Box::new(CandlestickPatterns::default()),
+            Box::new(ChartPatterns::new(PatternFamily::Continuation)),
+            Box::new(ChartPatterns::new(PatternFamily::Reversal)),
         ]
     }
 

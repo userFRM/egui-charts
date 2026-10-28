@@ -16,6 +16,7 @@
 //! ## Momentum / oscillators
 //! [`RSI`], [`MACD`], [`Stochastic`], [`StochasticRSI`], [`WilliamsR`],
 //! [`CCI`], [`Momentum`], [`RateOfChange`], [`Aroon`], [`AwesomeOscillator`], [`RsiDivergence`],
+//! [`TechnicalRatings`], [`KnoxvilleDivergence`],
 //! [`UltimateOscillator`], [`ConnorsRSI`], [`CoppockCurve`], [`TRIX`],
 //! [`ElderRay`], [`FisherTransform`], [`ForceIndex`], [`MassIndex`],
 //! [`DetrendedPriceOscillator`], [`KDJ`], [`PrettyGoodOscillator`],
@@ -26,7 +27,7 @@
 //! [`SMIErgodicIndicator`], [`SMIErgodicOscillator`], [`WoodiesCCI`]
 //!
 //! ## Trend
-//! [`ADX`], [`SuperTrend`], [`IchimokuCloud`], [`ParabolicSAR`],
+//! [`ADX`], [`AdxBreakout`], [`SuperTrend`], [`IchimokuCloud`], [`ParabolicSAR`],
 //! [`DirectionalMovement`], [`VortexIndicator`], [`SqueezeMomentum`],
 //! [`WilliamsAlligator`], [`ChopZone`], [`VolatilityStop`], [`ChandeKrollStop`]
 //!
@@ -48,22 +49,27 @@
 //! [`VwapAutoAnchored`], [`Volume24h`], [`RelativeVolumeAtTime`]
 //!
 //! ## Support / resistance
-//! [`PivotPoints`], [`PivotPointsHighLow`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
-//! [`PriceChannel`]
+//! [`PivotPoints`], [`IntradayPivotPoints`], [`ProjectedPivotPoints`], [`PivotPointsHighLow`],
+//! [`MissedPivots`], [`KeyLevels`], [`ElliottWave`], [`Reversal`], [`RisingWedge`], [`FallingWedge`],
+//! [`WilliamsFractals`], [`Gaps`], [`ZigZag`], [`PriceChannel`]
 //!
 //! ## Patterns
-//! [`CandlestickPatterns`]
+//! [`CandlestickPatterns`], [`ChartPatterns`]
 //!
 //! ## Statistics
-//! [`LinearRegression`], [`StandardError`],
-//! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`], [`LunarPhases`]
+//! [`LinearRegression`], [`TrendStrengthIndex`], [`StandardError`],
+//! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`], [`Ratio`], [`LunarPhases`],
+//! [`Spread`], [`Correlation`]
 //!
 //! ## Time
 //! [`TradingSessions`]
 
 use crate::model::Bar;
 mod footprint_studies;
-pub use footprint_studies::{FootprintStudy, FootprintStudyKind, footprint_studies};
+pub use footprint_studies::{
+    FootprintStudy, FootprintStudyConfig, FootprintStudyKind, FootprintStudyState,
+    footprint_studies,
+};
 mod options_volume_profile;
 pub use options_volume_profile::OptionsVolumeProfile;
 mod trade_delta;
@@ -71,6 +77,11 @@ pub use trade_delta::{TradeDeltaValue, trade_delta};
 
 mod candlestick_patterns;
 pub use candlestick_patterns::{CandlestickPatterns, PatternTrend, PatternType};
+
+mod chart_patterns;
+pub use chart_patterns::{
+    ChartPatterns, Formation, FormationKind, FormationStatus, PatternDirection, PatternFamily,
+};
 
 mod higher_interval_candles;
 pub use higher_interval_candles::HigherIntervalCandles;
@@ -137,6 +148,7 @@ mod vwap_auto_anchored;
 
 // Trend indicators
 mod adx;
+mod adx_breakout;
 mod ichimoku;
 mod supertrend;
 
@@ -151,11 +163,20 @@ mod std_dev;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod auto_drawing;
+mod elliott_wave;
 mod gaps;
+mod intraday_pivot_points;
+mod key_levels;
 mod lunar_phases;
+mod knoxville_divergence;
+mod missed_pivots;
 mod pivot_points;
 mod pivot_points_high_low;
+mod projected_pivot_points;
+mod reversal;
 mod rsi_divergence;
+mod swings;
+mod wedge;
 mod williams_fractals;
 mod zigzag;
 
@@ -216,6 +237,7 @@ mod double_stochastic;
 mod elder_impulse;
 mod mcginley_dynamic;
 mod trend_intensity;
+mod trend_strength_index;
 mod true_strength;
 mod vidya;
 mod volume_price_trend;
@@ -277,11 +299,15 @@ mod price_momentum_oscillator;
 mod rci_ribbon;
 mod relative_volatility_index;
 mod smi_ergodic;
+mod symbol_pair;
+mod technical_ratings;
 pub use market_breadth::{
     AdvanceDeclineLine, AdvanceDeclineRatio, CumulativeVolumeIndex, MarketBreadth,
 };
 mod special_k;
 mod woodies_cci;
+pub use symbol_pair::{Correlation, Ratio, Spread, SymbolPair};
+pub use technical_ratings::TechnicalRatings;
 // Time studies
 mod performance;
 mod relative_volume_at_time;
@@ -332,7 +358,7 @@ pub use obv::OnBalanceVolume;
 pub use twap::TimeWeightedAvgPrice;
 pub use volume::{Volume, VolumeAverage, VolumeColorRule};
 pub use volume_profile::{
-    VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
+    ProfileInput, VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
     VolProfileSession, VolProfileVisible,
 };
 pub use vwap::{VolumeWeightedAvgPrice, VwapAnchor};
@@ -340,6 +366,7 @@ pub use vwap_auto_anchored::{AutoAnchor, VwapAutoAnchored};
 
 // Re-exports - Trend indicators
 pub use adx::ADX;
+pub use adx_breakout::AdxBreakout;
 pub use ichimoku::IchimokuCloud;
 pub use supertrend::SuperTrend;
 
@@ -354,11 +381,19 @@ pub use std_dev::StandardDeviation;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
+pub use elliott_wave::ElliottWave;
 pub use gaps::Gaps;
 pub use lunar_phases::{LunarPhase, LunarPhases, MoonPhase, lunar_phases};
+pub use intraday_pivot_points::IntradayPivotPoints;
+pub use key_levels::KeyLevels;
+pub use knoxville_divergence::KnoxvilleDivergence;
+pub use missed_pivots::MissedPivots;
 pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
 pub use pivot_points_high_low::PivotPointsHighLow;
+pub use projected_pivot_points::ProjectedPivotPoints;
+pub use reversal::Reversal;
 pub use rsi_divergence::RsiDivergence;
+pub use wedge::{FallingWedge, RisingWedge, Wedge};
 pub use williams_fractals::WilliamsFractals;
 pub use zigzag::{ZigZag, ZigZagMode, ZigZagPivot};
 
@@ -376,7 +411,7 @@ pub use trix::TRIX;
 pub use balance_of_power::BalanceOfPower;
 pub use ease_of_movement::EaseOfMovement;
 pub use percentage_volume_oscillator::PercentageVolumeOscillator;
-pub use price_oscillator::PriceOscillator;
+pub use price_oscillator::{OscillatorAverage, PriceOscillator};
 pub use volume_oscillator::VolumeOscillator;
 pub use vroc::VolumeRateOfChange;
 
@@ -407,6 +442,7 @@ pub use percent_b::PercentB;
 pub use price_channel::PriceChannel;
 pub use relative_vigor::RelativeVigorIndex;
 pub use smi::StochasticMomentumIndex;
+pub use trend_strength_index::TrendStrengthIndex;
 pub use typical_price::{MedianPrice, TypicalPrice, WeightedClose};
 pub use ultimate_momentum::UltimateMomentum;
 
@@ -528,3 +564,46 @@ mod order_flow;
 pub use order_flow::OrderFlowStudy;
 
 mod smoothing;
+
+/// Asserts that a causal study gives, on every prefix of `bars`, the values a batch calculation
+/// of all bars has on those bars: appending bars one at a time and calculating each prefix afresh
+/// both equal the batch, so no value depends on a later bar.
+#[cfg(test)]
+pub(super) fn assert_replay_matches_batch(study: &dyn crate::studies::Indicator, bars: &[Bar]) {
+    let mut batch = study.clone_box();
+    batch.calculate(bars);
+    let mut stepped = study.clone_box();
+    for end in 1..=bars.len() {
+        let mut prefix = study.clone_box();
+        prefix.calculate(&bars[..end]);
+        stepped.update(&bars[..end], end - 1);
+        for (label, candidate) in [("stepped", &stepped), ("prefix", &prefix)] {
+            for line in 0..batch.line_count() {
+                for bar in 0..end {
+                    let (got, want) = (
+                        candidate.values().value(line, bar),
+                        batch.values().value(line, bar),
+                    );
+                    assert_eq!(
+                        got,
+                        want,
+                        "{label} {} line {line} bar {bar} of {end}",
+                        batch.name()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Daily bars from (high, low, close) triples, opening at the close.
+#[cfg(test)]
+pub(super) fn hlc_bars(hlc: &[(f64, f64, f64)]) -> Vec<Bar> {
+    hlc.iter()
+        .enumerate()
+        .map(|(at, &(high, low, close))| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(at as i64);
+            Bar::new(time, close, high, low, close, 1.0)
+        })
+        .collect()
+}

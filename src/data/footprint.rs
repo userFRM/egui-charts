@@ -235,6 +235,14 @@ impl Footprint {
         self.step
     }
 
+    /// The level a trade at `price` falls in: the nearest tick, grouped downwards. `None` when
+    /// the price is not finite or the level overflows.
+    pub fn level_of(&self, price: f64) -> Option<i64> {
+        let level = ((price / self.tick_size).round() / self.ticks_per_row as f64).floor();
+        (level.is_finite() && level >= i64::MIN as f64 && level < i64::MAX as f64)
+            .then_some(level as i64)
+    }
+
     /// Aggregated bars in chronological order.
     pub fn bars(&self) -> &BTreeMap<DateTime<Utc>, FootprintBar> {
         &self.bars
@@ -250,23 +258,17 @@ impl Footprint {
     /// or overflowing input returns an error and changes nothing. Unknown side stays unknown.
     /// Zero-sized executions are ignored.
     pub fn push(&mut self, trade: &Tick) -> Result<bool, FeedError> {
-        let tick = (trade.price / self.tick_size).round();
-        let level = (tick / self.ticks_per_row as f64).floor();
-        if !super::trades::valid(trade)
-            || !level.is_finite()
-            || level < i64::MIN as f64
-            || level >= i64::MAX as f64
-            || self.last.is_some_and(|last| trade.ts < last)
-        {
+        let Some(level) = self.level_of(trade.price).filter(|_| {
+            super::trades::valid(trade) && self.last.is_none_or(|last| trade.ts >= last)
+        }) else {
             return Err(FeedError::InvalidData(
                 "invalid or out-of-order footprint trade".into(),
             ));
-        }
+        };
         if trade.size < self.min_size || trade.size > self.max_size || trade.size == 0.0 {
             return Ok(false);
         }
         let time = self.clock.bar_open(trade.ts);
-        let level = level as i64;
         if self
             .bars
             .get(&time)

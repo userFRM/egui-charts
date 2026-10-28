@@ -258,6 +258,9 @@ impl IndicatorSettingsDialog {
                                             egui::TextEdit::singleline(value)
                                                 .hint_text(l10n::text(ui.ctx(), "Chart symbol")),
                                         ),
+                                        (InputKind::Text, InputValue::Text(value)) => {
+                                            ui.add(egui::TextEdit::singleline(value))
+                                        }
                                         (InputKind::Timeframe, InputValue::Timeframe(value)) => {
                                             let response = egui::ComboBox::from_id_salt(&input.id)
                                                 .selected_text(l10n::text(
