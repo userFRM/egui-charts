@@ -214,7 +214,7 @@ Chart,Scales and axes,Countdown to bar close,done,library,src/widget/mod.rs;src/
 Chart,Scales and axes,Extended hours,done,host,src/widget/feed.rs;src/widget/frame.rs;src/chart/renderers/session_breaks.rs
 Chart,Scales and axes,High and low price labels,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Chart,Scales and axes,Index-based time axis,done,library,src/model/timescale.rs;src/widget/frame.rs
-Chart,Scales and axes,Indexed to 100 scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/ui/dialogs/series_settings/tabs/scales.rs;src/widget/mod.rs
+Chart,Scales and axes,Indexed to 100 scale,done,library,src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/studies/chart_state.rs;src/ui/dialogs/series_settings/tabs/scales.rs;src/widget/mod.rs
 Chart,Scales and axes,Indicator labels and last values on the scale,partial,library,src/widget/frame.rs;src/chart/rendering/axes.rs;src/widget/settings/apply.rs
 Chart,Scales and axes,Invert scale,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/scales/pricescale.rs;src/widget/frame.rs
 Chart,Scales and axes,Last price line and label,done,library,src/widget/frame.rs;src/chart/rendering/axes.rs;src/widget/settings/apply.rs
@@ -222,7 +222,7 @@ Chart,Scales and axes,Left price scale and moving the scale,done,library,src/wid
 Chart,Scales and axes,Lock price to bar ratio,done,library,src/ui/axis_context_menu.rs;src/widget/frame.rs;src/scales/pricescale.rs
 Chart,Scales and axes,Logarithmic scale,done,library,src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/studies/chart_state.rs;src/widget/frame.rs;src/ui/axis_context_menu.rs
 Chart,Scales and axes,Multiple price scales and pin to scale,done,library,src/model/series_scale.rs;src/widget/price_series.rs
-Chart,Scales and axes,Percent scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/scales/price_formatter.rs;src/scales/pricescale_marks.rs
+Chart,Scales and axes,Percent scale,done,library,src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/studies/chart_state.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/scales/price_formatter.rs
 Chart,Scales and axes,Previous close line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Chart,Scales and axes,Price label precision,partial,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/chart/renderers/crosshair.rs;src/widget/price_series.rs;src/widget/frame.rs;src/scales/pricescale.rs;src/scales/pricescale_marks.rs
 Chart,Scales and axes,Regular price scale,done,library,src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/studies/chart_state.rs;src/widget/frame.rs

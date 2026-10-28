@@ -38,7 +38,8 @@ pub struct PriceMarkGeneratorConfig {
     /// pixels apart, and no closer than `min_spacing`
     pub target_density: f32,
 
-    /// Minimum tick size. Marks lie on multiples of this value; invalid sizes are ignored.
+    /// Minimum price tick size. Normal and logarithmic marks lie on its multiples;
+    /// invalid sizes are ignored.
     pub min_price_step: Option<f64>,
 }
 
@@ -143,7 +144,9 @@ impl PriceMarkGenerator {
             let unit = 10f64.powi(-(decimals as i32));
             nice_step = Self::round_up_to_multiple(nice_step, unit);
         }
-        let min_step = self.min_step();
+        let min_step = self
+            .min_step()
+            .filter(|_| prices || map.transform().mode == PriceScaleMode::Normal);
         if let Some(min_step) = min_step {
             nice_step = Self::round_up_to_multiple(nice_step, min_step);
         }
@@ -545,6 +548,26 @@ mod tests {
                     mark.label
                 );
             }
+        }
+    }
+
+    #[test]
+    fn percentage_and_indexed_ticks_keep_their_own_units() {
+        use PriceScaleMode::{IndexedTo100, Percentage};
+        for (mode, min, max, expected) in [
+            (Percentage, -2.0, 2.375, "-1.60%"),
+            (IndexedTo100, 98.0, 102.375, "98.40"),
+        ] {
+            let marks = map(mode, min, max)
+                .with_tick_marks(PriceMarkGeneratorConfig {
+                    min_price_step: Some(0.25),
+                    ..Default::default()
+                })
+                .marks();
+            assert!(
+                marks.iter().any(|mark| mark.label == expected),
+                "{mode:?}: expected {expected}, got {marks:?}"
+            );
         }
     }
 
