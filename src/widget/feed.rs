@@ -2899,7 +2899,8 @@ mod tests {
     }
 
     /// A comparison or spread on a chart with a feed gets its bars from that feed, and a restored
-    /// snapshot gets them again; a chart without a feed leaves the series to the host.
+    /// snapshot gets them again; `add_comparison` and a chart without a feed leave the series to
+    /// the host.
     #[test]
     fn comparisons_are_filled_from_the_feed_and_survive_a_snapshot() {
         use crate::model::SeriesScale;
@@ -2909,7 +2910,11 @@ mod tests {
             .with_feed(feed.clone())
             .with_symbol("AAPL")
             .build();
-        let msft = chart.add_comparison("MSFT", egui::Color32::RED);
+        let msft = chart.add_feed_series(SeriesOptions {
+            name: "MSFT".into(),
+            color: egui::Color32::RED,
+            ..Default::default()
+        });
         let spread = chart.add_feed_series(SeriesOptions {
             name: "AAPL-MSFT".into(),
             scale: SeriesScale::Left,
@@ -2953,8 +2958,13 @@ mod tests {
             assert_eq!(other.series_pane(spread), Some(other.panes()[1]));
         }
 
+        let host = chart.add_comparison("MSFT", egui::Color32::RED);
+        assert!(!chart.is_fed(host));
         let mut manual = ChartBuilder::new().build();
-        let id = manual.add_comparison("MSFT", egui::Color32::RED);
+        let id = manual.add_feed_series(SeriesOptions {
+            name: "MSFT".into(),
+            ..Default::default()
+        });
         assert!(!manual.is_fed(id));
     }
 
@@ -2967,7 +2977,10 @@ mod tests {
             .with_feed(feed.clone())
             .with_symbol("AAPL")
             .build();
-        chart.add_comparison("MSFT", egui::Color32::RED);
+        chart.add_feed_series(crate::widget::SeriesOptions {
+            name: "MSFT".into(),
+            ..Default::default()
+        });
         let mut frames = Frames::new();
         for adjusted in [false, true] {
             chart.set_dividend_adjusted(adjusted);

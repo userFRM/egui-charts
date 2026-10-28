@@ -6,11 +6,14 @@ use super::{Action, Terminal};
 use crate::drawings::DrawingTemplate;
 use crate::localization as l10n;
 use crate::model::{ChartType, SeriesScale, SymbolType};
+use crate::scales::PriceScaleMode;
 use crate::services::{StoreKind, SymbolExpression, UserSettings};
 use crate::studies::{Indicator, InputKind, InputValue, StudySource, StudyTemplate};
 use crate::ui::Control;
 use crate::ui::dialogs::templates::TemplateDialog;
+use crate::ui::floating_replay_control::ReplayControlAction;
 use crate::ui::timeframe_toolbar::TimeframeToolbarAction;
+use crate::ui::top_toolbar::components::settings_menu::SettingsAction;
 use crate::ui::top_toolbar::{
     CompareAction, ComparePlacement, CompareSymbol, CompareSymbolsDialog, TopToolbarAction,
 };
@@ -121,13 +124,11 @@ impl Terminal {
             }
             Action::DrawingToolbar(action) => return self.perform_template_action(action),
             // The settings dialog keeps its templates itself.
-            Action::Settings(
-                crate::ui::top_toolbar::components::settings_menu::SettingsAction::SaveTemplate(_)
-                | crate::ui::top_toolbar::components::settings_menu::SettingsAction::LoadTemplate(_),
-            ) => {}
+            Action::Settings(SettingsAction::SaveTemplate(_) | SettingsAction::LoadTemplate(_)) => {
+            }
             Action::BottomBar(TimeframeToolbarAction::AdjustDividendsToggled(adjusted)) => {
                 if self.replay_active {
-                    self.perform(Action::TopToolbar(TopToolbarAction::ToggleReplay));
+                    self.perform(Action::Replay(ReplayControlAction::Stop));
                 }
                 self.chart_mut().set_dividend_adjusted(adjusted);
             }
@@ -255,15 +256,19 @@ impl Terminal {
             ComparePlacement::NewPane => Some(SeriesScale::Right),
             _ => None,
         };
-        let id = match scale {
-            Some(scale) => chart.add_feed_series(SeriesOptions {
-                name: symbol,
-                color,
-                scale,
-                ..Default::default()
-            }),
-            None => chart.add_comparison(symbol, color),
-        };
+        let scale = scale.unwrap_or_else(|| {
+            // The main series' scale in percent, as `Chart::add_comparison` sets it.
+            let percent = chart.price_scale_mut();
+            percent.options_mut().mode = PriceScaleMode::Percentage;
+            percent.reset();
+            chart.series_scale(SeriesId::MAIN).unwrap_or_default()
+        });
+        let id = chart.add_feed_series(SeriesOptions {
+            name: symbol,
+            color,
+            scale,
+            ..Default::default()
+        });
         if placement == ComparePlacement::NewPane {
             let pane = chart.add_pane();
             chart.move_series_to_pane(id, pane);
@@ -415,7 +420,6 @@ mod tests {
     use super::*;
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
     use crate::model::Instrument;
-    use crate::scales::PriceScaleMode;
     use crate::studies::{EMA, RSI, SMA};
     use crate::ui::drawing_toolbar::DrawingToolbarAction;
     use crate::widget::PaneId;

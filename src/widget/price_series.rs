@@ -52,9 +52,9 @@ fn shared_prices(
 
 /// The spread a series name spells, such as `AAPL-MSFT`; `None` for a plain symbol.
 fn spread_of(name: &str) -> Option<SymbolExpression> {
-    let expression = SymbolExpression::parse(name).ok()?;
-    let lone = matches!(expression.symbols()[..], [symbol] if symbol == expression.to_string());
-    (!lone).then_some(expression)
+    SymbolExpression::parse(name)
+        .ok()
+        .filter(SymbolExpression::is_spread)
 }
 
 /// The symbols the feed supplies for a series name: the symbol itself, or a spread's legs.
@@ -463,12 +463,10 @@ impl Chart {
 
     /// Adds a comparison line on the main series' scale and switches that scale to percent.
     /// Each series uses its own first visible close as zero; scrolling recomputes references.
-    /// On a chart with a feed the line shows the symbol `name`, as for
-    /// [`add_feed_series`](Self::add_feed_series).
     pub fn add_comparison(&mut self, name: impl Into<String>, color: Color32) -> SeriesId {
         self.state.price_scale_mut().options_mut().mode = PriceScaleMode::Percentage;
         self.state.price_scale_mut().reset();
-        self.add_feed_series(SeriesOptions {
+        self.add_series(SeriesOptions {
             name: name.into(),
             color,
             scale: self.main_series_scale,
