@@ -85,7 +85,7 @@ Builder API,Widget API and customization,Locale-aware date formatting,done,libra
 Builder API,Widget API and customization,Localisation of UI text,partial,library,src/localization.rs;src/ui/top_toolbar/components/layout_menu.rs;src/chart/renderers/trading_lines.rs;src/chart/renderers/legend/mod.rs
 Builder API,Widget API and customization,Multiple charts per widget,done,library,src/widget/layout.rs;src/ui/multi_chart.rs
 Builder API,Widget API and customization,Price scale API,done,library,src/scales/pricescale.rs;src/widget/mod.rs;src/widget/price_series.rs;src/widget/frame.rs
-Builder API,Widget API and customization,Screenshots,partial,library,src/widget/export.rs;src/widget/raster.rs
+Builder API,Widget API and customization,Screenshots,partial,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed.rs
 Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/price_series.rs;src/widget/time_scale.rs;src/widget/series.rs
 Builder API,Widget API and customization,Style overrides,partial,library,src/widget/mod.rs;src/widget/builder.rs;src/widget/frame.rs;src/config/chart.rs
 Builder API,Widget API and customization,Themes and custom colour schemes,partial,library,src/widget/mod.rs;src/theme/context.rs;src/widget/frame.rs;src/chart/renderers/markers.rs
@@ -156,7 +156,7 @@ Chart,Crosshair and interaction,Magnet crosshair,partial,library,src/widget/cros
 Chart,Crosshair and interaction,Mouse wheel zoom anchored at the cursor,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs;src/model/timescale.rs
 Chart,Crosshair and interaction,Pinch zoom and two-finger pan,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
 Chart,Crosshair and interaction,Price scale and time scale context menus,done,library,src/ui/context_menu.rs;src/ui/axis_context_menu.rs
-Chart,Crosshair and interaction,Table view of chart data,missing,library,
+Chart,Crosshair and interaction,Table view of chart data,done,library,src/widget/export.rs;src/ui/dialogs/data_table.rs;src/ui/context_menu.rs
 Chart,Crosshair and interaction,Undo and redo,partial,library,src/widget/history.rs
 Chart,Crosshair and interaction,Zoom-to-rectangle tool,done,library,src/widget/pan_zoom.rs;src/chart/rendering/overlays/box_zoom.rs
 Chart,Keyboard shortcuts,Copy and paste drawings,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/clipboard.rs
@@ -787,7 +787,7 @@ Terminal,Alerts,Alert log,done,library,src/ui/widget_bar/panels/alerts_panel.rs
 Terminal,Alerts,Alert manager panel,partial,library,src/ui/widget_bar/panels/alerts_panel.rs
 Terminal,Alerts,"Alert name, custom message and placeholders",partial,library,src/ui/dialogs/alert_dialog/dialog.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/model/alert.rs
 Terminal,Alerts,Alert presets and per-alert notification schedule,partial,library,src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs
-Terminal,Alerts,Alerts tab in series settings,missing,library,
+Terminal,Alerts,Alerts tab in series settings,done,library,src/model/series_style.rs;src/chart/series/settings.rs;src/ui/dialogs/series_settings/tabs/scales.rs;src/widget/mod.rs;src/widget/snapshot.rs;src/widget/history.rs
 Terminal,Alerts,"Channel operators: entering, exiting, inside, outside a channel",partial,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs
 Terminal,Alerts,Create a price alert from the toolbar bell,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/dialogs/alert_dialog/dialog.rs
 Terminal,Alerts,Demo alert sound playback,done,host,examples/demo/controller.rs;examples/demo/audio.rs
@@ -811,12 +811,12 @@ Terminal,"News, calendar and social","Earnings, dividends and splits marked on t
 Terminal,"News, calendar and social",Economic calendar,done,host,src/ui/widget_bar/panels/calendar.rs
 Terminal,"News, calendar and social",Economic events on the chart,done,host,src/model/time_scale_event.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs
 Terminal,"News, calendar and social",Filtered headline stream,partial,host,src/ui/widget_bar/panels/news.rs
-Terminal,"News, calendar and social",Ideas and community feed,missing,host,
+Terminal,"News, calendar and social",Ideas and community feed,done,host,src/ui/ideas.rs
 Terminal,"News, calendar and social",News alerts,missing,host,
 Terminal,"News, calendar and social",News headlines marked on the chart time scale,done,host,src/model/time_scale_event.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs
 Terminal,"News, calendar and social",Private chats,partial,host,src/services/chats.rs;src/ui/widget_bar/panels/chats.rs
 Terminal,"News, calendar and social","Profiles, following and social notifications",partial,host,src/services/notifications.rs;src/ui/widget_bar/panels/notifications.rs
-Terminal,"News, calendar and social",Publish an idea from the chart,partial,host,src/ui/top_toolbar/toolbar.rs;src/widget/export.rs
+Terminal,"News, calendar and social",Publish an idea from the chart,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/ideas.rs;src/widget/export.rs
 Terminal,"News, calendar and social",Symbol news in the right panel,done,host,src/ui/widget_bar/panels/news.rs
 Terminal,Replay,Bar replay button and replay mode on/off,done,library,src/ui/top_toolbar/toolbar.rs
 Terminal,Replay,Continue the last replay session after a reload,done,library,src/ui/replay/session.rs
@@ -841,7 +841,7 @@ Terminal,Templates and layouts,"Create new, rename and make a copy of a layout",
 Terminal,Templates and layouts,Drawing serialisation for saved layouts,done,library,src/widget/anchors.rs;src/widget/snapshot.rs
 Terminal,Templates and layouts,Drawing templates,done,library,src/drawings/domain/template.rs;src/ui/dialogs/templates/dialog.rs
 Terminal,Templates and layouts,Export chart data to CSV,done,library,src/widget/export.rs
-Terminal,Templates and layouts,Export dialog image options,partial,library,src/ui/export.rs;src/widget/export.rs
+Terminal,Templates and layouts,Export dialog image options,done,library,src/ui/export.rs;src/widget/export.rs;src/widget/svg.rs
 Terminal,Templates and layouts,"Image sharing, hosted links and social posting",done,host,src/ui/top_toolbar/toolbar.rs;src/widget/export.rs
 Terminal,Templates and layouts,Indicator templates,done,library,src/studies/template.rs;src/ui/dialogs/templates/dialog.rs
 Terminal,Templates and layouts,Multi-chart layouts,done,library,src/widget/layout.rs
