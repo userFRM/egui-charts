@@ -1135,35 +1135,9 @@ mod tests {
                     assert!(Rc::ptr_eq(&previous, profiles), "{visible:?}, {first}");
                 }
                 assert_eq!(profiles.len(), 1);
-                let fields = |p: &TPOProfile| {
-                    let mut single_prints = p.single_prints.clone();
-                    single_prints.sort_by(f64::total_cmp);
-                    (
-                        p.session_date,
-                        [
-                            p.tick_size,
-                            p.poc_price,
-                            p.value_area_high,
-                            p.value_area_low,
-                            p.initial_balance_high,
-                            p.initial_balance_low,
-                            p.profile_high,
-                            p.profile_low,
-                            p.opening_price,
-                        ],
-                        p.letters
-                            .iter()
-                            .map(|l| (l.price, l.letter, l.period_idx, l.ts))
-                            .collect::<Vec<_>>(),
-                        p.price_tpo_count.clone(),
-                        single_prints,
-                        p.has_poor_high,
-                        p.has_poor_low,
-                    )
-                };
                 assert_eq!(
-                    fields(&profiles[0]),
-                    fields(expected),
+                    format!("{:?}", profiles[0]),
+                    format!("{expected:?}"),
                     "{visible:?}, {first}"
                 );
             }

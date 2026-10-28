@@ -6,6 +6,8 @@
 //! A second table prints first, steady, tick and new-bar frame times for candles and the five
 //! price-based chart types on 1,000,000 one-minute bars; `-- price-based` runs it alone.
 //! A third prints the frame of volume bubbles from 100,000 trades; `-- bubbles` runs it alone.
+//! A fourth prints the frame of a zoomed-out daily TPO chart at 400 and at 1,600 sessions;
+//! `-- tpo` runs it alone.
 //! `--regression <scenario>` runs a compact workload for `benches/check-regressions.sh`.
 
 use egui::{Rect, UiBuilder, pos2, vec2};
