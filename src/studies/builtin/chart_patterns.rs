@@ -680,7 +680,7 @@ impl State {
         let seq = self.seq;
         self.seq += 1;
         self.last = index;
-        let width = 2 * config.strength + 1;
+        let width = config.strength.saturating_mul(2).saturating_add(1);
         self.recent.push_back((index, bar.high, bar.low));
         if self.recent.len() > width {
             self.recent.pop_front();
@@ -857,10 +857,11 @@ impl State {
 /// | Inverse head and shoulders | mirror | confirms bullish above the neckline |
 ///
 /// A boundary is flat when it moves at most `tolerance` percent between the first and last
-/// pivot. A flag or pennant's length is counted from its pole's top and the length of the
-/// others from their first pivot, and lies between `min_length` and `max_length`. A bull flag, bull
-/// pennant and ascending triangle confirm bullish above their upper boundary; a bear flag,
-/// bear pennant and descending triangle confirm bearish below their lower boundary. A
+/// pivot. A flag or pennant spans at least `min_length` bars from its pole's top and at most
+/// `max_length` bars from the pole's start; the others span between `min_length` and
+/// `max_length` bars from their first pivot. A bull flag, bull pennant and ascending triangle
+/// confirm bullish above their upper boundary; a bear flag, bear pennant and descending
+/// triangle confirm bearish below their lower boundary. A
 /// rectangle and a symmetrical triangle confirm in the direction of the break. A pennant's
 /// last four pivots also form a symmetrical triangle, which is then not reported, and a triple
 /// top or bottom follows the double top or bottom of its first two tops. Each pivot
@@ -1324,6 +1325,12 @@ mod tests {
         let formations = found(&mut off, &path(&BULL_FLAG));
         assert!(formations.iter().all(|f| f.kind != BullFlag));
 
+        // A swing strength at the input's upper bound finds no pivot instead of overflowing.
+        let mut wide = ChartPatterns::new(PatternFamily::Continuation);
+        wide.set_input("strength", InputValue::Length(usize::MAX))
+            .unwrap();
+        assert!(found(&mut wide, &path(&BULL_FLAG)).is_empty());
+
         // A symmetrical triangle whose last low is followed by a bounce and a break down
         // confirms bearish, on the first close under its lower line.
         let down = [106.0, 112.0, 100.0, 109.0, 103.0, 105.5, 95.0];
@@ -1465,11 +1472,11 @@ mod tests {
         assert!((start - 100.0).abs() < 1e-9 && (end - 101.8).abs() < 1e-9);
 
         // With a minimum separation longer than the tops have, the same double top is not one.
-        let relaxed = found(
+        let apart = found(
             &mut ChartPatterns::new(PatternFamily::Reversal).with_geometry(3, 12..=200, 3.0, 2),
             &path(&DOUBLE_TOP),
         );
-        assert!(relaxed.iter().all(|f| f.kind != DoubleTop));
+        assert!(apart.iter().all(|f| f.kind != DoubleTop));
     }
 
     /// Replaying any prefix of the bars finds the confirmed formations the full history
