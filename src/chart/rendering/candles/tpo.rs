@@ -13,7 +13,7 @@
 //! whole sessions of the visible bars and anchors each session's letter histogram
 //! at the session it summarises, staying correct under pan and zoom.
 
-use std::{cell::RefCell, ops::Range, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
 
 use crate::localization as l10n;
 use crate::scales::PriceMap;
@@ -236,27 +236,41 @@ fn cached_profiles(
         profile_open = end;
     }
     PROFILE_CACHE.with_borrow_mut(|cache| {
+        let mut positions: HashMap<_, Vec<usize>> = HashMap::with_capacity(cache.len());
+        let mut entries: Vec<_> = cache
+            .drain(..)
+            .enumerate()
+            .map(|(i, entry)| {
+                positions
+                    .entry((entry.first, entry.len))
+                    .or_default()
+                    .push(i);
+                Some(entry)
+            })
+            .collect();
+        let mut used = Vec::with_capacity(ends.len());
         let mut profiles = Vec::new();
         for len in ends {
             let (session, rest) = bars.split_at(len);
             let last = session.last().unwrap();
-            let pos = cache.iter().position(|entry| {
-                same_profiles(&entry.config, &config)
-                    && entry.clock == *clock
-                    && entry.revision == revision
-                    && entry.first == start_idx
-                    && entry.len == session.len()
-                    && entry.last.time == last.time
-                    && {
-                        let bits = |bar: &Bar| {
-                            [bar.open, bar.high, bar.low, bar.close, bar.volume].map(f64::to_bits)
-                        };
-                        bits(&entry.last) == bits(last)
-                    }
-            });
-            let entry = match pos {
-                Some(pos) => cache.remove(pos),
-                None => CachedProfile {
+            let entry = positions
+                .get(&(start_idx, session.len()))
+                .into_iter()
+                .flatten()
+                .find_map(|&i| {
+                    let entry = entries[i].as_ref()?;
+                    let bits = |bar: &Bar| {
+                        [bar.open, bar.high, bar.low, bar.close, bar.volume].map(f64::to_bits)
+                    };
+                    (entry.revision == revision
+                        && entry.last.time == last.time
+                        && bits(&entry.last) == bits(last)
+                        && same_profiles(&entry.config, &config)
+                        && entry.clock == *clock)
+                        .then_some(i)
+                })
+                .and_then(|i| entries[i].take())
+                .unwrap_or_else(|| CachedProfile {
                     revision,
                     first: start_idx,
                     len: session.len(),
@@ -264,13 +278,14 @@ fn cached_profiles(
                     config: config.clone(),
                     clock: clock.clone(),
                     profiles: Rc::new(to_tpo_profiles(session, &config, clock)),
-                },
-            };
+                });
             profiles.push((start_idx, session.len(), Rc::clone(&entry.profiles)));
-            cache.push(entry);
+            used.push(entry);
             start_idx += session.len();
             bars = rest;
         }
+        cache.extend(entries.into_iter().flatten());
+        cache.extend(used);
         // Keep every visible session, with room for another view and small multi-chart layouts.
         let limit = 8.max(profiles.len().saturating_mul(2));
         if cache.len() > limit {
@@ -1071,6 +1086,87 @@ mod tests {
                 assert_eq!(profile.tick_size, tick, "{change}");
             }
             previous = current;
+        }
+
+        let mut bars: Vec<_> = (0..16)
+            .map(|day| {
+                let price = 100.0 + (day % 5) as f64;
+                Bar::new(
+                    chrono::DateTime::UNIX_EPOCH + Duration::days(day),
+                    price,
+                    price,
+                    price,
+                    price,
+                    1.0,
+                )
+            })
+            .collect();
+        let clock = BarClock::new(Timeframe::Min1);
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let mut seen = std::collections::HashMap::new();
+        for (visible, append) in [
+            (0..8, false),
+            (4..12, false),
+            (0..8, false),
+            (8..16, false),
+            (9..17, true),
+        ] {
+            if append {
+                let mut bar = bars.last().unwrap().clone();
+                bar.time += Duration::days(1);
+                bars.push(bar);
+            }
+            let cached = cached_profiles(
+                &bars[visible.clone()],
+                99,
+                visible.start,
+                &config,
+                &clock,
+                &clock.sessions(),
+            );
+            let expected = to_tpo_profiles(&bars[visible.clone()], &config, &clock);
+            assert_eq!(cached.len(), expected.len(), "{visible:?}");
+            for ((first, len, profiles), expected) in cached.iter().zip(&expected) {
+                assert_eq!(*len, 1);
+                if let Some(previous) = seen.insert(*first, Rc::clone(profiles)) {
+                    assert!(Rc::ptr_eq(&previous, profiles), "{visible:?}, {first}");
+                }
+                assert_eq!(profiles.len(), 1);
+                let fields = |p: &TPOProfile| {
+                    let mut single_prints = p.single_prints.clone();
+                    single_prints.sort_by(f64::total_cmp);
+                    (
+                        p.session_date,
+                        [
+                            p.tick_size,
+                            p.poc_price,
+                            p.value_area_high,
+                            p.value_area_low,
+                            p.initial_balance_high,
+                            p.initial_balance_low,
+                            p.profile_high,
+                            p.profile_low,
+                            p.opening_price,
+                        ],
+                        p.letters
+                            .iter()
+                            .map(|l| (l.price, l.letter, l.period_idx, l.ts))
+                            .collect::<Vec<_>>(),
+                        p.price_tpo_count.clone(),
+                        single_prints,
+                        p.has_poor_high,
+                        p.has_poor_low,
+                    )
+                };
+                assert_eq!(
+                    fields(&profiles[0]),
+                    fields(expected),
+                    "{visible:?}, {first}"
+                );
+            }
         }
     }
 }
