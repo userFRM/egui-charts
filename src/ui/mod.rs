@@ -37,6 +37,7 @@ pub mod context_menu;
 pub mod export;
 pub mod financials;
 pub mod floating_replay_control;
+pub mod ideas;
 pub mod multi_chart;
 pub mod replay_status;
 pub mod strategy_report;
