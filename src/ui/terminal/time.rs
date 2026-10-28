@@ -6,8 +6,9 @@ use super::{Action, Terminal};
 use crate::Chart;
 use crate::config::{KeyboardAction, TimezoneMode};
 use crate::localization as l10n;
-use crate::model::session::local_instant;
-use crate::model::{Bar, BoxSizeMethod, ChartType, DateRange, Session, Timeframe, TimezoneId};
+use crate::model::{
+    Bar, BoxSizeMethod, ChartType, DateRange, Session, Timeframe, TimezoneId, local_instant,
+};
 use crate::services::UserSettings;
 use crate::ui::Control;
 use crate::ui::floating_replay_control::ReplayControlAction;
