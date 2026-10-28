@@ -68,7 +68,7 @@ struct State {
 impl KnoxvilleDivergence {
     /// Momentum and RSI of the given periods and pivots with `left` and `right` bars on each side,
     /// each raised to at least 1, divergences between pivots at most `lookback` bars apart, and
-    /// RSI limits of at most 100.
+    /// RSI limits of 30 and 70, set through the `oversold` and `overbought` inputs.
     pub fn new(
         momentum_period: usize,
         rsi_period: usize,
@@ -89,13 +89,6 @@ impl KnoxvilleDivergence {
             colors: [palette::ACCENT, palette::GREEN, palette::RED],
             visible: true,
         }
-    }
-
-    /// The RSI at or below which a bullish divergence counts and at or above which a bearish one
-    /// does, each at most 100.
-    pub fn with_rsi_limits(mut self, oversold: usize, overbought: usize) -> Self {
-        (self.oversold, self.overbought) = (oversold.min(100), overbought.min(100));
-        self
     }
 }
 
@@ -274,6 +267,7 @@ impl Indicator for KnoxvilleDivergence {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::studies::InputValue;
 
     /// Momentum of 1 bar, an RSI of 2 bars, one bar on each side of a pivot, flat bars. Closes
     /// 10, 8, 9, 7.5, 8.5 have pivot lows 8 at bar 1 and 7.5 at bar 3, a lower low whose momentum
@@ -308,10 +302,15 @@ mod tests {
         );
         assert_eq!(signal(&bearish, &study, 1), [none; 5]);
         // The pivots are 2 bars apart, the RSI 16.67 is over a limit of 10, and the mirror's 83.33 under 90.
+        let limit = |id: &str, value: usize| {
+            let mut study = study.clone();
+            study.set_input(id, InputValue::Length(value)).unwrap();
+            study
+        };
         for (study, bars, line) in [
             (KnoxvilleDivergence::new(1, 2, 1, 1, 1), &bullish, 1),
-            (study.clone().with_rsi_limits(10, 70), &bullish, 1),
-            (study.clone().with_rsi_limits(30, 90), &bearish, 2),
+            (limit("oversold", 10), &bullish, 1),
+            (limit("overbought", 90), &bearish, 2),
         ] {
             assert_eq!(signal(bars, &study, line), [none; 5]);
         }
