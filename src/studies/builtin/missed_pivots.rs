@@ -250,7 +250,8 @@ mod tests {
             (8.0, 6.0),
         ]);
         // Bars seen, then the zones (bars, price, plot) at that point.
-        let want: [(usize, Vec<(std::ops::Range<usize>, f64, usize)>); 4] = [
+        type Zone = (std::ops::Range<usize>, f64, usize);
+        let want: [(usize, Vec<Zone>); 4] = [
             (2, vec![]),
             (3, vec![(1..3, 10.0, 0)]),
             (5, vec![(1..5, 10.0, 0), (3..5, 4.0, 1)]),
