@@ -284,6 +284,12 @@ pub struct ScalesAndLinesSettings {
     pub show_study_values: bool,
     /// Study value tag colour, or each plot's colour when unset.
     pub study_value_color: Option<Color32>,
+    /// Write the symbol before its value tags on the price scale, independently of its last
+    /// value and legend title.
+    pub show_symbol_name: bool,
+    /// Write each study's name before its value tags, independently of the values and legend
+    /// titles.
+    pub show_study_names: bool,
     /// Display the host-supplied extended-session price tag.
     pub show_extended_session_price: bool,
     /// Extended-session price tag colour.
@@ -327,6 +333,8 @@ impl Default for ScalesAndLinesSettings {
             symbol_price_color: None,
             show_study_values: true,
             study_value_color: None,
+            show_symbol_name: false,
+            show_study_names: false,
             show_extended_session_price: true,
             extended_session_price_color: Color32::from_rgb(251, 142, 1),
             auto_scale: true,
