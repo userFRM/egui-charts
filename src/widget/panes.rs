@@ -900,6 +900,7 @@ impl Chart {
                         && !drawing_tool_active
                         && !eraser_mode
                         && let Some(click_pos) = pane_response.interact_pointer_pos()
+                        && !self.mark_under(click_pos)
                     {
                         let hit = study_at(click_pos);
                         if hit.is_some() || pending_pane_selection.is_none() {

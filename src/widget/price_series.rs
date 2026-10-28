@@ -1167,13 +1167,14 @@ impl Chart {
                     time: marker.time,
                     ..bar.clone()
                 };
-                crate::chart::renderers::render_markers(
+                let hits = crate::chart::renderers::render_markers(
                     &RenderContext::new(plot, rect),
                     std::slice::from_ref(marker),
                     &[bar],
                     &map,
                     &coords,
                 );
+                self.record_mark_hits(item.id, std::slice::from_ref(marker), hits);
             }
         }
     }
