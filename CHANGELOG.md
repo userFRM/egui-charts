@@ -405,7 +405,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - `LocaleTimeFormatter::new` defaults to a 24-hour clock for `en-GB`, and underscore locale identifiers use the same hour cycle as their hyphenated forms, including the 12-hour clock for `en_US` and `en_CA`. Explicit clock preferences are unchanged. ([#1231](https://github.com/userFRM/egui-charts/issues/1231))
 
-- Subsecond time-axis labels show milliseconds, including fractions within minute and midnight boundaries and bars offset from whole seconds at wider zoom; whole-second and coarser marks keep their labels. Subsecond crosshair labels place the fraction before the AM/PM marker in both built-in formatters and the `TimeFormatter` default. ([#1227](https://github.com/userFRM/egui-charts/issues/1227), [#1228](https://github.com/userFRM/egui-charts/issues/1228))
+- Subsecond time-axis labels show milliseconds, including fractions within minute and midnight boundaries and bars offset from whole seconds at wider zoom; clock marks also survive sub-millisecond offsets at wider zoom, and whole-second and coarser marks keep their labels. Subsecond crosshair labels place the fraction before the AM/PM marker in both built-in formatters and the `TimeFormatter` default. ([#1227](https://github.com/userFRM/egui-charts/issues/1227), [#1228](https://github.com/userFRM/egui-charts/issues/1228))
 
 - Intraday time axes with day or longer label intervals mark the first available bar of each Monday-anchored day bucket, including weeks whose opening day has no data. Missing Sunday bars no longer hide weekly labels. ([#1219](https://github.com/userFRM/egui-charts/issues/1219))
 

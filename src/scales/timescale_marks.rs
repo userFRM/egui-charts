@@ -320,13 +320,13 @@ impl TickMarkGenerator {
                     && interval >= Duration::seconds(1)
                 {
                     let boundary = local
-                        - Duration::milliseconds(
-                            (i64::from(local.time().num_seconds_from_midnight()) * 1000
-                                + i64::from(local.timestamp_subsec_millis()))
-                            .rem_euclid(millis),
+                        - Duration::nanoseconds(i64::from(local.timestamp_subsec_nanos()))
+                        - Duration::seconds(
+                            i64::from(local.time().num_seconds_from_midnight())
+                                .rem_euclid(interval.num_seconds()),
                         );
                     let (kind, weight) = self.classify_time_boundary(boundary, primary_type);
-                    let kind = if local.timestamp_subsec_nanos() != 0 {
+                    let kind = if local.timestamp_subsec_millis() != 0 {
                         TickMarkType::TimeWithMilliseconds
                     } else {
                         kind
@@ -1387,13 +1387,14 @@ mod tests {
     fn subsecond_axis_labels_distinguish_instants() {
         use crate::scales::{HorizontalScale, TickMarkLayout, TimeFormatterBuilder};
         let afternoon = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
-        for (start, count) in [
-            (afternoon, 30),
-            (Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(), 30),
-            (afternoon + Duration::milliseconds(50), 600),
+        for (start, count, step_ms) in [
+            (afternoon, 30, 100),
+            (Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(), 30, 100),
+            (afternoon + Duration::milliseconds(50), 600, 100),
+            (afternoon + Duration::nanoseconds(500), 390, 60_000),
         ] {
             let bars: Vec<_> = (0..count)
-                .map(|i| (start + Duration::milliseconds(100 * i), i as usize))
+                .map(|i| (start + Duration::milliseconds(step_ms * i), i as usize))
                 .collect();
             let formatter = TimeFormatterBuilder::new().build();
             let marks = formatter.tick_marks(
@@ -1405,7 +1406,7 @@ mod tests {
                     uniform_distribution: false,
                 },
             );
-            assert!(marks.len() >= 5, "{marks:?}");
+            assert!(marks.len() >= 5, "{start}, {step_ms} ms: {marks:?}");
             assert!(
                 marks.windows(2).all(|pair| pair[0].label != pair[1].label),
                 "{marks:?}"
