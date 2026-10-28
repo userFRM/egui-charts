@@ -5,6 +5,8 @@
 //! other contracts define the host side of the assembled terminal. [`PaperAccount`] is a
 //! ready-made [`Broker`] that simulates an account, and `AlertEngine`, with the `alert-engine`
 //! feature, an [`Alerts`] service that evaluates alerts on the bars the host feeds it.
+//! `OrderFlowDetectors`, with the `detectors` feature, is a [`Signals`] service that finds
+//! order-flow events in the trades and depth the host feeds it.
 //!
 //! Like [`Datafeed`](crate::data::Datafeed), every service is held as an `Arc<dyn Trait>` and
 //! called on the UI thread. Its methods return at once and answer later through a
@@ -16,6 +18,8 @@ mod alert_engine;
 mod alerts;
 mod broker;
 mod chats;
+#[cfg(feature = "detectors")]
+mod detectors;
 #[cfg(feature = "widget")]
 pub(crate) mod document;
 #[cfg_attr(
@@ -41,6 +45,11 @@ pub use alerts::{AlertEvent, Alerts};
 pub use broker::{AccountEvent, Broker};
 pub use chats::{
     ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, NewChatRoom, NewChatRoomKind,
+};
+#[cfg(feature = "detectors")]
+#[cfg_attr(docsrs, doc(cfg(feature = "detectors")))]
+pub use detectors::{
+    BigTradeRule, DetectionKind, Detector, DetectorSettings, OrderFlowDetectors, Threshold,
 };
 pub use events::Events;
 #[cfg(feature = "widget")]
