@@ -32,7 +32,7 @@ mod signals;
 mod storage;
 
 pub use alerts::{AlertEvent, Alerts};
-pub use broker::{AccountEvent, Broker};
+pub use broker::{AccountEvent, Broker, HistoryKind, HistoryPage, HistoryRequest};
 pub use chats::{ChatEvent, ChatMessage, Chats};
 pub use events::Events;
 #[cfg(feature = "widget")]

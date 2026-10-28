@@ -1,5 +1,7 @@
 //! Placing orders with the host's broker.
 
+use chrono::{DateTime, Utc};
+
 use super::Events;
 use crate::data::{FeedError, FeedStatus, MaybeSend, Reply};
 use crate::model::{
@@ -127,6 +129,84 @@ pub trait Broker: MaybeSend + 'static {
     fn rules(&self, symbol: &str, reply: Reply<TradingRules>) {
         let _ = symbol;
         reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Answers one page of finished history older than what [`connect`](Self::connect) pushed, for
+    /// the kind and range of `request`. By default the answer is [`FeedError::NotSupported`], and
+    /// only the pushed history exists.
+    ///
+    /// A page holds [`AccountEvent::Order`] with a finished status, [`AccountEvent::Execution`],
+    /// [`AccountEvent::Balance`] or [`AccountEvent::Journal`] events, as the request's
+    /// [`HistoryKind`] says, oldest first, and never working orders or positions: those come only
+    /// from the pushed stream. The first page of a request holds the newest entries of its range
+    /// and each page after it, asked for with the [`next`](HistoryPage::next) cursor, the entries
+    /// before the previous one. Entries that were pushed live may appear again in a page: events
+    /// are compared by value, so repeat them unchanged. Answer for the account `connect` last
+    /// served; a consumer drops an answer that arrives after the account changed.
+    fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+        let _ = request;
+        reply.send(Err(FeedError::NotSupported));
+    }
+}
+
+/// Which finished history [`Broker::history`] is asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum HistoryKind {
+    /// Finished orders, as [`AccountEvent::Order`].
+    Orders,
+    /// Fills, as [`AccountEvent::Execution`].
+    Executions,
+    /// Changes of the cash balance, as [`AccountEvent::Balance`].
+    Balance,
+    /// Lines of the trading journal, as [`AccountEvent::Journal`].
+    Journal,
+}
+
+/// A request for one page of older history.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct HistoryRequest {
+    /// The history asked for.
+    pub kind: HistoryKind,
+    /// Inclusive start of the range, in UTC; `None` reaches back as far as the broker keeps.
+    pub from: Option<DateTime<Utc>>,
+    /// Exclusive end of the range, in UTC; `None` ends at the newest entry.
+    pub to: Option<DateTime<Utc>>,
+    /// The [`next`](HistoryPage::next) of the previous page of this request; `None` for the first.
+    pub cursor: Option<String>,
+    /// The number of entries wanted, at least 1. The page may hold fewer, and more only if
+    /// entries share a timestamp.
+    pub limit: u32,
+}
+
+impl HistoryRequest {
+    /// The first page of `kind` over all the broker keeps, of at most `limit` entries.
+    pub fn new(kind: HistoryKind, limit: u32) -> Self {
+        Self {
+            kind,
+            from: None,
+            to: None,
+            cursor: None,
+            limit,
+        }
+    }
+}
+
+/// One page of older history.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct HistoryPage {
+    /// The entries, oldest first.
+    pub events: Vec<AccountEvent>,
+    /// The cursor of the page before this one, or `None` when the range holds nothing older.
+    pub next: Option<String>,
+}
+
+impl HistoryPage {
+    /// A page of `events` with the cursor of the page before it.
+    pub fn new(events: Vec<AccountEvent>, next: Option<String>) -> Self {
+        Self { events, next }
     }
 }
 
