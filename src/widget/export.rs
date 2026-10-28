@@ -55,6 +55,48 @@ pub struct ChartImage {
     pub textures_delta: egui::TexturesDelta,
 }
 
+/// The loaded bars and visible study plots as text, aligned by chart time: what
+/// [`Chart::export_csv`] writes and the chart data table lists.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct DataTable {
+    /// Column titles: time, open, high, low, close and volume, then one per visible study plot.
+    pub headers: Vec<String>,
+    /// One row per loaded bar, oldest first. A missing or non-finite value is an empty cell.
+    pub rows: Vec<Vec<String>>,
+}
+
+impl DataTable {
+    /// CSV text of the `columns` (indices into [`Self::headers`]) in the given order.
+    pub fn csv(
+        &self,
+        columns: &[usize],
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let mut writer = csv::Writer::from_writer(Vec::new());
+        writer.write_record(columns.iter().map(|&column| &self.headers[column]))?;
+        for row in &self.rows {
+            writer.write_record(columns.iter().map(|&column| &row[column]))?;
+        }
+        Ok(String::from_utf8(writer.into_inner()?)?)
+    }
+
+    /// Tab-separated text of the `columns` with a header line, for pasting into a spreadsheet.
+    pub fn tsv(&self, columns: &[usize]) -> String {
+        let line = |cells: &mut dyn Iterator<Item = &String>| {
+            cells.map(String::as_str).collect::<Vec<_>>().join("\t")
+        };
+        let mut lines = vec![line(
+            &mut columns.iter().map(|&column| &self.headers[column]),
+        )];
+        lines.extend(
+            self.rows
+                .iter()
+                .map(|row| line(&mut columns.iter().map(|&column| &row[column]))),
+        );
+        lines.join("\n")
+    }
+}
+
 impl Chart {
     fn export_time(&self, time: DateTime<Utc>) -> String {
         match self.display_timezone() {
@@ -75,6 +117,14 @@ impl Chart {
     /// Prices inherit instrument precision (two decimals without metadata); study overrides and
     /// non-price units retain their precision. Missing/non-finite values are empty cells.
     pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let table = self.data_table();
+        table.csv(&(0..table.headers.len()).collect::<Vec<_>>())
+    }
+
+    /// The cells of [`Self::export_csv`] as a table, with the same bars, study plots, times and
+    /// precision. During replay it holds the bars the replay cutoff has completed, and on
+    /// price-based chart types still the source bars. Loads nothing: only loaded bars are listed.
+    pub fn data_table(&self) -> DataTable {
         let bars = &self.state.data().bars;
         let price_precision = self
             .instrument()
@@ -134,8 +184,7 @@ impl Chart {
                 String::new()
             }
         };
-        let mut writer = csv::Writer::from_writer(Vec::new());
-        writer.write_record(header)?;
+        let mut rows = Vec::with_capacity(bars.len());
         for (index, bar) in bars.iter().enumerate() {
             let mut row = vec![if self.horizontal_scale.is_some() {
                 self.format_time(bar.time)
@@ -156,9 +205,12 @@ impl Chart {
                     .plot_value(line, index)
                     .map_or_else(String::new, |value| number(value, precision))
             }));
-            writer.write_record(row)?;
+            rows.push(row);
         }
-        Ok(String::from_utf8(writer.into_inner()?)?)
+        DataTable {
+            headers: header,
+            rows,
+        }
     }
 
     /// Renders an isolated image frame using the same chart, studies, primitives, drawings and
@@ -783,6 +835,19 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn table_text_holds_the_chosen_columns_with_their_missing_cells() {
+        let table = DataTable {
+            headers: vec!["time".into(), "close".into(), "SMA: 5".into()],
+            rows: vec![
+                vec!["t0".into(), "1.50".into(), String::new()],
+                vec!["t1".into(), "2.50".into(), "2.00".into()],
+            ],
+        };
+        assert_eq!(table.csv(&[0, 2]).unwrap(), "time,SMA: 5\nt0,\nt1,2.00\n");
+        assert_eq!(table.tsv(&[2, 1]), "SMA: 5\tclose\n\t1.50\n2.00\t2.50");
     }
 
     #[test]

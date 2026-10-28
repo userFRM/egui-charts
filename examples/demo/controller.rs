@@ -350,6 +350,7 @@ pub struct DemoApp {
     alert_dialog: AlertDialog,
     drawing_props: DrawingPropertiesDialog,
     keyboard_shortcuts: KeyboardShortcutsDialog,
+    data_table: egui_charts::ui::dialogs::DataTableDialog,
     interval_entry: Option<String>,
     interval_focus: bool,
     /// The saved-layout chooser of the Open layout shortcut is open.
@@ -608,6 +609,7 @@ impl DemoApp {
             alert_dialog: AlertDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
+            data_table: egui_charts::ui::dialogs::DataTableDialog::new(),
             interval_entry: None,
             interval_focus: false,
             open_layout: false,
@@ -1098,6 +1100,12 @@ impl DemoApp {
             .show_with_shortcuts(ctx, self.chart.shortcuts());
         self.show_interval_entry(ctx);
         self.show_open_layout(ctx);
+
+        if let egui_charts::ui::dialogs::DataTableAction::Export(csv) =
+            self.data_table.show(ctx, &self.chart)
+        {
+            self.save_text("chart_data.csv", &csv);
+        }
 
         // Export dialog (screenshot / CSV).
         match self.export_dialog.show(ctx) {
@@ -2801,6 +2809,7 @@ impl DemoApp {
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
             ContextMenuAction::ResetChart => self.chart.reset_chart_view(),
+            ContextMenuAction::OpenDataTable => self.data_table.open(),
             ContextMenuAction::ExportCsv => self.export_csv(None),
             ContextMenuAction::Order(request) => self.trading.open_ticket(request),
             _ => {}
@@ -2908,6 +2917,7 @@ impl DemoApp {
 
     fn keyboard_dialog_open(&self) -> bool {
         self.keyboard_shortcuts.is_open
+            || self.data_table.is_open
             || self.quick_search.is_open()
             || self.symbol_search.is_open()
             || self.compare_dialog.is_open

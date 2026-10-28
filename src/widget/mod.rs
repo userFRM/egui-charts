@@ -56,7 +56,7 @@ pub use crate::chart::renderers::{
 pub use crate::chart::selection::{ChartElementId, SeriesId};
 pub use builder::ChartBuilder;
 use egui::{Pos2, Rect, Vec2};
-pub use export::{ChartImage, ImageExportOptions};
+pub use export::{ChartImage, DataTable, ImageExportOptions};
 pub use indicator_pane::{
     IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction,
 };
