@@ -255,7 +255,6 @@ impl Indicator for UpDownVolume {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::model::Bar;
     use crate::studies::*;
     use chrono::{TimeZone, Utc};
