@@ -498,6 +498,7 @@ impl DemoApp {
         chart.set_timeframe(timeframe);
         let storage = Arc::new(storage::DemoStorage::restore(cc.storage));
         chart.set_storage(storage.clone());
+        let notification_host: Arc<feeds::DemoNotifications> = Arc::default();
 
         let mut top_toolbar = TopToolbar::new().with_config(
             egui_charts::ui::top_toolbar::TopToolbarConfig::default().with_height(38.0),
@@ -612,7 +613,19 @@ impl DemoApp {
             open_panel: Some(SidePanel::Watchlist),
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
-            alert_host: Arc::default(),
+            alert_host: {
+                let alerts = cc
+                    .storage
+                    .and_then(|storage| eframe::get_value(storage, "alerts"))
+                    .unwrap_or_default();
+                let notifications = notification_host.clone();
+                Arc::new(crate::panel_alerts::DemoAlerts::new(
+                    alerts,
+                    move |symbol| {
+                        notifications.notify(format!("Alert triggered: {symbol}"), Some(symbol));
+                    },
+                ))
+            },
             audio: Default::default(),
             alert_monitors: Default::default(),
             trading: Default::default(),
@@ -652,7 +665,7 @@ impl DemoApp {
                 entries: feeds::heatmap(),
             },
             notifications: NotificationsPanel::new(),
-            notification_host: Arc::default(),
+            notification_host,
             chats: ChatsPanel::new(),
             products: ProductsPanel::new(vec![
                 product(
@@ -1201,6 +1214,7 @@ impl eframe::App for DemoApp {
             &self.chart.drawings().tool_defaults,
         );
         eframe::set_value(storage, "watchlists", &self.watchlist.lists());
+        eframe::set_value(storage, "alerts", &self.alert_host.engine().alerts());
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
         self.storage.persist(storage);
@@ -1231,11 +1245,6 @@ impl eframe::App for DemoApp {
         self.alerts.poll(&ctx, &mut self.toasts);
         self.monitor_alerts(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
-        let triggers = self.alert_host.take_triggers();
-        for symbol in &triggers {
-            self.notification_host
-                .notify(format!("Alert triggered: {symbol}"), Some(symbol));
-        }
         self.symbol_details.poll(&ctx);
         self.highlights.poll(&ctx);
         self.news.poll(&ctx);

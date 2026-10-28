@@ -18,7 +18,10 @@ impl AlertMonitor {
     fn new(source: &Chart, feed: &LiveFeed, symbol: &str, alert: &Alert) -> Self {
         let live = Arc::new(feed.fork());
         live.set_symbol(symbol);
-        let timeframe = source.timeframe().unwrap_or(Timeframe::Min1);
+        let timeframe = alert
+            .timeframe
+            .or(source.timeframe())
+            .unwrap_or(Timeframe::Min1);
         let mut chart = egui_charts::ChartBuilder::new()
             .with_symbol(symbol)
             .with_timeframe(timeframe)
@@ -88,6 +91,24 @@ impl AlertMonitor {
             studies,
             sources,
             alert_sources: alert_sources(alert).cloned().collect(),
+        }
+    }
+
+    /// The value of `source` at `bar`; study sources name the studies of the chart the alert was
+    /// made on, which `studies` maps to this copy's.
+    fn value(&self, source: &AlertSource, bar: usize) -> Option<f64> {
+        match source {
+            AlertSource::Study { id, output } => {
+                let id = self.studies.get(id)?.0.to_string();
+                self.chart.alert_value(
+                    &AlertSource::Study {
+                        id,
+                        output: *output,
+                    },
+                    bar,
+                )
+            }
+            _ => self.chart.alert_value(source, bar),
         }
     }
 
@@ -255,8 +276,18 @@ impl DemoApp {
         } else {
             self.live.paused()
         };
-        self.alert_host.expire(now);
+        let engine = self.alert_host.engine();
+        engine.tick(now);
+        for list in self.watchlist.lists() {
+            engine.set_watchlist(&list.name, list.symbols().map(str::to_owned).collect());
+        }
         let alerts = self.alerts.alerts();
+        if alerts
+            .iter()
+            .any(|alert| alert.status == AlertStatus::Active && alert.expires.is_some())
+        {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
         self.alert_monitors
             .retain(|(id, _), _| alerts.iter().any(|alert| alert.id.as_ref() == Some(id)));
         for alert in alerts
@@ -323,12 +354,12 @@ impl DemoApp {
                 if !monitor.live.paused() {
                     ctx.request_repaint_after(delay);
                 }
-                self.alert_host.evaluate(
-                    &monitor.chart,
+                engine.update(
+                    &symbol,
+                    monitor.chart.timeframe().unwrap_or(Timeframe::Min1),
+                    monitor.chart.bars(SeriesId::MAIN),
                     now,
-                    Some(id),
-                    self.watchlist.lists(),
-                    &monitor.studies,
+                    |source, bar| monitor.value(source, bar),
                 );
             }
         }
