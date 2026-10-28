@@ -13,7 +13,8 @@
 //!
 //! The latest `max_levels` levels, missed or revisited, are kept. Every level is a zone from its
 //! pivot bar to its revisit bar, or to the last bar while it is missed, in the colour of its
-//! side (pivot highs first, then pivot lows). It has no per-bar values. The defaults are 10 bars on each side, a tolerance of 0.1% and 20 levels. Overlay indicator.
+//! side (pivot highs first, then pivot lows). It has no per-bar values. The defaults are 10
+//! bars on each side, a tolerance of 0.1% and 20 levels. Overlay indicator.
 //!
 //! # Example
 //!

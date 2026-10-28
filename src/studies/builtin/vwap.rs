@@ -71,8 +71,9 @@ const VWAP_ANCHORS: [VwapAnchor; 6] = [
     VwapAnchor::Events,
 ];
 
-/// The most bands, and the most event anchors, that the study inputs can hold.
+/// The most bands that the study inputs can hold.
 const MAX_BANDS: usize = 10;
+/// The most event anchors that the study inputs can hold.
 const MAX_EVENTS: usize = 1000;
 
 /// The local date and time of an event anchor in inputs, to the second.
