@@ -16,7 +16,7 @@
 //! ## Momentum / oscillators
 //! [`RSI`], [`MACD`], [`Stochastic`], [`StochasticRSI`], [`WilliamsR`],
 //! [`CCI`], [`Momentum`], [`RateOfChange`], [`Aroon`], [`AwesomeOscillator`], [`RsiDivergence`],
-//! [`TechnicalRatings`],
+//! [`TechnicalRatings`], [`KnoxvilleDivergence`],
 //! [`UltimateOscillator`], [`ConnorsRSI`], [`CoppockCurve`], [`TRIX`],
 //! [`ElderRay`], [`FisherTransform`], [`ForceIndex`], [`MassIndex`],
 //! [`DetrendedPriceOscillator`], [`KDJ`], [`PrettyGoodOscillator`],
@@ -27,7 +27,7 @@
 //! [`SMIErgodicIndicator`], [`SMIErgodicOscillator`], [`WoodiesCCI`]
 //!
 //! ## Trend
-//! [`ADX`], [`SuperTrend`], [`IchimokuCloud`], [`ParabolicSAR`],
+//! [`ADX`], [`AdxBreakout`], [`SuperTrend`], [`IchimokuCloud`], [`ParabolicSAR`],
 //! [`DirectionalMovement`], [`VortexIndicator`], [`SqueezeMomentum`],
 //! [`WilliamsAlligator`], [`ChopZone`], [`VolatilityStop`], [`ChandeKrollStop`]
 //!
@@ -49,7 +49,7 @@
 //! [`VwapAutoAnchored`], [`Volume24h`], [`RelativeVolumeAtTime`]
 //!
 //! ## Support / resistance
-//! [`PivotPoints`], [`PivotPointsHighLow`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
+//! [`PivotPoints`], [`PivotPointsHighLow`], [`Reversal`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
 //! [`PriceChannel`]
 //!
 //! ## Patterns
@@ -139,6 +139,7 @@ mod vwap_auto_anchored;
 
 // Trend indicators
 mod adx;
+mod adx_breakout;
 mod ichimoku;
 mod supertrend;
 
@@ -154,8 +155,10 @@ mod std_dev;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod auto_drawing;
 mod gaps;
+mod knoxville_divergence;
 mod pivot_points;
 mod pivot_points_high_low;
+mod reversal;
 mod rsi_divergence;
 mod williams_fractals;
 mod zigzag;
@@ -345,6 +348,7 @@ pub use vwap_auto_anchored::{AutoAnchor, VwapAutoAnchored};
 
 // Re-exports - Trend indicators
 pub use adx::ADX;
+pub use adx_breakout::AdxBreakout;
 pub use ichimoku::IchimokuCloud;
 pub use supertrend::SuperTrend;
 
@@ -360,8 +364,10 @@ pub use std_dev::StandardDeviation;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
 pub use gaps::Gaps;
+pub use knoxville_divergence::KnoxvilleDivergence;
 pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
 pub use pivot_points_high_low::PivotPointsHighLow;
+pub use reversal::Reversal;
 pub use rsi_divergence::RsiDivergence;
 pub use williams_fractals::WilliamsFractals;
 pub use zigzag::{ZigZag, ZigZagMode, ZigZagPivot};
@@ -532,3 +538,46 @@ mod order_flow;
 pub use order_flow::OrderFlowStudy;
 
 mod smoothing;
+
+/// Asserts that a causal study gives, on every prefix of `bars`, the values a batch calculation
+/// of all bars has on those bars: appending bars one at a time and calculating each prefix afresh
+/// both equal the batch, so no value depends on a later bar.
+#[cfg(test)]
+pub(super) fn assert_replay_matches_batch(study: &dyn crate::studies::Indicator, bars: &[Bar]) {
+    let mut batch = study.clone_box();
+    batch.calculate(bars);
+    let mut stepped = study.clone_box();
+    for end in 1..=bars.len() {
+        let mut prefix = study.clone_box();
+        prefix.calculate(&bars[..end]);
+        stepped.update(&bars[..end], end - 1);
+        for (label, candidate) in [("stepped", &stepped), ("prefix", &prefix)] {
+            for line in 0..batch.line_count() {
+                for bar in 0..end {
+                    let (got, want) = (
+                        candidate.values().value(line, bar),
+                        batch.values().value(line, bar),
+                    );
+                    assert_eq!(
+                        got,
+                        want,
+                        "{label} {} line {line} bar {bar} of {end}",
+                        batch.name()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Daily bars from (high, low, close) triples, opening at the close.
+#[cfg(test)]
+pub(super) fn hlc_bars(hlc: &[(f64, f64, f64)]) -> Vec<Bar> {
+    hlc.iter()
+        .enumerate()
+        .map(|(at, &(high, low, close))| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(at as i64);
+            Bar::new(time, close, high, low, close, 1.0)
+        })
+        .collect()
+}

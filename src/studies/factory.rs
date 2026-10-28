@@ -131,6 +131,7 @@ impl IndicatorFactory {
                 Aroon,
                 AwesomeOscillator,
                 RsiDivergence,
+                KnoxvilleDivergence,
                 TechnicalRatings,
                 UltimateOscillator,
                 ConnorsRSI,
@@ -170,6 +171,7 @@ impl IndicatorFactory {
             ],
             "Trend" => [
                 ADX,
+                AdxBreakout,
                 SuperTrend,
                 IchimokuCloud,
                 ParabolicSAR,
@@ -246,6 +248,7 @@ impl IndicatorFactory {
             "Support and resistance" => [
                 PivotPoints,
                 PivotPointsHighLow,
+                Reversal,
                 WilliamsFractals,
                 ZigZag,
             ],
@@ -1225,6 +1228,9 @@ mod tests {
             Box::new(Gaps::new(l(0), x(30.0)).with_partial_closing(true)),
             Box::new(RsiDivergence::new(l(0), l(1), l(2), l(3), 60)),
             Box::new(TechnicalRatings::new(l(0), l(1), l(2))),
+            Box::new(Reversal::new(l(0))),
+            Box::new(KnoxvilleDivergence::new(l(0), l(1), l(2), l(3), l(4))),
+            Box::new(AdxBreakout::new(l(0), l(1), l(2))),
             Box::new(PriceChannel::new(l(0))),
             Box::new(LinearRegression::new(l(0))),
             Box::new(LinearRegressionChannel::new(l(0), x(2.0))),
