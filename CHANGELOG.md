@@ -405,7 +405,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - `LocaleTimeFormatter::new` defaults to a 24-hour clock for `en-GB`, and underscore locale identifiers use the same hour cycle as their hyphenated forms, including the 12-hour clock for `en_US` and `en_CA`. Explicit clock preferences are unchanged. ([#1231](https://github.com/userFRM/egui-charts/issues/1231))
 
-- Subsecond time-axis labels show milliseconds, including fractions within minute and midnight boundaries and bars offset from whole seconds at wider zoom; whole-second and coarser marks keep their labels. Subsecond crosshair labels place the fraction before the AM/PM marker in both built-in formatters and the `TimeFormatter` default. Migration: exhaustive `TickMarkType` matches handle `TimeWithMilliseconds`; custom formatters receive it for fractional ticks and subsecond crosshair clocks. ([#1227](https://github.com/userFRM/egui-charts/issues/1227), [#1228](https://github.com/userFRM/egui-charts/issues/1228))
+- Subsecond time-axis labels show milliseconds, including fractions within minute and midnight boundaries and bars offset from whole seconds at wider zoom; whole-second and coarser marks keep their labels. Subsecond crosshair labels place the fraction before the AM/PM marker in both built-in formatters and the `TimeFormatter` default. ([#1227](https://github.com/userFRM/egui-charts/issues/1227), [#1228](https://github.com/userFRM/egui-charts/issues/1228))
 
 - Intraday time axes with day or longer label intervals mark the first available bar of each Monday-anchored day bucket, including weeks whose opening day has no data. Missing Sunday bars no longer hide weekly labels. ([#1219](https://github.com/userFRM/egui-charts/issues/1219))
 
@@ -1077,6 +1077,8 @@ All notable changes to this project are documented in this file. The format is b
 - Drawing bar buttons and flyout rows have a role, a name and their selected state for assistive technology, and rows show a focus ring.
 
 ### Changed
+
+- `TickMarkType::TimeWithMilliseconds` marks fractional-second ticks and subsecond crosshair clocks. Migration: exhaustive `TickMarkType` matches handle the new variant, and custom `TimeFormatter`s format it, as the trait default now asks for it instead of appending the fraction to a seconds clock. ([#1227](https://github.com/userFRM/egui-charts/issues/1227), [#1228](https://github.com/userFRM/egui-charts/issues/1228))
 
 - `UserSettings` is `#[non_exhaustive]`, so that fields can be added without a breaking change. Migration: build `UserSettings` with `Default` and assign fields. `IndicatorDialogAction` implements `Clone` and `Debug`, and `SettingsAction` implements `Debug`.
 
