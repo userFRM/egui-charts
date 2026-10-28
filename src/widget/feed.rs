@@ -2205,13 +2205,16 @@ mod tests {
         assert!(chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
     }
 
+    /// Depth pages follow the visible time and stop without older columns, unless an empty
+    /// window names where they continue.
     #[test]
     fn depth_pages_follow_visible_time_and_stop_without_older_columns() {
-        for (name, offset, span, end, expected) in [
-            ("overlapping page", Some(899), 120, false, vec![900]),
-            ("final page", Some(899), 60, true, vec![899, 900]),
-            ("empty page", None, 60, false, vec![900]),
-            ("repeated page", Some(900), 60, false, vec![900]),
+        for (name, offset, span, end, continuation, expected) in [
+            ("overlapping page", Some(899), 120, false, None, vec![900]),
+            ("final page", Some(899), 60, true, None, vec![899, 900]),
+            ("empty page", None, 60, false, None, vec![900]),
+            ("repeated page", Some(900), 60, false, None, vec![900]),
+            ("empty window", None, 60, false, Some(880), vec![900]),
         ] {
             let feed = Arc::new(Script::default());
             let mut chart = fed(&feed, Some("A"));
@@ -2253,14 +2256,21 @@ mod tests {
                 matches!(&calls[0], Call::Depth(r) if r.before == Some(bars[900].time)),
                 "{name}: {calls:?}"
             );
-            feed.depth.lock().unwrap().remove(0).send(Ok(DepthPage::new(
-                offset.map(|i| column(i, span)).into_iter().collect(),
-                end,
-            )));
+            let mut answer =
+                DepthPage::new(offset.map(|i| column(i, span)).into_iter().collect(), end);
+            answer.continue_before = continuation.map(|i| bars[i].time);
+            feed.depth.lock().unwrap().remove(0).send(Ok(answer));
             for _ in 0..3 {
                 frames.run(&mut chart);
             }
-            assert!(feed.calls().is_empty(), "{name}: paging did not stop");
+            let calls = feed.calls();
+            match continuation {
+                Some(i) => assert!(
+                    matches!(&calls[..], [Call::Depth(r)] if r.before == Some(bars[i].time)),
+                    "{name}: {calls:?}"
+                ),
+                None => assert!(calls.is_empty(), "{name}: paging did not stop"),
+            }
             let held: Vec<_> = chart
                 .depth_history(SeriesId::MAIN)
                 .unwrap()
