@@ -1,7 +1,7 @@
 //! Crosshair snapping and study legend actions shared by the chart panes.
 
-use super::{Chart, ChartElementId, RightClickTarget};
-use crate::chart::renderers::{StudyAction, snap_to_values};
+use super::{Chart, ChartElementId, PaneId, RightClickTarget};
+use crate::chart::renderers::{ChartMapping, StudyAction, study_mapping};
 use crate::config::CrosshairMode;
 use crate::scales::PriceMap;
 use crate::studies::Indicator;
@@ -29,25 +29,33 @@ impl Chart {
             }
             return pos;
         }
+        // Candidates are pointer-space heights, so each value goes through its own scale.
         let ohlc = self
             .state
             .shown()
             .get(index)
             .filter(|_| self.main_series_visible)
             .into_iter()
-            .flat_map(|bar| [bar.open, bar.high, bar.low, bar.close]);
+            .flat_map(|bar| [bar.open, bar.high, bar.low, bar.close])
+            .map(|value| map.price_to_y(value));
+        let time_based = !self.chart_type.is_time_independent();
+        let coords = ChartMapping {
+            price: *map,
+            ..self.get_chart_mapping()
+        };
         let studies = self
-            .studies
-            .indicators()
+            .study_ids
             .iter()
-            .filter(|study| {
-                !self.chart_type.is_time_independent()
+            .zip(self.studies.indicators())
+            .filter(|(id, study)| {
+                time_based
                     && study.is_visible()
                     && study.is_overlay()
                     && !study.is_volume()
-                    && study.scale() == crate::studies::StudyScale::Main
+                    && self.series_pane(**id) == Some(PaneId::MAIN)
             })
-            .flat_map(|study| {
+            .flat_map(|(_, study)| {
+                let scale = study_mapping(study.as_ref(), &coords).price;
                 (0..study.line_count())
                     .filter(|line| {
                         let plot = study.plot_style(*line);
@@ -59,9 +67,25 @@ impl Chart {
                             )
                     })
                     .filter_map(move |line| study.plot_value(line, index))
+                    .map(move |value| scale.price_to_y(value))
             });
-        if let Some(value) = snap_to_values(pos.y, map, ohlc.chain(studies)) {
-            pos.y = map.price_to_y(value);
+        let rect = self.last_rendered_price_rect;
+        let series = self
+            .main_pane_series()
+            .filter(|_| time_based)
+            .filter_map(|item| {
+                let scale = self.series_map(item, rect);
+                self.series_close_at(item, index)
+                    .map(|value| scale.price_to_y(value))
+            });
+        // Equal distances keep the first candidate: the bar, then studies, then series.
+        if let Some(y) = ohlc
+            .chain(studies)
+            .chain(series)
+            .filter(|y| y.is_finite())
+            .min_by(|a, b| (a - pos.y).abs().total_cmp(&(b - pos.y).abs()))
+        {
+            pos.y = y;
         }
         pos
     }

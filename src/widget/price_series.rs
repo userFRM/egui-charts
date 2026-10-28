@@ -1502,6 +1502,32 @@ mod tests {
             .collect()
     }
 
+    /// The magnet reaches a visible comparison through its own scale, so a series whose prices
+    /// are far from the main ones still attracts the crosshair, and a hidden one does not.
+    #[test]
+    fn magnet_snaps_to_visible_comparison_values_on_their_own_scale() {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0, 120.0])));
+        chart.set_crosshair_mode(crate::config::CrosshairMode::Magnet);
+        let id = chart.add_comparison("Other", Color32::BLUE);
+        chart.set_series_scale(id, SeriesScale::Left);
+        chart.set_data(id, bars(&[1300.0, 1100.0, 1000.0]));
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let rect = chart.last_rendered_price_rect;
+        let main = chart.last_price_map.price_to_y(120.0);
+        let other = chart.series_map(&chart.price_series[0], rect).price_to_y(1000.0);
+        assert!((main - other).abs() > 20.0, "{main} {other}");
+        let at = |chart: &Chart, y: f32| {
+            chart
+                .snap_crosshair(egui::pos2(rect.center().x, y), &chart.last_price_map, 2)
+                .y
+        };
+        assert_eq!(at(&chart, other + 1.0), other);
+        assert_eq!(at(&chart, main + 1.0), main);
+        chart.set_series_visible(id, false);
+        assert_eq!(at(&chart, other + 1.0), main);
+    }
+
     /// Logarithms are monotone on positive prices. With 10% margins, ln(2)..ln(100)
     /// occupies 80% of the pane; a lone zero-crossing bar instead starts at ln(5).
     #[test]
