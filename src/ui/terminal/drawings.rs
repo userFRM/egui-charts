@@ -49,8 +49,9 @@ pub(super) struct State {
     properties: DrawingPropertiesDialog,
     /// Whether the data window is folded in its own panel.
     data_window_folded: bool,
-    /// The last pointer position the active chart reported, which the data window reads.
-    crosshair: Option<ChartPointer>,
+    /// The last pointer position a chart reported, with its slot, which the data window reads
+    /// while that chart is the active one.
+    crosshair: Option<(usize, ChartPointer)>,
     /// A colour picker drag of the object tree is in progress.
     colour_drag: bool,
 }
@@ -87,10 +88,7 @@ impl Terminal {
     pub(super) fn drawings_perform(&mut self, action: Action) -> Option<Action> {
         match action {
             Action::DrawingToolbar(action) => self.perform_drawing_toolbar(action),
-            Action::ObjectTree(action) => {
-                self.perform_object_tree(action);
-                None
-            }
+            Action::ObjectTree(action) => self.perform_object_tree(action),
             Action::DrawingProperties(action) => {
                 match action {
                     DrawingPropertiesAction::Delete(id) => {
@@ -119,11 +117,9 @@ impl Terminal {
                 None
             }
             // The alert dialog belongs to the alerts group.
-            Action::ChartMenu(ChartContextAction::Drawing(DrawingContextMenuAction::AddAlert(
-                alert,
-            ))) => Some(Action::ChartMenu(ChartContextAction::Drawing(
-                DrawingContextMenuAction::AddAlert(alert),
-            ))),
+            action @ Action::ChartMenu(ChartContextAction::Drawing(
+                DrawingContextMenuAction::AddAlert(_),
+            )) => Some(action),
             Action::ChartMenu(ChartContextAction::Drawing(action)) => {
                 self.user_action(|terminal| terminal.perform_drawing_menu(action));
                 None
@@ -495,7 +491,8 @@ impl Terminal {
             .drawings
             .crosshair
             .as_ref()
-            .and_then(|pointer| Some((pointer, pointer.bar.as_ref()?)))
+            .filter(|(slot, _)| *slot == self.active)
+            .and_then(|(_, pointer)| Some((pointer, pointer.bar.as_ref()?)))
         else {
             return DataWindowInfo::from_chart(chart);
         };
@@ -525,15 +522,20 @@ impl Terminal {
                 _ => None,
             });
         if let Some(pointer) = moved {
-            self.drawings.crosshair = pointer;
+            self.drawings.crosshair = pointer.map(|pointer| (self.active, pointer));
             // The data window was drawn before the chart; show the new values now.
-            ctx.request_repaint();
+            if matches!(
+                self.panel,
+                Some(SidePanel::ObjectTree | SidePanel::DataWindow)
+            ) {
+                ctx.request_repaint();
+            }
         }
     }
 
     /// Performs an object tree action as one undoable step. Settings of the main series and of
-    /// studies belong to the studies group.
-    fn perform_object_tree(&mut self, action: ObjectTreeAction) {
+    /// studies belong to the studies group, and what it leaves is returned.
+    fn perform_object_tree(&mut self, action: ObjectTreeAction) -> Option<Action> {
         let sources = self.build_source_items();
         let state = &mut self.drawings;
         let chart = &mut self.charts[self.active];
@@ -574,11 +576,7 @@ impl Terminal {
             }
         };
         chart.end_user_action();
-        if let Some(menu) = handoff
-            && let Some(left) = self.perform(Action::ChartMenu(menu))
-        {
-            self.returned.push(left);
-        }
+        handoff.and_then(|menu| self.perform(Action::ChartMenu(menu)))
     }
 }
 
@@ -756,13 +754,16 @@ mod tests {
         let object_tree = |terminal: &mut Terminal, action| {
             assert!(terminal.run(Action::ObjectTree(action)).is_none());
         };
-        object_tree(
-            &mut terminal,
-            ObjectTreeAction::ToggleVisibility(MAIN_SERIES_ID),
-        );
-        assert!(!terminal.chart().is_main_series_visible());
-        assert!(terminal.chart_mut().undo());
-        assert!(terminal.chart().is_main_series_visible());
+        // The main series' settings are handed on as the chart menu's, which is left to the
+        // host until the studies group performs it.
+        assert!(matches!(
+            terminal.run(Action::ObjectTree(ObjectTreeAction::OpenProperties(
+                MAIN_SERIES_ID
+            ))),
+            Some(Action::ChartMenu(ChartContextAction::Chart(
+                ContextMenuAction::OpenSettings
+            )))
+        ));
         // A drawing and a study selected in the tree are deleted, and restored, together.
         let tree = terminal.drawings.object_tree.state_mut();
         tree.select(ids[0]);
