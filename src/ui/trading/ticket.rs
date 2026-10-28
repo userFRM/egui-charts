@@ -522,18 +522,18 @@ impl OrderTicket {
                     .inner;
                 // A new order from the ladder waits for confirmation without one-click trading.
                 match ladder {
-                    Some(Action::Place(request)) => match self.with_brackets(request, market) {
-                        Ok(request) if *one_click => Some(Action::Place(request)),
-                        Ok(request) => {
-                            self.dom_error = None;
-                            self.confirm = Some(request);
-                            None
+                    Some(Action::Place(request)) => {
+                        let bracketed = self.with_brackets(request, market);
+                        self.dom_error = bracketed.as_ref().err().cloned();
+                        match bracketed {
+                            Ok(request) if *one_click => Some(Action::Place(request)),
+                            Ok(request) => {
+                                self.confirm = Some(request);
+                                None
+                            }
+                            Err(_) => None,
                         }
-                        Err(reason) => {
-                            self.dom_error = Some(reason);
-                            None
-                        }
-                    },
+                    }
                     Some(Action::Cancel(ids)) => {
                         self.cancel = Some(ids);
                         None
