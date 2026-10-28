@@ -8,11 +8,12 @@ use crate::ui_kit::notifications::NotificationPanel;
 pub(super) enum Region {
     /// Above the top toolbar, such as the layout tabs.
     Top,
-    /// The left edge: the 54 point drawing toolbar panel.
+    /// The left edge: the 54 point drawing toolbar panel, then the dock across the bottom of the
+    /// rest of the window.
     Left,
     /// The right edge: the 49 point widget bar and the side panel beside it.
     Right,
-    /// The bottom edge: the dock, then the 39 point bottom bar panel.
+    /// The bottom edge of the chart column: the 39 point bottom bar panel.
     Bottom,
     /// Over the chart area, after the charts are drawn.
     Chart,

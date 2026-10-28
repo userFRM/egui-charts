@@ -120,7 +120,9 @@ impl Terminal {
                     .account
                     .show_ticket(ui, &self.charts[self.active]);
             }
-            Region::Bottom => self.show_dock(ui),
+            // After the drawing toolbar and before the side panels and the bottom bar, so that the
+            // dock runs under the bottom bar to the window's right edge.
+            Region::Left => self.show_dock(ui),
             Region::Chart => {
                 self.highlight_trade(ui);
                 if self.trading_enabled() {
@@ -318,7 +320,7 @@ impl Terminal {
         tabs
     }
 
-    /// The strip of tabs above the bottom bar, with the panel of the selected tab over it.
+    /// The strip of tabs below the bottom bar, with the panel of the selected tab over it.
     fn show_dock(&mut self, ui: &mut egui::Ui) {
         let tabs = self.dock_tabs();
         if tabs.is_empty() || self.trading.dock == Dock::Closed {
@@ -333,7 +335,8 @@ impl Terminal {
             Dock::Maximised => (available - 160.0 - STRIP).max(BODY),
             _ => BODY,
         };
-        let height = (STRIP + body).min((available - 96.0).max(STRIP));
+        // The chart keeps 96 points over the 40 point bottom bar.
+        let height = (STRIP + body).min((available - 136.0).max(STRIP));
         let theme = self.theme.clone();
         let symbol = self.chart().symbol().to_owned();
         let (dock, tab) = (self.trading.dock, self.trading.tab);
@@ -346,11 +349,18 @@ impl Terminal {
             .exact_size(height)
             .show_separator_line(false)
             .frame(panel_frame(theme.ui.panel_bg).outer_margin(egui::Margin {
-                bottom: 5,
+                top: 5,
                 ..egui::Margin::ZERO
             }))
             .show(ui, |ui| {
-                click = show_strip(ui, &theme, &tabs, tab, dock != Dock::Minimised);
+                click = egui::Panel::bottom("egui_charts_terminal_dock_tabs")
+                    .exact_size(STRIP)
+                    .show_separator_line(false)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| {
+                        show_strip(ui, &theme, &tabs, tab, dock != Dock::Minimised)
+                    })
+                    .inner;
                 if dock == Dock::Minimised {
                     return;
                 }
@@ -504,11 +514,13 @@ fn show_strip(
     // Buttons 23 points apart, the last ending 15 points from the edge.
     let maximise = pos2(strip.right() - 15.0 - 8.0, strip.center().y);
     let minimise = maximise - vec2(23.0, 0.0);
-    for (centre, name) in [(minimise, "Minimise"), (maximise, "Maximise")] {
+    for (centre, name) in [(minimise, "Minimize panel"), (maximise, "Maximize panel")] {
         let rect = egui::Rect::from_center_size(centre, vec2(22.0, 22.0));
-        let response = ui.interact(rect, ui.scope_id().with(name), Sense::click());
-        let name = l10n::text(ui.ctx(), name);
-        response.widget_info(|| WidgetInfo::labeled(Role::Button, true, &name));
+        let label = l10n::text(ui.ctx(), name);
+        let response = ui
+            .interact(rect, ui.scope_id().with(name), Sense::click())
+            .on_hover_text(&label);
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, true, &label));
         let color = if response.hovered() {
             theme.ui.text
         } else {
@@ -531,7 +543,7 @@ fn show_strip(
     if expanded {
         painter.hline(
             strip.x_range(),
-            strip.bottom(),
+            strip.top(),
             egui::Stroke::new(1.0, theme.ui.border),
         );
     }
@@ -708,7 +720,9 @@ mod tests {
         settle(&mut terminal);
         let tabs = frame(&mut terminal, SIZE, vec![]);
         assert!(tabs.text_at("Account Manager").is_some());
-        assert!(tabs.text_at("Strategy Report").is_some());
+        let report_tab = tabs.text_at("Strategy Report").expect("report tab");
+        let clear = tabs.text_at("Clear report").expect("report panel");
+        assert!(report_tab.y > clear.y, "the panel opens above its tabs");
 
         terminal.set_strategy_report(None);
         settle(&mut terminal);
