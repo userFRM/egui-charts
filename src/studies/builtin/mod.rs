@@ -49,7 +49,7 @@
 //! [`VwapAutoAnchored`], [`Volume24h`], [`RelativeVolumeAtTime`]
 //!
 //! ## Support / resistance
-//! [`PivotPoints`], [`PivotPointsHighLow`], [`Reversal`], [`RisingWedge`], [`FallingWedge`],
+//! [`PivotPoints`], [`PivotPointsHighLow`], [`ElliottWave`], [`Reversal`], [`RisingWedge`], [`FallingWedge`],
 //! [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
 //! [`PriceChannel`]
 //!
@@ -155,6 +155,7 @@ mod std_dev;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod auto_drawing;
+mod elliott_wave;
 mod gaps;
 mod knoxville_divergence;
 mod pivot_points;
@@ -366,6 +367,7 @@ pub use std_dev::StandardDeviation;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
+pub use elliott_wave::ElliottWave;
 pub use gaps::Gaps;
 pub use knoxville_divergence::KnoxvilleDivergence;
 pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
