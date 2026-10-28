@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `NewsQuery` carries `symbols`, `topics` and `providers`, and the news panel offers them: `NewsPanel::set_symbols` adds symbols to the followed one, and `set_topics` and `set_providers` list the topic values and provider identifiers the feed supports. Every change sends the complete selection through `Datafeed::news`, a superseded reply is ignored, and the choices stay selected through loading, empty and failed states and while the host offers the same values again. Migration: read `NewsQuery::symbols`, empty for the whole market, instead of `NewsQuery::symbol`. ([#1101](https://github.com/userFRM/egui-charts/issues/1101))
 - `ChartEvent::MarkClick { id, series, time }` reports a primary click on a bar mark that has a `Marker::id`, through `Chart::drain_events`. The hit area is the one that shows the mark's tooltip, so only visible marks respond; of overlapping marks the one painted on top is reported, and the click neither selects nor deselects a series or study. Drawing tools and the eraser take the click first. ([#1106](https://github.com/userFRM/egui-charts/issues/1106))
 
 - `KineticScrollOptions::mouse` continues a released mouse drag with the same damping, speed limits, minimum movement and cancellation as touch inertia, which `enabled` keeps controlling on its own. Migration: `KineticScrollOptions` literals add `mouse: false` or use defaults. ([#1065](https://github.com/userFRM/egui-charts/issues/1065))

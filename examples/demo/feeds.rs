@@ -59,12 +59,18 @@ const HIGHLIGHTS: &[(&str, &str)] = &[
 
 /// Up to `query.limit` synthetic stories, newest first, published on the hour before `now`.
 pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
-    let symbols: Vec<&DemoSymbol> = match &query.symbol {
-        Some(symbol) => DemoSymbol::catalog()
+    let symbols: Vec<&DemoSymbol> = if query.symbols.is_empty() {
+        DemoSymbol::catalog().iter().collect()
+    } else {
+        DemoSymbol::catalog()
             .iter()
-            .filter(|spec| spec.symbol.eq_ignore_ascii_case(symbol))
-            .collect(),
-        None => DemoSymbol::catalog().iter().collect(),
+            .filter(|spec| {
+                query
+                    .symbols
+                    .iter()
+                    .any(|symbol| spec.symbol.eq_ignore_ascii_case(symbol))
+            })
+            .collect()
     };
     let templates = if query.highlights {
         HIGHLIGHTS

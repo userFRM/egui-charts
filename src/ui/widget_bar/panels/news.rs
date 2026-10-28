@@ -1,4 +1,5 @@
-//! Headlines and highlights the feed supplies, for the chart's symbol or the whole market.
+//! Headlines and highlights the feed supplies, for the chart's symbol, more symbols or the whole
+//! market, narrowed by topic and provider.
 
 use crate::localization as l10n;
 use std::sync::Arc;
@@ -13,6 +14,8 @@ use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 use crate::ui_kit::{EmptyState, IconButton, LoadingIndicator, PanelHeader};
+
+use super::controls::dropdown;
 
 /// Stories asked for at most.
 const LIMIT: usize = 50;
@@ -33,8 +36,10 @@ pub enum NewsAction {
 /// News or highlights fed by the host's [`Datafeed::news`].
 ///
 /// Keep it on the chart's symbol with [`set_symbol`](Self::set_symbol); the user switches between
-/// that symbol's stories and the whole market's. Each change asks the feed again, and only the
-/// answer to the latest request is shown. A story opens to its text, with actions to show the
+/// that symbol's stories and the whole market's. With [`set_symbols`](Self::set_symbols) they can
+/// add symbols, and with [`set_topics`](Self::set_topics) and [`set_providers`](Self::set_providers)
+/// narrow the stories by topic and provider. Each change asks the feed again with the complete
+/// selection, and only the answer to the latest request is shown. A story opens to its text, with actions to show the
 /// chart at its time and to open its link. Call [`poll`](Self::poll) each frame, then
 /// [`show`](Self::show) while the panel is open.
 pub struct NewsPanel {
@@ -42,6 +47,9 @@ pub struct NewsPanel {
     feed: Option<Arc<dyn Datafeed>>,
     symbol: Option<String>,
     market: bool,
+    more_symbols: Vec<(String, bool)>,
+    topics: Vec<(String, bool)>,
+    providers: Vec<(String, bool)>,
     stories: Vec<NewsStory>,
     open: Option<String>,
     error: Option<FeedError>,
@@ -64,6 +72,9 @@ impl NewsPanel {
             feed: None,
             symbol: None,
             market: false,
+            more_symbols: Vec::new(),
+            topics: Vec::new(),
+            providers: Vec::new(),
             stories: Vec::new(),
             open: None,
             error: None,
@@ -97,6 +108,27 @@ impl NewsPanel {
         }
     }
 
+    /// Offer `symbols` as further symbols to show stories about, next to the followed one. None is
+    /// selected at first; choices still offered stay selected.
+    pub fn set_symbols(&mut self, symbols: impl IntoIterator<Item = String>) {
+        offer(&mut self.more_symbols, symbols);
+        self.refresh();
+    }
+
+    /// Offer `topics`, in the values the feed supports, as a filter. None is selected at first,
+    /// which lists every topic; choices still offered stay selected.
+    pub fn set_topics(&mut self, topics: impl IntoIterator<Item = String>) {
+        offer(&mut self.topics, topics);
+        self.refresh();
+    }
+
+    /// Offer `providers`, in the identifiers the feed uses, as a filter. None is selected at
+    /// first, which lists every provider; choices still offered stay selected.
+    pub fn set_providers(&mut self, providers: impl IntoIterator<Item = String>) {
+        offer(&mut self.providers, providers);
+        self.refresh();
+    }
+
     /// Ask the feed again, such as when the host learns of new stories.
     pub fn refresh(&mut self) {
         let Some(feed) = &self.feed else {
@@ -104,12 +136,19 @@ impl NewsPanel {
         };
         self.request += 1;
         self.loading = true;
+        let symbols = if self.market {
+            Vec::new()
+        } else {
+            self.symbol
+                .iter()
+                .chain(chosen(&self.more_symbols))
+                .cloned()
+                .collect()
+        };
         let query = NewsQuery {
-            symbol: if self.market {
-                None
-            } else {
-                self.symbol.clone()
-            },
+            symbols,
+            topics: chosen(&self.topics).cloned().collect(),
+            providers: chosen(&self.providers).cloned().collect(),
             highlights: self.highlights,
             limit: LIMIT,
         };
@@ -251,7 +290,42 @@ impl NewsPanel {
                 });
             },
         );
-        if refresh || market != self.market {
+        let before = (
+            self.more_symbols.clone(),
+            self.topics.clone(),
+            self.providers.clone(),
+        );
+        ui.horizontal_wrapped(|ui| {
+            for (id, noun, choices) in [
+                ("news_symbols", "symbols", &mut self.more_symbols),
+                ("news_topics", "topics", &mut self.topics),
+                ("news_providers", "providers", &mut self.providers),
+            ] {
+                if choices.is_empty() || (id == "news_symbols" && self.market) {
+                    continue;
+                }
+                let count = choices.iter().filter(|(_, on)| *on).count();
+                let text = if count == 0 {
+                    format!("All {noun}")
+                } else {
+                    format!("{count} {noun}")
+                };
+                dropdown(ui, id, &text, |ui| {
+                    for (value, on) in choices.iter_mut() {
+                        ui.checkbox(on, l10n::text(ui.ctx(), value.as_str()));
+                    }
+                });
+            }
+        });
+        if refresh
+            || market != self.market
+            || before
+                != (
+                    self.more_symbols.clone(),
+                    self.topics.clone(),
+                    self.providers.clone(),
+                )
+        {
             self.refresh();
         }
         match &self.error {
@@ -329,6 +403,23 @@ impl NewsPanel {
     }
 }
 
+/// Replace the offered values with `values`, keeping the choice of those still offered.
+fn offer(choices: &mut Vec<(String, bool)>, values: impl IntoIterator<Item = String>) {
+    let kept = std::mem::take(choices);
+    *choices = values
+        .into_iter()
+        .map(|value| {
+            let on = kept.iter().any(|(old, on)| *on && *old == value);
+            (value, on)
+        })
+        .collect();
+}
+
+/// The values the user ticked.
+fn chosen(choices: &[(String, bool)]) -> impl Iterator<Item = &String> {
+    choices.iter().filter(|(_, on)| *on).map(|(value, _)| value)
+}
+
 /// The publication time in UTC and the source.
 fn meta(story: &NewsStory) -> String {
     let time = story.time.format("%b %-d, %H:%M UTC").to_string();
@@ -370,8 +461,8 @@ mod tests {
         let ctx = egui::Context::default();
         let story = |id: &str| NewsStory::new(id, DateTime::UNIX_EPOCH, id);
         let mut requests = std::mem::take(&mut *feed.0.lock().unwrap());
-        let queried: Vec<_> = requests.iter().map(|(q, _)| q.symbol.clone()).collect();
-        assert_eq!(queried, [Some("AAA".into()), Some("BBB".into())]);
+        let queried: Vec<_> = requests.iter().map(|(q, _)| q.symbols.clone()).collect();
+        assert_eq!(queried, [["AAA"], ["BBB"]]);
         let (_, latest) = requests.pop().unwrap();
         let (_, earlier) = requests.pop().unwrap();
         latest.send(Ok(vec![story("b")]));
@@ -379,13 +470,34 @@ mod tests {
         panel.poll(&ctx);
         assert_eq!(panel.stories, [story("b")]);
 
+        panel.set_topics(["tech".into(), "fx".into()]);
+        panel.set_providers(["wire".into()]);
+        panel.set_symbols(["DDD".into()]);
+        panel.topics[1].1 = true;
+        panel.more_symbols[0].1 = true;
+        panel.providers[0].1 = true;
+        panel.refresh();
+        panel.set_topics(["fx".into(), "oil".into()]);
+        let queries: Vec<_> = std::mem::take(&mut *feed.0.lock().unwrap())
+            .into_iter()
+            .map(|(query, _)| (query.symbols, query.topics, query.providers))
+            .collect();
+        // The complete selection is sent, and re-offering values keeps the ones still offered.
+        let selected = (
+            vec!["BBB".to_owned(), "DDD".to_owned()],
+            vec!["fx".to_owned()],
+            vec!["wire".to_owned()],
+        );
+        assert_eq!(queries[3], selected);
+        assert_eq!(queries[4], selected);
+
         panel.market = true;
         panel.refresh();
         panel.set_symbol("CCC");
         let mut requests = std::mem::take(&mut *feed.0.lock().unwrap());
         assert_eq!(requests.len(), 1);
         let (query, reply) = requests.pop().unwrap();
-        assert_eq!((query.symbol, query.highlights), (None, false));
+        assert_eq!((query.symbols, query.highlights), (vec![], false));
         reply.send(Err(FeedError::NotSupported));
         panel.poll(&ctx);
         assert!(panel.stories.is_empty());

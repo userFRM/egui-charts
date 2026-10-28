@@ -7,8 +7,14 @@ use chrono::{DateTime, Utc};
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct NewsQuery {
-    /// Stories about this symbol, or about the whole market when `None`.
-    pub symbol: Option<String>,
+    /// Stories about any of these symbols, or about the whole market when empty.
+    pub symbols: Vec<String>,
+    /// Only stories of these topics, in the values the feed supports, or of every topic when
+    /// empty.
+    pub topics: Vec<String>,
+    /// Only stories from these providers, in the identifiers the feed uses, or from every
+    /// provider when empty.
+    pub providers: Vec<String>,
     /// Short summaries of what moves the market or the symbol, instead of headlines.
     pub highlights: bool,
     /// Stories wanted at most.
