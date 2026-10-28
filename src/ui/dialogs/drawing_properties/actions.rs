@@ -246,3 +246,167 @@ impl DrawingProps {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Existing drawing settings survive opening and applying the properties, bulk edits over the
+    /// selection stay atomic, and every tool's saved settings reach the drawing.
+    #[test]
+    fn props_round_trip_visibility_fill_fonts_and_tool_settings() {
+        use crate::drawings::{Drawing, DrawingToolType, TimeframeVisibility};
+        use crate::model::{BarData, LineStyle};
+        use crate::widget::Chart;
+        let mut chart = Chart::new(BarData::new());
+        let mut drawing = Drawing::new(7, DrawingToolType::TextLabel);
+        drawing.line_style = LineStyle::Dotted;
+        drawing.fill_color = Some([51, 102, 153, 85]);
+        drawing.font_size = 24.0;
+        drawing.extend_left = true;
+        drawing.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
+        drawing.text = Some("Annotation".into());
+        drawing.locked = true;
+        chart.drawings_mut().drawings.push(drawing);
+        let props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+        assert!(!props.visible_all_timeframes);
+        assert_eq!(props.visible_timeframes, ["1h"]);
+        assert!(props.fill_enabled);
+        assert_eq!(
+            props.fill_color.unwrap().to_srgba_unmultiplied(),
+            [51, 102, 153, 85]
+        );
+        assert_eq!(props.font_size, 24.0);
+        assert!(matches!(props.line_style, LineStyle::Dotted));
+        assert!(props.extend_left);
+        assert!(
+            DrawingProps {
+                font_size: 40.0,
+                ..props.clone()
+            }
+            .apply_to_chart(DrawingId(7), &mut chart)
+            .is_err()
+        );
+        assert_eq!(chart.drawings().drawings[0].font_size, 24.0);
+        chart.drawings_mut().edit_drawing(7, |d| d.locked = false);
+        props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
+        let mut second = chart.drawings().drawings[0].clone();
+        second.id = 8;
+        chart.drawings_mut().drawings.push(second);
+        chart.drawings_mut().select_drawings([7, 8]);
+        let changed = DrawingProps {
+            visible_all_timeframes: false,
+            visible_timeframes: vec!["4h".into()],
+            font_size: 28.0,
+            fill_enabled: false,
+            ..props.clone()
+        };
+        changed.apply_to_chart(DrawingId(7), &mut chart).unwrap();
+        let saved = &chart.drawings().drawings[0];
+        assert!(saved.timeframe_visibility.is_visible_on("4h"));
+        assert!(!saved.timeframe_visibility.is_visible_on("1h"));
+        assert_eq!(saved.fill_color, None);
+        assert_eq!(saved.font_size, 28.0);
+        assert_eq!(chart.drawings().drawings[1].font_size, 28.0);
+        assert!(chart.undo());
+        assert!(
+            chart
+                .drawings()
+                .drawings
+                .iter()
+                .all(|d| d.font_size == 24.0)
+        );
+        assert!(chart.redo());
+
+        use crate::data::VolumeProfileConfig;
+        use crate::drawings::{
+            FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, PositionSizing,
+            RegressionTrendConfig,
+        };
+        for tool in [
+            DrawingToolType::FibonacciRetracement,
+            DrawingToolType::Pitchfork,
+            DrawingToolType::GannBox,
+            DrawingToolType::LongPos,
+            DrawingToolType::ShortPos,
+            DrawingToolType::FixedRangeVolumeProfile,
+            DrawingToolType::RegressionTrend,
+            DrawingToolType::ParallelChannel,
+        ] {
+            chart.drawings_mut().drawings.clear();
+            chart.drawings_mut().drawings.push(Drawing::new(7, tool));
+            let mut peer = Drawing::new(8, DrawingToolType::TrendLine);
+            peer.chart_points
+                .push(crate::drawings::ChartPoint::new(5.0, 75.0));
+            chart.drawings_mut().drawings.push(peer);
+            chart.drawings_mut().select_drawings([7, 8]);
+            let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+            let settings = &mut props.tool_settings.as_mut().unwrap().settings;
+            settings.fib_config = Some(FibonacciConfig {
+                reverse: true,
+                ..Default::default()
+            });
+            settings.pitchfork = Some(PitchforkConfig {
+                background_opacity: 75,
+                ..Default::default()
+            });
+            settings.gann = Some(GannConfig {
+                price_levels: vec![0.0, 0.5, 1.0],
+                time_levels: vec![0.25, 0.75],
+            });
+            settings.position_size = Some(PositionSize::RiskPercent {
+                account_size: 10_000.0,
+                percent: 1.0,
+            });
+            settings.position_sizing = PositionSizing {
+                point_value: 50.0,
+                lot_size: 10.0,
+                quantity_step: 0.01,
+                leverage: 5.0,
+            };
+            let sizing = settings.position_sizing;
+            settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
+            settings.regression_trend = RegressionTrendConfig::new(3.0);
+            settings.channel_midline = true;
+            let expected = format!("{:?}", settings.fib_config);
+            props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
+            let saved = &chart.drawings().drawings[0];
+            assert_eq!(format!("{:?}", saved.fib_config), expected);
+            assert_eq!(saved.pitchfork.as_ref().unwrap().background_opacity, 75);
+            assert_eq!(saved.gann.as_ref().unwrap().time_levels, [0.25, 0.75]);
+            assert_eq!(
+                saved.position_size.unwrap().quantity(100.0, 98.0),
+                Some(50.0)
+            );
+            assert_eq!(saved.volume_profile.unwrap().rows(), 48);
+            assert_eq!(saved.position_sizing, sizing);
+            assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
+            assert!(saved.channel_midline);
+            assert!(chart.drawings().drawings[1].fib_config.is_none());
+            assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
+            assert!(chart.undo());
+            assert!(chart.drawings().drawings[0].fib_config.is_none());
+            assert!(chart.redo());
+            chart.drawings_mut().edit_drawing(7, |d| d.locked = true);
+            props.font_size = 18.0;
+            props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
+            assert_eq!(chart.drawings().drawings[0].font_size, 12.0);
+            assert_eq!(chart.drawings().drawings[1].font_size, 18.0);
+            // A malformed ratio cannot partially change common style or another selected tool.
+            props
+                .tool_settings
+                .as_mut()
+                .unwrap()
+                .settings
+                .fib_config
+                .as_mut()
+                .unwrap()
+                .levels[0]
+                .value = f32::NAN;
+            props.line_width = 9.0;
+            assert!(props.apply_to_chart(DrawingId(7), &mut chart).is_err());
+            assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0);
+            assert_eq!(chart.drawings().drawings[1].stroke_width, 2.0);
+        }
+    }
+}
