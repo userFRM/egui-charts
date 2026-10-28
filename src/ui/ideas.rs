@@ -292,6 +292,7 @@ impl IdeasPanel {
         }
         for idea in shown {
             ui.group(|ui| {
+                ui.set_width(ui.available_width());
                 if !idea.title.is_empty() {
                     ui.label(RichText::new(&idea.title).strong());
                 }

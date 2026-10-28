@@ -125,7 +125,7 @@ impl DataTableDialog {
         let mut action = DataTableAction::None;
         let mut open = true;
         Modal::new("chart_data_table", l10n::text(ctx, "Chart data"))
-            .width(760.0)
+            .width(860.0)
             .height(520.0)
             .show(ctx, &mut open, |ui| {
                 action = Self::contents(ui, table, hidden);

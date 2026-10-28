@@ -211,7 +211,9 @@ impl StudyEditor {
                     .id(editor)
                     .code_editor()
                     .desired_width(f32::INFINITY)
-                    .desired_rows(12)
+                    .desired_rows(
+                        (height / ui.text_style_height(&egui::TextStyle::Monospace)) as usize,
+                    )
                     .show(ui);
                 if let Some(range) = reveal {
                     let cursors =
