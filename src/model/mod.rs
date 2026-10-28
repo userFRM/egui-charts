@@ -117,8 +117,9 @@ pub use tpo::{
     derive_tick_size, to_tpo_profiles,
 };
 pub use trading::{
-    Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderRequest,
-    OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce, TradingRules,
+    Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderPreview,
+    OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce,
+    TradingRules,
 };
 
 pub use watchlist::{Watchlist, WatchlistFlag, WatchlistItem};
