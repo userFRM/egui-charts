@@ -370,12 +370,11 @@ impl IndicatorSettingsDialog {
                                         egui::ComboBox::from_id_salt("plot_type")
                                             .selected_text(l10n::text(
                                                 ui.ctx(),
-                                                format!("{:?}", plot.plot_type),
+                                                plot.plot_type.name(),
                                             ))
                                             .show_ui(ui, |ui| {
                                                 for kind in PlotType::ALL {
-                                                    let label =
-                                                        l10n::text(ui.ctx(), format!("{kind:?}"));
+                                                    let label = l10n::text(ui.ctx(), kind.name());
                                                     // A saved choice stays listed and selected.
                                                     match kind
                                                         .incompatibility(

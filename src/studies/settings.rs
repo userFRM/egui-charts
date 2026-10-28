@@ -50,6 +50,23 @@ impl PlotType {
         Self::BackgroundColor,
     ];
 
+    /// User-facing display name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Line => "Line",
+            Self::StepLine => "Step line",
+            Self::Histogram => "Histogram",
+            Self::Columns => "Columns",
+            Self::Area => "Area",
+            Self::Circles => "Circles",
+            Self::Crosses => "Crosses",
+            Self::TriangleUp => "Triangle up",
+            Self::TriangleDown => "Triangle down",
+            Self::BarColor => "Bar colour",
+            Self::BackgroundColor => "Background colour",
+        }
+    }
+
     /// Why a plot of this type cannot be drawn for a study, or `None` when it can.
     /// `overlay` is whether the study is drawn on the price chart, and `price_scale` whether it
     /// shares the price scale there, which a volume study does not.
