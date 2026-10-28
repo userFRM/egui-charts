@@ -172,7 +172,7 @@ impl DepthHistory {
         }
         self.clear();
         for column in held {
-            self.push_shared(column);
+            self.push(column);
         }
         Ok(accepted)
     }
@@ -182,11 +182,8 @@ impl DepthHistory {
     }
 
     /// Live columns supersede overlapping history, including a page answered in the same drain.
-    pub(crate) fn push(&mut self, column: DepthColumn) {
-        self.push_shared(Arc::new(column));
-    }
-
-    fn push_shared(&mut self, column: Arc<DepthColumn>) {
+    pub(crate) fn push(&mut self, column: impl Into<Arc<DepthColumn>>) {
+        let column = column.into();
         if self
             .columns()
             .next_back()
