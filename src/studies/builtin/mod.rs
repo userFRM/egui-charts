@@ -52,7 +52,7 @@
 //! [`PriceChannel`]
 //!
 //! ## Patterns
-//! [`CandlestickPatterns`]
+//! [`CandlestickPatterns`], [`ChartPatterns`]
 //!
 //! ## Statistics
 //! [`LinearRegression`], [`StandardError`],
@@ -71,6 +71,11 @@ pub use trade_delta::{TradeDeltaValue, trade_delta};
 
 mod candlestick_patterns;
 pub use candlestick_patterns::{CandlestickPatterns, PatternTrend, PatternType};
+
+mod chart_patterns;
+pub use chart_patterns::{
+    ChartPatterns, Formation, FormationKind, FormationStatus, PatternDirection, PatternFamily,
+};
 
 mod higher_interval_candles;
 pub use higher_interval_candles::HigherIntervalCandles;
@@ -331,7 +336,7 @@ pub use obv::OnBalanceVolume;
 pub use twap::TimeWeightedAvgPrice;
 pub use volume::{Volume, VolumeAverage, VolumeColorRule};
 pub use volume_profile::{
-    VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
+    ProfileInput, VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
     VolProfileSession, VolProfileVisible,
 };
 pub use vwap::{VolumeWeightedAvgPrice, VwapAnchor};
