@@ -696,6 +696,7 @@ impl DemoApp {
             .clone()
             .filter(|name| menu.layouts.contains(name));
         settings.layout_autosave = menu.autosave;
+        settings.layout_favorites = menu.favorites.clone();
         settings
     }
 
@@ -717,6 +718,7 @@ impl DemoApp {
         }
         self.drawing_toolbar.state.favorites = settings.drawing_favorites;
         self.top_toolbar.layout_menu.autosave = settings.layout_autosave;
+        self.top_toolbar.layout_menu.favorites = settings.layout_favorites;
         if let Some(layout) = settings.layout {
             self.top_toolbar.layout_menu.open(&layout);
         }
