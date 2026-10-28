@@ -2193,36 +2193,48 @@ impl Chart {
 
         tags.push(last_price_tag);
         if show_price_axis {
-            for (value, colors, outlined) in &pending_values {
-                if price_map
-                    .range()
-                    .contains(price_map.transform().to_scale(*value))
-                {
-                    let label = price_map.transform().label(
-                        price_map.transform().to_scale(*value),
-                        price_map.price_precision().unwrap_or(2),
-                        price_formatter.as_deref(),
+            // Labels that sit closer than a tag is high stack in the order of their prices.
+            let mut shown: Vec<_> = pending_values
+                .iter()
+                .filter(|(value, ..)| {
+                    price_map
+                        .range()
+                        .contains(price_map.transform().to_scale(*value))
+                })
+                .map(|(value, colors, outlined)| {
+                    (price_map.price_to_y(*value), *value, *colors, *outlined)
+                })
+                .collect();
+            shown.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut ys: Vec<_> = shown.iter().map(|shown| shown.0).collect();
+            if !self.config.price_axis.allow_label_overlap {
+                ys = rendering::axes::spread_axis_ys(&painter, &ys);
+            }
+            for ((_, value, colors, outlined), y) in shown.into_iter().zip(ys) {
+                let label = price_map.transform().label(
+                    price_map.transform().to_scale(value),
+                    price_map.price_precision().unwrap_or(2),
+                    price_formatter.as_deref(),
+                );
+                let tag = rendering::axes::render_axis_value(
+                    &painter,
+                    price_rect,
+                    axis_edge,
+                    y,
+                    label,
+                    colors,
+                    &tags,
+                    self.config.price_axis.allow_label_overlap,
+                );
+                if outlined && let Some(rect) = tag {
+                    painter.rect_stroke(
+                        rect,
+                        2.0,
+                        egui::Stroke::new(1.0, colors.0),
+                        egui::StrokeKind::Inside,
                     );
-                    let tag = rendering::axes::render_axis_value(
-                        &painter,
-                        price_rect,
-                        axis_edge,
-                        price_map.price_to_y(*value),
-                        label,
-                        *colors,
-                        &tags,
-                        self.config.price_axis.allow_label_overlap,
-                    );
-                    if *outlined && let Some(rect) = tag {
-                        painter.rect_stroke(
-                            rect,
-                            2.0,
-                            egui::Stroke::new(1.0, colors.0),
-                            egui::StrokeKind::Inside,
-                        );
-                    }
-                    tags.push(tag);
                 }
+                tags.push(tag);
             }
         }
         if show_price_axis {
