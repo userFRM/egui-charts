@@ -174,6 +174,8 @@ pub struct VolumeProfile {
     pub(crate) high: f64,
     pub(crate) row_height: f64,
     fixed_height: bool,
+    /// Original price of an all-flat equal-row span, before padding its grid.
+    flat_price: Option<f64>,
     /// Volume per row, lowest prices first.
     pub(crate) volume: Vec<f64>,
     pub(crate) up: Vec<f64>,
@@ -238,6 +240,7 @@ impl VolumeProfile {
             high,
             row_height: row_size,
             fixed_height: false,
+            flat_price: None,
             volume: vec![0.0; count as usize],
             up: vec![0.0; count as usize],
             down: vec![0.0; count as usize],
@@ -284,6 +287,7 @@ impl VolumeProfile {
             high,
             row_height: step,
             fixed_height: true,
+            flat_price: None,
             volume: vec![0.0; count as usize],
             up: vec![0.0; count as usize],
             down: vec![0.0; count as usize],
@@ -353,6 +357,7 @@ impl VolumeProfile {
         if rows == 0 || rows > 10_000 {
             return None;
         }
+        let flat_price = (row_size.is_none() && low == high).then_some(low);
         let (low, high, row_height, rows) = if let Some(height) = row_size {
             let (low, high, rows) = fixed_grid(low, high, height)?;
             (low, high, height, rows)
@@ -370,6 +375,7 @@ impl VolumeProfile {
             high,
             row_height,
             fixed_height: row_size.is_some(),
+            flat_price,
             volume: vec![0.0; rows],
             up: vec![0.0; rows],
             down: vec![0.0; rows],
@@ -406,7 +412,12 @@ impl VolumeProfile {
             }
             profile.low = low;
             profile.high = high;
-        } else if bar.low < self.low || bar.high > self.high {
+        } else if self
+            .flat_price
+            .is_some_and(|price| bar.low != price || bar.high != price)
+            || bar.low < self.low
+            || bar.high > self.high
+        {
             return None;
         }
         profile.add(bar);
@@ -607,6 +618,57 @@ mod tests {
                 Some((2, value_area)),
                 "share {share}"
             );
+        }
+    }
+
+    /// A flat span's padding is not its traded range: even a bar inside it needs a new grid.
+    #[test]
+    fn with_bar_rebuilds_when_a_flat_span_gains_range() {
+        let time = chrono::DateTime::UNIX_EPOCH;
+        for price in [0.000_02, 0.5, 2.0, 100.0] {
+            for rows in [1, 24] {
+                let flat = Bar::new(time, price, price, price, price, 100.0);
+                let profile = VolumeProfile::of(std::slice::from_ref(&flat), rows, None).unwrap();
+                assert_eq!(
+                    profile.with_bar(&flat),
+                    VolumeProfile::of(&[flat.clone(), flat.clone()], rows, None)
+                );
+                let range = (price.abs() * 1e-6).max(1e-6) * 0.4;
+                let next = Bar::new(time, price, price + range, price - range, price, 100.0);
+                assert!(next.low > profile.low() && next.high < profile.high());
+                assert!(
+                    profile.with_bar(&next).is_none(),
+                    "price {price}, rows {rows}"
+                );
+                // A different flat price also changes the span, even by one representable step.
+                let moved = Bar::new(time, price, price.next_up(), price, price, 100.0);
+                assert!(profile.with_bar(&moved).is_none());
+                let bars = [flat.clone(), next.clone()];
+                let rebuilt = VolumeProfile::of(&bars, rows, None).unwrap();
+                assert_eq!(rebuilt.volume().len(), rows);
+                assert_eq!((rebuilt.low(), rebuilt.high()), (next.low, next.high));
+                assert_close(rebuilt.row_height(), 2.0 * range / rows as f64);
+                // The flat bar lies in row 12; the second bar puts 100/24 in every row.
+                assert!((rebuilt.volume()[rows / 2] - (100.0 + 100.0 / rows as f64)).abs() < 1e-6);
+                let third = Bar::new(
+                    time,
+                    price,
+                    price + range / 2.0,
+                    price - range / 2.0,
+                    price,
+                    100.0,
+                );
+                let updated = rebuilt.with_bar(&third).unwrap();
+                assert_eq!(
+                    Some(updated.clone()),
+                    VolumeProfile::of(&[flat, next, third], rows, None)
+                );
+                assert!(
+                    (updated.volume()[rows / 2] - (100.0 + if rows == 1 { 200.0 } else { 12.5 }))
+                        .abs()
+                        < 1e-6
+                );
+            }
         }
     }
 
