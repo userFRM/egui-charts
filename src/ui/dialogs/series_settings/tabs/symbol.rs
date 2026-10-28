@@ -376,7 +376,7 @@ impl SymbolTab {
         }
     }
 
-    fn color_picker(ui: &mut Ui, color: &mut Color32) {
+    pub(super) fn color_picker(ui: &mut Ui, color: &mut Color32) {
         let id = ui.next_auto_id();
         let mut state = ui
             .data(|data| data.get_temp::<ColorPickerState>(id))

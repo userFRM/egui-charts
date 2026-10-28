@@ -803,6 +803,7 @@ impl Chart {
         self.config.price_source = settings.price_source;
         self.config.show_price_line = settings.show_price_line;
         self.config.show_prev_close_line = settings.show_prev_close_line;
+        self.main_series_style.alerts = settings.alerts;
         self.set_chart_type_params(settings.chart_type_params.clone());
         if self.state.price_scale().options().mode != settings.price_scale_mode {
             self.state.price_scale_mut().reset();
@@ -829,6 +830,7 @@ impl Chart {
             price_source: self.config.price_source,
             show_price_line: self.config.show_price_line,
             show_prev_close_line: self.config.show_prev_close_line,
+            alerts: self.main_series_style.alerts,
             price_scale_mode: self.state.price_scale().options().mode,
             invert_scale: self.state.price_scale().options().invert_scale,
             ..Default::default()
