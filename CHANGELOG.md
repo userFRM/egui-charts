@@ -1109,6 +1109,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Session volume profiles use faint session boxes, blue and violet volume stacks, distinct value-area shading and thin red POC lines in dark and light themes. Default value-area guides, node labels and developing traces are hidden; shared trade-profile rows gain crisp gaps, theme-aware value-area opacity and a thinner POC stroke. ([#1297](https://github.com/userFRM/egui-charts/issues/1297))
+
 - `UserSettings` is `#[non_exhaustive]`, so that fields can be added without a breaking change. Migration: build `UserSettings` with `Default` and assign fields. `IndicatorDialogAction` implements `Clone` and `Debug`, and `SettingsAction` implements `Debug`.
 
 - Migration for scale settings: `ScalesAndLinesSettings`, `ChartConfig` and `PriceAxisOptions` literals add the new display fields or use `..Default::default()`. Older saved settings take their defaults. `chart::render_axis_currency` takes an optional unit before the currency choices; pass `None` for the previous header. `PriceScale::set_bar_ratio` accepts a positive finite number of scale units per bar, with `None` unlocking it; logarithmic axes measure natural logarithms of prices.
