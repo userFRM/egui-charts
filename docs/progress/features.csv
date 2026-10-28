@@ -57,7 +57,7 @@ Builder API,Datafeed API,Trade tick input,done,host,src/data/inbox.rs;src/widget
 Builder API,Datafeed API,Trading session definition from the feed,partial,host,src/model/instrument.rs;src/model/session/mod.rs;src/widget/feed.rs
 Builder API,Datafeed API,Update cost and coalescing of fast streams,done,library,src/data/inbox.rs;src/widget/feed.rs;src/widget/series.rs;src/widget/studies.rs
 Builder API,Datafeed API,Validation of incoming bars,done,library,src/widget/builder.rs;src/widget/series.rs;src/data/merge.rs;src/data/inbox.rs
-Builder API,Datafeed API,Volume precision,done,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/tooltip.rs;src/widget/frame.rs
+Builder API,Datafeed API,Volume precision,done,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/tooltip.rs;src/widget/frame.rs;src/scales/price_formatter.rs
 Builder API,Datafeed API,Volume profile resolution hint,missing,host,
 Builder API,Save/load adapter,Auto-save trigger,done,library,src/widget/history.rs;src/widget/feed.rs;src/ui/top_toolbar/components/layout_menu.rs
 Builder API,Save/load adapter,Chart templates,done,library,src/ui/top_toolbar/components/settings_menu/dialog/mod.rs;src/ui/dialogs/templates/store.rs
@@ -185,7 +185,7 @@ Chart,Legend and data window,Indicator entries in the legend,done,library,src/wi
 Chart,Legend and data window,Legend buttons,partial,library,src/chart/renderers/legend/mod.rs;src/widget/crosshair.rs
 Chart,Legend and data window,Status line values follow the crosshair,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs
 Chart,Legend and data window,Symbol status line,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs
-Chart,Legend and data window,Volume in the status line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/legend/mod.rs
+Chart,Legend and data window,Volume in the status line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/scales/price_formatter.rs
 Chart,Multi-chart and sync,Grid layout presets,done,library,src/widget/layout.rs;src/ui/top_toolbar/toolbar.rs
 Chart,Multi-chart and sync,Multi-chart layout container,done,library,src/widget/layout.rs
 Chart,Multi-chart and sync,Symbol and interval sync groups,done,library,src/widget/layout.rs

@@ -318,17 +318,28 @@ impl Default for VolumeFormatter {
 impl PriceFormatter for VolumeFormatter {
     fn format(&self, value: f64) -> String {
         let abs_val = value.abs();
-        let precision = self.precision.min(MAX_PRECISION);
-
-        if abs_val >= 1_000_000_000.0 {
-            format!("{:.prec$}B", value / 1_000_000_000.0, prec = precision)
+        let (mut unit, mut suffix) = if abs_val >= 1_000_000_000.0 {
+            (1_000_000_000.0, "B")
         } else if abs_val >= 1_000_000.0 {
-            format!("{:.prec$}M", value / 1_000_000.0, prec = precision)
+            (1_000_000.0, "M")
         } else if abs_val >= 1_000.0 {
-            format!("{:.prec$}K", value / 1_000.0, prec = precision)
+            (1_000.0, "K")
         } else {
-            format_decimal(value, self.precision)
+            (1.0, "")
+        };
+        let mut formatted = format_decimal(value / unit, self.precision);
+        if unit < 1_000_000_000.0
+            && formatted.trim_start_matches('-').split('.').next() == Some("1000")
+        {
+            unit *= 1_000.0;
+            suffix = match suffix {
+                "" => "K",
+                "K" => "M",
+                _ => "B",
+            };
+            formatted = format_decimal(value / unit, self.precision);
         }
+        format!("{formatted}{suffix}")
     }
 
     fn clone_box(&self) -> Box<dyn PriceFormatter> {
@@ -684,6 +695,23 @@ mod tests {
         }
         assert_eq!(formatter.format(-0.006), "-0.01");
         assert_eq!(formatter.format(-3_500.0), "-3.50K");
+        for (precision, value, expected) in [
+            (2, 999.996, "1.00K"),
+            (2, 999_999.0, "1.00M"),
+            (2, 999_996_000.0, "1.00B"),
+            (2, 999.994, "999.99"),
+            (2, 999_994.0, "999.99K"),
+            (2, 999_994_000.0, "999.99M"),
+            (0, 999.6, "1K"),
+            (0, 999_600.0, "1M"),
+            (3, 999_999.4, "999.999K"),
+            (3, 999_999.6, "1.000M"),
+            (2, 999_999_999_999.0, "1000.00B"),
+        ] {
+            let formatter = VolumeFormatter { precision };
+            assert_eq!(formatter.format(value), expected);
+            assert_eq!(formatter.format(-value), format!("-{expected}"));
+        }
     }
 
     #[test]
