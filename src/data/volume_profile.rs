@@ -634,22 +634,21 @@ mod tests {
         use crate::data::Footprint;
         use crate::model::{BarClock, OrderSide, Tick, Timeframe};
         let time = chrono::DateTime::UNIX_EPOCH;
-        for (volumes, share, expected) in [
-            (vec![1.0; 24], 0.7, (0, (0, 16))),
-            (vec![1.0, 1.0, 2.0, 1.0, 1.0], 0.6, (2, (1, 3))),
+        // One bar of 24 over 24 rows, and five unit-high bars holding 1, 1, 2, 1 and 1.
+        let single = vec![Bar::new(time, 100.0, 124.0, 100.0, 124.0, 24.0)];
+        let peak_rows = vec![1.0, 1.0, 2.0, 1.0, 1.0];
+        let peak: Vec<_> = peak_rows
+            .iter()
+            .enumerate()
+            .map(|(i, &volume)| {
+                let low = 100.0 + i as f64;
+                Bar::new(time, low, low + 1.0, low, low + 1.0, volume)
+            })
+            .collect();
+        for (bars, volumes, share, expected) in [
+            (single, vec![1.0; 24], 0.7, (0, (0, 16))),
+            (peak, peak_rows, 0.6, (2, (1, 3))),
         ] {
-            let bars: Vec<_> = if volumes.len() == 24 {
-                vec![Bar::new(time, 100.0, 124.0, 100.0, 124.0, 24.0)]
-            } else {
-                volumes
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &volume)| {
-                        let low = 100.0 + i as f64;
-                        Bar::new(time, low, low + 1.0, low, low + 1.0, volume)
-                    })
-                    .collect()
-            };
             let estimated = VolumeProfile::of(&bars, volumes.len(), None).unwrap();
             let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
             for (i, &volume) in volumes.iter().enumerate() {
@@ -703,7 +702,7 @@ mod tests {
                 assert_eq!(rebuilt.volume().len(), rows);
                 assert_eq!((rebuilt.low(), rebuilt.high()), (next.low, next.high));
                 assert_close(rebuilt.row_height(), 2.0 * range / rows as f64);
-                // The flat bar lies in row 12; the second bar puts 100/24 in every row.
+                // The flat bar lies in the middle row; the second bar spreads 100 evenly over all rows.
                 assert!((rebuilt.volume()[rows / 2] - (100.0 + 100.0 / rows as f64)).abs() < 1e-6);
                 let third = Bar::new(
                     time,

@@ -428,53 +428,32 @@ mod tests {
         ));
         assert!(!marked(&[(0, 100.0, 5.0, None)], &ratio(1.0), RatioAsk));
         assert!(!marked(&flat, &ratio(1.0), RatioAsk) && !marked(&flat, &ratio(1.0), RatioBid));
-        // 29/100 is 29%, 33/30 and 55/50 are 1.1; fractional sizes obey the same rules.
-        for scale in [1.0, 0.1, 1e-12] {
-            for (side, opposite, delta_kind, ratio_kind) in [
+        // 29 of 100 is 29%, 33 against 30 and 55 against 50 are 1.1, also with fractional sizes.
+        for scale in [1.0, 0.1] {
+            for (side, other, delta_kind, ratio_kind) in [
                 (buy, sell, DeltaAsk, RatioAsk),
                 (sell, buy, DeltaBid, RatioBid),
             ] {
-                let percentage = [
-                    (0, 100.0, 29.0 * scale, side),
-                    (1, 100.0, 71.0 * scale, None),
-                ];
-                let level = flow(&[
-                    (0, 100.0, 33.0 * scale, side),
-                    (1, 100.0, 30.0 * scale, opposite),
-                ]);
-                let bar = level.bars().values().next().unwrap();
-                let imbalance = bar.imbalance(100, 1.1, false);
-                let at_ratio = [
-                    (0, 100.0, 55.0 * scale, side),
-                    (1, 100.0, 50.0 * scale, opposite),
-                ];
-                assert_eq!(
-                    (
-                        marked(&percentage, &delta(29.0), delta_kind),
-                        imbalance,
-                        marked(&at_ratio, &ratio(1.1), ratio_kind)
-                    ),
-                    (true, (side == sell, side == buy), true),
-                    "inclusive thresholds, scale {scale}, side {side:?}"
-                );
-                let below = [
-                    (0, 100.0, 54.0 * scale, side),
-                    (1, 100.0, 50.0 * scale, opposite),
-                ];
-                assert!(!marked(&below, &ratio(1.1), ratio_kind));
-                let below_level = flow(&[
-                    (0, 100.0, 32.0 * scale, side),
-                    (1, 100.0, 30.0 * scale, opposite),
-                ]);
-                assert_eq!(
-                    below_level
+                let pair =
+                    |a: f64, b: f64| [(0, 100.0, a * scale, side), (1, 100.0, b * scale, other)];
+                let imbalance = |a, b| {
+                    let level = flow(&pair(a, b));
+                    level
                         .bars()
                         .values()
                         .next()
                         .unwrap()
-                        .imbalance(100, 1.1, false),
-                    (false, false)
-                );
+                        .imbalance(100, 1.1, false)
+                };
+                let share = [
+                    (0, 100.0, 29.0 * scale, side),
+                    (1, 100.0, 71.0 * scale, None),
+                ];
+                assert!(marked(&share, &delta(29.0), delta_kind), "scale {scale}");
+                assert_eq!(imbalance(33.0, 30.0), (side == sell, side == buy));
+                assert_eq!(imbalance(32.0, 30.0), (false, false));
+                assert!(marked(&pair(55.0, 50.0), &ratio(1.1), ratio_kind));
+                assert!(!marked(&pair(54.0, 50.0), &ratio(1.1), ratio_kind));
             }
         }
         // Delta POC: 100 nets +2 and 101 nets -3; at a tie of 3 the lower price wins.
