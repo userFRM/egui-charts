@@ -740,7 +740,7 @@ Studies,Indicators,Williams Alligator,done,library,src/studies/builtin/williams_
 Studies,Indicators,Williams Fractal,done,library,src/studies/builtin/williams_fractals.rs;src/studies/factory.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Woodies CCI,partial,library,src/studies/builtin/woodies_cci.rs
 Studies,Indicators,Zig Zag,done,library,src/studies/builtin/zigzag.rs;src/studies/factory.rs;src/chart/renderers/indicator.rs
-Studies,Strategy tester,Backtest engine,missing,library,
+Studies,Strategy tester,Backtest engine,done,library,src/strategies/backtest.rs;src/strategies/mod.rs
 Studies,Strategy tester,Built-in Bollinger Bands strategy,missing,library,
 Studies,Strategy tester,Built-in Bollinger Bands strategy Directed,missing,library,
 Studies,Strategy tester,Built-in Consecutive Up/Down strategy,missing,library,
@@ -767,10 +767,10 @@ Studies,Strategy tester,Commission models,missing,library,
 Studies,Strategy tester,Deep backtesting and bar magnifier,missing,library,
 Studies,Strategy tester,Equity curve and drawdown chart,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs;src/ui/strategy_report/plot.rs
 Studies,Strategy tester,Export trades and report,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs
-Studies,Strategy tester,Limit and stop orders,missing,library,
+Studies,Strategy tester,Limit and stop orders,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs
 Studies,Strategy tester,List of trades,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs
-Studies,Strategy tester,"Long and short positions, margin and leverage",missing,library,
-Studies,Strategy tester,Order fill model,missing,library,
+Studies,Strategy tester,"Long and short positions, margin and leverage",partial,library,src/strategies/backtest.rs
+Studies,Strategy tester,Order fill model,partial,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs
 Studies,Strategy tester,Parameter optimisation,missing,library,
 Studies,Strategy tester,Performance summary,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs
 Studies,Strategy tester,Position sizing,missing,library,

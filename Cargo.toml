@@ -154,6 +154,9 @@ studies = []
 ## `services::AlertEngine`: an `Alerts` service that evaluates alerts on the bars the host feeds
 ## it while the application runs.  Needs no egui, so a server can run it.
 alert-engine = []
+## `strategies::Backtest`, which runs a `strategies::Strategy` over bars and returns a
+## `StrategyReport`.  Needs no egui, so a server can run it.
+strategies = []
 ## Compile-time embedded SVG icons (`icons::Icon`).  Required by `ui`.
 ## The chart installs egui_extras' SVG image loader and a pixel-aligned icon loader so the icons render.
 icons = ["widget", "dep:egui_extras", "egui_extras/svg", "dep:resvg"]
