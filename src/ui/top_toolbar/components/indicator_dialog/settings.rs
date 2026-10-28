@@ -3,7 +3,9 @@
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use crate::model::Timeframe;
-use crate::studies::{Indicator, InputKind, InputValue, PlotType, StudyInput, StudySettings};
+use crate::studies::{
+    Indicator, InputKind, InputValue, PlotType, StudyInput, StudyScale, StudySettings,
+};
 use crate::theme::Theme;
 use crate::ui_kit::{FormGrid, dialog::DialogFooter, modal::Modal};
 use crate::widget::SeriesId;
@@ -37,6 +39,8 @@ pub struct IndicatorSettingsDialog {
     tab: Tab,
     current_interval: Option<Timeframe>,
     sources: Vec<(crate::studies::StudySource, String)>,
+    overlay: bool,
+    price_scale: bool,
 }
 
 impl crate::ui_kit::tab_bar::TabLabel for Tab {
@@ -60,6 +64,8 @@ impl IndicatorSettingsDialog {
         self.inputs = study.inputs();
         self.title = format!("{} settings", study.name());
         self.line_names = study.line_names();
+        self.overlay = study.is_overlay();
+        self.price_scale = study.scale() == StudyScale::Main;
         self.current_interval = interval;
         self.tab = Tab::Inputs;
         self.sources.clear();
@@ -367,16 +373,37 @@ impl IndicatorSettingsDialog {
                                                 format!("{:?}", plot.plot_type),
                                             ))
                                             .show_ui(ui, |ui| {
-                                                for kind in [
-                                                    PlotType::Line,
-                                                    PlotType::Histogram,
-                                                    PlotType::Circles,
-                                                ] {
-                                                    ui.selectable_value(
-                                                        &mut plot.plot_type,
-                                                        kind,
-                                                        l10n::text(ui.ctx(), format!("{kind:?}")),
-                                                    );
+                                                for kind in PlotType::ALL {
+                                                    let label =
+                                                        l10n::text(ui.ctx(), format!("{kind:?}"));
+                                                    // A saved choice stays listed and selected.
+                                                    match kind
+                                                        .incompatibility(
+                                                            self.overlay,
+                                                            self.price_scale,
+                                                        )
+                                                        .filter(|_| kind != plot.plot_type)
+                                                    {
+                                                        Some(reason) => {
+                                                            ui.add_enabled(
+                                                                false,
+                                                                egui::Button::selectable(
+                                                                    false, label,
+                                                                ),
+                                                            )
+                                                            .on_disabled_hover_text(l10n::text(
+                                                                ui.ctx(),
+                                                                reason,
+                                                            ));
+                                                        }
+                                                        None => {
+                                                            ui.selectable_value(
+                                                                &mut plot.plot_type,
+                                                                kind,
+                                                                label,
+                                                            );
+                                                        }
+                                                    }
                                                 }
                                             })
                                             .response

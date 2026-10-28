@@ -34,6 +34,39 @@ pub enum PlotType {
     BackgroundColor,
 }
 
+impl PlotType {
+    /// Every plot type, in the order a style editor lists them.
+    pub const ALL: [Self; 11] = [
+        Self::Line,
+        Self::StepLine,
+        Self::Histogram,
+        Self::Columns,
+        Self::Area,
+        Self::Circles,
+        Self::Crosses,
+        Self::TriangleUp,
+        Self::TriangleDown,
+        Self::BarColor,
+        Self::BackgroundColor,
+    ];
+
+    /// Why a plot of this type cannot be drawn for a study, or `None` when it can.
+    /// `overlay` is whether the study is drawn on the price chart, and `price_scale` whether it
+    /// shares the price scale there, which a volume study does not.
+    pub fn incompatibility(self, overlay: bool, price_scale: bool) -> Option<&'static str> {
+        match self {
+            Self::BarColor if !overlay => {
+                Some("Bar colour repaints the price bars, so the study must be on the price chart.")
+            }
+            Self::Histogram | Self::Columns | Self::Area if overlay && price_scale => Some(
+                "This type draws from zero, which is far from the prices on the price scale. \
+                 Give the study its own scale first.",
+            ),
+            _ => None,
+        }
+    }
+}
+
 /// Editable presentation of one output line.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct PlotStyle {
@@ -843,6 +876,34 @@ mod tests {
             settings.precision = None;
             bounded.apply_settings(&[], settings).unwrap();
             assert_eq!(bounded.precision(), precision);
+        }
+    }
+
+    /// New Net Volume, PPO and PVO studies draw their signed volume and oscillator differences as
+    /// columns and their oscillator lines as lines, and a saved plot type replaces the default.
+    #[test]
+    fn histogram_defaults_yield_to_a_saved_plot_type() {
+        use super::super::{NetVolume, PercentageVolumeOscillator, PriceOscillator};
+        let (line, columns) = (PlotType::Line, PlotType::Columns);
+        let studies: [(Box<dyn Indicator>, &[PlotType]); 3] = [
+            (Box::new(NetVolume::default()), &[columns]),
+            (Box::new(PriceOscillator::default()), &[line, line, columns]),
+            (
+                Box::new(PercentageVolumeOscillator::default()),
+                &[line, line, columns],
+            ),
+        ];
+        for (study, expected) in studies {
+            let name = study.name().to_owned();
+            let mut study = ConfiguredStudy::new(study);
+            let types = |study: &ConfiguredStudy| -> Vec<_> {
+                study.settings().plots.iter().map(|p| p.plot_type).collect()
+            };
+            assert_eq!(types(&study), expected, "{name}");
+            let mut settings = study.settings();
+            settings.plots[0].plot_type = PlotType::Area;
+            study.apply_settings(&[], settings).unwrap();
+            assert_eq!(study.plot_style(0).plot_type, PlotType::Area, "{name}");
         }
     }
 
