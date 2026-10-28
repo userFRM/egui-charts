@@ -170,7 +170,6 @@ impl Terminal {
     }
 
     /// Hands `contents` to the host's file export as `name`. False without one.
-    #[expect(dead_code, reason = "the export dialog and the panels save files")]
     pub(super) fn save_file(&mut self, name: String, contents: ExportContents) -> bool {
         let Some(save) = &mut self.services.save else {
             return false;
@@ -184,10 +183,6 @@ impl Terminal {
     }
 
     /// Plays the host sound `name` at `volume`, from zero to one, if the host plays sounds.
-    #[expect(
-        dead_code,
-        reason = "alerts, trading and the settings preview play sounds"
-    )]
     pub(super) fn play_sound(&mut self, name: &str, volume: f32) {
         if let Some(play) = &mut self.services.play {
             play(name, volume);
