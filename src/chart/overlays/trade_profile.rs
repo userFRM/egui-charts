@@ -7,7 +7,9 @@ use crate::studies::TradeProfile;
 use egui::{Align2, FontId, Painter, Rect, Stroke, pos2};
 
 /// Draws bid/ask stacks, total volume or signed delta profiles, their POC, value area,
-/// developing POC and volume nodes. `step` is the footprint's grouped price step.
+/// developing POC and volume nodes. `step` is the footprint's grouped price step and
+/// `tick` is its instrument tick size before grouping. Bands extend half a tick below
+/// their first tick and above their last tick.
 /// Histograms of partly visible sessions stay at the left edge of the viewport.
 /// Profile ranges and data remain host-owned; edit [`crate::studies::TradeProfileRanges`]
 /// in response to a session menu's merge/split actions and recalculate after trades change.
@@ -17,9 +19,10 @@ pub fn render_trade_profiles(
     bars: &[Bar],
     profiles: &[TradeProfile],
     step: f64,
+    tick: f64,
     config: &FootprintConfig,
 ) {
-    if !step.is_finite() || step <= 0.0 || bars.is_empty() {
+    if !step.is_finite() || step <= 0.0 || !tick.is_finite() || tick <= 0.0 || bars.is_empty() {
         return;
     }
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
@@ -50,8 +53,8 @@ pub fn render_trade_profiles(
         let (high, low) = profile.nodes(config.node_sensitivity);
         let poc = profile.volume.poc();
         for row in profile.volume.levels.values() {
-            let y0 = mapping.price_to_y(row.level as f64 * step);
-            let y1 = mapping.price_to_y((row.level as f64 + 1.0) * step);
+            let y0 = mapping.price_to_y(row.level as f64 * step - tick * 0.5);
+            let y1 = mapping.price_to_y((row.level as f64 + 1.0) * step - tick * 0.5);
             if !y0.is_finite() || !y1.is_finite() {
                 continue;
             }
@@ -119,8 +122,8 @@ pub fn render_trade_profiles(
         // A valley can lie on untraded rows, so nodes are placed by level, not by traded row.
         for (label, nodes) in [("HVN", &high), ("LVN", &low)] {
             for &level in nodes {
-                let y0 = mapping.price_to_y(level as f64 * step);
-                let y1 = mapping.price_to_y((level as f64 + 1.0) * step);
+                let y0 = mapping.price_to_y(level as f64 * step - tick * 0.5);
+                let y1 = mapping.price_to_y((level as f64 + 1.0) * step - tick * 0.5);
                 if y0.is_finite() && y1.is_finite() && (y0 - y1).abs() >= config.min_text_height {
                     painter.text(
                         pos2(x + width + 3.0, (y0 + y1) * 0.5),
@@ -138,7 +141,7 @@ pub fn render_trade_profiles(
                 (config.value_area_high, (high_level as f64 + 1.0) * step),
                 (config.value_area_low, low_level as f64 * step),
             ] {
-                let y = mapping.price_to_y(edge);
+                let y = mapping.price_to_y(edge - tick * 0.5);
                 if let Some(stroke) = stroke
                     && y.is_finite()
                 {
@@ -151,7 +154,7 @@ pub fn render_trade_profiles(
             let index = bars.partition_point(|b| b.time < time);
             let point = pos2(
                 mapping.idx_to_x(index),
-                mapping.price_to_y((poc as f64 + 0.5) * step),
+                mapping.price_to_y((poc as f64 + 0.5) * step - tick * 0.5),
             );
             if !point.is_finite() {
                 previous = None;
@@ -238,7 +241,17 @@ mod tests {
                     screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(320.0, 200.0))),
                     ..Default::default()
                 },
-                |ui| render_trade_profiles(ui.painter(), &mapping, &bars, &profiles, 1.0, &config),
+                |ui| {
+                    render_trade_profiles(
+                        ui.painter(),
+                        &mapping,
+                        &bars,
+                        &profiles,
+                        1.0,
+                        1.0,
+                        &config,
+                    )
+                },
             );
             output.textures_delta.clear();
             let columns: Vec<_> = output
@@ -308,7 +321,17 @@ mod tests {
                     screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(320.0, 200.0))),
                     ..Default::default()
                 },
-                |ui| render_trade_profiles(ui.painter(), &mapping, &bars, &profiles, 1.0, &config),
+                |ui| {
+                    render_trade_profiles(
+                        ui.painter(),
+                        &mapping,
+                        &bars,
+                        &profiles,
+                        1.0,
+                        1.0,
+                        &config,
+                    )
+                },
             );
             output.textures_delta.clear();
             output
@@ -323,8 +346,8 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         // Level 100 holds 4 of 6 contracts, which meets the 60% share on its own.
-        let top = mapping.price_to_y(101.0);
-        let bottom = mapping.price_to_y(100.0);
+        let top = mapping.price_to_y(100.5);
+        let bottom = mapping.price_to_y(99.5);
         assert_eq!(
             guides(Some(red), Some(blue)),
             [(top, egui::Color32::RED), (bottom, egui::Color32::BLUE)]
