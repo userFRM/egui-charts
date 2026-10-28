@@ -82,7 +82,11 @@ impl OrderFlowStudy {
                 }
             }
             OrderFlowKind::FilteredCvd { .. } => {
-                let mut sum = self.values.line(0)[..from]
+                let mut sum = self
+                    .values
+                    .line(0)
+                    .get(..from)
+                    .unwrap_or_default()
                     .iter()
                     .rev()
                     .find(|v| v.is_finite())

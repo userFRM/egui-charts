@@ -315,9 +315,7 @@ mod tests {
                 .shapes
                 .iter()
                 .filter_map(|shape| match &shape.shape {
-                    Shape::LineSegment { points, stroke }
-                        if *stroke == red.into() || *stroke == blue.into() =>
-                    {
+                    Shape::LineSegment { points, stroke } if *stroke == red || *stroke == blue => {
                         Some((points[0].y, stroke.color))
                     }
                     _ => None,
