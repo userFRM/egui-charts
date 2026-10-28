@@ -588,7 +588,14 @@ fn staple_studies_match_published_definitions() {
             closes.push(closes[closes.len() - 1] + step);
         }
     }
-    let divergence_bars = hand(closes.into_iter().map(|c| (c + 1.0, c - 1.0, c)).collect());
+    let divergence_bars = hand(closes.iter().map(|c| (c + 1.0, c - 1.0, *c)).collect());
+    // The same divergences at prices a trillion times smaller: the RSI does not depend on scale.
+    let tiny_divergence_bars = hand(
+        closes
+            .iter()
+            .map(|c| ((c + 1.0) * 1e-12, (c - 1.0) * 1e-12, c * 1e-12))
+            .collect(),
+    );
     use crate::studies::{AverageLine, AverageType, MACombination};
     let combination_bars: Vec<_> = [2.0, 4.0, 8.0, 6.0, 10.0, 5.0]
         .into_iter()
@@ -755,6 +762,11 @@ fn staple_studies_match_published_definitions() {
             "RSIDiv-hand",
             Box::new(RsiDivergence::default()),
             divergence_bars.clone(),
+        ),
+        (
+            "RSIDiv-hand-tiny",
+            Box::new(RsiDivergence::default()),
+            tiny_divergence_bars,
         ),
         // 18 bars lie between the bullish pivots and 23 between the bearish ones.
         (

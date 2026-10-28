@@ -272,18 +272,19 @@ impl Indicator for RsiDivergence {
                                 ]
                             };
                             for (shown, line, rsi_rises, price_rises) in divergences {
-                                let moved = |rises: bool, from: f64, to: f64| {
+                                // Prices compare exactly, so the rule holds at any price scale.
+                                let moved = |rises: bool, from: f64, to: f64, tie: f64| {
                                     if rises {
-                                        to > from + RSI_TIE
+                                        to > from + tie
                                     } else {
-                                        to < from - RSI_TIE
+                                        to < from - tie
                                     }
                                 };
                                 let price =
                                     |pivot: Pivot| if high { pivot.high } else { pivot.low };
                                 if shown
-                                    && moved(rsi_rises, q.rsi, p.rsi)
-                                    && moved(price_rises, price(q), price(p))
+                                    && moved(rsi_rises, q.rsi, p.rsi, RSI_TIE)
+                                    && moved(price_rises, price(q), price(p), 0.0)
                                 {
                                     segments.push(Segment {
                                         line,
