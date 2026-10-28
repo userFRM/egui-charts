@@ -54,9 +54,11 @@ pub(super) fn render_kagi(
     bearish_color: Color32,
     x_of: impl Fn(usize) -> f32,
 ) {
+    // A non-finite width hides its lines, as a non-positive one does.
+    let width = |w: f32| if w.is_finite() { w } else { 0.0 };
     let stroke = |thickness| match thickness {
-        KagiThickness::Thick => Stroke::new(style.thick_width, bullish_color),
-        KagiThickness::Thin => Stroke::new(style.thin_width, bearish_color),
+        KagiThickness::Thick => Stroke::new(width(style.thick_width), bullish_color),
+        KagiThickness::Thin => Stroke::new(width(style.thin_width), bearish_color),
     };
     let flip = |thickness| match thickness {
         KagiThickness::Thick => KagiThickness::Thin,
