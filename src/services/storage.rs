@@ -26,6 +26,8 @@ pub enum StoreKind {
     Layouts,
     /// Recently opened instruments, newest first.
     RecentSymbols,
+    /// Named screener screens: the universe, column set, filters, sort order and description.
+    Screens,
 }
 
 /// Where the library keeps settings and drawings between sessions: files, browser storage or a

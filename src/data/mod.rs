@@ -63,7 +63,7 @@ pub use footprint::{Footprint, FootprintBar, FootprintLevel};
 pub use market::{
     CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
     NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,
-    ScreenerRow,
+    ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
 };
 #[cfg(feature = "studies")]
 pub(crate) use options_volume::OptionsVolumeSource;
@@ -241,6 +241,15 @@ pub trait Datafeed: MaybeSend + 'static {
     /// hotlists panel. Answer [`FeedError::NotSupported`] (the default) to have the panel say the
     /// feed has none.
     fn hotlist(&self, query: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
+        let _ = query;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// As [`screen`](Self::screen), for a query whose `text` describes the screen in words. The feed
+    /// interprets the text with the other criteria and answers the rows with an explanation of how
+    /// it understood them. Answer [`FeedError::NotSupported`] (the default) to have the panel say
+    /// the feed takes no descriptions, and [`FeedError::InvalidData`] for one it cannot interpret.
+    fn screen_text(&self, query: ScreenerQuery, reply: Reply<ScreenerTextAnswer>) {
         let _ = query;
         reply.send(Err(FeedError::NotSupported));
     }
