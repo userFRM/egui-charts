@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::account_panel::grouped;
 use super::dom::Ladder;
+use super::format::{Numbers, TradingFormatter};
 use crate::chart::{TradingLineAction, decimals, to_step};
 use crate::icons::icons;
 use crate::model::{
@@ -169,6 +170,11 @@ enum Tab {
 
 /// What the ticket needs from the chart and the account for one frame.
 pub(crate) struct Market<'a> {
+    /// The chart's symbol, which the host's formatter receives with each number.
+    pub symbol: &'a str,
+    pub formatter: Option<&'a dyn TradingFormatter>,
+    /// The value in the account's currency of one pip for one unit, if known.
+    pub pip_value: Option<f64>,
     /// The last price, the entry of a market order without a quote.
     pub last: Option<f64>,
     /// The best bid and ask, the entries of a market sell and buy.
@@ -195,6 +201,17 @@ pub(crate) struct Market<'a> {
     pub trades: &'a [&'a Tick],
     /// The latest account fill for this symbol.
     pub last_fill: Option<f64>,
+}
+
+impl<'a> Market<'a> {
+    /// How the numbers of the chart's symbol are written.
+    pub fn numbers(&self) -> Numbers<'a> {
+        Numbers {
+            symbol: self.symbol,
+            decimals: self.decimals,
+            formatter: self.formatter,
+        }
+    }
 }
 
 /// What the user asked the ticket for.
@@ -518,7 +535,7 @@ impl OrderTicket {
                 side_name(request.side),
                 summary(
                     request,
-                    market.decimals,
+                    &market.numbers(),
                     decimals(market.rules.quantity_step)
                 )
             );
@@ -688,6 +705,7 @@ impl OrderTicket {
             .map_or(self.quantity, |request| request.quantity);
         let per_point = quantity * rules.point_value;
         let currency = market.currency;
+        let numbers = market.numbers();
 
         // Prices of limit, stop and stop-limit orders.
         let prices: &[(&str, bool)] = match self.kind {
@@ -721,7 +739,7 @@ impl OrderTicket {
                     if let Some(touch) = touch {
                         swapped = swap(ui, "Enter the price or its distance in ticks");
                         let suffix = if in_ticks {
-                            grouped(*price, market.decimals, false)
+                            market.numbers().price(*price)
                         } else {
                             let reference = match (self.side, market.ask, market.bid) {
                                 (OrderSide::Buy, Some(_), _) => "Ask",
@@ -805,7 +823,7 @@ impl OrderTicket {
                             &if ticket.sizing == Sizing::Value {
                                 format!(
                                     "{} units",
-                                    grouped(quantity, decimals(rules.quantity_step), false)
+                                    numbers.quantity(quantity, decimals(rules.quantity_step))
                                 )
                             } else {
                                 format!("{} {currency}", grouped(entry * per_point, 2, false))
@@ -918,6 +936,15 @@ impl OrderTicket {
             currency,
             theme.ui.text,
         );
+        if let Some(pip_value) = market.pip_value {
+            info(
+                ui,
+                "Pip value",
+                &numbers.pip_value(pip_value * request.quantity),
+                currency,
+                theme.ui.text,
+            );
+        }
         info(
             ui,
             "Trade value",
@@ -984,14 +1011,14 @@ impl OrderTicket {
             let inner = half.shrink2(vec2(12.0, 8.0));
             let anchor = align.pos_in_rect(&inner);
             text(ui, anchor, align, label, 13.0, text_color);
-            let price = price.or(market.last).map_or("-".to_owned(), |price| {
-                grouped(price, market.decimals, false)
-            });
+            let price = price
+                .or(market.last)
+                .map_or("-".to_owned(), |price| market.numbers().price(price));
             let below = anchor + vec2(0.0, 18.0);
             text(ui, below, align, &price, 17.0, text_color);
         }
         if let (Some(bid), Some(ask)) = (market.bid, market.ask) {
-            let spread = grouped(ask - bid, market.decimals, false);
+            let spread = market.numbers().spread(ask - bid);
             let galley = ui.painter().layout_no_wrap(
                 l10n::text(ui.ctx(), spread),
                 FontId::proportional(11.0),
@@ -1172,7 +1199,7 @@ impl OrderTicket {
                             &if bracket.1.mode == BracketMode::Price {
                                 format!("{} ticks", ((price - entry) / tick).abs().round())
                             } else {
-                                grouped(price, market.decimals, false)
+                                market.numbers().price(price)
                             },
                         );
                     });
@@ -1214,7 +1241,7 @@ impl OrderTicket {
         let detail = request.as_ref().map_or(String::new(), |request| {
             summary(
                 request,
-                market.decimals,
+                &market.numbers(),
                 decimals(market.rules.quantity_step),
             )
         });
@@ -1325,8 +1352,8 @@ pub(super) fn side_name(side: OrderSide) -> &'static str {
 }
 
 /// An order as the send button and the confirmation write it: "1 ES @ 4,000.25 LIMIT".
-fn summary(request: &OrderRequest, decimals: usize, quantity_decimals: usize) -> String {
-    let at = |price: f64, kind: &str| format!(" @ {} {kind}", grouped(price, decimals, false));
+fn summary(request: &OrderRequest, numbers: &Numbers<'_>, quantity_decimals: usize) -> String {
+    let at = |price: f64, kind: &str| format!(" @ {} {kind}", numbers.price(price));
     let order_type = match request.order_type {
         OrderType::Limit(price) => at(price, "LIMIT"),
         OrderType::Stop(price) => at(price, "STOP"),
@@ -1335,7 +1362,7 @@ fn summary(request: &OrderRequest, decimals: usize, quantity_decimals: usize) ->
     };
     format!(
         "{} {}{order_type}",
-        grouped(request.quantity, quantity_decimals, false),
+        numbers.quantity(request.quantity, quantity_decimals),
         request.symbol
     )
 }
@@ -1678,6 +1705,9 @@ mod tests {
                 let mut rules = TradingRules::new("ES");
                 rules.time_in_force.push(TimeInForce::GoodTillCancelled);
                 let market = Market {
+                    symbol: "ES",
+                    formatter: None,
+                    pip_value: None,
                     last: Some(100.0),
                     bid: None,
                     ask: None,
@@ -1782,6 +1812,9 @@ mod tests {
             crate::model::OrderStatus::Working,
         )];
         let market = Market {
+            symbol: "ES",
+            formatter: None,
+            pip_value: None,
             last: Some(100.0),
             bid: Some(99.75),
             ask: Some(100.25),
@@ -1935,6 +1968,9 @@ mod tests {
             capabilities.brackets,
         ) = (true, true, true);
         let market = Market {
+            symbol: "ES",
+            formatter: None,
+            pip_value: None,
             last: Some(4_000.0),
             bid: None,
             ask: None,

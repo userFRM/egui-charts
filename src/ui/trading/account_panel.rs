@@ -620,13 +620,10 @@ impl Trading {
             self.account_panel.tab
         };
         let capabilities = self.capabilities();
-        let price = |symbol: &str, value: f64| {
-            let decimals = if symbol == chart_symbol {
-                self.decimals
-            } else {
-                2
-            };
-            grouped(value, decimals, false)
+        let price = |symbol: &str, value: f64| self.numbers(symbol, chart_symbol).price(value);
+        let quantity = |symbol: &str, value: f64| {
+            self.numbers(symbol, chart_symbol)
+                .quantity(value, quantity_decimals(value))
         };
         let money = |value: Option<f64>, signed: bool| {
             let Some(value) = value else {
@@ -685,11 +682,7 @@ impl Trading {
                     },
                 ),
                 plain(kind(&request.order_type).to_owned()),
-                plain(grouped(
-                    request.quantity,
-                    quantity_decimals(request.quantity),
-                    false,
-                )),
+                plain(quantity(&request.symbol, request.quantity)),
                 plain(optional(&request.symbol, limit)),
                 plain(optional(&request.symbol, stop)),
             ];
@@ -728,7 +721,7 @@ impl Trading {
                             cells: vec![
                                 symbol(s),
                                 side(long, label),
-                                plain(grouped(size, quantity_decimals(size), false)),
+                                plain(quantity(s, size)),
                                 plain(price(s, position.average_price)),
                                 plain(optional(s, position.last_price)),
                                 colored(money(position.unrealized_pnl, true)),
@@ -793,11 +786,7 @@ impl Trading {
                         cells: vec![
                             symbol(name),
                             side(fill.side, fill.side.label()),
-                            plain(grouped(
-                                fill.quantity,
-                                quantity_decimals(fill.quantity),
-                                false,
-                            )),
+                            plain(quantity(name, fill.quantity)),
                             plain(price(name, fill.price)),
                             plain(time(Some(fill.time))),
                             plain(fill.order.to_string()),
@@ -1104,14 +1093,19 @@ impl Trading {
             }
             None => {}
         }
-        self.show_order_editor(ui.ctx());
+        self.show_order_editor(ui.ctx(), chart_symbol);
         action
     }
 
     /// The edit dialog of a working order: its quantity, prices and brackets. Saving sends the
     /// change to the broker; the dialog is the user's confirmation.
-    fn show_order_editor(&mut self, ctx: &egui::Context) {
-        let decimals = self.decimals;
+    fn show_order_editor(&mut self, ctx: &egui::Context, chart_symbol: &str) {
+        let Some(symbol) =
+            (self.account_panel.editing.as_ref()).map(|(order, _)| order.request.symbol.clone())
+        else {
+            return;
+        };
+        let decimals = self.numbers(&symbol, chart_symbol).decimals;
         let brackets = self.capabilities().brackets;
         let Some((order, request)) = &mut self.account_panel.editing else {
             return;

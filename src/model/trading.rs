@@ -429,6 +429,11 @@ pub struct TradingRules {
     /// The profit or loss in the account's currency of one unit moving by one price unit: 1 for
     /// a share, the contract multiplier for a future.
     pub point_value: f64,
+    /// The profit or loss in the account's currency of one unit moving by one pip. `None` when the
+    /// broker reports none: the ticket then takes the instrument's
+    /// [`pip_size`](crate::model::Instrument::pip_size) times
+    /// [`point_value`](Self::point_value), and shows no pip value for an instrument without pips.
+    pub pip_value: Option<f64>,
     /// The times in force the broker accepts for the symbol, the default first. Never empty.
     pub time_in_force: Vec<TimeInForce>,
     /// The trade value per unit of margin, such as 20 for 20:1, if the broker trades the symbol
@@ -446,6 +451,7 @@ impl TradingRules {
             min_quantity: 1.0,
             max_quantity: None,
             point_value: 1.0,
+            pip_value: None,
             time_in_force: vec![TimeInForce::Day],
             leverage: None,
         }

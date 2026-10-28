@@ -7,20 +7,23 @@ mod account_panel;
 mod broker_picker;
 mod dom;
 mod executions;
+mod format;
 mod ticket;
 
 pub use account_panel::{AccountPanel, AccountPanelAction};
 pub use broker_picker::{BrokerFact, BrokerPicker, BrokerPickerAction, BrokerTile};
+pub use format::TradingFormatter;
 pub use ticket::{Bracket, BracketMode, OrderPreset};
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::chart::selection::SeriesId;
 use crate::chart::{TradingLineAction, TradingLineOptions, render_trading_lines, to_step};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{
-    Account, Capabilities, Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType,
-    Position, Quote, TradingRules,
+    Account, Capabilities, Instrument, Order, OrderId, OrderRequest, OrderSide, OrderStatus,
+    OrderType, Position, Quote, TradingRules,
 };
 use crate::services::{AccountEvent, Broker, Listener};
 use crate::theme::ThemeExt;
@@ -28,6 +31,7 @@ use crate::ui_kit::modal::dialogs::ConfirmDialog;
 use crate::ui_kit::notifications::{Toast, ToastKind, Toasts};
 use crate::widget::Chart;
 use crate::widget::settings::{TradingNotifications, TradingSettings};
+use format::Numbers;
 use ticket::{Action, Market, OrderTicket, order_quantity};
 
 /// The trading controls of one chart, connected to the host's [`Broker`].
@@ -82,6 +86,10 @@ pub struct Trading {
     pending: Option<TradingLineAction>,
     /// Decimals of the chart's prices, for notifications.
     decimals: usize,
+    /// The metadata of the symbols the host described with
+    /// [`set_instrument`](Self::set_instrument), by symbol.
+    instruments: HashMap<String, Instrument>,
+    formatter: Option<Arc<dyn TradingFormatter>>,
     /// The latest quote of a symbol, from [`set_quote`](Self::set_quote).
     quote: Option<(String, Quote)>,
     /// The quantity the ticket opens with, and that instant orders and the chart menu's orders
@@ -121,6 +129,8 @@ impl Default for Trading {
             ticket: OrderTicket::default(),
             pending: None,
             decimals: 2,
+            instruments: HashMap::new(),
+            formatter: None,
             quote: None,
             quantity: 1.0,
             presets: Vec::new(),
@@ -138,6 +148,40 @@ impl Trading {
     /// quote's ask and a market sell at its bid; without them, at the last price.
     pub fn set_quote(&mut self, symbol: &str, quote: Quote) {
         self.quote = Some((symbol.to_owned(), quote));
+    }
+
+    /// Describes `instrument` to the trading panels: its price decimals write the prices of its
+    /// symbol in the account tables, and its pip size gives the ticket a pip value when the
+    /// broker's [`TradingRules::pip_value`] is absent. The chart's own instrument is used for the
+    /// symbol it shows, so call this for the other symbols of the account, such as those of
+    /// positions and working orders. A symbol without an instrument shows two decimals.
+    pub fn set_instrument(&mut self, instrument: Instrument) {
+        self.instruments
+            .insert(instrument.symbol.clone(), instrument);
+    }
+
+    /// Writes the prices, quantities, spreads and pip values of the ticket, the depth ladder and
+    /// the account tables with `formatter`, where it returns text. `None` restores the built-in
+    /// text.
+    pub fn set_formatter(&mut self, formatter: Option<Arc<dyn TradingFormatter>>) {
+        self.formatter = formatter;
+    }
+
+    /// How the numbers of `symbol` are written, with the decimals of the instrument the host
+    /// described, or of the chart's prices for `chart_symbol`.
+    fn numbers<'a>(&'a self, symbol: &'a str, chart_symbol: &str) -> Numbers<'a> {
+        let decimals = if symbol == chart_symbol {
+            self.decimals
+        } else {
+            (self.instruments.get(symbol))
+                .and_then(crate::scales::instrument_price_precision)
+                .map_or(2, usize::from)
+        };
+        Numbers {
+            symbol,
+            decimals,
+            formatter: self.formatter.as_deref(),
+        }
     }
 
     /// Connects to `service`, dropping the previous account's state.
@@ -513,7 +557,8 @@ impl Trading {
         let symbol = chart.symbol();
         let instrument = chart
             .instrument()
-            .filter(|instrument| instrument.symbol == symbol);
+            .filter(|instrument| instrument.symbol == symbol)
+            .or_else(|| self.instruments.get(symbol));
         let decimals = instrument
             .and_then(crate::scales::instrument_price_precision)
             .map_or(2, usize::from);
@@ -527,6 +572,13 @@ impl Trading {
             .map(|(_, quote)| quote);
         let book = chart.order_book(SeriesId::MAIN).filter(|_| !replay);
         Market {
+            symbol,
+            formatter: self.formatter.as_deref(),
+            pip_value: self.rules.pip_value.or_else(|| {
+                let pip = instrument.and_then(|instrument| instrument.pip_size);
+                pip.filter(|pip| pip.is_finite() && *pip > 0.0)
+                    .map(|pip| pip * self.rules.point_value)
+            }),
             last: crate::model::last_with_value(chart.bars(SeriesId::MAIN)).map(|bar| bar.close),
             bid: book
                 .and_then(|book| book.best_bid().map(|level| level.price))
@@ -742,7 +794,8 @@ impl Trading {
             }
         }
         if let Some(action) = &self.pending {
-            let money = |value: f64| format!("{value:.decimals$}");
+            let numbers = self.numbers(symbol, symbol);
+            let money = |value: f64| numbers.price(value);
             let (title, message, confirm) = describe(action, &money);
             let mut open = true;
             let result = ConfirmDialog::new("trading_confirm", title, message)
@@ -1004,6 +1057,7 @@ fn valid(rules: &TradingRules) -> bool {
             .max_quantity
             .is_none_or(|max| positive(max) && max >= rules.min_quantity)
         && rules.leverage.is_none_or(positive)
+        && rules.pip_value.is_none_or(positive)
         && !rules.time_in_force.is_empty()
 }
 
@@ -1196,6 +1250,47 @@ mod tests {
         current.send(Err(FeedError::NotSupported));
         trading.poll(&egui::Context::default(), &mut Toasts::new());
         assert!(trading.rules_ready);
+    }
+
+    /// Rows of differently formatted symbols keep their own price decimals, host text and pip
+    /// value instead of the chart symbol's decimals or a fixed two. A regression writes every
+    /// symbol with the chart's decimals, ignores the host's formatter or loses the pip value.
+    #[test]
+    fn symbols_keep_their_own_decimals_host_text_and_pip_values() {
+        struct Host;
+        impl TradingFormatter for Host {
+            fn quantity(&self, symbol: &str, quantity: f64) -> Option<String> {
+                (symbol == "BTC").then(|| format!("{quantity} coins"))
+            }
+        }
+        let mut trading = Trading::default();
+        trading.decimals = 5;
+        trading.set_instrument(
+            Instrument::new("USDJPY")
+                .with_price_decimals(3)
+                .with_pip_size(0.01),
+        );
+        trading.set_formatter(Some(Arc::new(Host)));
+        let price = |trading: &Trading, symbol| trading.numbers(symbol, "EURUSD").price(1234.5);
+        assert_eq!(price(&trading, "EURUSD"), "1,234.50000");
+        assert_eq!(price(&trading, "USDJPY"), "1,234.500");
+        assert_eq!(price(&trading, "UNKNOWN"), "1,234.50");
+        let quantity = |symbol| trading.numbers(symbol, "EURUSD").quantity(2.0, 0);
+        assert_eq!(
+            (quantity("BTC"), quantity("USDJPY")),
+            ("2 coins".into(), "2".into())
+        );
+
+        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+        chart.set_symbol("USDJPY");
+        trading.rules = TradingRules::new("USDJPY");
+        trading.rules.point_value = 1000.0;
+        assert_eq!(trading.market(&chart).pip_value, Some(10.0));
+        trading.rules.pip_value = Some(0.5);
+        assert_eq!(trading.market(&chart).pip_value, Some(0.5));
+        chart.set_symbol("UNKNOWN");
+        trading.rules = TradingRules::new("UNKNOWN");
+        assert_eq!(trading.market(&chart).pip_value, None);
     }
 
     #[test]
