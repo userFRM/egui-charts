@@ -373,6 +373,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The layout menu's Autosave toggle, the trading lines' order types, take profit and stop loss labels, tick results, tooltips and Buy and Sell button, and the legend's series and study controls, quote boxes, delayed and end-of-day hints and copied values go through the context's translator, so one that changes every key reaches them without recreating the chart. The volume tag on the price scale takes the applied theme's rising or falling candle colour for the last bar instead of a fixed pink, marker outlines take the theme's crosshair label text colour, and event break lines its info colour, so a custom palette reaches them; a marker's own colour is unchanged. ([#1059](https://github.com/userFRM/egui-charts/issues/1059))
 - A deselected rectangle draws its border, fill and label only. Its centre guides and size labels appear while it is selected or being drawn, and its corner dots, which duplicated the selection handles, are gone. ([#1169](https://github.com/userFRM/egui-charts/issues/1169))
 
 - Footprint cells and statistics columns at the edges of the plot show complete numbers or none; a number the plot edge would cut is left out. ([#1170](https://github.com/userFRM/egui-charts/issues/1170))

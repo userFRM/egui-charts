@@ -489,7 +489,7 @@ impl LayoutMenu {
             action = LayoutAction::DownloadImage;
             ui.close();
         }
-        ui.toggle_value(&mut self.autosave, "Autosave")
+        ui.toggle_value(&mut self.autosave, l10n::text(ui.ctx(), "Autosave"))
             .on_hover_text(l10n::text(ui.ctx(), "Save the layout after each change"));
         if let Some(is_rename) = self.editing {
             let response = ui.add(

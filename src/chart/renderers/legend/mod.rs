@@ -2,6 +2,7 @@
 
 use super::{price_decimals, semibold};
 use crate::chart::renderers::StyleColors;
+use crate::localization as l10n;
 use crate::model::{Bar, DataStatus, Instrument, Level1Quote, percent_change};
 use crate::studies::Indicator;
 use crate::theme::ThemeExt;
@@ -275,7 +276,7 @@ impl<'a> Legend<'a> {
                 if let Some(hint) = hint {
                     let rect = rect.intersect(bounds);
                     ui.interact(rect, id.with("data_status"), Sense::hover())
-                        .on_hover_text(hint);
+                        .on_hover_text(l10n::text(ui.ctx(), hint));
                 }
             }
         }
@@ -367,7 +368,11 @@ impl<'a> Legend<'a> {
                 Sense::focusable_noninteractive(),
             );
             title_response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::Button, true, "Series controls")
+                egui::WidgetInfo::labeled(
+                    egui::Role::Button,
+                    true,
+                    l10n::text(ui.ctx(), "Series controls"),
+                )
             });
             let focused = title_response.has_focus()
                 || title_response.lost_focus()
@@ -404,29 +409,42 @@ impl<'a> Legend<'a> {
                         },
                     )
                     .paint_at(ui, flag.shrink(2.0));
-                if flag_response.on_hover_text("Flag instrument").clicked() {
+                if flag_response
+                    .on_hover_text(l10n::text(ui.ctx(), "Flag instrument"))
+                    .clicked()
+                {
                     ui.ctx()
                         .data_mut(|data| data.insert_temp(id.with("flag"), !flagged));
                 }
                 let more_response = ui
                     .interact(more, id.with("more"), Sense::click())
-                    .on_hover_text("Series actions");
+                    .on_hover_text(l10n::text(ui.ctx(), "Series actions"));
                 crate::icons::icons::UI_MORE_HORIZONTAL
                     .as_image_tinted(Vec2::splat(16.0), theme.ui.text)
                     .paint_at(ui, more.shrink(2.0));
                 egui::Popup::menu(&more_response).show(|ui| {
-                    if ui.button("Copy symbol").clicked() {
+                    if ui.button(l10n::text(ui.ctx(), "Copy symbol")).clicked() {
                         ui.ctx().copy_text(self.symbol.to_owned());
                         ui.close();
                     }
-                    if ui.button("Copy values").clicked() {
-                        ui.ctx().copy_text(format!(
-                            "Open {} High {} Low {} Close {} Vol {}",
+                    if ui.button(l10n::text(ui.ctx(), "Copy values")).clicked() {
+                        let values = [
                             self.bar.open,
                             self.bar.high,
                             self.bar.low,
                             self.bar.close,
-                            self.bar.volume
+                            self.bar.volume,
+                        ];
+                        ui.ctx().copy_text(l10n::format_text(
+                            ui.ctx(),
+                            "Open {0} High {1} Low {2} Close {3} Vol {4}",
+                            &[
+                                ("0", values[0].to_string()),
+                                ("1", values[1].to_string()),
+                                ("2", values[2].to_string()),
+                                ("3", values[3].to_string()),
+                                ("4", values[4].to_string()),
+                            ],
                         ));
                         ui.close();
                     }
@@ -464,11 +482,13 @@ impl<'a> Legend<'a> {
                         Vec2::splat(20.0),
                     )
                     .intersect(bounds);
+                    let label = l10n::text(ui.ctx(), label);
                     let response = ui
                         .interact(rect, id.with(("series_control", index)), Sense::click())
-                        .on_hover_text(label);
-                    response
-                        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+                        .on_hover_text(&label);
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, &label)
+                    });
                     if response.hovered() {
                         painter.rect_filled(rect, theme.radius.sm, theme.ui.btn_bg_hover);
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -519,7 +539,7 @@ impl<'a> Legend<'a> {
                     .any(|study| study.is_volume() && study.is_overlay())
             {
                 layout.field(
-                    "Vol ",
+                    &format!("{} ", l10n::text(ui.ctx(), "Vol")),
                     self.formatters
                         .volume
                         .map(|formatter| formatter.format(self.bar.volume))
@@ -556,11 +576,10 @@ impl<'a> Legend<'a> {
                 if self.show_indicator_titles {
                     layout.text(
                         if study.is_volume() {
-                            "Vol"
+                            l10n::text(ui.ctx(), "Vol")
                         } else {
-                            study.name()
-                        }
-                        .to_owned(),
+                            study.name().to_owned()
+                        },
                         theme.text.ohlc,
                         colors.text,
                         bounds.width(),
@@ -670,11 +689,14 @@ impl<'a> Legend<'a> {
                 egui::WidgetInfo::labeled(
                     egui::Role::Button,
                     true,
-                    if collapsed {
-                        "Expand legend"
-                    } else {
-                        "Collapse legend"
-                    },
+                    l10n::text(
+                        ui.ctx(),
+                        if collapsed {
+                            "Expand legend"
+                        } else {
+                            "Collapse legend"
+                        },
+                    ),
                 )
             });
             painter.rect(
@@ -779,8 +801,13 @@ pub(crate) fn study_controls(
         touch
     });
     let row_response = ui.interact(row, id.with("row"), Sense::click());
-    row_response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Study controls"));
+    row_response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            true,
+            l10n::text(ui.ctx(), "Study controls"),
+        )
+    });
     let mut menu = row_response
         .secondary_clicked()
         .then(|| row_response.interact_pointer_pos())
@@ -819,13 +846,16 @@ pub(crate) fn study_controls(
             Vec2::splat(20.0),
         )
         .intersect(controls);
-        let label = match index {
-            0 if visible => "Hide study",
-            0 => "Show study",
-            1 => "Study settings",
-            2 => "Remove study",
-            _ => "More actions",
-        };
+        let label = l10n::text(
+            ui.ctx(),
+            match index {
+                0 if visible => "Hide study",
+                0 => "Show study",
+                1 => "Study settings",
+                2 => "Remove study",
+                _ => "More actions",
+            },
+        );
         let response = ui.interact(
             rect,
             id.with(index),
@@ -838,8 +868,8 @@ pub(crate) fn study_controls(
         if !revealed {
             return response;
         }
-        let response = response.on_hover_text(label);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+        let response = response.on_hover_text(&label);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
         if response.hovered() {
             ui.painter()
                 .rect_filled(rect, theme.radius.sm, theme.ui.btn_bg_hover);
@@ -1015,12 +1045,14 @@ fn paint_quotes(
                 semibold(FontId::proportional(theme.text.ohlc), color),
             ));
         let label = layout.painter.layout_no_wrap(
-            if side == QuoteSide::Sell {
-                "SELL"
-            } else {
-                "BUY"
-            }
-            .to_owned(),
+            l10n::text(
+                ui.ctx(),
+                if side == QuoteSide::Sell {
+                    "SELL"
+                } else {
+                    "BUY"
+                },
+            ),
             FontId::proportional(theme.text.small),
             color,
         );
@@ -1039,7 +1071,7 @@ fn paint_quotes(
         sell_rect,
         sell,
         theme.chart.candle_down,
-        "Sell at bid",
+        &l10n::text(ui.ctx(), "Sell at bid"),
         id.with("sell"),
     );
     let spread_rect = Rect::from_min_size(
@@ -1063,9 +1095,14 @@ fn paint_quotes(
                 id.with("quantity"),
                 Sense::click(),
             )
-            .on_hover_text("Order quantity");
-        response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Order quantity"));
+            .on_hover_text(l10n::text(ui.ctx(), "Order quantity"));
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::Button,
+                true,
+                l10n::text(ui.ctx(), "Order quantity"),
+            )
+        });
         let fill = if response.hovered() {
             theme.ui.btn_bg_active
         } else {
@@ -1098,7 +1135,7 @@ fn paint_quotes(
         buy_rect,
         buy,
         theme.ui.accent,
-        "Buy at ask",
+        &l10n::text(ui.ctx(), "Buy at ask"),
         id.with("buy"),
     );
     layout.pos.x = buy_rect.right() + 8.0;
@@ -1126,8 +1163,14 @@ fn paint_quotes(
     }
     let dropdown = ui
         .interact(dropdown, id.with("ticket"), Sense::click())
-        .on_hover_text("Order ticket");
-    dropdown.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Order ticket"));
+        .on_hover_text(l10n::text(ui.ctx(), "Order ticket"));
+    dropdown.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            true,
+            l10n::text(ui.ctx(), "Order ticket"),
+        )
+    });
     let action = if dropdown.clicked() {
         Some(QuoteSide::Ticket)
     } else if sell_response.clicked() {
@@ -1216,6 +1259,8 @@ mod tests {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
+            // A translator that changes every key must reach the control labels.
+            l10n::set_translator(&ctx, |english| Some(format!("{english}!")));
             let row = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(220.0, 20.0));
             let controls = Rect::from_min_size(Pos2::new(150.0, 10.0), Vec2::new(80.0, 20.0));
             let settings = controls.min + Vec2::new(30.0, 10.0);
@@ -1325,7 +1370,7 @@ mod tests {
                     modifiers: Default::default(),
                 }]);
                 assert!(focused.0, "keyboard focus must reveal {label}");
-                assert_eq!(focused.2.as_deref(), Some(label));
+                assert_eq!(focused.2, Some(format!("{label}!")));
                 assert!(frame(vec![]).0, "focused controls must stay visible");
                 let activated = frame(vec![Event::Key {
                     key: Key::Enter,
