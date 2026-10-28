@@ -49,7 +49,8 @@
 //! [`VwapAutoAnchored`], [`Volume24h`], [`RelativeVolumeAtTime`]
 //!
 //! ## Support / resistance
-//! [`PivotPoints`], [`PivotPointsHighLow`], [`Reversal`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
+//! [`PivotPoints`], [`PivotPointsHighLow`], [`Reversal`], [`RisingWedge`], [`FallingWedge`],
+//! [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
 //! [`PriceChannel`]
 //!
 //! ## Patterns
@@ -160,6 +161,8 @@ mod pivot_points;
 mod pivot_points_high_low;
 mod reversal;
 mod rsi_divergence;
+mod swings;
+mod wedge;
 mod williams_fractals;
 mod zigzag;
 
@@ -369,6 +372,7 @@ pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
 pub use pivot_points_high_low::PivotPointsHighLow;
 pub use reversal::Reversal;
 pub use rsi_divergence::RsiDivergence;
+pub use wedge::{FallingWedge, RisingWedge, Wedge};
 pub use williams_fractals::WilliamsFractals;
 pub use zigzag::{ZigZag, ZigZagMode, ZigZagPivot};
 

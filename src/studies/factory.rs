@@ -249,6 +249,8 @@ impl IndicatorFactory {
                 PivotPoints,
                 PivotPointsHighLow,
                 Reversal,
+                RisingWedge,
+                FallingWedge,
                 WilliamsFractals,
                 ZigZag,
             ],
@@ -1004,9 +1006,10 @@ mod tests {
                     .unwrap();
             }
             study.calculate(&bars);
-            // Studies that draw only shapes differ by their zones or profile.
+            // Studies that draw only shapes differ by their zones, table or profile.
             let shapes = vec![
                 format!("{:?}", study.zones()),
+                format!("{:?}", study.table()),
                 study.tpo().is_some().to_string(),
                 format!("{:?}", study.volume_profiles(200..400)),
             ];
@@ -1229,6 +1232,8 @@ mod tests {
             Box::new(RsiDivergence::new(l(0), l(1), l(2), l(3), 60)),
             Box::new(TechnicalRatings::new(l(0), l(1), l(2))),
             Box::new(Reversal::new(l(0))),
+            Box::new(RisingWedge::new(l(0), l(1), l(2), l(3), l(4), l(5))),
+            Box::new(FallingWedge::new(l(0), l(1), l(2), l(3), l(4), l(5))),
             Box::new(KnoxvilleDivergence::new(l(0), l(1), l(2), l(3), l(4))),
             Box::new(AdxBreakout::new(l(0), l(1), l(2))),
             Box::new(PriceChannel::new(l(0))),
