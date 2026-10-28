@@ -56,7 +56,7 @@ The chart pans, zooms and shows a crosshair out of the box. `set_chart_type` pic
 
 ## A terminal around it
 
-In the default build, the toolbars, panels and dialogs are components you place in your layout; each returns an action that your app applies to the chart. This one puts the drawing toolbar next to a chart that loads its bars from your `Datafeed`:
+In the default build, `ui::terminal::Terminal` assembles the toolbars, menus and charts on your `Datafeed` and performs their actions:
 
 ```sh
 cargo add egui-charts
@@ -68,9 +68,7 @@ use std::sync::Arc;
 
 use eframe::egui;
 use egui_charts::data::{Datafeed, HistoryPage, HistoryRequest, Reply, Subscription};
-use egui_charts::model::Timeframe;
-use egui_charts::ui::drawing_toolbar::DrawingToolbar;
-use egui_charts::{Chart, ChartBuilder};
+use egui_charts::ui::terminal::Terminal;
 
 /// Your market data: history on request, then live updates.
 struct MyFeed;
@@ -90,38 +88,18 @@ impl Datafeed for MyFeed {
     }
 }
 
-struct Terminal {
-    chart: Chart,
-    tools: DrawingToolbar,
-}
-
-impl eframe::App for Terminal {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::Panel::left("tools").show(ui, |ui| {
-            if let Some(tool) = self.tools.show(ui) {
-                self.chart.drawings_mut().set_active_tool(Some(tool));
-            }
-        });
-        egui::CentralPanel::default().show(ui, |ui| self.chart.show(ui));
-    }
-}
-
 fn main() -> eframe::Result {
-    let chart = ChartBuilder::new()
-        .with_symbol("SAMPLE")
-        .with_timeframe(Timeframe::Min1)
-        .with_feed(Arc::new(MyFeed))
-        .build();
-    let tools = DrawingToolbar::default();
-    eframe::run_native(
-        "My terminal",
-        eframe::NativeOptions::default(),
-        Box::new(|_cc| Ok(Box::new(Terminal { chart, tools }))),
-    )
+    let mut terminal = Terminal::new(Arc::new(MyFeed)).with_symbol("AAPL");
+    eframe::run_ui_native("My terminal", eframe::NativeOptions::default(), move |ui, _frame| {
+        for action in terminal.show(ui) {
+            // Actions you intercepted, host entries and actions without a default.
+            let _ = action;
+        }
+    })
 }
 ```
 
-The [demo](examples/demo) connects the top, drawing and timeframe toolbars, the dialogs, the side panels and the context menus this way. The components return actions for the host to apply; the library does not assemble an application or connect to a market data provider on its own.
+`with_intercept` returns chosen actions to your app instead of performing them, and `run` performs one after your own checks. Storage, symbol search, alerts, brokers, signals, marks, quotes, notifications and chats are passed as services with the `with_` methods, and file export and sounds as callbacks; a control whose service is absent stays hidden. `examples/terminal.rs` runs a terminal on a synthetic feed. The components also work on their own: each returns an action for your app to apply, as the [demo](examples/demo) does. The library does not connect to a market data provider.
 
 ## Chart types
 

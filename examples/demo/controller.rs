@@ -989,7 +989,9 @@ impl DemoApp {
     }
 
     fn open_indicator_settings(&mut self, id: SeriesId) {
-        if !self.indicator_settings.open_for_chart(&self.chart, id)
+        if id == SeriesId::MAIN {
+            self.open_chart_settings_dialog();
+        } else if !self.indicator_settings.open_for_chart(&self.chart, id)
             && self.chart.series().any(|(series, _)| series == id)
         {
             self.compare_dialog.open();
@@ -1673,6 +1675,7 @@ impl DemoApp {
                     CrosshairStyle::Dot => CursorType::Dot,
                     CrosshairStyle::Arrow | CrosshairStyle::Hidden => CursorType::Arrow,
                     CrosshairStyle::Demonstration => CursorType::Demonstration,
+                    CrosshairStyle::Magic => CursorType::Magic,
                 },
                 eraser_mode_enabled: dm.eraser_mode,
                 stay_in_drawing_mode: dm.stay_in_drawing_mode,
@@ -1776,6 +1779,7 @@ impl DemoApp {
                     CursorType::Dot => CrosshairStyle::Dot,
                     CursorType::Arrow | CursorType::Eraser => CrosshairStyle::Arrow,
                     CursorType::Demonstration => CrosshairStyle::Demonstration,
+                    CursorType::Magic => CrosshairStyle::Magic,
                 });
                 self.chart.drawings_mut().set_active_tool(None);
                 self.chart
@@ -5253,6 +5257,7 @@ mod tests {
                 CursorType::Demonstration,
                 MagnetType::Strong,
             ),
+            (CrosshairStyle::Magic, CursorType::Magic, MagnetType::Strong),
             (CrosshairStyle::Dot, CursorType::Dot, MagnetType::OHLC),
         ] {
             if magnet == MagnetType::OHLC {
@@ -5854,6 +5859,7 @@ mod tests {
             settings.gann = Some(GannConfig {
                 price_levels: vec![0.0, 0.5, 1.0],
                 time_levels: vec![0.25, 0.75],
+                ..Default::default()
             });
             settings.position_size = Some(PositionSize::RiskPercent {
                 account_size: 10_000.0,
