@@ -1,6 +1,8 @@
 //! Tiled and tabbed charts with independent state and timestamp-based synchronization.
 
 use super::Chart;
+use super::keyboard::ShortcutRequest;
+use crate::config::KeyboardAction;
 use crate::localization as l10n;
 use crate::model::Timeframe;
 use crate::theme::ThemeExt;
@@ -203,6 +205,8 @@ pub struct ChartLayout {
     /// Synchronization controls, applied within each group.
     pub sync: ChartSyncOptions,
     active: usize,
+    /// The chart slot Alt+Enter shows alone in place of the preset.
+    maximized: Option<usize>,
     focus_active: bool,
     groups: [Option<String>; 16],
     detached: [bool; 16],
@@ -279,6 +283,12 @@ impl ChartLayout {
             return ui.allocate_response(Vec2::ZERO, Sense::hover());
         }
         self.active = self.active.min(count - 1);
+        if self.maximized.is_some_and(|index| index >= count) {
+            self.maximized = None;
+        }
+        if let Some(index) = self.maximized {
+            self.active = index;
+        }
         if self.mode == ChartLayoutMode::Tabs {
             egui::ScrollArea::horizontal().show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -320,6 +330,9 @@ impl ChartLayout {
             if self.mode == ChartLayoutMode::Tabs && index != self.active && !self.detached[index] {
                 continue;
             }
+            if self.maximized.is_some_and(|slot| slot != index) && !self.detached[index] {
+                continue;
+            }
             let focus = self.focus_active && index == self.active;
             if self.detached[index] {
                 let id = egui::ViewportId::from_hash_of((ui.scope_id(), "detached_chart", index));
@@ -356,7 +369,9 @@ impl ChartLayout {
                 if activate {
                     self.active = index;
                 }
-                if self.mode != ChartLayoutMode::Tabs || index == self.active {
+                if (self.mode != ChartLayoutMode::Tabs || index == self.active)
+                    && self.maximized.is_none_or(|slot| slot == index)
+                {
                     ui.scope_builder(egui::UiBuilder::new().max_rect(rects[index]), |ui| {
                         if ui
                             .button(l10n::text(ui.ctx(), "Return chart to layout"))
@@ -417,7 +432,7 @@ impl ChartLayout {
                     }
                 },
             );
-            if count > 1 && index == self.active {
+            if count > 1 && self.maximized.is_none() && index == self.active {
                 ui.painter().rect_stroke(
                     rect,
                     0.0,
@@ -427,6 +442,26 @@ impl ChartLayout {
             }
         }
         self.focus_active = false;
+        // Alt+Enter toggles the focused tile in a grid; a lone chart leaves it to the host.
+        if self.mode != ChartLayoutMode::Tabs && count > 1 {
+            for (index, chart) in charts.iter_mut().take(count).enumerate() {
+                let requests = &mut chart.keyboard.requests;
+                let before = requests.len();
+                requests.retain(|request| {
+                    *request != ShortcutRequest::Action(KeyboardAction::MaximizeChart)
+                });
+                // A discarded pass replays its input, so only the last one toggles.
+                if requests.len() != before && !ui.ctx().will_discard() {
+                    self.maximized = if self.maximized == Some(index) {
+                        None
+                    } else {
+                        Some(index)
+                    };
+                    self.set_active(index);
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
         // Apply gestures from the source after it has handled this frame's input.
         let sync_range = charts[self.active].visible_time_range() != before_range
             || self.previous_preset != Some((self.mode, count));
@@ -510,6 +545,11 @@ impl ChartLayout {
     fn rects(&self, rect: Rect, count: usize) -> Vec<Rect> {
         if self.mode == ChartLayoutMode::Tabs {
             return vec![rect; count];
+        }
+        if let Some(slot) = self.maximized {
+            return (0..count)
+                .map(|index| if index == slot { rect } else { Rect::NOTHING })
+                .collect();
         }
         let (columns, _) = self.mode.grid_size();
         let columns = columns.min(count);
@@ -857,5 +897,65 @@ mod tests {
         layout.apply_date_range(&mut refs, range);
         assert_ne!(refs[1].get_time_scale_state(), before);
         assert_eq!(refs[2].get_time_scale_state(), isolated);
+    }
+
+    /// Alt+Enter shows the focused tile alone and a second press brings the preset back with the
+    /// tile's slot, viewport and synchronization group unchanged.
+    #[test]
+    fn alt_enter_maximizes_and_restores_the_active_tile() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Four,
+            ..Default::default()
+        };
+        let mut charts = [chart(60), chart(120), chart(60), chart(60)];
+        layout.set_sync_group(2, Some("B".into()));
+        layout.set_active(2);
+        let mut time = 0.0;
+        let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart; 4], pressed: bool| {
+            time += 0.1;
+            let events = if pressed {
+                vec![Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::ALT,
+                }]
+            } else {
+                vec![]
+            };
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        for _ in 0..3 {
+            frame(&mut layout, &mut charts, false);
+        }
+        let tile = charts[2].get_rendered_price_rect();
+        let viewport = charts[2].get_time_scale_state();
+        frame(&mut layout, &mut charts, true);
+        // The chart's widget id follows its rect, so focus moves over to it on the next frames.
+        frame(&mut layout, &mut charts, false);
+        frame(&mut layout, &mut charts, false);
+        assert_eq!((layout.maximized, layout.active()), (Some(2), 2));
+        assert!(charts[2].get_rendered_price_rect().width() > tile.width() * 1.8);
+        assert_eq!(layout.sync_group(2), Some("B"));
+        assert!(charts[2].take_shortcut_requests().is_empty());
+        frame(&mut layout, &mut charts, true);
+        frame(&mut layout, &mut charts, false);
+        frame(&mut layout, &mut charts, false);
+        assert_eq!((layout.maximized, layout.active()), (None, 2));
+        assert_eq!(charts[2].get_rendered_price_rect(), tile);
+        assert_eq!(charts[2].get_time_scale_state(), viewport);
     }
 }
