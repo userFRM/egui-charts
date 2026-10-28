@@ -282,6 +282,8 @@ impl DemoAlerts {
     }
 }
 
+/// The value of `source` at `index` on `chart`. `studies` maps the study ids alerts name to the
+/// ids of the chart's own studies when the chart is a monitor's copy.
 fn source_value(
     chart: &egui_charts::Chart,
     studies: &std::collections::HashMap<String, egui_charts::widget::SeriesId>,
@@ -289,28 +291,19 @@ fn source_value(
     index: usize,
 ) -> Option<f64> {
     use egui_charts::model::AlertSource;
-    let bars = chart.bars(egui_charts::chart::series::SeriesId::MAIN);
-    let value = match source {
-        AlertSource::Price => bars.get(index)?.close,
-        AlertSource::Volume => bars.get(index)?.volume,
-        AlertSource::Study { id, output } => chart
-            .indicators()
-            .find(|(key, _)| {
-                if studies.is_empty() {
-                    key.0.to_string() == *id
-                } else {
-                    studies.get(id) == Some(key)
-                }
-            })?
-            .1
-            .plot_value(*output, index)?,
-        AlertSource::Drawing(_) => chart.drawings().drawings.iter().find_map(|d| {
-            let level = d.alert_level(source)?;
-            let levels = d.alert_levels(index as f64, chart.config().right_axis_scale_mode);
-            levels.into_iter().find(|l| l.0 == level).map(|l| l.2)
-        })?,
-    };
-    value.is_finite().then_some(value)
+    match source {
+        AlertSource::Study { id, output } if !studies.is_empty() => {
+            let id = studies.get(id)?.0.to_string();
+            chart.alert_value(
+                &AlertSource::Study {
+                    id,
+                    output: *output,
+                },
+                index,
+            )
+        }
+        _ => chart.alert_value(source, index),
+    }
 }
 
 fn comparison_holds(

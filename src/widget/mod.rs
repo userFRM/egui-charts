@@ -67,6 +67,9 @@ use crate::chart::state;
 mod accessibility;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+mod alerts;
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod anchors;
 mod builder;
 mod change_marks;

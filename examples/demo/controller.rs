@@ -912,50 +912,7 @@ impl DemoApp {
 
     /// Offers the studies' outputs and every level of the drawings as alert sources.
     fn list_alert_sources(&mut self) {
-        use egui_charts::model::AlertSource;
-        let bar = self.chart.bars(SeriesId::MAIN).len().saturating_sub(1) as f64;
-        let scale = self.chart.config().right_axis_scale_mode;
-        self.alert_dialog.sources = self
-            .chart
-            .indicators()
-            .flat_map(|(id, study)| {
-                study
-                    .line_names()
-                    .into_iter()
-                    .enumerate()
-                    .map(move |(output, name)| {
-                        (
-                            AlertSource::Study {
-                                id: id.0.to_string(),
-                                output,
-                            },
-                            format!("{}: {name}", study.name()),
-                        )
-                    })
-            })
-            .chain(
-                self.chart
-                    .drawings()
-                    .drawings
-                    .iter()
-                    .filter(|d| d.completed)
-                    .flat_map(|d| {
-                        let levels = d.alert_levels(bar, scale);
-                        let single = levels.len() == 1;
-                        levels.into_iter().map(move |(level, name, _)| {
-                            let drawing = format!("{} {}", d.tool_type.as_str(), d.id);
-                            (
-                                d.alert_source(level),
-                                if single {
-                                    drawing
-                                } else {
-                                    format!("{drawing}: {name}")
-                                },
-                            )
-                        })
-                    }),
-            )
-            .collect();
+        self.alert_dialog.sources = self.chart.alert_sources();
         self.alert_dialog.watchlists = self
             .watchlist
             .lists()
