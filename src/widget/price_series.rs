@@ -18,12 +18,8 @@ use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Utc};
 use egui::{Color32, Pos2, Rect};
 
-type AxisValue = (
-    f64,
-    (Color32, Color32),
-    PriceMap,
-    Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
-);
+/// A price on a series axis, its tag colours, the map it is drawn on and its tag text.
+type AxisValue = (f64, (Color32, Color32), PriceMap, String);
 
 fn shared_prices(
     study: &dyn Indicator,
@@ -54,7 +50,7 @@ fn shared_prices(
 }
 
 /// Display settings of a host-fed bar series.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SeriesOptions {
     /// Host-supplied title, displayed beside the series values.
     pub name: String,
@@ -215,6 +211,8 @@ pub(super) struct SeriesLegend {
     close: Option<f64>,
     values: IndicatorValues,
     formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    /// Decimals of the series' price scale, when it sets them.
+    precision: Option<usize>,
 }
 
 impl SeriesLegend {
@@ -222,6 +220,7 @@ impl SeriesLegend {
         item: &PriceSeries,
         close: Option<f64>,
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+        precision: Option<usize>,
     ) -> Self {
         Self {
             name: item.options.name.clone(),
@@ -234,6 +233,7 @@ impl SeriesLegend {
             },
             close,
             formatter,
+            precision,
             values: IndicatorValues::default(),
         }
     }
@@ -250,7 +250,7 @@ impl Indicator for SeriesLegend {
 
     fn format_value(&self, value: f64) -> String {
         self.formatter.as_ref().map_or_else(
-            || StudyFormat::Price.format(value, None),
+            || StudyFormat::Price.format(value, self.precision),
             |formatter| formatter.format(value),
         )
     }
@@ -876,26 +876,49 @@ impl Chart {
             .flat_map(move |item| {
                 let map = self.series_map(item, rect);
                 self.series_axis_values(item)
-                    .filter(move |(value, _)| {
+                    .filter(move |(value, ..)| {
                         map.range().contains(map.transform().to_scale(*value))
                     })
-                    .map(move |(value, colors)| {
+                    .map(move |(value, colors, last)| {
                         (
                             value,
                             colors,
                             map,
-                            self.series_label_formatter(item.id, map.transform().mode),
+                            self.series_tag_label(item, &map, value, last),
                         )
                     })
             })
     }
 
+    /// The text of a value tag of `item` on `map`. Hosts' formatters write it; otherwise it has
+    /// the scale's precision, led by the series name for the last value when the axis shows
+    /// names.
+    pub(super) fn series_tag_label(
+        &self,
+        item: &PriceSeries,
+        map: &PriceMap,
+        value: f64,
+        last_value: bool,
+    ) -> String {
+        let transform = map.transform();
+        crate::chart::rendering::axes::named_label(
+            last_value && self.config.price_axis.show_symbol_name,
+            &item.options.name,
+            transform.label(
+                transform.to_scale(value),
+                map.price_precision().unwrap_or(2),
+                self.series_label_formatter(item.id, transform.mode)
+                    .as_deref(),
+            ),
+        )
+    }
+
     /// The price-line labels and the last close that `item` shows on its price axis, each with
-    /// its text and tag colours.
+    /// its tag colours and whether it is the last close.
     pub(super) fn series_axis_values<'a>(
         &'a self,
         item: &'a PriceSeries,
-    ) -> impl Iterator<Item = (f64, (Color32, Color32))> + 'a {
+    ) -> impl Iterator<Item = (f64, (Color32, Color32), bool)> + 'a {
         item.lines
             .iter()
             .filter(|(_, line)| line.axis_label)
@@ -903,6 +926,7 @@ impl Chart {
                 (
                     line.price,
                     crate::chart::rendering::axes::axis_label_colors(line),
+                    false,
                 )
             })
             .chain(
@@ -913,7 +937,7 @@ impl Chart {
                     .map(|bar| {
                         let color = item.value_color(bar);
                         let text = crate::chart::rendering::axes::tag_text_color(color);
-                        (bar.close, (text, color))
+                        (bar.close, (text, color), true)
                     }),
             )
     }
@@ -1073,6 +1097,7 @@ impl Chart {
                 visible_data: visible,
                 full_data: &item.bars,
                 revision: item.revision,
+                shows_elements: false,
                 heikin_ashi: &item.heikin_ashi,
                 start_idx: start,
                 clock: &clock,
@@ -1226,7 +1251,13 @@ impl Chart {
                     || "∅".into(),
                     |bar| {
                         formatter.as_ref().map_or_else(
-                            || format!("{:.2}", bar.close),
+                            || {
+                                format!(
+                                    "{:.*}",
+                                    self.series_map(item, rect).price_precision().unwrap_or(2),
+                                    bar.close
+                                )
+                            },
                             |formatter| formatter.format(bar.close),
                         )
                     },
@@ -1413,17 +1444,13 @@ impl Chart {
             let ctx = RenderContext::new(&clipped, label_rect);
             let slot = clipped.add(egui::Shape::Noop);
             let mut tags = Vec::new();
-            for (value, colors, mapping, formatter) in self.secondary_axis_values(key, rect) {
+            for (value, colors, mapping, label) in self.secondary_axis_values(key, rect) {
                 tags.push(crate::chart::rendering::axes::render_axis_value(
                     &clipped,
                     label_rect,
                     axis.right(),
                     mapping.price_to_y(value),
-                    mapping.transform().label(
-                        mapping.transform().to_scale(value),
-                        2,
-                        formatter.as_deref(),
-                    ),
+                    label,
                     colors,
                     &tags,
                     self.config.price_axis.allow_label_overlap,
@@ -1854,6 +1881,55 @@ mod tests {
                 .secondary_axis_values(SeriesScale::Separate(2), chart.last_rendered_price_rect)
                 .count(),
             0
+        );
+    }
+
+    /// Each added series writes its last value with its own scale's decimals, led by its own
+    /// name once the axis shows names, and a host formatter still replaces the decimals.
+    #[test]
+    fn added_series_value_tags_use_their_scale_precision_and_name() {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0])));
+        let mut add = |name: &str, key, decimals, last| {
+            let id = chart.add_series(SeriesOptions {
+                name: name.into(),
+                scale: key,
+                ..Default::default()
+            });
+            chart.set_data(id, bars(&[last, last]));
+            chart
+                .series_price_scale_mut(id)
+                .unwrap()
+                .set_price_precision(Some(decimals));
+            id
+        };
+        let alpha = add("Alpha", SeriesScale::Separate(2), 3, 200.5);
+        add("Beta", SeriesScale::Separate(3), 0, 300.5);
+        chart.config.price_axis.show_symbol_name = true;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let labels = |chart: &Chart, key, rect| {
+            chart
+                .secondary_axis_values(key, rect)
+                .map(|(.., label)| label)
+                .collect::<Vec<_>>()
+        };
+        let rect = chart.last_rendered_price_rect;
+        assert_eq!(
+            labels(&chart, SeriesScale::Separate(2), rect),
+            ["Alpha 200.500"]
+        );
+        assert_eq!(labels(&chart, SeriesScale::Separate(3), rect), ["Beta 300"]);
+        chart.config.price_axis.show_symbol_name = false;
+        assert_eq!(labels(&chart, SeriesScale::Separate(2), rect), ["200.500"]);
+        chart.set_series_formatter(
+            alpha,
+            Some(std::sync::Arc::new(
+                crate::scales::CustomPriceFormatter::new(|price| format!("{price:.1} USD")),
+            )),
+        );
+        assert_eq!(
+            labels(&chart, SeriesScale::Separate(2), rect),
+            ["200.5 USD"]
         );
     }
 

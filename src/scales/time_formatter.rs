@@ -470,7 +470,7 @@ impl<T: chrono::TimeZone> TimezoneAwareFormatter<T> {
 
     /// Convert UTC ts to target timezone
     fn convert_timezone(&self, utc_time: DateTime<Utc>) -> DateTime<Utc> {
-        use crate::model::session::local_time;
+        use crate::model::local_time;
         local_time(self.timezone.clone(), utc_time).and_utc()
     }
 }
@@ -499,7 +499,7 @@ impl<T: chrono::TimeZone + Send + Sync + 'static> TimeFormatter for TimezoneAwar
     }
 
     fn utc_time(&self, time: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        use crate::model::session::local_instant;
+        use crate::model::local_instant;
         local_instant(self.timezone.clone(), time.naive_utc())
     }
 

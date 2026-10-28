@@ -1,6 +1,8 @@
 //! Timeframe Selector
 //!
 //! A dropdown menu for selecting chart timeframes with favorites support.
+mod custom;
+
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
 use crate::model::Timeframe;
@@ -9,11 +11,13 @@ use crate::styles::icons as icon_sizes;
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::top_toolbar::buttons::Trigger;
-use crate::ui_kit::buttons::Button;
 use crate::ui_kit::list_item::{ContentContext, LabelContent, ListItem, ListItemContent};
 use egui::{Color32, Rect, RichText, Role, Ui, WidgetInfo, pos2, vec2};
 use std::collections::HashSet;
+use std::hash::Hash;
 use std::num::{NonZeroU32, NonZeroU64};
+
+pub use custom::CustomTimeframeDialog;
 
 /// Height of the interval menu's rows and section headers.
 const ROW_H: f32 = 32.0;
@@ -245,151 +249,6 @@ pub enum TimeframeAction {
     RestoreHidden,
 }
 
-/// Custom timeframe dialog state
-#[derive(Debug, Clone)]
-pub struct CustomTimeframeDialog {
-    /// The numeric value input
-    pub value_input: String,
-    /// The selected unit
-    pub unit: TimeframeUnit,
-    /// Validation error message
-    pub error: Option<String>,
-}
-
-impl Default for CustomTimeframeDialog {
-    fn default() -> Self {
-        Self {
-            value_input: "1".to_string(),
-            unit: TimeframeUnit::Minute,
-            error: None,
-        }
-    }
-}
-
-impl CustomTimeframeDialog {
-    /// Validate and return the custom Timeframe, or None if invalid
-    pub fn validate(&mut self) -> Option<Timeframe> {
-        let trimmed = self.value_input.trim();
-        if trimmed.is_empty() {
-            self.error = Some("Enter a number".to_string());
-            return None;
-        }
-        match trimmed.parse::<u32>() {
-            Ok(0) => {
-                self.error = Some("Value must be > 0".to_string());
-                None
-            }
-            Ok(v) if v > 10_000 => {
-                self.error = Some("Value too large (max 10000)".to_string());
-                None
-            }
-            Ok(v) if self.unit == TimeframeUnit::Millisecond && ![100, 250, 500].contains(&v) => {
-                self.error = Some("Use 100, 250 or 500 milliseconds".to_owned());
-                None
-            }
-            Ok(v) => {
-                self.error = None;
-                Some(interval(v, self.unit))
-            }
-            Err(_) => {
-                self.error = Some("Enter a valid number".to_string());
-                None
-            }
-        }
-    }
-
-    /// Available units for the custom dialog
-    fn available_units() -> &'static [(TimeframeUnit, &'static str)] {
-        &[
-            (TimeframeUnit::Tick, "Ticks"),
-            (TimeframeUnit::Volume, "Volume"),
-            (TimeframeUnit::Range, "Range"),
-            (TimeframeUnit::Delta, "Delta"),
-            (TimeframeUnit::Second, "Seconds"),
-            (TimeframeUnit::Minute, "Minutes"),
-            (TimeframeUnit::Hour, "Hours"),
-            (TimeframeUnit::Day, "Days"),
-            (TimeframeUnit::Week, "Weeks"),
-            (TimeframeUnit::Month, "Months"),
-        ]
-    }
-
-    /// Show the custom timeframe dialog inside the dropdown.
-    /// Returns Some(Timeframe) if the user confirms, None otherwise.
-    pub fn show(&mut self, ui: &mut Ui) -> Option<Timeframe> {
-        let theme = ui.active_theme();
-        let mut result = None;
-
-        ui.add_space(theme.spacing.lg);
-        ui.allocate_ui_with_layout(
-            vec2(ui.available_width(), DESIGN_TOKENS.sizing.button_md),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.add_space(theme.spacing.lg);
-                // The controls share the height of the button.
-                ui.spacing_mut().interact_size.y = DESIGN_TOKENS.sizing.button_md;
-                // The menu style draws inactive controls without a frame; the form's fields need one.
-                let inactive = &mut ui.visuals_mut().widgets.inactive;
-                inactive.bg_stroke = egui::Stroke::new(1.0, theme.ui.border_control);
-                inactive.weak_bg_fill = theme.ui.btn_bg_hover;
-                let width_id = ui.scope_id().with("interval_actions_width");
-                let actions_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
-                let field_width =
-                    (ui.available_width() - actions_width - 2.0 * theme.spacing.lg).max(0.0);
-                ui.add_sized(
-                    vec2(field_width, DESIGN_TOKENS.sizing.button_md),
-                    egui::TextEdit::singleline(&mut self.value_input)
-                        .desired_width(0.0)
-                        .align(egui::Align2::LEFT_CENTER)
-                        .font(egui::FontId::proportional(theme.text.body)),
-                )
-                .accessible_name(l10n::text(ui.ctx(), "Interval value"));
-                let width = ui
-                    .horizontal(|ui| {
-                        let unit = Self::available_units()
-                            .iter()
-                            .find(|(u, _)| *u == self.unit)
-                            .map_or_else(|| self.unit.name(), |(_, label)| label);
-                        // A submenu keeps the interval menu open when a unit is picked.
-                        ui.menu_button(l10n::text(ui.ctx(), unit), |ui| {
-                            for (u, label) in Self::available_units() {
-                                if ui
-                                    .selectable_label(self.unit == *u, l10n::text(ui.ctx(), *label))
-                                    .clicked()
-                                {
-                                    self.unit = *u;
-                                }
-                            }
-                        });
-                        if Button::new("Add").primary().show(ui).clicked() {
-                            result = self.validate();
-                        }
-                    })
-                    .response
-                    .rect
-                    .width();
-                if (width - actions_width).abs() > 0.5 {
-                    ui.data_mut(|d| d.insert_temp(width_id, width));
-                    ui.ctx().request_discard("Interval actions changed width");
-                }
-            },
-        );
-
-        if let Some(err) = &self.error {
-            ui.horizontal(|ui| {
-                ui.add_space(theme.spacing.lg);
-                ui.label(
-                    RichText::new(l10n::text(ui.ctx(), err))
-                        .size(theme.text.small)
-                        .color(ui.visuals().error_fg_color),
-                );
-            });
-        }
-
-        result
-    }
-}
-
 /// Host-owned interval settings. Save with the user's settings and restore with
 /// [`TimeframeSelector::set_preferences`]. The selector owns no storage.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -500,9 +359,8 @@ impl TimeframeSelector {
 
     /// Show favorite interval buttons and the interval menu trigger.
     pub fn show(&mut self, ui: &mut Ui) -> TimeframeAction {
-        if !self.favorites.contains(&self.current) {
-            self.last_non_favorite = Some(self.current);
-        }
+        let extra = retain_non_favorite(&mut self.last_non_favorite, self.current, &self.favorites)
+            .filter(|tf| self.supports(*tf));
         let favorites: Vec<_> = PRESETS
             .iter()
             .chain(&self.custom_timeframes)
@@ -513,33 +371,20 @@ impl TimeframeSelector {
                     && !self.hidden_timeframes.contains(tf)
             })
             .collect();
+        let (btn_res, clicked) = favorite_strip(
+            ui,
+            self.current,
+            favorites,
+            extra,
+            self.is_open,
+            "Chart interval",
+            |ui, tf| self.interval_button(ui, tf),
+        );
         let mut selected = TimeframeAction::None;
-        let btn_res = if favorites.is_empty() {
-            self.interval_button(ui, self.current)
-                .show(ui, self.is_open)
-        } else {
-            let extra = self
-                .last_non_favorite
-                .filter(|tf| !self.favorites.contains(tf) && self.supports(*tf));
-            for tf in favorites.into_iter().chain(extra) {
-                if self
-                    .interval_button(ui, tf)
-                    .show(ui, tf == self.current)
-                    .clicked()
-                {
-                    self.current = tf;
-                    selected = TimeframeAction::Select(tf);
-                }
-            }
-            Trigger {
-                icon: Some(&embedded_icons::CHEVRON_DOWN),
-                name: "Chart interval".to_owned(),
-                label: String::new(),
-                min_width: 0.0,
-                filled: false,
-            }
-            .show(ui, self.is_open)
-        };
+        if let Some(tf) = clicked {
+            self.current = tf;
+            selected = TimeframeAction::Select(tf);
+        }
 
         let theme = ui.active_theme();
         let id = ui.make_persistent_id("timeframe_menu");
@@ -785,6 +630,108 @@ pub(super) fn menu_row_focus(ui: &Ui, response: &egui::Response) {
     }
 }
 
+/// Remembers `current` as the latest chosen choice that is not a favourite, and returns that
+/// choice unless it has been starred since.
+pub(super) fn retain_non_favorite<T: Copy + Eq + Hash>(
+    last: &mut Option<T>,
+    current: T,
+    favorites: &HashSet<T>,
+) -> Option<T> {
+    if !favorites.contains(&current) {
+        *last = Some(current);
+    }
+    last.filter(|choice| !favorites.contains(choice))
+}
+
+/// The toolbar buttons of a control with a menu of choices and starred favourites. Without
+/// `favorites` (the starred choices in menu order) it is one button for `current` that opens the
+/// menu. Otherwise there is a button for each favourite, then one for `extra`, then a chevron
+/// named `menu_name` that opens the menu, and `current`'s button is pressed. Returns the menu's
+/// anchor and the choice whose button was clicked.
+pub(super) fn favorite_strip<T: Copy + PartialEq>(
+    ui: &mut Ui,
+    current: T,
+    favorites: Vec<T>,
+    extra: Option<T>,
+    open: bool,
+    menu_name: &str,
+    button: impl Fn(&Ui, T) -> Trigger<'static>,
+) -> (egui::Response, Option<T>) {
+    if favorites.is_empty() {
+        return (button(ui, current).show(ui, open), None);
+    }
+    let mut clicked = None;
+    for choice in favorites.into_iter().chain(extra) {
+        if button(ui, choice).show(ui, choice == current).clicked() {
+            clicked = Some(choice);
+        }
+    }
+    let menu = Trigger {
+        icon: Some(&embedded_icons::CHEVRON_DOWN),
+        name: menu_name.to_owned(),
+        label: String::new(),
+        min_width: 0.0,
+        filled: false,
+    }
+    .show(ui, open);
+    (menu, clicked)
+}
+
+/// Width of the star's slot at the end of a menu row.
+pub(super) const STAR_SLOT_W: f32 = 28.0;
+
+/// The star at the end of a menu row, which adds the row's choice to the favourites or removes
+/// it. With `on_hover` it is drawn only on a favourite, a hovered row, or while a key has focus
+/// in the row. Returns whether it was clicked.
+pub(super) fn favorite_star(
+    ui: &Ui,
+    context: &ContentContext<'_>,
+    favorite: bool,
+    on_hover: bool,
+    color: Color32,
+) -> bool {
+    let rect = context.rect;
+    let star_rect = Rect::from_center_size(
+        pos2(rect.right() - icon_sizes::SM / 2.0, rect.center().y),
+        vec2(STAR_SLOT_W, rect.height()),
+    );
+    let star = ui.interact(
+        star_rect,
+        context.response.id.with("favorite"),
+        egui::Sense::click(),
+    );
+    let tooltip = if favorite {
+        "Remove from favorites"
+    } else {
+        "Add to favorites"
+    };
+    let translated_label = l10n::text(ui.ctx(), tooltip);
+    star.widget_info(|| {
+        WidgetInfo::selected(Role::Button, ui.is_enabled(), favorite, &translated_label)
+    });
+    let shown = !on_hover
+        || favorite
+        || ui.rect_contains_pointer(context.response.rect)
+        || context.response.has_focus()
+        || star.has_focus();
+    if shown {
+        let icon = if favorite {
+            &embedded_icons::STAR_FILLED
+        } else {
+            &embedded_icons::STAR_EMPTY
+        };
+        icon.as_image_tinted(vec2(icon_sizes::SM, icon_sizes::SM), color)
+            .paint_at(
+                ui,
+                Rect::from_center_size(star_rect.center(), vec2(icon_sizes::SM, icon_sizes::SM)),
+            );
+    }
+    menu_row_focus(ui, &star);
+    let clicked = star.clicked();
+    star.on_hover_text(translated_label);
+    clicked
+}
+
 /// A section title on the menu's row grid, with its text on the bottom of the row.
 fn section_header(ui: &mut Ui, theme: &Theme, text: &str) {
     if ui.cursor().top() > ui.max_rect().top() + 1.0 {
@@ -857,42 +804,7 @@ impl ListItemContent for TimeframeRow<'_> {
         menu_row_focus(ui, &hide);
         hide.on_hover_text(label);
 
-        let star_rect = Rect::from_center_size(
-            pos2(rect.right() - icon_sizes::SM / 2.0, rect.center().y),
-            vec2(28.0, ROW_H),
-        );
-        let star = ui.interact(
-            star_rect,
-            context.response.id.with("favorite"),
-            egui::Sense::click(),
-        );
-        let tooltip = if self.favorite {
-            "Remove from favorites"
-        } else {
-            "Add to favorites"
-        };
-        let translated_label = l10n::text(ui.ctx(), tooltip);
-        star.widget_info(|| {
-            WidgetInfo::selected(
-                Role::Button,
-                ui.is_enabled(),
-                self.favorite,
-                &translated_label,
-            )
-        });
-        *self.toggle_favorite = star.clicked();
-        let icon = if self.favorite {
-            &embedded_icons::STAR_FILLED
-        } else {
-            &embedded_icons::STAR_EMPTY
-        };
-        icon.as_image_tinted(vec2(icon_sizes::SM, icon_sizes::SM), text)
-            .paint_at(
-                ui,
-                Rect::from_center_size(star_rect.center(), vec2(icon_sizes::SM, icon_sizes::SM)),
-            );
-        menu_row_focus(ui, &star);
-        star.on_hover_text(l10n::text(ui.ctx(), tooltip));
+        *self.toggle_favorite = favorite_star(ui, context, self.favorite, false, text);
         ui.painter().text(
             pos2(rect.min.x, rect.center().y),
             egui::Align2::LEFT_CENTER,
@@ -1247,63 +1159,6 @@ mod tests {
                         .iter()
                         .any(|(label, _)| *label == display_long(custom))
                 );
-            }
-        }
-    }
-
-    #[test]
-    fn custom_interval_tabs_from_value_to_unit_to_add() {
-        for unit in [TimeframeUnit::Week, TimeframeUnit::Month] {
-            assert!(
-                CustomTimeframeDialog::available_units()
-                    .iter()
-                    .any(|(u, _)| *u == unit)
-            );
-            let mut dialog = CustomTimeframeDialog {
-                value_input: "3".into(),
-                unit,
-                error: None,
-            };
-            assert_eq!(parts(dialog.validate().unwrap()), (3, unit));
-            dialog.value_input = "0".into();
-            assert!(dialog.validate().is_none());
-        }
-        for width in [320.0, 500.0] {
-            let ctx = egui::Context::default();
-            let mut dialog = CustomTimeframeDialog::default();
-            let mut frame = |events| {
-                ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            vec2(width, 200.0),
-                        )),
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        dialog.show(ui);
-                    },
-                )
-                .drop_without_applying_deltas();
-                ctx.memory(|m| m.focused())
-                    .and_then(|id| ctx.read_response(id))
-                    .map(|r| r.rect)
-            };
-            frame(vec![]);
-            let mut right = 0.0;
-            for _ in 0..3 {
-                let rect = frame(vec![egui::Event::Key {
-                    key: egui::Key::Tab,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }])
-                .unwrap();
-                assert!(rect.left() >= right, "{rect:?} follows {right}");
-                assert!(rect.right() <= width, "{rect:?}");
-                right = rect.right();
             }
         }
     }
