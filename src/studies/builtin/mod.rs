@@ -336,7 +336,7 @@ pub use obv::OnBalanceVolume;
 pub use twap::TimeWeightedAvgPrice;
 pub use volume::{Volume, VolumeAverage, VolumeColorRule};
 pub use volume_profile::{
-    VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
+    ProfileInput, VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
     VolProfileSession, VolProfileVisible,
 };
 pub use vwap::{VolumeWeightedAvgPrice, VwapAnchor};
