@@ -1918,10 +1918,13 @@ mod tests {
             capabilities,
             rules: &rules,
             rules_ready: true,
-            book: None,
+            ladder: None,
+            ladder_unavailable: None,
+            highlights: Vec::new(),
             orders: &[],
             positions: &[],
             trades: &[],
+            session_open: None,
             last_fill: None,
         };
         let ticks = |value| {
