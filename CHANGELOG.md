@@ -403,6 +403,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Intraday time axes with day or longer label intervals mark the first available bar of each Monday-anchored day bucket, including weeks whose opening day has no data. Missing Sunday bars no longer hide weekly labels. ([#1219](https://github.com/userFRM/egui-charts/issues/1219))
+
 - Daily time-axis labels use the first supplied bar at or after each calendar boundary, so weekends and holidays with no bar are not labelled. Candidates sharing a bar keep its strongest boundary, and candidates beyond the last bar are omitted. ([#1234](https://github.com/userFRM/egui-charts/issues/1234))
 
 - The upside and downside Tasuki gap patterns need the third candle to open strictly inside the second candle's body and close strictly inside the gap, so an open outside the body, a close on either gap edge or a closed gap is no longer marked. ([#1083](https://github.com/userFRM/egui-charts/issues/1083))

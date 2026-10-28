@@ -300,10 +300,15 @@ impl TickMarkGenerator {
             let clock_mark = interval < Duration::days(1)
                 && (previous.is_some_and(|previous| clock_bucket(previous) != clock_bucket(local))
                     || local.timestamp_millis().rem_euclid(millis) == 0);
-            let day_mark = day
-                && (interval < Duration::days(1)
-                    || i64::from(local.num_days_from_ce()).rem_euclid(interval.num_days().max(1))
-                        == 0);
+            // Gregorian day 1 is Monday; a bucket change also catches missing anchor days.
+            let day_bucket = |time: DateTime<Utc>| {
+                (i64::from(time.num_days_from_ce()) - 1).div_euclid(interval.num_days().max(1))
+            };
+            let day_mark = if interval < Duration::days(1) {
+                day
+            } else {
+                previous.is_none_or(|previous| day_bucket(previous) != day_bucket(local))
+            };
             if kind == TickMarkType::Year || kind == TickMarkType::Month || day_mark || clock_mark {
                 let (mark_type, weight) = if day && weight < TickMarkWeight::DAY {
                     (TickMarkType::DayOfMonth, TickMarkWeight::DAY)
@@ -1290,6 +1295,68 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn intraday_day_buckets_mark_the_first_available_bar() {
+        use crate::scales::{HorizontalScale, TickMarkLayout, TimeFormatterBuilder};
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 14, 30, 0).unwrap();
+        // Monday January 8 is closed as well as weekends. Day numbers below are
+        // offsets from January 1, with Monday-anchored Gregorian day buckets.
+        let bars: Vec<_> = (0..50)
+            .filter(|day| {
+                *day != 7
+                    && (start + Duration::days(*day))
+                        .weekday()
+                        .number_from_monday()
+                        <= 5
+            })
+            .flat_map(|day| {
+                (0..7).map(move |hour| start + Duration::days(day) + Duration::hours(hour))
+            })
+            .enumerate()
+            .map(|(index, time)| (time, index))
+            .collect();
+        let generator = TickMarkGenerator::new();
+        for (days, expected) in [
+            (
+                2,
+                vec![
+                    0, 1, 3, 8, 9, 11, 14, 15, 17, 21, 23, 25, 28, 29, 31, 35, 37, 39, 42, 43, 45,
+                    49,
+                ],
+            ),
+            (7, vec![0, 8, 14, 21, 28, 35, 42, 49]),
+            (14, vec![0, 8, 21, 35, 49]),
+        ] {
+            let marks =
+                generator.generate_bar_marks(&bars, Duration::days(days), TickMarkType::DayOfMonth);
+            // The first February bar is a stronger calendar boundary, independent of the stride.
+            let actual: Vec<_> = marks
+                .iter()
+                .filter(|mark| mark.weight < TickMarkWeight::MONTH)
+                .map(|mark| (mark.time - start).num_days())
+                .collect();
+            let expected: Vec<_> = expected.into_iter().filter(|day| *day != 31).collect();
+            assert_eq!(actual, expected, "{days}-day buckets");
+            assert!(
+                marks
+                    .iter()
+                    .all(|mark| mark.time.hour() == 14 && mark.time.minute() == 30)
+            );
+        }
+        let formatter = TimeFormatterBuilder::new().build();
+        let marks = formatter.tick_marks(
+            &bars,
+            &TickMarkLayout {
+                width: 1000.0,
+                bar_spacing: 1000.0 / bars.len() as f32,
+                min_spacing: 80.0,
+                uniform_distribution: false,
+            },
+        );
+        assert!(marks.len() >= 4, "weekly marks: {marks:?}");
+        assert!(marks.iter().all(|mark| mark.time == bars[mark.index].0));
     }
 
     #[test]
