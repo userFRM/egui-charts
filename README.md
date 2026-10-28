@@ -1,20 +1,128 @@
 <div align="center">
 
-# egui-charts
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
+  <img src="docs/images/logo-light.svg" alt="egui-charts" width="480">
+</picture>
 
-Interactive financial charts for [egui](https://github.com/emilk/egui), using your historical and streaming data.
+Financial charts for Rust applications built with egui 0.37.
 
-[Documentation](https://userfrm.github.io/egui-charts/docs/) · **[Live demo](https://userfrm.github.io/egui-charts/demo/)** · [API docs](https://docs.rs/egui-charts) · [Examples](https://github.com/userFRM/egui-charts/tree/main/examples)
-
-[![CI](https://github.com/userFRM/egui-charts/workflows/CI/badge.svg)](https://github.com/userFRM/egui-charts/actions)
-[![crates.io](https://img.shields.io/crates/v/egui-charts.svg)](https://crates.io/crates/egui-charts)
-[![docs.rs](https://docs.rs/egui-charts/badge.svg)](https://docs.rs/egui-charts)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
-[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](#minimum-supported-rust-version)
+<p>
+  <a href="https://userfrm.github.io/egui-charts/demo/"><img src="https://img.shields.io/badge/Live_demo-0969da?style=flat-square" alt="Live demo"></a>
+  <a href="https://userfrm.github.io/egui-charts/docs/"><img src="https://img.shields.io/badge/Guide-0969da?style=flat-square" alt="Guide"></a>
+  <a href="https://docs.rs/egui-charts"><img src="https://img.shields.io/docsrs/egui-charts?style=flat-square&amp;logo=rust" alt="docs.rs"></a>
+  <a href="https://crates.io/crates/egui-charts"><img src="https://img.shields.io/crates/v/egui-charts?style=flat-square&amp;logo=rust" alt="crates.io"></a>
+  <a href="https://github.com/userFRM/egui-charts/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/userFRM/egui-charts/ci.yml?branch=main&amp;style=flat-square&amp;logo=github&amp;label=CI" alt="CI"></a>
+  <a href="https://github.com/emilk/egui"><img src="https://img.shields.io/badge/egui-0.37-555?style=flat-square" alt="egui 0.37"></a>
+  <a href="Cargo.toml"><img src="https://img.shields.io/badge/MSRV-1.95-555?style=flat-square" alt="MSRV 1.95"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/License-MIT_OR_Apache--2.0-555?style=flat-square" alt="License MIT OR Apache-2.0"></a>
+  <a href="examples"><img src="https://img.shields.io/badge/Examples-0969da?style=flat-square" alt="Examples"></a>
+</p>
 
 </div>
 
-`Chart` provides price and volume panes, pan and zoom, crosshairs and live bar updates on native and WebAssembly targets. Optional features add built-in studies, drawing tools, order flow visualizations and application UI such as toolbars, replay controls, trading panels and dialogs. The host supplies market data, external accounts and durable storage through the crate's contracts.
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/hero-light.webp">
+  <img src="docs/images/hero-dark.webp" alt="Intraday workspace with candles, volume, EMA overlays, VWAP, RSI, a long-position plan, working orders, an alert, watchlist and paper account">
+</picture>
+
+*An intraday session: analysis, risk and orders on the same chart. Every image uses generated sample data and simulated trading.*
+
+## Inside the demo
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Liquidity and executions</strong><br>
+      <a href="docs/images/liquidity-dark.webp"><picture>
+        <source media="(prefers-color-scheme: light)" srcset="docs/images/liquidity-light.webp">
+        <img src="docs/images/liquidity-dark.webp" alt="Depth history and volume bubbles from the sample feed’s synthetic order book.">
+      </picture></a><br>
+      Depth history and volume bubbles from the sample feed’s synthetic order book.
+    </td>
+    <td width="50%" valign="top">
+      <strong>Session volume</strong><br>
+      <a href="docs/images/profile-dark.webp"><picture>
+        <source media="(prefers-color-scheme: light)" srcset="docs/images/profile-light.webp">
+        <img src="docs/images/profile-dark.webp" alt="Candles, a session volume profile, point of control and value area.">
+      </picture></a><br>
+      Candles, a session volume profile, point of control and value area.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Plan an order</strong><br>
+      <a href="docs/images/trading-dark.webp"><picture>
+        <source media="(prefers-color-scheme: light)" srcset="docs/images/trading-light.webp">
+        <img src="docs/images/trading-dark.webp" alt="Limit ticket with take profit, stop loss and risk/reward beside the paper account.">
+      </picture></a><br>
+      Limit ticket with take profit, stop loss and risk/reward beside the paper account.
+    </td>
+    <td width="50%" valign="top">
+      <strong>Work the ladder</strong><br>
+      <a href="docs/images/depth-dark.webp"><picture>
+        <source media="(prefers-color-scheme: light)" srcset="docs/images/depth-light.webp">
+        <img src="docs/images/depth-dark.webp" alt="Bid and ask sizes, bracket exits and working orders beside the paper account.">
+      </picture></a><br>
+      Bid and ask sizes, bracket exits and working orders beside the paper account.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Read several intervals</strong><br>
+      <a href="docs/images/layouts-dark.webp"><picture>
+        <source media="(prefers-color-scheme: light)" srcset="docs/images/layouts-light.webp">
+        <img src="docs/images/layouts-dark.webp" alt="Four linked charts with candles, Heikin-Ashi, OHLC bars and area.">
+      </picture></a><br>
+      Four linked charts with candles, Heikin-Ashi, OHLC bars and area.
+    </td>
+    <td width="50%" valign="top">
+      <strong>Mark the setup</strong><br>
+      <a href="docs/images/drawings-dark.webp"><picture>
+        <source media="(prefers-color-scheme: light)" srcset="docs/images/drawings-light.webp">
+        <img src="docs/images/drawings-dark.webp" alt="Pitchfork, Fibonacci extension, XABCD pattern and a retest callout.">
+      </picture></a><br>
+      Pitchfork, Fibonacci extension, XABCD pattern and a retest callout.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Choose studies</strong><br>
+      <a href="docs/images/studies-dark.webp"><picture>
+        <source media="(prefers-color-scheme: light)" srcset="docs/images/studies-light.webp">
+        <img src="docs/images/studies-dark.webp" alt="The indicator catalog over Bollinger Bands, EMA, VWAP, RSI and MACD.">
+      </picture></a><br>
+      The indicator catalog over Bollinger Bands, EMA, VWAP, RSI and MACD.
+    </td>
+    <td width="50%" valign="top">
+      <strong>Rehearse the session</strong><br>
+      <a href="docs/images/replay-dark.webp"><picture>
+        <source media="(prefers-color-scheme: light)" srcset="docs/images/replay-light.webp">
+        <img src="docs/images/replay-dark.webp" alt="Replay transport and a paper position with working orders.">
+      </picture></a><br>
+      Replay transport and a paper position with working orders.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Change the view</strong><br>
+      <a href="docs/images/chart-types-dark.webp"><picture>
+        <source media="(prefers-color-scheme: light)" srcset="docs/images/chart-types-light.webp">
+        <img src="docs/images/chart-types-dark.webp" alt="Heikin-Ashi, Renko, range bars and Kagi in a four-chart layout.">
+      </picture></a><br>
+      Heikin-Ashi, Renko, range bars and Kagi in a four-chart layout.
+    </td>
+    <td width="50%" valign="top">
+      <strong>Try a session</strong><br>
+      <a href="https://userfrm.github.io/egui-charts/demo/">Open the live demo</a> to draw, add studies, switch layouts and trade the paper account.<br><br>
+      Light and dark appearances follow your colour scheme. Open an image for the full view.
+    </td>
+  </tr>
+</table>
+
+egui-charts draws price series, computes studies and handles chart interaction inside your egui application. Start with a `Chart`, or assemble a workspace from the toolbars, panels and dialogs. Your application supplies market data, broker connections and durable storage.
+
+`ui::terminal::Terminal` assembles them on your `Datafeed` and performs their actions; each component also works on its own, as the [demo](examples/demo) shows.
 
 ## Status
 
@@ -22,17 +130,15 @@ Interactive financial charts for [egui](https://github.com/emilk/egui), using yo
 
 [![progress map](https://userfrm.github.io/egui-charts/docs/progress/progress.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
 
-## Quick start
+## Start with a chart
 
-The chart widget alone, without the toolbars, the built-in studies, the icons or `egui_extras`:
+Requires Rust 1.95 or newer. Use egui and eframe 0.37 throughout your application so their types match.
 
 ```toml
 [dependencies]
-egui-charts = { version = "0.3", default-features = false, features = ["widget"] }
+egui-charts = "0.3"
 eframe = "0.37"
 ```
-
-This example uses eframe 0.37, which matches the egui version egui-charts builds on; another eframe version brings a second egui whose types do not match.
 
 ```rust,no_run
 use eframe::egui;
@@ -40,28 +146,63 @@ use egui_charts::{Chart, model::{Bar, BarData}};
 
 fn main() -> eframe::Result {
     let bars = vec![
-        Bar::new("2024-01-01T00:00:00Z".parse().unwrap(),
+        Bar::new("2026-10-27T18:00:00Z".parse().unwrap(),
                  100.0, 102.0, 99.0, 101.0, 1_000.0),
-        Bar::new("2024-01-01T00:01:00Z".parse().unwrap(),
+        Bar::new("2026-10-27T18:01:00Z".parse().unwrap(),
                  101.0, 103.0, 100.0, 102.0, 1_200.0),
     ];
     let mut chart = Chart::new(BarData::from_bars(bars));
-    eframe::run_ui_native("My chart", Default::default(), move |ui, _| {
+    eframe::run_ui_native("Price chart", Default::default(), move |ui, _| {
         egui::CentralPanel::default().show(ui, |ui| chart.show(ui));
     })
 }
 ```
 
-The chart pans, zooms and shows a crosshair out of the box. `set_chart_type` picks one of the chart types below, `set_data` replaces the bars of a series, and `update` merges a live bar into it. [`examples/bare_chart.rs`](examples/bare_chart.rs) streams sample ticks into this chart.
+The widget handles pan, zoom and crosshair interaction. Use `chart.set_data(SeriesId::MAIN, bars)` to load history and `chart.update(SeriesId::MAIN, bar)` to merge a bar by its opening time. `SeriesId` is in `egui_charts::widget`.
 
-## A terminal around it
-
-In the default build, `ui::terminal::Terminal` assembles the toolbars, menus and charts on your `Datafeed` and performs their actions:
+Run the demo locally with:
 
 ```sh
-cargo add egui-charts
-cargo add eframe@0.37
+cargo run --manifest-path examples/demo/Cargo.toml
 ```
+
+## Bring your data
+
+For a feed-backed chart, implement `Datafeed` and pass it to `ChartBuilder::with_feed`. Only `history` is required. The chart requests older pages as the user scrolls back; `subscribe` supplies live updates through a `Sink`.
+
+Feed methods run on the UI thread and must return promptly. Fetch data elsewhere and answer through `Reply`, or respond inline when the data is already in memory. [`live_feed.rs`](examples/live_feed.rs) demonstrates paged history and a cancellable stream of sample trades.
+
+| Your application supplies | The library consumes it through |
+|---|---|
+| Historical bars, live bars, trades and depth | `Datafeed` |
+| Instrument search results | `SymbolSearch` |
+| Orders, positions and account events | `Broker` |
+| Saved drawings, layouts and settings | `Storage` |
+| Alert rules and alert events | `Alerts` |
+
+Order flow uses executions and depth from your feed. The library renders footprints, session volume profiles, volume bubbles and liquidity heatmaps. Footprints need a time-based interval and an instrument tick size; without them, or before retained executions begin, that chart style draws candles. OHLCV bars alone do not supply the aggressor side of trades.
+
+The host also owns strategy execution and any scripting runtime. The [builder guide](docs/builder-guide.md) covers these integration points and the service contracts.
+
+## Studies on the chart
+
+Overlays share the price pane; oscillators get their own panes. The chart updates studies when its bars change. Built-in studies include moving averages, Bollinger Bands, RSI, MACD, Ichimoku and VWAP. Implement `Indicator` to supply your own calculation.
+
+```rust
+use egui_charts::studies::{BollingerBands, RSI};
+fn add_studies(chart: &mut egui_charts::Chart) {
+    chart.add_indicator(Box::new(BollingerBands::new(20, 2.0)));
+    chart.add_indicator(Box::new(RSI::new(14)));
+}
+```
+
+## Draw on price and time
+
+Add trend lines, channels, Fibonacci drawings, shapes and annotations. `DrawingToolType` lists 98 drawing tool types, including cursor modes. The chart retains drawing timestamps through pan, zoom and interval changes, with undo and redo for edits. `Chart::save_drawings` returns a `DrawingStorage`; call its `to_json` method to serialize it for your storage.
+
+## Build a workspace
+
+In the default build, `Terminal` assembles the toolbars, menus and charts on your `Datafeed` and performs their actions:
 
 ```rust,no_run
 use std::sync::Arc;
@@ -101,177 +242,49 @@ fn main() -> eframe::Result {
 
 `with_intercept` returns chosen actions to your app instead of performing them, and `run` performs one after your own checks. Storage, symbol search, alerts, brokers, signals, marks, quotes, notifications and chats are passed as services with the `with_` methods, and file export and sounds as callbacks; a control whose service is absent stays hidden. `examples/terminal.rs` runs a terminal on a synthetic feed. The components also work on their own: each returns an action for your app to apply, as the [demo](examples/demo) does. The library does not connect to a market data provider.
 
-## Chart types
+`ChartLayout` arranges charts in grids or tabs and can synchronize symbols, intervals, crosshairs, time ranges and drawings.
 
-`ChartType` offers these types, in the groups of `ChartTypeCategory`:
+Choose a chart style with `Chart::set_chart_type`: candles, OHLC bars, line, area, baseline, Heikin-Ashi, Renko, Kagi, line break, point and figure, or range bars. See [`ChartType`](https://docs.rs/egui-charts/latest/egui_charts/model/enum.ChartType.html) for the full set.
 
-| Group | Types |
+The UI components also include replay controls, an order ticket, a depth ladder and an account panel. Connect trading UI to your `Broker` implementation; the demo uses `PaperAccount` for simulated execution.
+
+## Fit your application
+
+The default build includes the chart, studies, drawings and UI components, plus locale and named time zone support. Select a smaller build with `default-features = false`:
+
+| Features | Included |
 |---|---|
-| Standard | Candles, Bars, Hollow Candles, Volume Candles |
-| Line | Line, Line with Markers, Step Line |
-| Area | Area, HLC Area, Baseline, Columns |
-| Japanese | Heikin Ashi, Renko, Kagi, Line Break, Point and Figure |
-| Range | High-Low, Range Bars |
-| Advanced | Market Profile (TPO), Volume Footprint, Session Volume Profile |
+| `widget` | Chart widget and the `Indicator` extension point |
+| `widget`, `studies` | Chart widget and built-in studies |
+| `widget`, `drawings` | Chart widget and drawing interaction |
+| `studies` | Study calculations without egui |
+| None | Data types, scales and host service contracts without egui |
 
-## Studies
+For example:
 
-A chart computes its studies, updates them as its bars change and draws them: overlays on the price pane, the others in panes below it. `IndicatorFactory` registers 177 indicator names with default features (automatic drawing studies also require `drawings`), each a distinct study under a category such as Momentum or Volume, and the indicator dialog lists every study the factory registers, the host's own included. Other types are built directly instead of registered: some compute the same study as a registered one under their defaults (`CVD` and A/D, `CloseToCloseVol` and Historical Volatility, `HL2` and Median Price, `HLC3` and Typical Price, `PriceChannel` and Donchian Channels), and `EhlersFisher` is a variant of the Fisher Transform.
-
-| Group | Examples |
-|---|---|
-| Moving averages | SMA, EMA, WMA, DEMA, TEMA, HMA, ALMA, VWMA, LSMA, KAMA, VIDYA, McGinley Dynamic |
-| Momentum | RSI, MACD, Stochastic, Williams %R, CCI, ROC, Aroon, Awesome Oscillator, Ultimate Oscillator, Connors RSI, TRIX, KDJ |
-| Trend | ADX, SuperTrend, Ichimoku Cloud, Parabolic SAR, Vortex, Squeeze Momentum |
-| Volatility | Bollinger Bands, ATR, Keltner Channels, Donchian Channels, Historical Volatility, Chandelier Exit, Parkinson Vol, Zero-Trend Vol |
-| Volume | OBV, VWAP, MFI, A/D, Chaikin Money Flow, Klinger Oscillator |
-| Profiles | Volume Profile, Time Price Opportunity |
-| Support and resistance | Pivot Points, ZigZag |
-| Market structure | 52W HL%, 52W High/Low |
-| Patterns | All Candlestick Patterns |
-| Statistics | Linear Regression, Standard Error, Rank Correlation |
-
-```rust
-use egui_charts::studies::{BollingerBands, RSI, SMA};
-# let mut chart = egui_charts::Chart::new(egui_charts::model::BarData::default());
-let sma = chart.add_indicator(Box::new(SMA::new(20)));
-chart.add_indicator(Box::new(RSI::new(14)));
-chart.add_indicator(Box::new(BollingerBands::new(20, 2.0)));
-chart.remove_series(sma);
+```toml
+egui-charts = { version = "0.3", default-features = false, features = ["widget", "studies"] }
 ```
 
-The built-in studies and `IndicatorFactory` are in the `studies` feature, which the default build includes and which needs no egui. The `Indicator` trait and `IndicatorRegistry`, which computes studies on a slice of bars without a chart, are in every build, so a study of your own needs neither.
-
-## Drawing tools
-
-The `drawings` feature enables drawing tools and is included by `ui`. Widget-only applications add `drawings` to use these APIs. `DrawingToolType` defines 98 drawing tool types, including cursor modes, which the drawing toolbar groups into cursors, lines, Fibonacci, patterns, projections, shapes, annotations and icons. Drawings are anchored to bar and price, so they stay in place through pan and zoom, and undo and redo are built in. `DrawingToolRegistry` configures built-in availability and supports host-defined renderers; inspect availability before exposing a tool in a host picker.
-
-Magnet mode snaps drawing anchors to nearby OHLC prices, visible study values and drawing anchors; strong magnet mode selects a bar value without a pixel threshold. `drawings::persistence` saves drawings to JSON, with their anchors as timestamps and every setting, and restores them; hosts can save and load explicitly through `Chart::save_drawings` and `load_drawings`, or attach a host storage service with `Chart::set_storage`.
-
-## Order flow
-
-The library renders Market Profile (TPO), volume profiles, footprints, volume bubbles and liquidity heatmaps. `Datafeed` accepts host-supplied executions and depth updates; `Footprint` aggregates executed volume at price and `DepthHistory` retains the book over time. Execution-based studies require trade data from the host. Bar-based volume estimates do not recover the actual aggressor side of trades.
-
-`ChartType::VolumeFootprint` and `ChartType::SessionVolumeProfile` use retained and incoming feed executions on time-based intervals, with the instrument's tick size. They draw candles on trade-based intervals or without a tick size, and for bars before the first retained execution. Session profiles also require `studies`.
-
-## Themes
-
-A `Theme` is one value with public fields: UI colours (`theme.ui`), chart colours (`theme.chart`), and the type, spacing and corner radius scales. It comes in dark, light and high-contrast presets. Start from one, override what you need, and apply it at startup and after every change:
+`Theme::dark()`, `Theme::light()` and `Theme::high_contrast()` provide starting palettes. A `Theme` exposes its UI colours, chart colours, typography, spacing and corner radii as public fields. Apply it at startup and after a theme change:
 
 ```rust
 use eframe::egui::Color32;
 use egui_charts::theme::{Theme, apply_to_egui};
 
-# let ctx = &eframe::egui::Context::default();
-// The accent's hover and pressed shades, the text on it and the selection follow it.
-let mut theme = Theme::dark().with_accent(Color32::from_rgb(255, 120, 0));
-theme.chart.candle_up = Color32::from_rgb(0, 160, 120);
-theme.chart.candle_down = Color32::from_rgb(220, 60, 60);
-apply_to_egui(ctx, &theme);
-
-// Light UI chrome with the dark chart.
-let classic = Theme { chart: Theme::dark().chart, ..Theme::light() };
+fn apply_theme(ctx: &eframe::egui::Context) {
+    let mut theme = Theme::dark().with_accent(Color32::from_rgb(70, 120, 240));
+    theme.chart.candle_up = Color32::from_rgb(0, 160, 120);
+    apply_to_egui(ctx, &theme);
+}
 ```
 
-With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a theme can be stored in any serde format. The `dark` flag and complete UI and chart palettes are required; omitted text, spacing and radius scales use their defaults.
+## Development and license
 
-## Layers and feature flags
+[ROADMAP.md](ROADMAP.md) tracks implemented work and remaining tasks. For contributions, start with [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Report security issues through the [Security Policy](SECURITY.md); use [Discussions](https://github.com/userFRM/egui-charts/discussions) for questions.
 
-| Layer | What it gives | Feature |
-|---|---|---|
-| Engine | Bars, symbols and timeframes, price and time scales, the `Datafeed` contract and the host service traits (broker, symbol search, storage, alerts, signals), and the `Indicator` trait with `IndicatorRegistry`. No egui dependency. | always on |
-| Studies | The built-in studies and `IndicatorFactory`, also without egui | `studies` |
-| Chart widget | `Chart` and `ChartBuilder`: rendering, pan and zoom, crosshair, chart types, studies on the chart, theme | `widget` |
-| Drawing tools | Drawing geometry, interaction, undo and persistence | `drawings` |
-| Icons | Embedded SVG icons, drawn through `egui_extras` | `icons` |
-| Terminal UI | Top, drawing and timeframe toolbars, replay controls, side panels, broker picker, account panel, order tickets with a depth ladder and trading lines, dialogs, and the `ui_kit` widgets they are built from | `ui` |
+Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option, for open source and commercial use. Bundled assets retain their own licenses; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-The default features are `ui`, `locales` and `timezones`. `ui` enables `icons`, `widget`, `studies` and `drawings`.
-
-```toml
-# The chart with toolbars, panels, dialogs, icons and built-in studies (default)
-egui-charts = "0.3"
-
-# The chart widget alone: no toolbars, built-in studies, icons or egui_extras
-egui-charts = { version = "0.3", default-features = false, features = ["widget"] }
-
-# The chart widget with the built-in studies
-egui-charts = { version = "0.3", default-features = false, features = ["widget", "studies"] }
-
-# The engine with the built-in studies, without egui
-egui-charts = { version = "0.3", default-features = false, features = ["studies"] }
-```
-
-`timezones` (on by default) supplies IANA zones and daylight-saving rules through the optional `chrono-tz` dependency. Without it, UTC, system local time and fixed offsets remain available: `TimezoneMode::Timezone("+05:45".parse()?)` and `TimezoneId::fixed_offset(5 * 3600 + 45 * 60)` need no database. Named zones are rejected when the feature is off; Trading Sessions uses fixed standard-time offsets (+09:00, +00:00 and -05:00) for its default sessions, which the host can override with `with_session`; the exchange presets (`TimezoneMode::{nyse,lse,jse,hkex}` and `DailySessionProvider::nyse`) require it. Session configuration presets and the settings time zone list use fixed offsets when the feature is off. Add `"timezones"` to the feature list above when the host supplies named exchange zones. Time zone APIs use the crate's `model::TimezoneId`; callers no longer depend on a particular `chrono-tz` version. Persisted named-zone strings keep their format.
-
-`locales` names months and weekdays and the AM/PM marker in the language given to `Chart::set_locale` or `LocaleTimeFormatter`, from chrono's locale tables; the builds above with `default-features = false` leave it out and write those names in English unless they list it. `serde` (off by default) adds `Serialize` and `Deserialize` to `Theme`. `theme::apply_to_egui` installs the bundled Roboto ahead of the application's proportional fonts. To replace it, call `egui::Context::set_fonts` after applying the theme. eframe enables egui's `default_fonts` as fallbacks by default. Since egui 0.37 those fonts have no emoji, which need egui's `monochrome_emoji_fonts` feature or fonts the application installs. The chart installs no image loader other than SVG; an application that shows PNG, JPEG, file or HTTP images calls `egui_extras::install_image_loaders` with the loader features it needs.
-
-## Performance
-
-`cargo bench --bench bare_chart --no-default-features --features widget` measures the frame cost of the bare chart example. `cargo bench --bench frame_time` covers large histories and multiple charts with studies.
-
-On Linux with glibc, freeing large tessellation buffers can cause heap trimming and page faults on every frame. In the reported 5,000,000-bar workload, setting both `M_MMAP_THRESHOLD` to 64 MiB and `M_TRIM_THRESHOLD` to 256 MiB reduced the frame from about 5.8 ms to 3.9 ms, within 2% of egui 0.33. Setting either threshold alone did not remove the overhead. Applications can instead raise `M_TOP_PAD` to 16 MiB or choose another global allocator. The library leaves process-wide allocation policy to the host. See [performance notes](docs/performance.md) for the `GLIBC_TUNABLES` commands, measurements and memory tradeoffs.
-
-## Connect your data
-
-The [builder guide](docs/builder-guide.md), also included in the
-[API documentation](https://docs.rs/egui-charts/latest/egui_charts/guide/), covers
-history, streaming, custom studies, drawing persistence, synchronized charts and
-host strategy and script integration. docs.rs builds every feature; module badges
-show the feature needed to use each optional part.
-
-Implement `Datafeed` to connect any market data provider, as in the [terminal example](#a-terminal-around-it); only `history` is required. The chart calls the feed from `show` on the UI thread and never waits for it: answer through the `Reply` and push into the `Sink` from any thread, runtime or browser task. The chart asks for older pages as the user scrolls back, and unsubscribes when the symbol or timeframe changes. [`examples/live_feed.rs`](examples/live_feed.rs) serves history from memory and streams synthetic trades.
-
-## Workflow examples
-
-Run each with `cargo run --example <name>`. These examples use generated market data.
-
-| Example | Workflow |
-|---|---|
-| [basic_chart](examples/basic_chart.rs) | Historical bars, a price line and click events |
-| [live_feed](examples/live_feed.rs) | Paged history and a cancellable stream of executions |
-| [with_indicators](examples/with_indicators.rs) | Built-in overlays and study panes |
-| [custom_indicator](examples/custom_indicator.rs) | A calculation closure with explicit warm-up values |
-| [drawing_tools](examples/drawing_tools.rs) | Programmatic and interactive annotations |
-| [drawing_persistence](examples/drawing_persistence.rs) | Save and load timestamped drawing JSON, reporting errors |
-| [backtesting](examples/backtesting.rs) | A host buy-and-hold run, fees, equity and strategy metrics; also runs with `--no-default-features` |
-| [scripting](examples/scripting.rs) | A minimal host expression evaluator connected to a custom study |
-| [synchronized_charts](examples/synchronized_charts.rs) | Crosshairs and viewports shared by UTC across 1-hour and 4-hour charts |
-
-The host owns market data, durable storage, strategy execution and its scripting
-runtime. The scripting example accepts only `close - close[N]`; it demonstrates
-the adapter and error handling, and adds no language support to the library.
-
-## Platform support
-
-| Target | Status |
-|---|---|
-| Linux x86_64 | Built and linted in CI on stable and the MSRV; tests run on both |
-| macOS aarch64 | Built and linted in CI on stable and the MSRV; tests run on both |
-| Windows x86_64 | Built and linted in CI on stable and the MSRV; tests run on both |
-| WebAssembly (wasm32-unknown-unknown) | Widget tests run in headless Chrome; the demo is built in CI and runs as the [live demo](https://userfrm.github.io/egui-charts/demo/) |
-
-Other targets are expected to work but are not built in CI. The chart is an egui widget, so it runs wherever egui runs: in an eframe window on Linux, macOS and Windows, or in the browser through eframe's web runner.
-
-## Minimum supported Rust version
-
-The MSRV is **1.95** (Rust edition 2024), set in `Cargo.toml` through `rust-version`.
-
-## License
-
-Licensed under either of
-
-- [Apache License, Version 2.0](LICENSE-APACHE)
-- [MIT License](LICENSE-MIT)
-
-at your option.
-
-Some interface icons under `assets/icons/` come from Lucide and are licensed under the ISC License (with a Feather-derived subset under the MIT License); see the [third-party notices](THIRD-PARTY-NOTICES.md) and the [Lucide licence](assets/icons/LICENSE-lucide.txt). The bundled Roboto Latin subset is licensed under the [SIL Open Font License 1.1](assets/fonts/LICENSE-roboto.txt).
-
-## Contributing
-
-Contributions are welcome: bug fixes, docs, examples, and new studies, drawing tools, chart types and themes. Start with [CONTRIBUTING.md](CONTRIBUTING.md), which covers the dev setup, the project layout, where each kind of addition lives, and the local checks that mirror CI.
-
-Please also read the [Code of Conduct](CODE_OF_CONDUCT.md), and report security issues privately per the [Security Policy](SECURITY.md). Questions and ideas are welcome in [Discussions](https://github.com/userFRM/egui-charts/discussions).
+To support development, use the repository's Sponsor button. Feature requests and bug reports belong in the [issue tracker](https://github.com/userFRM/egui-charts/issues).
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
