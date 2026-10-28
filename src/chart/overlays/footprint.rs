@@ -3,14 +3,16 @@
 use crate::chart::coords::ChartMapping;
 use crate::data::{Footprint, FootprintBar, FootprintLevel};
 use crate::model::Bar;
-#[cfg(feature = "studies")]
-use egui::Align2;
 use egui::epaint::{Mesh, Shape};
-use egui::{Color32, FontId, Painter, Rect, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Color32, FontId, Painter, Rect, Stroke, StrokeKind, pos2, vec2};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// The smallest and largest font size a footprint number is drawn at, in points.
+const FONT_LIMITS: [f32; 2] = [8.0, 24.0];
+
 /// Numbers shown in a footprint column.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FootprintMode {
     /// Sell volume on the left, buy volume on the right.
     BidAsk,
@@ -20,10 +22,13 @@ pub enum FootprintMode {
     Delta,
     /// Delta followed by total volume.
     DeltaVolume,
+    /// Only the larger of the sell and buy volume of the row, at the left of the cell when sells
+    /// dominate and at the right when buys do, centred on a tie. The other side stays out.
+    DominantSide,
 }
 
 /// What determines a footprint cell's colour.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FootprintColor {
     /// Volume relative to the largest row of this bar.
     Volume,
@@ -31,10 +36,18 @@ pub enum FootprintColor {
     Delta,
     /// Dominant bid or ask side, using the configured comparison.
     Imbalance,
+    /// The neutral colour for every cell, whatever was traded.
+    Fixed,
+    /// The buy colour for a positive delta and the sell colour for a negative one, with the
+    /// opacity growing with the delta's absolute size relative to the bar's largest. A zero delta
+    /// takes the neutral colour at full opacity.
+    DeltaOpacity,
 }
 
-/// Footprint appearance. Supply colours from the host's theme.
-#[derive(Clone, Debug)]
+/// Footprint appearance. Supply colours from the host's theme. Serializable, so a host can keep
+/// it with its chart settings; fields missing from older documents take their defaults.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FootprintConfig {
     /// One to four columns per bar; only the first four entries are drawn.
     pub modes: Vec<FootprintMode>,
@@ -63,6 +76,21 @@ pub struct FootprintConfig {
     pub show_poc: bool,
     /// Shade the contiguous value area containing this share of the bar volume.
     pub value_area: Option<f64>,
+    /// Write 1,200 as 1.2K and 3,400,000 as 3.4M, instead of every digit.
+    pub abbreviate: bool,
+    /// Write zero volumes as 0. Otherwise they are left blank, so a one-sided row shows only
+    /// the side that traded.
+    pub show_zero: bool,
+    /// Smallest and largest font size of the numbers, in points. A row's size follows its volume
+    /// relative to the bar's largest row, and equal values give a fixed size. Both are held
+    /// within 8 and 24 points so that numbers stay readable, and a number taller than its row
+    /// is left out.
+    pub font_size: [f32; 2],
+    /// Write the ask/bid ratio of the highest and lowest row of each bar above and below it,
+    /// or `n/a` when the bid is zero and the ratio is undefined.
+    pub extreme_ratio: bool,
+    /// Outline the rows of the bar's pullback range, see [`pullback_range`].
+    pub pullback: bool,
 }
 
 impl Default for FootprintConfig {
@@ -81,8 +109,32 @@ impl Default for FootprintConfig {
             diagonal: true,
             show_poc: true,
             value_area: Some(0.7),
+            abbreviate: false,
+            show_zero: true,
+            font_size: [10.0, 10.0],
+            extreme_ratio: false,
+            pullback: false,
         }
     }
+}
+
+/// The rows of a bar between its close and the extreme it reached beyond the close: from the
+/// close up to the highest traded row when the bar closed at or above its open, and from the
+/// lowest traded row up to the close when it closed below. Returns inclusive level keys of
+/// `flow`, or `None` when the bar has no executions or closed on its extreme row. The range
+/// follows the bar as it develops, and it only selects rows: their executed volume is never
+/// changed.
+pub fn pullback_range(bar: &Bar, flow: &Footprint) -> Option<(i64, i64)> {
+    let source = flow.bar_at(bar.time)?;
+    let low = *source.levels.first_key_value()?.0;
+    let high = *source.levels.last_key_value()?.0;
+    let close = flow.level_of(bar.close)?.clamp(low, high);
+    let range = if bar.close >= bar.open {
+        (close, high)
+    } else {
+        (low, close)
+    };
+    (range.0 < range.1).then_some(range)
 }
 
 /// Draws visible footprint bars, bounded by the visible bar range and clipped to `mapping.rect`.
@@ -150,8 +202,19 @@ pub fn render_footprint(
             .values()
             .map(|row| row.volume())
             .fold(0.0, f64::max);
+        let max_delta = shown
+            .levels
+            .values()
+            .map(|row| row.delta().abs())
+            .fold(0.0, f64::max);
         let area = config.value_area.and_then(|share| shown.value_area(share));
         let poc = config.show_poc.then(|| shown.poc()).flatten();
+        let pullback = config
+            .pullback
+            .then(|| pullback_range(bar, flow))
+            .flatten()
+            .map(|(low, high)| (low.div_euclid(group), high.div_euclid(group)));
+        let [smallest, largest] = font_limits(config.font_size);
         for row in shown.levels.values() {
             let price = row.level as f64 * flow.price_step() * group as f64;
             let y1 = mapping.price_to_y(price);
@@ -168,7 +231,7 @@ pub fn render_footprint(
                 if !rect.intersects(mapping.rect) {
                     continue;
                 }
-                let color = cell_color(shown, row, max_volume, config);
+                let color = cell_color(shown, row, max_volume, max_delta, config);
                 if area.is_some_and(|(low, high)| (low..=high).contains(&row.level)) {
                     mesh.add_colored_rect(
                         rect.intersect(mapping.rect),
@@ -200,6 +263,14 @@ pub fn render_footprint(
                 } else {
                     mesh.add_colored_rect(fill.intersect(mapping.rect), color.gamma_multiply(0.5));
                 }
+                if pullback.is_some_and(|(low, high)| (low..=high).contains(&row.level)) {
+                    painter.rect_stroke(
+                        rect,
+                        0,
+                        Stroke::new(1.0, config.neutral_color),
+                        StrokeKind::Inside,
+                    );
+                }
                 if poc == Some(row.level) {
                     painter.rect_stroke(
                         rect,
@@ -209,30 +280,30 @@ pub fn render_footprint(
                     );
                 }
                 if rect.height() >= config.min_text_height.max(10.0) && width >= 22.0 {
-                    let text = match mode {
-                        FootprintMode::BidAsk => {
-                            format!("{} × {}", volume_text(row.bid), volume_text(row.ask))
-                        }
-                        FootprintMode::Volume => volume_text(row.volume()),
-                        FootprintMode::Delta => format!(
-                            "{}{}",
-                            if row.delta() >= 0.0 { "+" } else { "" },
-                            volume_text(row.delta())
-                        ),
-                        FootprintMode::DeltaVolume => {
-                            format!(
-                                "{}{} / {}",
-                                if row.delta() >= 0.0 { "+" } else { "" },
-                                volume_text(row.delta()),
-                                volume_text(row.volume())
-                            )
-                        }
+                    let text = cell_text(*mode, row, config);
+                    if text.is_empty() {
+                        continue;
+                    }
+                    let share = if max_volume > 0.0 {
+                        (row.volume() / max_volume) as f32
+                    } else {
+                        0.0
                     };
-                    let galley =
-                        painter.layout_no_wrap(text, FontId::monospace(10.0), config.text_color);
-                    if galley.size().x + 4.0 <= rect.width() {
+                    let font = FontId::monospace(smallest + (largest - smallest) * share);
+                    let galley = painter.layout_no_wrap(text, font, config.text_color);
+                    if galley.size().x + 4.0 <= rect.width()
+                        && galley.size().y <= rect.height() + 1.0
+                    {
+                        let center = rect.center().x;
+                        let x = match mode {
+                            FootprintMode::DominantSide if row.bid > row.ask => rect.left() + 2.0,
+                            FootprintMode::DominantSide if row.ask > row.bid => {
+                                rect.right() - 2.0 - galley.size().x
+                            }
+                            _ => center - galley.size().x / 2.0,
+                        };
                         painter.galley(
-                            rect.center() - galley.size() / 2.0,
+                            pos2(x, rect.center().y - galley.size().y / 2.0),
                             galley,
                             config.text_color,
                         );
@@ -240,11 +311,99 @@ pub fn render_footprint(
                 }
             }
         }
+        if config.extreme_ratio {
+            let step = flow.price_step() * group as f64;
+            let first = shown.levels.first_key_value();
+            let last = shown.levels.last_key_value();
+            // A bar of one row has a single extreme.
+            for (extreme, high) in [
+                (last, true),
+                (first.filter(|_| shown.levels.len() > 1), false),
+            ] {
+                let Some((&level, row)) = extreme else {
+                    continue;
+                };
+                let edge = mapping.price_to_y((level + i64::from(high)) as f64 * step);
+                let text = row.ratio().map_or_else(
+                    || "A/B n/a".to_owned(),
+                    |ratio| {
+                        format!(
+                            "A/B {}",
+                            egui::emath::format_with_decimals_in_range(ratio, 0..=2)
+                        )
+                    },
+                );
+                let galley =
+                    painter.layout_no_wrap(text, FontId::monospace(10.0), config.text_color);
+                let anchor = if high {
+                    Align2::CENTER_BOTTOM
+                } else {
+                    Align2::CENTER_TOP
+                };
+                let bounds = anchor.anchor_size(pos2(x, edge), galley.size());
+                if edge.is_finite()
+                    && galley.size().x <= mapping.bar_spacing
+                    && mapping.rect.contains_rect(bounds)
+                {
+                    painter.galley(bounds.min, galley, config.text_color);
+                }
+            }
+        }
     }
     painter.set(background, Shape::mesh(mesh));
 }
 
-fn volume_text(value: f64) -> String {
+/// The font sizes of the smallest and the largest row: the configured pair within the readable
+/// limits, in ascending order; the default size for one that is not a number.
+fn font_limits(sizes: [f32; 2]) -> [f32; 2] {
+    let [a, b] = sizes.map(|size| {
+        if size.is_nan() {
+            10.0
+        } else {
+            size.clamp(FONT_LIMITS[0], FONT_LIMITS[1])
+        }
+    });
+    [a.min(b), a.max(b)]
+}
+
+/// The text of one cell in `mode`; empty when every number in it is a hidden zero.
+fn cell_text(mode: FootprintMode, row: &FootprintLevel, config: &FootprintConfig) -> String {
+    let hidden = |value: f64| value == 0.0 && !config.show_zero;
+    let number = |value: f64| {
+        if hidden(value) {
+            String::new()
+        } else {
+            volume_text(value, config.abbreviate)
+        }
+    };
+    let signed = |value: f64| match number(value) {
+        text if text.is_empty() || value < 0.0 => text,
+        text => format!("+{text}"),
+    };
+    match mode {
+        FootprintMode::BidAsk if hidden(row.bid) && hidden(row.ask) => String::new(),
+        FootprintMode::BidAsk => format!("{} × {}", number(row.bid), number(row.ask)),
+        FootprintMode::Volume => number(row.volume()),
+        FootprintMode::Delta => signed(row.delta()),
+        FootprintMode::DeltaVolume if hidden(row.delta()) && hidden(row.volume()) => String::new(),
+        FootprintMode::DeltaVolume => {
+            format!("{} / {}", signed(row.delta()), number(row.volume()))
+        }
+        FootprintMode::DominantSide => number(row.bid.max(row.ask)),
+    }
+}
+
+fn volume_text(value: f64, abbreviate: bool) -> String {
+    if abbreviate && value.abs() >= 1000.0 {
+        // 999,950 and above round to 1000.0K at one decimal, so they take the next unit.
+        let (scaled, unit) = if value.abs() >= 999_950.0 {
+            (value / 1e6, 'M')
+        } else {
+            (value / 1e3, 'K')
+        };
+        let text = format!("{scaled:.1}");
+        return format!("{}{unit}", text.strip_suffix(".0").unwrap_or(&text));
+    }
     if value != 0.0 && value.abs() < 0.001 {
         format!("{value:.2e}")
     } else {
@@ -282,9 +441,20 @@ fn cell_color(
     bar: &FootprintBar,
     row: &FootprintLevel,
     max_volume: f64,
+    max_delta: f64,
     config: &FootprintConfig,
 ) -> Color32 {
     match config.color_by {
+        FootprintColor::Fixed => config.neutral_color,
+        FootprintColor::DeltaOpacity if row.delta() == 0.0 => config.neutral_color,
+        FootprintColor::DeltaOpacity => {
+            let side = if row.delta() > 0.0 {
+                config.ask_color
+            } else {
+                config.bid_color
+            };
+            side.gamma_multiply((row.delta().abs() / max_delta) as f32)
+        }
         FootprintColor::Volume => config.neutral_color.gamma_multiply(if max_volume > 0.0 {
             (row.volume() / max_volume) as f32
         } else {
@@ -349,7 +519,7 @@ pub fn render_footprint_statistics(
         {
             let text = value.map_or_else(
                 || format!("{label} n/a"),
-                |value| format!("{label} {}", volume_text(value)),
+                |value| format!("{label} {}", volume_text(value, false)),
             );
             let galley = painter.layout_no_wrap(text, FontId::monospace(10.0), text_color);
             if galley.size().x <= mapping.bar_spacing - 2.0 {
@@ -598,6 +768,131 @@ mod tests {
                 }),
                 "missing {expected}"
             );
+        }
+        // The highest and lowest rows carry their ask/bid ratio; a zero bid is undefined, not
+        // infinite. Here 100.25 holds buys only and 100.0 holds 2 sells against 3 buys.
+        let config = FootprintConfig {
+            modes: vec![FootprintMode::Volume],
+            extreme_ratio: true,
+            auto_row_height: None,
+            ..Default::default()
+        };
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for (price, size, side) in [
+            (100.0, 2.0, OrderSide::Sell),
+            (100.0, 3.0, OrderSide::Buy),
+            (100.25, 4.0, OrderSide::Buy),
+        ] {
+            flow.push(&Tick::new(time, price, size, Some(side)))
+                .unwrap();
+        }
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| render_footprint(ui.painter(), &map, &bars, &flow, &config),
+        );
+        output.textures_delta.clear();
+        for expected in ["A/B n/a", "A/B 1.5"] {
+            assert!(
+                output.shapes.iter().any(|shape| match &shape.shape {
+                    Shape::Text(text) => text.galley.text() == expected,
+                    _ => false,
+                }),
+                "missing {expected}"
+            );
+        }
+    }
+
+    /// Guards the number and colour choices: abbreviation switches units before one decimal
+    /// would round up to 1000, a hidden zero leaves only the side that traded, the dominant
+    /// side is the only number of its cell, delta opacity follows the share of the bar's largest
+    /// delta, and font limits keep numbers readable whatever the host asks for.
+    #[test]
+    fn number_colour_and_font_choices_follow_their_documented_rules() {
+        let row = |bid, ask, unknown| FootprintLevel {
+            level: 0,
+            bid,
+            ask,
+            unknown,
+        };
+        let config = |abbreviate, show_zero| FootprintConfig {
+            abbreviate,
+            show_zero,
+            ..Default::default()
+        };
+        #[rustfmt::skip]
+        let texts = [
+            (FootprintMode::Volume, row(0.0, 1234.0, 0.0), config(true, true), "1.2K"),
+            (FootprintMode::Volume, row(0.0, 1234.0, 0.0), config(false, true), "1234"),
+            (FootprintMode::Volume, row(0.0, 999.0, 0.0), config(true, true), "999"),
+            (FootprintMode::Volume, row(0.0, 1000.0, 0.0), config(true, true), "1K"),
+            (FootprintMode::Volume, row(0.0, 999_949.0, 0.0), config(true, true), "999.9K"),
+            (FootprintMode::Volume, row(0.0, 999_950.0, 0.0), config(true, true), "1M"),
+            (FootprintMode::Volume, row(0.0, 3_400_000.0, 0.0), config(true, true), "3.4M"),
+            (FootprintMode::Delta, row(2500.0, 0.0, 0.0), config(true, true), "-2.5K"),
+            (FootprintMode::BidAsk, row(0.0, 7.0, 0.0), config(false, false), " × 7"),
+            (FootprintMode::BidAsk, row(0.0, 0.0, 4.0), config(false, false), ""),
+            (FootprintMode::BidAsk, row(0.0, 0.0, 4.0), config(false, true), "0 × 0"),
+            (FootprintMode::Delta, row(3.0, 3.0, 0.0), config(false, false), ""),
+            (FootprintMode::DominantSide, row(5.0, 3.0, 0.0), config(false, true), "5"),
+            (FootprintMode::DominantSide, row(2.0, 3.0, 9.0), config(false, true), "3"),
+        ];
+        for (mode, row, config, expected) in texts {
+            assert_eq!(cell_text(mode, &row, &config), expected, "{mode:?} {row:?}");
+        }
+        let bar = FootprintBar {
+            time: "2026-01-05T10:00:00Z".parse().unwrap(),
+            levels: BTreeMap::new(),
+            bid: 0.0,
+            ask: 0.0,
+            unknown: 0.0,
+            min_delta: 0.0,
+            max_delta: 0.0,
+        };
+        let colors = |color_by, row: FootprintLevel| {
+            let config = FootprintConfig {
+                color_by,
+                ..Default::default()
+            };
+            (cell_color(&bar, &row, 10.0, 6.0, &config), config)
+        };
+        let (color, config) = colors(FootprintColor::DeltaOpacity, row(2.0, 8.0, 0.0));
+        assert_eq!(color, config.ask_color.gamma_multiply(1.0));
+        let (color, config) = colors(FootprintColor::DeltaOpacity, row(5.0, 2.0, 0.0));
+        assert_eq!(color, config.bid_color.gamma_multiply(0.5));
+        let (color, config) = colors(FootprintColor::DeltaOpacity, row(4.0, 4.0, 1.0));
+        assert_eq!(color, config.neutral_color);
+        let (color, config) = colors(FootprintColor::Fixed, row(2.0, 8.0, 0.0));
+        assert_eq!(color, config.neutral_color);
+        assert_eq!(font_limits([4.0, 100.0]), [8.0, 24.0]);
+        assert_eq!(font_limits([18.0, 12.0]), [12.0, 18.0]);
+        assert_eq!(font_limits([f32::NAN, 12.0]), [10.0, 12.0]);
+    }
+
+    /// Guards the pullback rule against hand-worked bars: levels 100, 100.25 and 100.5 are keys
+    /// 400 to 402. A bar that closed up selects the close row to the high, one that closed down
+    /// the low to the close row, one that closed on its extreme row none, and a close outside the
+    /// executed rows is held to them.
+    #[test]
+    fn the_pullback_range_runs_from_the_close_to_the_extreme_it_left() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for price in [100.0, 100.25, 100.5] {
+            flow.push(&Tick::new(time, price, 1.0, Some(OrderSide::Buy)))
+                .unwrap();
+        }
+        for (open, close, expected) in [
+            (100.0, 100.25, Some((401, 402))),
+            (100.5, 100.25, Some((400, 401))),
+            (100.0, 100.5, None),
+            (100.5, 100.0, None),
+            (100.0, 99.0, None),
+            (100.0, 101.0, None),
+        ] {
+            let bar = Bar::new(time, open, 100.5, 100.0, close, 3.0);
+            assert_eq!(pullback_range(&bar, &flow), expected, "{open} to {close}");
         }
     }
 }

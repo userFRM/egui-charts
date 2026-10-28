@@ -6,7 +6,8 @@
 
 mod footprint;
 pub use footprint::{
-    FootprintColor, FootprintConfig, FootprintMode, render_footprint, render_footprint_statistics,
+    FootprintColor, FootprintConfig, FootprintMode, pullback_range, render_footprint,
+    render_footprint_statistics,
 };
 mod heatmap_strip;
 mod liquidity_heatmap;

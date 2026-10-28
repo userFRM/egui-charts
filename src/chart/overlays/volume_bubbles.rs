@@ -364,8 +364,8 @@ impl VolumeBubbles {
                 let mut at = from - ((self.evicted + from) % self.group).min(from);
                 let end = to + (self.group - (self.evicted + to) % self.group) % self.group;
                 while from < to && at < end.min(self.trades.len()) {
-                    let next = (at + self.group - (self.evicted + at) % self.group)
-                        .min(self.trades.len());
+                    let next =
+                        (at + self.group - (self.evicted + at) % self.group).min(self.trades.len());
                     shown.push(Bubble::of_group(self.trades.range(at..next)));
                     at = next;
                 }
@@ -828,9 +828,11 @@ mod tests {
                 pending.push(trade);
                 store.append(pending, &mut |trade, added| bubbles.fold(trade, added));
             }
-            let got = Vec::from_iter(bubbles.between(ten, ten + TimeDelta::minutes(1)).map(|b| {
-                ((b.at - ten).num_seconds(), b.price, b.buy, b.sell, b.volume)
-            }));
+            let got = Vec::from_iter(
+                bubbles
+                    .between(ten, ten + TimeDelta::minutes(1))
+                    .map(|b| ((b.at - ten).num_seconds(), b.price, b.buy, b.sell, b.volume)),
+            );
             assert_eq!(got, expected, "{name}");
         }
     }
@@ -879,7 +881,8 @@ mod tests {
             (BubbleColor::Volume, bubble(4.0, 0.0, 0.0), 0.0, vec![(4.0, with(gray, 200))]),
         ];
         for (mode, bubble, max_delta, expected) in cases {
-            let bubbles = VolumeBubbles::new(config(mode), BarClock::new(Timeframe::Min1), None, []);
+            let bubbles =
+                VolumeBubbles::new(config(mode), BarClock::new(Timeframe::Min1), None, []);
             let (discs, n) = bubbles.discs(&bubble, max_delta);
             assert_eq!(discs[..n], expected[..], "{mode:?} {bubble:?}");
         }
@@ -936,7 +939,12 @@ mod tests {
         // A quarter into the first bar, half way, and three quarters into the second.
         assert_eq!(
             centres(&[(15, 100.0), (30, 99.0), (75, 99.0), (30, 99.0)]),
-            [(87.5, 100.0), (100.0, 101.0), (100.0, 101.0), (137.5, 101.0)]
+            [
+                (87.5, 100.0),
+                (100.0, 101.0),
+                (100.0, 101.0),
+                (137.5, 101.0)
+            ]
         );
     }
 }

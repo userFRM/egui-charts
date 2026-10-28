@@ -8,7 +8,9 @@ estimating their aggressor from candles. Replay chronological historical trades 
 new executions with `push`; rebuild on corrections. Unknown aggressors contribute to total
 volume and remain outside bid/ask delta. `Chart::show_footprint` draws the four numeric modes,
 profiles, grouped rows, imbalances, POC and value area in place of the price series. Its
-`FootprintConfig` controls the presentation. Automatic grouping affects display only.
+`FootprintConfig` controls the presentation: cell colour, number abbreviation and zero display,
+value-sized fonts, extreme ask/bid ratios and the pullback range. Automatic grouping affects
+display only.
 
 ## Liquidity
 
