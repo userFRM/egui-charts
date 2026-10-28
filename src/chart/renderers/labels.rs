@@ -458,8 +458,8 @@ pub fn render_time_labels(
 
 #[path = "legend/mod.rs"]
 mod legend;
-pub(crate) use legend::study_controls;
 pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
+pub(crate) use legend::{SeriesAction, study_controls};
 
 /// Formats text at weight 600 when the face has a weight axis.
 fn semibold(font: FontId, color: Color32) -> egui::text::TextFormat {
