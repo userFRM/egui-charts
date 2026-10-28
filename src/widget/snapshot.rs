@@ -68,6 +68,10 @@ pub struct ChartSnapshot {
     /// Complete appearance settings; absent in version 1 layouts.
     #[serde(default)]
     pub config: Option<crate::config::ChartConfig>,
+    /// The palette `config`'s colours followed, so that [`Chart::restore`] can tell the colours
+    /// the user edited from those that follow the active theme; absent in older layouts.
+    #[serde(default)]
+    pub palette: Option<crate::config::ChartConfig>,
     /// Interaction and time axis settings; absent in version 1 layouts.
     #[serde(default)]
     pub options: Option<crate::config::ChartOptions>,
@@ -137,6 +141,7 @@ impl Chart {
             main_series_visible: self.main_series_visible,
             settings: ChartSettingsState::from_chart(self),
             config: Some(self.config.clone()),
+            palette: Some(self.followed_palette()),
             options: Some(self.chart_options.clone()),
             price_scale: Some(self.state.price_scale().clone()),
             maximized: self
@@ -254,6 +259,7 @@ impl Chart {
         snapshot.settings.apply_to_chart(self)?;
         if let Some(config) = &snapshot.config {
             self.config = config.clone();
+            self.follow_restored_palette(snapshot.palette.as_ref());
         }
         if let Some(options) = &snapshot.options {
             self.set_chart_options(options.clone());

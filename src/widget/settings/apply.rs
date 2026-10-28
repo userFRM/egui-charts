@@ -106,6 +106,8 @@ impl ChartSettingsState {
         settings.scales_and_lines.allow_label_overlap = config.price_axis.allow_label_overlap;
         settings.scales_and_lines.show_study_values = config.price_axis.show_study_values;
         settings.scales_and_lines.study_value_color = config.price_axis.study_value_color;
+        settings.scales_and_lines.show_symbol_name = config.price_axis.show_symbol_name;
+        settings.scales_and_lines.show_study_names = config.price_axis.show_study_names;
         settings.scales_and_lines.show_extended_session_price = config.show_extended_session_price;
         settings.scales_and_lines.extended_session_price_color =
             config.extended_session_price_color;
@@ -355,6 +357,8 @@ impl ChartSettingsState {
         config.price_axis.allow_label_overlap = self.scales_and_lines.allow_label_overlap;
         config.price_axis.show_study_values = self.scales_and_lines.show_study_values;
         config.price_axis.study_value_color = self.scales_and_lines.study_value_color;
+        config.price_axis.show_symbol_name = self.scales_and_lines.show_symbol_name;
+        config.price_axis.show_study_names = self.scales_and_lines.show_study_names;
         config.show_extended_session_price = self.scales_and_lines.show_extended_session_price;
         config.extended_session_price_color = self.scales_and_lines.extended_session_price_color;
         config.lock_price_to_bar_ratio = self.scales_and_lines.lock_price_to_bar_ratio;

@@ -130,7 +130,11 @@ pub(crate) fn render_study_axis(
                             .study_value_color
                             .unwrap_or(member.plot_style(line).color),
                     ),
-                    label,
+                    crate::chart::rendering::axes::named_label(
+                        axis_options.show_study_names,
+                        member.name(),
+                        label,
+                    ),
                 ));
             }
         }

@@ -65,6 +65,11 @@ impl<B: PriceBuilder> Built<B> {
         self.elements.get(start..start + len).unwrap_or_default()
     }
 
+    /// The bars of the elements in the visible slots, as [`Self::shown`].
+    pub(super) fn shown_bars(&self, start: usize, len: usize) -> &[Bar] {
+        self.bars.get(start..start + len).unwrap_or_default()
+    }
+
     fn series(&self) -> (Arc<[Bar]>, bool) {
         (
             self.bars.clone(),
@@ -81,7 +86,7 @@ thread_local! {
     static RENKO: RefCell<SpanCache<Built<RenkoBuilder>, (f64, PriceBasedSource, bool)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static KAGI: RefCell<SpanCache<Built<KagiBuilder>, (f64, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static LINE_BREAK: RefCell<SpanCache<Built<LineBreakBuilder>, (usize, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
-    static POINT_AND_FIGURE: RefCell<SpanCache<Built<PnfBuilder>, (f64, u32)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
+    static POINT_AND_FIGURE: RefCell<SpanCache<Built<PnfBuilder>, (f64, u32, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static RANGE: RefCell<SpanCache<Built<RangeBarBuilder>, f64>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
 }
 
@@ -230,10 +235,13 @@ pub(super) fn point_and_figure(
     params: &ChartTypeParams,
 ) -> Rc<Built<PnfBuilder>> {
     let (box_size, reversal) = (params.pnf_box_size, params.pnf_reversal);
-    let config = PointFigureConfig::new(box_size, reversal as usize);
+    let config = PointFigureConfig {
+        use_close: params.pnf_source == PriceBasedSource::Close,
+        ..PointFigureConfig::new(box_size, reversal as usize)
+    };
     cached(
         &POINT_AND_FIGURE,
-        (box_size, reversal),
+        (box_size, reversal, params.pnf_source),
         full,
         revision,
         point_figure::MAX_COLUMNS,
@@ -269,6 +277,56 @@ pub(super) fn range_bars(
         |bars| range_bar::work_start(bars, size),
         range_bar::RangeBar::to_bar,
     )
+}
+
+/// Range bars built from executions, kept until the executions, the range size or the replay
+/// cutoff change.
+#[derive(Default)]
+pub(crate) struct ExecutionRanges {
+    key: Option<(f64, u64, Option<chrono::DateTime<chrono::Utc>>)>,
+    built: Option<(Arc<[Bar]>, bool)>,
+}
+
+impl ExecutionRanges {
+    /// One bar per range bar of the trades before `cutoff` (all of them without one), and whether
+    /// older range bars were left out by the bar limit; `trades_revision` identifies `trades`.
+    /// `None` for an invalid range size or without a trade, when the range bars come from the
+    /// chart's OHLC bars.
+    pub(crate) fn bars<'a>(
+        &mut self,
+        params: &ChartTypeParams,
+        trades_revision: u64,
+        trades: impl Iterator<Item = &'a crate::model::Tick>,
+        cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Option<(Arc<[Bar]>, bool)> {
+        if params.invalid(ChartType::Range).is_some() {
+            *self = Self::default();
+            return None;
+        }
+        let key = (params.range_size, trades_revision, cutoff);
+        if self.key != Some(key) {
+            let mut builder = RangeBarBuilder::new(params.range_size);
+            for trade in trades.filter(|t| cutoff.is_none_or(|c| t.ts < c)) {
+                builder.push_tick(trade);
+            }
+            let bars: Arc<[Bar]> = builder
+                .elements()
+                .iter()
+                .map(range_bar::RangeBar::to_bar)
+                .collect();
+            self.built = (!bars.is_empty()).then(|| {
+                let trimmed = bars.len() >= range_bar::MAX_BARS;
+                (bars, trimmed)
+            });
+            self.key = Some(key);
+        }
+        self.built.clone()
+    }
+
+    /// Whether the last bars came from executions.
+    pub(crate) fn in_use(&self) -> bool {
+        self.built.is_some()
+    }
 }
 
 /// The element containing a loaded time. Columns include quiet bars up to the next column's
@@ -746,6 +804,25 @@ mod tests {
             assert_eq!((built[count - 1].open, built[count - 1].close), last);
             let restored = elements(kind, &close, &data, 0);
             assert!(restored.is_none_or(|(bars, _)| bars.len() == 1));
+        }
+        // Point and Figure with 1-point boxes and 3-box reversals: the high of 104 lifts the
+        // first column to 104 and the same bar's low of 100 reverses it to a column from 103
+        // down to 100; close-only input sees neither.
+        let mut data = bars(0, &[100.0, 100.0], None);
+        data[1].high = 104.0;
+        for (source, count, first, last) in [
+            (PriceBasedSource::HighLow, 2, (100.0, 104.0), (103.0, 100.0)),
+            (PriceBasedSource::Close, 1, (100.0, 100.0), (100.0, 100.0)),
+        ] {
+            let params = ChartTypeParams {
+                pnf_source: source,
+                ..Default::default()
+            };
+            let (built, _) = elements(ChartType::PointAndFigure, &params, &data, 0).unwrap();
+            assert_eq!(built.len(), count, "{source:?}");
+            assert_eq!((built[0].open, built[0].close), first, "{source:?}");
+            let end = &built[count - 1];
+            assert_eq!((end.open, end.close), last, "{source:?}");
         }
         let data = bars(10, &[100.0, 103.0, 101.5, 104.0], None);
         let mut params = ChartTypeParams::default();

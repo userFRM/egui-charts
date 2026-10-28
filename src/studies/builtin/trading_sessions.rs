@@ -32,7 +32,7 @@
 //! assert_eq!(sessions.values().value(1, 1), Some(1.0));
 //! ```
 
-use crate::model::session::local_time;
+use crate::model::local_time;
 use crate::model::{Bar, BarClock, TimezoneId};
 use crate::studies::palette;
 use crate::studies::stepper::update_window;

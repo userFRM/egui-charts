@@ -748,6 +748,18 @@ impl SettingsDialog {
                         dialog.settings.scales_and_lines.symbol_price_color = None;
                     }
                 });
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.scales_and_lines.show_symbol_name,
+                    "Symbol name on scale",
+                    theme.ui.text,
+                );
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.scales_and_lines.show_study_names,
+                    "Study names on scale",
+                    theme.ui.text,
+                );
                 self.draw_setting_row_with_controls(ui, "Study values", theme, |ui, dialog| {
                     styled_checkbox(
                         ui,

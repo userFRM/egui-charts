@@ -47,7 +47,7 @@ pub(crate) struct FeedLink {
     retries: Vec<(f64, Request, u32)>,
     subscription: Option<SubscriptionId>,
     instrument: Option<Instrument>,
-    trades: Trades,
+    pub(super) trades: Trades,
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
     /// The trades as a footprint on the instrument's tick, while the chart type draws from them.
@@ -1544,6 +1544,63 @@ mod tests {
                 "execution charts retain candles when the interval has no time slots"
             );
         }
+    }
+
+    /// Range bars follow the order of the supplied executions, not only the OHLC of the bars they
+    /// fall in, and the OHLC approximation stands in while the chart holds none.
+    #[test]
+    fn range_bars_are_built_from_the_held_trades() {
+        use crate::model::RangeBarSource::{Executions, OhlcApproximation};
+        let start = bars(1)[0].time;
+        // Both paths open at 100, high 104, low 96 and close at 100: up first, then down first.
+        let paths = [[100.0, 104.0, 96.0, 100.0], [100.0, 96.0, 104.0, 100.0]];
+        let mut closes = Vec::new();
+        for prices in paths {
+            let feed = Arc::new(Script::default());
+            let mut chart = fed(&feed, Some("A"));
+            chart.set_chart_type(crate::model::ChartType::Range);
+            chart.set_chart_type_params(crate::model::ChartTypeParams {
+                range_size: 4.0,
+                ..Default::default()
+            });
+            let mut frames = Frames::new();
+            frames.run(&mut chart);
+            feed.resolve().send(Ok(Instrument::new("A")));
+            let mut history = bars(1);
+            (history[0].high, history[0].low) = (104.0, 96.0);
+            feed.page().send(page(history, true));
+            frames.run(&mut chart);
+            assert_eq!(chart.range_bar_source(), Some(OhlcApproximation));
+            let sink = feed.sink();
+            for (i, price) in prices.into_iter().enumerate() {
+                sink.push_tick(Tick::new(
+                    start + TimeDelta::seconds(i as i64),
+                    price,
+                    1.0,
+                    None,
+                ));
+            }
+            frames.run(&mut chart);
+            assert_eq!(chart.range_bar_source(), Some(Executions));
+            closes.push(
+                chart
+                    .state
+                    .shown()
+                    .iter()
+                    .map(|bar| bar.close)
+                    .collect::<Vec<_>>(),
+            );
+            // A replay cursor after the second trade leaves only its first range bar.
+            chart.set_replay_time(Some(start + TimeDelta::seconds(2)));
+            frames.run(&mut chart);
+            assert_eq!(chart.range_bar_source(), Some(Executions));
+            let shown: Vec<_> = chart.state.shown().iter().map(|bar| bar.close).collect();
+            assert_eq!(shown, [closes[closes.len() - 1][0]]);
+        }
+        assert_eq!(
+            closes,
+            [[104.0, 100.0, 96.0, 100.0], [96.0, 100.0, 104.0, 100.0]]
+        );
     }
 
     #[test]

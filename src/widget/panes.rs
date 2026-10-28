@@ -438,6 +438,7 @@ impl Chart {
                                 item.id,
                                 crate::scales::PriceScaleMode::Normal,
                             ),
+                            map.price_precision(),
                         ),
                     )
                 })
@@ -1002,13 +1003,13 @@ impl Chart {
                     );
                 }
                 if !collapsed && let Some(axis_edge) = axis_edge {
-                    for (id, (value, colors)) in items
+                    for (item, (value, colors, last)) in items
                         .iter()
                         .flat_map(|item| {
                             self.series_axis_values(item)
-                                .map(move |value| (item.id, value))
+                                .map(move |value| (item, value))
                         })
-                        .filter(|(_, (value, _))| {
+                        .filter(|(_, (value, ..))| {
                             map.range().contains(map.transform().to_scale(*value))
                         })
                     {
@@ -1017,12 +1018,7 @@ impl Chart {
                             chart_rect,
                             axis_edge,
                             map.price_to_y(value),
-                            map.transform().label(
-                                map.transform().to_scale(value),
-                                2,
-                                self.series_label_formatter(id, map.transform().mode)
-                                    .as_deref(),
-                            ),
+                            self.series_tag_label(item, &map, value, last),
                             colors,
                             &axis_tags,
                             self.config.price_axis.allow_label_overlap,
