@@ -85,7 +85,8 @@ pub enum BubbleGrouping {
     /// below a millisecond counts as one millisecond.
     TimeWindow(TimeDelta),
     /// One bubble per bar and price level of this height, which must be finite and positive,
-    /// else every traded price has its own bubble.
+    /// else every traded price has its own bubble. Levels on one pixel row merge as with
+    /// [`Automatic`](Self::Automatic).
     PriceStep(f64),
     /// One bubble per this many consecutive executions, at the time of the last of them and the
     /// volume-weighted price of all of them. The newest group grows until it is full. Groups
@@ -413,7 +414,7 @@ impl VolumeBubbles {
                     if bars[i].time != bubble.at {
                         continue;
                     }
-                    (x(i), self.config.grouping == BubbleGrouping::Automatic)
+                    (x(i), true)
                 }
                 _ if elapsed < slot_of(i) => {
                     let share = elapsed as f32 / slot_of(i) as f32;
@@ -890,7 +891,8 @@ mod tests {
 
     /// Guards the exact position of ungrouped bubbles: a fill sits in its bar's slot at the
     /// share of the bar interval that had elapsed, and two fills of one instant and price draw
-    /// two circles on one spot instead of one.
+    /// two circles on one spot instead of one, while a price step still merges the levels of a
+    /// bar that fall on one pixel row, keeping the shapes bounded by the pane.
     #[test]
     fn an_ungrouped_bubble_sits_at_its_time_within_the_bar() {
         let ten = "2024-03-15T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
@@ -898,18 +900,14 @@ mod tests {
             Bar::new(ten, 100.0, 101.0, 99.0, 100.0, 1.0),
             Bar::new(ten + TimeDelta::minutes(1), 100.0, 101.0, 99.0, 100.0, 1.0),
         ];
-        let config = VolumeBubblesConfig {
-            grouping: Ungrouped,
-            ..VolumeBubblesConfig::default()
-        };
-        let centres = |fills: &[(i64, f64)]| {
+        let mesh = |grouping, fills: &[(i64, f64)]| {
+            let config = VolumeBubblesConfig {
+                grouping,
+                ..VolumeBubblesConfig::default()
+            };
             let trades = Vec::from_iter(fills.iter().map(|&(s, p)| trade(s, p, 1.0, None)));
-            let bubbles = VolumeBubbles::new(
-                config.clone(),
-                BarClock::new(Timeframe::Min1),
-                Some(1.0),
-                &trades,
-            );
+            let bubbles =
+                VolumeBubbles::new(config, BarClock::new(Timeframe::Min1), Some(1.0), &trades);
             let ctx = egui::Context::default();
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 bubbles.render(
@@ -921,14 +919,17 @@ mod tests {
                 );
             });
             output.textures_delta.clear();
-            let mesh = output
+            output
                 .shapes
                 .iter()
                 .find_map(|shape| match &shape.shape {
                     Shape::Mesh(mesh) => Some(Arc::clone(mesh)),
                     _ => None,
                 })
-                .unwrap();
+                .unwrap()
+        };
+        let centres = |fills: &[(i64, f64)]| {
+            let mesh = mesh(Ungrouped, fills);
             let sides = mesh.vertices.len() / fills.len();
             Vec::from_iter(
                 mesh.vertices
@@ -945,6 +946,13 @@ mod tests {
                 (100.0, 101.0),
                 (137.5, 101.0)
             ]
+        );
+        // 99.0 and 99.25 both round to row 101: one disc, as large as a lone fill's.
+        assert_eq!(
+            mesh(PriceStep(0.25), &[(15, 99.0), (20, 99.25)])
+                .vertices
+                .len(),
+            mesh(Ungrouped, &[(15, 99.0)]).vertices.len()
         );
     }
 }
