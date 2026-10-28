@@ -57,6 +57,8 @@ pub(super) struct State {
     resume: Option<(ReplaySession, Timeframe, f64)>,
     /// The slots holding the replay cutoff.
     slots: Vec<usize>,
+    /// The time of the last replayed bar the brokers were told.
+    observed: Option<DateTime<Utc>>,
     control: FloatingReplayControl,
     /// Where the feed answers for finer history arrive.
     inbox: Arc<Inbox>,
@@ -648,10 +650,19 @@ impl Terminal {
         // sees in turn; a start or a rewind shows it where the cursor is now.
         let revealed = match previous {
             Some(previous) if previous < time => visible.partition_point(|bar| bar.time < previous),
+            // The same cutoff at a coarser interval: its last bar opens earlier, but the replay
+            // has not gone back.
+            Some(previous)
+                if previous == time
+                    && visible.last().map(|bar| bar.time) < self.replay.observed =>
+            {
+                visible.len()
+            }
             _ => visible.len().saturating_sub(1),
         };
         for bar in &visible[revealed..] {
             observe(&self.services.brokers, &symbol, bar.close, Some(bar.time));
+            self.replay.observed = Some(bar.time);
         }
         let group = self.replay_group(source);
         for &slot in &self.replay.slots {
@@ -928,7 +939,9 @@ mod tests {
             terminal.layout.mode = ChartLayoutMode::TwoHorizontal;
             terminal
         };
-        let mut terminal = two_slots("TEST");
+        let paper = Arc::new(PaperAccount::new("USD", 100_000.0));
+        let mut terminal =
+            two_slots("TEST").with_broker(BrokerTile::new("paper", "Paper"), paper.clone());
         settle(&mut terminal);
         let slot = ChartBuilder::new().with_feed(terminal.feed.clone()).build();
         terminal.charts.push(slot);
@@ -959,12 +972,24 @@ mod tests {
             assert_eq!(chart.bars(SeriesId::MAIN).last().unwrap().volume, 649_400.0);
         }
 
+        // Back at the daily interval on the same cutoff, nothing was rewound.
+        buy(&paper, "TEST");
+        let daily = ReplayControlAction::SetUpdateInterval(Timeframe::Day1);
+        transport(&mut terminal, daily);
+        assert_eq!(terminal.charts[0].replay_time(), Some(end));
+        assert_eq!(account(&paper).1, 1, "the position is kept");
+        transport(
+            &mut terminal,
+            ReplayControlAction::SetUpdateInterval(Timeframe::Min1),
+        );
+
         // Two minutes back, the slots still share the cutoff.
         transport(&mut terminal, ReplayControlAction::StepBackward);
         transport(&mut terminal, ReplayControlAction::StepBackward);
         let cutoff = at(2026, 1, 1, 23, 58);
         assert_eq!(terminal.charts[0].replay_time(), Some(cutoff));
         assert_eq!(terminal.charts[1].replay_time(), Some(cutoff));
+        assert_eq!(account(&paper).1, 0, "a rewind takes the position back");
         drop(terminal);
 
         // After a restart the session resumes paused, also from another symbol.
