@@ -280,18 +280,18 @@ impl Indicator for OrderFlowStudy {
                     InputKind::Toggle,
                 ),
             ],
-            OrderFlowKind::FilteredCvd { min, max } => ["min", "max"]
-                .into_iter()
-                .zip([min, max])
-                .map(|(id, value)| {
-                    StudyInput::new(
-                        id,
-                        format!("{} size", if id == "min" { "Smallest" } else { "Largest" }),
-                        InputValue::Number(value),
-                        InputKind::Number(0.0, f64::MAX),
-                    )
-                })
-                .collect(),
+            OrderFlowKind::FilteredCvd { min, max } => {
+                [("min", "Smallest size", min), ("max", "Largest size", max)]
+                    .map(|(id, label, value)| {
+                        StudyInput::new(
+                            id,
+                            label,
+                            InputValue::Number(value),
+                            InputKind::Number(0.0, f64::MAX),
+                        )
+                    })
+                    .to_vec()
+            }
             OrderFlowKind::AggressorRate { seconds, instant } => vec![
                 length("seconds", "Rolling seconds", seconds, 1, 86400),
                 length("instant", "Instant seconds", instant, 1, 86400),
