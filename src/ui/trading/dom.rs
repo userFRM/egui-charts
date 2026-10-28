@@ -275,7 +275,12 @@ impl Ladder {
             |rect: Rect| Rect::from_x_y_ranges(rect.left()..=rect.right() - strip, rect.y_range());
         let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
         let [_, bid_column, price_header, ask_column, _] = columns(ladder_of(header));
-        for (column, label) in [(bid_column, "Bid size"), (ask_column, "Ask size")] {
+        for (column, long, short) in [
+            (bid_column, "Bid size", "Bid"),
+            (ask_column, "Ask size", "Ask"),
+        ] {
+            // The optional columns narrow the ladder until the long label spills into the price.
+            let label = if column.width() < 52.0 { short } else { long };
             let at = column.center();
             text(
                 ui,
