@@ -187,29 +187,22 @@ impl ScreenerPanel {
 
     /// Ask the feed again, such as when the host's data changed.
     pub fn refresh(&mut self) {
+        self.ask(0);
+    }
+
+    /// Ask for the page after the rows shown, of the same screen.
+    fn load_more(&mut self) {
+        self.ask(self.rows.len());
+    }
+
+    fn ask(&mut self, offset: usize) {
         let Some(feed) = &self.feed else {
             return;
         };
         self.request += 1;
         self.loading = true;
-        self.appending = false;
-        let query = self.query(0);
-        if self.text.is_empty() {
-            feed.screen(query, self.inbox.reply(self.request));
-        } else {
-            feed.screen_text(query, self.inbox.reply(self.request));
-        }
-    }
-
-    /// Ask for the page after the rows shown, of the same screen.
-    fn load_more(&mut self) {
-        let Some(feed) = self.feed.clone() else {
-            return;
-        };
-        self.request += 1;
-        self.loading = true;
-        self.appending = true;
-        let query = self.query(self.rows.len());
+        self.appending = offset > 0;
+        let query = self.query(offset);
         if self.text.is_empty() {
             feed.screen(query, self.inbox.reply(self.request));
         } else {
