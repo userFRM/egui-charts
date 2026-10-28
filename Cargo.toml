@@ -205,7 +205,7 @@ egui = { version = "0.37.0", default-features = false, features = ["serde"], opt
 ecolor = { version = "0.37.0", features = ["serde"] }
 egui_extras = { version = "0.37.0", default-features = false, optional = true }
 # The icon loader rasterises with the same resvg that egui_extras' SVG loader uses.
-resvg = { version = "0.45.1", default-features = false, optional = true }
+resvg = { version = "0.48.1", default-features = false, optional = true }
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.149"
 chrono = { version = "0.4.43", features = ["serde"] }
