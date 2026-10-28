@@ -137,6 +137,17 @@ pub trait Datafeed: MaybeSend + 'static {
         reply.send(Ok(Instrument::new(symbol)));
     }
 
+    /// Describes `symbol` with its prices converted to `conversion`, the currency or unit the
+    /// host chose with [`Chart::set_conversion`](crate::widget::Chart::set_conversion). Label the
+    /// instrument with the converted [`currency`](Instrument::currency) and
+    /// [`unit`](Instrument::unit). The library converts nothing: the default answers
+    /// [`FeedError::NotSupported`], which shows no data rather than unconverted data under a
+    /// converted choice.
+    fn resolve_converted(&self, symbol: &str, conversion: &str, reply: Reply<Instrument>) {
+        let _ = (symbol, conversion);
+        reply.send(Err(FeedError::NotSupported));
+    }
+
     /// Up to `request.count` bars that open before `request.before`, or the latest bars when it
     /// is `None`.
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>);
@@ -363,6 +374,9 @@ pub struct HistoryRequest {
     pub count: usize,
     /// Include the instrument's extended trading hours, as well as regular hours.
     pub extended_hours: bool,
+    /// The currency or unit the host chose, in which the bars are wanted, as
+    /// [`Datafeed::resolve_converted`] described the symbol. `None` asks for the instrument's own.
+    pub conversion: Option<String>,
 }
 
 /// One page of history. A page without bars ends scroll-back like `end_of_history` does, so a
@@ -391,6 +405,9 @@ pub struct TradeRequest {
     pub before: Option<DateTime<Utc>>,
     /// Trades wanted. Fewer is fine.
     pub count: usize,
+    /// The currency or unit the host chose, in which the prices are wanted; see
+    /// [`HistoryRequest::conversion`].
+    pub conversion: Option<String>,
 }
 
 /// One page of trades. A page without trades ends scroll-back like `end_of_history` does.
@@ -433,6 +450,9 @@ pub struct DepthRequest {
     pub config: DepthHistoryConfig,
     /// Price of one tick, finite and positive.
     pub tick_size: f64,
+    /// The currency or unit the host chose, in which the prices are wanted; see
+    /// [`HistoryRequest::conversion`].
+    pub conversion: Option<String>,
 }
 
 impl DepthRequest {
@@ -449,6 +469,7 @@ impl DepthRequest {
             count,
             config,
             tick_size,
+            conversion: None,
         }
     }
 }
@@ -525,6 +546,9 @@ pub struct Subscription {
     pub clock: BarClock,
     /// Include the instrument's extended trading hours, as well as regular hours.
     pub extended_hours: bool,
+    /// The currency or unit the host chose, in which the updates are wanted; see
+    /// [`HistoryRequest::conversion`].
+    pub conversion: Option<String>,
     /// Destination for updates; stop publishing when it becomes inactive.
     pub sink: Sink,
 }

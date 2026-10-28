@@ -198,7 +198,7 @@ mod tests {
         let host: Arc<dyn Sharing> = Arc::new(Host);
         let mut controls = ShareControls::default();
         controls.set_service(host.clone());
-        let mut run = |controls: &mut ShareControls, operation: Operation, kind| {
+        let run = |controls: &mut ShareControls, operation: Operation, kind| {
             controls.pending = Some(operation.clone());
             match operation {
                 Operation::Link(ref name) => host.link(kind, name, controls.inbox.reply(0)),

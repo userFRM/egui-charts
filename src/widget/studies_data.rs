@@ -35,6 +35,8 @@ struct Stream {
     next_key: u64,
     /// Kept intact until success, including while newer live data arrives.
     history: Option<HistoryRequest>,
+    /// The chart's currency or unit conversion, which `clear_feed` replaces the stream on.
+    conversion: Option<String>,
     retry_at: Option<f64>,
     failures: u32,
     end: bool,
@@ -61,8 +63,12 @@ impl Stream {
                     .history(history.clone(), self.inbox.reply(self.next_key));
             }
         } else {
-            self.feed
-                .resolve(&source.symbol, self.inbox.reply(self.next_key));
+            super::feed::resolve(
+                &*self.feed,
+                &source.symbol,
+                self.conversion.as_deref(),
+                self.inbox.reply(self.next_key),
+            );
         }
     }
 
@@ -292,7 +298,12 @@ impl Chart {
                         ctx.request_repaint_of(viewport);
                     }
                 });
-                feed.resolve(&request.symbol, inbox.reply(0));
+                super::feed::resolve(
+                    &**feed,
+                    &request.symbol,
+                    self.conversion.as_deref(),
+                    inbox.reply(0),
+                );
                 self.study_data.series.push(Series {
                     request: request.clone(),
                     bars: Vec::new(),
@@ -307,6 +318,7 @@ impl Chart {
                         pending: true,
                         next_key: 0,
                         history: None,
+                        conversion: self.conversion.clone(),
                         retry_at: None,
                         failures: 0,
                         end: false,
@@ -465,6 +477,7 @@ impl Chart {
                         timeframe: tf,
                         clock: series.clock.clone(),
                         extended_hours: extended,
+                        conversion: stream.conversion.clone(),
                         sink,
                     });
                 }
@@ -497,6 +510,7 @@ impl Chart {
                     before: series.bars.first().map(|bar| bar.time),
                     count,
                     extended_hours: extended,
+                    conversion: stream.conversion.clone(),
                 });
                 stream.request(&series.request);
             }

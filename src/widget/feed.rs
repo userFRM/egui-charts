@@ -369,6 +369,31 @@ impl Chart {
         }
     }
 
+    /// Asks the feed for data in a currency or unit the host chose, such as `"EUR"` or `"oz"`,
+    /// or in the instrument's own with `None`. The library converts nothing: the feed does, and
+    /// labels the resolved instrument's currency and unit, which the legend and scale headers
+    /// show. A changed choice drops the bars, trades and depth held, ignores the replies to the
+    /// previous choice and reloads, resolving through [`Datafeed::resolve_converted`] and
+    /// carrying the choice in every history, trade and depth request and subscription,
+    /// including those of studies on other symbols. A feed that cannot convert answers
+    /// [`FeedError::NotSupported`] and the chart shows no data. Without a feed it has no effect.
+    pub fn set_conversion(&mut self, conversion: Option<String>) {
+        if self.conversion != conversion {
+            self.conversion = conversion;
+            self.study_data.clear_feed();
+            if let Some(link) = &mut self.feed_link {
+                link.reload_pending = true;
+                // The headers must not keep the previous choice's currency while loading.
+                link.instrument = None;
+            }
+        }
+    }
+
+    /// The currency or unit chosen with [`set_conversion`](Self::set_conversion).
+    pub fn conversion(&self) -> Option<&str> {
+        self.conversion.as_deref()
+    }
+
     /// Reloads the current feed key on the next frame, retaining drawings and chart history.
     /// Use after changing host-side feed settings or to retry a permanent request failure.
     pub fn reload_feed(&mut self) {
@@ -686,7 +711,14 @@ impl Chart {
                 },
                 Request::Resolve => match result::<Instrument>(answer) {
                     Ok(instrument) => self.subscribe(&mut link, instrument),
-                    Err(error) => self.request_failed(&mut link, request, failures, error, now),
+                    Err(error) => {
+                        // History asked in the meantime is in the choice's currency or unit,
+                        // which the failed instrument cannot label.
+                        if self.conversion.is_some() && !error.is_recoverable() {
+                            self.rule_out(&mut link);
+                        }
+                        self.request_failed(&mut link, request, failures, error, now);
+                    }
                 },
                 Request::History { scroll_back, .. } => match result::<HistoryPage>(answer) {
                     Ok(page) => self.apply_page(&link, page, scroll_back),
@@ -839,7 +871,7 @@ impl Chart {
                 Request::Resolve => {
                     let reply = link.reply(request);
                     link.pending.last_mut().unwrap().2 = failures;
-                    feed.resolve(&self.symbol, reply);
+                    resolve(&*feed, &self.symbol, self.conversion.as_deref(), reply);
                 }
                 Request::History {
                     request: history, ..
@@ -931,7 +963,7 @@ impl Chart {
             return;
         }
         let reply = link.reply(Request::Resolve);
-        link.feed.resolve(&self.symbol, reply);
+        resolve(&*link.feed, &self.symbol, self.conversion.as_deref(), reply);
         if supports(self.legend_instrument.as_ref(), timeframe) {
             self.request_latest(link);
         } else {
@@ -949,6 +981,7 @@ impl Chart {
             before: None,
             count: link.initial_bars,
             extended_hours: self.extended_hours,
+            conversion: self.conversion.clone(),
         };
         let reply = link.reply(Request::History {
             request: request.clone(),
@@ -1009,6 +1042,7 @@ impl Chart {
             timeframe,
             clock: link.clock.clone(),
             extended_hours: self.extended_hours,
+            conversion: self.conversion.clone(),
             sink,
         };
         link.feed.subscribe(subscription);
@@ -1016,6 +1050,7 @@ impl Chart {
             symbol: self.symbol.clone(),
             before: None,
             count: TRADE_CAPACITY,
+            conversion: self.conversion.clone(),
         };
         let reply = link.reply(Request::Trades);
         link.feed.trades(request, reply);
@@ -1125,6 +1160,7 @@ impl Chart {
             tick,
         );
         request.before = before;
+        request.conversion = self.conversion.clone();
         let reply = link.reply(Request::Depth(request.clone()));
         link.feed.depth_history(request, reply);
     }
@@ -1164,6 +1200,7 @@ impl Chart {
             before: Some(before),
             count: link.initial_bars.max(MIN_SCROLL_BACK_PAGE),
             extended_hours: self.extended_hours,
+            conversion: self.conversion.clone(),
         };
         self.feed.loading_history = true;
         let reply = link.reply(Request::History {
@@ -1171,6 +1208,19 @@ impl Chart {
             scroll_back: true,
         });
         link.feed.history(request, reply);
+    }
+}
+
+/// Describes `symbol` as the feed does for `conversion`, or as it is without one.
+pub(super) fn resolve(
+    feed: &dyn Datafeed,
+    symbol: &str,
+    conversion: Option<&str>,
+    reply: Reply<Instrument>,
+) {
+    match conversion {
+        Some(conversion) => feed.resolve_converted(symbol, conversion, reply),
+        None => feed.resolve(symbol, reply),
     }
 }
 
@@ -1258,6 +1308,11 @@ mod tests {
                 .push(Call::Resolve(symbol.into()));
             self.resolves.lock().unwrap().push(reply);
         }
+        fn resolve_converted(&self, symbol: &str, conversion: &str, reply: Reply<Instrument>) {
+            let call = Call::Resolve(format!("{symbol} in {conversion}"));
+            self.calls.lock().unwrap().push(call);
+            self.resolves.lock().unwrap().push(reply);
+        }
         fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
             self.calls.lock().unwrap().push(Call::History(request));
             self.pages.lock().unwrap().push(reply);
@@ -1319,6 +1374,46 @@ mod tests {
         assert_eq!(feed.capability_asks.load(Ordering::Relaxed), 1);
     }
 
+    /// A changed conversion resolves and loads the symbol again with the choice in every request,
+    /// and a reply to the previous choice, however late, is not shown.
+    #[test]
+    fn conversion_reloads_and_ignores_replies_to_the_previous_choice() {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        let (stale, stale_resolve) = (feed.page(), feed.resolve());
+        feed.calls();
+        chart.set_conversion(Some("EUR".into()));
+        frames.run(&mut chart);
+        let calls = feed.calls();
+        assert_eq!(calls[0], Call::Resolve("A in EUR".into()));
+        let Call::History(request) = &calls[1] else {
+            panic!("{calls:?}");
+        };
+        assert_eq!(request.conversion.as_deref(), Some("EUR"));
+
+        stale.send(page(bars(5), false));
+        stale_resolve.send(Ok(Instrument::new("A").with_currency("USD")));
+        frames.run(&mut chart);
+        assert!(chart.bars(SeriesId::MAIN).is_empty(), "previous choice");
+        assert_eq!(chart.instrument(), None, "previous choice");
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_currency("EUR")));
+        feed.page().send(page(bars(3), false));
+        frames.run(&mut chart);
+        assert_eq!(chart.bars(SeriesId::MAIN).len(), 3);
+        assert_eq!(
+            chart.instrument().and_then(|i| i.currency.as_deref()),
+            Some("EUR")
+        );
+        let calls = feed.calls();
+        let Some(Call::Trades(trades)) = calls.iter().find(|c| matches!(c, Call::Trades(_))) else {
+            panic!("{calls:?}");
+        };
+        assert_eq!(trades.conversion.as_deref(), Some("EUR"));
+    }
+
     /// Scanners retain no empty managers; marked symbols survive revisits until forgotten.
     #[test]
     fn inactive_symbol_state_can_be_forgotten() {
@@ -1373,6 +1468,7 @@ mod tests {
             before,
             count: 1000,
             extended_hours: false,
+            conversion: None,
         })
     }
 
@@ -2324,6 +2420,7 @@ mod tests {
             symbol: "A".into(),
             before: None,
             count: TRADE_CAPACITY,
+            conversion: None,
         });
         let subscribe = Call::Subscribe(id, "A".into(), Timeframe::Min1, false);
         assert_eq!(feed.calls(), [subscribe, trades], "c");
