@@ -394,9 +394,9 @@ Order flow,Order flow,DOM levels panel beside the heatmap,partial,library,src/wi
 Order flow,Order flow,Delta % and bid/ask ratio highlight markers on bars,partial,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/studies/builtin/footprint_studies.rs
 Order flow,Order flow,Delta POC per bar,partial,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs
 Order flow,Order flow,Delta split into trade-size ranges,partial,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs
-Order flow,Order flow,Depth ladder liquidity and execution columns,partial,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs
+Order flow,Order flow,Depth ladder liquidity and execution columns,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs
 Order flow,Order flow,"Depth ladder order entry, editing and brackets",partial,host,src/ui/trading/dom.rs;src/ui/trading/ticket.rs;src/ui/trading/mod.rs
-Order flow,Order flow,Depth ladder session and resettable profiles,partial,library,src/ui/trading/dom.rs
+Order flow,Order flow,Depth ladder session and resettable profiles,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/ui/trading/ticket.rs
 Order flow,Order flow,Depth ladder with configurable visible levels,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/data/depth.rs
 Order flow,Order flow,Developing POC line through the session,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs
 Order flow,Order flow,Diagonal imbalance detection and highlighting,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
@@ -465,7 +465,7 @@ Order flow,Order flow data model,Historical trades and depth request for a time 
 Order flow,Order flow data model,Incremental depth updates with sequence numbers and snapshot resync,done,library,src/data/depth.rs;src/data/inbox.rs;src/widget/feed.rs
 Order flow,Order flow data model,Level 2 order book snapshots,done,library,src/model/quote.rs;src/data/inbox.rs;src/data/depth.rs;src/widget/feed.rs
 Order flow,Order flow data model,Market-by-order events,done,library,src/data/orders.rs;src/data/inbox.rs;src/widget/feed.rs
-Order flow,Order flow data model,Memory bounds for trade and depth history,partial,library,src/data/trades.rs;src/data/depth_history.rs;src/chart/overlays/volume_bubbles.rs;src/widget/feed.rs;src/data/footprint.rs
+Order flow,Order flow data model,Memory bounds for trade and depth history,done,library,src/data/trades.rs;src/data/depth_history.rs;src/chart/overlays/volume_bubbles.rs;src/widget/feed.rs;src/data/footprint.rs
 Order flow,Order flow data model,Order book reconstruction from updates,done,library,src/data/depth.rs;src/model/quote.rs;src/widget/feed.rs
 Order flow,Order flow data model,Order-flow inputs to studies,partial,library,src/studies/indicator_trait.rs;src/data/order_flow.rs;src/widget/feed.rs;src/studies/builtin/trade_delta.rs
 Order flow,Order flow data model,Recording ticks and depth to disk for later sessions and replay,done,library,src/data/recording.rs;src/data/mod.rs
