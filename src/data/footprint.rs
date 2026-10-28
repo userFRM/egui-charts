@@ -3,6 +3,7 @@
 use super::FeedError;
 use crate::model::{BarClock, OrderSide, Tick};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Executed volume at one grouped price, with sells on the bid and buys on the ask.
@@ -39,7 +40,7 @@ impl FootprintLevel {
 ///
 /// The default compares each price row with its immediate neighbours, which is the most
 /// sensitive setting. Raising `smoothing` or `prominence` leaves only the broader nodes.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct NodeSensitivity {
     /// Rows on each side of a row that are averaged with it before comparing; zero compares
     /// the rows as traded. Untraded rows count as zero volume.
