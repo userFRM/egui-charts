@@ -52,6 +52,26 @@ pub enum OrderFlowKind {
         /// or a sell above the previous sell.
         reversal: bool,
     },
+    /// Buy minus sell volume per bar, counting only executions whose size lies in each of three
+    /// inclusive `[min, max]` ranges, all from the same trades. A range with `min > max`
+    /// matches nothing; executions of unknown side count for no range.
+    SizeDelta {
+        /// Inclusive size ranges, one per output.
+        ranges: [[f64; 2]; 3],
+    },
+    /// Total volume and buy minus sell volume per bar, which a study sums over `bars` bars.
+    FlowSum {
+        /// Bars in the rolling sum.
+        bars: usize,
+    },
+    /// Buy minus sell volume per bar of executions whose size lies in the inclusive range,
+    /// which a study accumulates into a cumulative volume delta.
+    FilteredCvd {
+        /// Smallest size counted.
+        min: f64,
+        /// Largest size counted.
+        max: f64,
+    },
     /// Absolute bid and ask movement in ticks and their sum, per bar when `seconds == 0`,
     /// otherwise over `(now - seconds, now]`. The first quote after book loss seeds anew.
     LevelsTradedThrough {
@@ -88,11 +108,30 @@ impl OrderFlowKind {
                 seconds: seconds.min(86400),
                 reversal,
             },
+            Self::SizeDelta { ranges } => Self::SizeDelta {
+                ranges: ranges.map(|[min, max]| [size_bound(min), size_bound(max)]),
+            },
+            Self::FlowSum { bars } => Self::FlowSum {
+                bars: bars.clamp(1, 10_000),
+            },
+            Self::FilteredCvd { min, max } => Self::FilteredCvd {
+                min: size_bound(min),
+                max: size_bound(max),
+            },
             Self::LevelsTradedThrough { seconds } => Self::LevelsTradedThrough {
                 seconds: seconds.min(86400),
             },
             Self::Spread => Self::Spread,
         }
+    }
+}
+
+/// A size bound: NaN counts as zero, and the bound is kept in 0..=`f64::MAX`.
+fn size_bound(size: f64) -> f64 {
+    if size.is_nan() {
+        0.0
+    } else {
+        size.clamp(0.0, f64::MAX)
     }
 }
 
@@ -423,6 +462,25 @@ impl OrderFlowInput {
                 }
                 [levels[0], levels[1], levels[0] + levels[1]]
             }
+            OrderFlowKind::SizeDelta { ranges } => {
+                let mut row = state.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
+                for (sum, [min, max]) in row.iter_mut().zip(ranges) {
+                    *sum += signed_size(trade, min, max);
+                }
+                row
+            }
+            OrderFlowKind::FlowSum { .. } => {
+                let old = state.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
+                [
+                    old[0] + trade.size,
+                    old[1] + signed_size(trade, 0.0, f64::MAX),
+                    0.0,
+                ]
+            }
+            OrderFlowKind::FilteredCvd { min, max } => {
+                let old = state.bars.get(&open).map_or(0.0, |(v, _)| v[0]);
+                [old + signed_size(trade, min, max), 0.0, 0.0]
+            }
             _ => return,
         };
         state.bars.insert(open, (row, 0));
@@ -487,6 +545,9 @@ impl OrderFlowInput {
             OrderFlowKind::TradeRate { .. }
                 | OrderFlowKind::AggressorRate { .. }
                 | OrderFlowKind::LevelsExecuted { .. }
+                | OrderFlowKind::SizeDelta { .. }
+                | OrderFlowKind::FlowSum { .. }
+                | OrderFlowKind::FilteredCvd { .. }
         ) {
             return;
         }
@@ -560,6 +621,19 @@ impl OrderFlowInput {
         }
         state.bars.insert(clock.bar_open(time), (row, 0));
         state.finish(time, clock.bar_open(time));
+    }
+}
+
+/// The execution's size, negative for a sell, when it is classified and its size lies in
+/// `min..=max`; zero otherwise.
+fn signed_size(trade: &Tick, min: f64, max: f64) -> f64 {
+    if !(min..=max).contains(&trade.size) {
+        return 0.0;
+    }
+    match trade.side {
+        Some(OrderSide::Buy) => trade.size,
+        Some(OrderSide::Sell) => -trade.size,
+        None => 0.0,
     }
 }
 

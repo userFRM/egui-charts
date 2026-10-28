@@ -304,6 +304,14 @@ impl IndicatorFactory {
                 seconds: 0,
                 reversal: false,
             },
+            OrderFlowKind::SizeDelta {
+                ranges: [[0.0, 9.0], [10.0, 99.0], [100.0, f64::MAX]],
+            },
+            OrderFlowKind::FlowSum { bars: 10 },
+            OrderFlowKind::FilteredCvd {
+                min: 100.0,
+                max: f64::MAX,
+            },
             OrderFlowKind::LevelsTradedThrough { seconds: 0 },
         ] {
             let name = OrderFlowStudy::new(kind).name().to_owned();
@@ -1194,6 +1202,14 @@ mod tests {
             Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsExecuted {
                 seconds: l(0),
                 reversal: true,
+            })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::SizeDelta {
+                ranges: [[x(0.0), x(9.0)], [x(10.0), x(99.0)], [x(100.0), f64::MAX]],
+            })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::FlowSum { bars: l(0) })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
+                min: x(100.0),
+                max: f64::MAX,
             })),
             Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsTradedThrough {
                 seconds: l(0),
