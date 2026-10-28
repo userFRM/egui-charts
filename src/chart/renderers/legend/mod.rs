@@ -222,7 +222,8 @@ impl<'a> Legend<'a> {
                 Some(DataStatus::EndOfDay) => Some(("E", "End-of-day data")),
                 _ => None,
             }
-            .map(|(text, hint)| {
+            .map(|(text, hint)| (l10n::text(ui.ctx(), text), hint));
+            let data_status = data_status.as_ref().map(|(text, hint)| {
                 let color = theme.ui.warning;
                 let background = color.gamma_multiply(0.15);
                 (
@@ -231,7 +232,7 @@ impl<'a> Legend<'a> {
                         color,
                         background,
                     },
-                    hint,
+                    *hint,
                 )
             });
             let statuses: Vec<_> = data_status

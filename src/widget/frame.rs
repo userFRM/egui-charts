@@ -2180,8 +2180,9 @@ impl Chart {
                     .map(|quote| (quote, self.config.extended_session_price_color)),
                 (show_volume && show_price_axis && !cfg!(feature = "studies")).then_some((
                     last.volume,
-                    // The tag takes the colour of the bar's direction in the applied theme.
-                    if last.close >= last.open {
+                    // The tag takes the colour of the bar's direction in the applied theme, as
+                    // its volume bar does.
+                    if last.is_bullish() {
                         ui.active_theme().chart.candle_up
                     } else {
                         ui.active_theme().chart.candle_down
