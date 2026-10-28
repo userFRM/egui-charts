@@ -1,6 +1,6 @@
 //! Exact bid, ask and delta profiles over host-selected session or composite ranges.
 
-use crate::data::{FeedError, Footprint, FootprintBar, FootprintLevel};
+use crate::data::{FeedError, Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
 use chrono::{DateTime, Utc};
 use std::{collections::BTreeMap, ops::Range};
 
@@ -63,34 +63,59 @@ pub struct TradeProfile {
 }
 
 impl TradeProfile {
-    /// Local volume maxima and minima, respectively, against the immediately adjacent price
-    /// rows. A missing row has zero volume; ties and outer endpoints are not nodes.
-    pub fn nodes(&self) -> (Vec<i64>, Vec<i64>) {
+    /// Local volume maxima and minima, respectively, between the first and last traded rows.
+    /// Untraded rows have zero volume, so a gap between traded rows is a valley; it is
+    /// evaluated as one span, however wide. Rows of equal smoothed volume form one plateau,
+    /// reported once at its lowest row, and the outer traded rows are never nodes. See
+    /// [`NodeSensitivity`] for the smoothing and prominence applied.
+    pub fn nodes(&self, sensitivity: NodeSensitivity) -> (Vec<i64>, Vec<i64>) {
         let mut high = Vec::new();
         let mut low = Vec::new();
         let levels = &self.volume.levels;
         let (Some(&first), Some(&last)) = (levels.keys().next(), levels.keys().next_back()) else {
             return (high, low);
         };
-        if first == last {
-            return (high, low);
+        let reach = i64::from(sensitivity.smoothing);
+        let smoothed = |at: i64| {
+            levels
+                .range(at.saturating_sub(reach)..=at.saturating_add(reach))
+                .map(|(_, row)| row.volume())
+                .sum::<f64>()
+                / (2 * reach + 1) as f64
+        };
+        // The smoothed volume changes only where a traded row enters or leaves the window.
+        let mut starts = vec![first];
+        for &level in levels.keys() {
+            for start in [level.saturating_sub(reach), level.saturating_add(reach + 1)] {
+                if first < start && start <= last {
+                    starts.push(start);
+                }
+            }
         }
-        for (&level, row) in levels.range((
-            std::ops::Bound::Excluded(first),
-            std::ops::Bound::Excluded(last),
-        )) {
-            let below = level
-                .checked_sub(1)
-                .and_then(|key| levels.get(&key))
-                .map_or(0.0, FootprintLevel::volume);
-            let above = level
-                .checked_add(1)
-                .and_then(|key| levels.get(&key))
-                .map_or(0.0, FootprintLevel::volume);
-            if row.volume() > below && row.volume() > above {
+        starts.sort_unstable();
+        starts.dedup();
+        let mut plateaus: Vec<(i64, f64)> = Vec::new();
+        for start in starts {
+            let volume = smoothed(start);
+            if plateaus.last().is_none_or(|&(_, v)| v != volume) {
+                plateaus.push((start, volume));
+            }
+        }
+        let largest = plateaus.iter().map(|p| p.1).fold(0.0, f64::max);
+        let share = sensitivity.prominence;
+        let margin = if share.is_nan() {
+            0.0
+        } else {
+            share.clamp(0.0, 1.0)
+        } * largest;
+        for pair in plateaus.windows(3) {
+            let [(_, before), (level, volume), (_, after)] = [pair[0], pair[1], pair[2]];
+            let rise = volume - before.max(after);
+            let drop = before.min(after) - volume;
+            if rise > 0.0 && rise >= margin {
                 high.push(level);
             }
-            if row.volume() < below && row.volume() < above {
+            if drop > 0.0 && drop >= margin {
                 low.push(level);
             }
         }
@@ -178,7 +203,10 @@ mod tests {
         let mut ranges = TradeProfileRanges::new(vec![start..middle, middle..end]).unwrap();
         let split = trade_profiles(&flow, &ranges);
         assert_eq!(split[0].volume.poc(), Some(100));
-        assert_eq!(split[0].nodes(), (vec![100], vec![101]));
+        assert_eq!(
+            split[0].nodes(NodeSensitivity::default()),
+            (vec![100], vec![101])
+        );
         assert!(ranges.merge_next(0));
         let merged = trade_profiles(&flow, &ranges);
         assert_eq!(merged[0].developing_poc, [(start, 100), (middle, 101)]);
@@ -196,5 +224,69 @@ mod tests {
         assert_eq!(restored[0].volume, split[0].volume);
         assert_eq!(restored[1].volume, split[1].volume);
         assert!(!ranges.split(0, start));
+    }
+
+    /// Expected nodes were worked out by hand from the volumes by level, with untraded levels
+    /// at zero: a smoothed volume is the mean over `2 * smoothing + 1` levels.
+    #[test]
+    fn nodes_follow_the_sensitivity_across_steps_plateaus_and_gaps() {
+        let nodes = |volumes: &[(i64, f64)], smoothing, prominence| {
+            let levels = volumes
+                .iter()
+                .map(|&(level, ask)| {
+                    (
+                        level,
+                        FootprintLevel {
+                            level,
+                            ask,
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect();
+            let time = "2026-01-05T10:00:00Z".parse().unwrap();
+            TradeProfile {
+                range: time..time,
+                volume: FootprintBar {
+                    time,
+                    levels,
+                    bid: 0.0,
+                    ask: 0.0,
+                    unknown: 0.0,
+                    min_delta: 0.0,
+                    max_delta: 0.0,
+                },
+                developing_poc: Vec::new(),
+            }
+            .nodes(NodeSensitivity {
+                smoothing,
+                prominence,
+            })
+        };
+        let steps = [(1, 1.0), (2, 2.0), (3, 3.0), (4, 4.0)];
+        let flat = [(1, 5.0), (2, 5.0), (3, 5.0)];
+        let plateau = [(1, 1.0), (2, 5.0), (3, 5.0), (4, 1.0)];
+        let gaps = [(1, 4.0), (5, 6.0), (9, 4.0)];
+        let wide_gap = [(-1_000_000_000_000, 2.0), (1_000_000_000_000, 2.0)];
+        let noisy = [(1, 3.0), (2, 1.0), (3, 3.0), (4, 1.0), (5, 3.0)];
+        let ragged = [(1, 10.0), (2, 4.0), (3, 6.0), (4, 2.0), (5, 10.0)];
+        for (volumes, smoothing, prominence, high, low) in [
+            (&steps[..], 0, 0.0, vec![], vec![]),
+            (&flat[..], 0, 0.0, vec![], vec![]),
+            (&plateau[..], 0, 0.0, vec![2], vec![]),
+            (&gaps[..], 0, 0.0, vec![5], vec![2, 6]),
+            (&wide_gap[..], 0, 0.0, vec![], vec![-999_999_999_999]),
+            (&noisy[..], 0, 0.0, vec![3], vec![2, 4]),
+            (&noisy[..], 2, 0.0, vec![3], vec![]),
+            (&ragged[..], 0, 0.0, vec![3], vec![2, 4]),
+            (&ragged[..], 0, 0.3, vec![], vec![4]),
+            (&ragged[..], 0, f64::NAN, vec![3], vec![2, 4]),
+        ] {
+            assert_eq!(
+                nodes(volumes, smoothing, prominence),
+                (high, low),
+                "{volumes:?}, smoothing {smoothing}, prominence {prominence}"
+            );
+        }
     }
 }

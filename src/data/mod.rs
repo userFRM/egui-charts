@@ -59,7 +59,7 @@ mod resample;
 mod targets;
 mod volume_profile;
 pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
-pub use footprint::{Footprint, FootprintBar, FootprintLevel};
+pub use footprint::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
 pub use market::{
     CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
     NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,

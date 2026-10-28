@@ -539,13 +539,14 @@ fn draw_session_profile(
             }
             painter.rect_filled(row, 0.0, render_config.single_print_color);
             let ctx = painter.ctx();
-            if ctx.pointer_hover_pos().is_some_and(|p| {
-                row.contains(p) && ctx.layer_id_at(p) == Some(painter.layer_id())
-            }) {
+            if ctx
+                .pointer_hover_pos()
+                .is_some_and(|p| row.contains(p) && ctx.layer_id_at(p) == Some(painter.layer_id()))
+            {
                 egui::Tooltip::always_open(
                     ctx.clone(),
                     painter.layer_id(),
-                    egui::Id::new(("tpo-single-print", anchor_x.to_bits(), price.to_bits())),
+                    egui::Id::unique(("tpo-single-print", anchor_x.to_bits(), price.to_bits())),
                     row,
                 )
                 .show(|ui| {

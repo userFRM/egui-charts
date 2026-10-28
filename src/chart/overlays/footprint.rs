@@ -1,7 +1,7 @@
 //! Footprint cells painted through the chart's existing price and time mapping.
 
 use crate::chart::coords::ChartMapping;
-use crate::data::{Footprint, FootprintBar, FootprintLevel};
+use crate::data::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
 use crate::model::Bar;
 #[cfg(feature = "studies")]
 use egui::Align2;
@@ -63,6 +63,12 @@ pub struct FootprintConfig {
     pub show_poc: bool,
     /// Shade the contiguous value area containing this share of the bar volume.
     pub value_area: Option<f64>,
+    /// Trade profiles: the guide along the top edge of the value area (VAH); `None` hides it.
+    pub value_area_high: Option<Stroke>,
+    /// Trade profiles: the guide along the bottom edge of the value area (VAL); `None` hides it.
+    pub value_area_low: Option<Stroke>,
+    /// Trade profiles: how volume nodes are chosen.
+    pub node_sensitivity: NodeSensitivity,
 }
 
 impl Default for FootprintConfig {
@@ -81,6 +87,9 @@ impl Default for FootprintConfig {
             diagonal: true,
             show_poc: true,
             value_area: Some(0.7),
+            value_area_high: Some(Stroke::new(1.0, Color32::GRAY)),
+            value_area_low: Some(Stroke::new(1.0, Color32::GRAY)),
+            node_sensitivity: NodeSensitivity::default(),
         }
     }
 }

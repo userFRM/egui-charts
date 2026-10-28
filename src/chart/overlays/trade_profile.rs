@@ -47,7 +47,7 @@ pub fn render_trade_profiles(
             continue;
         }
         let area = config.value_area.and_then(|s| profile.volume.value_area(s));
-        let (high, low) = profile.nodes();
+        let (high, low) = profile.nodes(config.node_sensitivity);
         let poc = profile.volume.poc();
         for row in profile.volume.levels.values() {
             let y0 = mapping.price_to_y(row.level as f64 * step);
@@ -115,21 +115,35 @@ pub fn render_trade_profiles(
                     Stroke::new(1.5, config.text_color),
                 );
             }
-            let label = if high.contains(&row.level) {
-                "HVN"
-            } else if low.contains(&row.level) {
-                "LVN"
-            } else {
-                ""
-            };
-            if !label.is_empty() && bottom - top >= config.min_text_height {
-                painter.text(
-                    pos2(x + width + 3.0, (top + bottom) * 0.5),
-                    Align2::LEFT_CENTER,
-                    label,
-                    FontId::monospace(9.0),
-                    config.text_color,
-                );
+        }
+        // A valley can lie on untraded rows, so nodes are placed by level, not by traded row.
+        for (label, nodes) in [("HVN", &high), ("LVN", &low)] {
+            for &level in nodes {
+                let y0 = mapping.price_to_y(level as f64 * step);
+                let y1 = mapping.price_to_y((level as f64 + 1.0) * step);
+                if y0.is_finite() && y1.is_finite() && (y0 - y1).abs() >= config.min_text_height {
+                    painter.text(
+                        pos2(x + width + 3.0, (y0 + y1) * 0.5),
+                        Align2::LEFT_CENTER,
+                        label,
+                        FontId::monospace(9.0),
+                        config.text_color,
+                    );
+                }
+            }
+        }
+        // The guides sit on the edges of the rows the shading covers.
+        if let Some((low_level, high_level)) = area {
+            for (stroke, edge) in [
+                (config.value_area_high, (high_level as f64 + 1.0) * step),
+                (config.value_area_low, low_level as f64 * step),
+            ] {
+                let y = mapping.price_to_y(edge);
+                if let Some(stroke) = stroke
+                    && y.is_finite()
+                {
+                    painter.line_segment([pos2(x, y), pos2(x + width, y)], stroke);
+                }
             }
         }
         let mut previous = None;
@@ -243,5 +257,81 @@ mod tests {
             });
             assert_eq!(columns, expected, "scroll offset {offset}");
         }
+    }
+
+    /// The VAH and VAL guides lie on the outer edges of the rows the shading covers, each in
+    /// its own style, and either can be hidden.
+    #[test]
+    fn value_area_guides_follow_the_shaded_rows() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (price, size, side) in [
+            (100.0, 4.0, OrderSide::Buy),
+            (101.0, 1.0, OrderSide::Sell),
+            (102.0, 1.0, OrderSide::Sell),
+        ] {
+            flow.push(&Tick::new(time, price, size, Some(side)))
+                .unwrap();
+        }
+        let bars = [Bar::new(time, 100.0, 102.0, 100.0, 101.0, 0.0)];
+        let ranges = TradeProfileRanges::new(vec![time..time + TimeDelta::minutes(1)]).unwrap();
+        let profiles = trade_profiles(&flow, &ranges);
+        let rect = Rect::from_min_size(pos2(40.0, 20.0), vec2(240.0, 160.0));
+        let mapping = ChartMapping::new(
+            rect,
+            20.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(99.0, 104.0),
+                20.0,
+                180.0,
+                false,
+            ),
+        );
+        let (red, blue) = (
+            Stroke::new(1.0, egui::Color32::RED),
+            Stroke::new(2.0, egui::Color32::BLUE),
+        );
+        let guides = |high, low| {
+            let config = FootprintConfig {
+                value_area: Some(0.6),
+                value_area_high: high,
+                value_area_low: low,
+                ..Default::default()
+            };
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(320.0, 200.0))),
+                    ..Default::default()
+                },
+                |ui| render_trade_profiles(ui.painter(), &mapping, &bars, &profiles, 1.0, &config),
+            );
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::LineSegment { points, stroke }
+                        if *stroke == red.into() || *stroke == blue.into() =>
+                    {
+                        Some((points[0].y, stroke.color))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // Level 100 holds 4 of 6 contracts, which meets the 60% share on its own.
+        let top = mapping.price_to_y(101.0);
+        let bottom = mapping.price_to_y(100.0);
+        assert_eq!(
+            guides(Some(red), Some(blue)),
+            [(top, egui::Color32::RED), (bottom, egui::Color32::BLUE)]
+        );
+        assert_eq!(guides(None, Some(blue)), [(bottom, egui::Color32::BLUE)]);
+        assert_eq!(guides(Some(red), None), [(top, egui::Color32::RED)]);
     }
 }
