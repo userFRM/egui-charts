@@ -136,6 +136,8 @@ pub(crate) struct Trades {
     /// Time of the newest trade without an id a page added: any live trade at or before it may
     /// repeat it.
     paged_without_id_until: Option<DateTime<Utc>>,
+    /// Time of the newest trade dropped to stay within `capacity`: evidence before it is incomplete.
+    lost_until: Option<DateTime<Utc>>,
     /// Changes whenever a trade is added or evicted.
     revision: u64,
 }
@@ -148,6 +150,7 @@ impl Trades {
             ids: HashSet::new(),
             paged_until: None,
             paged_without_id_until: None,
+            lost_until: None,
             revision: next_revision(),
         }
     }
@@ -159,6 +162,15 @@ impl Trades {
     )]
     pub(crate) fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Time of the newest trade dropped to stay within capacity, evicted or left out of a page.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
+    pub(crate) fn lost_until(&self) -> Option<DateTime<Utc>> {
+        self.lost_until
     }
 
     /// An empty store of the same capacity, for the next drain.
@@ -192,6 +204,7 @@ impl Trades {
             if let Some(id) = evicted.id {
                 self.ids.remove(&id);
             }
+            self.lost_until = self.lost_until.max(Some(evicted.ts));
             changed(&evicted, false);
         }
     }
@@ -210,6 +223,7 @@ impl Trades {
     /// Appends `newer`, the trades pushed since the last drain, without those a page already
     /// added. Calls `changed` with each trade added (`true`) or evicted (`false`).
     pub(crate) fn append(&mut self, newer: Trades, changed: &mut impl FnMut(&Tick, bool)) {
+        self.lost_until = self.lost_until.max(newer.lost_until);
         for trade in newer.trades {
             let paged_until = match trade.id {
                 Some(_) => self.paged_without_id_until,
@@ -247,10 +261,23 @@ impl Trades {
                 trade.ts < oldest || (trade.ts == oldest && trade.id.is_some() && ids_at_oldest)
             });
         }
-        let room = self.capacity.saturating_sub(self.trades.len());
-        let added = (page.into_iter().rev())
-            .filter(|trade| trade.id.is_none_or(|id| self.ids.insert(id)))
-            .take(room);
+        let mut room = self.capacity.saturating_sub(self.trades.len());
+        let mut added = Vec::new();
+        for trade in page.into_iter().rev() {
+            if trade.id.is_some_and(|id| self.ids.contains(&id)) {
+                continue;
+            }
+            if room == 0 {
+                // The newest trade left out; the older ones are lost with it.
+                self.lost_until = self.lost_until.max(Some(trade.ts));
+                break;
+            }
+            room -= 1;
+            if let Some(id) = trade.id {
+                self.ids.insert(id);
+            }
+            added.push(trade);
+        }
         for trade in added {
             self.paged_until = self.paged_until.max(Some(trade.ts));
             if trade.id.is_none() {

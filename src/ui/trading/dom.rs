@@ -5,6 +5,8 @@
 use crate::localization as l10n;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use chrono::{DateTime, Utc};
+
 use egui::{Align2, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use super::account_panel::{HISTORY_LIMIT, grouped};
@@ -21,6 +23,37 @@ use crate::theme::ThemeExt;
 
 /// Height of a price row.
 const ROW: f32 = 22.0;
+
+/// What the price column's profile draws from the traded volume at each price.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Profile {
+    /// All volume, including unclassified prints.
+    #[default]
+    Total,
+    /// Buy minus sell volume.
+    Delta,
+    /// Sell and buy volume side by side.
+    BidAsk,
+}
+
+/// Which trades the profile and the traded column sum.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Accumulation {
+    /// Every trade the chart retains.
+    #[default]
+    Retained,
+    /// The trades since the open of the exchange session of the newest one.
+    Session,
+    /// The trades after the last reset, or all retained ones before the first.
+    Manual,
+}
+
+/// The optional columns right of the ladder: the order count and the size change of each side, and
+/// the volume traded at the bid and the ask.
+const EXTRAS: [&str; 3] = ["Orders", "Obs. chg", "Traded"];
+
+/// Width of one optional column.
+const EXTRA: f32 = 48.0;
 
 /// Where the ladder stands between frames.
 #[derive(Default)]
@@ -39,6 +72,12 @@ pub(super) struct Ladder {
     observed: bool,
     /// The order chosen from a price with more than one working order on the same side.
     selected: Option<OrderId>,
+    /// Which of the [`EXTRAS`] are shown.
+    columns: [bool; 3],
+    profile: Profile,
+    accumulation: Accumulation,
+    /// The newest trade at the last reset: later trades accumulate, however often the feed updates.
+    reset_after: Option<DateTime<Utc>>,
 }
 
 /// The account's orders and executions, shared by the ladder, chart and account history.
@@ -111,7 +150,7 @@ impl Fills {
 }
 
 /// Sell aggressors trade at the bid, buys at the ask. Unclassified prints contribute only to
-/// total volume. The profile covers the trades retained by the chart, not inferred bar volume.
+/// total volume. The profile covers the given trades, not inferred bar volume.
 fn traded(trades: &[&Tick], tick: f64, top: i64, rows: usize) -> Vec<[f64; 3]> {
     let mut volumes = vec![[0.0; 3]; rows];
     for trade in trades {
@@ -172,6 +211,24 @@ fn format_size(value: f64) -> String {
 }
 
 impl Ladder {
+    /// The retained trades the profile sums, oldest first.
+    fn accumulated<'a>(
+        &self,
+        trades: &'a [&'a Tick],
+        session_open: Option<DateTime<Utc>>,
+    ) -> &'a [&'a Tick] {
+        let from = match self.accumulation {
+            Accumulation::Retained => 0,
+            Accumulation::Session => {
+                session_open.map_or(0, |open| trades.partition_point(|trade| trade.ts < open))
+            }
+            Accumulation::Manual => self
+                .reset_after
+                .map_or(0, |after| trades.partition_point(|trade| trade.ts <= after)),
+        };
+        &trades[from..]
+    }
+
     /// Draws the ladder and its footer into `ui`. Returns an order to place, orders to cancel, or
     /// a change for the user to confirm.
     pub(super) fn show(
@@ -211,10 +268,19 @@ impl Ladder {
         };
         let mut action = None;
 
-        // The header over the size columns.
+        // The header over the size columns, with the menu of the columns and the profile.
+        let extras: Vec<usize> = (0..EXTRAS.len()).filter(|&i| self.columns[i]).collect();
+        let strip = EXTRA * extras.len() as f32;
+        let ladder_of =
+            |rect: Rect| Rect::from_x_y_ranges(rect.left()..=rect.right() - strip, rect.y_range());
         let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-        let [_, bid_column, _, ask_column, _] = columns(header);
-        for (column, label) in [(bid_column, "Bid size"), (ask_column, "Ask size")] {
+        let [_, bid_column, price_header, ask_column, _] = columns(ladder_of(header));
+        for (column, long, short) in [
+            (bid_column, "Bid size", "Bid"),
+            (ask_column, "Ask size", "Ask"),
+        ] {
+            // The optional columns narrow the ladder until the long label spills into the price.
+            let label = if column.width() < 48.0 { short } else { long };
             let at = column.center();
             text(
                 ui,
@@ -225,15 +291,97 @@ impl Ladder {
                 theme.ui.text_muted,
             );
         }
+        for (n, &i) in extras.iter().enumerate() {
+            let at = pos2(
+                header.right() - strip + (n as f32 + 0.5) * EXTRA,
+                header.center().y,
+            );
+            text(
+                ui,
+                at,
+                Align2::CENTER_CENTER,
+                EXTRAS[i],
+                10.0,
+                theme.ui.text_muted,
+            );
+        }
+        let view = ui.interact(
+            price_header,
+            ui.make_persistent_id("dom_view"),
+            Sense::click(),
+        );
+        let translated_label = l10n::text(ui.ctx(), "Ladder view");
+        view.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label));
+        let ink = if view.hovered() {
+            theme.ui.text
+        } else {
+            theme.ui.text_muted
+        };
+        text(
+            ui,
+            price_header.center() - vec2(6.0, 0.0),
+            Align2::CENTER_CENTER,
+            "View",
+            12.0,
+            ink,
+        );
+        chevron(
+            ui,
+            pos2(price_header.center().x + 14.0, price_header.center().y),
+            ink,
+            false,
+        );
+        egui::Popup::menu(&view).show(|ui| {
+            muted(ui, "Columns");
+            for (i, label) in [
+                "Order count",
+                "Observed size change",
+                "Traded at bid and ask",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                ui.checkbox(&mut self.columns[i], l10n::text(ui.ctx(), label));
+            }
+            muted(ui, "Profile");
+            for (profile, label) in [
+                (Profile::Total, "Total volume"),
+                (Profile::Delta, "Delta"),
+                (Profile::BidAsk, "Bid and ask"),
+            ] {
+                ui.selectable_value(&mut self.profile, profile, l10n::text(ui.ctx(), label));
+            }
+            muted(ui, "Accumulate");
+            for (accumulation, label) in [
+                (Accumulation::Retained, "Retained history"),
+                (Accumulation::Session, "Current session"),
+                (Accumulation::Manual, "Since reset"),
+            ] {
+                ui.selectable_value(
+                    &mut self.accumulation,
+                    accumulation,
+                    l10n::text(ui.ctx(), label),
+                );
+            }
+            if ui.button(l10n::text(ui.ctx(), "Reset")).clicked() {
+                self.accumulation = Accumulation::Manual;
+                self.reset_after = market
+                    .trades
+                    .last()
+                    .map(|trade| trade.ts)
+                    .or(self.reset_after);
+            }
+        });
 
         let footer = 28.0 + 32.0 + 32.0 + 36.0 + 24.0 + if self.details { 64.0 } else { 0.0 };
         let spacing = ui.spacing().item_spacing.y;
         let height = ui.available_height() - footer - 6.0 * spacing;
         let rows = ((height / ROW).floor() as i64).max(3);
-        let (rect, response) = ui.allocate_exact_size(
+        let (full, response) = ui.allocate_exact_size(
             vec2(ui.available_width(), rows as f32 * ROW),
             Sense::click(),
         );
+        let rect = ladder_of(full);
 
         // Scroll by whole rows; without the lock the market stays in view.
         // Keep the price under a press or drag stable through its release frame.
@@ -287,11 +435,16 @@ impl Ladder {
             )
         };
 
-        let volumes = traded(market.trades, tick, top, rows as usize);
-        let max_volume = volumes
-            .iter()
-            .map(|v| v.iter().sum::<f64>())
-            .fold(0.0, f64::max);
+        let volumes = traded(
+            self.accumulated(market.trades, market.session_open),
+            tick,
+            top,
+            rows as usize,
+        );
+        let largest = |value: fn(&[f64; 3]) -> f64| volumes.iter().map(value).fold(0.0, f64::max);
+        let max_volume = largest(|v| v.iter().sum());
+        let max_delta = largest(|v| (v[1] - v[0]).abs());
+        let max_side = largest(|v| v[0].max(v[1]));
         // A missing snapshot is a feed gap, not a cancellation of every resting order.
         let book = market.ladder.as_deref();
         if book.is_none() {
@@ -352,6 +505,15 @@ impl Ladder {
             ask_column,
             sell_margin,
         ] = columns(rect);
+        // The columns and the hover text of a row say the same: a side with no resting size has
+        // no order count, and a count the feed did not send is unavailable.
+        let order_count = |row: usize, side: usize| {
+            let (size, count) = sizes[row][side];
+            (size > 0.0).then_some(count)
+        };
+        let change = |row: usize, side: usize| {
+            (self.changes[side].get(&(top - row as i64))).map(|n| format!("{n:+}"))
+        };
         let painter = ui.painter();
         let grid = Stroke::new(1.0, theme.ui.border);
         for (row, [bid, ask]) in sizes.iter().enumerate() {
@@ -384,13 +546,66 @@ impl Ladder {
                 }
             }
             let cell = row_rect(row, price_column);
+            let [bid_volume, ask_volume, _] = volumes[row];
             let volume: f64 = volumes[row].iter().sum();
-            if max_volume > 0.0 && volume > 0.0 {
-                let profile = Rect::from_min_size(
-                    cell.min,
-                    vec2(cell.width() * (volume / max_volume) as f32, cell.height()),
+            let (centre, half) = (cell.center().x, cell.width() / 2.0);
+            let bar = |from: f32, to: f32, color: Color32, opacity: f32| {
+                let bar = Rect::from_x_y_ranges(from.min(to)..=from.max(to), cell.y_range());
+                painter.rect_filled(bar, 0.0, color.gamma_multiply(opacity));
+            };
+            match self.profile {
+                Profile::Total if max_volume > 0.0 && volume > 0.0 => {
+                    let width = cell.width() * (volume / max_volume) as f32;
+                    bar(cell.left(), cell.left() + width, theme.ui.accent, 0.16);
+                }
+                Profile::Delta if max_delta > 0.0 && ask_volume != bid_volume => {
+                    let delta = ask_volume - bid_volume;
+                    let color = if delta > 0.0 { buy } else { sell };
+                    bar(
+                        centre,
+                        centre + half * (delta / max_delta) as f32,
+                        color,
+                        0.35,
+                    );
+                }
+                Profile::BidAsk if max_side > 0.0 => {
+                    bar(
+                        centre,
+                        centre - half * (bid_volume / max_side) as f32,
+                        sell,
+                        0.35,
+                    );
+                    bar(
+                        centre,
+                        centre + half * (ask_volume / max_side) as f32,
+                        buy,
+                        0.35,
+                    );
+                }
+                _ => {}
+            }
+            for (n, &i) in extras.iter().enumerate() {
+                let left = rect.right() + n as f32 * EXTRA;
+                let cell = Rect::from_x_y_ranges(left..=left + EXTRA, cell.y_range());
+                let traded = |value: f64| (value > 0.0).then(|| format_size(value));
+                let [bid, ask] = match i {
+                    0 => [0, 1].map(|side| {
+                        order_count(row, side)
+                            .map(|n| n.map_or("n/a".to_owned(), |n| n.to_string()))
+                    }),
+                    1 => [change(row, 0), change(row, 1)],
+                    _ => [traded(bid_volume), traded(ask_volume)],
+                };
+                let dash = |value: Option<String>| value.unwrap_or_else(|| "-".to_owned());
+                let label = format!("{}|{}", dash(bid), dash(ask));
+                text(
+                    ui,
+                    cell.center(),
+                    Align2::CENTER_CENTER,
+                    &label,
+                    10.0,
+                    theme.ui.text,
                 );
-                painter.rect_filled(profile, 0.0, theme.ui.accent.gamma_multiply(0.16));
             }
             let color = match last {
                 Some(last) if tick_index > last => sell,
@@ -423,7 +638,7 @@ impl Ladder {
                 );
             }
         }
-        let ladder = Rect::from_x_y_ranges(bid_column.left()..=ask_column.right(), rect.y_range());
+        let ladder = Rect::from_x_y_ranges(bid_column.left()..=full.right(), rect.y_range());
         for row in 0..=rows {
             painter.hline(ladder.x_range(), rect.top() + row as f32 * ROW, grid);
         }
@@ -432,7 +647,10 @@ impl Ladder {
             price_column.left(),
             price_column.right(),
             ask_column.right(),
-        ] {
+        ]
+        .into_iter()
+        .chain((0..extras.len()).map(|n| rect.right() + (n + 1) as f32 * EXTRA))
+        {
             painter.vline(x, rect.y_range(), grid);
         }
         if market.ladder_unavailable.is_some() {
@@ -448,16 +666,22 @@ impl Ladder {
 
         if let Some(pos) = response.hover_pos() {
             let row = ((pos.y - rect.top()) / ROW).floor() as usize;
-            if let Some([bid, ask]) = sizes.get(row) {
-                let counts =
-                    |count: Option<u32>| count.map_or("unknown".to_owned(), |n| n.to_string());
-                let delta = |side: usize| {
-                    self.changes[side]
-                        .get(&(top - row as i64))
-                        .map_or("unknown".to_owned(), |n| format!("{n:+}"))
+            if row < sizes.len() {
+                let unavailable =
+                    |value: Option<String>, none: &str| value.unwrap_or_else(|| none.to_owned());
+                let counts = |side| match order_count(row, side) {
+                    Some(Some(count)) => count.to_string(),
+                    Some(None) => "unavailable".to_owned(),
+                    None => "none".to_owned(),
                 };
+                let delta = |side| unavailable(change(row, side), "none observed");
                 let [bid_traded, ask_traded, unknown] = volumes[row];
-                response.clone().on_hover_text(l10n::format_text(ui.ctx(), "Bid orders: {0} · Ask orders: {1}\nSize change: bid {2}, ask {3}\nTraded at bid: {4} · at ask: {5}\nUnclassified: {6} · Total: {7}\nProfile: retained feed trades{8}", &[("0", counts(bid.1).to_string()), ("1", counts(ask.1).to_string()), ("2", delta(0).to_string()), ("3", delta(1).to_string()), ("4", format_size(bid_traded).to_string()), ("5", format_size(ask_traded).to_string()), ("6", format_size(unknown).to_string()), ("7", format_size(bid_traded + ask_traded + unknown).to_string()), ("8", (if market.last_fill.is_some_and(|fill| ticks(fill) == top - row as i64) {
+                let span = match self.accumulation {
+                    Accumulation::Retained => "retained feed trades",
+                    Accumulation::Session => "current session",
+                    Accumulation::Manual => "since reset",
+                };
+                response.clone().on_hover_text(l10n::format_text(ui.ctx(), "Bid orders: {0} · Ask orders: {1}\nObserved size change, not confirmed execution or cancellation: bid {2}, ask {3}\nTraded at bid: {4} · at ask: {5}\nUnclassified: {6} · Total: {7}\nProfile: {8}{9}", &[("0", counts(0)), ("1", counts(1)), ("2", delta(0)), ("3", delta(1)), ("4", format_size(bid_traded)), ("5", format_size(ask_traded)), ("6", format_size(unknown)), ("7", format_size(bid_traded + ask_traded + unknown)), ("8", span.to_owned()), ("9", (if market.last_fill.is_some_and(|fill| ticks(fill) == top - row as i64) {
                         "\nLast account fill"
                     } else { "" }).to_string())]));
             }
@@ -922,6 +1146,35 @@ fn boxed(ui: &mut Ui, label: &str, color: Color32) {
 mod tests {
     use super::*;
 
+    /// The profile sums the retained trades, those since the session open, or those after the last
+    /// reset, which later live trades extend and an earlier session open does not move.
+    #[test]
+    fn accumulation_follows_the_session_and_the_reset() {
+        let start: DateTime<Utc> = "2026-01-05T14:00:00Z".parse().unwrap();
+        let at = |minute| start + chrono::TimeDelta::minutes(minute);
+        let owned: Vec<_> = (0..6).map(|m| Tick::new(at(m), 100.0, 1.0, None)).collect();
+        let trades: Vec<&Tick> = owned.iter().collect();
+        let minutes = |ladder: &Ladder, held: usize, open| {
+            let held = &trades[..held];
+            let shown = ladder.accumulated(held, open);
+            shown
+                .iter()
+                .map(|t| (t.ts - start).num_minutes())
+                .collect::<Vec<_>>()
+        };
+        let mut ladder = Ladder::default();
+        assert_eq!(minutes(&ladder, 6, Some(at(3))), [0, 1, 2, 3, 4, 5]);
+        ladder.accumulation = Accumulation::Session;
+        assert_eq!(minutes(&ladder, 6, Some(at(3))), [3, 4, 5]);
+        // The next session opens: its first trade alone.
+        assert_eq!(minutes(&ladder, 6, Some(at(5))), [5]);
+        ladder.accumulation = Accumulation::Manual;
+        assert_eq!(minutes(&ladder, 6, None), [0, 1, 2, 3, 4, 5]);
+        ladder.reset_after = Some(at(3));
+        assert_eq!(minutes(&ladder, 4, None), Vec::<i64>::new());
+        assert_eq!(minutes(&ladder, 6, Some(at(1))), [4, 5]);
+    }
+
     /// Moving quotes must not move the price under a pressed cell or a dragged order.
     #[test]
     fn gestures_keep_their_price_while_the_book_moves() {
@@ -998,6 +1251,7 @@ mod tests {
                             orders: &working,
                             positions: &positions,
                             trades: &[],
+                            session_open: None,
                             last_fill: None,
                         };
                         let mut action = None;
@@ -1156,6 +1410,7 @@ mod tests {
                 orders: &[],
                 positions: &[],
                 trades: &[],
+                session_open: None,
                 last_fill: None,
             };
             ctx.run_ui(egui::RawInput::default(), |ui| {
