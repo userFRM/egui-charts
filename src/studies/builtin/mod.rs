@@ -57,7 +57,8 @@
 //!
 //! ## Statistics
 //! [`LinearRegression`], [`StandardError`],
-//! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`]
+//! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`], [`Ratio`],
+//! [`Spread`], [`Correlation`]
 //!
 //! ## Time
 //! [`TradingSessions`]
@@ -277,12 +278,14 @@ mod price_momentum_oscillator;
 mod rci_ribbon;
 mod relative_volatility_index;
 mod smi_ergodic;
+mod symbol_pair;
 mod technical_ratings;
 pub use market_breadth::{
     AdvanceDeclineLine, AdvanceDeclineRatio, CumulativeVolumeIndex, MarketBreadth,
 };
 mod special_k;
 mod woodies_cci;
+pub use symbol_pair::{Correlation, Ratio, Spread, SymbolPair};
 pub use technical_ratings::TechnicalRatings;
 // Time studies
 mod performance;
