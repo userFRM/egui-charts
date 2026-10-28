@@ -116,7 +116,8 @@ struct Run {
 #[derive(Clone, PartialEq)]
 struct Seen {
     time: DateTime<Utc>,
-    bar: (f64, f64),
+    /// The bits of the close and volume, so that a value that is not a number equals itself.
+    bar: (u64, u64),
     rules: Vec<(Option<f64>, Option<f64>)>,
 }
 
@@ -398,7 +399,7 @@ fn evaluate<'a>(
         .collect();
     let seen = Seen {
         time: bar.time,
-        bar: (bar.close, bar.volume),
+        bar: (bar.close.to_bits(), bar.volume.to_bits()),
         rules: rules
             .iter()
             .map(|(src, condition)| {
@@ -691,6 +692,13 @@ mod tests {
                 vec![(99.0, 10.0, n)],
                 [n, 101.0, 100.0].map(|c| (c, 10.0, n)).to_vec(),
                 vec![1],
+            ),
+            // A repeated tick changes nothing, even when the volume is not a number.
+            (
+                AlertCondition::Above(100.0),
+                vec![(99.0, n, n)],
+                [101.0, 101.0].map(|c| (c, n, n)).to_vec(),
+                vec![0],
             ),
             // The other output moves too: its previous value is the one of the previous tick.
             (
