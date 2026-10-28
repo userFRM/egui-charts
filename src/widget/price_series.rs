@@ -1516,7 +1516,9 @@ mod tests {
         frame(&ctx, &mut chart, 0.0, vec![]);
         let rect = chart.last_rendered_price_rect;
         let main = chart.last_price_map.price_to_y(120.0);
-        let other = chart.series_map(&chart.price_series[0], rect).price_to_y(1000.0);
+        let other = chart
+            .series_map(&chart.price_series[0], rect)
+            .price_to_y(1000.0);
         assert!((main - other).abs() > 20.0, "{main} {other}");
         let at = |chart: &Chart, y: f32| {
             chart
