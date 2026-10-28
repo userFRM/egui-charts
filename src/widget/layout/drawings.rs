@@ -2,7 +2,7 @@
 
 use crate::drawings::{ChartPoint, Drawing};
 use crate::model::{index_at, time_at};
-use crate::widget::Chart;
+use crate::widget::{Chart, PaneId};
 use std::collections::{HashMap, HashSet};
 
 type Key = (usize, usize);
@@ -34,12 +34,7 @@ impl DrawingLinks {
         let mut changes = Vec::new();
         let mut current = HashSet::new();
         for (slot, chart) in charts.iter().take(count).enumerate() {
-            for drawing in chart
-                .drawings()
-                .drawings
-                .iter()
-                .filter(|d| d.pane.is_none())
-            {
+            for drawing in &chart.drawings().drawings {
                 let Ok(style) = serde_json::to_string(drawing) else {
                     continue;
                 };
@@ -87,6 +82,7 @@ impl DrawingLinks {
                     };
                     changed = true;
                     if let Some(id) = linked {
+                        unlock(charts[slot], id);
                         charts[slot].drawings_mut().drag_edit_drawing(id, |target| {
                             copy.id = target.id;
                             copy.stored_id.clone_from(&target.stored_id);
@@ -103,6 +99,7 @@ impl DrawingLinks {
                     }
                 } else if let Some(id) = linked {
                     changed = true;
+                    unlock(charts[slot], id);
                     charts[slot].drawings_mut().delete_drawing(id);
                 }
             }
@@ -115,12 +112,7 @@ impl DrawingLinks {
         // Cache the propagated state too, so receiver updates cannot echo back next frame.
         self.previous.clear();
         for (slot, chart) in charts.iter().take(count).enumerate() {
-            for drawing in chart
-                .drawings()
-                .drawings
-                .iter()
-                .filter(|d| d.pane.is_none())
-            {
+            for drawing in &chart.drawings().drawings {
                 if let Ok(style) = serde_json::to_string(drawing) {
                     self.previous.insert(
                         (slot, drawing.id),
@@ -141,8 +133,29 @@ impl DrawingLinks {
     }
 }
 
+/// A linked copy follows its source even where a local lock holds it, which the source's own
+/// lock state restores with the copy. Direct edits keep meeting the lock.
+fn unlock(chart: &mut Chart, id: usize) {
+    if chart
+        .drawings()
+        .drawings
+        .iter()
+        .any(|d| d.id == id && d.locked)
+    {
+        chart.drawings_mut().edit_drawing(id, |d| d.locked = false);
+    }
+}
+
 fn map_drawing(drawing: &Drawing, source: &Chart, target: &Chart) -> Option<Drawing> {
     let mut copy = drawing.clone();
+    if drawing.pane.is_some() {
+        // Study ids are local to each chart, so the copy goes to the corresponding pane.
+        let pane = source
+            .drawing_pane(drawing.id)
+            .filter(|pane| *pane != PaneId::MAIN)?;
+        let pane = source.linked_pane(pane, target)?;
+        copy.pane = target.pane_series(pane).first().map(|id| id.0);
+    }
     copy.chart_points = drawing
         .chart_points
         .iter()
@@ -330,12 +343,88 @@ mod tests {
         let mapped = map_drawing(drawing, &source, &target).unwrap();
         assert_eq!(mapped.chart_points[0].bar_idx, 1.5);
         assert_eq!(mapped.chart_points[1].bar_idx, 3.5);
-        // Study ids are local to each chart, so pane drawings cannot be mirrored by id.
+        // A drawing of a study pane without a counterpart is not mirrored.
         let mut owned = drawing.clone();
         owned.pane = Some(7);
         source.drawings_mut().add_synced_drawing(owned);
         let mut local = DrawingLinks::default();
         local.sync(&mut [&mut source, &mut target], 2, &groups, false);
         assert!(target.drawings().drawings.iter().all(|d| d.pane.is_none()));
+    }
+
+    /// Drawings in corresponding study panes follow each other by timestamp, and a linked edit,
+    /// unlock or deletion reaches a locked copy while a direct edit still meets its lock.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn study_pane_drawings_link_by_time_and_pass_locks() {
+        use crate::studies::{MACD, RSI};
+        let chart = |step: i64, rsi_first: bool| {
+            let mut chart = Chart::new(BarData::from_bars(
+                (0..10)
+                    .map(|i| {
+                        Bar::new(
+                            DateTime::from_timestamp(i * step, 0).unwrap(),
+                            10.0,
+                            11.0,
+                            9.0,
+                            10.0,
+                            1.0,
+                        )
+                    })
+                    .collect(),
+            ));
+            if !rsi_first {
+                chart.add_indicator(Box::new(MACD::new(12, 26, 9)));
+            }
+            let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+            if rsi_first {
+                chart.add_indicator(Box::new(MACD::new(12, 26, 9)));
+            }
+            (chart, rsi)
+        };
+        let ((mut a, rsi_a), (mut b, rsi_b)) = (chart(60, true), chart(120, false));
+        assert_eq!(
+            a.linked_pane(a.series_pane(rsi_a).unwrap(), &b),
+            b.series_pane(rsi_b)
+        );
+        let groups = std::array::from_fn(|_| None);
+        let mut links = DrawingLinks::default();
+        let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+        drawing.pane = Some(rsi_a.0);
+        drawing.chart_points = vec![ChartPoint::new(2.0, 40.0), ChartPoint::new(4.0, 60.0)];
+        drawing.completed = true;
+        a.drawings_mut().add_synced_drawing(drawing);
+        let source = a.drawings().drawings[0].id;
+        let mut sync = |a: &mut Chart, b: &mut Chart| links.sync(&mut [a, b], 2, &groups, false);
+        sync(&mut a, &mut b);
+        let copy = &b.drawings().drawings[0];
+        let id = copy.id;
+        assert_eq!(copy.pane, Some(rsi_b.0));
+        // Bars two and four are the minutes 2 and 4, which are the bars one and two at 2 minute spacing.
+        assert_eq!(
+            copy.chart_points,
+            vec![ChartPoint::new(1.0, 40.0), ChartPoint::new(2.0, 60.0)]
+        );
+        let copy = |b: &Chart| b.drawings().drawings.iter().find(|d| d.id == id).cloned();
+        a.drawings_mut().edit_drawing(source, |d| d.locked = true);
+        sync(&mut a, &mut b);
+        assert!(copy(&b).unwrap().locked);
+        a.drawings_mut().edit_drawing(source, |d| {
+            d.locked = false;
+            d.chart_points[0].bar_idx = 3.0;
+        });
+        sync(&mut a, &mut b);
+        let moved = copy(&b).unwrap();
+        assert!(!moved.locked, "an unlock reaches a locked copy");
+        assert_eq!(moved.chart_points[0].bar_idx, 1.5);
+        a.drawings_mut().edit_drawing(source, |d| d.locked = true);
+        sync(&mut a, &mut b);
+        b.drawings_mut()
+            .edit_drawing(id, |d| d.chart_points[0].bar_idx = 0.0);
+        assert_eq!(copy(&b).unwrap().chart_points[0].bar_idx, 1.5);
+        a.drawings_mut().edit_drawing(source, |d| d.locked = false);
+        a.drawings_mut().delete_drawing(source);
+        sync(&mut a, &mut b);
+        assert!(copy(&b).is_none(), "a deletion reaches a locked copy");
     }
 }

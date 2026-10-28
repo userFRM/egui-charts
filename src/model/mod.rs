@@ -66,7 +66,7 @@ pub(crate) use bar::{index_at, time_at};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub use chart_style::{
-    AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, HlcAreaStyle,
+    AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, HlcAreaStyle, KagiStyle,
     LastPriceAnimation, LinePlotStyle, LineType,
 };
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
@@ -111,6 +111,7 @@ pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};
 pub use timeframe::Timeframe;
 pub use timescale::{LogicalRange, TimeScale};
 pub use timezone::{TimezoneId, TimezoneOffset};
+pub(crate) use timezone::{local_instant, local_time};
 pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLetter, TPOProfile,
     derive_tick_size, to_tpo_profiles,

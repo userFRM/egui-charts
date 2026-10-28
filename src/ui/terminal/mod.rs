@@ -108,7 +108,6 @@ pub struct Terminal {
     /// Whether a replay is running, so a symbol change stops it.
     replay_active: bool,
     strategy_report: Option<StrategyReport>,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     drawings: drawings::State,
     studies: studies::State,
     #[expect(dead_code, reason = "the group keeps its state here")]

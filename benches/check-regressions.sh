@@ -7,6 +7,10 @@ base_bin=$(realpath "$1")
 head_bin=$(realpath "$2")
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
+# glibc raises its mmap threshold as large blocks are freed, which changes whether growing a
+# vector copies it. That moved the tessellator's mesh growth by about 5% for unrelated changes,
+# so the threshold is fixed and counts follow the code.
+export MALLOC_MMAP_THRESHOLD_=131072
 instructions() {
     local count
     if ! FRAME_TIME_FRAMES=$3 valgrind --tool=cachegrind --cache-sim=no --branch-sim=no \
