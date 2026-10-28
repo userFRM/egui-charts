@@ -6,58 +6,6 @@
 //! direction and confirmation time through [`ChartPatterns::formations`]. Developing formations are
 //! told apart from confirmed ones, and every confirmed formation is marked on the bar that
 //! confirms it.
-//!
-//! # Rules
-//!
-//! A swing pivot is a bar whose high (low) is greater (lower) than those of the `strength`
-//! bars before it and at least (at most) those of the `strength` bars after it. It is known
-//! `strength` bars later, and consecutive pivots of one kind keep the more extreme. A
-//! formation is built from the last pivots, so it exists only once its last pivot is known.
-//!
-//! A line through two pivots is projected forward. A formation is confirmed on the first bar
-//! from the one that completes it onward whose close lies beyond its breakout boundary, and
-//! is dropped if the close first crosses the opposite guard or the formation is older than
-//! `max_length` bars. A bar with a non-finite price is skipped as if absent, and lengths
-//! count the other bars. Every rule reads bars up to the confirmation bar only, so results
-//! on a prefix of the history equal those of the full history up to that bar.
-//!
-//! | Formation | Pivots | Rule |
-//! |---|---|---|
-//! | Bull flag | low, high, low, high, low | pole from the first to the second rises at least `pole` percent; the highs and the lows after the pole fall along nearly parallel lines (the end width within a quarter of the start width); both lows stay above the pole's middle |
-//! | Bear flag | mirror | the pole falls and the flag rises |
-//! | Bull pennant | as the bull flag | the highs fall, the lows rise and the end width is at most three quarters of the start width |
-//! | Bear pennant | as the bear flag | the same converging lines |
-//! | Rectangle | `2 * touches` alternating pivots | each boundary through its first and last pivot is flat, all its pivots within `tolerance` percent of it, and the height at least twice the tolerance |
-//! | Ascending triangle | as the rectangle | flat upper boundary, rising lower boundary |
-//! | Descending triangle | as the rectangle | falling upper boundary, flat lower boundary |
-//! | Symmetrical triangle | as the rectangle | falling upper and rising lower boundary |
-//!
-//! | Cup and handle | high, low, high, low | the rims differ by at most `tolerance` percent of their mean; the cup is at least `depth` percent deep below the mean rim, lasts between `min_length` and `max_length` bars and has its low in the middle half of that time; the handle pulls back from the right rim by at most `handle` percent of the cup depth over at most half the cup's duration; confirms bullish above the higher rim, fails below the cup's low |
-//! | Inverted cup and handle | mirror | confirms bearish below the lower rim |
-//! | Double top | high, low, high | the tops differ by at most `tolerance` percent; at least `min_length` bars apart; the valley at least `depth` percent below them; the neckline is the valley's low; confirms bearish below it, fails above the higher top by more than `tolerance` percent |
-//! | Double bottom | mirror | the neckline is the valley's high; confirms bullish above it |
-//! | Triple top | high, low, high, low, high | as the double top for all three tops and both valleys; the neckline is the lower valley |
-//! | Triple bottom | mirror | the neckline is the higher valley |
-//! | Head and shoulders | high, low, high, low, high | the shoulders differ by at most `tolerance` percent, the head is at least `depth` percent above each, each valley lies below its shoulder, the shoulders are between `min_length` and `max_length` bars apart; the neckline runs through the valleys and may slope; confirms bearish below it, fails above the head |
-//! | Inverse head and shoulders | mirror | confirms bullish above the neckline |
-//!
-//! A boundary is flat when it moves at most `tolerance` percent between the first and last
-//! pivot. A flag or pennant's length is counted from its pole's top and the length of the
-//! others from their first pivot, and lies between `min_length` and `max_length`. A bull flag, bull
-//! pennant and ascending triangle confirm bullish above their upper boundary; a bear flag,
-//! bear pennant and descending triangle confirm bearish below their lower boundary. A
-//! rectangle and a symmetrical triangle confirm in the direction of the break. A pennant's
-//! last four pivots also form a symmetrical triangle, which is then not reported, and a triple
-//! top or bottom follows the double top or bottom of its first two tops. Each pivot
-//! belongs to at most one formation of a kind. At most 16 pivots, 8 developing and 64
-//! confirmed formations are kept.
-//!
-//! # Outputs
-//!
-//! Line 0 marks a bullish confirmation at the low of its bar, line 1 a bearish one at the
-//! high, each labelled with the abbreviations of the formations it confirms. Boundaries are
-//! also generated as drawings, dashed while developing; a reversal formation draws only its
-//! neckline or breakout level.
 
 use super::clamp_param;
 use crate::model::Bar;
@@ -870,11 +818,61 @@ impl State {
 }
 
 /// Automatic chart patterns: the formations of a [`PatternFamily`], each with a toggle,
-/// detected from swing pivots and marked on the bar that confirms them.
-///
-/// The rules are in the [module documentation](self). Read the formations, with their
-/// anchors, boundaries, direction and confirmation bar, from
+/// detected from swing pivots and marked on the bar that confirms them. Read the formations,
+/// with their anchors, boundaries, direction and confirmation bar, from
 /// [`formations`](Self::formations).
+///
+/// # Rules
+///
+/// A swing pivot is a bar whose high (low) is greater (lower) than those of the `strength`
+/// bars before it and at least (at most) those of the `strength` bars after it. It is known
+/// `strength` bars later, and consecutive pivots of one kind keep the more extreme. A
+/// formation is built from the last pivots, so it exists only once its last pivot is known.
+///
+/// A line through two pivots is projected forward. A formation is confirmed on the first bar
+/// from the one that completes it onward whose close lies beyond its breakout boundary, and
+/// is dropped if the close first crosses the opposite guard or the formation is older than
+/// `max_length` bars. A bar with a non-finite price is skipped as if absent, and lengths
+/// count the other bars. Every rule reads bars up to the confirmation bar only, so results
+/// on a prefix of the history equal those of the full history up to that bar.
+///
+/// | Formation | Pivots | Rule |
+/// |---|---|---|
+/// | Bull flag | low, high, low, high, low | pole from the first to the second rises at least `pole` percent; the highs and the lows after the pole fall along nearly parallel lines (the end width within a quarter of the start width); both lows stay above the pole's middle |
+/// | Bear flag | mirror | the pole falls and the flag rises |
+/// | Bull pennant | as the bull flag | the highs fall, the lows rise and the end width is at most three quarters of the start width |
+/// | Bear pennant | as the bear flag | the same converging lines |
+/// | Rectangle | `2 * touches` alternating pivots | each boundary through its first and last pivot is flat, all its pivots within `tolerance` percent of it, and the height at least twice the tolerance |
+/// | Ascending triangle | as the rectangle | flat upper boundary, rising lower boundary |
+/// | Descending triangle | as the rectangle | falling upper boundary, flat lower boundary |
+/// | Symmetrical triangle | as the rectangle | falling upper and rising lower boundary |
+///
+/// | Cup and handle | high, low, high, low | the rims differ by at most `tolerance` percent of their mean; the cup is at least `depth` percent deep below the mean rim, lasts between `min_length` and `max_length` bars and has its low in the middle half of that time; the handle pulls back from the right rim by at most `handle` percent of the cup depth over at most half the cup's duration; confirms bullish above the higher rim, fails below the cup's low |
+/// | Inverted cup and handle | mirror | confirms bearish below the lower rim |
+/// | Double top | high, low, high | the tops differ by at most `tolerance` percent; at least `min_length` bars apart; the valley at least `depth` percent below them; the neckline is the valley's low; confirms bearish below it, fails above the higher top by more than `tolerance` percent |
+/// | Double bottom | mirror | the neckline is the valley's high; confirms bullish above it |
+/// | Triple top | high, low, high, low, high | as the double top for all three tops and both valleys; the neckline is the lower valley |
+/// | Triple bottom | mirror | the neckline is the higher valley |
+/// | Head and shoulders | high, low, high, low, high | the shoulders differ by at most `tolerance` percent, the head is at least `depth` percent above each, each valley lies below its shoulder, the shoulders are between `min_length` and `max_length` bars apart; the neckline runs through the valleys and may slope; confirms bearish below it, fails above the head |
+/// | Inverse head and shoulders | mirror | confirms bullish above the neckline |
+///
+/// A boundary is flat when it moves at most `tolerance` percent between the first and last
+/// pivot. A flag or pennant's length is counted from its pole's top and the length of the
+/// others from their first pivot, and lies between `min_length` and `max_length`. A bull flag, bull
+/// pennant and ascending triangle confirm bullish above their upper boundary; a bear flag,
+/// bear pennant and descending triangle confirm bearish below their lower boundary. A
+/// rectangle and a symmetrical triangle confirm in the direction of the break. A pennant's
+/// last four pivots also form a symmetrical triangle, which is then not reported, and a triple
+/// top or bottom follows the double top or bottom of its first two tops. Each pivot
+/// belongs to at most one formation of a kind. At most 16 pivots, 8 developing and 64
+/// confirmed formations are kept.
+///
+/// # Outputs
+///
+/// Line 0 marks a bullish confirmation at the low of its bar, line 1 a bearish one at the
+/// high, each labelled with the abbreviations of the formations it confirms. Boundaries are
+/// also generated as drawings, dashed while developing; a reversal formation draws only its
+/// neckline or breakout level.
 #[derive(Clone)]
 pub struct ChartPatterns {
     family: PatternFamily,
