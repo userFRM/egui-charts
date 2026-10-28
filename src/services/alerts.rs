@@ -18,6 +18,19 @@ use crate::model::{Alert, AlertId};
 /// outside the application (email, push notifications) are the host's: it can play a sound or send
 /// a message when it pushes the trigger.
 ///
+/// Evaluation is the host's, so these rules are the contract between the library that edits an
+/// alert and the service that runs it. A channel is inclusive at both boundaries. The state
+/// conditions [`InsideChannel`](crate::model::AlertCondition::InsideChannel) and
+/// [`OutsideChannel`](crate::model::AlertCondition::OutsideChannel) hold on every evaluation
+/// while the value is in that state, so pair them with a frequency that limits repeats, whereas
+/// entering and exiting hold only on the evaluation that crosses a boundary.
+/// [`AlertFrequency::OncePerMinute`](crate::model::AlertFrequency::OncePerMinute) allows one
+/// trigger per UTC clock minute, from `hh:mm:00` up to but excluding the next minute, whatever the
+/// chart's interval. An alert's [`schedule`](crate::model::Alert::schedule) limits notifications
+/// only: evaluate and trigger the alert as usual, and deliver the notification when
+/// [`NotificationSchedule::allows`](crate::model::NotificationSchedule::allows) accepts the
+/// trigger time.
+///
 /// These methods are called on the UI thread, while the terminal shows a frame or runs a command,
 /// and must return at once. Do the work elsewhere and answer through the [`Reply`] or push through
 /// the [`Events`] you were given, from any thread, runtime or browser task. A `Reply` dropped

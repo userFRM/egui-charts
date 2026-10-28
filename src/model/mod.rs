@@ -55,7 +55,7 @@ mod watchlist;
 
 pub use alert::{
     Alert, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertRule, AlertSource,
-    AlertStatus,
+    AlertStatus, NotificationSchedule, NotificationWindow,
 };
 pub use annotations::{Annotation, MarkerType};
 #[cfg(feature = "widget")]

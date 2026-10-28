@@ -246,12 +246,15 @@ impl DemoAlerts {
             if run.sample == Some(sample) && run.previous == inputs {
                 continue;
             }
+            let minute = chrono::DateTime::from_timestamp(now.timestamp().div_euclid(60) * 60, 0)
+                .unwrap_or_default();
             let fire = satisfied
                 && match alert.frequency {
                     AlertFrequency::Once | AlertFrequency::EveryTime => true,
                     AlertFrequency::OncePerBar | AlertFrequency::OncePerBarClose => {
                         run.triggered_bar != Some(bar.time)
                     }
+                    AlertFrequency::OncePerMinute => run.triggered_bar != Some(minute),
                     _ => false,
                 };
             run.previous = inputs;
@@ -261,7 +264,11 @@ impl DemoAlerts {
                 if triggers.len() > 10_000 {
                     triggers.pop_front();
                 }
-                run.triggered_bar = Some(bar.time);
+                run.triggered_bar = Some(if alert.frequency == AlertFrequency::OncePerMinute {
+                    minute
+                } else {
+                    bar.time
+                });
                 if alert.frequency == AlertFrequency::Once {
                     run.once = true;
                     if alert.watchlist.is_none() {
@@ -358,6 +365,8 @@ fn condition_holds(
             .is_some_and(|p| (p < *lower || p > *upper) && value >= *lower && value <= *upper),
         ExitingChannel { lower, upper } => previous
             .is_some_and(|p| p >= *lower && p <= *upper && (value < *lower || value > *upper)),
+        InsideChannel { lower, upper } => value >= *lower && value <= *upper,
+        OutsideChannel { lower, upper } => value < *lower || value > *upper,
         MovingBy {
             value: change,
             bars,
