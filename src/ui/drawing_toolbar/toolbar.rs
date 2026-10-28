@@ -940,13 +940,22 @@ impl DrawingToolbar {
         ]
     }
 
-    /// Render compact floating toolbar
+    /// Render the floating strip of favourite drawing tools, which the user can drag.
+    ///
+    /// The strip lists [`ToolbarState::favorites`], so starring or unstarring a tool changes it
+    /// at once. `position` places it until it has been moved; afterwards
+    /// [`ToolbarState::floating_pos`] holds its position. Its close button clears
+    /// [`ToolbarState::floating_visible`], which hides it until the host sets it again.
     pub fn show_floating(&mut self, ui: &mut Ui, position: Pos2) -> Option<DrawingToolType> {
         let mut new_selection = None;
+        if !self.state.floating_visible || self.state.favorites.is_empty() {
+            return None;
+        }
 
-        egui::Area::new(egui::Id::unique("floating_drawing_toolbar"))
+        let area = egui::Area::new(egui::Id::NULL.with("floating_drawing_toolbar"))
             .enabled(ui.is_enabled())
-            .fixed_pos(position)
+            .movable(true)
+            .default_pos(self.state.floating_pos.unwrap_or(position))
             .show(ui.ctx(), |ui| {
                 egui::Frame::new()
                     .fill(ui.visuals().panel_fill)
@@ -954,16 +963,7 @@ impl DrawingToolbar {
                     .corner_radius(ui.active_theme().radius.md)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            let quick_tools = [
-                                DrawingToolType::TrendLine,
-                                DrawingToolType::HorizontalLine,
-                                DrawingToolType::VerticalLine,
-                                DrawingToolType::FibonacciRetracement,
-                                DrawingToolType::Rect,
-                                DrawingToolType::TextLabel,
-                            ];
-
-                            for tool in quick_tools {
+                            for tool in self.state.favorites.clone() {
                                 let is_sel = self.state.sel_tool == Some(tool);
                                 let (rect, response) = ui.allocate_exact_size(
                                     Vec2::splat(DESIGN_TOKENS.sizing.button_md),
@@ -1082,9 +1082,19 @@ impl DrawingToolbar {
                             })
                             .response
                             .accessible_name(l10n::text(ui.ctx(), "More drawing tools"));
+
+                            if crate::ui_kit::buttons::Button::icon(&embedded_icons::CLOSE)
+                                .ghost()
+                                .tooltip("Hide favorite tools")
+                                .show(ui)
+                                .clicked()
+                            {
+                                self.state.floating_visible = false;
+                            }
                         });
                     });
             });
+        self.state.floating_pos = Some(area.response.rect.min);
 
         if let Some(tool) = new_selection {
             self.select_tool(tool);
@@ -1098,6 +1108,36 @@ impl DrawingToolbar {
 mod tests {
     use super::*;
     use egui::{Context, Event, Key, Modifiers, RawInput};
+
+    /// The floating strip lists the favorite tools as they change, stays where it was first put
+    /// and where the host moves it, and hides until shown again.
+    #[test]
+    fn floating_strip_follows_favorites_and_keeps_position_and_visibility() {
+        let ctx = Context::default();
+        let id = Id::NULL.with("floating_drawing_toolbar");
+        let mut toolbar = DrawingToolbar::new();
+        let frame = |toolbar: &mut DrawingToolbar, at: Pos2| {
+            ctx.run_ui(RawInput::default(), |ui| {
+                toolbar.show_floating(ui, at);
+            })
+            .drop_without_applying_deltas();
+            ctx.memory(|memory| memory.area_rect(id))
+        };
+        let three = frame(&mut toolbar, Pos2::new(20.0, 30.0)).unwrap();
+        assert_eq!(three.min, Pos2::new(20.0, 30.0));
+        toolbar.state.favorites.pop();
+        let two = frame(&mut toolbar, Pos2::new(300.0, 300.0)).unwrap();
+        assert!(
+            two.width() < three.width() - 20.0,
+            "{two:?} after unstarring from {three:?}"
+        );
+        assert_eq!(two.min, three.min, "the strip stays where it was put");
+        assert_eq!(toolbar.state.floating_pos, Some(three.min));
+        toolbar.state.floating_visible = false;
+        let before = ctx.memory(|memory| memory.area_rect(id));
+        frame(&mut toolbar, Pos2::ZERO);
+        assert_eq!(ctx.memory(|memory| memory.area_rect(id)), before);
+    }
 
     /// The flyout searches all families, emits the picked glyph and shows session recents first.
     #[test]

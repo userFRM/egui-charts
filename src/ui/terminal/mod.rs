@@ -71,14 +71,13 @@ type Intercept = Box<dyn FnMut(&Action) -> bool>;
 /// host intercepts it.
 ///
 /// Every chart slot loads from the same [`Datafeed`]. Each service is handed to the components
-/// that consume it; a control whose service or output is absent is hidden. So far the terminal
-/// performs chart type, undo, redo, theme and fullscreen: the controls of other features stay
-/// hidden and the services passed for them are kept unused.
+/// that consume it; a control whose service or output is absent is hidden. The controls of
+/// features the terminal does not perform yet stay hidden and the services passed for them are
+/// kept unused.
 pub struct Terminal {
     charts: Vec<Chart>,
     layout: ChartLayout,
     active: usize,
-    #[expect(dead_code, reason = "the chart slots added later load from it")]
     feed: Arc<dyn Datafeed>,
     services: services::Services,
     intercept: Option<Intercept>,
@@ -109,9 +108,7 @@ pub struct Terminal {
     /// Whether a replay is running, so a symbol change stops it.
     replay_active: bool,
     strategy_report: Option<StrategyReport>,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     drawings: drawings::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     studies: studies::State,
     time: time::State,
     #[expect(dead_code, reason = "the group keeps its state here")]

@@ -476,12 +476,19 @@ impl Drawing {
             self.color[3],
         );
 
-        // Draw fill for completed triangle
-        if self.points.len() >= 3 {
-            let fill_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 25);
+        // Four anchors zigzag between the two boundaries; fewer are a plain polygon.
+        let boundaries = triangle_boundaries(&self.points, painter.clip_rect().right());
+        let fill_color =
+            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 25);
+        if self.points.len() == 3 {
             painter.add(egui::epaint::PathShape::convex_polygon(
                 self.points.clone(),
+                fill_color,
+                Stroke::NONE,
+            ));
+        } else if let Some((_, fill)) = &boundaries {
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                fill.clone(),
                 fill_color,
                 Stroke::NONE,
             ));
@@ -504,56 +511,33 @@ impl Drawing {
             );
         }
 
-        // Close the triangle for 3+ points
-        if self.points.len() >= 3 {
+        if self.points.len() == 3 {
             painter.line_segment(
-                [self.points[self.points.len() - 1], self.points[0]],
+                [self.points[2], self.points[0]],
                 Stroke::new(self.stroke_width, color),
             );
+        }
 
-            // Calculate apex (extension of converging lines)
-            // For ascending/descending triangles, project the trendlines to find intersection
-            if self.points.len() >= 4 {
-                // Upper trendline from peaks
-                let upper_start = if self.points[0].y < self.points[2].y {
-                    self.points[0]
-                } else {
-                    self.points[2]
-                };
-                let upper_end = if self.points[1].y < self.points[3].y {
-                    self.points[1]
-                } else {
-                    self.points[3]
-                };
-
-                // Draw extended trendlines (dashed)
-                let extend_color = Color32::from_rgba_unmultiplied(
-                    self.color[0],
-                    self.color[1],
-                    self.color[2],
-                    80,
-                );
-
-                // Extend upper line
-                let dx = upper_end.x - upper_start.x;
-                let dy = upper_end.y - upper_start.y;
-                if dx.abs() > 0.001 {
-                    let slope = dy / dx;
-                    let extension = DESIGN_TOKENS.sizing.technical_labels.fib_label_offset_x
-                        + DESIGN_TOKENS.spacing.xxxl;
-                    let extended =
-                        Pos2::new(upper_end.x + extension, upper_end.y + slope * extension);
+        // Draw both boundaries through their anchors, then dashed on to where they meet.
+        if let Some((lines, _)) = &boundaries {
+            let extend_color =
+                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 80);
+            for (line, last) in lines.iter().zip([self.points[2], self.points[3]]) {
+                painter.line_segment([line[0], last], Stroke::new(self.stroke_width, color));
+                if line[1].x > last.x {
                     super::utils::draw_dashed_line(
                         painter,
-                        upper_end,
-                        extended,
+                        last,
+                        line[1],
                         Stroke::new(stroke::HAIRLINE, extend_color),
                         DESIGN_TOKENS.spacing.sm + DESIGN_TOKENS.spacing.hairline,
                         DESIGN_TOKENS.spacing.xs + DESIGN_TOKENS.spacing.hairline,
                     );
                 }
             }
+        }
 
+        if self.points.len() >= 3 {
             // Draw numbered labels
             for (i, &point) in self.points.iter().enumerate() {
                 let label_offset = if i % 2 == 0 {
@@ -723,6 +707,44 @@ impl Drawing {
     }
 }
 
+/// Triangle pattern boundaries from the zigzag anchors (first peak, first trough, second peak,
+/// second trough): the line through each pair of same-side anchors, from its first anchor to where
+/// the two meet, and the fill between them and the first zigzag leg as a convex polygon. The
+/// boundaries end at `right` when they meet beyond it, and at the last anchor when they are
+/// parallel, diverge or meet before the first anchor. `None` until four anchors are placed, or
+/// while a boundary is vertical.
+pub(super) fn triangle_boundaries(
+    points: &[Pos2],
+    right: f32,
+) -> Option<([[Pos2; 2]; 2], Vec<Pos2>)> {
+    let &[a0, b0, a1, b1, ..] = points else {
+        return None;
+    };
+    if a1.x == a0.x || b1.x == b0.x {
+        return None;
+    }
+    let (slope_a, slope_b) = ((a1.y - a0.y) / (a1.x - a0.x), (b1.y - b0.y) / (b1.x - b0.x));
+    let y_a = |x: f32| a0.y + slope_a * (x - a0.x);
+    let y_b = |x: f32| b0.y + slope_b * (x - b0.x);
+    let left = a0.x.min(b0.x);
+    let last = a1.x.max(b1.x);
+    let apex_x = (b0.y - a0.y + slope_a * a0.x - slope_b * b0.x) / (slope_a - slope_b);
+    let apex_x = (apex_x.is_finite() && apex_x > left).then_some(apex_x);
+    let end = apex_x.map_or(last, |x| x.min(last.max(right)));
+    let mut fill = vec![a0, Pos2::new(end, y_a(end))];
+    if apex_x != Some(end) {
+        fill.push(Pos2::new(end, y_b(end)));
+    }
+    fill.push(b0);
+    Some((
+        [
+            [a0, Pos2::new(end, y_a(end))],
+            [b0, Pos2::new(end, y_b(end))],
+        ],
+        fill,
+    ))
+}
+
 /// Head and shoulders neckline and target from the anchors (start, left shoulder, trough, head,
 /// trough, right shoulder, end): the neckline runs through the two troughs, from the left trough to
 /// `extend` past the last anchor's x, and the target y lies at the last anchor's x, as far beyond
@@ -856,6 +878,63 @@ mod tests {
                 expected,
                 "{points:?}"
             );
+        }
+    }
+
+    #[test]
+    fn triangle_boundaries_meet_at_the_apex_and_clip_the_fill() {
+        let p = Pos2::new;
+        // Zigzag anchors on an upper line y = 0.5x and a lower line y = 95 - 0.5 (x - 10), which
+        // meet at (100, 50); parallel lines; and an upper y = 55 - 0.5x with a lower y = 40 + 2x,
+        // which meet at x = 6, left of every anchor.
+        let converging = [p(0.0, 0.0), p(10.0, 95.0), p(20.0, 10.0), p(30.0, 85.0)];
+        let parallel = [p(0.0, 0.0), p(10.0, 50.0), p(20.0, 0.0), p(30.0, 50.0)];
+        let diverging = [p(10.0, 50.0), p(20.0, 80.0), p(30.0, 40.0), p(40.0, 120.0)];
+        let vertical = [p(0.0, 0.0), p(10.0, 95.0), p(0.0, 10.0), p(30.0, 85.0)];
+        let cases = [
+            (
+                &converging[..],
+                f32::INFINITY,
+                Some((
+                    [
+                        [p(0.0, 0.0), p(100.0, 50.0)],
+                        [p(10.0, 95.0), p(100.0, 50.0)],
+                    ],
+                    vec![p(0.0, 0.0), p(100.0, 50.0), p(10.0, 95.0)],
+                )),
+            ),
+            (
+                &converging[..],
+                60.0,
+                Some((
+                    [[p(0.0, 0.0), p(60.0, 30.0)], [p(10.0, 95.0), p(60.0, 70.0)]],
+                    vec![p(0.0, 0.0), p(60.0, 30.0), p(60.0, 70.0), p(10.0, 95.0)],
+                )),
+            ),
+            (
+                &parallel[..],
+                f32::INFINITY,
+                Some((
+                    [[p(0.0, 0.0), p(30.0, 0.0)], [p(10.0, 50.0), p(30.0, 50.0)]],
+                    vec![p(0.0, 0.0), p(30.0, 0.0), p(30.0, 50.0), p(10.0, 50.0)],
+                )),
+            ),
+            (
+                &diverging[..],
+                f32::INFINITY,
+                Some((
+                    [
+                        [p(10.0, 50.0), p(40.0, 35.0)],
+                        [p(20.0, 80.0), p(40.0, 120.0)],
+                    ],
+                    vec![p(10.0, 50.0), p(40.0, 35.0), p(40.0, 120.0), p(20.0, 80.0)],
+                )),
+            ),
+            (&vertical[..], f32::INFINITY, None),
+            (&converging[..3], f32::INFINITY, None),
+        ];
+        for (points, right, expected) in cases {
+            assert_eq!(triangle_boundaries(points, right), expected, "{points:?}");
         }
     }
 

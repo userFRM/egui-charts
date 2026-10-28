@@ -164,7 +164,6 @@ impl Terminal {
     }
 
     /// Opens `panel` beside the chart.
-    #[expect(dead_code, reason = "the widget bar and commands open panels")]
     pub(super) fn open_panel(&mut self, panel: SidePanel) {
         self.panel = Some(panel);
     }
@@ -184,10 +183,6 @@ impl Terminal {
     }
 
     /// Plays the host sound `name` at `volume`, from zero to one, if the host plays sounds.
-    #[expect(
-        dead_code,
-        reason = "alerts, trading and the settings preview play sounds"
-    )]
     pub(super) fn play_sound(&mut self, name: &str, volume: f32) {
         if let Some(play) = &mut self.services.play {
             play(name, volume);
