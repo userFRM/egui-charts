@@ -27,6 +27,9 @@ pub struct CandleDataContext<'a> {
     pub revision: u64,
     /// Transform retained by the owner of this series, shared by its price fit and rendering.
     pub heikin_ashi: &'a super::HeikinAshiCache,
+    /// Whether `visible_data` already holds the elements of a price-based chart type, one bar per
+    /// element, as the chart builds them. Range bars then draw from it instead of from `full_data`.
+    pub shows_elements: bool,
     /// Index of the first visible bar within `full_data`.
     pub start_idx: usize,
     /// Interval and calendar of the bars, whose sessions the TPO profiles follow.

@@ -257,6 +257,8 @@ pub struct Chart {
     pub(crate) studies: IndicatorRegistry,
     study_data: studies_data::StudyDataCache,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
+    /// Range bars built from the held trades, while the chart type is Range.
+    execution_ranges: crate::chart::rendering::candles::price_based::ExecutionRanges,
     #[cfg(feature = "studies")]
     volume_setting: bool,
     #[cfg(feature = "studies")]
@@ -339,7 +341,7 @@ pub struct Chart {
     time_scale_events: Vec<crate::model::TimeScaleEvent>,
     event_visibility: crate::model::EventVisibility,
     mark_source: Option<marks::MarkSource>,
-    signal_source: Option<signals::SignalSource>,
+    signal_sources: Vec<signals::SignalSource>,
     targets: targets::TargetState,
     show_price_targets: bool,
     hidden_signal_categories: std::collections::BTreeSet<String>,
@@ -765,7 +767,7 @@ impl Chart {
         self.zoom_just_applied
     }
 
-    /// Sets the crosshair rendering style (Full, Dot, Arrow or Demonstration).
+    /// Sets the crosshair rendering style (Full, Dot, Arrow, Demonstration or Magic).
     ///
     /// Use this to connect a toolbar cursor-type selector to the chart.
     /// The style controls how the crosshair lines and labels are drawn

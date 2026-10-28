@@ -63,6 +63,13 @@ pub struct PriceAxisOptions {
     pub show_study_values: bool,
     /// Study value tag colour; `None` follows each plot's colour.
     pub study_value_color: Option<Color32>,
+    /// Write the symbol before its last value tag on its price axis, and before the value tags
+    /// of added series on theirs. Independent of the legend title.
+    /// Default: false
+    pub show_symbol_name: bool,
+    /// Write each study's name before its value tags. Independent of the legend title.
+    /// Default: false
+    pub show_study_names: bool,
     /// Draw a line between the plot and the axis.
     /// Default: false
     pub border_visible: bool,
@@ -86,6 +93,8 @@ impl Default for PriceAxisOptions {
             allow_label_overlap: false,
             show_study_values: true,
             study_value_color: None,
+            show_symbol_name: false,
+            show_study_names: false,
             border_visible: false,
             border_color: None,
             ticks_visible: false,

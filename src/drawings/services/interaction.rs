@@ -220,11 +220,18 @@ impl DrawingInteraction {
                     }
                 }
                 DrawingToolType::FibonacciChannel => {
-                    if drawing.fib_channel_level_lines().is_some_and(|(_, lines)| {
-                        lines
-                            .iter()
-                            .any(|&[a, b]| point_to_line_distance(point, a, b) <= hit_distance)
-                    }) {
+                    // Extended levels are cut at a box around the anchors and the point, as below.
+                    let reach = Rect::from_points(&drawing.points)
+                        .union(Rect::from_pos(point))
+                        .expand(2.0 * hit_distance);
+                    if drawing
+                        .fib_channel_level_lines(reach)
+                        .is_some_and(|(_, lines)| {
+                            lines
+                                .iter()
+                                .any(|&[a, b]| point_to_line_distance(point, a, b) <= hit_distance)
+                        })
+                    {
                         return Some(drawing.id);
                     }
                 }

@@ -52,6 +52,8 @@ pub mod icons {
     pub const ARROW: Icon = crate::icon_from_path!("lines/cursor-arrow.svg");
     /// Pointer with a halo for presenting a position on the chart.
     pub const DEMONSTRATION: Icon = crate::icon_from_path!("lines/cursor-demonstration.svg");
+    /// Wand with sparks for the trail that follows the pointer while the button is held.
+    pub const MAGIC_CURSOR: Icon = crate::icon_from_path!("lines/cursor-magic.svg");
     /// Eraser SVG icon.
     pub const ERASER: Icon = crate::icon_from_path!("lines/eraser.svg");
 
