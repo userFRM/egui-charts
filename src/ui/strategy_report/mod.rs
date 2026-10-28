@@ -164,9 +164,7 @@ impl StrategyReportPanel {
             if Button::new("Export summary CSV").show(ui).clicked() {
                 action = StrategyReportAction::ExportSummaryCsv {
                     filename: summary_filename(&data.report),
-                    content: data
-                        .report
-                        .summary_csv(&data.performance, &data.comparison),
+                    content: data.report.summary_csv(&data.performance, &data.comparison),
                 };
             }
         });

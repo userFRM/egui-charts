@@ -1271,7 +1271,8 @@ mod tests {
     fn summary_csv_writes_metrics_and_properties_with_unavailable_values() {
         let mut r = fixture_a();
         r.currency = Some("USD".into());
-        r.properties.push(("Fast, length".into(), "say \"hi\"".into()));
+        r.properties
+            .push(("Fast, length".into(), "say \"hi\"".into()));
         assert_eq!(
             r.summary_csv(&r.performance(), &r.comparison(&[])),
             "section,name,value,unit,currency\n\
