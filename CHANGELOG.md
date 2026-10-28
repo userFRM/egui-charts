@@ -407,7 +407,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - `VolumeFormatter` promotes a rounded mantissa of 1000 to the next available unit, so values just below the K, M and B boundaries show `1.00K`, `1.00M` and `1.00B` at the default precision, including negative values. ([#1230](https://github.com/userFRM/egui-charts/issues/1230))
 
-- Price-axis tick intervals and logarithmic marks respect multiples of `PriceMarkGeneratorConfig::min_price_step`, including when label precision is set. Tick placement without a minimum step is unchanged. ([#1229](https://github.com/userFRM/egui-charts/issues/1229))
+- Price-axis tick intervals and logarithmic marks respect multiples of `PriceMarkGeneratorConfig::min_price_step`, including when label precision is set. Floating-point noise in tiny tick sizes or precision units no longer increases an already round interval. ([#1229](https://github.com/userFRM/egui-charts/issues/1229))
 
 - Percentage axis ticks and price labels show a positive zero when the value rounds to zero at the displayed precision, including scientific tick labels. ([#1226](https://github.com/userFRM/egui-charts/issues/1226))
 
