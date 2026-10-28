@@ -277,8 +277,7 @@ impl LocaleTimeFormatter {
 
     /// Determine default 24-hour preference for locale
     fn default_24hour_for_locale(locale: &str) -> bool {
-        // US, Canada, UK prefer 12-hour
-        !matches!(locale, "en-US" | "en-CA" | "en-GB")
+        !matches!(locale.replace('_', "-").as_str(), "en-US" | "en-CA")
     }
 
     fn style(&self) -> Style<'_> {
@@ -719,6 +718,22 @@ mod tests {
                 english
             }
         };
+        for (locale, expected) in [
+            ("en-US", "02:30 PM"),
+            ("en_US", "02:30 PM"),
+            ("en-CA", "02:30 PM"),
+            ("en_CA", "02:30 PM"),
+            ("en-GB", "14:30"),
+            ("en_GB", "14:30"),
+            ("de-DE", "14:30"),
+            ("de_DE", "14:30"),
+        ] {
+            assert_eq!(
+                LocaleTimeFormatter::new(locale).format(time, TickMarkType::Time),
+                expected,
+                "{locale}"
+            );
+        }
         let german = LocaleTimeFormatter::new("de-DE");
         assert_eq!(
             german.format(time, TickMarkType::Month),
