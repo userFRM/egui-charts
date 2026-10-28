@@ -252,6 +252,10 @@ impl IndicatorFactory {
                 ElliottWave,
                 RisingWedge,
                 FallingWedge,
+                MissedPivots,
+                KeyLevels,
+                IntradayPivotPoints,
+                ProjectedPivotPoints,
                 WilliamsFractals,
                 ZigZag,
             ],
@@ -259,6 +263,7 @@ impl IndicatorFactory {
                 LinearRegression,
                 LinearRegressionChannel,
                 LinearRegressionSlope,
+                TrendStrengthIndex,
                 StandardError,
                 StandardErrorBands,
                 RankCorrelationIndex,
@@ -1017,9 +1022,10 @@ mod tests {
                     .unwrap();
             }
             study.calculate(&bars);
-            // Studies that draw only shapes differ by their zones, table or profile.
+            // Studies that draw only shapes differ by their zones, projections, table or profile.
             let shapes = vec![
                 format!("{:?}", study.zones()),
+                format!("{:?}", study.projections()),
                 format!("{:?}", study.table()),
                 study.tpo().is_some().to_string(),
                 format!("{:?}", study.volume_profiles(200..400)),
@@ -1237,6 +1243,10 @@ mod tests {
             #[cfg(feature = "drawings")]
             Box::new(AutoDrawing::new(AutoDrawingKind::Pitchfork, x(5.0), l(0))),
             Box::new(PivotPointsHighLow::new(l(0), l(1), l(2), l(3))),
+            Box::new(MissedPivots::new(l(0), l(1), x(0.1), l(2))),
+            Box::new(KeyLevels::new(l(0), l(1), l(2), x(0.25))),
+            Box::new(IntradayPivotPoints::new(l(0))),
+            Box::new(ProjectedPivotPoints::new().with_pivots_back(l(1))),
             Box::new(WilliamsFractals::new(l(0))),
             Box::new(Gaps::new(l(0), x(30.0)).with_trail_limit(Some(l(1)))),
             Box::new(Gaps::new(l(0), x(30.0)).with_partial_closing(true)),
@@ -1252,6 +1262,7 @@ mod tests {
             Box::new(LinearRegression::new(l(0))),
             Box::new(LinearRegressionChannel::new(l(0), x(2.0))),
             Box::new(LinearRegressionSlope::new(l(0))),
+            Box::new(TrendStrengthIndex::new(l(0))),
             Box::new(StandardError::new(l(0))),
             Box::new(StandardErrorBands::new(l(0), x(2.0))),
             Box::new(RankCorrelationIndex::new(l(0))),

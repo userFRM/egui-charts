@@ -49,15 +49,15 @@
 //! [`VwapAutoAnchored`], [`Volume24h`], [`RelativeVolumeAtTime`]
 //!
 //! ## Support / resistance
-//! [`PivotPoints`], [`PivotPointsHighLow`], [`ElliottWave`], [`Reversal`], [`RisingWedge`], [`FallingWedge`],
-//! [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
-//! [`PriceChannel`]
+//! [`PivotPoints`], [`IntradayPivotPoints`], [`ProjectedPivotPoints`], [`PivotPointsHighLow`],
+//! [`MissedPivots`], [`KeyLevels`], [`ElliottWave`], [`Reversal`], [`RisingWedge`], [`FallingWedge`],
+//! [`WilliamsFractals`], [`Gaps`], [`ZigZag`], [`PriceChannel`]
 //!
 //! ## Patterns
 //! [`CandlestickPatterns`], [`ChartPatterns`]
 //!
 //! ## Statistics
-//! [`LinearRegression`], [`StandardError`],
+//! [`LinearRegression`], [`TrendStrengthIndex`], [`StandardError`],
 //! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`], [`Ratio`],
 //! [`Spread`], [`Correlation`]
 //!
@@ -162,9 +162,13 @@ mod std_dev;
 mod auto_drawing;
 mod elliott_wave;
 mod gaps;
+mod intraday_pivot_points;
+mod key_levels;
 mod knoxville_divergence;
+mod missed_pivots;
 mod pivot_points;
 mod pivot_points_high_low;
+mod projected_pivot_points;
 mod reversal;
 mod rsi_divergence;
 mod swings;
@@ -229,6 +233,7 @@ mod double_stochastic;
 mod elder_impulse;
 mod mcginley_dynamic;
 mod trend_intensity;
+mod trend_strength_index;
 mod true_strength;
 mod vidya;
 mod volume_price_trend;
@@ -374,9 +379,13 @@ pub use std_dev::StandardDeviation;
 pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
 pub use elliott_wave::ElliottWave;
 pub use gaps::Gaps;
+pub use intraday_pivot_points::IntradayPivotPoints;
+pub use key_levels::KeyLevels;
 pub use knoxville_divergence::KnoxvilleDivergence;
+pub use missed_pivots::MissedPivots;
 pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
 pub use pivot_points_high_low::PivotPointsHighLow;
+pub use projected_pivot_points::ProjectedPivotPoints;
 pub use reversal::Reversal;
 pub use rsi_divergence::RsiDivergence;
 pub use wedge::{FallingWedge, RisingWedge, Wedge};
@@ -397,7 +406,7 @@ pub use trix::TRIX;
 pub use balance_of_power::BalanceOfPower;
 pub use ease_of_movement::EaseOfMovement;
 pub use percentage_volume_oscillator::PercentageVolumeOscillator;
-pub use price_oscillator::PriceOscillator;
+pub use price_oscillator::{OscillatorAverage, PriceOscillator};
 pub use volume_oscillator::VolumeOscillator;
 pub use vroc::VolumeRateOfChange;
 
@@ -428,6 +437,7 @@ pub use percent_b::PercentB;
 pub use price_channel::PriceChannel;
 pub use relative_vigor::RelativeVigorIndex;
 pub use smi::StochasticMomentumIndex;
+pub use trend_strength_index::TrendStrengthIndex;
 pub use typical_price::{MedianPrice, TypicalPrice, WeightedClose};
 pub use ultimate_momentum::UltimateMomentum;
 

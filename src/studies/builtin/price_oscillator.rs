@@ -4,19 +4,62 @@ use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
+use std::collections::VecDeque;
+
+/// Average formula of the oscillator's two averages or of its signal line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OscillatorAverage {
+    /// Alpha 2/(length+1), seeded with the mean of the first `length` values.
+    Exponential,
+    /// Arithmetic mean of the last `length` values.
+    Simple,
+}
+
+/// Resumable [`OscillatorAverage`] over the finite values it is fed.
+#[derive(Clone, Default)]
+pub(super) struct Mean {
+    exponential: Smoothing,
+    window: VecDeque<f64>,
+}
+
+impl Mean {
+    fn next(&mut self, kind: OscillatorAverage, input: f64, length: usize) -> f64 {
+        match kind {
+            OscillatorAverage::Exponential => {
+                self.exponential
+                    .next(input, length, 2.0 / (length as f64 + 1.0))
+            }
+            OscillatorAverage::Simple => {
+                if !input.is_finite() {
+                    return f64::NAN;
+                }
+                self.window.push_back(input);
+                if self.window.len() > length {
+                    self.window.pop_front();
+                }
+                if self.window.len() < length {
+                    return f64::NAN;
+                }
+                self.window.iter().sum::<f64>() / length as f64
+            }
+        }
+    }
+}
 
 /// Percentage Price Oscillator (PPO): MACD taken as a percentage of the long average.
 ///
-/// - PPO = 100 * (EMA(close, short) - EMA(close, long)) / EMA(close, long).
-/// - Signal = EMA(PPO, signal length), computed only over the bars where the PPO is defined
-///   and seeded with the mean of its first `signal` values, like the study's other averages,
-///   which are seeded with the mean of their first values.
+/// - PPO = 100 * (MA(close, short) - MA(close, long)) / MA(close, long).
+/// - Signal = MA(PPO, signal length), computed only over the bars where the PPO is defined.
+///   An exponential average is seeded with the mean of its first `signal` values, like the
+///   study's other averages, which are seeded with the mean of their first values; a simple
+///   one is the mean of the last `signal` values.
 /// - Histogram = PPO - signal.
 ///
-/// With lengths 12, 26 and 9 a bar has no value before bar 25, the PPO alone on bars 25 to 32,
-/// and from bar 33, the mean of the PPO on bars 25 to 33 being the first signal, the PPO, the
-/// signal and the histogram. A bar with a non-finite close has no value and is skipped by the
-/// averages.
+/// MA is exponential by default; the oscillator's averages and the signal line each choose an
+/// [`OscillatorAverage`] independently. With lengths 12, 26 and 9 a bar has no value before
+/// bar 25, the PPO alone on bars 25 to 32, and from bar 33, the mean of the PPO on bars 25 to
+/// 33 being the first signal, the PPO, the signal and the histogram, under either formula. A
+/// bar with a non-finite close has no value and is skipped by the averages.
 #[derive(Clone)]
 pub struct PriceOscillator {
     /// Short EMA period (typically 12)
@@ -25,8 +68,12 @@ pub struct PriceOscillator {
     long_period: usize,
     /// Signal line EMA period (typically 9)
     signal_period: usize,
+    /// Formula of the short and long averages
+    oscillator_average: OscillatorAverage,
+    /// Formula of the signal line
+    signal_average: OscillatorAverage,
     values: IndicatorValues,
-    stepper: Stepper<[Smoothing; 3]>,
+    stepper: Stepper<[Mean; 3]>,
     /// Colors: [PPO line, Signal line, Histogram]
     colors: Vec<Color32>,
     visible: bool,
@@ -40,6 +87,8 @@ impl PriceOscillator {
             short_period: short_period.max(1),
             long_period: long_period.max(1),
             signal_period: signal_period.max(1),
+            oscillator_average: OscillatorAverage::Exponential,
+            signal_average: OscillatorAverage::Exponential,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
@@ -51,6 +100,17 @@ impl PriceOscillator {
         }
     }
 
+    /// Choose the formula of the short and long averages and of the signal line.
+    pub fn with_averages(
+        mut self,
+        oscillator: OscillatorAverage,
+        signal: OscillatorAverage,
+    ) -> Self {
+        self.oscillator_average = oscillator;
+        self.signal_average = signal;
+        self
+    }
+
     /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.set_colors(colors);
@@ -60,20 +120,20 @@ impl PriceOscillator {
 
 /// Resume the percentage difference, its signal over defined values, and histogram.
 pub(super) fn percentage_oscillator(
-    state: &mut [Smoothing; 3],
+    state: &mut [Mean; 3],
     value: f64,
-    short: usize,
-    long: usize,
-    signal: usize,
+    lengths: [usize; 3],
+    averages: [OscillatorAverage; 2],
 ) -> IndicatorValue {
-    let short_value = state[0].next(value, short, 2.0 / (short as f64 + 1.0));
-    let long_value = state[1].next(value, long, 2.0 / (long as f64 + 1.0));
+    let [short, long, signal] = lengths;
+    let short_value = state[0].next(averages[0], value, short);
+    let long_value = state[1].next(averages[0], value, long);
     let line = if long_value == 0.0 {
         f64::NAN
     } else {
         (short_value - long_value) / long_value * 100.0
     };
-    let signal = state[2].next(line, signal, 2.0 / (signal as f64 + 1.0));
+    let signal = state[2].next(averages[1], line, signal);
     if line.is_finite() {
         IndicatorValue::Multiple(vec![line, signal, line - signal])
     } else {
@@ -98,7 +158,9 @@ impl Indicator for PriceOscillator {
     crate::studies::inputs::study_inputs!(self;
         short_period: length("Short period", 1, usize::MAX),
         long_period: length("Long period", 1, usize::MAX),
-        signal_period: length("Signal period", 1, usize::MAX)
+        signal_period: length("Signal period", 1, usize::MAX),
+        oscillator_average: choice("Oscillator MA", [OscillatorAverage::Exponential, OscillatorAverage::Simple]),
+        signal_average: choice("Signal MA", [OscillatorAverage::Exponential, OscillatorAverage::Simple])
     ; {});
 
     fn value_format(&self) -> crate::scales::StudyFormat {
@@ -126,9 +188,8 @@ impl Indicator for PriceOscillator {
                 percentage_oscillator(
                     state,
                     bar.close,
-                    self.short_period,
-                    self.long_period,
-                    self.signal_period,
+                    [self.short_period, self.long_period, self.signal_period],
+                    [self.oscillator_average, self.signal_average],
                 )
             });
     }
@@ -237,6 +298,49 @@ mod tests {
                 IndicatorValue::None => panic!("Expected non-None PPO value"),
             };
             assert!(ppo_val > 0.0, "PPO should be positive in uptrend");
+        }
+    }
+
+    /// Hand values for lengths 2, 3 and 2 on closes 10, 12, 11, 13, 14, for each pairing of the
+    /// oscillator and signal formulas. The averages of 2 are 11, 11.5, 12, 13.5 (simple) and
+    /// 11, 11, 37/3, 121/9 (exponential, alpha 2/3), those of 3 are 11, 12, 38/3 (simple) and
+    /// 11, 12, 13 (exponential, alpha 1/2). The signal's exponential seed is the mean of its
+    /// first two values, which is also its first simple value.
+    #[test]
+    fn each_average_pairing_matches_hand_values() {
+        use OscillatorAverage::{Exponential as E, Simple as S};
+        let pct = |short: f64, long: f64| 100.0 * (short - long) / long;
+        let exp_line = [
+            pct(11.0, 11.0),
+            pct(37.0 / 3.0, 12.0),
+            pct(121.0 / 9.0, 13.0),
+        ];
+        let sma_line = [pct(11.5, 11.0), pct(12.0, 12.0), pct(13.5, 38.0 / 3.0)];
+        let data: Vec<Bar> = [10.0, 12.0, 11.0, 13.0, 14.0]
+            .into_iter()
+            .map(make_bar)
+            .collect();
+        for (osc, signal, line) in [
+            (E, E, exp_line),
+            (E, S, exp_line),
+            (S, E, sma_line),
+            (S, S, sma_line),
+        ] {
+            let seed = (line[0] + line[1]) / 2.0;
+            let last = match signal {
+                E => seed + (line[2] - seed) * 2.0 / 3.0,
+                S => (line[1] + line[2]) / 2.0,
+            };
+            let mut ppo = PriceOscillator::new(2, 3, 2).with_averages(osc, signal);
+            ppo.calculate(&data);
+            for (bar, ppo_line, signal) in [(3, line[1], seed), (4, line[2], last)] {
+                let got: Vec<f64> = (0..3)
+                    .map(|l| ppo.values().value(l, bar).unwrap())
+                    .collect();
+                for (got, want) in got.iter().zip([ppo_line, signal, ppo_line - signal]) {
+                    assert!((got - want).abs() < 1e-9, "{osc:?}/{signal:?} bar {bar}");
+                }
+            }
         }
     }
 }
