@@ -325,13 +325,7 @@ impl TickMarkGenerator {
                             i64::from(local.time().num_seconds_from_midnight())
                                 .rem_euclid(interval.num_seconds()),
                         );
-                    let (kind, weight) = self.classify_time_boundary(boundary, primary_type);
-                    let kind = if local.timestamp_subsec_millis() != 0 {
-                        TickMarkType::TimeWithMilliseconds
-                    } else {
-                        kind
-                    };
-                    (kind, weight)
+                    self.classify_time_boundary(boundary, primary_type)
                 } else {
                     (kind, weight)
                 };
@@ -1413,7 +1407,7 @@ mod tests {
             );
             for mark in marks
                 .iter()
-                .filter(|mark| mark.time.timestamp_subsec_millis() == 0)
+                .filter(|mark| mark.time.timestamp_subsec_millis() == 0 || count == 600)
             {
                 let (kind, pattern) = if mark.time == start && start.month() == 1 {
                     (TickMarkType::Year, "%Y")
@@ -1427,12 +1421,10 @@ mod tests {
             }
             for mark in marks
                 .iter()
-                .filter(|mark| mark.time.timestamp_subsec_millis() != 0)
+                .filter(|mark| mark.time.timestamp_subsec_millis() != 0 && count == 30)
             {
                 assert_eq!(mark.label, mark.time.format("%H:%M:%S%.3f").to_string());
-                if count == 30 {
-                    assert_eq!(mark.weight, TickMarkWeight::SUBSECOND);
-                }
+                assert_eq!(mark.weight, TickMarkWeight::SUBSECOND);
             }
         }
     }
