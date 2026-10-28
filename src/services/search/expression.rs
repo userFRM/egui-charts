@@ -242,6 +242,7 @@ impl SymbolExpression {
     }
 
     /// Whether the expression is more than one symbol, which is what a spread chart needs.
+    #[cfg(feature = "widget")]
     pub(crate) fn is_spread(&self) -> bool {
         !matches!(self.root, Node::Symbol(_))
     }
