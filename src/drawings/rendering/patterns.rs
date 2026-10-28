@@ -3,9 +3,14 @@
 //! Includes: XABCD, Cypher, Head & Shoulders, ABCD, Triangle, and Three Drives patterns.
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
+use crate::drawings::rendering::ChartView;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
+
+/// The extension of the second correction, as the least and the greatest ratio, in which the third
+/// drive is expected to end.
+const THREE_DRIVES_EXTENSION: [f64; 2] = [1.272, 1.618];
 
 impl Drawing {
     /// Render XABCD Harmonic Pattern - Gartley, Bat, Butterfly, Crab with Fibonacci ratios
@@ -565,8 +570,8 @@ impl Drawing {
         }
     }
 
-    /// Render Three Drives Pattern - With ratio validation and reversal zone
-    pub(crate) fn render_three_drives_pattern(&self, painter: &egui::Painter) {
+    /// Render Three Drives Pattern - With each leg's ratio and the reversal zone
+    pub(crate) fn render_three_drives_pattern(&self, painter: &egui::Painter, view: &ChartView) {
         let color = Color32::from_rgba_unmultiplied(
             self.color[0],
             self.color[1],
@@ -641,6 +646,15 @@ impl Drawing {
             }
         }
 
+        // Each correction's retracement of the drive before it and each drive's extension of the
+        // correction before it, on the chord joining the outside ends of the two legs
+        for (ends, ratio) in [[0, 2], [1, 3], [2, 4], [3, 5]]
+            .into_iter()
+            .zip(self.three_drives_ratios())
+        {
+            self.draw_pattern_ratio(painter, color, ends, ratio);
+        }
+
         // Draw drive labels (Drive 1, 2, 3) at the peaks
         if self.points.len() >= 5 {
             let drive_color =
@@ -667,25 +681,19 @@ impl Drawing {
             }
         }
 
-        // Draw reversal zone if pattern is complete
-        if self.points.len() >= 7 {
+        // Draw the reversal zone, the price interval the third drive is expected to end in, from
+        // the last drive's anchor to the pattern's last
+        if self.points.len() >= 7
+            && let Some(prices) = self.three_drives_zone()
+        {
             let reversal_color = DESIGN_TOKENS
                 .semantic
                 .extended
                 .bullish
                 .gamma_multiply(60_f32 / 255.0); // Teal with alpha
-            let last_point = self.points[6];
-            let zone_height = DESIGN_TOKENS.spacing.section_lg + DESIGN_TOKENS.spacing.lg;
-            let zone_width = DESIGN_TOKENS.sizing.technical_labels.pattern_label_width
-                - DESIGN_TOKENS.spacing.xxxl;
-
-            let zone_rect = Rect::from_center_size(
-                Pos2::new(
-                    last_point.x + DESIGN_TOKENS.spacing.xxxl + DESIGN_TOKENS.spacing.sm,
-                    last_point.y,
-                ),
-                egui::Vec2::new(zone_width, zone_height),
-            );
+            let [y1, y2] = prices.map(|price| (view.price_to_y)(price));
+            let (x1, x2) = (self.points[5].x, self.points[6].x);
+            let zone_rect = Rect::from_x_y_ranges(x1.min(x2)..=x1.max(x2), y1.min(y2)..=y1.max(y2));
             painter.rect_filled(zone_rect, DESIGN_TOKENS.rounding.md, reversal_color);
 
             painter.text(
@@ -788,6 +796,31 @@ impl Drawing {
             },
             self.leg_ratio([3, 4], if cypher { [0, 3] } else { [2, 3] }),
         ]
+    }
+
+    /// Price ratios of the Three drives legs: correction 1 over drive 1, drive 2 over correction 1,
+    /// correction 2 over drive 2 and drive 3 over correction 2.
+    fn three_drives_ratios(&self) -> [Option<f64>; 4] {
+        [
+            self.leg_ratio([1, 2], [0, 1]),
+            self.leg_ratio([2, 3], [1, 2]),
+            self.leg_ratio([3, 4], [2, 3]),
+            self.leg_ratio([4, 5], [3, 4]),
+        ]
+    }
+
+    /// The prices the third drive is expected to end between: the second correction extended by
+    /// [`THREE_DRIVES_EXTENSION`] from its end, in the direction opposite to that correction;
+    /// `None` until both ends are placed or while the correction is flat.
+    fn three_drives_zone(&self) -> Option<[f64; 2]> {
+        let (from, to) = (
+            self.chart_points.get(3)?.price,
+            self.chart_points.get(4)?.price,
+        );
+        if from == to {
+            return None;
+        }
+        Some(THREE_DRIVES_EXTENSION.map(|ratio| to + (from - to) * ratio))
     }
 
     /// Price ratio of an ABCD pattern's CD leg to its AB leg.
@@ -1020,6 +1053,63 @@ mod tests {
                     }
                     _ => assert_eq!(actual, expected, "{tool:?} {prices:?}"),
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn three_drives_ratios_and_zone_are_measured_in_price() {
+        let drives = |prices: &[f64]| {
+            let mut drawing = Drawing::new(0, DrawingToolType::ThreeDrivesPattern);
+            drawing.chart_points = prices
+                .iter()
+                .enumerate()
+                .map(|(i, &price)| ChartPoint::new(10.0 * i as f32, price))
+                .collect();
+            drawing
+        };
+        // Drive 1 and 2 rise by 100 and 80, corrections fall by 61.8 and 60; drive 3 would end
+        // 1.272 to 1.618 corrections above the second trough: 158.2 + 60 * [1.272, 1.618].
+        let rising = drives(&[100.0, 200.0, 138.2, 218.2, 158.2, 255.0]);
+        let falling = drives(&[300.0, 200.0, 261.8, 181.8, 241.8, 145.0]);
+        // A flat second correction has no zone, and a flat first drive no ratio.
+        let flat = drives(&[100.0, 100.0, 90.0, 120.0, 120.0]);
+        let cases = [
+            (
+                &rising,
+                [
+                    Some(0.618),
+                    Some(80.0 / 61.8),
+                    Some(0.75),
+                    Some(96.8 / 60.0),
+                ],
+                Some([234.52, 255.28]),
+            ),
+            (
+                &falling,
+                [
+                    Some(0.618),
+                    Some(80.0 / 61.8),
+                    Some(0.75),
+                    Some(96.8 / 60.0),
+                ],
+                Some([165.48, 144.72]),
+            ),
+            (&flat, [None, Some(30.0 / 10.0), Some(0.0), None], None),
+        ];
+        for (drawing, ratios, zone) in cases {
+            for (actual, expected) in drawing.three_drives_ratios().into_iter().zip(ratios) {
+                match (actual, expected) {
+                    (Some(a), Some(e)) => assert!((a - e).abs() < 1e-9, "{a} != {e}"),
+                    _ => assert_eq!(actual, expected),
+                }
+            }
+            match (drawing.three_drives_zone(), zone) {
+                (Some(a), Some(e)) => assert!(
+                    a.iter().zip(e).all(|(a, e)| (a - e).abs() < 1e-9),
+                    "{a:?} != {e:?}"
+                ),
+                (a, e) => assert_eq!(a, e),
             }
         }
     }

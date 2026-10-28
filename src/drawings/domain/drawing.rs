@@ -16,6 +16,7 @@ use super::{
 
 use crate::data::VolumeProfileConfig;
 use crate::model::{AlertSource, LineStyle};
+use crate::scales::PriceScaleMode;
 use serde::{Deserialize, Serialize};
 
 /// A drawing on the chart
@@ -355,11 +356,15 @@ impl Drawing {
     }
 
     /// The price levels an alert can follow at the fractional bar index `bar`, each with its
-    /// level number, name and price: a line's price extended through its two anchors (linear in
-    /// price), a horizontal level, a rectangle's top and bottom, a position's entry, target and
-    /// stop, and each visible Fibonacci retracement or extension level, numbered by its place
-    /// in the level settings. Empty for other drawings.
-    pub fn alert_levels(&self, bar: f64) -> Vec<(usize, String, f64)> {
+    /// level number, name and price: a line's price extended through its two anchors, the base and
+    /// parallel lines of a parallel or disjoint channel, the trend and flat lines of a flat
+    /// top/bottom, a horizontal level, a rectangle's top and bottom, a position's entry, target
+    /// and stop, and each visible Fibonacci retracement or extension level, numbered by its place
+    /// in the level settings. Sloping lines are straight on the price axis `scale` paints, so
+    /// they are linear in price except on a logarithmic scale. Empty for other drawings, and for
+    /// geometry with no price at `bar`, such as a vertical line or a sloping line through a
+    /// non-positive price on a logarithmic scale.
+    pub fn alert_levels(&self, bar: f64, scale: PriceScaleMode) -> Vec<(usize, String, f64)> {
         use DrawingToolType as T;
         let named = |names: &[&str], prices: &[f64]| {
             names
@@ -367,18 +372,49 @@ impl Drawing {
                 .zip(prices)
                 .enumerate()
                 .map(|(level, (name, price))| (level, (*name).to_owned(), *price))
-                .collect()
+                .collect::<Vec<_>>()
         };
-        match (self.tool_type, &self.chart_points[..]) {
+        let log = scale == PriceScaleMode::Logarithmic;
+        let to_axis = |price: f64| if log { price.ln() } else { price };
+        let from_axis = |value: f64| if log { value.exp() } else { value };
+        // The line through `a` and `b` at `bar`, in axis coordinates.
+        let along = |a: &ChartPoint, b: &ChartPoint, bar: f64| {
+            let (from, to) = (to_axis(a.price), to_axis(b.price));
+            from + (bar - f64::from(a.bar_idx)) * (to - from) / f64::from(b.bar_idx - a.bar_idx)
+        };
+        let levels = match (self.tool_type, &self.chart_points[..]) {
             (T::HorizontalLine | T::HorizontalRay, [level, ..]) => named(&["Line"], &[level.price]),
             (
                 T::TrendLine | T::Ray | T::ExtendedLine | T::InfoLine | T::TrendAngle,
                 [start, end, ..],
-            ) if start.bar_idx != end.bar_idx => {
-                let slope = (end.price - start.price) / f64::from(end.bar_idx - start.bar_idx);
+            ) => named(&["Line"], &[from_axis(along(start, end, bar))]),
+            // The second line is the base line moved straight up or down through the third anchor.
+            (T::ParallelChannel, [start, end, through, ..]) => {
+                let shift = to_axis(through.price) - along(start, end, f64::from(through.bar_idx));
                 named(
-                    &["Line"],
-                    &[start.price + (bar - f64::from(start.bar_idx)) * slope],
+                    &["Line", "Parallel line"],
+                    &[
+                        from_axis(along(start, end, bar)),
+                        from_axis(along(start, end, bar) + shift),
+                    ],
+                )
+            }
+            (T::FlatTopBottom, [start, end, flat, ..]) => named(
+                &["Line", "Flat line"],
+                &[from_axis(along(start, end, bar)), flat.price],
+            ),
+            // The second line starts at the third anchor and runs as far as the first.
+            (T::DisjointChannel, [start, end, from, ..]) => {
+                let rise = to_axis(end.price) - to_axis(start.price);
+                let run = f64::from(end.bar_idx - start.bar_idx);
+                named(
+                    &["Line", "Second line"],
+                    &[
+                        from_axis(along(start, end, bar)),
+                        from_axis(
+                            to_axis(from.price) + (bar - f64::from(from.bar_idx)) * rise / run,
+                        ),
+                    ],
                 )
             }
             (T::Rect, [a, b, ..]) => named(
@@ -408,6 +444,11 @@ impl Drawing {
                         .collect()
                 })
                 .unwrap_or_default(),
+        };
+        if levels.iter().all(|(_, _, price)| price.is_finite()) {
+            levels
+        } else {
+            Vec::new()
         }
     }
 
@@ -642,6 +683,7 @@ mod tests {
     #[test]
     fn alert_levels_follow_the_drawing_geometry() {
         use DrawingToolType as T;
+        use PriceScaleMode::{Logarithmic, Normal as Linear};
         let drawing = |tool, points: &[(f32, f64)]| {
             let mut drawing = Drawing::new(7, tool);
             drawing.chart_points = points.iter().map(|&(b, p)| ChartPoint::new(b, p)).collect();
@@ -652,42 +694,49 @@ mod tests {
         config.levels[1].visible = false;
         fib.fib_config = Some(config);
         // (drawing, bar) -> (level, name, price); prices by hand.
-        for (drawing, bar, expected) in [
+        for (drawing, bar, scale, expected) in [
             // 100 + (25 - 10) * (120 - 100) / (20 - 10).
             (
                 drawing(T::TrendLine, &[(10.0, 100.0), (20.0, 120.0)]),
                 25.0,
+                Linear,
                 vec![(0, "Line", 130.0)],
             ),
             (
                 drawing(T::TrendLine, &[(10.0, 100.0), (10.0, 120.0)]),
                 25.0,
+                Linear,
                 vec![],
             ),
             (
                 drawing(T::HorizontalRay, &[(3.0, 50.0)]),
                 9.0,
+                Linear,
                 vec![(0, "Line", 50.0)],
             ),
             (
                 drawing(T::Rect, &[(5.0, 90.0), (8.0, 110.0)]),
                 9.0,
+                Linear,
                 vec![(0, "Top", 110.0), (1, "Bottom", 90.0)],
             ),
             (
                 drawing(T::LongPos, &[(5.0, 100.0), (9.0, 110.0)]),
                 9.0,
+                Linear,
                 vec![(0, "Entry", 100.0), (1, "Target", 110.0), (2, "Stop", 90.0)],
             ),
             (
                 drawing(T::ShortPos, &[(5.0, 100.0), (9.0, 90.0), (9.0, 104.0)]),
                 9.0,
+                Linear,
                 vec![(0, "Entry", 100.0), (1, "Target", 90.0), (2, "Stop", 104.0)],
             ),
             // Level 0 is on the second anchor; the hidden 23.6% level keeps the numbers after it.
             (
                 fib,
                 9.0,
+                Linear,
                 vec![
                     (0, "0%", 200.0),
                     (2, "38.2%", 161.8),
@@ -697,9 +746,95 @@ mod tests {
                     (6, "100%", 100.0),
                 ],
             ),
-            (drawing(T::Brush, &[(1.0, 1.0), (2.0, 2.0)]), 9.0, vec![]),
+            // Straight on the scale: the geometric mean of 100 and 400 halfway on a log scale.
+            (
+                drawing(T::TrendLine, &[(10.0, 100.0), (20.0, 400.0)]),
+                15.0,
+                Logarithmic,
+                vec![(0, "Line", 200.0)],
+            ),
+            (
+                drawing(T::TrendLine, &[(10.0, 100.0), (20.0, 400.0)]),
+                15.0,
+                Linear,
+                vec![(0, "Line", 250.0)],
+            ),
+            (
+                drawing(T::TrendLine, &[(10.0, 0.0), (20.0, 10.0)]),
+                15.0,
+                Logarithmic,
+                vec![],
+            ),
+            // The base line is 110 at the third anchor's bar 15, 20 below it: 130 + 20 at bar 25.
+            // On a log scale the third anchor is twice the base line there, so the parallel is
+            // twice as high at every bar: 400 and 800 at bar 20.
+            (
+                drawing(
+                    T::ParallelChannel,
+                    &[(10.0, 100.0), (20.0, 120.0), (15.0, 130.0)],
+                ),
+                25.0,
+                Linear,
+                vec![(0, "Line", 130.0), (1, "Parallel line", 150.0)],
+            ),
+            (
+                drawing(
+                    T::ParallelChannel,
+                    &[(10.0, 100.0), (20.0, 400.0), (15.0, 400.0)],
+                ),
+                20.0,
+                Logarithmic,
+                vec![(0, "Line", 400.0), (1, "Parallel line", 800.0)],
+            ),
+            (
+                drawing(
+                    T::ParallelChannel,
+                    &[(10.0, 100.0), (10.0, 120.0), (15.0, 130.0)],
+                ),
+                25.0,
+                Linear,
+                vec![],
+            ),
+            (
+                drawing(
+                    T::FlatTopBottom,
+                    &[(10.0, 100.0), (20.0, 120.0), (15.0, 90.0)],
+                ),
+                25.0,
+                Linear,
+                vec![(0, "Line", 130.0), (1, "Flat line", 90.0)],
+            ),
+            // The second line starts at the third anchor, 50 at bar 12, and rises as the first:
+            // 2 a bar, or 4 times in 10 bars.
+            (
+                drawing(
+                    T::DisjointChannel,
+                    &[(10.0, 100.0), (20.0, 120.0), (12.0, 50.0)],
+                ),
+                25.0,
+                Linear,
+                vec![(0, "Line", 130.0), (1, "Second line", 76.0)],
+            ),
+            (
+                drawing(
+                    T::DisjointChannel,
+                    &[(10.0, 100.0), (20.0, 400.0), (12.0, 50.0)],
+                ),
+                22.0,
+                Logarithmic,
+                vec![
+                    (0, "Line", 100.0 * 4f64.powf(1.2)),
+                    (1, "Second line", 200.0),
+                ],
+            ),
+            (
+                drawing(T::Brush, &[(1.0, 1.0), (2.0, 2.0)]),
+                9.0,
+                Linear,
+                vec![],
+            ),
         ] {
-            let levels = drawing.alert_levels(bar);
+            let levels = drawing.alert_levels(bar, scale);
             assert_eq!(levels.len(), expected.len(), "{:?}", drawing.tool_type);
             for ((level, name, price), (want_level, want_name, want_price)) in
                 levels.into_iter().zip(expected)

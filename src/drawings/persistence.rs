@@ -863,6 +863,13 @@ mod tests {
         if tool == DrawingToolType::DoubleCurve {
             d.chart_points.push(ChartPoint::new(12.0, 115.0));
         }
+        if tool == DrawingToolType::ElliottTriangle {
+            d.chart_points.extend([
+                ChartPoint::new(12.0, 115.0),
+                ChartPoint::new(14.0, 104.0),
+                ChartPoint::new(16.0, 112.0),
+            ]);
+        }
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d

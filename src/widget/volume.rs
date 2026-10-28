@@ -165,7 +165,11 @@ pub(super) fn tags(
             && plot.visible
             && map.range().contains(value)
         {
-            let label = study.format_value(value);
+            let label = crate::chart::rendering::axes::named_label(
+                axis.show_study_names,
+                study.name(),
+                study.format_value(value),
+            );
             let color = axis.study_value_color.unwrap_or(plot.color).to_opaque();
             occupied.push(crate::chart::rendering::axes::render_axis_value(
                 painter,

@@ -16,7 +16,8 @@ pub mod timeframe_selector;
 
 // From chart_type_selector (ChartType is re-exported from crate::model)
 pub use chart_type_selector::{
-    ChartTypeAction, ChartTypeSelector, ChartTypeSelectorConfig, ChartTypeUiExt,
+    ChartTypeAction, ChartTypePreferences, ChartTypeSelector, ChartTypeSelectorConfig,
+    ChartTypeUiExt,
 };
 
 // From indicator_dialog

@@ -38,6 +38,7 @@ mod price_source;
 pub mod quote;
 pub mod range_bar;
 pub mod renko;
+mod replay;
 mod revision;
 mod series_scale;
 mod series_style;
@@ -50,6 +51,7 @@ mod timescale;
 mod timezone;
 pub mod tpo;
 mod trading;
+mod watchlist;
 
 pub use alert::{
     Alert, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertRule, AlertSource,
@@ -64,7 +66,7 @@ pub(crate) use bar::{index_at, time_at};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub use chart_style::{
-    AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, KagiStyle,
+    AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, HlcAreaStyle, KagiStyle,
     LastPriceAnimation, LinePlotStyle, LineType,
 };
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
@@ -87,8 +89,11 @@ pub use quote::{
     ExtendedHoursQuote, ExtendedSession, Level1Quote, OrderBook, OrderBookLevel, Quote, Tick,
     TradeConditions,
 };
-pub use range_bar::{RangeBar, RangeBarConfig, to_range_bars_from_ohlc, to_range_bars_from_ticks};
+pub use range_bar::{
+    RangeBar, RangeBarConfig, RangeBarSource, to_range_bars_from_ohlc, to_range_bars_from_ticks,
+};
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
+pub use replay::ReplaySession;
 pub(crate) use revision::next_revision;
 pub use series_scale::SeriesScale;
 pub use series_style::{AutoscaleProvider, PriceLineSource, SeriesStyle};
@@ -106,6 +111,7 @@ pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};
 pub use timeframe::Timeframe;
 pub use timescale::{LogicalRange, TimeScale};
 pub use timezone::{TimezoneId, TimezoneOffset};
+pub(crate) use timezone::{local_instant, local_time};
 pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLetter, TPOProfile,
     derive_tick_size, to_tpo_profiles,
@@ -114,6 +120,8 @@ pub use trading::{
     Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderRequest,
     OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce, TradingRules,
 };
+
+pub use watchlist::{Watchlist, WatchlistFlag, WatchlistItem};
 
 #[cfg(test)]
 mod tests {

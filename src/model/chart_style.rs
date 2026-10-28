@@ -117,6 +117,27 @@ impl Default for BaselineStyle {
     }
 }
 
+/// The HLC area chart's fill and close line. The fills take the chart's bullish and bearish
+/// colours and the close line its bullish colour.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HlcAreaStyle {
+    /// Opacity of the high-to-close and close-to-low fills, 0 to 1. Values outside the range
+    /// are clamped; a non-finite opacity draws no fill.
+    pub fill_opacity: f32,
+    /// Close line width in logical points. Non-positive or non-finite widths hide the line.
+    pub line_width: f32,
+}
+
+impl Default for HlcAreaStyle {
+    fn default() -> Self {
+        Self {
+            fill_opacity: 30.0 / 255.0,
+            line_width: DESIGN_TOKENS.stroke.thick,
+        }
+    }
+}
+
 /// The Bars chart's OHLC ticks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -181,7 +202,7 @@ impl Default for KagiStyle {
     }
 }
 
-/// Styles of the candles, bars, line, step, marker, area and baseline chart types.
+/// Styles of the candles, bars, line, step, marker, area, HLC area, baseline and Kagi chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -198,6 +219,8 @@ pub struct ChartTypeStyles {
     pub area: AreaStyle,
     /// Baseline chart.
     pub baseline: BaselineStyle,
+    /// HLC area chart.
+    pub hlc_area: HlcAreaStyle,
     /// Candles chart.
     pub candles: CandlesStyle,
     /// Bars chart.
@@ -221,6 +244,7 @@ impl Default for ChartTypeStyles {
             marker_radius: 3.0,
             area: AreaStyle::default(),
             baseline: BaselineStyle::default(),
+            hlc_area: HlcAreaStyle::default(),
             candles: CandlesStyle::default(),
             bars: BarsStyle::default(),
             kagi: KagiStyle::default(),

@@ -306,7 +306,7 @@ fn source_value(
             .plot_value(*output, index)?,
         AlertSource::Drawing(_) => chart.drawings().drawings.iter().find_map(|d| {
             let level = d.alert_level(source)?;
-            let levels = d.alert_levels(index as f64);
+            let levels = d.alert_levels(index as f64, chart.config().right_axis_scale_mode);
             levels.into_iter().find(|l| l.0 == level).map(|l| l.2)
         })?,
     };
