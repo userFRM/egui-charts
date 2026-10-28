@@ -145,7 +145,7 @@ impl Indicator for TrendStrengthIndex {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec![format!("TSI({})", self.period)]
+        vec![format!("Trend Strength({})", self.period)]
     }
 }
 

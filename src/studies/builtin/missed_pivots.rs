@@ -13,9 +13,7 @@
 //!
 //! The latest `max_levels` levels, missed or revisited, are kept. Every level is a zone from its
 //! pivot bar to its revisit bar, or to the last bar while it is missed, in the colour of its
-//! side. The two outputs are the nearest missed pivot high (the lowest above price) and the
-//! nearest missed pivot low (the highest below price), unavailable while there is none.
-//! The defaults are 10 bars on each side, a tolerance of 0.1% and 20 levels. Overlay indicator.
+//! side (pivot highs first, then pivot lows). It has no per-bar values. The defaults are 10 bars on each side, a tolerance of 0.1% and 20 levels. Overlay indicator.
 //!
 //! # Example
 //!
@@ -33,9 +31,8 @@
 //! let mut missed = MissedPivots::new(2, 2, 0.1, 20);
 //! missed.calculate(&bars);
 //! // The pivot high at bar 2 is confirmed at bar 4 and is still missed.
-//! assert_eq!(missed.values().value(0, 3), None);
-//! assert_eq!(missed.values().value(0, 4), Some(10.0));
-//! assert_eq!(missed.zones()[0].bars, 2..6);
+//! assert_eq!(missed.zones().len(), 1);
+//! assert_eq!((missed.zones()[0].bars.clone(), missed.zones()[0].top), (2..6, 10.0));
 //! ```
 
 use super::clamp_param;
@@ -162,17 +159,7 @@ impl Indicator for MissedPivots {
                 while state.levels.len() > max_levels {
                     state.levels.pop_front();
                 }
-                let missed = |high: bool| {
-                    state
-                        .levels
-                        .iter()
-                        .filter(move |l| l.high == high && l.revisited.is_none())
-                        .map(|l| l.price)
-                };
-                IndicatorValue::Multiple(vec![
-                    missed(true).fold(f64::NAN, f64::min),
-                    missed(false).fold(f64::NAN, f64::max),
-                ])
+                IndicatorValue::None
             });
         let state = self.stepper.state();
         self.zones = state
@@ -246,10 +233,11 @@ mod tests {
             .collect()
     }
 
-    /// A hand-labelled history with pivots of one bar each side. The pivot high 10 at bar 1 is
-    /// confirmed at bar 2 and revisited at bar 5, whose high 9.96 is within 0.5% of 10 (10 - 0.05 = 9.95);
-    /// the pivot low 4 at bar 3 is confirmed at bar 4 and still missed, bar 5 lows staying above
-    /// 4 * 1.005 = 4.02; the pivot high 9.96 at bar 5 is confirmed at bar 6 and missed.
+    /// A hand-labelled history with pivots of one bar each side, given to the study a bar at a
+    /// time. The pivot high 10 at bar 1 is confirmed at bar 2 and revisited at bar 5, whose high
+    /// 9.96 is within 0.5% of 10 (10 - 0.05 = 9.95); the pivot low 4 at bar 3 is confirmed at
+    /// bar 4 and still missed, bar 5 lows staying above 4 * 1.005 = 4.02; the pivot high 9.96 at
+    /// bar 5 is confirmed at bar 6 and missed.
     #[test]
     fn levels_are_confirmed_missed_and_revisited() {
         let data = bars(&[
@@ -261,20 +249,22 @@ mod tests {
             (9.96, 8.0),
             (8.0, 6.0),
         ]);
+        // Bars seen, then the zones (bars, price, plot) at that point.
+        let want: [(usize, Vec<(std::ops::Range<usize>, f64, usize)>); 4] = [
+            (2, vec![]),
+            (3, vec![(1..3, 10.0, 0)]),
+            (5, vec![(1..5, 10.0, 0), (3..5, 4.0, 1)]),
+            (7, vec![(1..6, 10.0, 0), (3..7, 4.0, 1), (5..7, 9.96, 0)]),
+        ];
         let mut missed = MissedPivots::new(1, 1, 0.5, 20);
-        missed.calculate(&data);
-        let row = |bar| (missed.values().value(0, bar), missed.values().value(1, bar));
-        assert_eq!(row(1), (None, None));
-        assert_eq!(row(2), (Some(10.0), None));
-        assert_eq!(row(4), (Some(10.0), Some(4.0)));
-        // Revisited at bar 5: no missed high until the new pivot high is confirmed at bar 6.
-        assert_eq!(row(5), (None, Some(4.0)));
-        assert_eq!(row(6), (Some(9.96), Some(4.0)));
-        let zones: Vec<_> = missed
-            .zones()
-            .iter()
-            .map(|z| (z.bars.clone(), z.top, z.plot))
-            .collect();
-        assert_eq!(zones, [(1..6, 10.0, 0), (3..7, 4.0, 1), (5..7, 9.96, 0)]);
+        for (seen, zones) in want {
+            missed.calculate(&data[..seen]);
+            let got: Vec<_> = missed
+                .zones()
+                .iter()
+                .map(|z| (z.bars.clone(), z.top, z.plot))
+                .collect();
+            assert_eq!(got, zones, "after {seen} bars");
+        }
     }
 }
