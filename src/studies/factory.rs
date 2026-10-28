@@ -259,6 +259,7 @@ impl IndicatorFactory {
                 MajorityRule,
                 AccumulationSwingIndex,
                 Seasonality,
+                LunarPhases,
                 Performance,
             ],
             "Price" => [
@@ -1217,6 +1218,7 @@ mod tests {
             Box::new(AutoDrawing::new(AutoDrawingKind::Pitchfork, x(5.0), l(0))),
             Box::new(PivotPointsHighLow::new(l(0), l(1), l(2), l(3))),
             Box::new(WilliamsFractals::new(l(0))),
+            Box::new(LunarPhases::new()),
             Box::new(Gaps::new(l(0), x(30.0)).with_trail_limit(Some(l(1)))),
             Box::new(Gaps::new(l(0), x(30.0)).with_partial_closing(true)),
             Box::new(RsiDivergence::new(l(0), l(1), l(2), l(3), 60)),

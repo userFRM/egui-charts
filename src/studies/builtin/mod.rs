@@ -56,7 +56,7 @@
 //!
 //! ## Statistics
 //! [`LinearRegression`], [`StandardError`],
-//! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`]
+//! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`], [`LunarPhases`]
 //!
 //! ## Time
 //! [`TradingSessions`]
@@ -152,6 +152,7 @@ mod std_dev;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod auto_drawing;
 mod gaps;
+mod lunar_phases;
 mod pivot_points;
 mod pivot_points_high_low;
 mod rsi_divergence;
@@ -354,6 +355,7 @@ pub use std_dev::StandardDeviation;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
 pub use gaps::Gaps;
+pub use lunar_phases::{LunarPhase, LunarPhases, MoonPhase, lunar_phases};
 pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
 pub use pivot_points_high_low::PivotPointsHighLow;
 pub use rsi_divergence::RsiDivergence;
