@@ -276,7 +276,8 @@ pub enum DataStatus {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Session {
-    /// Regular windows. With no regular or extended windows, the session is always open.
+    /// Regular windows. With no regular or extended windows, the session is always open, apart
+    /// from its holidays and the dates in [`overrides`](Self::overrides).
     pub windows: Vec<SessionWindow>,
     /// Pre-market and post-market windows in the exchange zone.
     pub extended_windows: Vec<SessionWindow>,
@@ -343,7 +344,8 @@ pub struct SessionOverride {
 
 impl SessionOverride {
     /// A closure: every window of `date` is closed. Add hours with
-    /// [`with_windows`](Self::with_windows) and [`with_extended_windows`](Self::with_extended_windows).
+    /// [`with_windows`](Self::with_windows) and
+    /// [`with_extended_windows`](Self::with_extended_windows).
     pub fn new(date: NaiveDate) -> Self {
         Self {
             date,

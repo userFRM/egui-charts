@@ -84,8 +84,9 @@ pub trait Profiles: MaybeSend + 'static {
 
     /// Follows `id` when `follow` is true, otherwise unfollows it. Push the profile with its new
     /// [`Profile::followed`] as [`ProfileEvent::Upsert`] first, then answer `Ok` once the relation
-    /// changed, or with a [`FeedError`](crate::data::FeedError) the user can read if the host refused. Authorisation
-    /// belongs to the host: refuse a request the signed-in user may not make.
+    /// changed, or with a [`FeedError`](crate::data::FeedError) the user can read if the host
+    /// refused. Authorization belongs to the host: refuse a request the signed-in user may not
+    /// make.
     fn follow(&self, id: ProfileId, follow: bool, reply: Reply<()>);
 }
 
