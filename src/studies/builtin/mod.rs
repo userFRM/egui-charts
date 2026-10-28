@@ -48,8 +48,8 @@
 //! [`VwapAutoAnchored`], [`Volume24h`], [`RelativeVolumeAtTime`]
 //!
 //! ## Support / resistance
-//! [`PivotPoints`], [`PivotPointsHighLow`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
-//! [`PriceChannel`]
+//! [`PivotPoints`], [`IntradayPivotPoints`], [`ProjectedPivotPoints`], [`PivotPointsHighLow`],
+//! [`MissedPivots`], [`KeyLevels`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`], [`PriceChannel`]
 //!
 //! ## Patterns
 //! [`CandlestickPatterns`]
@@ -152,8 +152,12 @@ mod std_dev;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod auto_drawing;
 mod gaps;
+mod intraday_pivot_points;
+mod key_levels;
+mod missed_pivots;
 mod pivot_points;
 mod pivot_points_high_low;
+mod projected_pivot_points;
 mod rsi_divergence;
 mod williams_fractals;
 mod zigzag;
@@ -355,8 +359,12 @@ pub use std_dev::StandardDeviation;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
 pub use gaps::Gaps;
+pub use intraday_pivot_points::IntradayPivotPoints;
+pub use key_levels::KeyLevels;
+pub use missed_pivots::MissedPivots;
 pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
 pub use pivot_points_high_low::PivotPointsHighLow;
+pub use projected_pivot_points::ProjectedPivotPoints;
 pub use rsi_divergence::RsiDivergence;
 pub use williams_fractals::WilliamsFractals;
 pub use zigzag::{ZigZag, ZigZagMode, ZigZagPivot};
