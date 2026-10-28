@@ -367,6 +367,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- A deselected rectangle draws its border, fill and label only. Its centre guides and size labels appear while it is selected or being drawn, and its corner dots, which duplicated the selection handles, are gone. ([#1169](https://github.com/userFRM/egui-charts/issues/1169))
+
+- Footprint cells and statistics columns at the edges of the plot show complete numbers or none; a number the plot edge would cut is left out. ([#1170](https://github.com/userFRM/egui-charts/issues/1170))
+
 - The magnet crosshair also snaps to the visible outputs of studies on shared, independent and unlabelled scales and to the values of visible comparison series, each converted through its own scale. Hidden, missing and non-finite values are skipped, and an equal distance keeps the bar's own price first, then studies, then series. ([#1107](https://github.com/userFRM/egui-charts/issues/1107))
 
 - `ChartLayout` crosshair sync forwards the source chart's main-pane price with its time, so synchronized charts show the horizontal line and price label at the same price. Over volume or an indicator pane only the time is shared, and both clear when the pointer leaves. ([#1108](https://github.com/userFRM/egui-charts/issues/1108))
