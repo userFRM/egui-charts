@@ -13,8 +13,11 @@ use egui::{
     Shape, Stroke, TextStyle, Ui, pos2, vec2,
 };
 
+use super::market_details::WatchlistDetails;
 use super::object_tree::price_decimals;
+use super::symbol_details::detail_section;
 use crate::data::inbox::Inbox;
+use crate::data::{CalendarEvent, NewsStory};
 use crate::icons::icons;
 use crate::model::Quote;
 use crate::scales::{CurrencyFormatter, PriceFormatter, StudyFormat};
@@ -59,6 +62,17 @@ impl WatchlistColumn {
     /// The columns after the symbol that the panel shows by default.
     pub const DEFAULT: [Self; 3] = [Self::Last, Self::Change, Self::ChangePercent];
 
+    /// The columns after the symbol in the wide view: all of them.
+    pub const WIDE: [Self; 7] = [
+        Self::Last,
+        Self::Change,
+        Self::ChangePercent,
+        Self::Volume,
+        Self::ExtendedLast,
+        Self::ExtendedChange,
+        Self::ExtendedChangePercent,
+    ];
+
     fn label(self) -> &'static str {
         match self {
             Self::Symbol => "Symbol",
@@ -96,6 +110,21 @@ impl WatchlistColumn {
     }
 }
 
+/// A section of the wide watchlist.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WatchlistSection {
+    /// The table of quotes.
+    #[default]
+    Overview,
+    /// Earnings of the shown symbols.
+    Earnings,
+    /// Dividends of the shown symbols.
+    Dividends,
+    /// News about the shown symbols.
+    News,
+}
+
 /// An action the host handles.
 #[derive(Clone, Debug, PartialEq, Default)]
 #[non_exhaustive]
@@ -108,8 +137,11 @@ pub enum WatchlistAction {
     /// Let the user pick a symbol, such as with symbol search, and pass it to
     /// [`WatchlistPanel::add_symbol`].
     AddSymbol,
-    /// Show the active list in the host's full-size view.
+    /// Show the active list in the host's full-size view, drawn with
+    /// [`WatchlistPanel::show_wide`].
     AdvancedView,
+    /// Return from the wide view to the compact panel, drawn with [`WatchlistPanel::show`].
+    CompactView,
     /// Read a text file the user chooses and pass it to [`WatchlistPanel::import`].
     Import,
     /// Save `text`, the active list in the [`Watchlist::from_text`] format, to a file the user
@@ -153,6 +185,7 @@ pub struct WatchlistPanel {
     /// The columns after the symbol.
     columns: Vec<WatchlistColumn>,
     sort: Option<(WatchlistColumn, bool)>,
+    section: WatchlistSection,
     /// Shows the symbols flagged this way in any list instead of the active list.
     flag_filter: Option<WatchlistFlag>,
     selected: Option<String>,
@@ -185,6 +218,7 @@ impl WatchlistPanel {
             marks: HashMap::new(),
             columns: WatchlistColumn::DEFAULT.to_vec(),
             sort: None,
+            section: WatchlistSection::default(),
             flag_filter: None,
             selected: None,
             service: None,
@@ -347,15 +381,31 @@ impl WatchlistPanel {
 
     /// Render the active list and return the host action.
     pub fn show(&mut self, ui: &mut Ui) -> WatchlistAction {
+        self.show_with(ui, None)
+    }
+
+    /// Render the active list in the wide view: the table with every [`WatchlistColumn::WIDE`]
+    /// column, and tabs for the earnings, dividends and news of `details`, which the host
+    /// fills for the [`symbols`](Self::symbols) shown. The sections list the rows of the
+    /// selected symbol, or of every shown symbol while none of them is selected. Selection,
+    /// sorting, the active list and the flag filter are those of [`show`](Self::show), so
+    /// switching views keeps them. Returns [`WatchlistAction::CompactView`] from its view button.
+    pub fn show_wide(&mut self, ui: &mut Ui, details: &WatchlistDetails) -> WatchlistAction {
+        self.show_with(ui, Some(details))
+    }
+
+    fn show_with(&mut self, ui: &mut Ui, wide: Option<&WatchlistDetails>) -> WatchlistAction {
         let mut action = WatchlistAction::None;
+        let shown_symbols: Vec<String> = self.symbols().map(str::to_owned).collect();
         let Self {
             lists,
             active,
             quotes,
             decimals,
             marks,
-            columns: shown_columns,
+            columns: compact_columns,
             sort,
+            section,
             flag_filter,
             selected,
             ..
@@ -372,11 +422,19 @@ impl WatchlistPanel {
                     .show(ui),
             );
             if IconButton::new(&icons::TABLE)
-                .tooltip("Advanced view")
+                .tooltip(if wide.is_some() {
+                    "Compact view"
+                } else {
+                    "Advanced view"
+                })
                 .show(ui)
                 .clicked()
             {
-                action = WatchlistAction::AdvancedView;
+                action = if wide.is_some() {
+                    WatchlistAction::CompactView
+                } else {
+                    WatchlistAction::AdvancedView
+                };
             }
             if IconButton::new(&icons::PLUS)
                 .tooltip("Add symbol")
@@ -496,6 +554,32 @@ impl WatchlistPanel {
                 };
             }
         });
+        if let Some(details) = wide {
+            ui.horizontal(|ui| {
+                for (choice, label) in [
+                    (WatchlistSection::Overview, "Overview"),
+                    (WatchlistSection::Earnings, "Earnings"),
+                    (WatchlistSection::Dividends, "Dividends"),
+                    (WatchlistSection::News, "News"),
+                ] {
+                    ui.selectable_value(section, choice, l10n::text(ui.ctx(), label));
+                }
+            });
+            if *section != WatchlistSection::Overview {
+                // The selected symbol's rows, or those of every shown symbol without one.
+                let focus: Vec<&str> = match selected.as_deref() {
+                    Some(symbol) if shown_symbols.iter().any(|shown| shown == symbol) => {
+                        vec![symbol]
+                    }
+                    _ => shown_symbols.iter().map(String::as_str).collect(),
+                };
+                if let Some(symbol) = detail_rows(ui, *section, details, &focus) {
+                    *selected = Some(symbol.clone());
+                    action = WatchlistAction::SelectSymbol(symbol);
+                }
+                return action;
+            }
+        }
         // A flag filter draws copies of the flagged symbols, whose flag changes and removals are
         // applied to their lists after drawing.
         let mut flagged = flag_filter.map(|flag| {
@@ -576,6 +660,11 @@ impl WatchlistPanel {
         // The number columns share 70.5% of the row, 23.5% each by default, which leaves the
         // symbol column room for a six-letter name after its mark; the last column's own gap
         // completes the right margin.
+        let shown_columns: &[WatchlistColumn] = if wide.is_some() {
+            &WatchlistColumn::WIDE
+        } else {
+            compact_columns
+        };
         let numbers = shown_columns.len();
         let columns = |rect: egui::Rect| {
             let right = rect.right() - 4.0;
@@ -1013,6 +1102,112 @@ pub(super) fn grouped(value: f64, decimals: usize) -> String {
         return "-".to_owned();
     }
     CurrencyFormatter::new("", decimals).format(value)
+}
+
+/// Rows of the wide view's section, for the symbols in `focus`; returns the symbol the user
+/// clicked.
+fn detail_rows(
+    ui: &mut Ui,
+    section: WatchlistSection,
+    details: &WatchlistDetails,
+    focus: &[&str],
+) -> Option<String> {
+    let in_focus = |symbol: &str| focus.contains(&symbol);
+    let mut picked = None;
+    egui::ScrollArea::both()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let events = |ui: &mut Ui, id: &str, events: &[CalendarEvent]| -> Option<String> {
+                let mut clicked = None;
+                let mut rows: Vec<&CalendarEvent> = events
+                    .iter()
+                    .filter(|event| event.symbol.as_deref().is_some_and(in_focus))
+                    .collect();
+                rows.sort_by_key(|event| event.time);
+                egui::Grid::new(id).striped(true).show(ui, |ui| {
+                    for heading in ["Date", "Symbol", "Name", "Actual", "Forecast", "Prior"] {
+                        ui.label(RichText::new(l10n::text(ui.ctx(), heading)).strong());
+                    }
+                    ui.end_row();
+                    for event in rows {
+                        ui.label(event.time.format("%Y-%m-%d").to_string());
+                        let symbol = event.symbol.clone().unwrap_or_default();
+                        if ui.link(&symbol).clicked() {
+                            clicked = Some(symbol);
+                        }
+                        ui.label(l10n::text(ui.ctx(), &event.title));
+                        for figure in [&event.actual, &event.forecast, &event.prior] {
+                            ui.label(figure.as_deref().unwrap_or("-"));
+                        }
+                        ui.end_row();
+                    }
+                });
+                clicked
+            };
+            let has_event = |events: &[CalendarEvent]| {
+                events
+                    .iter()
+                    .any(|event| event.symbol.as_deref().is_some_and(in_focus))
+            };
+            match section {
+                WatchlistSection::Overview => {}
+                WatchlistSection::Earnings => detail_section(
+                    ui,
+                    "Earnings",
+                    &details.earnings,
+                    |list| !has_event(list),
+                    |ui, list| picked = events(ui, "watchlist_earnings", list),
+                ),
+                WatchlistSection::Dividends => detail_section(
+                    ui,
+                    "Dividends",
+                    &details.dividends,
+                    |list| !has_event(list),
+                    |ui, list| picked = events(ui, "watchlist_dividends", list),
+                ),
+                WatchlistSection::News => {
+                    let about =
+                        |story: &NewsStory| story.symbols.iter().any(|symbol| in_focus(symbol));
+                    detail_section(
+                        ui,
+                        "News",
+                        &details.news,
+                        |stories| !stories.iter().any(about),
+                        |ui, stories| {
+                            let mut rows: Vec<&NewsStory> =
+                                stories.iter().filter(|story| about(story)).collect();
+                            rows.sort_by_key(|story| std::cmp::Reverse(story.time));
+                            egui::Grid::new("watchlist_news")
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    for heading in ["Time", "Source", "Headline", "Symbols"] {
+                                        ui.label(
+                                            RichText::new(l10n::text(ui.ctx(), heading)).strong(),
+                                        );
+                                    }
+                                    ui.end_row();
+                                    for story in rows {
+                                        ui.label(story.time.format("%Y-%m-%d %H:%M").to_string());
+                                        ui.label(l10n::text(ui.ctx(), &story.source));
+                                        ui.label(l10n::text(ui.ctx(), &story.headline));
+                                        ui.horizontal(|ui| {
+                                            for symbol in
+                                                story.symbols.iter().filter(|s| in_focus(s))
+                                            {
+                                                if ui.link(symbol).clicked() {
+                                                    picked = Some(symbol.clone());
+                                                }
+                                            }
+                                        });
+                                        ui.end_row();
+                                    }
+                                });
+                        },
+                    );
+                }
+            }
+        });
+    picked
 }
 
 /// Where each symbol flagged `flag` first appears: its list and item index, in list order.
@@ -1488,5 +1683,71 @@ mod tests {
         (0..=10_000).for_each(|_| second.push(("A".into(), quote(1.0))));
         panel.poll(&ctx);
         assert_eq!(stream(2).0, ["A", "B", "D"]);
+    }
+
+    /// Switching between the compact and wide views keeps the selection and the sort, the wide
+    /// sections list only the selected symbol's rows (every shown symbol's without a selection),
+    /// and a section that is loading, failed or empty says so.
+    #[test]
+    fn wide_view_keeps_selection_and_sort_and_states_each_section() {
+        use crate::data::{CalendarEvent, CalendarKind};
+        use crate::ui::widget_bar::MarketDetail;
+        let ctx = egui::Context::default();
+        let texts = |panel: &mut WatchlistPanel, details: Option<&WatchlistDetails>| {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                match details {
+                    Some(details) => panel.show_wide(ui, details),
+                    None => panel.show(ui),
+                };
+            });
+            let texts: Vec<String> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            texts
+        };
+        let time: chrono::DateTime<chrono::Utc> = "2026-10-28T12:00:00Z".parse().unwrap();
+        let event = |symbol: &str, title: &str| {
+            let mut event = CalendarEvent::new(symbol, CalendarKind::Earnings, time, title);
+            event.symbol = Some(symbol.into());
+            event
+        };
+        let mut details = WatchlistDetails::default();
+        let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "AAA,BBB")]);
+        panel.set_quote("AAA", Quote::new(10.0, 9.0, time).with_volume(5.0));
+        (panel.selected, panel.sort) = (Some("BBB".into()), Some((WatchlistColumn::Volume, true)));
+        let compact = texts(&mut panel, None);
+        assert!(
+            !compact.contains(&"Vol".into()),
+            "compact view omits volume"
+        );
+        assert!(texts(&mut panel, Some(&details)).contains(&"Vol".into()));
+        panel.section = WatchlistSection::Earnings;
+        assert!(texts(&mut panel, Some(&details)).contains(&"Not available".into()));
+        details.earnings = MarketDetail::Loading;
+        assert!(texts(&mut panel, Some(&details)).contains(&"Loading…".into()));
+        details.earnings = MarketDetail::Failed("down".into());
+        assert!(texts(&mut panel, Some(&details)).contains(&"down".into()));
+        details.earnings =
+            MarketDetail::Ready(vec![event("AAA", "Alpha Inc"), event("ZZZ", "Other")]);
+        assert!(
+            texts(&mut panel, Some(&details)).contains(&"No data".into()),
+            "BBB has no rows"
+        );
+        panel.selected = None;
+        let shown = texts(&mut panel, Some(&details));
+        assert!(shown.contains(&"Alpha Inc".into()) && !shown.contains(&"Other".into()));
+        panel.selected = Some("BBB".into());
+        panel.section = WatchlistSection::Overview;
+        texts(&mut panel, None);
+        assert_eq!(
+            (panel.selected.as_deref(), panel.sort),
+            (Some("BBB"), Some((WatchlistColumn::Volume, true)))
+        );
     }
 }

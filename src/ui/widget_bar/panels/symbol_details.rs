@@ -10,6 +10,7 @@ use egui::text::LayoutJob;
 use egui::{Align, Color32, Label, Layout, RichText, Sense, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
+use super::market_details::{MarketDetail, MarketDetailRequest, PeriodReturn, Seasonality};
 use super::object_tree::price_decimals;
 use super::watchlist::{HEADER_HEIGHT, grouped, signed, weighted};
 use crate::data::inbox::Inbox;
@@ -27,7 +28,17 @@ const PRICE_SIZE: f32 = 26.0;
 /// Text size of the extended-hours price.
 const EXTENDED_PRICE_SIZE: f32 = 18.0;
 /// The sections the layout menu shows or hides, in panel order.
-const SECTIONS: [&str; 4] = ["Volume", "Key statistics", "Profile", "Notes"];
+const SECTIONS: [&str; 6] = [
+    "Volume",
+    "Key statistics",
+    "Profile",
+    "Performance",
+    "Seasonality",
+    "Notes",
+];
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 #[derive(Serialize, Deserialize)]
 struct NotesDocument {
@@ -72,6 +83,13 @@ enum Request {
 /// [`show`](Self::show) while it is open. The More menu's Financials item is reported by
 /// [`take_financials_request`](Self::take_financials_request), for the host to open a
 /// [`FinancialsPanel`](crate::ui::financials::FinancialsPanel) with the company's figures.
+///
+/// The Performance and Seasonality sections show what the host supplies. Call
+/// [`take_market_requests`](Self::take_market_requests) each frame: the first call for a symbol
+/// returns its [`MarketDetailRequest`]s and shows both sections as loading, and the host answers
+/// with [`set_period_returns`](Self::set_period_returns) and
+/// [`set_seasonality`](Self::set_seasonality). A host that never calls it sees neither section.
+/// Each section says whether it is loading, empty, unavailable or failed.
 #[derive(Default)]
 pub struct SymbolDetailsPanel {
     instrument: Option<Instrument>,
@@ -81,6 +99,8 @@ pub struct SymbolDetailsPanel {
     timezone: TimezoneId,
     hidden: HashSet<&'static str>,
     details: Option<SymbolDetails>,
+    returns: Option<MarketDetail<Vec<PeriodReturn>>>,
+    seasonality: Option<MarketDetail<Seasonality>>,
     error: Option<String>,
     notes: HashMap<String, Notes>,
     feed: Option<Arc<dyn Datafeed>>,
@@ -126,6 +146,8 @@ impl SymbolDetailsPanel {
             self.quote = None;
             self.average_volume = None;
             self.details = None;
+            self.returns = None;
+            self.seasonality = None;
             self.error = None;
             self.request_details(instrument.symbol.clone());
             // Notes not read yet and not being read, such as after a failed read, are read again.
@@ -163,6 +185,42 @@ impl SymbolDetailsPanel {
     /// Whether the user chose Financials in the More menu since the last call.
     pub fn take_financials_request(&mut self) -> bool {
         std::mem::take(&mut self.financials_requested)
+    }
+
+    /// The market detail the sections still lack for the shown symbol, each returned once; it
+    /// marks them loading. Call it every frame and answer with
+    /// [`set_period_returns`](Self::set_period_returns) and
+    /// [`set_seasonality`](Self::set_seasonality).
+    pub fn take_market_requests(&mut self) -> Vec<MarketDetailRequest> {
+        let Some(symbol) = self.symbol().map(str::to_owned) else {
+            return Vec::new();
+        };
+        let mut requests = Vec::new();
+        if self.returns.is_none() {
+            self.returns = Some(MarketDetail::Loading);
+            requests.push(MarketDetailRequest::PeriodReturns(symbol.clone()));
+        }
+        if self.seasonality.is_none() {
+            self.seasonality = Some(MarketDetail::Loading);
+            requests.push(MarketDetailRequest::Seasonality(symbol));
+        }
+        requests
+    }
+
+    /// Answers the [`MarketDetailRequest::PeriodReturns`] of `symbol`. An answer for a symbol the
+    /// panel no longer shows is ignored.
+    pub fn set_period_returns(&mut self, symbol: &str, returns: MarketDetail<Vec<PeriodReturn>>) {
+        if self.symbol() == Some(symbol) {
+            self.returns = Some(returns);
+        }
+    }
+
+    /// Answers the [`MarketDetailRequest::Seasonality`] of `symbol`. An answer for a symbol the
+    /// panel no longer shows is ignored.
+    pub fn set_seasonality(&mut self, symbol: &str, seasonality: MarketDetail<Seasonality>) {
+        if self.symbol() == Some(symbol) {
+            self.seasonality = Some(seasonality);
+        }
     }
 
     /// The shown symbol, if any.
@@ -317,6 +375,8 @@ impl SymbolDetailsPanel {
             timezone,
             hidden,
             details,
+            returns,
+            seasonality,
             error,
             notes,
             financials_requested,
@@ -550,6 +610,89 @@ impl SymbolDetailsPanel {
                         }
                     }
                 }
+                if let Some(returns) = returns.as_ref().filter(|_| shown("Performance")) {
+                    detail_section(
+                        ui,
+                        "Performance",
+                        returns,
+                        |rows| rows.is_empty(),
+                        |ui, rows| {
+                            for row in rows {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(l10n::text(ui.ctx(), &row.period))
+                                            .color(theme.ui.text_secondary),
+                                    );
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        let (text, color) = percent_text(row.percent, &theme);
+                                        ui.label(
+                                            RichText::new(l10n::text(ui.ctx(), text)).color(color),
+                                        );
+                                    });
+                                });
+                            }
+                        },
+                    );
+                }
+                if let Some(seasonality) = seasonality.as_ref().filter(|_| shown("Seasonality")) {
+                    detail_section(
+                        ui,
+                        "Seasonality",
+                        seasonality,
+                        |seasonality| seasonality.months.is_empty(),
+                        |ui, seasonality| {
+                            ui.label(
+                                RichText::new(l10n::format_text(
+                                    ui.ctx(),
+                                    "Average monthly return over {0} years",
+                                    &[("0", seasonality.years.to_string())],
+                                ))
+                                .size(theme.text.small)
+                                .color(theme.ui.text_secondary),
+                            );
+                            egui::Grid::new("seasonality_months")
+                                .num_columns(4)
+                                .spacing(vec2(theme.spacing.md, theme.spacing.sm))
+                                .show(ui, |ui| {
+                                    for (index, month) in seasonality
+                                        .months
+                                        .iter()
+                                        .filter(|month| (1..=12).contains(&month.month))
+                                        .enumerate()
+                                    {
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                RichText::new(l10n::text(
+                                                    ui.ctx(),
+                                                    MONTHS[usize::from(month.month) - 1],
+                                                ))
+                                                .size(theme.text.small)
+                                                .color(theme.ui.text_secondary),
+                                            );
+                                            let (text, color) =
+                                                percent_text(month.average_percent, &theme);
+                                            ui.label(
+                                                RichText::new(l10n::text(ui.ctx(), text))
+                                                    .color(color),
+                                            );
+                                            let share = month.positive_share.map_or_else(
+                                                || "-".to_owned(),
+                                                |share| format!("{:.0}% up", share * 100.0),
+                                            );
+                                            ui.label(
+                                                RichText::new(l10n::text(ui.ctx(), share))
+                                                    .size(theme.text.small)
+                                                    .color(theme.ui.text_secondary),
+                                            );
+                                        });
+                                        if index % 4 == 3 {
+                                            ui.end_row();
+                                        }
+                                    }
+                                });
+                        },
+                    );
+                }
                 if shown("Notes") {
                     ui.add_space(theme.spacing.md);
                     ui.label(RichText::new(l10n::text(ui.ctx(), "Notes")).strong());
@@ -570,6 +713,47 @@ impl SymbolDetailsPanel {
                     status_message(ui, MessageKind::Error, error);
                 }
             });
+    }
+}
+
+/// A signed percentage in the rising or falling colour, or a dash when the host lacks it.
+fn percent_text(percent: Option<f64>, theme: &crate::theme::Theme) -> (String, Color32) {
+    match percent.filter(|percent| percent.is_finite()) {
+        Some(percent) => (
+            format!("{}%", signed(percent, 2)),
+            if percent > 0.0 {
+                theme.chart.candle_up
+            } else if percent < 0.0 {
+                theme.chart.candle_down
+            } else {
+                theme.ui.text
+            },
+        ),
+        None => ("-".to_owned(), theme.ui.text_secondary),
+    }
+}
+
+/// A titled section that says what a host-supplied answer is: still loading, empty, not supplied
+/// or failed, and otherwise draws it with `body`.
+pub(super) fn detail_section<T>(
+    ui: &mut Ui,
+    title: &str,
+    state: &MarketDetail<T>,
+    is_empty: impl Fn(&T) -> bool,
+    body: impl FnOnce(&mut Ui, &T),
+) {
+    let theme = ui.active_theme();
+    ui.add_space(theme.spacing.md);
+    ui.label(RichText::new(l10n::text(ui.ctx(), title)).strong());
+    let note = |ui: &mut Ui, text: &str| {
+        ui.label(RichText::new(l10n::text(ui.ctx(), text)).color(theme.ui.text_secondary));
+    };
+    match state {
+        MarketDetail::Loading => note(ui, "Loading…"),
+        MarketDetail::Unavailable => note(ui, "Not available"),
+        MarketDetail::Failed(message) => status_message(ui, MessageKind::Error, message),
+        MarketDetail::Ready(value) if is_empty(value) => note(ui, "No data"),
+        MarketDetail::Ready(value) => body(ui, value),
     }
 }
 
@@ -874,5 +1058,72 @@ mod tests {
         for (offset, label) in [(0, "UTC"), (-5 * 3600, "GMT-5"), (-12600, "GMT-3:30")] {
             assert_eq!(zone_label(offset), label);
         }
+    }
+
+    /// The sections ask once per symbol, ignore answers for another symbol, and say whether they
+    /// are loading, empty, unavailable or failed instead of leaving a blank. A regression shows
+    /// the previous symbol's figures, asks every frame, or hides a failure.
+    #[test]
+    fn market_detail_sections_ask_once_and_state_what_the_host_answered() {
+        use crate::ui::widget_bar::SeasonalityMonth;
+        let ctx = egui::Context::default();
+        let mut panel = SymbolDetailsPanel::new();
+        assert!(panel.take_market_requests().is_empty(), "no symbol");
+        panel.set_instrument(&Instrument::new("AAA"));
+        assert!(!texts(&ctx, &mut panel).contains(&"Performance".into()));
+        assert_eq!(
+            panel.take_market_requests(),
+            [
+                MarketDetailRequest::PeriodReturns("AAA".into()),
+                MarketDetailRequest::Seasonality("AAA".into())
+            ]
+        );
+        assert!(panel.take_market_requests().is_empty());
+        let shown = texts(&ctx, &mut panel);
+        assert_eq!(shown.iter().filter(|t| *t == "Loading…").count(), 2);
+        panel.set_period_returns(
+            "OLD",
+            MarketDetail::Ready(vec![PeriodReturn::new("1M", Some(9.0))]),
+        );
+        panel.set_period_returns(
+            "AAA",
+            MarketDetail::Ready(vec![
+                PeriodReturn::new("1M", Some(2.5)),
+                PeriodReturn::new("1Y", Some(-10.0)),
+                PeriodReturn::new("5Y", None),
+            ]),
+        );
+        panel.set_seasonality("AAA", MarketDetail::Failed("feed offline".into()));
+        let shown = texts(&ctx, &mut panel);
+        for text in ["+2.50%", "-10.00%", "-", "feed offline"] {
+            assert!(shown.contains(&text.into()), "{text}: {shown:?}");
+        }
+        assert!(!shown.contains(&"+9.00%".into()));
+        panel.set_period_returns("AAA", MarketDetail::Ready(vec![]));
+        panel.set_seasonality(
+            "AAA",
+            MarketDetail::Ready(Seasonality::new(
+                20,
+                vec![SeasonalityMonth::new(1, Some(1.25), Some(0.65))],
+            )),
+        );
+        let shown = texts(&ctx, &mut panel);
+        for text in [
+            "No data",
+            "Jan",
+            "+1.25%",
+            "65% up",
+            "Average monthly return over 20 years",
+        ] {
+            assert!(shown.contains(&text.into()), "{text}: {shown:?}");
+        }
+        panel.set_period_returns("AAA", MarketDetail::Unavailable);
+        assert!(texts(&ctx, &mut panel).contains(&"Not available".into()));
+        panel.set_instrument(&Instrument::new("BBB"));
+        assert_eq!(
+            panel.take_market_requests().len(),
+            2,
+            "a new symbol asks again"
+        );
     }
 }

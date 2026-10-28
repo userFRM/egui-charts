@@ -391,6 +391,8 @@ pub struct DemoApp {
     quotes: Arc<live::DemoQuotes>,
     // Text pasted for a watchlist import, while its window is open.
     watchlist_import: Option<String>,
+    /// Whether the wide watchlist window is open.
+    watchlist_wide: bool,
     // Symbol search is open for the watchlist's add button: the pick joins the list.
     watchlist_search: bool,
     time_and_sales: TimeAndSalesPanel,
@@ -648,6 +650,7 @@ impl DemoApp {
             ),
             quotes,
             watchlist_import: None,
+            watchlist_wide: false,
             watchlist_search: false,
             time_and_sales: TimeAndSalesPanel::default(),
             symbol_details: SymbolDetailsPanel::new(),
@@ -1390,6 +1393,7 @@ impl eframe::App for DemoApp {
         self.show_replay_start(&ctx);
         self.show_dialogs(&ctx);
         self.show_watchlist_import(&ctx);
+        self.show_wide_watchlist(&ctx);
 
         // Transient status notice.
         self.show_notice(ui);
@@ -2167,6 +2171,19 @@ impl DemoApp {
         }
         self.symbol_details
             .set_average_volume(self.live.daily_volume().1);
+        for request in self.symbol_details.take_market_requests() {
+            use egui_charts::ui::widget_bar::{MarketDetail, MarketDetailRequest};
+            let bars = self.chart.bars(SeriesId::MAIN);
+            match request {
+                MarketDetailRequest::PeriodReturns(symbol) => self
+                    .symbol_details
+                    .set_period_returns(&symbol, MarketDetail::Ready(feeds::period_returns(bars))),
+                MarketDetailRequest::Seasonality(symbol) => self
+                    .symbol_details
+                    .set_seasonality(&symbol, MarketDetail::Ready(feeds::seasonality(bars))),
+                _ => {}
+            }
+        }
         // Open financials follow the chart's symbol.
         if self.symbol_details.take_financials_request()
             || (self.financials.as_ref()).is_some_and(|(symbol, _)| *symbol != chart_symbol)
@@ -2248,14 +2265,70 @@ impl DemoApp {
                 self.watchlist_search = true;
                 self.symbol_search.open();
             }
-            WatchlistAction::AdvancedView => {
-                self.notify("The advanced watchlist view is not part of this demo")
-            }
+            WatchlistAction::AdvancedView => self.watchlist_wide = true,
             WatchlistAction::Import => self.watchlist_import = Some(String::new()),
             WatchlistAction::Export { text, .. } => self.save_text("watchlist.txt", &text),
             WatchlistAction::None => {}
             _ => {}
         }
+    }
+
+    /// The wide watchlist in a window, with the synthetic earnings, dividends and news of its
+    /// symbols. It shares the compact panel's selection and sorting.
+    fn show_wide_watchlist(&mut self, ctx: &egui::Context) {
+        use egui_charts::data::{CalendarEvent, CalendarKind, NewsStory};
+        use egui_charts::ui::widget_bar::{MarketDetail, WatchlistDetails};
+        if !self.watchlist_wide {
+            return;
+        }
+        let now = chrono::Utc::now();
+        let mut details = WatchlistDetails::default();
+        let (mut earnings, mut dividends, mut news) = (Vec::new(), Vec::new(), Vec::new());
+        for (n, symbol) in self.watchlist.symbols().enumerate() {
+            let days = chrono::Duration::days(n as i64 % 20 + 1);
+            let event = |kind, time, title: String| {
+                let mut event = CalendarEvent::new(format!("{symbol}-{kind:?}"), kind, time, title);
+                event.symbol = Some(symbol.to_owned());
+                event
+            };
+            let mut report = event(
+                CalendarKind::Earnings,
+                now + days,
+                format!("{symbol} quarterly results"),
+            );
+            (report.forecast, report.prior) = (Some("1.24".into()), Some("1.17".into()));
+            earnings.push(report);
+            let mut payout = event(
+                CalendarKind::Dividends,
+                now + days * 2,
+                format!("{symbol} dividend"),
+            );
+            payout.forecast = Some("0.42".into());
+            dividends.push(payout);
+            let mut story = NewsStory::new(
+                format!("{symbol}-story"),
+                now - chrono::Duration::hours(n as i64 + 1),
+                format!("{symbol} extends its range as volume rises"),
+            );
+            story.source = "Demo wire".into();
+            story.symbols = vec![symbol.to_owned()];
+            news.push(story);
+        }
+        details.earnings = MarketDetail::Ready(earnings);
+        details.dividends = MarketDetail::Ready(dividends);
+        details.news = MarketDetail::Ready(news);
+        let mut open = true;
+        let mut action = WatchlistAction::None;
+        egui::Window::new("Watchlist")
+            .open(&mut open)
+            .default_size([900.0, 520.0])
+            .show(ctx, |ui| action = self.watchlist.show_wide(ui, &details));
+        match action {
+            WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+            WatchlistAction::CompactView => open = false,
+            _ => {}
+        }
+        self.watchlist_wide = open;
     }
 
     /// The demo has no file picker for imports: the user pastes the exported text instead.
