@@ -81,12 +81,18 @@ impl NotificationsPanel {
         self.inbox.set_waker(move || repaint.request_repaint());
         for (_, answer) in self.inbox.drain().answers {
             if let Ok(entry) = answer.downcast::<Notification>() {
-                self.log.push_back(*entry);
-                self.unread += 1;
-                if self.log.len() > KEPT {
-                    self.log.pop_front();
-                }
+                self.push(*entry);
             }
+        }
+    }
+
+    /// Adds an entry of the host's own, such as an event it logs itself, to the log as unread.
+    /// Entries pushed by the service and by the host share the log.
+    pub fn push(&mut self, entry: Notification) {
+        self.log.push_back(entry);
+        self.unread += 1;
+        if self.log.len() > KEPT {
+            self.log.pop_front();
         }
         self.unread = self.unread.min(self.log.len());
     }

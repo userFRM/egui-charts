@@ -44,6 +44,7 @@ mod time;
 mod trading;
 
 pub use action::Action;
+pub use panels::MarketPanels;
 pub use services::{ExportContents, ExportFile};
 
 use crate::data::Datafeed;
@@ -78,7 +79,6 @@ pub struct Terminal {
     charts: Vec<Chart>,
     layout: ChartLayout,
     active: usize,
-    #[expect(dead_code, reason = "the chart slots added later load from it")]
     feed: Arc<dyn Datafeed>,
     services: services::Services,
     intercept: Option<Intercept>,
@@ -119,7 +119,6 @@ pub struct Terminal {
     replay: replay::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
     alerts: alerts::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     panels: panels::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
     trading: trading::State,
