@@ -1,11 +1,11 @@
 //! A deterministic feed, in-memory storage and frame helpers for the terminal's tests.
 
 use super::{Action, Terminal};
-use crate::data::{Datafeed, HistoryPage, HistoryRequest, Reply};
-use crate::model::{Bar, Instrument, Session, SessionWindow, TimezoneId};
-use crate::services::{Storage, StoreKind};
 use chrono::{NaiveTime, TimeDelta, TimeZone, Utc, Weekday};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
+use egui_charts::data::{Datafeed, HistoryPage, HistoryRequest, Reply};
+use egui_charts::model::{Bar, Instrument, Session, SessionWindow, TimezoneId};
+use egui_charts::services::{Storage, StoreKind};
 use std::collections::HashMap;
 use std::sync::Mutex;
 

@@ -15,7 +15,7 @@ mod support;
 
 use chrono::{DurationRound, TimeDelta, Utc};
 use egui_charts::ChartBuilder;
-use egui_charts::chart::overlays::VolumeBubblesConfig;
+use egui_charts::chart::overlays::{BubbleGrouping, VolumeBubblesConfig};
 use egui_charts::data::{Datafeed, HistoryPage, HistoryRequest, Reply, Subscription};
 use egui_charts::model::{Bar, OrderSide, Tick, Timeframe};
 use egui_charts::theme::Theme;
@@ -50,7 +50,7 @@ impl LiveFeedApp {
             .with_initial_bars(500)
             .build();
         chart.set_volume_bubbles(Some(VolumeBubblesConfig {
-            price_step: Some(0.1),
+            grouping: BubbleGrouping::PriceStep(0.1),
             ..VolumeBubblesConfig::default()
         }));
         Self { chart }

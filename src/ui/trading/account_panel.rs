@@ -752,7 +752,7 @@ impl Trading {
                             symbol: Some(position.symbol.clone()),
                             edit: None,
                             close: capabilities
-                                .market
+                                .close
                                 .then(|| RowAction::Position(position.clone())),
                         }
                     })

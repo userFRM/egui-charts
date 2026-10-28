@@ -18,7 +18,10 @@ impl AlertMonitor {
     fn new(source: &Chart, feed: &LiveFeed, symbol: &str, alert: &Alert) -> Self {
         let live = Arc::new(feed.fork());
         live.set_symbol(symbol);
-        let timeframe = source.timeframe().unwrap_or(Timeframe::Min1);
+        let timeframe = alert
+            .timeframe
+            .or(source.timeframe())
+            .unwrap_or(Timeframe::Min1);
         let mut chart = egui_charts::ChartBuilder::new()
             .with_symbol(symbol)
             .with_timeframe(timeframe)
@@ -88,6 +91,24 @@ impl AlertMonitor {
             studies,
             sources,
             alert_sources: alert_sources(alert).cloned().collect(),
+        }
+    }
+
+    /// The value of `source` at `bar`; study sources name the studies of the chart the alert was
+    /// made on, which `studies` maps to this copy's.
+    fn value(&self, source: &AlertSource, bar: usize) -> Option<f64> {
+        match source {
+            AlertSource::Study { id, output } => {
+                let id = self.studies.get(id)?.0.to_string();
+                self.chart.alert_value(
+                    &AlertSource::Study {
+                        id,
+                        output: *output,
+                    },
+                    bar,
+                )
+            }
+            _ => self.chart.alert_value(source, bar),
         }
     }
 
@@ -255,10 +276,21 @@ impl DemoApp {
         } else {
             self.live.paused()
         };
-        self.alert_host.expire(now);
+        let engine = self.alert_host.engine();
+        engine.tick(now);
+        for list in self.watchlist.lists() {
+            engine.set_watchlist(&list.name, list.symbols().map(str::to_owned).collect());
+        }
         let alerts = self.alerts.alerts();
+        if alerts
+            .iter()
+            .any(|alert| alert.status == AlertStatus::Active && alert.expires.is_some())
+        {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
         self.alert_monitors
             .retain(|(id, _), _| alerts.iter().any(|alert| alert.id.as_ref() == Some(id)));
+        let mut refreshed = Vec::new();
         for alert in alerts
             .iter()
             .filter(|alert| alert.status == AlertStatus::Active)
@@ -323,14 +355,30 @@ impl DemoApp {
                 if !monitor.live.paused() {
                     ctx.request_repaint_after(delay);
                 }
-                self.alert_host.evaluate(
-                    &monitor.chart,
-                    now,
-                    Some(id),
-                    self.watchlist.lists(),
-                    &monitor.studies,
-                );
+                refreshed.push(key);
             }
+        }
+        // The engine evaluates every alert on a symbol and timeframe at once, so each is fed one
+        // series, with a source resolved by the first of its monitors that knows the study or
+        // drawing.
+        let mut fed = Vec::new();
+        for (index, key @ (_, symbol)) in refreshed.iter().enumerate() {
+            let monitor = &self.alert_monitors[key];
+            let timeframe = monitor.chart.timeframe().unwrap_or(Timeframe::Min1);
+            let bars = monitor.chart.bars(SeriesId::MAIN);
+            if fed.contains(&(symbol, timeframe)) {
+                continue;
+            }
+            fed.push((symbol, timeframe));
+            let group: Vec<_> = refreshed[index..]
+                .iter()
+                .filter(|(_, other)| other == symbol)
+                .map(|key| &self.alert_monitors[key])
+                .filter(|other| other.chart.bars(SeriesId::MAIN) == bars)
+                .collect();
+            engine.update(symbol, timeframe, bars, now, |source, bar| {
+                group.iter().find_map(|monitor| monitor.value(source, bar))
+            });
         }
     }
 }
@@ -355,5 +403,34 @@ mod tests {
             let monitor = app.alert_monitors.values().next().unwrap();
             assert_eq!(monitor.live.paused(), paused);
         }
+    }
+
+    /// Two alerts on one symbol fire once each on unchanged bars, although only the later
+    /// alert's monitor knows the study the later alert tests.
+    #[test]
+    fn alerts_on_one_symbol_see_one_series() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        let mut price = Alert::new(app.chart.symbol(), AlertCondition::Above(0.0));
+        price.frequency = egui_charts::model::AlertFrequency::EveryTime;
+        app.alerts.save(price.clone());
+        app.alerts.poll(&ctx, &mut app.toasts);
+        app.monitor_alerts(&ctx);
+        let study = app
+            .chart
+            .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
+        let mut average = price;
+        average.source = AlertSource::Study {
+            id: study.0.to_string(),
+            output: 0,
+        };
+        app.alerts.save(average);
+        for _ in 0..3 {
+            app.alerts.poll(&ctx, &mut app.toasts);
+            app.monitor_alerts(&ctx);
+        }
+        app.alerts.poll(&ctx, &mut app.toasts);
+        assert_eq!(app.alerts.log().len(), 2);
     }
 }

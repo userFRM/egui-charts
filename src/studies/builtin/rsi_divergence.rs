@@ -48,6 +48,10 @@ use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
+/// RSI values closer than this are equal: the RSI is the same number whenever the averages
+/// scale together, as on a flat bar, but rounds to neighbouring floats.
+const RSI_TIE: f64 = 1e-9;
+
 /// Text of the marks on outputs 5 to 8.
 const MARKS: [&str; 4] = ["Bull", "H Bull", "Bear", "H Bear"];
 
@@ -230,14 +234,20 @@ impl Indicator for RsiDivergence {
                     let window = state.window.range(at - self.left..);
                     if window.clone().all(|pivot| pivot.rsi.is_finite()) {
                         for high in [false, true] {
-                            let before = state
-                                .window
-                                .range(at - self.left..at)
-                                .all(|v| if high { v.rsi <= p.rsi } else { v.rsi >= p.rsi });
-                            let after = state
-                                .window
-                                .range(at + 1..)
-                                .all(|v| if high { v.rsi < p.rsi } else { v.rsi > p.rsi });
+                            let before = state.window.range(at - self.left..at).all(|v| {
+                                if high {
+                                    v.rsi <= p.rsi + RSI_TIE
+                                } else {
+                                    v.rsi >= p.rsi - RSI_TIE
+                                }
+                            });
+                            let after = state.window.range(at + 1..).all(|v| {
+                                if high {
+                                    v.rsi < p.rsi - RSI_TIE
+                                } else {
+                                    v.rsi > p.rsi + RSI_TIE
+                                }
+                            });
                             if !(before && after) {
                                 continue;
                             }
@@ -262,14 +272,19 @@ impl Indicator for RsiDivergence {
                                 ]
                             };
                             for (shown, line, rsi_rises, price_rises) in divergences {
-                                let moved = |rises: bool, from: f64, to: f64| {
-                                    if rises { to > from } else { to < from }
+                                // Prices compare exactly, so the rule holds at any price scale.
+                                let moved = |rises: bool, from: f64, to: f64, tie: f64| {
+                                    if rises {
+                                        to > from + tie
+                                    } else {
+                                        to < from - tie
+                                    }
                                 };
                                 let price =
                                     |pivot: Pivot| if high { pivot.high } else { pivot.low };
                                 if shown
-                                    && moved(rsi_rises, q.rsi, p.rsi)
-                                    && moved(price_rises, price(q), price(p))
+                                    && moved(rsi_rises, q.rsi, p.rsi, RSI_TIE)
+                                    && moved(price_rises, price(q), price(p), 0.0)
                                 {
                                     segments.push(Segment {
                                         line,

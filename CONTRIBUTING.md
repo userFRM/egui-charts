@@ -95,6 +95,8 @@ A second table prints the first frame and the median and 95th percentile of stea
 
 `benches/order_flow.rs` pushes the order flow of a busy instrument, 18,000 trades, depth deltas and quotes a second from the demo's synthetic book, into one chart with a depth history and draws a frame per 1/60 s of market time. It prints the messages pushed per second, the frame time, the heap allocations per message and the heap the chart holds: `cargo bench --bench order_flow`. `ORDER_FLOW_SECONDS` sets the market time simulated (default 300).
 
+`benches/heatmap.rs` feeds one chart 400 depth deltas a second into a book of 1,000 levels a side and draws the liquidity heatmap in a 1440 by 900 window. It prints the sampling cadence, the time the sink takes per delta, the frame time, the texture data uploaded, and the textures and heap held, for the default history of 100 levels at one second, for 1,000 levels at 50 ms, and for the latter with its history filled to every resolution: `cargo bench --bench heatmap`. `HEATMAP_SECONDS` sets the market time simulated (default 60). `docs/order-flow.md` quotes its results.
+
 To compare two commits, build the bench on each and run the two binaries in turn, so that changes in machine load and clock speed affect both alike. `cargo bench --no-run` prints the path of the binary it builds:
 
 ```sh
@@ -146,6 +148,7 @@ The default build includes the chart widget, the icons, the built-in studies and
 - `widget` (**default on**): the egui chart widget and the modules built on it (`chart`, `config`, `theme`, `styles`, `widget`). Required by `drawings`, `icons` and `ui`.
 - `drawings` (**default on**): drawing tools, geometry, interaction, undo and persistence. Implies `widget`; enabled by `ui`.
 - `studies` (**default on**): the built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. Required by `ui`.
+- `alert-engine` (off): `services::AlertEngine`, an `Alerts` service that evaluates alerts on the bars the host feeds it. Needs no egui.
 - `icons` (**default on**): compile-time embedded SVG icons. Required by `ui`.
 - `ui` (**default on**): application-level UI (toolbars, panels, sidebars, dialogs), the `ui_kit` widget library it is built on, and the `ui_kit::ext` helpers. Enables `icons`, `studies` and `drawings`.
 - `serde` (off): `Serialize` and `Deserialize` for `theme::Theme`.

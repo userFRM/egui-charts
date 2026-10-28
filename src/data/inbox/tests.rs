@@ -1,6 +1,6 @@
 use super::*;
 use crate::data::{HistoryPage, OrderEvent, RestingOrder};
-use crate::model::{OrderBookLevel, Tick, Timeframe};
+use crate::model::{OrderBook, OrderBookLevel, Tick, Timeframe};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::sync::atomic::AtomicUsize;
 
@@ -45,6 +45,139 @@ fn trade_bar_thresholds_survive_drains_and_keep_raw_fills() {
             trades.iter().map(|t| t.1).sum::<f64>()
         );
         assert!(crate::data::resample(&[], Timeframe::Min1, tf).is_none());
+    }
+}
+
+/// Guards that one filter gives one answer: the book size study, the heatmap's depth columns and
+/// the ladder's book (`OrderQueue::filtered`) sum the same orders, leaving out a small order, a
+/// young one, one of an excluded participant and one whose age is unknown, and that a feed with
+/// aggregate depth only gives no value or column instead of an unfiltered one.
+#[test]
+fn one_order_filter_gives_book_size_heatmap_and_ladder_the_same_sizes() {
+    use crate::data::{OrderFilter, OrderFilterUnavailable, OrderFlowInput, OrderFlowKind};
+    use crate::model::OrderSide::{Buy, Sell};
+    let time = at(1, 0);
+    let ago = |seconds| time - TimeDelta::seconds(seconds);
+    let orders = vec![
+        RestingOrder::new(1, Buy, 99.0, 5.0)
+            .with_participant(1)
+            .with_placed(ago(30)),
+        RestingOrder::new(2, Buy, 99.0, 1.0)
+            .with_participant(2)
+            .with_placed(ago(2)),
+        RestingOrder::new(3, Buy, 98.75, 8.0)
+            .with_participant(1)
+            .with_placed(ago(60)),
+        RestingOrder::new(4, Sell, 99.25, 4.0)
+            .with_participant(2)
+            .with_placed(ago(40)),
+        RestingOrder::new(5, Sell, 99.5, 2.0),
+    ];
+    let filter = OrderFilter {
+        min_size: 2.0,
+        min_age: Some(TimeDelta::seconds(10)),
+        exclude_participants: vec![2],
+    };
+    let config = DepthHistoryConfig {
+        cadence: TimeDelta::seconds(1),
+        rows: 10,
+        columns: 10,
+        orders: Some(filter.clone()),
+        ..Default::default()
+    };
+    let size = |filter: &OrderFilter| {
+        OrderFlowInput::new(OrderFlowKind::BookSize {
+            levels: 10,
+            distance: 0.0,
+        })
+        .with_order_filter(filter.clone())
+    };
+    let inbox = Arc::new(Inbox::default());
+    let sink = inbox.subscribe("A".into(), Timeframe::Min1.into(), 10, Some(0.25));
+    let (filtered, everything) = (size(&filter), size(&OrderFilter::default()));
+    sink.update(|live| {
+        live.study_inputs
+            .extend([filtered.clone(), everything.clone()])
+    });
+    inbox.sample_depth(sink.id, Some(config.clone()));
+    sink.set_server_time(time);
+    sink.push_order_snapshot(1, time, orders.clone());
+    let next = time + TimeDelta::seconds(1);
+    sink.push_order_event(
+        2,
+        next,
+        OrderEvent::Add(RestingOrder::new(6, Sell, 100.0, 1.0)),
+    );
+    let (_, updates) = inbox.drain().updates.pop().unwrap();
+
+    // The ladder: the accepted orders are the two bids of 5 and 8, and no ask.
+    let ladder = updates.orders.unwrap().filtered("A", &filter).unwrap();
+    let sizes = |levels: &[OrderBookLevel]| Vec::from_iter(levels.iter().map(|l| l.size));
+    assert_eq!(
+        (sizes(&ladder.bids), sizes(&ladder.asks)),
+        (vec![5.0, 8.0], vec![])
+    );
+    // Book size and the heatmap column sum the same orders.
+    let bar = at(1, 0);
+    assert_eq!(filtered.values()[&bar], [13.0, 0.0, 13.0]);
+    assert_eq!(everything.values()[&bar], [14.0, 7.0, 7.0]);
+    let column = &updates.depth_columns[0];
+    assert_eq!(
+        (column.time, column.bids.clone(), column.asks.clone()),
+        (time, vec![(396, 5.0), (395, 8.0)], vec![])
+    );
+
+    // Aggregate depth knows no orders: no value and no column, never the unfiltered sizes.
+    let sink = inbox.subscribe("B".into(), Timeframe::Min1.into(), 10, Some(0.25));
+    let aggregate = size(&filter);
+    sink.update(|live| live.study_inputs.push(aggregate.clone()));
+    inbox.sample_depth(sink.id, Some(config));
+    sink.set_server_time(time);
+    let book = |ts, price| OrderBook {
+        ts,
+        symbol: "B".into(),
+        bids: vec![OrderBookLevel {
+            price,
+            size: 9.0,
+            order_cnt: None,
+        }],
+        asks: vec![],
+    };
+    sink.push_depth_snapshot(1, book(time, 99.0));
+    sink.push_depth_delta(2, &book(next, 98.75));
+    let (_, updates) = inbox.drain().updates.pop().unwrap();
+    assert!(updates.depth_columns.is_empty() && updates.orders.is_none());
+    assert!(aggregate.values()[&bar].iter().all(|v| v.is_nan()));
+
+    // A filter on metadata no order has is unavailable, not silently ignored.
+    let mut queue = crate::data::OrderQueue::new(Some(0.25));
+    queue
+        .snapshot(1, time, vec![RestingOrder::new(1, Buy, 99.0, 5.0)])
+        .unwrap();
+    for (filter, expected) in [
+        (
+            OrderFilter {
+                exclude_participants: vec![1],
+                ..Default::default()
+            },
+            Err(OrderFilterUnavailable::Participants),
+        ),
+        (
+            OrderFilter {
+                min_age: Some(TimeDelta::seconds(1)),
+                ..Default::default()
+            },
+            Err(OrderFilterUnavailable::PlacementTimes),
+        ),
+        (
+            OrderFilter {
+                min_size: 1.0,
+                ..Default::default()
+            },
+            Ok(()),
+        ),
+    ] {
+        assert_eq!(queue.filtered("A", &filter).map(|_| ()), expected);
     }
 }
 
@@ -581,6 +714,7 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
         rows: 2,
         ticks_per_row: 2,
         columns: 10,
+        orders: None,
     };
     inbox.sample_depth(sink.id, Some(config));
     let level = |price, size| OrderBookLevel {
