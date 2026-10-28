@@ -673,8 +673,8 @@ impl Live {
         let Some(sampler) = &mut self.sampler else {
             return;
         };
-        if !(Utc::now().checked_add_signed(self.offset + TimeDelta::minutes(1)))
-            .is_some_and(|limit| ts <= limit)
+        if (Utc::now().checked_add_signed(self.offset + TimeDelta::minutes(1)))
+            .is_none_or(|limit| ts > limit)
         {
             return;
         }

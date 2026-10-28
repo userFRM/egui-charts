@@ -259,7 +259,7 @@ impl Footprint {
     /// Zero-sized executions are ignored.
     pub fn push(&mut self, trade: &Tick) -> Result<bool, FeedError> {
         let Some(level) = self.level_of(trade.price).filter(|_| {
-            super::trades::valid(trade) && !self.last.is_some_and(|last| trade.ts < last)
+            super::trades::valid(trade) && self.last.is_none_or(|last| trade.ts >= last)
         }) else {
             return Err(FeedError::InvalidData(
                 "invalid or out-of-order footprint trade".into(),
