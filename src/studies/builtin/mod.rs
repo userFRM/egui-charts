@@ -16,6 +16,7 @@
 //! ## Momentum / oscillators
 //! [`RSI`], [`MACD`], [`Stochastic`], [`StochasticRSI`], [`WilliamsR`],
 //! [`CCI`], [`Momentum`], [`RateOfChange`], [`Aroon`], [`AwesomeOscillator`], [`RsiDivergence`],
+//! [`TechnicalRatings`],
 //! [`UltimateOscillator`], [`ConnorsRSI`], [`CoppockCurve`], [`TRIX`],
 //! [`ElderRay`], [`FisherTransform`], [`ForceIndex`], [`MassIndex`],
 //! [`DetrendedPriceOscillator`], [`KDJ`], [`PrettyGoodOscillator`],
@@ -276,11 +277,13 @@ mod price_momentum_oscillator;
 mod rci_ribbon;
 mod relative_volatility_index;
 mod smi_ergodic;
+mod technical_ratings;
 pub use market_breadth::{
     AdvanceDeclineLine, AdvanceDeclineRatio, CumulativeVolumeIndex, MarketBreadth,
 };
 mod special_k;
 mod woodies_cci;
+pub use technical_ratings::TechnicalRatings;
 // Time studies
 mod performance;
 mod relative_volume_at_time;
