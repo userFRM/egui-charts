@@ -11,6 +11,19 @@ use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet, VecDeque};
 
+/// Size taken from one resting order, or from an unidentified one, at one price.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ConsumedOrder {
+    /// Exchange id of the resting order; fills without one are listed apart, as their orders
+    /// cannot be told from each other.
+    pub resting_order_id: Option<u64>,
+    /// Price of the fills.
+    pub price: f64,
+    /// Total retained size filled, saturating at the largest finite value on overflow.
+    pub size: f64,
+}
+
 /// Fills of one explicitly identified aggressive order, or one fill without an order id.
 /// Only retained fills count: eviction from the raw store also removes them from this view.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,6 +47,13 @@ pub struct CombinedTrade {
     pub fills: usize,
     /// Aggressor side, unknown if fills disagree.
     pub side: Option<OrderSide>,
+    /// The resting orders the retained fills consumed, in fill order; consecutive fills of
+    /// one identified order at one price are one entry. Their sizes add up to
+    /// [`size`](Self::size).
+    pub consumed: Vec<ConsumedOrder>,
+    /// Whether the order is fully reconstructed: its aggressor id is explicit and every
+    /// retained fill names its resting order. Otherwise `consumed` lacks evidence.
+    pub complete: bool,
 }
 
 /// Combines explicit aggressor ids, in order of their first fill. Unknown ids stay separate.
@@ -61,11 +81,12 @@ pub fn combine_trades<'a>(trades: impl IntoIterator<Item = &'a Tick>) -> Vec<Com
             if trade.side != fill.side {
                 trade.side = None;
             }
+            trade.consume(fill);
         } else {
             if let Some(id) = fill.aggressor_order_id {
                 indices.insert(id, combined.len());
             }
-            combined.push(CombinedTrade {
+            let mut trade = CombinedTrade {
                 aggressor_order_id: fill.aggressor_order_id,
                 first_time: fill.ts,
                 last_time: fill.ts,
@@ -75,10 +96,33 @@ pub fn combine_trades<'a>(trades: impl IntoIterator<Item = &'a Tick>) -> Vec<Com
                 size: fill.size,
                 fills: 1,
                 side: fill.side,
-            });
+                consumed: Vec::new(),
+                complete: fill.aggressor_order_id.is_some(),
+            };
+            trade.consume(fill);
+            combined.push(trade);
         }
     }
     combined
+}
+
+impl CombinedTrade {
+    /// Adds the resting order that `fill` consumed to the breakdown.
+    fn consume(&mut self, fill: &Tick) {
+        self.complete &= fill.resting_order_id.is_some();
+        match self.consumed.last_mut().filter(|c| {
+            fill.resting_order_id.is_some()
+                && c.resting_order_id == fill.resting_order_id
+                && c.price == fill.price
+        }) {
+            Some(order) => order.size = (order.size + fill.size).min(f64::MAX),
+            None => self.consumed.push(ConsumedOrder {
+                resting_order_id: fill.resting_order_id,
+                price: fill.price,
+                size: fill.size,
+            }),
+        }
+    }
 }
 
 /// Trades in arrival order, at most `capacity` of them: the oldest go first.
@@ -306,6 +350,61 @@ mod tests {
                 assert!((actual.3 - expected.3).abs() < 1e-10, "{name}: VWAP");
             }
         }
+    }
+
+    /// The breakdown lists the resting orders the retained fills consumed and adds up to the
+    /// combined size, also after eviction; it is complete only when every fill names its
+    /// resting order.
+    #[test]
+    fn the_breakdown_sums_to_the_retained_fills_and_reports_missing_evidence() {
+        let fill = |second, price, size, resting| {
+            let mut t = trade(second, price).with_aggressor_order_id(7);
+            t.size = size;
+            t.resting_order_id = resting;
+            t
+        };
+        let fills = || {
+            vec![
+                fill(1, 100.0, 2.0, Some(1)),
+                fill(2, 100.0, 1.0, Some(1)),
+                fill(3, 101.0, 4.0, Some(2)),
+                fill(4, 101.0, 3.0, None),
+            ]
+        };
+        for (capacity, want, complete) in [
+            (
+                10,
+                vec![
+                    (Some(1), 100.0, 3.0),
+                    (Some(2), 101.0, 4.0),
+                    (None, 101.0, 3.0),
+                ],
+                false,
+            ),
+            // The oldest two fills are evicted.
+            (2, vec![(Some(2), 101.0, 4.0), (None, 101.0, 3.0)], false),
+        ] {
+            let mut store = Trades::new(capacity);
+            fills().into_iter().for_each(|t| store.push(t));
+            let combined = combine_trades(store.iter());
+            let trade = &combined[0];
+            let got: Vec<_> = trade
+                .consumed
+                .iter()
+                .map(|c| (c.resting_order_id, c.price, c.size))
+                .collect();
+            assert_eq!(
+                (got, trade.complete),
+                (want, complete),
+                "capacity {capacity}"
+            );
+            assert_eq!(
+                trade.consumed.iter().map(|c| c.size).sum::<f64>(),
+                trade.size
+            );
+        }
+        let named: Vec<_> = fills().into_iter().take(3).collect();
+        assert!(combine_trades(&named)[0].complete);
     }
 
     /// Guards the memory bound and the join of history and live trades: a store that never evicts

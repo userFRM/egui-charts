@@ -291,6 +291,10 @@ impl Chart {
             bar_to_x: &bar_to_x,
             price_to_y: &price_to_y,
             time_axis: self.horizontal_scale.is_none(),
+            executions: self
+                .feed_link
+                .as_ref()
+                .and_then(|link| link.footprint.as_ref()),
         };
         drawing_manager.render_all(painter, price_rect, &view);
         if drawing_manager.text_editor.as_ref().is_some_and(|editor| {

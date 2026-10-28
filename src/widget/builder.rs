@@ -129,6 +129,7 @@ impl Chart {
             heikin_ashi: Default::default(),
             series_scales: Default::default(),
             study_ids: Vec::new(),
+            study_limit: None,
             study_inputs: Vec::new(),
             study_autoscale: Vec::new(),
             pending_from: Vec::new(),
