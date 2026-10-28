@@ -701,9 +701,10 @@ impl Drawing {
 
 /// Triangle pattern boundaries from the zigzag anchors (first peak, first trough, second peak,
 /// second trough): the line through each pair of same-side anchors, from its first anchor to where
-/// the two meet, and the fill between them as a convex polygon. The boundaries end at `right`
-/// when they meet beyond it, and at the last anchor when they are parallel, diverge or meet before
-/// the first anchor. `None` until four anchors are placed, or while a boundary is vertical.
+/// the two meet, and the fill between them and the first zigzag leg as a convex polygon. The
+/// boundaries end at `right` when they meet beyond it, and at the last anchor when they are
+/// parallel, diverge or meet before the first anchor. `None` until four anchors are placed, or
+/// while a boundary is vertical.
 pub(super) fn triangle_boundaries(
     points: &[Pos2],
     right: f32,
@@ -722,11 +723,11 @@ pub(super) fn triangle_boundaries(
     let apex_x = (b0.y - a0.y + slope_a * a0.x - slope_b * b0.x) / (slope_a - slope_b);
     let apex_x = (apex_x.is_finite() && apex_x > left).then_some(apex_x);
     let end = apex_x.map_or(last, |x| x.min(last.max(right)));
-    let mut fill = vec![Pos2::new(left, y_a(left)), Pos2::new(end, y_a(end))];
+    let mut fill = vec![a0, Pos2::new(end, y_a(end))];
     if apex_x != Some(end) {
         fill.push(Pos2::new(end, y_b(end)));
     }
-    fill.push(Pos2::new(left, y_b(left)));
+    fill.push(b0);
     Some((
         [
             [a0, Pos2::new(end, y_a(end))],
@@ -866,7 +867,7 @@ mod tests {
                         [p(0.0, 0.0), p(100.0, 50.0)],
                         [p(10.0, 95.0), p(100.0, 50.0)],
                     ],
-                    vec![p(0.0, 0.0), p(100.0, 50.0), p(0.0, 100.0)],
+                    vec![p(0.0, 0.0), p(100.0, 50.0), p(10.0, 95.0)],
                 )),
             ),
             (
@@ -874,7 +875,7 @@ mod tests {
                 60.0,
                 Some((
                     [[p(0.0, 0.0), p(60.0, 30.0)], [p(10.0, 95.0), p(60.0, 70.0)]],
-                    vec![p(0.0, 0.0), p(60.0, 30.0), p(60.0, 70.0), p(0.0, 100.0)],
+                    vec![p(0.0, 0.0), p(60.0, 30.0), p(60.0, 70.0), p(10.0, 95.0)],
                 )),
             ),
             (
@@ -882,7 +883,7 @@ mod tests {
                 f32::INFINITY,
                 Some((
                     [[p(0.0, 0.0), p(30.0, 0.0)], [p(10.0, 50.0), p(30.0, 50.0)]],
-                    vec![p(0.0, 0.0), p(30.0, 0.0), p(30.0, 50.0), p(0.0, 50.0)],
+                    vec![p(0.0, 0.0), p(30.0, 0.0), p(30.0, 50.0), p(10.0, 50.0)],
                 )),
             ),
             (
@@ -893,7 +894,7 @@ mod tests {
                         [p(10.0, 50.0), p(40.0, 35.0)],
                         [p(20.0, 80.0), p(40.0, 120.0)],
                     ],
-                    vec![p(10.0, 50.0), p(40.0, 35.0), p(40.0, 120.0), p(10.0, 60.0)],
+                    vec![p(10.0, 50.0), p(40.0, 35.0), p(40.0, 120.0), p(20.0, 80.0)],
                 )),
             ),
             (&vertical[..], f32::INFINITY, None),
