@@ -10,7 +10,6 @@ use super::layout::Region;
 use super::{Action, Terminal};
 use crate::config::KeyboardAction;
 use crate::localization as l10n;
-use crate::model::Timeframe;
 use crate::services::UserSettings;
 use crate::ui::Control;
 use crate::ui::export::{ExportConfig, ExportFormat, ExportResponse};
@@ -238,7 +237,7 @@ impl Terminal {
         let mut chart = ChartBuilder::new()
             .with_feed(self.feed.clone())
             .with_symbol(source.symbol())
-            .with_timeframe(source.timeframe().unwrap_or(Timeframe::Day1))
+            .with_timeframe(source.timeframe().unwrap_or_default())
             .with_drawing_registry(source.drawings().registry.clone())
             .with_visible_candles(0)
             .build();
