@@ -20,8 +20,8 @@
 //! Each component counts once, whatever its group. A group's score is the mean of the votes it
 //! has, the summary is the mean of all votes, and a score without a single vote has no value.
 //! A component without a value, in its warm-up (for the MACD the first max(slow, signal) bars)
-//! or on a bar with a non-finite high, low or close, has no vote: it leaves the mean and lowers the coverage, the votes it has over the
-//! components enabled. A rating is derived from a score:
+//! or on a bar with a non-finite high, low or close, has no vote: it leaves the mean and lowers
+//! the coverage, the votes it has over the components enabled. A rating is derived from a score:
 //!
 //! ```text
 //! Strong Buy   score >= 0.5
