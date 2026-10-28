@@ -1,7 +1,8 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
-use crate::data::VolumeProfile;
+use crate::data::{ProfileSource, VolumeProfile};
 use crate::drawings::domain::Drawing;
+use crate::drawings::domain::DrawingToolType;
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
 use crate::model::{Bar, SpanCache};
 use crate::styles::{stroke, typography};
@@ -177,7 +178,7 @@ impl Drawing {
         right: f32,
     ) {
         let config = self.volume_profile.unwrap_or_default();
-        let profile = span_profile(view, config.rows(), config.row_size(), first, bars);
+        let profile = self.span_profile(view, first, bars);
         let Some(profile) = profile.as_ref() else {
             return;
         };
@@ -190,6 +191,63 @@ impl Drawing {
             false,
             view.price_to_y,
         );
+        let note = match profile.source() {
+            ProfileSource::Estimated => "Estimated from bars",
+            ProfileSource::Executions { complete: false } => "Partial executions",
+            ProfileSource::Executions { complete: true } => return,
+        };
+        if right - left >= 60.0 {
+            painter.text(
+                Pos2::new(left + 3.0, (view.price_to_y)(profile.high())),
+                egui::Align2::LEFT_TOP,
+                note,
+                egui::FontId::proportional(typography::XS),
+                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 200),
+            );
+        }
+    }
+
+    /// The profile of `bars`, the span that starts at bar `first`: the executed volume at each
+    /// price when the view holds executions in the span, else estimated from the bars.
+    fn span_profile(
+        &self,
+        view: &ChartView,
+        first: usize,
+        bars: &[Bar],
+    ) -> Rc<Option<VolumeProfile>> {
+        if let (Some(flow), Some(start), Some(end)) = (view.executions, bars.first(), bars.last()) {
+            let executed = flow.profile(start.time, end.time);
+            let complete = flow
+                .bars()
+                .keys()
+                .next()
+                .is_some_and(|&t| t <= executed.time);
+            if let Some(profile) =
+                VolumeProfile::from_executions(&executed, flow.price_step(), complete)
+            {
+                return Rc::new(Some(profile));
+            }
+        }
+        let config = self.volume_profile.unwrap_or_default();
+        span_profile(view, config.rows(), config.row_size(), first, bars)
+    }
+
+    /// The profile that a fixed range or anchored volume profile shows over the view's bars,
+    /// with its [source](VolumeProfile::source): executed volume when
+    /// [`ChartView::executions`] holds any in the selected span, else the bar estimate.
+    /// `None` for other tools, a drawing without its anchors, or an empty selection.
+    pub fn volume_profile_of(&self, view: &ChartView) -> Option<VolumeProfile> {
+        let anchor = |i: usize| self.chart_points.get(i).map(|p| p.bar_idx);
+        let (first, bars) = match self.tool_type {
+            DrawingToolType::FixedRangeVolumeProfile => {
+                bars_between(view.bars, anchor(0)?, anchor(1)?)?
+            }
+            DrawingToolType::AnchoredVolumeProfile => {
+                bars_between(view.bars, anchor(0)?, f32::INFINITY)?
+            }
+            _ => return None,
+        };
+        self.span_profile(view, first, bars).as_ref().clone()
     }
 
     fn draw_volume_profile_anchors(
@@ -398,6 +456,7 @@ mod tests {
                 bar_to_x: &|x| x,
                 price_to_y,
                 time_axis: true,
+                executions: None,
             };
             let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                 let painter = egui::Painter::new(
@@ -501,6 +560,7 @@ mod tests {
                 bar_to_x: &|x| x,
                 price_to_y: &|price| price as f32,
                 time_axis: true,
+                executions: None,
             };
             let want = VolumeProfile::of(&bars[1..], 24, None);
             assert_eq!(
@@ -525,5 +585,81 @@ mod tests {
         let time = bars.last().unwrap().time + chrono::Duration::minutes(1);
         bars.push(Bar::new(time, 13.0, 13.5, 12.5, 13.2, 20.0));
         check(&bars, "new bar");
+    }
+
+    /// A selection over held executions shows their exact profile, as the public footprint
+    /// aggregation gives it: totals, aggressor sides, POC and value area. Moving an anchor
+    /// changes the selected span, and without executions the bar estimate is labelled as such.
+    #[test]
+    fn volume_profile_selects_executions_by_anchor() {
+        use crate::data::{Footprint, ProfileSource};
+        use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+        let bars = sample_bars();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        // Bar 1 trades 11 (4 sold), 12 (6 bought, 2 unknown); bar 2 trades 12 (3 bought).
+        for (bar, price, size, side) in [
+            (1, 11.0, 4.0, Some(OrderSide::Sell)),
+            (1, 12.0, 6.0, Some(OrderSide::Buy)),
+            (1, 12.0, 2.0, None),
+            (2, 12.0, 3.0, Some(OrderSide::Buy)),
+        ] {
+            flow.push(&Tick::new(bars[bar].time, price, size, side))
+                .unwrap();
+        }
+        let view = |executions| ChartView {
+            instrument: None,
+            bars: &bars,
+            revision: 0,
+            bar_to_x: &|x| x,
+            price_to_y: &|price| price as f32,
+            time_axis: true,
+            executions,
+        };
+        let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+        let select = |drawing: &mut Drawing, first, last| {
+            drawing.chart_points = vec![
+                crate::drawings::domain::ChartPoint::new(first, 10.0),
+                crate::drawings::domain::ChartPoint::new(last, 10.0),
+            ];
+        };
+
+        select(&mut drawing, 0.0, 2.0);
+        let profile = drawing.volume_profile_of(&view(Some(&flow))).unwrap();
+        let exact = flow.profile(bars[0].time, bars[2].time);
+        assert_eq!(
+            profile.source(),
+            ProfileSource::Executions { complete: false }
+        );
+        assert_eq!((profile.low(), profile.high()), (11.0, 13.0));
+        assert_eq!(profile.volume(), [4.0, 11.0]);
+        assert_eq!(
+            (profile.up(), profile.down()),
+            ([0.0, 9.0].as_slice(), [4.0, 0.0].as_slice())
+        );
+        assert_eq!(profile.volume().iter().sum::<f64>(), exact.volume());
+        // 90% of 15 is 13.5, so the POC's 11 needs the 4 below it.
+        let (poc, (low, high)) = profile.poc_and_value_area(0.9).unwrap();
+        assert_eq!(exact.poc(), Some(12));
+        assert_eq!(exact.value_area(0.9), Some((11, 12)));
+        assert_eq!((poc, (low, high)), (1, (0, 1)));
+
+        // Moving the first anchor past bar 1 drops its executions and the lower row.
+        select(&mut drawing, 2.0, 2.0);
+        let profile = drawing.volume_profile_of(&view(Some(&flow))).unwrap();
+        assert_eq!((profile.low(), profile.volume()), (12.0, [3.0].as_slice()));
+
+        // A span with no executions, and a view without any, fall back to the estimate.
+        select(&mut drawing, 4.0, 5.0);
+        for executions in [Some(&flow), None] {
+            let profile = drawing.volume_profile_of(&view(executions)).unwrap();
+            assert_eq!(profile.source(), ProfileSource::Estimated);
+        }
+        // Executions held from the span's first bar are complete.
+        select(&mut drawing, 1.0, 2.0);
+        let profile = drawing.volume_profile_of(&view(Some(&flow))).unwrap();
+        assert_eq!(
+            profile.source(),
+            ProfileSource::Executions { complete: true }
+        );
     }
 }

@@ -1,8 +1,8 @@
 //! Exact bid, ask and delta profiles over host-selected session or composite ranges.
 
-use crate::data::{FeedError, Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
+use crate::data::{FeedError, Footprint, FootprintBar, NodeSensitivity};
 use chrono::{DateTime, Utc};
-use std::{collections::BTreeMap, ops::Range};
+use std::ops::Range;
 
 /// Half-open session ranges. Adjacent sessions can be merged and split again by the user.
 #[derive(Clone, Debug)]
@@ -131,35 +131,10 @@ pub fn trade_profiles(flow: &Footprint, ranges: &TradeProfileRanges) -> Vec<Trad
         .ranges()
         .iter()
         .map(|range| {
-            let mut volume = FootprintBar {
-                time: range.start,
-                levels: BTreeMap::new(),
-                bid: 0.0,
-                ask: 0.0,
-                unknown: 0.0,
-                min_delta: 0.0,
-                max_delta: 0.0,
-            };
+            let mut volume = FootprintBar::empty(range.start);
             let mut developing_poc = Vec::new();
             for (&time, bar) in flow.bars().range(range.clone()) {
-                let open = volume.delta();
-                volume.min_delta = volume.min_delta.min(open + bar.min_delta);
-                volume.max_delta = volume.max_delta.max(open + bar.max_delta);
-                volume.bid += bar.bid;
-                volume.ask += bar.ask;
-                volume.unknown += bar.unknown;
-                for (&level, row) in &bar.levels {
-                    let target = volume
-                        .levels
-                        .entry(level)
-                        .or_insert_with(|| FootprintLevel {
-                            level,
-                            ..Default::default()
-                        });
-                    target.bid += row.bid;
-                    target.ask += row.ask;
-                    target.unknown += row.unknown;
-                }
+                volume.absorb(bar);
                 if let Some(poc) = volume.poc() {
                     developing_poc.push((time, poc));
                 }
@@ -176,6 +151,7 @@ pub fn trade_profiles(flow: &Footprint, ranges: &TradeProfileRanges) -> Vec<Trad
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::FootprintLevel;
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use chrono::TimeDelta;
 

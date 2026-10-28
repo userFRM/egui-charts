@@ -344,6 +344,7 @@ mod tests {
                         bar_to_x: &|b| b * 10.0,
                         price_to_y: &|p| 500.0 - p as f32,
                         time_axis: true,
+                        executions: None,
                     };
                     manager.render_all(ui.painter(), pane, &view);
                 })
@@ -423,6 +424,7 @@ mod tests {
                     bar_to_x: &|b| b * 10.0,
                     price_to_y: &|p| 500.0 - p as f32,
                     time_axis: true,
+                    executions: None,
                 };
                 manager.render_all(ui.painter(), pane, &view);
             });

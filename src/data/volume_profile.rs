@@ -1,5 +1,6 @@
 //! Price-row volume distributions shared by studies and drawings.
 
+use super::FootprintBar;
 use crate::model::Bar;
 use serde::{Deserialize, Serialize};
 use std::ops::{Range, RangeInclusive};
@@ -141,6 +142,29 @@ impl Default for VolumeProfileConfig {
     }
 }
 
+/// Where a [`VolumeProfile`]'s volumes come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileSource {
+    /// Bar volume spread over each bar's high-low range, split by candle direction.
+    Estimated,
+    /// Executed volume at each price, split by aggressor side, with unclassified volume
+    /// apart. `complete` is false when the executions held start after the profile's span
+    /// does, so the earliest rows may be missing.
+    Executions {
+        /// Whether executions are held from the start of the span.
+        complete: bool,
+    },
+}
+
+/// The executions behind an exact profile, whose POC and value area follow
+/// [`FootprintBar`] rather than the estimated profile's rule.
+#[derive(Clone, Debug, PartialEq)]
+struct Executions {
+    first_level: i64,
+    bar: FootprintBar,
+    complete: bool,
+}
+
 /// Volume traded at each price row of bars or host-supplied option strikes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VolumeProfile {
@@ -154,6 +178,7 @@ pub struct VolumeProfile {
     pub(crate) volume: Vec<f64>,
     pub(crate) up: Vec<f64>,
     pub(crate) down: Vec<f64>,
+    executions: Option<Executions>,
 }
 
 fn valid_bar(bar: &Bar) -> bool {
@@ -216,6 +241,7 @@ impl VolumeProfile {
             volume: vec![0.0; count as usize],
             up: vec![0.0; count as usize],
             down: vec![0.0; count as usize],
+            executions: None,
         };
         let mut total = 0.0;
         for v in data {
@@ -233,6 +259,57 @@ impl VolumeProfile {
     pub fn from_bars(bars: &[Bar], config: VolumeProfileConfig) -> Option<Self> {
         Self::of(bars, config.rows(), config.row_size())
     }
+    /// Group the executions of one span into a row per traded price step, from the lowest
+    /// traded row to the highest, so untraded rows between them hold zero. `step` is the
+    /// footprint's [`price_step`](super::Footprint::price_step), and `complete` whether
+    /// executions are held from the start of the span. Calls and buys occupy [`Self::up`],
+    /// puts and sells [`Self::down`]; unclassified volume is in [`Self::volume`] only.
+    /// Returns no profile without executed volume, or for more than 10,000 rows.
+    pub fn from_executions(bar: &FootprintBar, step: f64, complete: bool) -> Option<Self> {
+        let (&first, &last) = (bar.levels.keys().next()?, bar.levels.keys().next_back()?);
+        let count = last as i128 - first as i128 + 1;
+        let (low, high) = (first as f64 * step, (last as f64 + 1.0) * step);
+        if bar.volume() <= 0.0
+            || !step.is_finite()
+            || step <= 0.0
+            || !(1..=10_000).contains(&count)
+            || !low.is_finite()
+            || !high.is_finite()
+        {
+            return None;
+        }
+        let mut profile = Self {
+            low,
+            high,
+            row_height: step,
+            fixed_height: true,
+            volume: vec![0.0; count as usize],
+            up: vec![0.0; count as usize],
+            down: vec![0.0; count as usize],
+            executions: Some(Executions {
+                first_level: first,
+                bar: bar.clone(),
+                complete,
+            }),
+        };
+        for (&level, row) in &bar.levels {
+            let i = (level - first) as usize;
+            profile.volume[i] = row.volume();
+            profile.up[i] = row.ask;
+            profile.down[i] = row.bid;
+        }
+        Some(profile)
+    }
+
+    /// Whether the volumes are estimated from bars or executed.
+    pub fn source(&self) -> ProfileSource {
+        self.executions
+            .as_ref()
+            .map_or(ProfileSource::Estimated, |e| ProfileSource::Executions {
+                complete: e.complete,
+            })
+    }
+
     /// Bottom edge of the first row.
     pub fn low(&self) -> f64 {
         self.low
@@ -295,6 +372,7 @@ impl VolumeProfile {
             volume: vec![0.0; rows],
             up: vec![0.0; rows],
             down: vec![0.0; rows],
+            executions: None,
         };
         bars.iter().for_each(|bar| profile.add(bar));
         Some(profile)
@@ -380,6 +458,11 @@ impl VolumeProfile {
         let total: f64 = volume.iter().sum();
         if !total.is_finite() || total <= 0.0 {
             return None;
+        }
+        if let Some(e) = &self.executions {
+            let row = |level: i64| (level - e.first_level) as usize;
+            let (low, high) = e.bar.value_area(share)?;
+            return Some((row(e.bar.poc()?), (row(low), row(high))));
         }
         let poc = (0..volume.len()).max_by(|&a, &b| volume[a].total_cmp(&volume[b]))?;
         Some((poc, value_area(volume, poc, total * share)))
