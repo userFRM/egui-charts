@@ -78,7 +78,6 @@ pub struct Terminal {
     charts: Vec<Chart>,
     layout: ChartLayout,
     active: usize,
-    #[expect(dead_code, reason = "the chart slots added later load from it")]
     feed: Arc<dyn Datafeed>,
     services: services::Services,
     intercept: Option<Intercept>,
@@ -115,7 +114,6 @@ pub struct Terminal {
     studies: studies::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
     time: time::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     replay: replay::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
     alerts: alerts::State,

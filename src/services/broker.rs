@@ -6,6 +6,7 @@ use crate::model::{
     Account, BalanceChange, Execution, JournalEntry, Order, OrderId, OrderRequest, Position,
     TradingRules,
 };
+use chrono::{DateTime, Utc};
 
 /// One trading account at the host's broker, real or simulated. The library holds no balances or
 /// positions: it shows what the broker pushes and places the orders the user confirms. Paper
@@ -127,6 +128,18 @@ pub trait Broker: MaybeSend + 'static {
     fn rules(&self, symbol: &str, reply: Reply<TradingRules>) {
         let _ = symbol;
         reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Tells a simulated account the market as the terminal shows it, so it fills at the prices
+    /// on the chart. The terminal calls it with the last close of the active chart on every frame,
+    /// and during a bar replay with the close of each revealed bar, oldest first, and `replay_time`
+    /// set to that bar's time. `replay_time` is `None` for live prices. A replay time earlier than
+    /// the one observed last means the replay was rewound, and one after live prices means it
+    /// started: a simulated account restarts from its opening state then, because its orders and
+    /// positions belong to a future the replay has taken back. A broker that trades real money
+    /// ignores it, as the default does.
+    fn observe(&self, symbol: &str, price: f64, replay_time: Option<DateTime<Utc>>) {
+        let _ = (symbol, price, replay_time);
     }
 }
 

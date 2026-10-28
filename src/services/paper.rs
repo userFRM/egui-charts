@@ -18,7 +18,8 @@ use crate::model::{
 ///
 /// Feed it the last price of every symbol it trades with [`set_price`](Self::set_price), live or
 /// replayed. During replay, call [`set_replay_time`](Self::set_replay_time) before each price so
-/// fills and history use the source bar's time. Only good-till-cancelled orders are supported;
+/// fills and history use the source bar's time; the terminal does both through
+/// [`Broker::observe`]. Only good-till-cancelled orders are supported;
 /// the account has no trading-session calendar. Market orders fill at the last price; limit and
 /// stop orders fill at the first price that reaches them, a limit at that price or better;
 /// a triggered stop-limit works on as a limit order. An order's take profit and stop loss become
@@ -722,6 +723,21 @@ impl Broker for PaperAccount {
         rules.leverage = Some(self.leverage);
         reply.send(Ok(rules));
     }
+
+    /// Follows the chart: [`reset`](Self::reset)s when a replay starts or is rewound, then takes
+    /// the replay time and the price.
+    fn observe(&self, symbol: &str, price: f64, replay_time: Option<DateTime<Utc>>) {
+        let restart = match (self.lock().replay_time, replay_time) {
+            (None, Some(_)) => true,
+            (Some(last), Some(time)) => time < last,
+            _ => false,
+        };
+        if restart {
+            self.reset();
+        }
+        self.set_replay_time(replay_time);
+        self.set_price(symbol, price);
+    }
 }
 
 #[cfg(test)]
@@ -891,6 +907,49 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn observe_restarts_the_account_on_replay_start_and_rewind_but_not_on_forward_steps() {
+        let paper = PaperAccount::new("USD", 10_000.0);
+        let at = |minute: i64| DateTime::from_timestamp(1_704_067_200 + minute * 60, 0);
+        let buy = || {
+            place(
+                &paper,
+                OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Market),
+            )
+            .unwrap();
+        };
+        let held = || {
+            snapshot(&paper)
+                .iter()
+                .filter(|event| matches!(event, AccountEvent::Position(_)))
+                .count()
+        };
+        paper.observe("SYM", 100.0, None);
+        buy();
+        assert_eq!(held(), 1, "a live position");
+        paper.observe("SYM", 100.0, at(0));
+        assert_eq!(held(), 0, "a replay starts from the opening state");
+        buy();
+        paper.observe("SYM", 80.0, at(1));
+        paper.observe("SYM", 110.0, at(2));
+        assert_eq!(held(), 1, "forward steps keep the position");
+        paper.observe("SYM", 80.0, at(1));
+        assert_eq!(held(), 0, "a rewind takes back the future position");
+        buy();
+        let fill = snapshot(&paper)
+            .into_iter()
+            .find_map(|event| match event {
+                AccountEvent::Execution(fill) => Some(fill),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!((fill.price, Some(fill.time)), (80.0, at(1)));
+        paper.observe("SYM", 90.0, None);
+        assert_eq!(held(), 1, "leaving replay keeps the position");
+        paper.observe("SYM", 90.0, at(0));
+        assert_eq!(held(), 0, "a second replay starts afresh");
     }
 
     #[test]
