@@ -28,7 +28,7 @@ jobs:
           - target: drawings
             seeds: src/drawings/fixtures
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
@@ -43,7 +43,7 @@ jobs:
           cargo fuzz run ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} ${{ matrix.seeds }} -- -max_total_time=300 -timeout=10 -len_control=0 -max_len=8192
       - name: Upload crash inputs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-${{ matrix.target }}-crashes
           path: fuzz/artifacts/${{ matrix.target }}

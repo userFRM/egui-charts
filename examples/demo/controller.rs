@@ -302,7 +302,7 @@ impl ChartAppState for DemoAppState {
 /// The full demo application.
 pub struct DemoApp {
     pub chart: Chart,
-    layout: ChartLayout,
+    pub(crate) layout: ChartLayout,
     layout_slot: usize,
     extra_charts: Vec<DemoChart>,
     layout_tabs: Vec<LayoutTab>,
@@ -324,9 +324,9 @@ pub struct DemoApp {
     theme_choice: Option<bool>,
 
     // Persistent toolbars.
-    top_toolbar: TopToolbar,
+    pub(crate) top_toolbar: TopToolbar,
     drawing_toolbar: DrawingToolbar,
-    timeframe_toolbar: TimeframeToolbar,
+    pub(crate) timeframe_toolbar: TimeframeToolbar,
     widget_bar: WidgetBar,
 
     // Dialogs (each owns its open/closed state).
@@ -370,7 +370,7 @@ pub struct DemoApp {
     data_window_expanded: bool,
 
     // Host-owned session-only alerts, shown through the library service connection.
-    alerts: AlertsPanel,
+    pub(crate) alerts: AlertsPanel,
     alert_host: Arc<crate::panel_alerts::DemoAlerts>,
     audio: audio::AudioPlayer,
     alert_monitors: std::collections::HashMap<
@@ -380,8 +380,8 @@ pub struct DemoApp {
 
     // Session-only paper account, connected from the broker picker and traded through the
     // library's order ticket and account panel.
-    trading: egui_charts::ui::trading::Trading,
-    paper: Arc<egui_charts::services::PaperAccount>,
+    pub(crate) trading: egui_charts::ui::trading::Trading,
+    pub(crate) paper: Arc<egui_charts::services::PaperAccount>,
     broker_picker: egui_charts::ui::trading::BrokerPicker,
     account_panel: AccountPanelSize,
     // The account settings ask whether to reset the paper account.
@@ -451,6 +451,14 @@ fn sample_widgets() -> [WidgetBarWidget; 2] {
 
 impl DemoApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        Self::new_at(cc, chrono::Utc::now(), false)
+    }
+
+    pub(crate) fn new_at(
+        cc: &eframe::CreationContext<'_>,
+        now: chrono::DateTime<chrono::Utc>,
+        paused: bool,
+    ) -> Self {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
@@ -479,7 +487,8 @@ impl DemoApp {
         options.time_scale.right_offset_pixels = Some(65.0 - 6.1 * 0.5 - 1.0);
         options.time_scale.time_visible = true;
         options.time_scale.seconds_visible = true;
-        let live = Arc::new(LiveFeed::new(symbol, chrono::Utc::now()));
+        let live = Arc::new(LiveFeed::new(symbol, now));
+        live.set_paused(paused);
         let quotes = Arc::new(live::DemoQuotes::new(live.clone()));
         let mut chart = egui_charts::ChartBuilder::new()
             .with_feed(live.clone())
@@ -498,6 +507,7 @@ impl DemoApp {
         chart.set_timeframe(timeframe);
         let storage = Arc::new(storage::DemoStorage::restore(cc.storage));
         chart.set_storage(storage.clone());
+        let notification_host: Arc<feeds::DemoNotifications> = Arc::default();
 
         let mut top_toolbar = TopToolbar::new().with_config(
             egui_charts::ui::top_toolbar::TopToolbarConfig::default().with_height(38.0),
@@ -612,7 +622,19 @@ impl DemoApp {
             open_panel: Some(SidePanel::Watchlist),
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
-            alert_host: Arc::default(),
+            alert_host: {
+                let alerts = cc
+                    .storage
+                    .and_then(|storage| eframe::get_value(storage, "alerts"))
+                    .unwrap_or_default();
+                let notifications = notification_host.clone();
+                Arc::new(crate::panel_alerts::DemoAlerts::new(
+                    alerts,
+                    move |symbol| {
+                        notifications.notify(format!("Alert triggered: {symbol}"), Some(symbol));
+                    },
+                ))
+            },
             audio: Default::default(),
             alert_monitors: Default::default(),
             trading: Default::default(),
@@ -652,7 +674,7 @@ impl DemoApp {
                 entries: feeds::heatmap(),
             },
             notifications: NotificationsPanel::new(),
-            notification_host: Arc::default(),
+            notification_host,
             chats: ChatsPanel::new(),
             products: ProductsPanel::new(vec![
                 product(
@@ -907,54 +929,12 @@ impl DemoApp {
             .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
             .unwrap_or(0.0);
         self.alert_dialog.open(self.state.symbol.clone(), price);
+        self.alert_dialog.alert.timeframe = Some(self.state.timeframe);
     }
 
     /// Offers the studies' outputs and every level of the drawings as alert sources.
     fn list_alert_sources(&mut self) {
-        use egui_charts::model::AlertSource;
-        let bar = self.chart.bars(SeriesId::MAIN).len().saturating_sub(1) as f64;
-        let scale = self.chart.config().right_axis_scale_mode;
-        self.alert_dialog.sources = self
-            .chart
-            .indicators()
-            .flat_map(|(id, study)| {
-                study
-                    .line_names()
-                    .into_iter()
-                    .enumerate()
-                    .map(move |(output, name)| {
-                        (
-                            AlertSource::Study {
-                                id: id.0.to_string(),
-                                output,
-                            },
-                            format!("{}: {name}", study.name()),
-                        )
-                    })
-            })
-            .chain(
-                self.chart
-                    .drawings()
-                    .drawings
-                    .iter()
-                    .filter(|d| d.completed)
-                    .flat_map(|d| {
-                        let levels = d.alert_levels(bar, scale);
-                        let single = levels.len() == 1;
-                        levels.into_iter().map(move |(level, name, _)| {
-                            let drawing = format!("{} {}", d.tool_type.as_str(), d.id);
-                            (
-                                d.alert_source(level),
-                                if single {
-                                    drawing
-                                } else {
-                                    format!("{drawing}: {name}")
-                                },
-                            )
-                        })
-                    }),
-            )
-            .collect();
+        self.alert_dialog.sources = self.chart.alert_sources();
         self.alert_dialog.watchlists = self
             .watchlist
             .lists()
@@ -964,8 +944,9 @@ impl DemoApp {
     }
 
     fn quick_price_alert(&mut self, symbol: String, price: f64) {
-        self.alerts
-            .save(Alert::new(symbol, AlertCondition::Crossing(price)));
+        let mut alert = Alert::new(symbol, AlertCondition::Crossing(price));
+        alert.timeframe = Some(self.state.timeframe);
+        self.alerts.save(alert);
     }
 
     // --- selection / context helpers --------------------------------------
@@ -1242,6 +1223,7 @@ impl eframe::App for DemoApp {
             &self.chart.drawings().tool_defaults,
         );
         eframe::set_value(storage, "watchlists", &self.watchlist.lists());
+        eframe::set_value(storage, "alerts", &self.alert_host.engine().alerts());
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
         self.storage.persist(storage);
@@ -1266,14 +1248,12 @@ impl eframe::App for DemoApp {
 
         // Fulfil requests from the previous frame, before a dialog can submit another.
         self.handle_screenshot(&ctx);
+        let alerts = &self.settings_state.alerts;
+        self.alerts
+            .set_sound(alerts.play_sound.then(|| alerts.sound.clone()));
         self.alerts.poll(&ctx, &mut self.toasts);
         self.monitor_alerts(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
-        let triggers = self.alert_host.take_triggers();
-        for symbol in &triggers {
-            self.notification_host
-                .notify(format!("Alert triggered: {symbol}"), Some(symbol));
-        }
         self.symbol_details.poll(&ctx);
         self.highlights.poll(&ctx);
         self.news.poll(&ctx);
@@ -1295,8 +1275,7 @@ impl eframe::App for DemoApp {
                 false,
             );
         }
-        if !triggers.is_empty() && self.settings_state.alerts.play_sound {
-            let name = self.settings_state.alerts.sound.clone();
+        if let Some(name) = self.alerts.take_sound() {
             self.play_sound(&ctx, &name, self.settings_state.alerts.sound_volume, false);
         }
         if let Some(error) = self.audio.take_error() {
@@ -1897,7 +1876,7 @@ impl DemoApp {
             });
     }
 
-    fn toggle_panel(&mut self, icon: RightBarIcon) {
+    pub(crate) fn toggle_panel(&mut self, icon: RightBarIcon) {
         if icon == RightBarIcon::Help {
             self.keyboard_shortcuts.toggle();
         }
@@ -2297,16 +2276,33 @@ impl DemoApp {
         }
     }
 
+    /// Advance the sample clock explicitly while preparing a paused session.
+    #[allow(dead_code, reason = "used by the documentation captures")]
+    pub(crate) fn advance_sample_to(&mut self, time: chrono::DateTime<chrono::Utc>) {
+        self.live.set_paused(false);
+        let mut cursor = self.live.now();
+        while cursor < time {
+            cursor = (cursor + chrono::Duration::seconds(1)).min(time);
+            self.live.advance(cursor);
+        }
+        self.live.set_paused(true);
+    }
+
+    /// Connects the paper account and opens its panel, as its tile in the broker picker does.
+    pub(crate) fn connect_paper(&mut self) {
+        self.trading.set_service(self.paper.clone());
+        self.trading.account_panel.broker = "Paper Trading".to_owned();
+        self.trading.account_panel.accounts = vec!["Paper 1".to_owned()];
+        self.account_panel = AccountPanelSize::Normal;
+    }
+
     /// The account panel of the connected broker, under the chart and its interval bar.
     fn show_account_panel(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         use egui_charts::ui::trading::{AccountPanelAction, BrokerPickerAction, BrokerTile};
 
         match self.broker_picker.show(ui.ctx()) {
             Some(BrokerPickerAction::Connect(id)) if id == BrokerTile::PAPER => {
-                self.trading.set_service(self.paper.clone());
-                self.trading.account_panel.broker = "Paper Trading".to_owned();
-                self.trading.account_panel.accounts = vec!["Paper 1".to_owned()];
-                self.account_panel = AccountPanelSize::Normal;
+                self.connect_paper()
             }
             Some(BrokerPickerAction::Connect(_)) => {
                 self.notify("Example brokers have no account behind them in this demo");
@@ -3198,6 +3194,31 @@ mod tests {
     use egui_charts::model::LineStyle;
     use egui_charts::ui::dialogs::DrawingProps;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    #[test]
+    fn advancing_a_paused_sample_keeps_intermediate_bars() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx);
+        let start = "2026-10-27T19:29:50Z".parse().unwrap();
+        let mut app = DemoApp::new_at(&cc, start, true);
+        let end = start + chrono::Duration::minutes(3);
+        app.advance_sample_to(end);
+        assert!(app.live.paused());
+        assert_eq!(app.live.now(), end);
+        let bars = app.live.snapshot(
+            Timeframe::Min1,
+            egui_charts::model::BarClock::new(Timeframe::Min1),
+            app.chart.extended_hours(),
+        );
+        let added: Vec<_> = bars.iter().filter(|bar| bar.time > start).collect();
+        assert_eq!(added.len(), 3);
+        assert!(added.iter().all(|bar| bar.volume > 0.0));
+        assert!(
+            added
+                .windows(2)
+                .all(|pair| pair[1].time - pair[0].time == chrono::Duration::minutes(1))
+        );
+    }
 
     #[test]
     fn replay_prices_fill_the_connected_paper_account() {
@@ -6645,7 +6666,14 @@ mod tests {
     fn settings_entry_points_open_the_same_chart_dialog() {
         for entry in ["top", "axis", "double-click", "series"] {
             let ctx = egui::Context::default();
-            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            // The sample is generated from the clock; at a fixed time no study line crosses the
+            // close that the double click aims at, which would take the click from the series.
+            let start = "2026-10-28T16:14:00Z".parse().unwrap();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                start,
+                true,
+            );
             app.live.set_paused(true);
             app.chart.set_feed_paused(true);
             let frame = |app: &mut DemoApp, events| {

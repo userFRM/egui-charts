@@ -16,6 +16,11 @@
 //! Subsequent values use Wilder's smoothing:
 //! `Avg = (Prev_Avg * (N-1) + Current) / N`.
 //!
+//! The formula is evaluated as `100 * Gain / (Gain + Loss)`, which is identical but needs no
+//! price-unit floor, so scaling the prices does not change the result. A window with gains and
+//! no losses is 100, one with losses and no gains is 0, and a fully flat window is the neutral
+//! 50.
+//!
 //! # Interpretation
 //!
 //! - RSI > 70: overbought -- potential pullback.
@@ -79,6 +84,16 @@ impl Default for State {
     }
 }
 
+/// RSI from Wilder's average gain and loss: 100 with no loss, 0 with no gain, 50 when both are 0.
+pub(super) fn from_averages(gain: f64, loss: f64) -> f64 {
+    let total = gain + loss;
+    if total > 0.0 {
+        100.0 * gain / total
+    } else {
+        50.0
+    }
+}
+
 impl State {
     pub(super) fn next(&mut self, bar: &Bar, period: usize) -> IndicatorValue {
         if !bar.close.is_finite() {
@@ -105,8 +120,7 @@ impl State {
             self.gain = (self.gain * (period - 1) as f64 + gain) / period as f64;
             self.loss = (self.loss * (period - 1) as f64 + loss) / period as f64;
         }
-        let rs = self.gain / self.loss.max(1e-10);
-        IndicatorValue::Single(100.0 - (100.0 / (1.0 + rs)))
+        IndicatorValue::Single(from_averages(self.gain, self.loss))
     }
 }
 
@@ -254,19 +268,34 @@ mod tests {
             .collect()
     }
 
-    /// A monotonically rising series has no losses, so RSI saturates at 100.
-    /// This pins both the value and that the first computed bar is correct.
+    fn rsi_of(closes: &[f64], period: usize) -> Vec<Option<f64>> {
+        let mut rsi = RSI::new(period);
+        rsi.calculate(&bars_from_closes(closes));
+        rsi.values()
+            .to_rows()
+            .into_iter()
+            .map(|v| match v {
+                IndicatorValue::Single(v) => Some(v),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Endpoints and scale: hand values for period 2 are RSI[2] = 100 * 1 / (1 + 0.5) from the
+    /// mean gain 1 and loss 0.5, then 100 * 1.5 / (1.5 + 0.25) after Wilder smoothing. Scaling
+    /// the prices must not move them; no loss is 100, no gain 0 and a flat window the neutral 50.
     #[test]
-    fn all_gains_saturate_at_100() {
-        let closes: Vec<f64> = (0..30).map(|i| 100.0 + i as f64).collect();
-        let bars = bars_from_closes(&closes);
-
-        let mut rsi = RSI::new(14);
-        rsi.calculate(&bars);
-
-        match rsi.values().to_rows()[14] {
-            IndicatorValue::Single(v) => assert!((v - 100.0).abs() < 1e-6),
-            _ => panic!("expected first RSI at index 14"),
+    fn endpoints_and_scale_invariance() {
+        let ordinary = [10.0, 12.0, 11.0, 13.0];
+        for scale in [1.0, 1e-12, 1e12] {
+            let closes: Vec<f64> = ordinary.iter().map(|c| c * scale).collect();
+            let got = rsi_of(&closes, 2);
+            assert_eq!(got[..2], [None, None]);
+            assert!((got[2].unwrap() - 200.0 / 3.0).abs() < 1e-9, "{scale}");
+            assert!((got[3].unwrap() - 600.0 / 7.0).abs() < 1e-9, "{scale}");
         }
+        assert_eq!(rsi_of(&[1e-12, 2e-12, 3e-12, 4e-12], 2)[2], Some(100.0));
+        assert_eq!(rsi_of(&[4e-12, 3e-12, 2e-12, 1e-12], 2)[2], Some(0.0));
+        assert_eq!(rsi_of(&[5.0, 5.0, 5.0, 5.0], 2)[2..], [Some(50.0); 2]);
     }
 }

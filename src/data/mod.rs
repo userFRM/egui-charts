@@ -76,7 +76,10 @@ pub(crate) mod trades;
 
 pub use inbox::{Reply, Sink, aggregate_trades, aggregate_trades_with_tick_size};
 pub use order_flow::{OrderFlowInput, OrderFlowKind};
-pub use orders::{OrderEvent, OrderQueue, RestingOrder};
+pub use orders::{
+    OrderEvent, OrderFilter, OrderFilterUnavailable, OrderQueue, OrderSizeTier, OrderSizeTiers,
+    RestingOrder,
+};
 pub use recording::{RecordingReader, RecordingWriter};
 pub use replay::{MarketEvent, ReplayClock, ReplayEvent};
 #[cfg(feature = "studies")]

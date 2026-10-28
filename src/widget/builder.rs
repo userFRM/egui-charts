@@ -129,6 +129,7 @@ impl Chart {
             heikin_ashi: Default::default(),
             series_scales: Default::default(),
             study_ids: Vec::new(),
+            study_limit: None,
             study_inputs: Vec::new(),
             study_autoscale: Vec::new(),
             pending_from: Vec::new(),
@@ -195,6 +196,8 @@ impl Chart {
             show_price_targets: false,
             hidden_signal_categories: Default::default(),
             event_click: None,
+            mark_hits: std::cell::RefCell::default(),
+            clickable_marks: Vec::new(),
             timeframe: None,
             feed_link: None,
             #[cfg(feature = "drawings")]
