@@ -8,6 +8,7 @@
 
 use crate::localization as l10n;
 use crate::model::{Bar, Timeframe};
+use crate::ui_kit::buttons::Button;
 use crate::ui_kit::modal::Modal;
 use crate::widget::{Chart, DataTable, SeriesId};
 use chrono::{DateTime, Utc};
@@ -67,8 +68,8 @@ impl Source {
 pub struct DataTableDialog {
     /// Whether the dialog is currently visible.
     pub is_open: bool,
-    /// Columns the user turned off, as indices into the table's headers.
-    hidden: BTreeSet<usize>,
+    /// Titles of the columns the user turned off, so they stay off when studies come and go.
+    hidden: BTreeSet<String>,
     cached: Option<(Source, DataTable)>,
 }
 
@@ -112,13 +113,6 @@ impl DataTableDialog {
             .is_none_or(|(cached, _)| *cached != source)
         {
             self.cached = Some((source, chart.data_table()));
-            self.hidden.retain(|&column| {
-                column
-                    < self
-                        .cached
-                        .as_ref()
-                        .map_or(0, |(_, table)| table.headers.len())
-            });
         }
         let table = &self.cached.as_ref().expect("table was just built").1;
         let hidden = &mut self.hidden;
@@ -137,29 +131,29 @@ impl DataTableDialog {
         action
     }
 
-    fn contents(ui: &mut Ui, table: &DataTable, hidden: &mut BTreeSet<usize>) -> DataTableAction {
+    fn contents(ui: &mut Ui, table: &DataTable, hidden: &mut BTreeSet<String>) -> DataTableAction {
         let mut action = DataTableAction::None;
         let shown: Vec<usize> = (0..table.headers.len())
-            .filter(|column| !hidden.contains(column))
+            .filter(|&column| !hidden.contains(&table.headers[column]))
             .collect();
         ui.horizontal(|ui| {
             ui.menu_button(l10n::text(ui.ctx(), "Columns"), |ui| {
                 // The time column keys the rows, so it stays.
-                for (column, header) in table.headers.iter().enumerate().skip(1) {
-                    let mut visible = !hidden.contains(&column);
+                for header in table.headers.iter().skip(1) {
+                    let mut visible = !hidden.contains(header);
                     if ui.checkbox(&mut visible, header).changed() {
                         if visible {
-                            hidden.remove(&column);
+                            hidden.remove(header);
                         } else {
-                            hidden.insert(column);
+                            hidden.insert(header.clone());
                         }
                     }
                 }
             });
-            if ui.button(l10n::text(ui.ctx(), "Copy")).clicked() {
+            if Button::new("Copy").show(ui).clicked() {
                 ui.ctx().copy_text(table.tsv(&shown));
             }
-            if ui.button(l10n::text(ui.ctx(), "Export CSV")).clicked()
+            if Button::new("Export CSV").show(ui).clicked()
                 && let Ok(csv) = table.csv(&shown)
             {
                 action = DataTableAction::Export(csv);
