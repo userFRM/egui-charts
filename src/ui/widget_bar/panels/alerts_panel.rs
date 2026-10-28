@@ -99,6 +99,7 @@ pub struct AlertsPanel {
     sort: AlertSortKey,
     descending: bool,
     sources: Vec<(AlertSource, String)>,
+    symbol: String,
     draft: Alert,
     draft_saving: bool,
     pending: usize,
@@ -127,9 +128,19 @@ impl AlertsPanel {
             sort: AlertSortKey::default(),
             descending: false,
             sources: Vec::new(),
+            symbol: String::new(),
             draft: Alert::new("", AlertCondition::Crossing(0.0)),
             draft_saving: false,
             pending: 0,
+        }
+    }
+
+    /// Start the Quick alert form on `symbol`, such as the chart's. Call it every frame: the form
+    /// follows a change of `symbol` and keeps what the user typed otherwise.
+    pub fn set_symbol(&mut self, symbol: &str) {
+        if self.symbol != symbol {
+            self.symbol = symbol.to_owned();
+            self.draft.symbol = symbol.to_owned();
         }
     }
 
@@ -251,7 +262,8 @@ impl AlertsPanel {
                     Ok(()) => {
                         self.error = None;
                         if key == DRAFT_REPLY {
-                            self.draft = Alert::new("", AlertCondition::Crossing(0.0));
+                            self.draft =
+                                Alert::new(self.symbol.clone(), AlertCondition::Crossing(0.0));
                         }
                     }
                     Err(error) => self.error = Some(error),
@@ -733,7 +745,8 @@ mod tests {
             })
             .drop_without_applying_deltas();
         };
-        panel.draft = Alert::new("SIM", AlertCondition::CrossingUp(10.0));
+        panel.set_symbol("SIM");
+        panel.draft.condition = AlertCondition::CrossingUp(10.0);
         panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY);
         assert_eq!((panel.pending, panel.draft_saving), (1, true));
         host.reply
@@ -750,7 +763,8 @@ mod tests {
         host.reply.lock().unwrap().take().unwrap().send(Ok(()));
         frame(&mut panel);
         assert_eq!(panel.error, None);
-        assert_eq!(panel.draft.symbol, "");
+        assert_eq!(panel.draft.symbol, "SIM");
+        assert_eq!(panel.draft.condition, AlertCondition::Crossing(0.0));
         assert!(panel.alerts().is_empty());
     }
 

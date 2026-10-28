@@ -2356,6 +2356,7 @@ impl DemoApp {
 
     fn show_alerts_panel(&mut self, ui: &mut egui::Ui) {
         self.list_alert_sources();
+        self.alerts.set_symbol(&self.state.symbol);
         match self.alerts.show(ui) {
             AlertPanelAction::CreateAlert => self.open_alert(None),
             AlertPanelAction::EditAlert(alert) => {
