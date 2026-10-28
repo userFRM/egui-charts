@@ -1,8 +1,9 @@
 //! Automatic chart patterns found in confirmed swing pivots.
 //!
 //! [`ChartPatterns`] detects continuation formations (flags, pennants, rectangles and
-//! triangles) in a bar history, and returns each one's anchors, boundary segments, direction
-//! and confirmation time through [`ChartPatterns::formations`]. Developing formations are
+//! triangles) or reversal formations (cup and handle, double and triple tops and bottoms,
+//! head and shoulders) in a bar history, and returns each one's anchors, boundary segments,
+//! direction and confirmation time through [`ChartPatterns::formations`]. Developing formations are
 //! told apart from confirmed ones, and every confirmed formation is marked on the bar that
 //! confirms it.
 //!
@@ -31,13 +32,23 @@
 //! | Descending triangle | as the rectangle | falling upper boundary, flat lower boundary |
 //! | Symmetrical triangle | as the rectangle | falling upper and rising lower boundary |
 //!
+//! | Cup and handle | high, low, high, low | the rims differ by at most `tolerance` percent of their mean; the cup is at least `depth` percent deep below the mean rim, lasts between `min_length` and `max_length` bars and has its low in the middle half of that time; the handle pulls back from the right rim by at most `handle` percent of the cup depth over at most half the cup's duration; confirms bullish above the higher rim, fails below the cup's low |
+//! | Inverted cup and handle | mirror | confirms bearish below the lower rim |
+//! | Double top | high, low, high | the tops differ by at most `tolerance` percent; at least `min_length` bars apart; the valley at least `depth` percent below them; the neckline is the valley's low; confirms bearish below it, fails above the higher top by more than `tolerance` percent |
+//! | Double bottom | mirror | the neckline is the valley's high; confirms bullish above it |
+//! | Triple top | high, low, high, low, high | as the double top for all three tops and both valleys; the neckline is the lower valley |
+//! | Triple bottom | mirror | the neckline is the higher valley |
+//! | Head and shoulders | high, low, high, low, high | the shoulders differ by at most `tolerance` percent, the head is at least `depth` percent above each, each valley lies below its shoulder, the shoulders are between `min_length` and `max_length` bars apart; the neckline runs through the valleys and may slope; confirms bearish below it, fails above the head |
+//! | Inverse head and shoulders | mirror | confirms bullish above the neckline |
+//!
 //! A boundary is flat when it moves at most `tolerance` percent between the first and last
 //! pivot. A flag or pennant's length is counted from its pole's top and the length of the
 //! others from their first pivot, and lies between `min_length` and `max_length`. A bull flag, bull
 //! pennant and ascending triangle confirm bullish above their upper boundary; a bear flag,
 //! bear pennant and descending triangle confirm bearish below their lower boundary. A
 //! rectangle and a symmetrical triangle confirm in the direction of the break. A pennant's
-//! last four pivots also form a symmetrical triangle, which is then not reported. Each pivot
+//! last four pivots also form a symmetrical triangle, which is then not reported, and a triple
+//! top or bottom follows the double top or bottom of its first two tops. Each pivot
 //! belongs to at most one formation of a kind. At most 16 pivots, 8 developing and 64
 //! confirmed formations are kept.
 //!
@@ -45,8 +56,10 @@
 //!
 //! Line 0 marks a bullish confirmation at the low of its bar, line 1 a bearish one at the
 //! high, each labelled with the abbreviations of the formations it confirms. Boundaries are
-//! also generated as drawings, dashed while developing.
+//! also generated as drawings, dashed while developing; a reversal formation draws only its
+//! neckline or breakout level.
 
+use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
@@ -85,6 +98,22 @@ pub enum FormationKind {
     DescendingTriangle,
     /// Falling highs over rising lows; confirms in the direction of the break.
     SymmetricalTriangle,
+    /// A rounded fall and recovery to the same level, a small pullback, then a break above the rim.
+    CupAndHandle,
+    /// The mirror image: a rounded rise and return, a small bounce, then a break below the rim.
+    InvertedCupAndHandle,
+    /// Two tops at the same level; confirms below the valley between them.
+    DoubleTop,
+    /// Two bottoms at the same level; confirms above the peak between them.
+    DoubleBottom,
+    /// Three tops at the same level; confirms below the lower valley.
+    TripleTop,
+    /// Three bottoms at the same level; confirms above the higher peak.
+    TripleBottom,
+    /// A head above two shoulders; confirms below the neckline through the valleys.
+    HeadAndShoulders,
+    /// A head below two shoulders; confirms above the neckline through the peaks.
+    InverseHeadAndShoulders,
 }
 
 impl FormationKind {
@@ -98,6 +127,14 @@ impl FormationKind {
             Self::AscendingTriangle => "Ascending Triangle",
             Self::DescendingTriangle => "Descending Triangle",
             Self::SymmetricalTriangle => "Symmetrical Triangle",
+            Self::CupAndHandle => "Cup and Handle",
+            Self::InvertedCupAndHandle => "Inverted Cup and Handle",
+            Self::DoubleTop => "Double Top",
+            Self::DoubleBottom => "Double Bottom",
+            Self::TripleTop => "Triple Top",
+            Self::TripleBottom => "Triple Bottom",
+            Self::HeadAndShoulders => "Head and Shoulders",
+            Self::InverseHeadAndShoulders => "Inverse Head and Shoulders",
         }
     }
 
@@ -111,18 +148,34 @@ impl FormationKind {
             Self::AscendingTriangle => "ATR",
             Self::DescendingTriangle => "DTR",
             Self::SymmetricalTriangle => "STR",
+            Self::CupAndHandle => "CH",
+            Self::InvertedCupAndHandle => "ICH",
+            Self::DoubleTop => "DT",
+            Self::DoubleBottom => "DB",
+            Self::TripleTop => "TT",
+            Self::TripleBottom => "TB",
+            Self::HeadAndShoulders => "HS",
+            Self::InverseHeadAndShoulders => "IHS",
         }
     }
 
     /// The direction the formation resolves in, `None` for a two-sided one.
     fn expected(self) -> Option<PatternDirection> {
         match self {
-            Self::BullFlag | Self::BullPennant | Self::AscendingTriangle => {
-                Some(PatternDirection::Bullish)
-            }
-            Self::BearFlag | Self::BearPennant | Self::DescendingTriangle => {
-                Some(PatternDirection::Bearish)
-            }
+            Self::BullFlag
+            | Self::BullPennant
+            | Self::AscendingTriangle
+            | Self::CupAndHandle
+            | Self::DoubleBottom
+            | Self::TripleBottom
+            | Self::InverseHeadAndShoulders => Some(PatternDirection::Bullish),
+            Self::BearFlag
+            | Self::BearPennant
+            | Self::DescendingTriangle
+            | Self::InvertedCupAndHandle
+            | Self::DoubleTop
+            | Self::TripleTop
+            | Self::HeadAndShoulders => Some(PatternDirection::Bearish),
             Self::Rectangle | Self::SymmetricalTriangle => None,
         }
     }
@@ -133,11 +186,13 @@ impl FormationKind {
 pub enum PatternFamily {
     /// Flags, pennants, rectangles and triangles.
     Continuation,
+    /// Cup and handle, double and triple tops and bottoms, head and shoulders.
+    Reversal,
 }
 
 impl PatternFamily {
     /// Every family.
-    pub(crate) const ALL: [Self; 1] = [Self::Continuation];
+    pub(crate) const ALL: [Self; 2] = [Self::Continuation, Self::Reversal];
 
     fn kinds(self) -> &'static [FormationKind] {
         match self {
@@ -151,12 +206,23 @@ impl PatternFamily {
                 FormationKind::DescendingTriangle,
                 FormationKind::SymmetricalTriangle,
             ],
+            Self::Reversal => &[
+                FormationKind::CupAndHandle,
+                FormationKind::InvertedCupAndHandle,
+                FormationKind::DoubleTop,
+                FormationKind::DoubleBottom,
+                FormationKind::TripleTop,
+                FormationKind::TripleBottom,
+                FormationKind::HeadAndShoulders,
+                FormationKind::InverseHeadAndShoulders,
+            ],
         }
     }
 
     fn name(self) -> &'static str {
         match self {
             Self::Continuation => "Continuation Chart Patterns",
+            Self::Reversal => "Reversal Chart Patterns",
         }
     }
 }
@@ -206,6 +272,8 @@ struct Config {
     tolerance: f64,
     touches: usize,
     pole: f64,
+    depth: f64,
+    handle: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -257,6 +325,8 @@ struct Candidate {
     lower: Line,
     on_up: Outcome,
     on_down: Outcome,
+    /// Whether the upper and lower line are reported as boundaries.
+    shown: [bool; 2],
 }
 
 impl Candidate {
@@ -290,7 +360,9 @@ impl Candidate {
             anchors: self.anchors.iter().map(|p| (p.bar, p.price)).collect(),
             boundaries: [self.upper, self.lower]
                 .iter()
-                .map(|line| [(start.bar, line.at(start.seq)), (end.1, line.at(end.0))])
+                .zip(self.shown)
+                .filter(|&(_, shown)| shown)
+                .map(|(line, _)| [(start.bar, line.at(start.seq)), (end.1, line.at(end.0))])
                 .collect(),
             confirmed_at: confirmed.then_some(end.1),
         }
@@ -343,6 +415,7 @@ fn flag(config: &Config, pivots: &VecDeque<Pivot>, bull: bool, pennant: bool) ->
         from: 1,
         upper,
         lower,
+        shown: [true; 2],
         on_up: if bull {
             Outcome::Confirm(PatternDirection::Bullish)
         } else {
@@ -406,6 +479,7 @@ fn channel(config: &Config, pivots: &VecDeque<Pivot>) -> Option<Candidate> {
         from: 0,
         upper,
         lower,
+        shown: [true; 2],
         on_up: if kind == FormationKind::DescendingTriangle {
             Outcome::Fail
         } else {
@@ -416,6 +490,207 @@ fn channel(config: &Config, pivots: &VecDeque<Pivot>) -> Option<Candidate> {
         } else {
             down
         },
+    })
+}
+
+/// A horizontal line.
+fn level(price: f64) -> Line {
+    Line {
+        seq: 0.0,
+        price,
+        slope: 0.0,
+    }
+}
+
+/// A double or triple top or bottom through the last three or five pivots.
+fn multiple(
+    config: &Config,
+    pivots: &VecDeque<Pivot>,
+    top: bool,
+    triple: bool,
+) -> Option<Candidate> {
+    let w = last_pivots(pivots, if triple { 5 } else { 3 })?;
+    if w[0].high != top {
+        return None;
+    }
+    let peaks: Vec<f64> = w.iter().step_by(2).map(|p| p.price).collect();
+    let valleys: Vec<f64> = w.iter().skip(1).step_by(2).map(|p| p.price).collect();
+    let (high, low) = (
+        peaks.iter().copied().fold(f64::MIN, f64::max),
+        peaks.iter().copied().fold(f64::MAX, f64::min),
+    );
+    let mean = peaks.iter().sum::<f64>() / peaks.len() as f64;
+    let apart = w
+        .windows(3)
+        .all(|p| p[2].seq - p[0].seq >= config.min_length);
+    // A valley this far below (above) a top (bottom).
+    let deep = |valley: f64| (mean - valley) * if top { 1.0 } else { -1.0 } / mean.abs() * 100.0;
+    if !near(high, low, config.tolerance)
+        || !apart
+        || w[w.len() - 1].seq - w[0].seq > config.max_length
+        || valleys.iter().any(|&v| deep(v) < config.depth)
+    {
+        return None;
+    }
+    let tolerance = config.tolerance / 100.0;
+    let (neckline, kind) = match (top, triple) {
+        (true, false) => (
+            valleys.iter().copied().fold(f64::MAX, f64::min),
+            FormationKind::DoubleTop,
+        ),
+        (true, true) => (
+            valleys.iter().copied().fold(f64::MAX, f64::min),
+            FormationKind::TripleTop,
+        ),
+        (false, false) => (
+            valleys.iter().copied().fold(f64::MIN, f64::max),
+            FormationKind::DoubleBottom,
+        ),
+        (false, true) => (
+            valleys.iter().copied().fold(f64::MIN, f64::max),
+            FormationKind::TripleBottom,
+        ),
+    };
+    let (up, down) = (
+        Outcome::Confirm(PatternDirection::Bullish),
+        Outcome::Confirm(PatternDirection::Bearish),
+    );
+    let (upper, lower, on_up, on_down, shown) = if top {
+        (
+            level(high * (1.0 + tolerance)),
+            level(neckline),
+            Outcome::Fail,
+            down,
+            [false, true],
+        )
+    } else {
+        (
+            level(neckline),
+            level(low * (1.0 - tolerance)),
+            up,
+            Outcome::Fail,
+            [true, false],
+        )
+    };
+    Some(Candidate {
+        kind,
+        anchors: w,
+        from: 0,
+        upper,
+        lower,
+        on_up,
+        on_down,
+        shown,
+    })
+}
+
+/// A head and shoulders (or its inverse) through the last five pivots.
+fn head_and_shoulders(config: &Config, pivots: &VecDeque<Pivot>, top: bool) -> Option<Candidate> {
+    let w = last_pivots(pivots, 5)?;
+    if w[0].high != top {
+        return None;
+    }
+    let side = if top { 1.0 } else { -1.0 };
+    let (left, first, head, second, right) = (w[0], w[1], w[2], w[3], w[4]);
+    let above = |shoulder: &Pivot| {
+        side * (head.price - shoulder.price) / shoulder.price.abs() * 100.0 >= config.depth
+    };
+    if !near(left.price, right.price, config.tolerance)
+        || !above(&left)
+        || !above(&right)
+        || side * first.price >= side * left.price
+        || side * second.price >= side * right.price
+        || !(config.min_length..=config.max_length).contains(&(right.seq - left.seq))
+    {
+        return None;
+    }
+    let neckline = Line::through(&first, &second);
+    let guard = level(head.price);
+    let (kind, upper, lower, on_up, on_down, shown) = if top {
+        (
+            FormationKind::HeadAndShoulders,
+            guard,
+            neckline,
+            Outcome::Fail,
+            Outcome::Confirm(PatternDirection::Bearish),
+            [false, true],
+        )
+    } else {
+        (
+            FormationKind::InverseHeadAndShoulders,
+            neckline,
+            guard,
+            Outcome::Confirm(PatternDirection::Bullish),
+            Outcome::Fail,
+            [true, false],
+        )
+    };
+    Some(Candidate {
+        kind,
+        anchors: w,
+        from: 1,
+        upper,
+        lower,
+        on_up,
+        on_down,
+        shown,
+    })
+}
+
+/// A cup and handle (or its inverse) through the last four pivots: the rims, the cup's
+/// extreme between them and the handle's.
+fn cup(config: &Config, pivots: &VecDeque<Pivot>, bull: bool) -> Option<Candidate> {
+    let w = last_pivots(pivots, 4)?;
+    if w[0].high != bull {
+        return None;
+    }
+    let side = if bull { 1.0 } else { -1.0 };
+    let (left, base, right, handle) = (w[0], w[1], w[2], w[3]);
+    let mean = (left.price + right.price) / 2.0;
+    let depth = side * (mean - base.price);
+    let duration = right.seq - left.seq;
+    let pullback = side * (right.price - handle.price);
+    if !near(left.price, right.price, config.tolerance)
+        || depth <= 0.0
+        || depth / mean.abs() * 100.0 < config.depth
+        || !(config.min_length..=config.max_length).contains(&duration)
+        || handle.seq - left.seq > config.max_length
+        || 4 * (base.seq - left.seq) < duration
+        || 4 * (right.seq - base.seq) < duration
+        || pullback <= 0.0
+        || pullback > config.handle / 100.0 * depth
+        || 2 * (handle.seq - right.seq) > duration
+    {
+        return None;
+    }
+    let (kind, upper, lower, on_up, on_down, shown) = if bull {
+        (
+            FormationKind::CupAndHandle,
+            level(left.price.max(right.price)),
+            level(base.price),
+            Outcome::Confirm(PatternDirection::Bullish),
+            Outcome::Fail,
+            [true, false],
+        )
+    } else {
+        (
+            FormationKind::InvertedCupAndHandle,
+            level(base.price),
+            level(left.price.min(right.price)),
+            Outcome::Fail,
+            Outcome::Confirm(PatternDirection::Bearish),
+            [false, true],
+        )
+    };
+    Some(Candidate {
+        kind,
+        anchors: w,
+        from: 0,
+        upper,
+        lower,
+        on_up,
+        on_down,
+        shown,
     })
 }
 
@@ -539,18 +814,33 @@ impl State {
     }
 
     fn detect(&mut self, config: &Config, family: PatternFamily, enabled: &[bool; 8]) {
-        let found = [
-            flag(config, &self.pivots, true, false),
-            flag(config, &self.pivots, false, false),
-            flag(config, &self.pivots, true, true),
-            flag(config, &self.pivots, false, true),
-            channel(config, &self.pivots),
-        ];
+        let pivots = &self.pivots;
+        let found: Vec<Option<Candidate>> = match family {
+            PatternFamily::Continuation => vec![
+                flag(config, pivots, true, false),
+                flag(config, pivots, false, false),
+                flag(config, pivots, true, true),
+                flag(config, pivots, false, true),
+                channel(config, pivots),
+            ],
+            PatternFamily::Reversal => vec![
+                cup(config, pivots, true),
+                cup(config, pivots, false),
+                multiple(config, pivots, true, false),
+                multiple(config, pivots, false, false),
+                multiple(config, pivots, true, true),
+                multiple(config, pivots, false, true),
+                head_and_shoulders(config, pivots, true),
+                head_and_shoulders(config, pivots, false),
+            ],
+        };
         // A pennant's last four pivots are also a symmetrical triangle; only the pennant is kept.
-        let pennant = found[2..4]
-            .iter()
-            .flatten()
-            .any(|c| enabled[family.kinds().iter().position(|&k| k == c.kind).unwrap()]);
+        let pennant = found.iter().flatten().any(|c| {
+            matches!(
+                c.kind,
+                FormationKind::BullPennant | FormationKind::BearPennant
+            ) && enabled[family.kinds().iter().position(|&k| k == c.kind).unwrap()]
+        });
         for candidate in found.into_iter().flatten() {
             if pennant
                 && candidate.kind == FormationKind::SymmetricalTriangle
@@ -605,13 +895,27 @@ impl ChartPatterns {
     pub fn new(family: PatternFamily) -> Self {
         Self {
             family,
-            config: Config {
-                strength: 3,
-                min_length: 8,
-                max_length: 120,
-                tolerance: 1.0,
-                touches: 2,
-                pole: 5.0,
+            config: match family {
+                PatternFamily::Continuation => Config {
+                    strength: 3,
+                    min_length: 8,
+                    max_length: 120,
+                    tolerance: 1.0,
+                    touches: 2,
+                    pole: 5.0,
+                    depth: 3.0,
+                    handle: 50.0,
+                },
+                PatternFamily::Reversal => Config {
+                    strength: 3,
+                    min_length: 10,
+                    max_length: 200,
+                    tolerance: 3.0,
+                    touches: 2,
+                    pole: 5.0,
+                    depth: 3.0,
+                    handle: 50.0,
+                },
             },
             enabled: [true; 8],
             found: Vec::new(),
@@ -645,14 +949,23 @@ impl ChartPatterns {
         self.config.strength = strength.max(1);
         self.config.min_length = *length.start();
         self.config.max_length = (*length.end()).max(*length.start());
-        self.config.tolerance = tolerance.clamp(0.0, 100.0);
+        self.config.tolerance = clamp_param(tolerance, 0.0, 100.0);
         self.config.touches = touches.clamp(2, MAX_PIVOTS / 2);
         self
     }
 
     /// The smallest rise or fall of a flag or pennant pole, in percent; NaN counts as zero.
     pub fn with_pole(mut self, percent: f64) -> Self {
-        self.config.pole = percent.max(0.0);
+        self.config.pole = clamp_param(percent, 0.0, f64::MAX);
+        self
+    }
+
+    /// The smallest depth of a cup, of a valley between tops and of a head above its shoulders,
+    /// in percent, and the largest pullback of a cup's handle, in percent of the cup's depth,
+    /// each clamped into 0 to 100, NaN to 0.
+    pub fn with_depth(mut self, depth: f64, handle: f64) -> Self {
+        self.config.depth = clamp_param(depth, 0.0, 100.0);
+        self.config.handle = clamp_param(handle, 0.0, 100.0);
         self
     }
 
@@ -699,21 +1012,29 @@ impl Indicator for ChartPatterns {
             length("min_length", "Minimum length", c.min_length, d.min_length),
             length("max_length", "Maximum length", c.max_length, d.max_length),
             number("tolerance", "Tolerance %", c.tolerance, d.tolerance),
-            StudyInput::new(
-                "touches",
-                "Touches per boundary",
-                InputValue::Length(c.touches),
-                InputKind::Length(2, MAX_PIVOTS / 2),
-            )
-            .with_default(InputValue::Length(d.touches)),
-            StudyInput::new(
-                "pole",
-                "Pole %",
-                InputValue::Number(c.pole),
-                InputKind::Number(0.0, f64::MAX),
-            )
-            .with_default(InputValue::Number(d.pole)),
         ];
+        inputs.extend(match self.family {
+            PatternFamily::Continuation => vec![
+                StudyInput::new(
+                    "touches",
+                    "Touches per boundary",
+                    InputValue::Length(c.touches),
+                    InputKind::Length(2, MAX_PIVOTS / 2),
+                )
+                .with_default(InputValue::Length(d.touches)),
+                StudyInput::new(
+                    "pole",
+                    "Pole %",
+                    InputValue::Number(c.pole),
+                    InputKind::Number(0.0, f64::MAX),
+                )
+                .with_default(InputValue::Number(d.pole)),
+            ],
+            PatternFamily::Reversal => vec![
+                number("depth", "Depth %", c.depth, d.depth),
+                number("handle", "Handle pullback %", c.handle, d.handle),
+            ],
+        });
         inputs.extend(self.family.kinds().iter().enumerate().map(|(k, kind)| {
             StudyInput::new(
                 format!("patterns[{k}]"),
@@ -742,6 +1063,8 @@ impl Indicator for ChartPatterns {
             ("touches", InputValue::Length(v)) => self.config.touches = v,
             ("tolerance", InputValue::Number(v)) => self.config.tolerance = v,
             ("pole", InputValue::Number(v)) => self.config.pole = v,
+            ("depth", InputValue::Number(v)) => self.config.depth = v,
+            ("handle", InputValue::Number(v)) => self.config.handle = v,
             (_, InputValue::Toggle(on)) => {
                 let slot = id
                     .strip_prefix("patterns[")
@@ -1064,15 +1387,110 @@ mod tests {
         assert_eq!(developing[0].boundaries[0][1].0, 30);
     }
 
+    const DOUBLE_TOP: [f64; 5] = [100.0, 120.0, 105.0, 119.0, 60.0];
+    const TRIPLE_TOP: [f64; 7] = [100.0, 120.0, 105.0, 119.5, 105.5, 119.0, 60.0];
+    const HEAD_AND_SHOULDERS: [f64; 7] = [100.0, 110.0, 100.0, 120.0, 101.0, 111.0, 80.0];
+    const CUP: [f64; 6] = [110.0, 120.0, 100.0, 119.0, 114.0, 130.0];
+
+    /// Each reversal fixture confirms on the hand-computed bar, often later than the first
+    /// close beyond the neckline because the last pivot is known only three bars on, or, as a
+    /// near miss breaking one rule, does not: unequal tops, a shallow valley, a third top
+    /// that is too low, a head too close to its shoulders, shoulders of unequal height, and a
+    /// handle that gives back more than half the cup. Mirrors give the other direction.
+    #[test]
+    fn reversal_fixtures_confirm_where_the_rules_say() {
+        use FormationKind::*;
+        use PatternDirection::*;
+        let flat = |a: &[f64]| a.to_vec();
+        #[rustfmt::skip]
+        let cases: [Case; 20] = [
+            ("double top", flat(&DOUBLE_TOP), DoubleTop, Some((Bearish, 18))),
+            ("double bottom", mirror(&DOUBLE_TOP), DoubleBottom, Some((Bullish, 18))),
+            ("double top with unequal tops", vec![100.0, 120.0, 105.0, 115.0, 60.0], DoubleTop, None),
+            ("double top with a shallow valley", vec![100.0, 120.0, 118.0, 119.5, 60.0], DoubleTop, None),
+            ("triple top", flat(&TRIPLE_TOP), TripleTop, Some((Bearish, 28))),
+            ("triple bottom", mirror(&TRIPLE_TOP), TripleBottom, Some((Bullish, 28))),
+            ("triple top with a low third top", vec![100.0, 120.0, 105.0, 119.5, 105.5, 112.0, 60.0], TripleTop, None),
+            ("head and shoulders", flat(&HEAD_AND_SHOULDERS), HeadAndShoulders, Some((Bearish, 28))),
+            ("inverse head and shoulders", mirror(&HEAD_AND_SHOULDERS), InverseHeadAndShoulders, Some((Bullish, 28))),
+            ("head too low", vec![100.0, 110.0, 100.0, 112.0, 101.0, 111.0, 80.0], HeadAndShoulders, None),
+            ("unequal shoulders", vec![100.0, 110.0, 100.0, 125.0, 101.0, 116.0, 80.0], HeadAndShoulders, None),
+            ("cup and handle", flat(&CUP), CupAndHandle, Some((Bullish, 23))),
+            ("inverted cup and handle", mirror(&CUP), InvertedCupAndHandle, Some((Bearish, 23))),
+            ("handle too deep", vec![110.0, 120.0, 100.0, 119.0, 105.0, 130.0], CupAndHandle, None),
+            ("unequal rims", vec![110.0, 120.0, 100.0, 112.0, 108.0, 130.0], CupAndHandle, None),
+            ("cup without a break", vec![110.0, 120.0, 100.0, 119.0, 114.0, 116.0], CupAndHandle, None),
+            ("double top that recovers", vec![100.0, 120.0, 105.0, 119.0, 125.0], DoubleTop, None),
+            ("head and shoulders that recovers", vec![100.0, 110.0, 100.0, 120.0, 101.0, 111.0, 125.0], HeadAndShoulders, None),
+            ("double top with no break", vec![100.0, 120.0, 105.0, 119.0, 112.0], DoubleTop, None),
+            ("cup with a break back down", vec![110.0, 120.0, 100.0, 119.0, 114.0, 95.0], CupAndHandle, None),
+        ];
+        for (label, anchors, kind, expected) in cases {
+            let formations = found(
+                &mut ChartPatterns::new(PatternFamily::Reversal),
+                &path(&anchors),
+            );
+            let got: Vec<_> = formations
+                .iter()
+                .filter(|f| f.kind == kind && f.status == FormationStatus::Confirmed)
+                .map(|f| (f.direction.unwrap(), f.confirmed_at.unwrap()))
+                .collect();
+            assert_eq!(got, expected.into_iter().collect::<Vec<_>>(), "{label}");
+        }
+
+        // The double top without a break is developing, with only its neckline as boundary,
+        // ending on the last bar.
+        let formations = found(
+            &mut ChartPatterns::new(PatternFamily::Reversal),
+            &path(&[100.0, 120.0, 105.0, 119.0, 112.0]),
+        );
+        let double: Vec<_> = formations.iter().filter(|f| f.kind == DoubleTop).collect();
+        assert_eq!(double.len(), 1);
+        assert_eq!(double[0].status, FormationStatus::Developing);
+        assert_eq!(double[0].direction, Some(Bearish));
+        assert_eq!(double[0].anchors, [(5, 120.0), (10, 105.0), (15, 119.0)]);
+        assert_eq!(double[0].boundaries, [[(5, 105.0), (20, 105.0)]]);
+
+        // A head and shoulders with a sloping neckline through (10, 100) and (20, 101) breaks
+        // it where the line is, 101.7 on bar 27, but is known only on bar 28.
+        let formations = found(
+            &mut ChartPatterns::new(PatternFamily::Reversal),
+            &path(&HEAD_AND_SHOULDERS),
+        );
+        let shoulders = formations
+            .iter()
+            .find(|f| f.kind == HeadAndShoulders)
+            .unwrap();
+        assert_eq!(shoulders.boundaries.len(), 1);
+        let [(from, start), (to, end)] = shoulders.boundaries[0];
+        assert_eq!((from, to), (10, 28));
+        assert!((start - 100.0).abs() < 1e-9 && (end - 101.8).abs() < 1e-9);
+
+        // With a minimum separation longer than the tops have, the same double top is not one.
+        let relaxed = found(
+            &mut ChartPatterns::new(PatternFamily::Reversal).with_geometry(3, 12..=200, 3.0, 2),
+            &path(&DOUBLE_TOP),
+        );
+        assert!(relaxed.iter().all(|f| f.kind != DoubleTop));
+    }
+
     /// Replaying any prefix of the bars finds the confirmed formations the full history
     /// confirmed by then and no others, and updating bar by bar equals a fresh calculation.
     #[test]
     fn prefixes_and_incremental_updates_agree_with_the_full_history() {
-        for anchors in [BULL_FLAG.to_vec(), RECTANGLE.to_vec(), mirror(&ASCENDING)] {
+        use PatternFamily::{Continuation, Reversal};
+        for (family, anchors) in [
+            (Continuation, BULL_FLAG.to_vec()),
+            (Continuation, RECTANGLE.to_vec()),
+            (Continuation, mirror(&ASCENDING)),
+            (Reversal, TRIPLE_TOP.to_vec()),
+            (Reversal, HEAD_AND_SHOULDERS.to_vec()),
+            (Reversal, mirror(&CUP)),
+        ] {
             let bars = path(&anchors);
-            let full = found(&mut ChartPatterns::new(PatternFamily::Continuation), &bars);
+            let full = found(&mut ChartPatterns::new(family), &bars);
             assert!(!full.is_empty());
-            let mut live = ChartPatterns::new(PatternFamily::Continuation);
+            let mut live = ChartPatterns::new(family);
             for k in 1..=bars.len() {
                 let confirmed = |formations: Vec<Formation>| -> Vec<Formation> {
                     formations
@@ -1080,20 +1498,14 @@ mod tests {
                         .filter(|f| f.status == FormationStatus::Confirmed)
                         .collect()
                 };
-                let replay = confirmed(found(
-                    &mut ChartPatterns::new(PatternFamily::Continuation),
-                    &bars[..k],
-                ));
+                let replay = confirmed(found(&mut ChartPatterns::new(family), &bars[..k]));
                 let expected: Vec<_> = confirmed(full.clone())
                     .into_iter()
                     .filter(|f| f.confirmed_at.unwrap() < k)
                     .collect();
                 assert_eq!(replay, expected, "prefix {k}");
                 live.update(&bars[..k], k - 1);
-                let fresh = found(
-                    &mut ChartPatterns::new(PatternFamily::Continuation),
-                    &bars[..k],
-                );
+                let fresh = found(&mut ChartPatterns::new(family), &bars[..k]);
                 assert_eq!(live.formations(), fresh, "update at {k}");
             }
         }

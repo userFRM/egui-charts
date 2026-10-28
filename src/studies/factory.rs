@@ -1268,6 +1268,7 @@ mod tests {
             Box::new(TradingSessions::new()),
             Box::new(CandlestickPatterns::default()),
             Box::new(ChartPatterns::new(PatternFamily::Continuation)),
+            Box::new(ChartPatterns::new(PatternFamily::Reversal)),
         ]
     }
 

@@ -150,7 +150,7 @@ A chart computes its studies, updates them as its bars change and draws them: ov
 | Profiles | Volume Profile, Time Price Opportunity |
 | Support and resistance | Pivot Points, ZigZag |
 | Market structure | 52W HL%, 52W High/Low |
-| Patterns | All Candlestick Patterns, Continuation Chart Patterns |
+| Patterns | All Candlestick Patterns, Continuation Chart Patterns, Reversal Chart Patterns |
 | Statistics | Linear Regression, Standard Error, Rank Correlation |
 
 ```rust
