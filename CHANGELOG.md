@@ -403,6 +403,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Percentage axis ticks and price labels show a positive zero when the value rounds to zero at the displayed precision. ([#1226](https://github.com/userFRM/egui-charts/issues/1226))
+
 - The upside and downside Tasuki gap patterns need the third candle to open strictly inside the second candle's body and close strictly inside the gap, so an open outside the body, a close on either gap edge or a closed gap is no longer marked. ([#1083](https://github.com/userFRM/egui-charts/issues/1083))
 
 - A deselected rectangle draws its border, fill and label only. Its centre guides and size labels appear while it is selected or being drawn, and its corner dots, which duplicated the selection handles, are gone. ([#1169](https://github.com/userFRM/egui-charts/issues/1169))

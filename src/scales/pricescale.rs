@@ -239,7 +239,11 @@ impl PriceTransform {
         let value = self.axis_value(value);
         match (formatter, self.mode) {
             (Some(formatter), _) => formatter.format(value),
-            (None, PriceScaleMode::Percentage) => format!("{value:+.decimals$}%"),
+            (None, PriceScaleMode::Percentage) => {
+                let formatted = super::price_formatter::format_decimal(value, decimals);
+                let sign = if formatted.starts_with('-') { "" } else { "+" };
+                format!("{sign}{formatted}%")
+            }
             (None, _) => DefaultPriceFormatter::with_precision(decimals).format(value),
         }
     }
@@ -624,6 +628,30 @@ impl PriceMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn percentage_labels_round_zero_without_a_minus() {
+        let transform = PriceTransform::new(PriceScaleMode::Percentage, 100.0);
+        for (price, expected) in [
+            (99.996, "+0.00%"),
+            (100.0, "+0.00%"),
+            (100.004, "+0.00%"),
+            (99.994, "-0.01%"),
+            (100.006, "+0.01%"),
+        ] {
+            assert_eq!(
+                transform.label(transform.to_scale(price), 2, None),
+                expected
+            );
+        }
+        let map = PriceMap::new(transform, PriceRange::new(-0.35, 0.45), 0.0, 500.0, false);
+        let zero = map
+            .marks()
+            .into_iter()
+            .find(|m| m.price.abs() < 1e-9)
+            .unwrap();
+        assert_eq!(zero.label, "+0.000%");
+    }
 
     /// Hand-computed positions on a pane from y = 0 (top) to y = 100 (bottom).
     #[test]
