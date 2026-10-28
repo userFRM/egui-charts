@@ -383,7 +383,7 @@ Order flow,Order flow,Bid/ask spread in ticks plotted over time with alert,parti
 Order flow,Order flow,Big trade zones,missing,host,
 Order flow,Order flow,Book speed,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory.rs
 Order flow,Order flow,Book thickness and resting-size delta over time,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/widget/feed.rs;src/data/orders.rs;src/data/inbox/sink.rs
-Order flow,Order flow,"Bubble grouping: automatic, by time window, by price, tick grouping",done,library,src/chart/overlays/volume_bubbles.rs
+Order flow,Order flow,"Bubble grouping: automatic, by time window, by price, tick grouping",done,library,src/chart/overlays/volume_bubbles.rs;src/model/clock.rs
 Order flow,Order flow,CVD drawn as candles,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/chart/series/mod.rs
 Order flow,Order flow,"Chart tabs, detached groups and shared crosshair",done,library,src/widget/layout.rs;src/widget/sync.rs
 Order flow,Order flow,Connectors for futures data feeds with aggregated and order-level depth,partial,host,src/data/mod.rs;src/data/inbox.rs;src/widget/builder.rs;src/widget/feed.rs
@@ -400,7 +400,7 @@ Order flow,Order flow,Depth ladder session and resettable profiles,done,library,
 Order flow,Order flow,Depth ladder with configurable visible levels,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/data/depth.rs
 Order flow,Order flow,Developing POC line through the session,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs
 Order flow,Order flow,Diagonal imbalance detection and highlighting,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
-Order flow,Order flow,Execution volume bubbles at trade prices and times,done,library,src/widget/feed.rs;src/chart/overlays/volume_bubbles.rs;src/widget/frame.rs
+Order flow,Order flow,Execution volume bubbles at trade prices and times,done,library,src/widget/feed.rs;src/chart/overlays/volume_bubbles.rs;src/widget/frame.rs;src/model/clock.rs
 Order flow,Order flow,Footprint cell colour and intensity modes,done,library,src/chart/overlays/footprint.rs
 Order flow,Order flow,Footprint chart type: bid x ask traded volume at every price inside each bar,done,library,src/data/footprint.rs;src/widget/feed.rs;src/widget/frame.rs;src/chart/overlays/footprint.rs;src/ui/top_toolbar/components/chart_type_selector.rs
 Order flow,Order flow,"Footprint display modes: bid/ask split, total volume, delta, delta plus volume",done,library,src/chart/overlays/footprint.rs;src/widget/frame.rs

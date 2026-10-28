@@ -397,21 +397,22 @@ impl VolumeBubbles {
             return;
         };
         let slot = self.clock.timeframe().map_or(0, |t| t.duration_ms());
+        let open_of = |i: usize| self.clock.bar_open(bars[i].time);
         let slot_of = |i: usize| match bars.get(i + 1) {
-            Some(next) if slot > 0 => slot.min((next.time - bars[i].time).num_milliseconds()),
-            Some(next) => (next.time - bars[i].time).num_milliseconds(),
+            Some(_) if slot > 0 => slot.min((open_of(i + 1) - open_of(i)).num_milliseconds()),
+            Some(_) => (open_of(i + 1) - open_of(i)).num_milliseconds(),
             None => slot,
         };
-        let end = last.time + TimeDelta::milliseconds(slot_of(bars.len() - 1));
+        let end = self.clock.bar_open(last.time) + TimeDelta::milliseconds(slot_of(bars.len() - 1));
         let min_size = self.config.min_size_filter.unwrap_or(f64::NEG_INFINITY);
         let mut shown: Vec<(f32, f32, Bubble)> = Vec::new();
-        for bubble in self.between(first.time, end) {
-            let i = bars.partition_point(|bar| bar.time <= bubble.at);
+        for bubble in self.between(self.clock.bar_open(first.time), end) {
+            let i = bars.partition_point(|bar| self.clock.bar_open(bar.time) <= bubble.at);
             let Some(i) = i.checked_sub(1) else { continue };
-            let elapsed = (bubble.at - bars[i].time).num_milliseconds();
+            let elapsed = (bubble.at - open_of(i)).num_milliseconds();
             let (x, merges) = match self.config.grouping {
                 BubbleGrouping::Automatic | BubbleGrouping::PriceStep(_) => {
-                    if bars[i].time != bubble.at {
+                    if open_of(i) != bubble.at {
                         continue;
                     }
                     (x(i), true)
@@ -892,22 +893,34 @@ mod tests {
     /// Guards the exact position of ungrouped bubbles: a fill sits in its bar's slot at the
     /// share of the bar interval that had elapsed, and two fills of one instant and price draw
     /// two circles on one spot instead of one, while a price step still merges the levels of a
-    /// bar that fall on one pixel row, keeping the shapes bounded by the pane.
+    /// bar that fall on one pixel row. Stamps inside a minute or daily slot leave every
+    /// grouping at the same position, including trades before the first visible stamp.
     #[test]
-    fn an_ungrouped_bubble_sits_at_its_time_within_the_bar() {
+    fn bubbles_follow_their_bar_slots_and_execution_times() {
         let ten = "2024-03-15T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
-        let bars = [
-            Bar::new(ten, 100.0, 101.0, 99.0, 100.0, 1.0),
-            Bar::new(ten + TimeDelta::minutes(1), 100.0, 101.0, 99.0, 100.0, 1.0),
-        ];
-        let mesh = |grouping, fills: &[(i64, f64)]| {
+        let mesh = |grouping, fills: &[(i64, f64)], stamp, timeframe: Timeframe| {
+            let clock = BarClock::new(timeframe);
+            let open = clock.bar_open(ten);
+            let bars = [0, timeframe.duration_ms()].map(|ms| {
+                Bar::new(
+                    open + TimeDelta::milliseconds(ms) + TimeDelta::seconds(stamp),
+                    100.0,
+                    101.0,
+                    99.0,
+                    100.0,
+                    1.0,
+                )
+            });
             let config = VolumeBubblesConfig {
                 grouping,
                 ..VolumeBubblesConfig::default()
             };
-            let trades = Vec::from_iter(fills.iter().map(|&(s, p)| trade(s, p, 1.0, None)));
-            let bubbles =
-                VolumeBubbles::new(config, BarClock::new(Timeframe::Min1), Some(1.0), &trades);
+            let trades = Vec::from_iter(
+                fills
+                    .iter()
+                    .map(|&(s, p)| Tick::new(open + TimeDelta::seconds(s), p, 1.0, None)),
+            );
+            let bubbles = VolumeBubbles::new(config, clock, Some(1.0), &trades);
             let ctx = egui::Context::default();
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 bubbles.render(
@@ -926,10 +939,10 @@ mod tests {
                     Shape::Mesh(mesh) => Some(Arc::clone(mesh)),
                     _ => None,
                 })
-                .unwrap()
+                .unwrap_or_default()
         };
         let centres = |fills: &[(i64, f64)]| {
-            let mesh = mesh(Ungrouped, fills);
+            let mesh = mesh(Ungrouped, fills, 0, Timeframe::Min1);
             let sides = mesh.vertices.len() / fills.len();
             Vec::from_iter(
                 mesh.vertices
@@ -949,10 +962,48 @@ mod tests {
         );
         // 99.0 and 99.25 both round to row 101: one disc, as large as a lone fill's.
         assert_eq!(
-            mesh(PriceStep(0.25), &[(15, 99.0), (20, 99.25)])
+            mesh(
+                PriceStep(0.25),
+                &[(15, 99.0), (20, 99.25)],
+                0,
+                Timeframe::Min1
+            )
+            .vertices
+            .len(),
+            mesh(Ungrouped, &[(15, 99.0)], 0, Timeframe::Min1)
                 .vertices
-                .len(),
-            mesh(Ungrouped, &[(15, 99.0)]).vertices.len()
+                .len()
         );
+        for (timeframe, stamp, second) in [
+            (Timeframe::Min1, 30, 60),
+            (Timeframe::Day1, 4 * 3600, 86400),
+        ] {
+            for grouping in [Automatic, PriceStep(1.0)] {
+                let fills = [(40, 100.0), (second + 40, 101.0)];
+                let opens = mesh(grouping, &fills, 0, timeframe);
+                let inside = mesh(grouping, &fills, stamp, timeframe);
+                assert!(!opens.vertices.is_empty());
+                assert_eq!(
+                    inside.vertices, opens.vertices,
+                    "{grouping:?} {timeframe:?}"
+                );
+            }
+        }
+        // 150 + (10/60 - 1/2) * 50 = 133 1/3; the first slot also retains
+        // executions before its stamp: 100 + (15/60 - 1/2) * 50 = 87.5.
+        // Ten-second windows sit at seconds 15 and 75, the latter at x = 137.5.
+        for (grouping, second_x) in [
+            (Ungrouped, 133.33333),
+            (Executions(1), 133.33333),
+            (TimeWindow(TimeDelta::seconds(10)), 137.5),
+        ] {
+            let fills = [(15, 100.0), (70, 101.0)];
+            let inside = mesh(grouping, &fills, 30, Timeframe::Min1);
+            let opens = mesh(grouping, &fills, 0, Timeframe::Min1);
+            assert_eq!(inside.vertices, opens.vertices, "{grouping:?}");
+            let second = inside.vertices.len() / 2;
+            assert!((inside.vertices[0].pos.x - 87.5).abs() < 0.01);
+            assert!((inside.vertices[second].pos.x - second_x).abs() < 0.01);
+        }
     }
 }
