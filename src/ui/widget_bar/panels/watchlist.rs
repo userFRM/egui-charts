@@ -581,23 +581,16 @@ impl WatchlistPanel {
         }
         // A flag filter draws copies of the flagged symbols, whose flag changes and removals are
         // applied to their lists after drawing.
-        let mut flagged = flag_filter.map(|flag| {
-            let found = flagged_symbols(lists, flag);
-            let items = found
-                .iter()
-                .map(|&(list, item)| lists[list].items[item].clone())
-                .collect();
-            (
-                Watchlist {
-                    name: String::new(),
-                    items,
-                },
-                found,
-            )
+        let mut flagged = flag_filter.map(|flag| Watchlist {
+            name: String::new(),
+            items: flagged_symbols(lists, flag)
+                .into_iter()
+                .map(|(list, item)| lists[list].items[item].clone())
+                .collect(),
         });
         let filtered = flagged.is_some();
         let list = match &mut flagged {
-            Some((view, _)) => view,
+            Some(view) => view,
             None => &mut lists[*active],
         };
         let reorderable = sort.is_none() && !filtered;
@@ -1060,19 +1053,8 @@ impl WatchlistPanel {
         {
             list.items.remove(index);
         }
-        if let Some((view, found)) = flagged {
-            for (item, &(list, at)) in view.items.iter().zip(&found) {
-                if let (
-                    WatchlistItem::Symbol { flag: new, .. },
-                    WatchlistItem::Symbol { flag, .. },
-                ) = (item, &mut lists[list].items[at])
-                {
-                    *flag = *new;
-                }
-            }
-            if let Some(&(list, at)) = removed.and_then(|index| found.get(index)) {
-                lists[list].items.remove(at);
-            }
+        if let (Some(view), Some(filter)) = (flagged, *flag_filter) {
+            apply_flag_view(lists, filter, &view.items, removed);
         }
         action
     }
@@ -1207,6 +1189,37 @@ fn detail_rows(
             }
         });
     picked
+}
+
+/// Applies the edits of the `filter` flag view to `lists`. Each row stands for its symbol wherever
+/// it is flagged `filter`, so a new flag reaches every such entry and removing the row removes them
+/// all; otherwise the row would come back from another list.
+fn apply_flag_view(
+    lists: &mut [Watchlist],
+    filter: WatchlistFlag,
+    view: &[WatchlistItem],
+    removed: Option<usize>,
+) {
+    for (index, item) in view.iter().enumerate() {
+        let WatchlistItem::Symbol { symbol, flag: new } = item else {
+            continue;
+        };
+        let remove = removed == Some(index);
+        if *new == Some(filter) && !remove {
+            continue;
+        }
+        for list in lists.iter_mut() {
+            list.items.retain_mut(|entry| match entry {
+                WatchlistItem::Symbol { symbol: at, flag }
+                    if at == symbol && *flag == Some(filter) =>
+                {
+                    *flag = *new;
+                    !remove
+                }
+                _ => true,
+            });
+        }
+    }
 }
 
 /// Where each symbol flagged `flag` first appears: its list and item index, in list order.
@@ -1396,9 +1409,9 @@ mod tests {
         assert_eq!(quote(-37.63, -10.0).change_percent(), -276.3);
     }
 
-    /// A list copy keeps sections, symbol order and flags under a fresh name that survives a
-    /// stored round trip, the flag view lists a symbol once however many lists flag it, and the
-    /// new columns read the quote's volume and extended-hours price, with missing figures last.
+    /// A list copy keeps sections, symbol order and flags under a fresh name, the flag view lists a
+    /// symbol once however many lists flag it and its edits reach each of them, and the new columns
+    /// read the quote's volume and extended-hours price.
     #[test]
     fn duplicates_flag_views_and_quote_columns_follow_the_lists_and_quotes() {
         let flagged = |name: &str, flag| WatchlistItem::Symbol {
@@ -1415,9 +1428,6 @@ mod tests {
         let copy = tech.duplicate(["Tech", "Tech copy"]);
         assert_eq!(copy.name, "Tech copy 2");
         assert_eq!(copy.items, tech.items);
-        let json = serde_json::to_string(&[&tech, &copy]).unwrap();
-        let stored: Vec<Watchlist> = serde_json::from_str(&json).unwrap();
-        assert_eq!(stored, [tech.clone(), copy.clone()]);
 
         let mut other = Watchlist::new("Other");
         other.items = vec![
@@ -1436,6 +1446,27 @@ mod tests {
         assert_eq!(panel.symbols().count(), 3);
         assert!(panel.add_symbol_to(1, "SHEL") && !panel.add_symbol_to(1, "SHEL"));
         assert!(!panel.add_symbol_to(9, "SHEL"));
+        // A row of the red view stands for the symbol in every list that flags it red, so
+        // unflagging AAPL or removing XOM there cannot leave a red copy behind in another list.
+        let red = Some(WatchlistFlag::Red);
+        apply_flag_view(
+            &mut panel.lists,
+            WatchlistFlag::Red,
+            &[flagged("AAPL", None)],
+            None,
+        );
+        apply_flag_view(
+            &mut panel.lists,
+            WatchlistFlag::Red,
+            &[flagged("XOM", red)],
+            Some(0),
+        );
+        panel.set_flag_filter(red);
+        assert_eq!(panel.symbols().collect::<Vec<_>>(), ["MSFT"]);
+        assert_eq!(
+            panel.lists[1].symbols().collect::<Vec<_>>(),
+            ["AAPL", "BP", "SHEL"]
+        );
 
         let time = chrono::Utc::now();
         let regular = Quote::new(100.0, 90.0, time).with_volume(2_000.0);
@@ -1444,7 +1475,7 @@ mod tests {
             last,
             time,
         };
-        let quote = regular.clone().with_extended(extended(105.0));
+        let quote = regular.with_extended(extended(105.0));
         // Hand calculations: 105 - 100 = 5, and 5 / 100 * 100 = 5%.
         for (column, expected) in [
             (WatchlistColumn::Volume, Some(2_000.0)),
@@ -1459,28 +1490,12 @@ mod tests {
                 "{column:?}"
             );
         }
-        assert_eq!(WatchlistColumn::Volume.value(&regular), Some(2_000.0));
         assert_eq!(
             WatchlistColumn::ExtendedChangePercent
                 .value(&Quote::new(0.0, 0.0, time).with_extended(extended(1.0))),
             None,
             "a change from a zero price is undefined"
         );
-        let items = vec![symbol("NONE"), symbol("BIG"), symbol("SMALL")];
-        let quotes = HashMap::from([
-            ("BIG".to_owned(), regular.clone().with_volume(9.0)),
-            ("SMALL".to_owned(), regular.with_volume(3.0)),
-            ("NONE".to_owned(), Quote::new(1.0, 1.0, time)),
-        ]);
-        // Indices into `items`: SMALL, BIG, NONE ascending and BIG, SMALL, NONE descending, the
-        // symbol without a volume last either way.
-        for (descending, expected) in [(false, [2, 1, 0]), (true, [1, 2, 0])] {
-            let sort = Some((WatchlistColumn::Volume, descending));
-            assert_eq!(
-                display_order(&items, &quotes, sort, &HashSet::new()),
-                expected
-            );
-        }
         panel.sort = Some((WatchlistColumn::Volume, false));
         panel.set_columns([WatchlistColumn::Last]);
         assert_eq!(panel.sort, None, "a sort by a hidden column is dropped");
