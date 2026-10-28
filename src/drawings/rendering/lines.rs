@@ -316,7 +316,7 @@ impl Drawing {
         }
     }
 
-    /// Render rect - with optional middle line and price range
+    /// Render rect: its border and fill
     pub(crate) fn render_rect(&self, painter: &egui::Painter, color: Color32, stroke: Stroke) {
         if self.points.len() >= 2 {
             let rect = Rect::from_two_pos(self.points[0], self.points[1]);
@@ -330,81 +330,73 @@ impl Drawing {
 
             // Main rectangle stroke
             painter.rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
-
-            // Draw middle horizontal line (50% level)
-            let middle_y = (rect.min.y + rect.max.y) / 2.0;
-            let middle_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 100);
-            super::utils::draw_dashed_line(
-                painter,
-                Pos2::new(rect.min.x, middle_y),
-                Pos2::new(rect.max.x, middle_y),
-                Stroke::new(stroke::HAIRLINE, middle_color),
-                DESIGN_TOKENS.rounding.lg,
-                DESIGN_TOKENS.rounding.md,
-            );
-
-            // Draw middle vertical line
-            let middle_x = (rect.min.x + rect.max.x) / 2.0;
-            super::utils::draw_dashed_line(
-                painter,
-                Pos2::new(middle_x, rect.min.y),
-                Pos2::new(middle_x, rect.max.y),
-                Stroke::new(stroke::HAIRLINE, middle_color),
-                DESIGN_TOKENS.rounding.lg,
-                DESIGN_TOKENS.rounding.md,
-            );
-
-            // Width in bars below, height in price on the right
-            let height = rect.height();
-            let width = rect.width();
-            let [width_label, height_label] =
-                <[String; 2]>::try_from(self.size_labels(&|_| 0.0)).unwrap_or_default();
-            let chart = painter.ctx().active_theme().chart;
-            let label_bg = chart.bg_axis;
-
-            // Width label (bottom center)
-            if width > 50.0 {
-                let width_label_pos = Pos2::new(rect.center().x, rect.max.y + typography::XS);
-                super::measurements::boxed_label(
-                    painter,
-                    egui::Align2::CENTER_CENTER,
-                    width_label_pos,
-                    width_label,
-                    chart.axis_text,
-                    label_bg,
-                );
-            }
-
-            // Height label (right center)
-            if height > 50.0 {
-                super::measurements::boxed_label(
-                    painter,
-                    egui::Align2::LEFT_CENTER,
-                    Pos2::new(rect.max.x + typography::XS, rect.center().y),
-                    height_label,
-                    chart.axis_text,
-                    label_bg,
-                );
-            }
-
-            // Corner anchor points
-            let corners = [
-                rect.min,
-                Pos2::new(rect.max.x, rect.min.y),
-                rect.max,
-                Pos2::new(rect.min.x, rect.max.y),
-            ];
-            for corner in corners {
-                painter.circle_filled(corner, DESIGN_TOKENS.rounding.md, color);
-                painter.circle_stroke(
-                    corner,
-                    DESIGN_TOKENS.rounding.md,
-                    Stroke::new(stroke::HAIRLINE, Color32::WHITE),
-                );
-            }
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.md, color);
+        }
+    }
+
+    /// Render the centre guides and the size labels of a rectangle that is selected or being
+    /// drawn; a deselected rectangle shows only its border and fill.
+    pub(crate) fn render_rect_guides(&self, painter: &egui::Painter) {
+        if self.points.len() < 2 {
+            return;
+        }
+        let rect = Rect::from_two_pos(self.points[0], self.points[1]);
+        // Draw middle horizontal line (50% level)
+        let middle_y = (rect.min.y + rect.max.y) / 2.0;
+        let middle_color =
+            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 100);
+        super::utils::draw_dashed_line(
+            painter,
+            Pos2::new(rect.min.x, middle_y),
+            Pos2::new(rect.max.x, middle_y),
+            Stroke::new(stroke::HAIRLINE, middle_color),
+            DESIGN_TOKENS.rounding.lg,
+            DESIGN_TOKENS.rounding.md,
+        );
+
+        // Draw middle vertical line
+        let middle_x = (rect.min.x + rect.max.x) / 2.0;
+        super::utils::draw_dashed_line(
+            painter,
+            Pos2::new(middle_x, rect.min.y),
+            Pos2::new(middle_x, rect.max.y),
+            Stroke::new(stroke::HAIRLINE, middle_color),
+            DESIGN_TOKENS.rounding.lg,
+            DESIGN_TOKENS.rounding.md,
+        );
+
+        // Width in bars below, height in price on the right
+        let height = rect.height();
+        let width = rect.width();
+        let [width_label, height_label] =
+            <[String; 2]>::try_from(self.size_labels(&|_| 0.0)).unwrap_or_default();
+        let chart = painter.ctx().active_theme().chart;
+        let label_bg = chart.bg_axis;
+
+        // Width label (bottom center)
+        if width > 50.0 {
+            let width_label_pos = Pos2::new(rect.center().x, rect.max.y + typography::XS);
+            super::measurements::boxed_label(
+                painter,
+                egui::Align2::CENTER_CENTER,
+                width_label_pos,
+                width_label,
+                chart.axis_text,
+                label_bg,
+            );
+        }
+
+        // Height label (right center)
+        if height > 50.0 {
+            super::measurements::boxed_label(
+                painter,
+                egui::Align2::LEFT_CENTER,
+                Pos2::new(rect.max.x + typography::XS, rect.center().y),
+                height_label,
+                chart.axis_text,
+                label_bg,
+            );
         }
     }
 
@@ -692,7 +684,7 @@ mod tests {
         for (_, theme) in presets() {
             apply_to_egui(&ctx, &theme);
             let output = ctx.run_ui(Default::default(), |ui| {
-                drawing.render_rect(ui.painter(), drawing.color32(), drawing.stroke());
+                drawing.render_rect_guides(ui.painter());
             });
             let labels: Vec<_> = output
                 .shapes
@@ -747,5 +739,40 @@ mod tests {
             assert_eq!(ray_end(start, end, rect), want);
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// Size labels and centre guides belong to a selected rectangle; a deselected one has
+    /// only its border and fill.
+    #[test]
+    fn rectangle_guides_show_only_while_selected() {
+        use crate::drawings::{DrawingManager, DrawingToolType};
+        let mut manager = DrawingManager::new();
+        let mut drawing = Drawing::new(1, DrawingToolType::Rect);
+        drawing.add_point(Pos2::new(100.0, 100.0));
+        drawing.add_point(Pos2::new(300.0, 300.0));
+        manager.drawings.push(drawing);
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        let texts = |manager: &DrawingManager| {
+            let ctx = egui::Context::default();
+            let output = ctx.run_ui(Default::default(), |ui| {
+                let view = ChartView {
+                    instrument: None,
+                    bars: &[],
+                    revision: 0,
+                    bar_to_x: &|x| x,
+                    price_to_y: &|p| p as f32,
+                    time_axis: true,
+                };
+                manager.render_all(ui.painter(), pane, &view);
+            });
+            let texts = (output.shapes.iter())
+                .filter(|shape| matches!(shape.shape, egui::Shape::Text(_)))
+                .count();
+            output.drop_without_applying_deltas();
+            texts
+        };
+        assert_eq!(texts(&manager), 0);
+        manager.select(1);
+        assert_eq!(texts(&manager), 2);
     }
 }

@@ -453,8 +453,15 @@ impl Chart {
     ) -> Response {
         let footprint = footprint.filter(|_| self.replay.is_none());
         let theme = self.theme_override.clone();
-        let _theme_scope = theme
+        // Axis labels take their size from the theme's label text.
+        let scaled = self.config.axis_font_size.map(|size| {
+            let mut scaled = theme.clone().unwrap_or_else(|| ui.ctx().active_theme());
+            scaled.text.label = size;
+            scaled
+        });
+        let _theme_scope = scaled
             .as_ref()
+            .or(theme.as_ref())
             .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
         let size = self.size;
         let show = |ui: &mut Ui| {
@@ -1184,6 +1191,7 @@ impl Chart {
         self.last_rendered_price_rect = price_rect;
         self.last_rendered_volume_rect = volume_rect;
 
+        self.begin_mark_hits();
         self.pump_marks(ui.ctx());
 
         // Get visible data
@@ -1882,6 +1890,7 @@ impl Chart {
         // where the panes are rendered, outside this rect.
         if response.clicked()
             && let Some(click_pos) = response.interact_pointer_pos()
+            && self.mark_at(click_pos).is_none()
         {
             match element_at(click_pos) {
                 Some((id, bar_idx)) => self.selection.select(id, Some(bar_idx)),
