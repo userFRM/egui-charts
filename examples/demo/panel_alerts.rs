@@ -260,9 +260,12 @@ impl DemoAlerts {
             run.previous = inputs;
             run.sample = Some(sample);
             if fire {
-                triggers.push_back(chart.symbol().to_owned());
-                if triggers.len() > 10_000 {
-                    triggers.pop_front();
+                // The schedule holds back the notification only; the trigger is still logged.
+                if alert.schedule.as_ref().is_none_or(|s| s.allows(now)) {
+                    triggers.push_back(chart.symbol().to_owned());
+                    if triggers.len() > 10_000 {
+                        triggers.pop_front();
+                    }
                 }
                 run.triggered_bar = Some(if alert.frequency == AlertFrequency::OncePerMinute {
                     minute
