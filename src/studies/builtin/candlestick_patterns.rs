@@ -1132,7 +1132,10 @@ mod tests {
     fn tasuki_gap_needs_open_in_body_and_close_in_gap() {
         let flat = walk((0..14).map(|i| 100.0 + f64::from(i % 2)));
         let down: [Ohlc; 2] = [(104.0, 104.25, 99.75, 100.0), (99.5, 99.75, 98.75, 99.0)];
-        let up: [Ohlc; 2] = [(100.0, 104.25, 99.75, 104.0), (104.5, 105.25, 104.25, 105.0)];
+        let up: [Ohlc; 2] = [
+            (100.0, 104.25, 99.75, 104.0),
+            (104.5, 105.25, 104.25, 105.0),
+        ];
         #[rustfmt::skip]
         let cases: [(&str, usize, &str, [Ohlc; 2], Ohlc, bool); 10] = [
             ("Downside Tasuki Gap - Bearish", 1, "DTG", down, (99.25, 100.25, 98.75, 99.75), true),

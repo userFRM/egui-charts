@@ -38,7 +38,7 @@ impl AverageType {
         }
     }
 
-    fn build(self, period: usize) -> Box<dyn Indicator> {
+    pub(super) fn build(self, period: usize) -> Box<dyn Indicator> {
         match self {
             Self::Simple => Box::new(SMA::new(period)),
             Self::Exponential => Box::new(EMA::new(period)),

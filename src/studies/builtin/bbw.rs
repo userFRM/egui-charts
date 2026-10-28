@@ -1,18 +1,26 @@
-use super::clamp_param;
+use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
-use crate::studies::palette;
-use crate::studies::stepper::update_window;
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::stepper::{update_window, usable_behind};
+use crate::studies::{Indicator, IndicatorValues};
+use crate::studies::{helpers, palette};
 use egui::Color32;
 
 /// Bollinger Bands Width - measures how wide the Bollinger Bands are.
 /// Formula: (upper_band - lower_band) / middle_band * 100
 /// where middle = SMA(close, period), upper = middle + std_dev * stdev,
 /// lower = middle - std_dev * stdev.
+///
+/// Outputs are the width, the highest width of the last `expansion` bars (highest
+/// expansion) and the lowest width of the last `contraction` bars (lowest contraction),
+/// each window ending at the current bar. The width starts at bar `period - 1` and both
+/// extrema start with it. A bar with a non-finite close is skipped as if absent: it has no
+/// value and is in no window, so later values equal those of the series without it.
 #[derive(Clone)]
 pub struct BollingerBandsWidth {
     period: usize,
     std_dev: f64,
+    expansion: usize,
+    contraction: usize,
     values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
@@ -24,10 +32,19 @@ impl BollingerBandsWidth {
         Self {
             period: period.max(1),
             std_dev: clamp_param(std_dev, 0.0, f64::MAX),
+            expansion: 125,
+            contraction: 125,
             values: IndicatorValues::new(),
-            colors: vec![palette::PURPLE],
+            colors: vec![palette::PURPLE, palette::GREEN, palette::RED],
             visible: true,
         }
+    }
+
+    /// Set the highest expansion and lowest contraction lookbacks, each at least 1 bar.
+    pub fn with_lookbacks(mut self, expansion: usize, contraction: usize) -> Self {
+        self.expansion = expansion.max(1);
+        self.contraction = contraction.max(1);
+        self
     }
 }
 
@@ -39,15 +56,11 @@ impl Default for BollingerBandsWidth {
 
 impl BollingerBandsWidth {
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.is_empty() {
-            return values;
-        }
+        let mut widths = Vec::with_capacity(data.len());
 
         for i in 0..data.len() {
             if i + 1 < self.period {
-                values.push(IndicatorValue::None);
+                widths.push(f64::NAN);
                 continue;
             }
 
@@ -62,12 +75,17 @@ impl BollingerBandsWidth {
             let upper = sma + self.std_dev * stdev;
             let lower = sma - self.std_dev * stdev;
 
-            if sma.abs() < 1e-15 {
-                values.push(IndicatorValue::Single(0.0));
+            widths.push(if sma.abs() < 1e-15 {
+                0.0
             } else {
-                let bbw = (upper - lower) / sma * 100.0;
-                values.push(IndicatorValue::Single(bbw));
-            }
+                (upper - lower) / sma * 100.0
+            });
+        }
+        let highest = helpers::highest(widths.iter().copied(), self.expansion);
+        let lowest = helpers::lowest(widths.iter().copied(), self.contraction);
+        let mut values = IndicatorValues::new();
+        for ((width, highest), lowest) in widths.into_iter().zip(highest).zip(lowest) {
+            values.push_lines(&[width, highest, lowest]);
         }
         values
     }
@@ -82,7 +100,9 @@ impl Indicator for BollingerBandsWidth {
 
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
-        std_dev: number("Std dev", 0.0, f64::MAX)
+        std_dev: number("Std dev", 0.0, f64::MAX),
+        expansion: length("Highest expansion lookback", 1, usize::MAX),
+        contraction: length("Lowest contraction lookback", 1, usize::MAX)
     ; {});
 
     fn value_format(&self) -> crate::scales::StudyFormat {
@@ -107,8 +127,11 @@ impl Indicator for BollingerBandsWidth {
             &mut values,
             data,
             from,
-            |_data, from| from.saturating_sub(self.period - 1),
-            |data| self.compute(data),
+            usable_behind(
+                (self.period - 1).saturating_add(self.expansion.max(self.contraction) - 1),
+                |b| b.close.is_finite(),
+            ),
+            |data| over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data)),
         );
         self.values = values;
     }
@@ -126,8 +149,8 @@ impl Indicator for BollingerBandsWidth {
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        if !colors.is_empty() {
-            self.colors = colors;
+        for (slot, color) in self.colors.iter_mut().zip(colors) {
+            *slot = color;
         }
     }
 
@@ -148,6 +171,10 @@ impl Indicator for BollingerBandsWidth {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec![format!("BBW({}, {})", self.period, self.std_dev)]
+        vec![
+            format!("BBW({}, {})", self.period, self.std_dev),
+            format!("Highest Expansion({})", self.expansion),
+            format!("Lowest Contraction({})", self.contraction),
+        ]
     }
 }
