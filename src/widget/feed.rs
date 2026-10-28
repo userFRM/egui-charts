@@ -11,8 +11,9 @@ use crate::data::inbox::{Answer, Inbox};
 use crate::data::merge::Origin;
 use crate::data::trades::Trades;
 use crate::data::{
-    Datafeed, DepthHistory, DepthPage, DepthRequest, FeedError, FeedState, Footprint, HistoryPage,
-    HistoryRequest, Reply, Subscription, SubscriptionId, TradePage, TradeRequest,
+    Datafeed, DepthHistory, DepthPage, DepthRequest, FeedCapabilities, FeedError, FeedState,
+    Footprint, HistoryPage, HistoryRequest, Reply, Subscription, SubscriptionId, TradePage,
+    TradeRequest,
 };
 use crate::model::{BarClock, ChartType, Instrument, OrderBook, Tick, Timeframe};
 use egui::ViewportId;
@@ -47,6 +48,8 @@ pub(crate) struct FeedLink {
     retries: Vec<(f64, Request, u32)>,
     subscription: Option<SubscriptionId>,
     instrument: Option<Instrument>,
+    /// What the feed offers as a whole, once it has answered.
+    capabilities: Option<FeedCapabilities>,
     pub(super) trades: Trades,
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
@@ -66,6 +69,7 @@ pub(crate) struct FeedLink {
 
 #[derive(Clone)]
 enum Request {
+    Capabilities,
     Resolve,
     History {
         request: HistoryRequest,
@@ -142,6 +146,7 @@ impl Chart {
             retries: Vec::new(),
             subscription: None,
             instrument: None,
+            capabilities: None,
             trades: Trades::new(TRADE_CAPACITY),
             bubbles: None,
             footprint: None,
@@ -154,6 +159,13 @@ impl Chart {
             time: None,
             paging_stopped: false,
         });
+    }
+
+    /// What the feed offers as a whole, once it has answered [`Datafeed::capabilities`]. Pass it
+    /// to the interval and symbol selectors before a symbol resolves. `None` without a feed or
+    /// before the answer.
+    pub fn feed_capabilities(&self) -> Option<&FeedCapabilities> {
+        self.feed_link.as_ref()?.capabilities.as_ref()
     }
 
     /// Suspends feed requests and unsubscribes while the host supplies replay bars by hand.
@@ -664,6 +676,14 @@ impl Chart {
             };
             let (_, request, failures) = link.pending.swap_remove(at);
             match request.clone() {
+                Request::Capabilities => match result::<FeedCapabilities>(answer) {
+                    Ok(capabilities) => link.capabilities = Some(capabilities),
+                    // The default restricts nothing, as a feed that reports none does.
+                    Err(error) if !error.is_recoverable() => {
+                        link.capabilities = Some(FeedCapabilities::default());
+                    }
+                    Err(error) => self.request_failed(&mut link, request, failures, error, now),
+                },
                 Request::Resolve => match result::<Instrument>(answer) {
                     Ok(instrument) => self.subscribe(&mut link, instrument),
                     Err(error) => self.request_failed(&mut link, request, failures, error, now),
@@ -811,6 +831,11 @@ impl Chart {
             let (_, request, failures) = link.retries.swap_remove(at);
             let feed = Arc::clone(&link.feed);
             match request.clone() {
+                Request::Capabilities => {
+                    let reply = link.reply(request);
+                    link.pending.last_mut().unwrap().2 = failures;
+                    feed.capabilities(reply);
+                }
                 Request::Resolve => {
                     let reply = link.reply(request);
                     link.pending.last_mut().unwrap().2 = failures;
@@ -898,6 +923,10 @@ impl Chart {
         // Timestamp anchors survive the empty interval between history requests.
         self.replace_main_data(Vec::new());
         self.feed = FeedState::default();
+        if link.capabilities.is_none() {
+            let reply = link.reply(Request::Capabilities);
+            link.feed.capabilities(reply);
+        }
         if self.symbol.is_empty() {
             return;
         }
@@ -1197,6 +1226,9 @@ mod tests {
         sinks: Mutex<Vec<Sink>>,
         /// `unsubscribe` drops the replies it keeps.
         drop_replies: AtomicBool,
+        /// What `capabilities` reports, and how often it was asked.
+        capabilities: Mutex<FeedCapabilities>,
+        capability_asks: std::sync::atomic::AtomicUsize,
     }
 
     impl Script {
@@ -1215,6 +1247,10 @@ mod tests {
     }
 
     impl Datafeed for Script {
+        fn capabilities(&self, reply: Reply<FeedCapabilities>) {
+            self.capability_asks.fetch_add(1, Ordering::Relaxed);
+            reply.send(Ok(self.capabilities.lock().unwrap().clone()));
+        }
         fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
             self.calls
                 .lock()
@@ -1258,6 +1294,29 @@ mod tests {
         fn request_depth_snapshot(&self, id: SubscriptionId) {
             self.calls.lock().unwrap().push(Call::Snapshot(id));
         }
+    }
+
+    /// The feed-wide capabilities are known before a symbol resolves, asked once however often
+    /// the symbol or interval changes, and an empty list stays distinct from an unreported one.
+    #[test]
+    fn capabilities_arrive_before_the_symbol_resolves() {
+        let feed = Arc::new(Script::default());
+        let reported = FeedCapabilities::new()
+            .with_timeframes([])
+            .with_exchanges(["NYSE".to_owned()]);
+        *feed.capabilities.lock().unwrap() = reported.clone();
+        let mut chart = fed(&feed, Some("A"));
+        assert_eq!(chart.feed_capabilities(), None);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        assert_eq!(chart.feed_capabilities(), Some(&reported));
+        assert_eq!(chart.feed_capabilities().unwrap().symbol_types, None);
+        assert_eq!(chart.feed_capabilities().unwrap().timeframes, Some(vec![]));
+        assert!(feed.resolves.lock().unwrap().len() == 1, "still resolving");
+        chart.set_symbol("B");
+        chart.set_timeframe(Timeframe::Min5);
+        frames.run(&mut chart);
+        assert_eq!(feed.capability_asks.load(Ordering::Relaxed), 1);
     }
 
     /// Scanners retain no empty managers; marked symbols survive revisits until forgotten.

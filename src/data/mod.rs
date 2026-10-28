@@ -28,7 +28,7 @@
 
 pub use crate::model::Bar;
 pub use crate::model::Timeframe;
-use crate::model::{BarClock, Instrument, Tick};
+use crate::model::{BarClock, Instrument, SymbolType, Tick};
 use chrono::{DateTime, Utc};
 use std::error::Error;
 use std::fmt;
@@ -123,6 +123,15 @@ impl<T: ?Sized> MaybeSend for T {}
 /// }
 /// ```
 pub trait Datafeed: MaybeSend + 'static {
+    /// What the feed offers as a whole, before any symbol is resolved: the intervals, exchanges
+    /// and symbol classes its selectors may offer, and the optional services it answers. The
+    /// chart asks once when it attaches the feed and keeps the answer in
+    /// [`Chart::feed_capabilities`](crate::widget::Chart::feed_capabilities). The default
+    /// answers [`FeedCapabilities::default`], which reports nothing and so restricts nothing.
+    fn capabilities(&self, reply: Reply<FeedCapabilities>) {
+        reply.send(Ok(FeedCapabilities::default()));
+    }
+
     /// Describes `symbol`. The default reports [`Instrument::new`] of the symbol.
     fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
         reply.send(Ok(Instrument::new(symbol)));
@@ -254,6 +263,87 @@ pub trait Datafeed: MaybeSend + 'static {
     /// restarts. The default does nothing, for feeds without depth.
     fn request_depth_snapshot(&self, id: SubscriptionId) {
         let _ = id;
+    }
+}
+
+/// An optional service of a [`Datafeed`], which [`FeedCapabilities::services`] lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FeedService {
+    /// [`Datafeed::trades`].
+    Trades,
+    /// [`Datafeed::depth_history`].
+    DepthHistory,
+    /// [`Datafeed::options_volume`].
+    OptionsVolume,
+    /// [`Datafeed::metrics`] and [`Datafeed::metric_history`].
+    Metrics,
+    /// [`Datafeed::price_targets`].
+    PriceTargets,
+    /// [`Datafeed::symbol_details`].
+    SymbolDetails,
+    /// [`Datafeed::news`].
+    News,
+    /// [`Datafeed::calendar`].
+    Calendar,
+    /// [`Datafeed::screen`].
+    Screener,
+    /// [`Datafeed::hotlist`].
+    Hotlist,
+}
+
+/// What a feed offers as a whole, answered by [`Datafeed::capabilities`]. Each list distinguishes
+/// `None`, which the feed does not report and so restricts nothing, from `Some` of an empty
+/// list, which it reports as offering none.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct FeedCapabilities {
+    /// Intervals [`Datafeed::history`] answers for at least some symbol. A symbol's own
+    /// [`supported_timeframes`](Instrument::supported_timeframes) narrows them further.
+    pub timeframes: Option<Vec<Timeframe>>,
+    /// Exchanges whose symbols the feed serves.
+    pub exchanges: Option<Vec<String>>,
+    /// Classes of symbol the feed serves.
+    pub symbol_types: Option<Vec<SymbolType>>,
+    /// Optional services the feed answers; any other answers [`FeedError::NotSupported`].
+    pub services: Option<Vec<FeedService>>,
+}
+
+impl FeedCapabilities {
+    /// Reports no capability, which restricts nothing.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets [`timeframes`](Self::timeframes).
+    pub fn with_timeframes(mut self, timeframes: impl IntoIterator<Item = Timeframe>) -> Self {
+        self.timeframes = Some(timeframes.into_iter().collect());
+        self
+    }
+
+    /// Sets [`exchanges`](Self::exchanges).
+    pub fn with_exchanges(mut self, exchanges: impl IntoIterator<Item = String>) -> Self {
+        self.exchanges = Some(exchanges.into_iter().collect());
+        self
+    }
+
+    /// Sets [`symbol_types`](Self::symbol_types).
+    pub fn with_symbol_types(mut self, types: impl IntoIterator<Item = SymbolType>) -> Self {
+        self.symbol_types = Some(types.into_iter().collect());
+        self
+    }
+
+    /// Sets [`services`](Self::services).
+    pub fn with_services(mut self, services: impl IntoIterator<Item = FeedService>) -> Self {
+        self.services = Some(services.into_iter().collect());
+        self
+    }
+
+    /// Whether to offer the controls of `service`: it is listed, or the feed reports no list.
+    pub fn offers(&self, service: FeedService) -> bool {
+        self.services
+            .as_ref()
+            .is_none_or(|services| services.contains(&service))
     }
 }
 
