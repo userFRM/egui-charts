@@ -41,10 +41,10 @@ mod start;
 mod state;
 mod toolbar;
 
+pub use crate::model::ReplaySession;
 pub use actions::{ReplayAction, ReplaySpeed};
 pub use config::{ReplayBehavior, ReplayColors, ReplayConfig, ReplayLayout};
 pub use controls::{CompactReplayControls, ReplayControls, ReplayKeyboardHandler};
-pub use session::ReplaySession;
 pub use start::{ReplayStartAction, ReplayStartPicker};
 pub use state::{PlaybackState, ReplayMarker, ReplayState};
 pub use toolbar::{ReplayToolbar, ReplayToolbarAction, ReplayToolbarConfig, ReplayToolbarState};

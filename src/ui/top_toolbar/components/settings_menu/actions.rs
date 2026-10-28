@@ -3,7 +3,7 @@
 use crate::widget::settings::ChartSettingsState;
 
 /// Settings action (emitted by both SettingsMenu and SettingsDialog)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum SettingsAction {
     /// No action taken

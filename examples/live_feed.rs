@@ -71,12 +71,12 @@ impl eframe::App for LiveFeedApp {
 }
 
 /// One-minute bars of a random walk up to the current minute, oldest first.
-struct SyntheticFeed {
+pub struct SyntheticFeed {
     bars: Vec<Bar>,
 }
 
 impl SyntheticFeed {
-    fn new(count: usize) -> Self {
+    pub fn new(count: usize) -> Self {
         let now = Utc::now().duration_trunc(TimeDelta::minutes(1)).unwrap();
         let bars = support::sample_bars(count, 100.0, TimeDelta::minutes(1), now);
         Self { bars }
