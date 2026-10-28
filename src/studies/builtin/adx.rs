@@ -162,7 +162,7 @@ impl Indicator for ADX {
                     state.dx_count += 1;
                     state.adx += dx;
                     if state.dx_count < self.period {
-                        return IndicatorValue::None;
+                        return IndicatorValue::Multiple(vec![f64::NAN, plus, minus]);
                     }
                     state.adx /= self.period as f64;
                 } else {

@@ -117,7 +117,7 @@ impl Stochastic {
 
         // Build output values
         for i in 0..data.len() {
-            if smooth_k[i].is_nan() || d_values[i].is_nan() {
+            if smooth_k[i].is_nan() {
                 values.push(IndicatorValue::None);
             } else {
                 values.push_lines(&[smooth_k[i], d_values[i]]);

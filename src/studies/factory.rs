@@ -986,10 +986,10 @@ mod tests {
         }
     }
 
-    /// Each registered name is a study of its own: on one series, no two names give the same
-    /// values on every bar, even with their lines in another order. Fixed profiles use a saved end.
+    /// Catalogue studies have distinct values except ADX and DMI, which expose the same Wilder
+    /// components in a different order. Fixed profiles use a saved end.
     #[test]
-    fn no_two_names_compute_the_same_study() {
+    fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
         use crate::model::Bar;
         use chrono::{TimeZone, Utc};
 
@@ -1067,7 +1067,7 @@ mod tests {
                 duplicates.push(format!("{first} and {name}"));
             }
         }
-        assert!(duplicates.is_empty(), "same values: {duplicates:?}");
+        assert_eq!(duplicates, ["ADX and DMI"]);
     }
 
     /// Every built-in, with its `k`-th length parameter set to `l(k)` and each

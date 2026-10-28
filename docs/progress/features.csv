@@ -491,7 +491,7 @@ Studies,Indicator infrastructure,Indicator templates,done,library,src/studies/te
 Studies,Indicator infrastructure,Indicators on indicators,done,library,src/studies/settings.rs;src/widget/studies.rs;src/ui/top_toolbar/components/indicator_dialog/settings.rs
 Studies,Indicator infrastructure,Input validation,done,library,src/studies/inputs.rs;src/studies/builtin/kama.rs;src/studies/builtin/mod.rs;src/studies/factory.rs
 Studies,Indicator infrastructure,Maximum studies per chart,missing,library,
-Studies,Indicator infrastructure,Multi-output studies draw all their lines,done,library,src/studies/indicator_trait.rs;src/studies/factory.rs;src/chart/renderers/indicator.rs;src/widget/indicator_pane.rs
+Studies,Indicator infrastructure,Multi-output studies draw all their lines,done,library,src/studies/builtin/adx.rs;src/studies/builtin/stochastic.rs;src/studies/builtin/stochastic_rsi.rs;src/studies/indicator_trait.rs;src/studies/factory.rs;src/chart/renderers/indicator.rs;src/widget/indicator_pane.rs
 Studies,Indicator infrastructure,Multi-timeframe inputs,partial,library,src/studies/settings.rs;src/studies/data.rs;src/widget/studies_data.rs
 Studies,Indicator infrastructure,Other-symbol inputs,partial,library,src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/studies_data.rs;src/services/search/expression.rs;src/studies/factory.rs
 Studies,Indicator infrastructure,Overlay versus separate pane,done,library,src/widget/series.rs;src/studies/settings.rs;src/widget/pane_layout.rs;src/widget/panes.rs

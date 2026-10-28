@@ -378,7 +378,10 @@ fn small_range_studies_are_invariant_to_price_and_volume_units() {
         }
         let mut base = factory.create(name).unwrap();
         base.calculate(&data);
-        assert!((0..data.len()).any(|bar| base.values().value(0, bar).is_some()), "{name}");
+        assert!(
+            (0..data.len()).any(|bar| base.values().value(0, bar).is_some()),
+            "{name}"
+        );
         for (price_scale, volume_scale) in [(1e-12_f64, 1.0), (1e-17, 1.0), (1e12, 1.0)]
             .into_iter()
             .chain((price_degree == 1).then_some((1.0, 1e-14)))

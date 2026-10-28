@@ -177,7 +177,7 @@ impl Indicator for StochasticRSI {
                     state.d.pop_front();
                 }
                 if state.d.len() < self.smooth_d {
-                    return IndicatorValue::None;
+                    return IndicatorValue::Multiple(vec![k * 100.0, f64::NAN]);
                 }
                 let d = state.d.iter().sum::<f64>() / self.smooth_d as f64;
                 if k.is_nan() || d.is_nan() {

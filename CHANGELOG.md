@@ -415,6 +415,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- ADX shows +DI and -DI as soon as their period is full, and Stochastic and Stochastic RSI show %K while %D is still warming up. Each line starts where its own definition first gives a value; the slower line's start is unchanged. Technical Ratings includes its default Stochastic vote two bars earlier. Reference rows, including short histories, follow independent rational calculations of those definitions. ([#1259](https://github.com/userFRM/egui-charts/issues/1259))
+
 - Stochastic, Williams %R, Ultimate Oscillator, CCI, ADX, Stochastic RSI, ROC, Bollinger BandWidth and 52 Week High/Low keep their ratios when prices are rescaled below the former absolute zero thresholds. DMI, ADX Breakout, the Commodity Selection Index and Technical Ratings inherit the corrected values. ROC has no value when its previous close is exactly zero. VWAP, Anchored VWAP and VWAP Auto Anchored use every nonzero volume sum, including tiny volumes. ([#1257](https://github.com/userFRM/egui-charts/issues/1257))
 
 - Money Flow Index returns the neutral 50 when a window has no flow, including flat prices and zero volume, and keeps its ratios at small price scales. Flow magnitude uses the absolute typical price so negative prices retain the direction of their change. Elder Impulse reports bearish only when both its EMA and MACD histogram fall; unchanged inputs are neutral. ([#1258](https://github.com/userFRM/egui-charts/issues/1258))
