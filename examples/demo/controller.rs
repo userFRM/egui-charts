@@ -964,6 +964,7 @@ impl DemoApp {
                     }),
             )
             .collect();
+        self.alerts.set_sources(self.alert_dialog.sources.clone());
         self.alert_dialog.watchlists = self
             .watchlist
             .lists()
@@ -2281,9 +2282,14 @@ impl DemoApp {
     }
 
     fn show_alerts_panel(&mut self, ui: &mut egui::Ui) {
+        self.list_alert_sources();
         match self.alerts.show(ui) {
             AlertPanelAction::CreateAlert => self.open_alert(None),
             AlertPanelAction::EditAlert(alert) => {
+                self.open_alert(None);
+                self.alert_dialog.edit(*alert);
+            }
+            AlertPanelAction::DuplicateAlert(alert) => {
                 self.open_alert(None);
                 self.alert_dialog.edit(*alert);
             }
