@@ -317,7 +317,7 @@ impl TickMarkGenerator {
                     (TickMarkType::DayOfMonth, TickMarkWeight::DAY)
                 } else if clock_mark
                     && weight < TickMarkWeight::DAY
-                    && local.timestamp_subsec_nanos() == 0
+                    && interval >= Duration::seconds(1)
                 {
                     let boundary = local
                         - Duration::milliseconds(
@@ -325,7 +325,13 @@ impl TickMarkGenerator {
                                 + i64::from(local.timestamp_subsec_millis()))
                             .rem_euclid(millis),
                         );
-                    self.classify_time_boundary(boundary, primary_type)
+                    let (kind, weight) = self.classify_time_boundary(boundary, primary_type);
+                    let kind = if local.timestamp_subsec_nanos() != 0 {
+                        TickMarkType::TimeWithMilliseconds
+                    } else {
+                        kind
+                    };
+                    (kind, weight)
                 } else {
                     (kind, weight)
                 };
@@ -583,7 +589,14 @@ impl TickMarkGenerator {
         time: DateTime<Utc>,
         primary_type: TickMarkType,
     ) -> (TickMarkType, TickMarkWeight) {
-        if time.timestamp_subsec_nanos() != 0 {
+        if time.timestamp_subsec_nanos() != 0
+            && matches!(
+                primary_type,
+                TickMarkType::Time
+                    | TickMarkType::TimeWithSeconds
+                    | TickMarkType::TimeWithMilliseconds
+            )
+        {
             return (
                 TickMarkType::TimeWithMilliseconds,
                 TickMarkWeight::SUBSECOND,
@@ -1375,11 +1388,13 @@ mod tests {
     #[test]
     fn subsecond_axis_labels_distinguish_instants() {
         use crate::scales::{HorizontalScale, TickMarkLayout, TimeFormatterBuilder};
-        for start in [
-            Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap(),
-            Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
+        let afternoon = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
+        for (start, count) in [
+            (afternoon, 30),
+            (Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(), 30),
+            (afternoon + Duration::milliseconds(50), 600),
         ] {
-            let bars: Vec<_> = (0..30)
+            let bars: Vec<_> = (0..count)
                 .map(|i| (start + Duration::milliseconds(100 * i), i as usize))
                 .collect();
             let formatter = TimeFormatterBuilder::new().build();
@@ -1387,7 +1402,7 @@ mod tests {
                 &bars,
                 &TickMarkLayout {
                     width: 1000.0,
-                    bar_spacing: 1000.0 / 30.0,
+                    bar_spacing: 1000.0 / count as f32,
                     min_spacing: 80.0,
                     uniform_distribution: false,
                 },
@@ -1419,7 +1434,9 @@ mod tests {
                 .filter(|mark| mark.time.timestamp_subsec_millis() != 0)
             {
                 assert_eq!(mark.label, mark.time.format("%H:%M:%S%.3f").to_string());
-                assert_eq!(mark.weight, TickMarkWeight::SUBSECOND);
+                if count == 30 {
+                    assert_eq!(mark.weight, TickMarkWeight::SUBSECOND);
+                }
             }
         }
     }
@@ -1445,6 +1462,13 @@ mod tests {
         let (mark_type, weight) = generator.classify_time_boundary(time, TickMarkType::Time);
         assert_eq!(mark_type, TickMarkType::Time);
         assert_eq!(weight, TickMarkWeight::HOUR);
+        assert_eq!(
+            generator.classify_time_boundary(
+                time + Duration::milliseconds(123),
+                TickMarkType::DayOfMonth
+            ),
+            (TickMarkType::DayOfMonth, TickMarkWeight::DAY)
+        );
     }
 
     #[test]
