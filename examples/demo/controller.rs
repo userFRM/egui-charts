@@ -658,7 +658,9 @@ impl DemoApp {
             screener: ScreenerPanel::new(feeds::screener_sets()),
             hotlists: HotlistsPanel::new(feeds::HOTLISTS.map(String::from).to_vec()),
             market_heatmap: egui_charts::ui::widget_bar::MarketHeatmapPanel {
-                entries: feeds::heatmap(),
+                universes: feeds::heatmap_universes(),
+                metrics: feeds::heatmap_metrics(),
+                ..Default::default()
             },
             notifications: NotificationsPanel::new(),
             notification_host: Arc::default(),
@@ -2131,9 +2133,16 @@ impl DemoApp {
         // The simulation clock rather than the wall clock, which the pause freezes: a paused
         // demo must be able to go idle instead of repainting for a market that stands still.
         let now = self.live.now();
-        for entry in &mut self.market_heatmap.entries {
+        for entry in self
+            .market_heatmap
+            .universes
+            .iter_mut()
+            .flat_map(|universe| &mut universe.entries)
+        {
             if let Some(quote) = live::watchlist_quote(&entry.symbol, now) {
-                entry.change_percent = (quote.last - quote.prev_close) / quote.prev_close * 100.0;
+                let change = (quote.last - quote.prev_close) / quote.prev_close * 100.0;
+                entry.values.insert("change".into(), change);
+                entry.values.insert("price".into(), quote.last);
             }
         }
         let chart_symbol = self.chart.symbol().to_owned();

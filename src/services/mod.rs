@@ -46,6 +46,6 @@ pub use quotes::Quotes;
 pub use search::{ExpressionError, SymbolExpression, SymbolQuery, SymbolSearch};
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
-pub use settings::{SettingsStore, UserSettings};
+pub use settings::{MarketHeatmapSelection, SettingsStore, UserSettings};
 pub use signals::{SignalEvent, Signals};
 pub use storage::{Storage, StoreKind};

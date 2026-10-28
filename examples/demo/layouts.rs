@@ -696,6 +696,7 @@ impl DemoApp {
             .clone()
             .filter(|name| menu.layouts.contains(name));
         settings.layout_autosave = menu.autosave;
+        settings.market_heatmap = self.market_heatmap.selection.clone();
         settings
     }
 
@@ -717,6 +718,7 @@ impl DemoApp {
         }
         self.drawing_toolbar.state.favorites = settings.drawing_favorites;
         self.top_toolbar.layout_menu.autosave = settings.layout_autosave;
+        self.market_heatmap.selection = settings.market_heatmap;
         if let Some(layout) = settings.layout {
             self.top_toolbar.layout_menu.open(&layout);
         }
