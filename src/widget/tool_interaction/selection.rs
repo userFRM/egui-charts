@@ -15,7 +15,7 @@ use egui::{Painter, Rect, Response, Stroke, Ui, epaint::StrokeKind};
 /// When no drawing tool is active, clicks are interpreted as selection attempts.
 /// If a drawing is already selected, its body and handles can be dragged. In eraser mode,
 /// clicking on a drawing deletes it instead, whatever is selected, unless it is locked.
-pub fn handle_selection<F1, F2>(
+pub fn handle_selection<F1, F2, F3>(
     ui: &Ui,
     drawing_manager: &mut DrawingManager,
     cursor_modes: &mut CursorModeState,
@@ -23,9 +23,11 @@ pub fn handle_selection<F1, F2>(
     price_rect: Rect,
     x_to_bar: &F1,
     y_to_price: &F2,
+    y_to_price_unclamped: &F3,
 ) where
     F1: Fn(f32) -> f32,
     F2: Fn(f32) -> f64,
+    F3: Fn(f32) -> f64,
 {
     let pointer_pos = if response.clicked() || response.drag_started() || response.dragged() {
         response.interact_pointer_pos()
@@ -42,6 +44,7 @@ pub fn handle_selection<F1, F2>(
                 price_rect.clamp(pos),
                 x_to_bar,
                 y_to_price,
+                y_to_price_unclamped,
             );
         }
         if response.drag_stopped() {
@@ -101,6 +104,7 @@ pub fn handle_selection<F1, F2>(
                 price_rect.clamp(pos),
                 x_to_bar,
                 y_to_price,
+                y_to_price_unclamped,
             );
         } else if response.clicked() {
             if ui.input(|i| i.modifiers.shift) {
@@ -234,6 +238,7 @@ mod tests {
                                     &response,
                                     pane,
                                     &|x| x,
+                                    &f64::from,
                                     &f64::from,
                                 );
                             },
@@ -444,8 +449,93 @@ mod tests {
         assert!(!chart.can_undo());
     }
 
-    /// A body grab keeps its offset from the anchors, translates every price and bar by
-    /// the pointer's data delta, and produces one history step and one host update.
+    /// Whole drawings keep off-pane anchors and their shape through the widget's scale mapping.
+    #[test]
+    fn whole_drawing_drags_keep_off_pane_anchors_on_every_scale() {
+        use crate::scales::PriceScaleMode::{IndexedTo100, Logarithmic, Normal, Percentage};
+        use crate::widget::test_frames::{chart, frame};
+        use egui::vec2;
+        for mode in [Normal, Percentage, IndexedTo100, Logarithmic] {
+            for (inverted, dy, grab) in [false, true].into_iter().flat_map(|inverted| {
+                [-60.0, 60.0].into_iter().flat_map(move |dy| {
+                    ["body", "centre", "group"].map(|grab| (inverted, dy, grab))
+                })
+            }) {
+                let ctx = Context::default();
+                let mut chart = chart(&[10.0], &[20.0]);
+                chart.price_scale_mut().options_mut().mode = mode;
+                chart.price_scale_mut().options_mut().invert_scale = inverted;
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let pane = chart.get_rendered_price_rect();
+                let map = chart.get_chart_mapping();
+                let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+                drawing.completed = true;
+                drawing.chart_points = [-0.25, 1.25]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, y)| {
+                        ChartPoint::new(
+                            30.0 + i as f32 * 40.0,
+                            map.y_to_price(pane.top() + y * pane.height()),
+                        )
+                    })
+                    .collect();
+                chart.drawings_mut().drawings.push(drawing.clone());
+                chart.drawings_mut().select(7);
+                if grab == "group" {
+                    drawing.id = 8;
+                    for point in &mut drawing.chart_points {
+                        point.bar_idx += 5.0;
+                    }
+                    chart.drawings_mut().drawings.push(drawing);
+                    chart.drawings_mut().select_drawings([7, 8]);
+                }
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                let before: Vec<_> = chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| d.points.clone())
+                    .collect();
+                let from =
+                    before[0][0].lerp(before[0][1], if grab == "centre" { 0.5 } else { 0.4 });
+                let to = from + vec2(0.0, dy);
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                for (i, events) in [
+                    vec![Event::PointerMoved(from)],
+                    vec![button(from, true)],
+                    vec![Event::PointerMoved(from + vec2(0.0, dy / 4.0))],
+                    vec![Event::PointerMoved(to)],
+                    vec![button(to, false)],
+                    vec![],
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    frame(&ctx, &mut chart, 0.2 + i as f64 * 0.1, events);
+                }
+                for (drawing, old) in chart.drawings().drawings.iter().zip(&before) {
+                    for (point, before) in drawing.points.iter().zip(old) {
+                        assert!(
+                            (point.y - before.y - dy).abs() < 0.001,
+                            "{mode:?}, inverted {inverted}, {grab}, dy {dy}: {before:?} -> {point:?}"
+                        );
+                    }
+                    if mode == Logarithmic {
+                        assert!(drawing.chart_points.iter().all(|p| p.price > 0.0));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Body and centre grabs translate every anchor by the same screen offset on a log
+    /// scale, with one history step and one host update per drawing.
     #[test]
     fn body_drags_translate_every_anchor_once_unless_locked() {
         for tool in [
@@ -453,13 +543,22 @@ mod tests {
             DrawingToolType::Rect,
             DrawingToolType::FibonacciChannel,
         ] {
-            for (locked, multi) in [(false, false), (true, false), (false, true)] {
+            for (locked, multi, centre, dy) in [
+                (false, false, false),
+                (true, false, false),
+                (false, true, false),
+                (false, false, true),
+            ]
+            .into_iter()
+            .flat_map(|(locked, multi, centre)| {
+                [-30.0, 30.0].map(move |dy| (locked, multi, centre, dy))
+            }) {
                 let ctx = Context::default();
                 let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 400.0));
                 let mut manager = DrawingManager::new();
                 let mut cursors = CursorModeState::default();
                 let mut drawing = Drawing::new(7, tool);
-                drawing.points = vec![Pos2::new(50.0, 100.0), Pos2::new(250.0, 100.0)];
+                drawing.points = vec![Pos2::new(50.0, 60.0), Pos2::new(250.0, 180.0)];
                 if tool == DrawingToolType::Rect {
                     drawing.points = vec![Pos2::new(50.0, 50.0), Pos2::new(250.0, 150.0)];
                 }
@@ -493,8 +592,18 @@ mod tests {
                     .iter()
                     .map(|d| d.chart_points.clone())
                     .collect();
-                let from = Pos2::new(100.0, 100.0);
-                let to = Pos2::new(140.0, 130.0);
+                let drawing = &manager.drawings[0];
+                let from = if centre {
+                    manager
+                        .get_handles(drawing)
+                        .into_iter()
+                        .find(|(handle, _)| *handle == crate::drawings::HandlePos::Middle)
+                        .unwrap()
+                        .1
+                } else {
+                    drawing.points[0].lerp(drawing.points[1], 0.25)
+                };
+                let to = from + egui::vec2(40.0, dy);
                 let button = |pos, pressed| Event::PointerButton {
                     pos,
                     button: PointerButton::Primary,
@@ -504,7 +613,7 @@ mod tests {
                 for events in [
                     vec![Event::PointerMoved(from)],
                     vec![button(from, true)],
-                    vec![Event::PointerMoved(Pos2::new(110.0, 105.0))],
+                    vec![Event::PointerMoved(from + egui::vec2(10.0, dy / 4.0))],
                     vec![Event::PointerMoved(to)],
                     vec![button(to, false)],
                 ] {
@@ -524,33 +633,30 @@ mod tests {
                                 &response,
                                 pane,
                                 &|x| x / 10.0,
+                                &|y: f32| price(y.clamp(pane.top(), pane.bottom())),
                                 &price,
                             );
                         },
                     )
                     .drop_without_applying_deltas();
                 }
-                for (old, moved) in before.iter().zip(&manager.drawings[0].chart_points) {
-                    assert!(
-                        (moved.bar_idx - old.bar_idx - if locked { 0.0 } else { 4.0 }).abs() < 1e-5,
-                        "{tool:?}, locked {locked}: {moved:?}"
-                    );
-                    let delta = if locked {
-                        0.0
-                    } else {
-                        price(to.y) - price(from.y)
-                    };
-                    assert!(
-                        (moved.price - old.price - delta).abs() < 1e-8,
-                        "{tool:?}, locked {locked}: {moved:?}"
-                    );
-                }
+                let screen_y = |price: f64| -100.0 * (price / 1000.0).ln();
                 for (drawing, original) in manager.drawings.iter().zip(&before_group) {
                     for (old, moved) in original.iter().zip(&drawing.chart_points) {
                         assert!(
                             (moved.bar_idx - old.bar_idx - if locked { 0.0 } else { 4.0 }).abs()
                                 < 1e-5,
-                            "group member {}",
+                            "{tool:?}, locked {locked}, member {}",
+                            drawing.id
+                        );
+                        assert!(moved.price > 0.0);
+                        assert!(
+                            (screen_y(moved.price)
+                                - screen_y(old.price)
+                                - if locked { 0.0 } else { f64::from(dy) })
+                            .abs()
+                                < 1e-4,
+                            "{tool:?}, locked {locked}, member {}, dy {dy}: {moved:?}",
                             drawing.id
                         );
                     }

@@ -76,27 +76,41 @@ impl DrawingManager {
 
     /// Updates the position of the currently dragged handle to `new_pos`,
     /// applying snap behavior and coordinate conversion.
-    pub fn update_drag_handle<F, G>(&mut self, new_pos: Pos2, x_to_bar: F, y_to_price: G)
-    where
+    /// `y_to_price_unclamped` maps translated anchors outside the pane for whole-drawing moves;
+    /// `y_to_price` retains the pointer bounds for individual handles.
+    pub fn update_drag_handle<F, G, H>(
+        &mut self,
+        new_pos: Pos2,
+        x_to_bar: F,
+        y_to_price: G,
+        y_to_price_unclamped: H,
+    ) where
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
+        H: Fn(f32) -> f64,
     {
         if let Some((id, handle)) = self.dragging_handle {
             // Compute snapped position before mutable borrow
             let snapped = self.snap_point(new_pos, &self.drawings);
             if let Some(origin) = self.drag_origin {
                 let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
-                let price = y_to_price(snapped.y) - y_to_price(origin.y);
+                let dy = snapped.y - origin.y;
                 for old in &self.drag_group {
                     if let Some(drawing) = self
                         .drawings
                         .iter_mut()
                         .find(|d| d.id == old.id && !d.locked)
                     {
-                        for (point, before) in
-                            drawing.chart_points.iter_mut().zip(&old.chart_points)
+                        for ((point, before), screen) in drawing
+                            .chart_points
+                            .iter_mut()
+                            .zip(&old.chart_points)
+                            .zip(&old.points)
                         {
-                            *point = ChartPoint::new(before.bar_idx + bars, before.price + price);
+                            *point = ChartPoint::new(
+                                before.bar_idx + bars,
+                                y_to_price_unclamped(screen.y + dy),
+                            );
                         }
                         for (point, before) in drawing.points.iter_mut().zip(&old.points) {
                             *point = *before + (snapped - origin);
@@ -113,15 +127,30 @@ impl DrawingManager {
             if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
                 if let (Some(origin), Some(old)) = (self.drag_origin, &self.drag_old_state) {
                     let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
-                    let price = y_to_price(snapped.y) - y_to_price(origin.y);
-                    for (point, before) in drawing.chart_points.iter_mut().zip(&old.chart_points) {
-                        *point = ChartPoint::new(before.bar_idx + bars, before.price + price);
+                    let dy = snapped.y - origin.y;
+                    for ((point, before), screen) in drawing
+                        .chart_points
+                        .iter_mut()
+                        .zip(&old.chart_points)
+                        .zip(&old.points)
+                    {
+                        *point = ChartPoint::new(
+                            before.bar_idx + bars,
+                            y_to_price_unclamped(screen.y + dy),
+                        );
                     }
                     for (point, before) in drawing.points.iter_mut().zip(&old.points) {
                         *point = *before + (snapped - origin);
                     }
                 } else {
-                    HandleService::update_handle(drawing, handle, snapped, x_to_bar, y_to_price);
+                    HandleService::update_handle(
+                        drawing,
+                        handle,
+                        snapped,
+                        x_to_bar,
+                        y_to_price,
+                        y_to_price_unclamped,
+                    );
                 }
                 if drawing.screen_anchor.is_some()
                     && let Some(pos) = drawing.points.first()
@@ -493,18 +522,19 @@ impl DrawingManager {
         self.complete_curr_drawing();
     }
 
-    /// Update drag handle with coordinate conversion functions
-    /// Alias for update_drag_handle for API compatibility
-    pub fn update_drag_handle_with_coords<F, G>(
+    /// Alias for [`Self::update_drag_handle`], with the same pointer and unclamped anchor mappings.
+    pub fn update_drag_handle_with_coords<F, G, H>(
         &mut self,
         new_pos: Pos2,
         x_to_bar: F,
         y_to_price: G,
+        y_to_price_unclamped: H,
     ) where
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
+        H: Fn(f32) -> f64,
     {
-        self.update_drag_handle(new_pos, x_to_bar, y_to_price);
+        self.update_drag_handle(new_pos, x_to_bar, y_to_price, y_to_price_unclamped);
     }
 
     /// Hit test a handle by drawing ID
