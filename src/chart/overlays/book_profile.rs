@@ -69,8 +69,8 @@ impl OrderBookView {
 /// as bars growing left from the right edge of `mapping.rect`, longest 60 points, `tick` high at
 /// each price, centred on it. Bids use `colors[0]` and asks `colors[1]`, unless the largest
 /// order at the price reaches a tier of the view. Fails, drawing nothing, when the view needs
-/// individual orders and
-/// the feed has none, so that the host can say the filtering is unavailable.
+/// individual orders and the feed has none, so that the host can say the filtering is
+/// unavailable.
 pub fn render_book_profile(
     painter: &Painter,
     mapping: &ChartMapping,
