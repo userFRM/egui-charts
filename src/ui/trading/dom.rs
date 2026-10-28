@@ -280,7 +280,7 @@ impl Ladder {
             (ask_column, "Ask size", "Ask"),
         ] {
             // The optional columns narrow the ladder until the long label spills into the price.
-            let label = if column.width() < 52.0 { short } else { long };
+            let label = if column.width() < 48.0 { short } else { long };
             let at = column.center();
             text(
                 ui,
