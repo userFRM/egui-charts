@@ -6,7 +6,6 @@ use super::{Action, ExportContents, Terminal};
 use crate::icons::{Icon, icons};
 use crate::model::Tick;
 use crate::services::UserSettings;
-use crate::ui::Control;
 use crate::ui::financials::FinancialsPanel;
 use crate::ui::top_toolbar::TopToolbarAction;
 use crate::ui::widget_bar::panels::object_tree::{DataWindowInfo, show_data_window};
@@ -19,7 +18,8 @@ use crate::ui::widget_bar::{
 use crate::widget::{SeriesId, ShortcutRequest};
 use chrono::{DateTime, Utc};
 
-/// The compact window width below which the rail is left out.
+/// The window width below which the rail and the side panels are left out, giving the chart the
+/// whole width.
 const RAIL_MIN_WIDTH: f32 = 600.0;
 
 /// The rail entries of the panels that have no built-in icon: their panel, widget id, icon and
@@ -92,7 +92,8 @@ impl Default for MarketPanels {
 
 /// The widget bar, the panels and what they need between frames.
 pub(super) struct State {
-    widget_bar: WidgetBar,
+    /// Follows the terminal's control visibility, which the core applies to it.
+    pub(super) widget_bar: WidgetBar,
     market: MarketPanels,
     /// The chart symbol's financials, shown in place of the chart while they are open.
     financials: Option<(String, FinancialsPanel)>,
@@ -353,14 +354,13 @@ impl Terminal {
 
     /// The rail and the side panel beside it.
     fn show_right(&mut self, ui: &mut egui::Ui) {
+        if ui.ctx().content_rect().width() < RAIL_MIN_WIDTH {
+            return;
+        }
         let bg = self.theme.ui.panel_bg;
         let panel = self.panel;
         let market = &self.panels.market;
         let bar = &mut self.panels.widget_bar;
-        // The three entries other groups perform follow the host's choice to hide them.
-        for control in [Control::Alerts, Control::ObjectTree, Control::Help] {
-            bar.set_control_visible(control, !self.hidden.contains(&control));
-        }
         for (icon, shown) in [
             (
                 RightBarIcon::MarketHeatmap,
@@ -383,20 +383,18 @@ impl Terminal {
         }
         let mut emitted = Vec::new();
         let mut picked = None;
-        if ui.ctx().content_rect().width() >= RAIL_MIN_WIDTH {
-            egui::Panel::right("egui_charts_terminal_widget_bar")
-                .resizable(false)
-                .exact_size(49.0)
-                .show_separator_line(false)
-                .frame(panel_frame(bg).outer_margin(egui::Margin {
-                    left: 4,
-                    ..egui::Margin::ZERO
-                }))
-                .show(ui, |ui| match bar.show(ui) {
-                    WidgetBarAction::None => {}
-                    action => emitted.push(Action::WidgetBar(action)),
-                });
-        }
+        egui::Panel::right("egui_charts_terminal_widget_bar")
+            .resizable(false)
+            .exact_size(49.0)
+            .show_separator_line(false)
+            .frame(panel_frame(bg).outer_margin(egui::Margin {
+                left: 4,
+                ..egui::Margin::ZERO
+            }))
+            .show(ui, |ui| match bar.show(ui) {
+                WidgetBarAction::None => {}
+                action => emitted.push(Action::WidgetBar(action)),
+            });
         bar.show_panel(ui);
         if let Some(which) = panel {
             picked = self.show_side_panel(ui, which, &mut emitted);
@@ -747,6 +745,16 @@ mod tests {
         ] {
             let left = terminal.run(Action::WidgetBar(action));
             assert_eq!((terminal.panel, left.is_some()), (panel, returned));
+        }
+    }
+
+    #[test]
+    fn a_narrow_window_leaves_the_side_panel_out() {
+        let mut terminal = terminal();
+        // The watchlist is open from the start; its add button is drawn wherever it is.
+        for (width, shown) in [(SIZE.x, true), (393.0, false)] {
+            let output = frame(&mut terminal, egui::vec2(width, SIZE.y), vec![]);
+            assert_eq!(output.text_at("Add symbol").is_some(), shown, "{width}");
         }
     }
 

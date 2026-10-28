@@ -73,8 +73,8 @@ type Intercept = Box<dyn FnMut(&Action) -> bool>;
 ///
 /// Every chart slot loads from the same [`Datafeed`]. Each service is handed to the components
 /// that consume it; a control whose service or output is absent is hidden. So far the terminal
-/// performs chart type, undo, redo, theme and fullscreen: the controls of other features stay
-/// hidden and the services passed for them are kept unused.
+/// performs chart type, undo, redo, theme, fullscreen and the side panels: the controls of other
+/// features stay hidden and the services passed for them are kept unused.
 pub struct Terminal {
     charts: Vec<Chart>,
     layout: ChartLayout,
@@ -98,13 +98,11 @@ pub struct Terminal {
     /// Controls the host hid with [`Terminal::hide`].
     hidden: HashSet<Control>,
     settings: Option<SettingsStore>,
-    /// Entries for the notifications panel, taken by the panel when it is shown.
-    #[allow(dead_code, reason = "the notifications panel takes the entries")]
+    /// Entries for the notifications panel, which takes them at the start of each frame.
     notices: Vec<Notification>,
     /// What each chart slot reported this frame, by slot.
     chart_events: Vec<(usize, ChartEvent)>,
     /// The side panel on show.
-    #[allow(dead_code, reason = "the side panels read the open panel")]
     panel: Option<core::SidePanel>,
     /// Whether a replay is running, so a symbol change stops it.
     replay_active: bool,
