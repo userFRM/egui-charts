@@ -157,6 +157,11 @@ impl StoredDrawing {
         if let Some(i) = self.points.iter().position(|p| bad(p.price)) {
             return Some(format!("points[{i}].price"));
         }
+        if d.ghost_feed
+            .is_some_and(|c| !c.spacing.is_finite() || !c.wick.is_finite())
+        {
+            return Some("ghost_feed".into());
+        }
         let sizing = d.position_sizing;
         if [
             sizing.point_value,
@@ -207,6 +212,20 @@ impl StoredDrawing {
                 d.gann
                     .iter()
                     .flat_map(|c| c.time_levels.iter().copied())
+                    .collect(),
+            ),
+            (
+                "gann.fan_ratios",
+                d.gann
+                    .iter()
+                    .flat_map(|c| c.fan_ratios.iter().copied())
+                    .collect(),
+            ),
+            (
+                "gann.arc_ratios",
+                d.gann
+                    .iter()
+                    .flat_map(|c| c.arc_ratios.iter().copied())
                     .collect(),
             ),
         ] {
@@ -876,7 +895,18 @@ mod tests {
             drawing.gann = Some(crate::drawings::GannConfig {
                 price_levels: vec![0.25, 0.75],
                 time_levels: vec![0.5],
+                show_grid: false,
+                show_fan: false,
+                fan_ratios: vec![0.5, 2.0],
+                fan_direction: crate::drawings::GannFanDirection::Reverse,
+                show_arcs: false,
+                arc_ratios: vec![0.75],
             });
+            drawing.ghost_feed = Some(crate::drawings::GhostFeedConfig {
+                spacing: 2.5,
+                wick: 0.5,
+            });
+            drawing.update_screen_coords(bar_to_x, price_to_y);
             let mut fork = crate::drawings::PitchforkConfig::default();
             fork.levels[0].line_style = LineStyle::Dotted;
             fork.levels[1].visible = false;
@@ -1218,7 +1248,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 15] = [
+        let cases: [(Spoil, &str); 16] = [
             (
                 |s| first(s).drawing.position_sizing.leverage = f64::NAN,
                 "non-finite position_sizing",
@@ -1290,6 +1320,16 @@ mod tests {
                         .time_levels[0] = f32::NAN
                 },
                 "non-finite gann.time_levels[0]",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .ghost_feed
+                        .get_or_insert_with(Default::default)
+                        .spacing = f64::NAN
+                },
+                "non-finite ghost_feed",
             ),
             (|s| s.drawings.push(s.drawings[0].clone()), "duplicate id"),
             (|s| first(s).points.truncate(1), "Trend Line needs 2"),

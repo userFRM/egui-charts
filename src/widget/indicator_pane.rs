@@ -1366,6 +1366,23 @@ impl IndicatorPane {
         if self.overlay {
             return width;
         }
+        if self.axis_options.border_visible {
+            let x = if left {
+                axis_edge - 0.5
+            } else {
+                chart_rect.right() + 0.5
+            };
+            painter.vline(
+                x,
+                chart_rect.y_range(),
+                egui::Stroke::new(
+                    1.0,
+                    self.axis_options
+                        .border_color
+                        .unwrap_or_else(|| painter.ctx().active_theme().ui.border),
+                ),
+            );
+        }
         let label_x = if left {
             self.axis_rect
                 .map_or(chart_rect.left(), |axis| axis.right())

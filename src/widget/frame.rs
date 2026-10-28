@@ -453,8 +453,15 @@ impl Chart {
     ) -> Response {
         let footprint = footprint.filter(|_| self.replay.is_none());
         let theme = self.theme_override.clone();
-        let _theme_scope = theme
+        // Axis labels take their size from the theme's label text.
+        let scaled = self.config.axis_font_size.map(|size| {
+            let mut scaled = theme.clone().unwrap_or_else(|| ui.ctx().active_theme());
+            scaled.text.label = size;
+            scaled
+        });
+        let _theme_scope = scaled
             .as_ref()
+            .or(theme.as_ref())
             .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
         let size = self.size;
         let show = |ui: &mut Ui| {
@@ -925,8 +932,10 @@ impl Chart {
         let show_volume = self.shows_volume();
         #[cfg(not(feature = "drawings"))]
         let is_drawing_interaction = false;
+        // The Magic cursor marks while the button is held, so a drag paints rather than pans.
         #[cfg(feature = "drawings")]
         let is_drawing_interaction = self.drawings.active_tool.is_some()
+            || self.chart_options.crosshair.style == crate::config::CrosshairStyle::Magic
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
             || self.drawings.curr_drawing.is_some()
@@ -995,7 +1004,10 @@ impl Chart {
                     // Dot mode - default pointer (dot is rendered on chart)
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
-                CrosshairStyle::Arrow | CrosshairStyle::Demonstration | CrosshairStyle::Hidden => {
+                CrosshairStyle::Arrow
+                | CrosshairStyle::Demonstration
+                | CrosshairStyle::Magic
+                | CrosshairStyle::Hidden => {
                     // Arrow mode - default pointer
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
@@ -1179,6 +1191,7 @@ impl Chart {
         self.last_rendered_price_rect = price_rect;
         self.last_rendered_volume_rect = volume_rect;
 
+        self.begin_mark_hits();
         self.pump_marks(ui.ctx());
 
         // Get visible data
@@ -1877,6 +1890,7 @@ impl Chart {
         // where the panes are rendered, outside this rect.
         if response.clicked()
             && let Some(click_pos) = response.interact_pointer_pos()
+            && self.mark_at(click_pos).is_none()
         {
             match element_at(click_pos) {
                 Some((id, bar_idx)) => self.selection.select(id, Some(bar_idx)),
@@ -2552,14 +2566,22 @@ impl Chart {
         #[cfg(feature = "drawings")]
         {
             self.cursor_modes.update(ui.input(|input| input.stable_dt));
-            if self.chart_options.crosshair.style == crate::config::CrosshairStyle::Demonstration
-                && !eraser_mode
-            {
-                self.cursor_modes
-                    .move_pointer(response.hover_pos().filter(|pos| price_rect.contains(*pos)));
+            let trail = Some(self.chart_options.crosshair.style)
+                .filter(|style| {
+                    matches!(
+                        style,
+                        crate::config::CrosshairStyle::Demonstration
+                            | crate::config::CrosshairStyle::Magic
+                    )
+                })
+                .filter(|_| !eraser_mode);
+            self.cursor_modes.follow(
+                trail,
+                response.hover_pos().filter(|pos| price_rect.contains(*pos)),
+                ui.input(|input| input.pointer.primary_down()),
+            );
+            if trail.is_some() {
                 self.cursor_modes.render(ui, price_rect);
-            } else {
-                self.cursor_modes.move_pointer(None);
             }
         }
         let mut table_rect = price_rect;

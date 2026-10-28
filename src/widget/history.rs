@@ -1,12 +1,13 @@
 //! Chart history records UI actions, not ordinary host API calls.
 
+use super::price_series::{PriceSeries, SeriesOptions};
 use super::{Chart, ChartElementId, SeriesId};
 use crate::config::{ChartConfig, ChartOptions};
 #[cfg(feature = "drawings")]
 use crate::drawings::DrawingManager;
 #[cfg(feature = "drawings")]
 use crate::drawings::services::HistoryService;
-use crate::model::{ChartType, ChartTypeParams, Timeframe};
+use crate::model::{ChartType, ChartTypeParams, SeriesScale, Timeframe};
 use crate::scales::PriceScale;
 use crate::studies::{Indicator, StudySettingsSnapshot};
 
@@ -28,23 +29,54 @@ struct Pending {
     #[cfg(feature = "drawings")]
     standalone_drawings: HistoryService,
     study_order: Vec<SeriesId>,
+    /// Added series removed during the action, with their bars.
+    removed_series: Vec<PriceSeries>,
 }
 
 #[derive(Default)]
 struct Action {
+    symbol: Option<String>,
+    series: Option<SeriesSet>,
     config: Option<ChartConfig>,
     main_series_visible: Option<bool>,
     price_targets_visible: Option<bool>,
     options: Option<ChartOptions>,
     view: Option<(f32, f32)>,
     scale: Option<PriceScale>,
-    series_scales: std::collections::HashMap<crate::model::SeriesScale, PriceScale>,
+    /// Scales that differ from the chart's, by assignment; `None` where the chart has none.
+    series_scales: std::collections::HashMap<crate::model::SeriesScale, Option<PriceScale>>,
     panes: Option<super::pane_layout::PaneLayout>,
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
     studies: Vec<StudyChange>,
     #[cfg(feature = "drawings")]
     drawings: HistoryService,
+}
+
+/// The added series of one state of the chart: their draw order, display settings and
+/// visibility, the scale of the main series, and the series the other state lacks, whole.
+struct SeriesSet {
+    props: Vec<(SeriesId, SeriesOptions, bool)>,
+    main_scale: SeriesScale,
+    held: Vec<PriceSeries>,
+}
+
+impl SeriesSet {
+    fn capture(chart: &Chart) -> Self {
+        Self {
+            props: chart
+                .price_series
+                .iter()
+                .map(|item| (item.id, item.options.clone(), item.visible))
+                .collect(),
+            main_scale: chart.main_series_scale,
+            held: Vec::new(),
+        }
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        self.main_scale == other.main_scale && self.props == other.props
+    }
 }
 
 struct StudyChange {
@@ -73,6 +105,11 @@ impl ChartHistory {
             pending.standalone_drawings.visit_chart_points(visit);
             pending.before.drawings.visit_chart_points(visit);
         }
+    }
+
+    /// Whether a user action is in progress.
+    pub(super) fn recording(&self) -> bool {
+        self.pending.is_some()
     }
 
     /// Forgets every action, keeping the edit counts.
@@ -185,13 +222,19 @@ impl Chart {
         self.history.pending = Some(Pending {
             depth: 1,
             before: Action {
+                symbol: Some(self.symbol.clone()),
+                series: Some(SeriesSet::capture(self)),
                 config: Some(self.config.clone()),
                 main_series_visible: Some(self.main_series_visible),
                 price_targets_visible: Some(self.show_price_targets),
                 options: Some(self.chart_options.clone()),
                 view: Some(self.get_time_scale_state()),
                 scale: Some(self.state.price_scale().clone()),
-                series_scales: self.series_scales.clone(),
+                series_scales: self
+                    .series_scales
+                    .iter()
+                    .map(|(id, scale)| (*id, Some(scale.clone())))
+                    .collect(),
                 panes: Some(self.pane_layout.clone()),
                 chart_type: Some((self.chart_type, self.chart_type_params.clone())),
                 interval: Some(self.timeframe),
@@ -200,6 +243,7 @@ impl Chart {
             #[cfg(feature = "drawings")]
             standalone_drawings,
             study_order: self.study_ids.clone(),
+            removed_series: Vec::new(),
         });
     }
 
@@ -228,6 +272,20 @@ impl Chart {
         #[cfg(feature = "drawings")]
         {
             action.drawings = pending.standalone_drawings;
+        }
+        if action.symbol.as_ref() == Some(&self.symbol) {
+            action.symbol = None;
+        }
+        if let Some(before) = &mut action.series {
+            if before.same(&SeriesSet::capture(self)) {
+                action.series = None;
+            } else {
+                before.held = pending
+                    .removed_series
+                    .into_iter()
+                    .filter(|item| before.props.iter().any(|(id, ..)| *id == item.id))
+                    .collect();
+            }
         }
         if action.view == Some(self.get_time_scale_state()) {
             action.view = None;
@@ -259,13 +317,18 @@ impl Chart {
                 action.scale = None;
             }
         }
+        let known: Vec<_> = action.series_scales.keys().copied().collect();
         action.series_scales.retain(|id, scale| {
-            self.series_scales.get(id).is_some_and(|current| {
-                scale.options() != current.options()
-                    || scale.is_manual() != current.is_manual()
-                    || (scale.is_manual() && scale.range() != current.range())
-            })
+            let (Some(scale), Some(current)) = (scale, self.series_scales.get(id)) else {
+                return true;
+            };
+            scale.options() != current.options()
+                || scale.is_manual() != current.is_manual()
+                || (scale.is_manual() && scale.range() != current.range())
         });
+        for id in self.series_scales.keys().filter(|id| !known.contains(id)) {
+            action.series_scales.insert(*id, None);
+        }
         if let Some(panes) = &action.panes
             && panes.maximized == self.pane_layout.maximized
             && panes.main == self.pane_layout.main
@@ -299,7 +362,9 @@ impl Chart {
         let drawings_changed = action.drawings.can_undo();
         #[cfg(not(feature = "drawings"))]
         let drawings_changed = false;
-        if action.view.is_none()
+        if action.symbol.is_none()
+            && action.series.is_none()
+            && action.view.is_none()
             && action.config.is_none()
             && action.main_series_visible.is_none()
             && action.price_targets_visible.is_none()
@@ -314,7 +379,58 @@ impl Chart {
         {
             return;
         }
+        // Edits after a symbol change belong to the new symbol, so they are undone first.
+        #[cfg(feature = "drawings")]
+        let later = action
+            .symbol
+            .is_some()
+            .then(|| Action {
+                drawings: std::mem::take(&mut action.drawings),
+                ..Action::default()
+            })
+            .filter(|later| later.drawings.can_undo());
         self.history.push(action);
+        #[cfg(feature = "drawings")]
+        if let Some(later) = later {
+            self.history.push(later);
+        }
+    }
+
+    /// Ends the drawing record of the pending action before another symbol's drawings take
+    /// over. What it recorded belongs to the old symbol, so it becomes an action of its own.
+    #[cfg(feature = "drawings")]
+    pub(super) fn detach_pending_drawings(&mut self) {
+        let Some(pending) = &mut self.history.pending else {
+            return;
+        };
+        self.drawings.swap_history(&mut pending.standalone_drawings);
+        let recorded = std::mem::replace(
+            &mut pending.standalone_drawings,
+            HistoryService::with_max_size(0),
+        );
+        if recorded.can_undo() {
+            self.history.push(Action {
+                drawings: recorded,
+                ..Action::default()
+            });
+        }
+    }
+
+    /// Starts recording the pending action's drawing edits on the new symbol's drawings.
+    #[cfg(feature = "drawings")]
+    pub(super) fn attach_pending_drawings(&mut self) {
+        if let Some(pending) = &mut self.history.pending {
+            let mut recording = HistoryService::with_max_size(0);
+            self.drawings.swap_history(&mut recording);
+            pending.standalone_drawings = recording;
+        }
+    }
+
+    /// Keeps a bar series removed by the pending action, bars included, so undo restores it.
+    pub(super) fn retain_removed_series(&mut self, series: PriceSeries) {
+        if let Some(pending) = &mut self.history.pending {
+            pending.removed_series.push(series);
+        }
     }
 
     pub(super) fn record_study(&mut self, id: SeriesId) {
@@ -366,6 +482,30 @@ impl Chart {
         };
         if let Some(study) = change.and_then(|change| change.before.as_mut()) {
             study.indicator = Some(indicator);
+        }
+    }
+
+    /// Exchanges the added series with those of `set`. A series the chart lacks comes from the
+    /// set whole, and one the set lacks goes into it, so the exchange reverses itself.
+    fn swap_series(&mut self, set: &mut SeriesSet) {
+        let now = SeriesSet::capture(self);
+        let mut pool = std::mem::take(&mut self.price_series);
+        pool.append(&mut set.held);
+        for (id, options, visible) in set.props.drain(..) {
+            if let Some(at) = pool.iter().position(|item| item.id == id) {
+                let mut item = pool.swap_remove(at);
+                item.options = options;
+                item.visible = visible;
+                item.revision = crate::model::next_revision();
+                self.price_series.push(item);
+            }
+        }
+        self.main_series_scale = set.main_scale;
+        *set = SeriesSet { held: pool, ..now };
+        if let Some(ChartElementId::Series(id)) = self.selection.selected_id()
+            && self.price_series.iter().all(|item| item.id != id)
+        {
+            self.selection.deselect();
         }
     }
 
@@ -463,6 +603,10 @@ impl Chart {
             .iter()
             .map(|change| Study::capture(self, change.id))
             .collect();
+        if let Some(symbol) = &mut action.symbol {
+            let target = std::mem::replace(symbol, self.symbol.clone());
+            self.change_symbol(target, true);
+        }
         if let Some((kind, params)) = &mut action.chart_type {
             let current = (self.chart_type, self.chart_type_params.clone());
             self.set_chart_type(*kind);
@@ -515,9 +659,14 @@ impl Chart {
             std::mem::swap(self.state.price_scale_mut(), scale);
         }
         for (id, scale) in &mut action.series_scales {
-            if let Some(current) = self.series_scales.get_mut(id) {
-                std::mem::swap(current, scale);
+            let current = self.series_scales.remove(id);
+            if let Some(scale) = scale.take() {
+                self.series_scales.insert(*id, scale);
             }
+            *scale = current;
+        }
+        if let Some(set) = &mut action.series {
+            self.swap_series(set);
         }
         self.element_studies.dirty |= !action.studies.is_empty();
         // Restore by original index after removing every touched study, so bulk removal and
@@ -1158,5 +1307,109 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A user's symbol navigation and comparison edits undo and redo in order, each step finding
+    /// the drawings, series, scales and symbol it was recorded against.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn symbol_navigation_and_comparison_edits_undo_and_redo_in_order() {
+        use crate::model::SeriesScale;
+        use crate::scales::PriceScaleMode;
+        let mut chart = chart(&[10.0, 11.0], &[20.0, 21.0]);
+        chart.set_symbol("AAA");
+        let draw = |chart: &mut Chart| {
+            chart.user_action(|chart| {
+                chart
+                    .drawings_mut()
+                    .add_synced_drawing(Drawing::new(0, DrawingToolType::TrendLine))
+            })
+        };
+        draw(&mut chart);
+        chart.user_action(|chart| chart.set_symbol("BBB"));
+        assert!(chart.drawings().drawings.is_empty());
+        let bars = chart.bars(SeriesId::MAIN).to_vec();
+        let mode = chart.state.price_scale().options().mode;
+        let comparison = chart.user_action(|chart| {
+            let id = chart.add_comparison("CCC", Color32::GOLD);
+            chart.set_data(id, bars.clone());
+            id
+        });
+        chart.user_action(|chart| {
+            chart.set_series_visible(comparison, false);
+            chart.set_series_scale(comparison, SeriesScale::Left);
+        });
+        chart.user_action(|chart| {
+            chart.remove_series(comparison);
+        });
+        draw(&mut chart);
+
+        let comparison_state = |chart: &Chart| {
+            (
+                chart.series_scale(comparison),
+                chart.is_series_visible(comparison),
+                chart.bars(comparison).len(),
+            )
+        };
+        let undo = |chart: &mut Chart| assert!(chart.undo());
+        undo(&mut chart);
+        assert_eq!(
+            (chart.symbol(), chart.drawings().drawings.len()),
+            ("BBB", 0)
+        );
+        undo(&mut chart);
+        assert_eq!(
+            comparison_state(&chart),
+            (Some(SeriesScale::Left), false, bars.len())
+        );
+        undo(&mut chart);
+        assert_eq!(
+            comparison_state(&chart),
+            (Some(SeriesScale::Right), true, bars.len())
+        );
+        assert_eq!(
+            chart.state.price_scale().options().mode,
+            PriceScaleMode::Percentage
+        );
+        undo(&mut chart);
+        assert_eq!(chart.series().count(), 0);
+        assert_eq!(chart.state.price_scale().options().mode, mode);
+        undo(&mut chart);
+        assert_eq!(
+            (chart.symbol(), chart.drawings().drawings.len()),
+            ("AAA", 1)
+        );
+        undo(&mut chart);
+        assert!(chart.drawings().drawings.is_empty());
+        assert!(!chart.can_undo());
+
+        assert!(chart.redo());
+        assert_eq!(
+            (chart.symbol(), chart.drawings().drawings.len()),
+            ("AAA", 1)
+        );
+        assert!(chart.redo());
+        assert_eq!(
+            (chart.symbol(), chart.drawings().drawings.len()),
+            ("BBB", 0)
+        );
+        assert!(chart.redo());
+        assert_eq!(
+            comparison_state(&chart),
+            (Some(SeriesScale::Right), true, bars.len())
+        );
+        assert!(chart.redo());
+        assert_eq!(
+            comparison_state(&chart),
+            (Some(SeriesScale::Left), false, bars.len())
+        );
+        assert!(chart.redo());
+        assert_eq!(chart.series().count(), 0);
+        assert!(chart.redo());
+        assert_eq!(
+            (chart.symbol(), chart.drawings().drawings.len()),
+            ("BBB", 1)
+        );
+        assert!(!chart.can_redo());
     }
 }

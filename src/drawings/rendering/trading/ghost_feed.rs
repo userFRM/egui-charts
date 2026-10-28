@@ -32,6 +32,8 @@ impl Drawing {
             ghost_alpha,
         );
 
+        self.draw_ghost_candles(painter);
+
         // Draw the ghost price path with gradient fade
         self.draw_ghost_path(painter, ghost_alpha);
 
@@ -45,6 +47,27 @@ impl Drawing {
 
         // Dashed connection to current price area (if we have chart points)
         self.draw_ghost_projection(painter, ghost_color);
+    }
+
+    /// The projected candles, translucent and outlined in the drawing's colour so they read as
+    /// a projection rather than market data: rising ones filled, falling ones hollow.
+    fn draw_ghost_candles(&self, painter: &egui::Painter) {
+        let [r, g, b, _] = self.color;
+        let outline = Stroke::new(
+            self.stroke_width.max(stroke::HAIRLINE),
+            Color32::from_rgba_unmultiplied(r, g, b, 160),
+        );
+        for c in &self.ghost_candles {
+            painter.vline(c.x, c.high.min(c.low)..=c.high.max(c.low), outline);
+            let body = Rect::from_x_y_ranges(
+                c.x - c.half_width..=c.x + c.half_width,
+                c.open.min(c.close)..=c.open.max(c.close).max(c.open.min(c.close) + 1.0),
+            );
+            if c.rising {
+                painter.rect_filled(body, 0.0, Color32::from_rgba_unmultiplied(r, g, b, 60));
+            }
+            painter.rect_stroke(body, 0.0, outline, egui::StrokeKind::Inside);
+        }
     }
 
     fn draw_ghost_path(&self, painter: &egui::Painter, ghost_alpha: u8) {

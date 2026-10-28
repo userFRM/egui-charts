@@ -1,0 +1,69 @@
+# Weekly dependency updates for every manifest in the repository.
+# Security updates are opened as soon as an advisory is published, whatever the schedule.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directories:
+      - "/"
+      - "/examples/demo"
+      - "/docs/capture"
+      - "/fuzz"
+    # Lockfile updates only. The demo, capture and fuzz crates lock the library's dependencies
+    # too, so a requirement raised in one manifest breaks the others' --locked builds until
+    # they move in the same change; breaking upgrades need code changes and are done by hand.
+    versioning-strategy: lockfile-only
+    schedule:
+      interval: weekly
+      day: monday
+    # A release must be a week old before it is proposed, so a yanked or compromised version
+    # is usually caught first.
+    cooldown:
+      default-days: 7
+    groups:
+      # egui, eframe and their companion crates only work at matching versions.
+      egui:
+        patterns:
+          - "egui"
+          - "egui_*"
+          - "eframe"
+          - "epaint"
+          - "emath"
+          - "ecolor"
+      cargo:
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: build
+      include: scope
+
+  - package-ecosystem: npm
+    directory: "/docs/site"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      docs-site:
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: build
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: ci
+      include: scope
