@@ -925,8 +925,10 @@ impl Chart {
         let show_volume = self.shows_volume();
         #[cfg(not(feature = "drawings"))]
         let is_drawing_interaction = false;
+        // The Magic cursor marks while the button is held, so a drag paints rather than pans.
         #[cfg(feature = "drawings")]
         let is_drawing_interaction = self.drawings.active_tool.is_some()
+            || self.chart_options.crosshair.style == crate::config::CrosshairStyle::Magic
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
             || self.drawings.curr_drawing.is_some()
@@ -995,7 +997,10 @@ impl Chart {
                     // Dot mode - default pointer (dot is rendered on chart)
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
-                CrosshairStyle::Arrow | CrosshairStyle::Demonstration | CrosshairStyle::Hidden => {
+                CrosshairStyle::Arrow
+                | CrosshairStyle::Demonstration
+                | CrosshairStyle::Magic
+                | CrosshairStyle::Hidden => {
                     // Arrow mode - default pointer
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
@@ -2552,14 +2557,22 @@ impl Chart {
         #[cfg(feature = "drawings")]
         {
             self.cursor_modes.update(ui.input(|input| input.stable_dt));
-            if self.chart_options.crosshair.style == crate::config::CrosshairStyle::Demonstration
-                && !eraser_mode
-            {
-                self.cursor_modes
-                    .move_pointer(response.hover_pos().filter(|pos| price_rect.contains(*pos)));
+            let trail = Some(self.chart_options.crosshair.style)
+                .filter(|style| {
+                    matches!(
+                        style,
+                        crate::config::CrosshairStyle::Demonstration
+                            | crate::config::CrosshairStyle::Magic
+                    )
+                })
+                .filter(|_| !eraser_mode);
+            self.cursor_modes.follow(
+                trail,
+                response.hover_pos().filter(|pos| price_rect.contains(*pos)),
+                ui.input(|input| input.pointer.primary_down()),
+            );
+            if trail.is_some() {
                 self.cursor_modes.render(ui, price_rect);
-            } else {
-                self.cursor_modes.move_pointer(None);
             }
         }
         let mut table_rect = price_rect;

@@ -400,6 +400,14 @@ impl KeyboardAction {
             Self::DrawingTool(crate::config::DrawingToolType::FibonacciRetracement) => {
                 const { &[KeyboardShortcut::new(Modifiers::ALT, Key::F)] }
             }
+            Self::DrawingTool(crate::config::DrawingToolType::Rect) => {
+                const {
+                    &[KeyboardShortcut::new(
+                        Modifiers::ALT.plus(Modifiers::SHIFT),
+                        Key::R,
+                    )]
+                }
+            }
             _ => &[],
         }
     }
@@ -452,6 +460,7 @@ impl KeyboardAction {
             Self::DrawingTool(crate::config::DrawingToolType::HorizontalLine) => "Alt+H",
             Self::DrawingTool(crate::config::DrawingToolType::VerticalLine) => "Alt+V",
             Self::DrawingTool(crate::config::DrawingToolType::FibonacciRetracement) => "Alt+F",
+            Self::DrawingTool(crate::config::DrawingToolType::Rect) => "Alt+Shift+R",
             _ => "",
         }
     }
@@ -503,6 +512,7 @@ impl KeyboardAction {
                     Self::DrawingTool(DrawingToolType::HorizontalLine),
                     Self::DrawingTool(DrawingToolType::VerticalLine),
                     Self::DrawingTool(DrawingToolType::FibonacciRetracement),
+                    Self::DrawingTool(DrawingToolType::Rect),
                     Self::DeleteSelectedDrawing,
                     Self::Cancel,
                     Self::CompleteDrawing,
