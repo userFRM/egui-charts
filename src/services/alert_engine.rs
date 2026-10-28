@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use chrono::{DateTime, Utc};
 
 use super::{AlertEvent, Alerts, Events};
-use crate::data::{FeedError, Reply};
+use crate::data::{FeedError, MaybeSend, Reply};
 use crate::model::{
     Alert, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertSource, AlertStatus, Bar,
     Timeframe,
@@ -75,6 +75,18 @@ use crate::model::{
 /// ```
 pub struct AlertEngine {
     state: Mutex<State>,
+    deliver: Option<Box<dyn Deliver>>,
+}
+
+/// The host's callback for triggers.
+trait Deliver: MaybeSend {
+    fn deliver(&self, alert: &Alert, event: &AlertEvent);
+}
+
+impl<F: Fn(&Alert, &AlertEvent) + MaybeSend> Deliver for F {
+    fn deliver(&self, alert: &Alert, event: &AlertEvent) {
+        self(alert, event);
+    }
 }
 
 #[derive(Default)]
@@ -120,7 +132,20 @@ impl AlertEngine {
     pub fn new() -> Self {
         Self {
             state: Mutex::new(State::default()),
+            deliver: None,
         }
+    }
+
+    /// Calls `deliver` with the alert and its [`AlertEvent::TriggeredForSymbol`] on every trigger,
+    /// after the event is pushed, so that the host can send it by email, push notification or web
+    /// request. The call comes from the thread that fed the engine and must return at once; it
+    /// may use the engine.
+    pub fn on_trigger(
+        mut self,
+        deliver: impl Fn(&Alert, &AlertEvent) + MaybeSend + 'static,
+    ) -> Self {
+        self.deliver = Some(Box::new(deliver));
+        self
     }
 
     /// Starts with `alerts` as [`alerts`](Self::alerts) returned them, giving those without an
@@ -173,6 +198,7 @@ impl AlertEngine {
         now: DateTime<Utc>,
         value: impl Fn(&AlertSource, usize) -> Option<f64>,
     ) {
+        let mut fired = Vec::new();
         let mut state = self.lock();
         state.expire(now);
         let State {
@@ -207,7 +233,8 @@ impl AlertEngine {
                 }
             }
             let run = runs.entry((id.clone(), symbol.to_owned())).or_default();
-            let Some(bar) = evaluate(alert, run, bars, &value) else {
+            let Some((bar, message)) = evaluate(alert, run, (symbol, timeframe), bars, &value)
+            else {
                 continue;
             };
             let price = bar.close.is_finite().then_some(bar.close);
@@ -218,23 +245,34 @@ impl AlertEngine {
                 }
             }
             run.fired = Some(bar.time);
-            if let Some(events) = events {
-                if alert.status != AlertStatus::Active {
-                    events.push(AlertEvent::Upsert(alert.clone()));
-                }
-                events.push(AlertEvent::TriggeredForSymbol {
-                    id,
-                    symbol: symbol.to_owned(),
-                    time: now,
-                    price,
-                });
+            if let Some(events) = events
+                && alert.status != AlertStatus::Active
+            {
+                events.push(AlertEvent::Upsert(alert.clone()));
             }
+            let event = AlertEvent::TriggeredForSymbol {
+                id,
+                symbol: symbol.to_owned(),
+                time: now,
+                price,
+                message,
+            };
+            if let Some(events) = events {
+                events.push(event.clone());
+            }
+            fired.push((alert.clone(), event));
         }
         runs.retain(|(id, _), _| {
             alerts
                 .iter()
                 .any(|a| a.id.as_ref() == Some(id) && a.status == AlertStatus::Active)
         });
+        drop(state);
+        if let Some(deliver) = &self.deliver {
+            for (alert, event) in &fired {
+                deliver.deliver(alert, event);
+            }
+        }
     }
 
     /// Marks the alerts whose expiry has passed as expired, without waiting for data. Call it
@@ -325,14 +363,15 @@ fn partner(condition: &AlertCondition) -> Option<&AlertSource> {
     }
 }
 
-/// Evaluates `alert` on the newest of `bars`, updating what `run` remembers. Returns the bar it
-/// fired on, if it did.
+/// Evaluates `alert` on the newest of `bars` of `subject`, updating what `run` remembers. Returns
+/// the bar it fired on and its message, if it did.
 fn evaluate<'a>(
     alert: &Alert,
     run: &mut Run,
+    (symbol, timeframe): (&str, Timeframe),
     bars: &'a [Bar],
     value: &impl Fn(&AlertSource, usize) -> Option<f64>,
-) -> Option<&'a Bar> {
+) -> Option<(&'a Bar, String)> {
     let closed = alert.frequency == AlertFrequency::OncePerBarClose;
     let index = bars.len().checked_sub(if closed { 2 } else { 1 })?;
     let bar = &bars[index];
@@ -409,7 +448,10 @@ fn evaluate<'a>(
                 run.fired != Some(bar.time)
             }
         };
-    fires.then_some(bar)
+    fires.then(|| {
+        let message = alert.expand_message(symbol, timeframe, bar, |src| source(src, index));
+        (bar, message)
+    })
 }
 
 /// Whether `condition` holds for `value`, given the previous value of the source, the current and
@@ -538,18 +580,26 @@ mod tests {
         engine: AlertEngine,
         inbox: Arc<Inbox>,
         _listener: Listener,
+        delivered: Arc<std::sync::Mutex<Vec<(Alert, AlertEvent)>>>,
     }
 
     impl Host {
         fn new(alerts: Vec<Alert>) -> Self {
             let inbox = Arc::new(Inbox::default());
             let (_listener, events) = Listener::new(&inbox, 1);
-            let engine = AlertEngine::new().with_alerts(alerts);
+            let delivered = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let sink = Arc::clone(&delivered);
+            let engine = AlertEngine::new()
+                .with_alerts(alerts)
+                .on_trigger(move |alert, event| {
+                    sink.lock().unwrap().push((alert.clone(), event.clone()));
+                });
             engine.watch(events);
             Self {
                 engine,
                 inbox,
                 _listener,
+                delivered,
             }
         }
 
@@ -797,6 +847,7 @@ mod tests {
     fn a_trigger_follows_the_change_of_status_and_reloads_never_repeat_it() {
         let mut watching = alert(AlertCondition::Above(100.0), AlertFrequency::EveryTime);
         watching.timeframe = None;
+        watching.message = "{{symbol}} closed at {{close}}".into();
         let host = Host::new(vec![watching]);
         host.events();
         let bars = [bar(0, 99.0, 1.0), bar(1, 101.0, 1.0), bar(2, 103.0, 1.0)];
@@ -810,6 +861,13 @@ mod tests {
             matches!(&events[1], AlertEvent::TriggeredForSymbol { price: Some(p), .. } if *p == 103.0)
         );
         assert_eq!(events.len(), 2);
+        // The message is filled in the event, and the host callback gets the same event.
+        assert!(
+            matches!(&events[1], AlertEvent::TriggeredForSymbol { message, .. } if message == "SYM closed at 103")
+        );
+        let delivered = host.delivered.lock().unwrap().clone();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].1, events[1]);
         feed(&host, &bars, &[], 1_001);
         // History that grew at the front, a rewound replay and another timeframe: nothing fires.
         let mut reloaded = vec![bar(-1, 98.0, 1.0)];

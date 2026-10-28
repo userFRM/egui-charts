@@ -132,5 +132,8 @@ pub enum AlertEvent {
         time: DateTime<Utc>,
         /// Price observed by the host when available.
         price: Option<f64>,
+        /// The alert's message with its placeholders filled in, as [`Alert::expand_message`]
+        /// does, empty if the alert has none. The terminal shows it in the popup and the log.
+        message: String,
     },
 }

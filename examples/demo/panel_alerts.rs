@@ -275,6 +275,14 @@ impl DemoAlerts {
                         symbol: chart.symbol().to_owned(),
                         time: now,
                         price: Some(bar.close),
+                        message: alert.expand_message(
+                            chart.symbol(),
+                            chart
+                                .timeframe()
+                                .unwrap_or(egui_charts::model::Timeframe::Min1),
+                            bar,
+                            |source| source_value(chart, studies, source, index),
+                        ),
                     });
                 }
             }

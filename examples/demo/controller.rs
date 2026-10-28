@@ -1225,6 +1225,9 @@ impl eframe::App for DemoApp {
 
         // Fulfil requests from the previous frame, before a dialog can submit another.
         self.handle_screenshot(&ctx);
+        let alerts = &self.settings_state.alerts;
+        self.alerts
+            .set_sound(alerts.play_sound.then(|| alerts.sound.clone()));
         self.alerts.poll(&ctx, &mut self.toasts);
         self.monitor_alerts(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
@@ -1254,8 +1257,7 @@ impl eframe::App for DemoApp {
                 false,
             );
         }
-        if !triggers.is_empty() && self.settings_state.alerts.play_sound {
-            let name = self.settings_state.alerts.sound.clone();
+        if let Some(name) = self.alerts.take_sound() {
             self.play_sound(&ctx, &name, self.settings_state.alerts.sound_volume, false);
         }
         if let Some(error) = self.audio.take_error() {
