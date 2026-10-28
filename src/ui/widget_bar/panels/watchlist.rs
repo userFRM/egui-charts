@@ -112,8 +112,7 @@ impl WatchlistColumn {
 
 /// A section of the wide watchlist.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum WatchlistSection {
+enum WatchlistSection {
     /// The table of quotes.
     #[default]
     Overview,

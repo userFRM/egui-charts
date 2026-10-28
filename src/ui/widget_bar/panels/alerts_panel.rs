@@ -50,8 +50,7 @@ pub enum AlertPanelAction {
 
 /// The property the alert list is ordered by.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum AlertSortKey {
+enum AlertSortKey {
     /// Arrival order, as the host pushed the alerts.
     #[default]
     Arrival,
