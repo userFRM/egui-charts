@@ -428,6 +428,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `HeatmapStrip` keeps cells aligned with the host's bar positions at narrow zooms, clips their paint to the strip, appends cells in amortized constant time and finds visible cells by binary search. Delta and volume normalization use cached maxima over the complete history. Migration: call `render(ui, rect, (first, last), bar_spacing, |i| mapping.idx_to_x(i))`, where the range is inclusive and `i` is an absolute bar index. The `cells` field is private; read normalized copies with `cells()`, construct with `new` or `with_config`, replace history with `set_data` (which sorts by bar index), and append in nondecreasing bar-index order with `add_cell`. ([#1286](https://github.com/userFRM/egui-charts/issues/1286), [#1290](https://github.com/userFRM/egui-charts/issues/1290))
+
 - Volume bubbles follow each bar's clock slot even when the feed stamps bars inside their intervals. Automatic and price-step groups stay on the bar centre; execution and time-window groups measure elapsed time from the slot open, and the first visible bar retains trades before its stamp. ([#1285](https://github.com/userFRM/egui-charts/issues/1285))
 
 - A footprint built from the feed's trades drops the contribution of each trade the bounded store evicts, summing the bar that lost trades again from those held so its delta high and low agree with them, and keeps at most 5,000 bars and 50,000 price rows, the oldest bars first. `Footprint::complete_from` gives the open of the oldest bar whose executions are all held; bars before it, cut by eviction or the budget, are drawn as candles instead of as complete footprint bars. ([#1114](https://github.com/userFRM/egui-charts/issues/1114))

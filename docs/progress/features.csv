@@ -429,6 +429,7 @@ Order flow,Order flow,"Order book, heatmap and order-level replay",done,library,
 Order flow,Order flow,Order-flow event alerts,partial,host,src/services/alerts.rs;src/services/notifications.rs;src/ui/widget_bar/panels/time_and_sales.rs
 Order flow,Order flow,Order-level trade classification,partial,library,src/data/trades.rs;src/data/orders.rs;src/model/quote.rs;src/widget/feed.rs
 Order flow,Order flow,Passive wall detection,missing,host,
+Order flow,Order flow,Per-bar delta and volume heatmap strip,done,library,src/chart/overlays/heatmap_strip.rs
 Order flow,Order flow,Per-bar delta as histogram or candles,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/chart/series/mod.rs
 Order flow,Order flow,Per-bar order-flow statistics table,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/chart/overlays/mod.rs
 Order flow,Order flow,"Profile POC, value area and VAH/VAL lines",done,library,src/data/footprint.rs;src/chart/overlays/trade_profile.rs;src/painting/volume_profile.rs
