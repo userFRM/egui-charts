@@ -19,8 +19,8 @@ use crate::chart::selection::SeriesId;
 use crate::chart::{TradingLineAction, TradingLineOptions, render_trading_lines, to_step};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{
-    Account, Capabilities, Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType,
-    Position, Quote, TradingRules,
+    Account, Capabilities, Order, OrderId, OrderPreview, OrderRequest, OrderSide, OrderStatus,
+    OrderType, Position, Quote, TradingRules,
 };
 use crate::services::{AccountEvent, Broker, Listener};
 use crate::theme::ThemeExt;
@@ -80,6 +80,8 @@ pub struct Trading {
     ticket: OrderTicket,
     /// A change the user asked for on a line, waiting for confirmation.
     pending: Option<TradingLineAction>,
+    /// An order the user asked the broker to preview, until it is placed or discarded.
+    preview: Option<Preview>,
     /// Decimals of the chart's prices, for notifications.
     decimals: usize,
     /// The latest quote of a symbol, from [`set_quote`](Self::set_quote).
@@ -103,6 +105,14 @@ pub struct Trading {
     calculator: Option<(egui::Pos2, String)>,
 }
 
+/// An order sent to [`Broker::preview`] and the estimate it was answered with. Confirming the
+/// preview places `request` itself, whatever the ticket shows by then.
+struct Preview {
+    key: u64,
+    request: OrderRequest,
+    estimate: Option<OrderPreview>,
+}
+
 impl Default for Trading {
     fn default() -> Self {
         Self {
@@ -120,6 +130,7 @@ impl Default for Trading {
             placing: Vec::new(),
             ticket: OrderTicket::default(),
             pending: None,
+            preview: None,
             decimals: 2,
             quote: None,
             quantity: 1.0,
@@ -166,6 +177,7 @@ impl Trading {
 
     fn connect(&mut self) {
         self.pending = None;
+        self.preview = None;
         self.sound = None;
         self.calculator = None;
         self.ticket = OrderTicket::default();
@@ -288,6 +300,29 @@ impl Trading {
                 }
                 continue;
             }
+            if self
+                .preview
+                .as_ref()
+                .is_some_and(|preview| preview.key == key)
+            {
+                if let Ok(answer) = answer.downcast::<Result<OrderPreview, FeedError>>() {
+                    match *answer {
+                        Ok(estimate) => {
+                            if let Some(preview) = &mut self.preview {
+                                preview.estimate = Some(estimate);
+                            }
+                        }
+                        Err(error) => {
+                            self.preview = None;
+                            self.notify(
+                                toasts,
+                                Toast::error(format!("Order preview unavailable: {error}")),
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
             if key == self.rules_key {
                 if let Ok(answer) = answer.downcast::<Result<TradingRules, FeedError>>() {
                     match *answer {
@@ -382,12 +417,15 @@ impl Trading {
             AccountEvent::Account(account) => {
                 self.placing
                     .retain(|(_, _, order)| account.capabilities.accepts(&order.order_type));
+                if !account.capabilities.preview {
+                    self.preview = None;
+                }
                 if matches!(self.pending, Some(TradingLineAction::Modify(_, _)))
                     && !account.capabilities.modify
-                    || matches!(
-                        self.pending,
-                        Some(TradingLineAction::Close(_) | TradingLineAction::Reverse(_))
-                    ) && !account.capabilities.market
+                    || matches!(self.pending, Some(TradingLineAction::Close(_)))
+                        && !account.capabilities.close
+                    || matches!(self.pending, Some(TradingLineAction::Reverse(_)))
+                        && !account.capabilities.reverse
                     || matches!(&self.pending,
                         Some(TradingLineAction::Exit(_, exit))
                         if !account.capabilities.accepts(&exit.order_type))
@@ -526,6 +564,27 @@ impl Trading {
             .filter(|(quoted, _)| quoted == symbol && !replay)
             .map(|(_, quote)| quote);
         let book = chart.order_book(SeriesId::MAIN).filter(|_| !replay);
+        let view = chart.order_book_view();
+        let queue = chart.order_queue(SeriesId::MAIN).filter(|_| !replay);
+        let filtered = view.filter != crate::data::OrderFilter::default();
+        let ladder = match (queue, filtered) {
+            (Some(queue), true) => queue
+                .filtered(symbol, &view.filter)
+                .map(|b| Some(std::borrow::Cow::Owned(b))),
+            (None, true) if !replay => Err(crate::data::OrderFilterUnavailable::AggregateDepth),
+            _ => Ok(book.map(std::borrow::Cow::Borrowed)),
+        };
+        let highlights = queue
+            .zip(view.tiers)
+            .map(|(queue, tiers)| {
+                (queue.largest_orders(&view.filter).into_iter())
+                    .filter_map(|o| {
+                        let tier = tiers.tier(o.size)?;
+                        Some((o.side == OrderSide::Buy, o.price, view.tier_color(tier)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Market {
             last: crate::model::last_with_value(chart.bars(SeriesId::MAIN)).map(|bar| bar.close),
             bid: book
@@ -544,10 +603,13 @@ impl Trading {
             capabilities: self.capabilities(),
             rules: &self.rules,
             rules_ready: self.rules_ready && self.rules.symbol == symbol,
-            book,
+            ladder_unavailable: ladder.as_ref().err().copied(),
+            ladder: ladder.unwrap_or(None),
+            highlights,
             orders: &self.orders,
             positions: &self.positions,
             trades: &[],
+            session_open: None,
             last_fill: self.account_panel.fills.price(symbol),
         }
     }
@@ -579,6 +641,9 @@ impl Trading {
         let mut market = self.market(chart);
         market.last = trades.last().map(|trade| trade.price).or(market.last);
         market.trades = &trades;
+        market.session_open = trades
+            .last()
+            .and_then(|trade| session_open(chart, trade.ts));
         let theme = ui.active_theme();
         let action = egui::Panel::right("order_ticket")
             .resizable(false)
@@ -595,8 +660,28 @@ impl Trading {
         // Later panels may grow to their contents, but must not cover the docked ticket.
         ui.shrink_clip_rect(ui.available_rect_before_wrap());
         (self.ticket, self.presets, self.display.instant_orders) = (ticket, presets, one_click);
+        self.perform(action);
+    }
+
+    /// Sends what the ticket asked for.
+    fn perform(&mut self, action: Option<Action>) {
         match action {
             Some(Action::Place(request)) => self.place(request),
+            Some(Action::Preview(request)) => {
+                if let Some(service) = self
+                    .service
+                    .as_ref()
+                    .filter(|_| self.capabilities().preview)
+                {
+                    self.request_key += 2;
+                    service.preview(request.clone(), self.inbox.reply(self.request_key));
+                    self.preview = Some(Preview {
+                        key: self.request_key,
+                        request,
+                        estimate: None,
+                    });
+                }
+            }
             Some(Action::Cancel(ids)) => {
                 if let Some(service) = &self.service {
                     for id in ids {
@@ -623,8 +708,8 @@ impl Trading {
             show_positions: display.show_positions,
             submit: false,
             modify: capabilities.modify,
-            close: capabilities.market,
-            reverse: display.reverse_button,
+            close: capabilities.close,
+            reverse: display.reverse_button && capabilities.reverse,
             take_profit: capabilities.limit,
             stop_loss: capabilities.stop,
             pnl: display.position_pnl.then_some(display.position_pnl_unit),
@@ -708,6 +793,16 @@ impl Trading {
         chart.export_png_with(ctx, options, |ui, chart| self.draw_export(ui, chart))
     }
 
+    /// Writes [`Self::export_image`] as SVG, as [`Chart::export_svg`] does.
+    pub fn export_svg(
+        &self,
+        chart: &Chart,
+        ctx: &egui::Context,
+        options: &crate::widget::ImageExportOptions,
+    ) -> Result<String, String> {
+        chart.export_svg_with(ctx, options, |ui, chart| self.draw_export(ui, chart))
+    }
+
     fn draw_export(&self, ui: &mut egui::Ui, chart: &mut Chart) {
         if self.display.include_in_image {
             chart.trading_bid_ask = self.display.bid_ask_labels;
@@ -754,6 +849,38 @@ impl Trading {
                 self.execute(action);
             } else if result.is_cancelled() || !open {
                 self.pending = None;
+            }
+        }
+
+        if let Some(Preview {
+            request,
+            estimate: Some(estimate),
+            ..
+        }) = &self.preview
+        {
+            let mut open = true;
+            let result = ConfirmDialog::new(
+                "order_preview",
+                "Order preview",
+                ticket::preview_message(
+                    request,
+                    estimate,
+                    &self.rules,
+                    decimals,
+                    self.account
+                        .as_ref()
+                        .map_or("", |account| &account.currency),
+                ),
+            )
+            .confirm_text("Place order")
+            .cancel_text("Back")
+            .show(ui.ctx(), &mut open);
+            if result.is_confirmed() {
+                if let Some(preview) = self.preview.take() {
+                    self.place(preview.request);
+                }
+            } else if result.is_cancelled() || !open {
+                self.preview = None;
             }
         }
 
@@ -863,7 +990,12 @@ impl Trading {
             }
             Some(TradingLineAction::Exit(position, exit)) => (position, exit),
             Some(TradingLineAction::Close(position) | TradingLineAction::Reverse(position))
-                if position.quantity != 0.0 =>
+                if position.quantity != 0.0
+                    && if reverse {
+                        self.capabilities().reverse
+                    } else {
+                        self.capabilities().close
+                    } =>
             {
                 let side = if position.quantity > 0.0 {
                     OrderSide::Sell
@@ -885,6 +1017,17 @@ impl Trading {
             self.placing.push((self.request_key, position, order));
         }
     }
+}
+
+/// The open of the exchange session containing `time`, by the chart's trading hours and zone.
+fn session_open(
+    chart: &Chart,
+    time: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let sessions = (chart.bar_clock().sessions()).with_timeframe(crate::model::Timeframe::Min1);
+    (sessions.opens([time]).into_iter().rev())
+        .find(|(open, _)| *open <= time)
+        .map(|(open, _)| open)
 }
 
 fn order_name(request: &OrderRequest) -> &'static str {
@@ -1098,6 +1241,7 @@ mod tests {
         cancelled: Mutex<Vec<OrderId>>,
         modified: Mutex<Vec<(OrderId, OrderRequest)>>,
         rules: Mutex<Vec<(String, Reply<TradingRules>)>>,
+        previews: Mutex<Vec<(OrderRequest, Reply<OrderPreview>)>>,
     }
 
     impl Broker for Recorder {
@@ -1107,6 +1251,9 @@ mod tests {
                 limit: true,
                 stop: true,
                 modify: true,
+                close: true,
+                reverse: true,
+                preview: true,
                 ..Capabilities::default()
             };
             events.push(AccountEvent::Account(Account::new(
@@ -1120,6 +1267,9 @@ mod tests {
         }
         fn rules(&self, symbol: &str, reply: Reply<TradingRules>) {
             self.rules.lock().unwrap().push((symbol.to_owned(), reply));
+        }
+        fn preview(&self, order: OrderRequest, reply: Reply<OrderPreview>) {
+            self.previews.lock().unwrap().push((order, reply));
         }
         fn modify(&self, id: OrderId, order: OrderRequest, reply: Reply<()>) {
             self.modified.lock().unwrap().push((id, order));
@@ -2398,6 +2548,86 @@ mod tests {
         trading.set_service(Arc::new(Recorder::default()));
         assert_eq!(trading.take_execution_sound(), None);
         assert!(trading.calculator.is_none());
+    }
+
+    /// Guards the capability gates: an account that does not report closing, reversing or
+    /// previewing never gets those requests, and a preview alone never places an order. A
+    /// regression sends a market order the broker said it cannot take, or places an order the
+    /// user only asked to price.
+    #[test]
+    fn close_reverse_and_preview_follow_the_accounts_capabilities() {
+        let broker = Arc::new(Recorder::default());
+        let mut trading = Trading::default();
+        trading.set_service(broker.clone());
+        let ctx = egui::Context::default();
+        let mut toasts = Toasts::new();
+        trading.poll(&ctx, &mut toasts);
+        trading.rules = TradingRules::new("ES");
+        trading.rules_ready = true;
+        let position = Position::new("ES", 2.0, 100.0);
+        let order = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Limit(99.0));
+        // (close, reverse, preview) -> the market quantities placed and the previews asked for.
+        for (close, reverse, preview, placed, previewed) in [
+            (true, true, true, vec![2.0, 4.0], 1),
+            (true, false, false, vec![2.0], 0),
+            (false, true, false, vec![4.0], 0),
+            (false, false, false, vec![], 0),
+        ] {
+            let capabilities = Capabilities {
+                market: true,
+                close,
+                reverse,
+                preview,
+                ..Capabilities::default()
+            };
+            trading.apply(
+                AccountEvent::Account(Account::new("USD", 0.0, capabilities)),
+                &mut toasts,
+            );
+            trading.execute(Some(TradingLineAction::Close(position.clone())));
+            trading.execute(Some(TradingLineAction::Reverse(position.clone())));
+            trading.perform(Some(Action::Preview(order.clone())));
+            let sent: Vec<f64> = std::mem::take(&mut *broker.placed.lock().unwrap())
+                .iter()
+                .map(|order| order.quantity)
+                .collect();
+            assert_eq!(sent, placed, "{close} {reverse} {preview}");
+            let asked = std::mem::take(&mut *broker.previews.lock().unwrap());
+            assert_eq!(asked.len(), previewed, "{close} {reverse} {preview}");
+            for (request, reply) in asked {
+                assert_eq!(request, order);
+                reply.send(Ok(OrderPreview::default()));
+                trading.poll(&ctx, &mut toasts);
+                assert_eq!(
+                    trading.preview.as_ref().map(|p| p.estimate.is_some()),
+                    Some(true)
+                );
+            }
+        }
+        // A refused preview clears the pending one and tells the user.
+        trading.apply(
+            AccountEvent::Account(Account::new(
+                "USD",
+                0.0,
+                Capabilities {
+                    preview: true,
+                    ..Capabilities::default()
+                },
+            )),
+            &mut toasts,
+        );
+        trading.perform(Some(Action::Preview(order)));
+        let (_, reply) = broker.previews.lock().unwrap().pop().unwrap();
+        reply.send(Err(FeedError::NotSupported));
+        trading.poll(&ctx, &mut toasts);
+        assert!(trading.preview.is_none());
+        assert!(
+            toasts
+                .toasts()
+                .iter()
+                .any(|t| t.message.contains("preview"))
+        );
+        assert!(broker.placed.lock().unwrap().is_empty());
     }
 
     #[test]

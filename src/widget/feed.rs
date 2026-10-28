@@ -20,6 +20,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 /// Trades kept per series for order flow.
 pub(crate) const TRADE_CAPACITY: usize = 100_000;
+/// Bars a feed-backed footprint keeps, the oldest dropped first.
+const FOOTPRINT_BARS: usize = 5_000;
+/// Price rows a feed-backed footprint keeps in all its bars, the oldest bars dropped first.
+const FOOTPRINT_ROWS: usize = TRADE_CAPACITY / 2;
 
 /// Bars from the first visible bar to the oldest one below which an older page is asked for.
 const SCROLL_BACK_MARGIN: usize = 150;
@@ -50,7 +54,8 @@ pub(crate) struct FeedLink {
     pub(super) trades: Trades,
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
-    /// The trades as a footprint on the instrument's tick, while the chart type draws from them.
+    /// The trades as a footprint on the instrument's tick, while the chart type draws from them,
+    /// within [`FOOTPRINT_BARS`] and [`FOOTPRINT_ROWS`].
     pub(super) footprint: Option<Footprint>,
     order_book: Option<OrderBook>,
     order_queue: Option<crate::data::OrderQueue>,
@@ -58,6 +63,8 @@ pub(crate) struct FeedLink {
     depth_history: Option<DepthHistory>,
     depth_complete: bool,
     heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
+    /// How the live book is shown by the heatmap's profile and the depth ladder.
+    book_view: crate::chart::overlays::OrderBookView,
     study_inputs: Vec<(crate::data::OrderFlowInput, u64)>,
     time: Option<chrono::DateTime<chrono::Utc>>,
     /// A permanent history or resolve failure stops paging until the next reload.
@@ -97,13 +104,51 @@ impl FeedLink {
         }
     }
 
+    /// A paused link for an offscreen image: it holds the visuals the feed built, the footprint,
+    /// bubbles, order book and depth, and never talks to the feed or the live link's inbox.
+    pub(super) fn frozen(&self) -> Self {
+        Self {
+            feed: Arc::clone(&self.feed),
+            inbox: Arc::default(),
+            clock: self.clock.clone(),
+            initial_bars: self.initial_bars,
+            wake: Arc::default(),
+            reload_pending: false,
+            paused: true,
+            next_key: 0,
+            pending: Vec::new(),
+            retries: Vec::new(),
+            subscription: None,
+            instrument: self.instrument.clone(),
+            trades: Trades::new(TRADE_CAPACITY),
+            bubbles: self
+                .bubbles
+                .as_ref()
+                .map(|bubbles| self.bubbles(bubbles.config.clone())),
+            footprint: self.footprint.is_some().then(|| self.footprint()).flatten(),
+            order_book: self.order_book.clone(),
+            order_queue: self.order_queue.clone(),
+            depth_history: self.depth_history.clone(),
+            depth_complete: self.depth_complete,
+            heatmap: self.heatmap.is_some().then(Default::default),
+            book_view: self.book_view.clone(),
+            study_inputs: Vec::new(),
+            time: self.time,
+            paging_stopped: true,
+        }
+    }
+
     /// The held trades as a footprint, or `None` without the instrument's tick size. A trade
     /// older than the one before it is left out, as it is when it arrives live.
     fn footprint(&self) -> Option<Footprint> {
         let tick_size = self.instrument.as_ref()?.tick_size?;
         let mut flow = Footprint::new(self.clock.clone(), tick_size, 1).ok()?;
+        flow.set_budget(FOOTPRINT_BARS, FOOTPRINT_ROWS);
         for trade in self.trades.iter() {
             let _ = flow.push(trade);
+        }
+        if let Some(lost) = self.trades.lost_until() {
+            flow.drop_through(lost, self.trades.iter());
         }
         Some(flow)
     }
@@ -150,6 +195,7 @@ impl Chart {
             depth_history: None,
             depth_complete: false,
             heatmap: None,
+            book_view: Default::default(),
             study_inputs: Vec::new(),
             time: None,
             paging_stopped: false,
@@ -404,11 +450,11 @@ impl Chart {
         crate::data::combine_trades(self.trades(series))
     }
 
-    /// Draws the trades the feed sends as bubbles, one per bar and price level, from the next
-    /// frame, or stops with `None`. A chart without a feed holds no trades and draws none, and
-    /// Renko, Kagi, line break, point and figure and range charts draw none, since their x axis
-    /// is not time. Sums every held trade again: call it when the settings change, not every
-    /// frame.
+    /// Draws the trades the feed sends as bubbles, grouped and coloured as the config says (by
+    /// default one per bar and price level), from the next frame, or stops with `None`. A chart
+    /// without a feed holds no trades and draws none, and Renko, Kagi, line break, point and
+    /// figure and range charts draw none, since their x axis is not time. Sums every held trade
+    /// again: call it when the settings change, not every frame.
     pub fn set_volume_bubbles(&mut self, config: Option<VolumeBubblesConfig>) {
         if let Some(link) = &mut self.feed_link {
             link.bubbles = config.map(|config| link.bubbles(config));
@@ -434,6 +480,25 @@ impl Chart {
             .filter(|_| series == SeriesId::MAIN)?
             .order_queue
             .as_ref()
+    }
+
+    /// How the heatmap's profile and the depth ladder show the live book: which individual orders
+    /// count, what a bar measures and which orders are highlighted. Applies from the next frame.
+    /// A view that needs individual orders on an aggregate feed draws an explicit notice in the
+    /// pane and an empty ladder, rather than aggregate sizes.
+    pub fn set_order_book_view(&mut self, view: crate::chart::overlays::OrderBookView) {
+        if let Some(link) = &mut self.feed_link {
+            link.book_view = view;
+        }
+    }
+
+    /// The view set by [`set_order_book_view`](Self::set_order_book_view), the default of the
+    /// aggregate book without a feed.
+    pub fn order_book_view(&self) -> crate::chart::overlays::OrderBookView {
+        self.feed_link
+            .as_ref()
+            .map(|link| link.book_view.clone())
+            .unwrap_or_default()
     }
 
     /// Loads recorded depth from the feed and keeps `history` of its live book, or stops
@@ -496,38 +561,35 @@ impl Chart {
             |time| self.time_to_index(time).and_then(|i| self.index_to_x(i)),
             [self.config.bullish_color, self.config.bearish_color],
         );
-        if let Some(book) = &link.order_book {
-            let max = book
-                .bids
-                .iter()
-                .chain(&book.asks)
-                .map(|l| l.size)
-                .fold(0.0, f64::max);
-            if max > 0.0 {
-                for (levels, color) in [
-                    (&book.bids, self.config.bullish_color),
-                    (&book.asks, self.config.bearish_color),
-                ] {
-                    for level in levels {
-                        let y0 = mapping.price_to_y(level.price);
-                        let y1 = mapping.price_to_y(level.price + tick);
-                        let rect = egui::Rect::from_min_max(
-                            egui::pos2(
-                                mapping.rect.right() - 60.0 * (level.size / max) as f32,
-                                y0.min(y1),
-                            ),
-                            egui::pos2(mapping.rect.right(), y0.max(y1)),
-                        );
-                        if rect.is_finite() && rect.intersects(mapping.rect) {
-                            painter.with_clip_rect(mapping.rect).rect_filled(
-                                rect,
-                                0.0,
-                                color.gamma_multiply(0.7),
-                            );
-                        }
-                    }
-                }
-            }
+        let shown = crate::chart::overlays::render_book_profile(
+            painter,
+            mapping,
+            link.order_book.as_ref(),
+            link.order_queue.as_ref(),
+            tick,
+            &link.book_view,
+            [self.config.bullish_color, self.config.bearish_color],
+        );
+        // A heatmap of individual orders has no columns without them either.
+        let unavailable = shown.err().or_else(|| {
+            (history.config().orders.is_some() && link.order_queue.is_none())
+                .then_some(crate::data::OrderFilterUnavailable::AggregateDepth)
+        });
+        if let Some(reason) = unavailable {
+            painter.text(
+                mapping.rect.right_top() + egui::vec2(-8.0, 8.0),
+                egui::Align2::RIGHT_TOP,
+                crate::localization::format_text(
+                    painter.ctx(),
+                    "Order-level depth unavailable: {0}",
+                    &[(
+                        "0",
+                        crate::localization::text(painter.ctx(), reason.to_string()),
+                    )],
+                ),
+                egui::FontId::proportional(11.0),
+                crate::tokens::DESIGN_TOKENS.semantic.status.caution,
+            );
         }
     }
 
@@ -767,10 +829,12 @@ impl Chart {
             let footprint = &mut link.footprint;
             let inputs = &link.study_inputs;
             let clock = &link.clock;
+            let lost_before = link.trades.lost_until();
+            let mut evicted = false;
             let fold = &mut |trade: &Tick, added| {
                 bubbles.iter_mut().for_each(|b| b.fold(trade, added));
+                evicted |= !added;
                 if added {
-                    // An evicted trade stays in the footprint until the trades are summed again.
                     if let Some(flow) = footprint {
                         let _ = flow.push(trade);
                     }
@@ -780,6 +844,12 @@ impl Chart {
                 }
             };
             link.trades.append(updates.trades, fold);
+            // Trades dropped for capacity, here or before they reached this store, leave the footprint.
+            if let (Some(flow), Some(lost)) = (&mut link.footprint, link.trades.lost_until())
+                && (evicted || Some(lost) != lost_before)
+            {
+                flow.drop_through(lost, link.trades.iter());
+            }
             link.time = link.time.max(updates.time);
             if let Some(now) = link.time {
                 for (input, _) in &link.study_inputs {
@@ -1544,6 +1614,46 @@ mod tests {
                 "execution charts retain candles when the interval has no time slots"
             );
         }
+    }
+
+    /// Evicted trades leave the footprint: its bars equal those summed from the held trades, delta
+    /// extrema included, and the bar the eviction cut is not offered as complete.
+    #[test]
+    fn footprint_follows_trade_eviction() {
+        use crate::model::OrderSide::{Buy, Sell};
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_chart_type(ChartType::VolumeFootprint);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(bars(5), false));
+        frames.run(&mut chart);
+        let start = bars(5)[4].time;
+        let sink = feed.sink();
+        // 100 s of trades span two minute bars; the first 10 leave the store.
+        for range in [0..TRADE_CAPACITY, TRADE_CAPACITY..TRADE_CAPACITY + 10] {
+            for i in range {
+                let side = [Buy, Buy, Sell][i % 3];
+                let ts = start + TimeDelta::milliseconds(i as i64);
+                sink.push_tick(Tick::new(ts, 100.0 + (i % 5) as f64, 1.0, Some(side)));
+            }
+            frames.run(&mut chart);
+        }
+        let mut summed = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        chart
+            .trades(SeriesId::MAIN)
+            .for_each(|t| _ = summed.push(t));
+        let flow = chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap();
+        assert_eq!(flow.bars(), summed.bars());
+        assert_eq!(flow.complete_from(), Some(start + TimeDelta::minutes(1)));
     }
 
     /// Range bars follow the order of the supplied executions, not only the OHLC of the bars they
@@ -2319,6 +2429,23 @@ mod tests {
             Some(1000.0),
             "c: and the footprint"
         );
+        let frozen = chart.feed_link.as_ref().unwrap().frozen();
+        let row = frozen
+            .footprint
+            .as_ref()
+            .and_then(|flow| flow.bar_at(forming.time)?.levels.get(&14));
+        assert_eq!(
+            row.map(|row| row.volume()),
+            Some(1000.0),
+            "c: image footprint"
+        );
+        let shown = frozen
+            .bubbles
+            .as_ref()
+            .unwrap()
+            .between(forming.time, forming.time);
+        assert_eq!(shown.count(), 1, "c: image bubbles");
+        assert!(frozen.paused, "c: an image never loads");
         chart.set_chart_type(ChartType::Candles);
         assert_eq!(chart.feed_state(main).unwrap().repeated_ticks, 1, "c");
         let empty = OrderBook {

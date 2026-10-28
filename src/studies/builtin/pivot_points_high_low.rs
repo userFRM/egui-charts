@@ -67,6 +67,44 @@ pub(super) fn pivots(values: &[f64], left: usize, right: usize, high: bool) -> V
         .collect()
 }
 
+/// [`pivots`] over a stream of bars: the window of the last `left + right + 1` bars with finite
+/// highs and lows, from which each new bar confirms the pivot `right` bars before it.
+#[derive(Clone, Default)]
+pub(super) struct Swings {
+    window: std::collections::VecDeque<(usize, f64, f64)>,
+}
+
+impl Swings {
+    /// Adds the bar at `index` and returns the pivot high and the pivot low it confirms, each as
+    /// its bar and price. A bar without a finite high and low is skipped, as if it were absent.
+    pub(super) fn push(
+        &mut self,
+        index: usize,
+        bar: &Bar,
+        left: usize,
+        right: usize,
+    ) -> [Option<(usize, f64)>; 2] {
+        if !(bar.high.is_finite() && bar.low.is_finite()) {
+            return [None, None];
+        }
+        let size = left.saturating_add(right).saturating_add(1);
+        self.window.push_back((index, bar.high, bar.low));
+        if self.window.len() > size {
+            self.window.pop_front();
+        }
+        if self.window.len() < size {
+            return [None, None];
+        }
+        let (at, high, low) = self.window[left];
+        let before = || self.window.range(..left);
+        let after = || self.window.range(left + 1..);
+        [
+            (before().all(|w| w.1 <= high) && after().all(|w| w.1 < high)).then_some((at, high)),
+            (before().all(|w| w.2 >= low) && after().all(|w| w.2 > low)).then_some((at, low)),
+        ]
+    }
+}
+
 /// Pivot Points High Low: swing highs and lows, each labelled with its price.
 #[derive(Clone)]
 pub struct PivotPointsHighLow {
@@ -231,5 +269,64 @@ impl Indicator for PivotPointsHighLow {
 
     fn line_names(&self) -> Vec<String> {
         vec!["Pivot High".to_string(), "Pivot Low".to_string()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    /// A stream of bars confirms exactly the pivots of the batch rule over its finite bars, each
+    /// `right` finite bars later, skipping a bar without a price.
+    #[test]
+    fn swings_confirm_the_pivots_of_the_batch_rule() {
+        let highs: Vec<f64> = (0..200u32)
+            .map(|i| {
+                if i == 90 {
+                    f64::NAN
+                } else {
+                    f64::from(i * 7919 % 31) + 1.0
+                }
+            })
+            .collect();
+        let bar = |i: usize, p: f64| {
+            Bar::new(
+                Utc.timestamp_opt(i as i64 * 60, 0).unwrap(),
+                p,
+                p,
+                p,
+                p,
+                1.0,
+            )
+        };
+        let finite: Vec<usize> = (0..highs.len()).filter(|&i| highs[i].is_finite()).collect();
+        let prices: Vec<f64> = finite.iter().map(|&i| highs[i]).collect();
+        for (left, right) in [(1, 1), (3, 2), (2, 5)] {
+            let mut swings = Swings::default();
+            let mut streamed = [vec![false; prices.len()], vec![false; prices.len()]];
+            for (i, &p) in highs.iter().enumerate() {
+                for (line, pivot) in swings
+                    .push(i, &bar(i, p), left, right)
+                    .into_iter()
+                    .enumerate()
+                {
+                    if let Some((at, price)) = pivot {
+                        streamed[line][finite.binary_search(&at).unwrap()] = true;
+                        assert_eq!(price, highs[at]);
+                    }
+                }
+            }
+            assert_eq!(
+                streamed[0],
+                pivots(&prices, left, right, true),
+                "{left} {right}"
+            );
+            assert_eq!(
+                streamed[1],
+                pivots(&prices, left, right, false),
+                "{left} {right}"
+            );
+        }
     }
 }

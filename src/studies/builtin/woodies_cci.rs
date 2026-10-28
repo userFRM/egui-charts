@@ -10,10 +10,21 @@
 //! ```
 //!
 //! A window with no deviation gives 0. Lines, in order: the CCI 14 columns, the CCI Turbo (6) and
-//! the CCI 14 line. A column is green when the five previous CCI 14 values are all above zero and
-//! red when they are all below. Otherwise it is coloured against its own sign, green below zero and
-//! red at or above it. Fewer than five previous values count as mixed. The green is the columns
-//! colour of the settings. Levels at 100, 0 and -100.
+//! the CCI 14 line. Levels at 100, 0 and -100.
+//!
+//! # Column stages
+//!
+//! A column's stage follows its run: the bar itself and the unbroken CCI 14 values just before it
+//! on the same side of zero. Bars without a value are not part of the series, and a value of
+//! exactly zero is on neither side, so it has no run and ends the run before it.
+//!
+//! | Run | Stage | Colour |
+//! |-----|-------|--------|
+//! | 6 or more | established | columns colour above zero, established down colour below |
+//! | 2 to 5 | transition | transition colour |
+//! | 1, or the value is zero | neutral | neutral colour |
+//!
+//! The columns colour is the first plot colour of the settings; the other three are study inputs.
 //!
 //! # Example
 //! ```
@@ -39,11 +50,14 @@ pub struct WoodiesCCI {
     turbo_length: usize,
     cci_length: usize,
     values: IndicatorValues,
-    /// Colors: [columns, CCI Turbo, CCI 14]; the columns colour is used after five values above
-    /// zero or a mixed run below zero.
+    /// Colors: [columns, CCI Turbo, CCI 14]; the columns colour is the established run above zero.
     colors: Vec<Color32>,
-    /// Column colour otherwise.
+    /// Column colour of an established run below zero.
     down_color: Color32,
+    /// Column colour of a run of two to five values.
+    transition_color: Color32,
+    /// Column colour of a first value on a side of zero, or of zero.
+    neutral_color: Color32,
     visible: bool,
 }
 
@@ -56,6 +70,8 @@ impl WoodiesCCI {
             values: IndicatorValues::new(),
             colors: vec![palette::GREEN, palette::GREEN, palette::RED],
             down_color: palette::RED,
+            transition_color: palette::ORANGE,
+            neutral_color: palette::GRAY,
             visible: true,
         }
     }
@@ -105,7 +121,10 @@ impl Indicator for WoodiesCCI {
 
     crate::studies::inputs::study_inputs!(self;
         turbo_length: length("CCI Turbo length", 1, usize::MAX),
-        cci_length: length("CCI 14 length", 1, usize::MAX)
+        cci_length: length("CCI 14 length", 1, usize::MAX),
+        down_color: color("Established down colour"),
+        transition_color: color("Transition colour"),
+        neutral_color: color("Neutral colour")
     ; {});
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
@@ -129,17 +148,12 @@ impl Indicator for WoodiesCCI {
         let value = self.values.value(0, bar)?;
         // Bars without a value, skipped as non-finite, are not in the run.
         let previous = (0..bar).rev().filter_map(|bar| self.values.value(0, bar));
-        let (mut above, mut below) = (0, 0);
-        for value in previous.take(5) {
-            above += usize::from(value > 0.0);
-            below += usize::from(value < 0.0);
-        }
-        Some(if above == 5 {
-            self.colors[0]
-        } else if below == 5 || value >= 0.0 {
-            self.down_color
-        } else {
-            self.colors[0]
+        let run = 1 + previous.take_while(|p| p * value > 0.0).take(5).count();
+        Some(match run {
+            1 => self.neutral_color,
+            2..=5 => self.transition_color,
+            _ if value > 0.0 => self.colors[0],
+            _ => self.down_color,
         })
     }
 
@@ -235,12 +249,12 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
 
-    /// A CCI of length 2 has the sign of the close change, so the closes set the run of signs. A
-    /// column is green after five values above zero, red after five below, and otherwise green below
-    /// zero and red at or above it; a non-finite bar is not part of the run. The green is the
-    /// columns colour.
+    /// A CCI of length 2 has the sign of the close change, and zero for equal closes, so the closes
+    /// set the runs. A run of one or a zero is neutral, two to five values are a transition and six
+    /// or more are established, above zero in the columns colour and below it in the down colour. A
+    /// non-finite bar is not part of the run, and a zero ends it.
     #[test]
-    fn columns_are_coloured_by_the_five_previous_values() {
+    fn columns_are_staged_by_the_run_on_one_side_of_zero() {
         let closes = [
             0.0,
             1.0,
@@ -259,6 +273,8 @@ mod tests {
             1.0,
             0.0,
             -1.0,
+            -1.0,
+            -2.0,
         ];
         let bars: Vec<Bar> = closes
             .iter()
@@ -276,25 +292,27 @@ mod tests {
             .collect();
         let mut study = WoodiesCCI::new(2, 2);
         study.calculate(&bars);
-        let (g, r) = (palette::GREEN, palette::RED);
+        let (n, t, g, r) = (palette::GRAY, palette::ORANGE, palette::GREEN, palette::RED);
         let expected = [
             None,
-            Some(r),
-            Some(r),
+            Some(n),
+            Some(t),
             None,
+            Some(t),
+            Some(t),
+            Some(t),
+            Some(g),
+            Some(n),
+            Some(t),
+            Some(n),
+            Some(n),
+            Some(t),
+            Some(t),
+            Some(t),
+            Some(t),
             Some(r),
-            Some(r),
-            Some(r),
-            Some(g),
-            Some(g),
-            Some(g),
-            Some(r),
-            Some(g),
-            Some(g),
-            Some(g),
-            Some(g),
-            Some(g),
-            Some(r),
+            Some(n),
+            Some(n),
         ];
         let colours = |study: &WoodiesCCI| -> Vec<_> {
             (0..bars.len())
@@ -302,9 +320,16 @@ mod tests {
                 .collect()
         };
         assert_eq!(colours(&study), expected);
-        // The columns colour set in the settings replaces the green.
+        // The columns colour of the plot and the three stage inputs replace the defaults.
         study.set_color(0, Color32::BLUE);
-        let recoloured = expected.map(|c| c.map(|c| if c == g { Color32::BLUE } else { c }));
+        for id in ["down_color", "transition_color", "neutral_color"] {
+            study
+                .set_input(id, crate::studies::InputValue::Color(Color32::GOLD))
+                .unwrap();
+        }
+        study.calculate(&bars);
+        let mut recoloured = expected.map(|c| c.map(|_| Color32::GOLD));
+        recoloured[7] = Some(Color32::BLUE);
         assert_eq!(colours(&study), recoloured);
     }
 }

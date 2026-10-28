@@ -76,6 +76,9 @@ jobs:
       - name: Clippy (studies only)
         if: matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features studies --all-targets -- -D warnings
+      - name: Clippy (alert engine only)
+        if: matrix.rust == 'stable'
+        run: cargo clippy --no-default-features --features alert-engine --all-targets -- -D warnings
 
   test:
     if: github.event.pull_request.draft != true
@@ -231,6 +234,11 @@ jobs:
           cp examples/bare_chart.rs performance-base/examples/bare_chart.rs
           if grep -q 'pub enum TradeSide' performance-base/src/model/quote.rs; then
             sed -i 's/\bOrderSide\b/TradeSide/g' performance-base/benches/frame_time.rs
+          fi
+          if ! grep -rq 'pub enum BubbleGrouping' performance-base/src/chart/overlays; then
+            sed -i -e 's/{BubbleGrouping, VolumeBubblesConfig}/VolumeBubblesConfig/' \
+              -e 's/grouping: BubbleGrouping::PriceStep(step),/price_step: Some(step),/' \
+              performance-base/benches/frame_time.rs
           fi
           cargo build --release --locked --bench frame_time --message-format=json-render-diagnostics > performance-head.json
           cargo build --release --locked --manifest-path performance-base/Cargo.toml --bench frame_time --message-format=json-render-diagnostics > performance-base.json
