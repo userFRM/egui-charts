@@ -1191,6 +1191,7 @@ impl Chart {
         self.last_rendered_price_rect = price_rect;
         self.last_rendered_volume_rect = volume_rect;
 
+        self.begin_mark_hits();
         self.pump_marks(ui.ctx());
 
         // Get visible data
@@ -1889,6 +1890,7 @@ impl Chart {
         // where the panes are rendered, outside this rect.
         if response.clicked()
             && let Some(click_pos) = response.interact_pointer_pos()
+            && self.mark_at(click_pos).is_none()
         {
             match element_at(click_pos) {
                 Some((id, bar_idx)) => self.selection.select(id, Some(bar_idx)),

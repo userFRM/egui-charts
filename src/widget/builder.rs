@@ -195,6 +195,8 @@ impl Chart {
             show_price_targets: false,
             hidden_signal_categories: Default::default(),
             event_click: None,
+            mark_hits: std::cell::RefCell::default(),
+            clickable_marks: Vec::new(),
             timeframe: None,
             feed_link: None,
             #[cfg(feature = "drawings")]
