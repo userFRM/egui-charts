@@ -6,11 +6,48 @@ use super::{
 };
 use crate::{
     Chart,
-    config::{BackgroundStyle, NavigationButtons},
+    config::{BackgroundStyle, ChartConfig, NavigationButtons},
     model::CandlesStyle,
     scales::{PriceScaleMode, TimezoneMode},
+    theme::Theme,
 };
 use egui::Color32;
+
+/// The axis label size the dialog shows: the configured one, else the default theme's.
+fn axis_font_size(config: &ChartConfig) -> u8 {
+    config
+        .axis_font_size
+        .unwrap_or(Theme::default().text.label)
+        .round() as u8
+}
+
+/// The axis line colour the dialog shows; transparent when the price axis draws no line.
+fn axis_line_color(config: &ChartConfig) -> Color32 {
+    if config.price_axis.border_visible {
+        config
+            .price_axis
+            .border_color
+            .unwrap_or(Theme::default().ui.border)
+    } else {
+        Color32::TRANSPARENT
+    }
+}
+
+fn button_visibility(buttons: NavigationButtons) -> ButtonVisibility {
+    match buttons {
+        NavigationButtons::Always => ButtonVisibility::AlwaysVisible,
+        NavigationButtons::OnHover => ButtonVisibility::VisibleOnMouseOver,
+        NavigationButtons::Never => ButtonVisibility::Hidden,
+    }
+}
+
+fn navigation_buttons(visibility: ButtonVisibility) -> NavigationButtons {
+    match visibility {
+        ButtonVisibility::AlwaysVisible => NavigationButtons::Always,
+        ButtonVisibility::VisibleOnMouseOver => NavigationButtons::OnHover,
+        ButtonVisibility::Hidden => NavigationButtons::Never,
+    }
+}
 
 impl ChartSettingsState {
     /// Read the chart's current display settings. Host-managed trading and alert groups
@@ -115,11 +152,7 @@ impl ChartSettingsState {
             (false, true) => GridLinesMode::Vertical,
             _ => GridLinesMode::None,
         };
-        settings.btns.navigation = match config.navigation_buttons {
-            NavigationButtons::Always => ButtonVisibility::AlwaysVisible,
-            NavigationButtons::OnHover => ButtonVisibility::VisibleOnMouseOver,
-            NavigationButtons::Never => ButtonVisibility::Hidden,
-        };
+        settings.btns.navigation = button_visibility(config.navigation_buttons);
         let (kind, first, second) = match config.background_style {
             BackgroundStyle::Solid => (
                 BackgroundType::Solid,
@@ -170,6 +203,9 @@ impl ChartSettingsState {
         };
         settings.watermark.color = config.watermark_color;
         settings.scales_appearance.text_color = config.text_color;
+        settings.scales_appearance.font_size = axis_font_size(config);
+        settings.scales_appearance.lines_color = axis_line_color(config);
+        settings.btns.pane = button_visibility(config.pane_buttons);
 
         settings
     }
@@ -251,6 +287,15 @@ impl ChartSettingsState {
             None
         };
         chart.chart_options.time_scale.timezone = timezone;
+        if self.scales_appearance.lines_color != axis_line_color(chart.config()) {
+            // A transparent line is no line; any other colour draws on the price axes and the time axis.
+            let line = (self.scales_appearance.lines_color != Color32::TRANSPARENT)
+                .then_some(self.scales_appearance.lines_color);
+            chart.config_mut().price_axis.border_visible = line.is_some();
+            chart.config_mut().price_axis.border_color = line;
+            chart.chart_options.time_scale.border_visible = line.is_some();
+            chart.chart_options.time_scale.border_color = line;
+        }
         let crosshair = &mut chart.chart_options.crosshair;
         crosshair.horz_line_color = self.crosshair.color;
         crosshair.vert_line_color = self.crosshair.color;
@@ -287,11 +332,8 @@ impl ChartSettingsState {
         config.show_vertical_grid = v;
         config.show_grid = h || v;
 
-        config.navigation_buttons = match self.btns.navigation {
-            ButtonVisibility::AlwaysVisible => NavigationButtons::Always,
-            ButtonVisibility::VisibleOnMouseOver => NavigationButtons::OnHover,
-            ButtonVisibility::Hidden => NavigationButtons::Never,
-        };
+        config.navigation_buttons = navigation_buttons(self.btns.navigation);
+        config.pane_buttons = navigation_buttons(self.btns.pane);
         config.show_ohlc_info = self.status_line.show_ohlc;
         config.show_legend_badge = self.status_line.show_logo;
         config.show_last_day_change = self.status_line.show_last_day_change;
@@ -350,6 +392,10 @@ impl ChartSettingsState {
             },
         };
         config.text_color = self.scales_appearance.text_color;
+        // Values the dialog did not change keep following the theme.
+        if self.scales_appearance.font_size != axis_font_size(config) {
+            config.axis_font_size = Some(f32::from(self.scales_appearance.font_size));
+        }
         config.show_watermark = self.watermark.mode != WatermarkMode::ReplayMode;
         config.watermark_color = self.watermark.color;
         if self.watermark.mode != WatermarkMode::Custom {
@@ -372,6 +418,15 @@ impl ChartSettingsState {
         } else {
             PriceScaleMode::Normal
         };
+        // The mode belongs to the axis the main scale is drawn on, which the configured mode
+        // would otherwise override at the next frame.
+        let config = chart.config_mut();
+        if config.show_left_axis && !config.show_right_axis {
+            config.left_axis_scale_mode = mode;
+        } else {
+            config.right_axis_scale_mode = mode;
+        }
+        chart.applied_config_scale_mode = mode;
         if mode != chart.state.price_scale().options().mode {
             chart.state.price_scale_mut().reset();
             chart.state.clear_zoom_history();
@@ -583,6 +638,86 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// The saved scale font size, axis line colour and pane button visibility render on the main,
+    /// study and time axes and in a maximized pane, and read back from the chart.
+    #[test]
+    fn scale_appearance_and_pane_button_settings_render_and_read_back() {
+        use crate::studies::RSI;
+        use crate::widget::test_frames::{chart, frame, shapes};
+        for (visibility, maximized) in [
+            (ButtonVisibility::AlwaysVisible, false),
+            (ButtonVisibility::VisibleOnMouseOver, false),
+            (ButtonVisibility::VisibleOnMouseOver, true),
+            (ButtonVisibility::Hidden, false),
+            (ButtonVisibility::Hidden, true),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+            let study = chart.add_indicator(Box::new(RSI::new(14)));
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            chart.pane_layout.maximized = maximized.then(|| chart.series_pane(study).unwrap());
+            let mut settings = ChartSettingsState::from_chart(&chart);
+            settings.scales_appearance.font_size = 18;
+            settings.scales_appearance.lines_color = Color32::RED;
+            settings.btns.pane = visibility;
+            settings.apply_to_chart(&mut chart).unwrap();
+            assert_eq!(
+                ChartSettingsState::from_chart(&chart).scales_appearance,
+                settings.scales_appearance
+            );
+            assert_eq!(ChartSettingsState::from_chart(&chart).btns, settings.btns);
+            frame(&ctx, &mut chart, 0.1, Vec::new());
+            let painted = shapes(&ctx, &mut chart, 0.2, Vec::new());
+            let pane = chart.get_rendered_indicator_panes()[0].clone();
+            let plot = if maximized {
+                pane.chart_rect
+            } else {
+                chart.get_rendered_price_rect()
+            };
+            for rect in [plot, pane.chart_rect] {
+                let axis_text = painted.iter().filter_map(|shape| match shape {
+                    Shape::Text(text)
+                        if text.pos.x >= rect.right() && rect.y_range().contains(text.pos.y) =>
+                    {
+                        Some(text.galley.job.sections[0].format.font_id.size)
+                    }
+                    _ => None,
+                });
+                let sizes: Vec<_> = axis_text.collect();
+                assert!(
+                    !sizes.is_empty() && sizes.iter().all(|size| *size == 18.0),
+                    "{sizes:?}"
+                );
+                let line = painted.iter().any(|shape| {
+                    matches!(shape, Shape::LineSegment { points, stroke }
+                    if stroke.color == Color32::RED
+                        && points[0].x == points[1].x
+                        && points[0].x >= rect.right()
+                        && rect.y_range().contains(points[0].y.max(points[1].y) - 1.0))
+                });
+                assert!(line, "axis line beside {rect:?}");
+            }
+            let button = egui::Rect::from_min_size(
+                egui::Pos2::new(pane.chart_rect.right() - 22.0, pane.panel_rect.top() + 2.0),
+                Vec2::splat(20.0),
+            );
+            let menu = painted.iter().any(|shape| {
+                matches!(shape, Shape::Text(text)
+                if text.galley.text() == "..." && pane.panel_rect.contains(text.pos))
+            });
+            assert_eq!(menu, visibility == ButtonVisibility::AlwaysVisible);
+            let icon = painted
+                .iter()
+                .any(|shape| matches!(shape, Shape::Rect(rect) if button.contains_rect(rect.rect)));
+            assert_eq!(
+                icon,
+                visibility == ButtonVisibility::AlwaysVisible
+                    || (visibility == ButtonVisibility::VisibleOnMouseOver && maximized),
+                "{visibility:?}, maximized={maximized}"
+            );
         }
     }
 }

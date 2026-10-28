@@ -249,6 +249,7 @@ impl Chart {
         // A host series whose legend asked to remove it, hide it, or open its settings.
         let mut pending_series_action = None;
         let mut pending_pane_collapse = None;
+        let mut pending_pane_maximize = None;
         let current_selection = self.selection.selected_id();
         // Draws the background, grid, axis and crosshair of a pane without a visible study.
         let frame = CustomIndicator::new("", |_| Vec::new())
@@ -901,6 +902,7 @@ impl Chart {
                         && !drawing_tool_active
                         && !eraser_mode
                         && let Some(click_pos) = pane_response.interact_pointer_pos()
+                        && self.mark_at(click_pos).is_none()
                     {
                         let hit = study_at(click_pos);
                         if hit.is_some() || pending_pane_selection.is_none() {
@@ -961,7 +963,7 @@ impl Chart {
                         }
                     }
 
-                    drawing_response = Some((pane_response, chart_rect, pane_coords, id));
+                    drawing_response = Some((pane_response, chart_rect, pane_coords));
                     // Store the pane info for hit testing by platform
                     if let Some(idx) = study {
                         self.last_rendered_indicator_panes
@@ -977,7 +979,7 @@ impl Chart {
                     }
                 }
             }
-            if let Some((_, chart_rect, _, _)) = &drawing_response {
+            if let Some((_, chart_rect, _)) = &drawing_response {
                 let chart_rect = *chart_rect;
                 let painter = ui
                     .painter()
@@ -1026,9 +1028,7 @@ impl Chart {
                     }
                 }
             }
-            if !collapsed
-                && let Some((pane_response, chart_rect, pane_coords, study_id)) = drawing_response
-            {
+            if !collapsed && let Some((pane_response, chart_rect, pane_coords)) = drawing_response {
                 if pane_response.clicked() || pane_response.secondary_clicked() {
                     host_clicks.push(pane_response.clone());
                 }
@@ -1066,11 +1066,9 @@ impl Chart {
                 };
                 #[cfg(not(feature = "drawings"))]
                 let drawing_hit: Option<usize> = None;
-                if pane_response.double_clicked()
-                    && drawing_hit.is_none()
-                    && let Some(id) = study_id
-                {
-                    self.indicator_settings_request = Some(id);
+                // Study settings stay on the legend button and the context menu.
+                if pane_response.double_clicked() && drawing_hit.is_none() {
+                    pending_pane_maximize = Some(pane_id);
                 }
                 if pane_response.clicked() && drawing_hit.is_some() {
                     pending_pane_selection = None;
@@ -1164,6 +1162,12 @@ impl Chart {
         }
 
         // The panes reflow on the next frame.
+        if let Some(id) = pending_pane_maximize {
+            self.user_action(|chart| {
+                let maximized = chart.pane_layout.maximized == Some(id);
+                chart.pane_layout.maximized = (!maximized).then_some(id);
+            });
+        }
         if let Some((id, collapsed)) = pending_pane_collapse {
             self.user_action(|chart| {
                 if let Some(pane) = chart
@@ -1507,6 +1511,18 @@ mod tests {
             click(&ctx, &mut chart, restore);
             for (restored, resized) in chart.get_rendered_indicator_panes().iter().zip(&resized) {
                 assert_eq!(restored.panel_rect, resized.panel_rect);
+            }
+            // Double-clicking a pane maximizes it and again restores it, without opening settings.
+            let inside = resized[0].chart_rect.center();
+            for maximized in [true, false] {
+                for pressed in [None, Some(true), Some(false), Some(true), Some(false), None] {
+                    pointer(&ctx, &mut chart, inside, pressed);
+                }
+                assert_eq!(
+                    chart.get_rendered_indicator_panes().len(),
+                    if maximized { 1 } else { 2 }
+                );
+                assert_eq!(chart.take_indicator_settings_request(), None);
             }
             let separator = Pos2::new(main.center().x, resized[0].panel_rect.top() - 0.5);
             drag(

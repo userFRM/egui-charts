@@ -189,10 +189,18 @@ impl Chart {
     /// the series and its studies, then resolves, loads and subscribes it, in one load per
     /// `show` however many setters ran; an unchanged one does nothing, also after an error.
     /// Drawings and markers are retained separately for each symbol. A changed symbol clears
-    /// chart undo and zoom history and returns its price scale to autoscaling. Without a feed
-    /// replace the bars with [`set_data`](Self::set_data).
+    /// zoom history and returns its price scale to autoscaling. It also clears chart undo
+    /// history, unless the host makes it inside [`Self::user_action`]: then the navigation is
+    /// an undo step that restores the symbol, interval and viewport, and the steps before it
+    /// stay with their own symbol. Without a feed replace the bars with
+    /// [`set_data`](Self::set_data).
     pub fn set_symbol(&mut self, symbol: impl Into<String>) {
-        let symbol = symbol.into();
+        let keep_history = self.history.recording();
+        self.change_symbol(symbol.into(), keep_history);
+    }
+
+    /// Shows `symbol` from the next frame, keeping chart undo history when asked to.
+    pub(super) fn change_symbol(&mut self, symbol: String, keep_history: bool) {
         if symbol != self.symbol {
             self.clear_source_signals();
             self.reload_price_targets();
@@ -215,6 +223,7 @@ impl Chart {
                 self.drawings.cancel_curr_drawing();
                 self.drawings.end_drag_handle();
                 self.drawings.deselect();
+                self.detach_pending_drawings();
                 let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
                 next.0.set_sync_enabled(self.drawings.sync_enabled);
                 next.0.registry = self.drawings.registry.clone();
@@ -229,6 +238,7 @@ impl Chart {
                 next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
                 std::mem::swap(&mut self.drawings, &mut next.0);
                 std::mem::swap(&mut self.marks, &mut next.1);
+                self.attach_pending_drawings();
                 if !next.0.drawings.is_empty()
                     || !next.1.is_empty()
                     || !next
@@ -249,7 +259,9 @@ impl Chart {
                     self.symbol_markers.insert(self.symbol.clone(), next_marks);
                 }
             }
-            self.history.clear();
+            if !keep_history {
+                self.history.clear();
+            }
             self.history.edits += 1;
             self.state.price_scale_mut().reset();
             self.state.clear_zoom_history();
@@ -1418,6 +1430,33 @@ mod tests {
                 assert!((range.max - 1056.25).abs() < 1e-10, "{range:?}");
             }
         }
+    }
+
+    /// Undoing a user's symbol navigation asks the feed for the earlier symbol again, and an
+    /// answer still owed for the symbol left behind changes nothing.
+    #[test]
+    fn undone_symbol_navigation_reloads_the_symbol_and_ignores_stale_replies() {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.page().send(page(bars(6), true));
+        frames.run(&mut chart);
+        chart.user_action(|chart| chart.set_symbol("B"));
+        frames.run(&mut chart);
+        let stale = feed.page();
+        feed.calls();
+        assert!(chart.undo());
+        frames.run(&mut chart);
+        assert!(feed.calls().contains(&history("A", Timeframe::Min1, None)));
+        stale.send(page(bars(3), true));
+        feed.page().send(page(bars(6), true));
+        frames.run(&mut chart);
+        assert_eq!(chart.symbol(), "A");
+        assert_eq!(chart.bars(SeriesId::MAIN), bars(6));
+        assert!(chart.redo());
+        frames.run(&mut chart);
+        assert!(feed.calls().contains(&history("B", Timeframe::Min1, None)));
     }
 
     /// A full retention window stops paging without claiming the feed has no more history.

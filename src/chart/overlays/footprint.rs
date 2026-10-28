@@ -301,11 +301,14 @@ pub fn render_footprint(
                             }
                             _ => center - galley.size().x / 2.0,
                         };
-                        painter.galley(
-                            pos2(x, rect.center().y - galley.size().y / 2.0),
-                            galley,
-                            config.text_color,
-                        );
+                        let at = pos2(x, rect.center().y - galley.size().y / 2.0);
+                        // Text is whole or absent: a cell cut by the plot edge shows no number.
+                        if mapping
+                            .rect
+                            .contains_rect(Rect::from_min_size(at, galley.size()))
+                        {
+                            painter.galley(at, galley, config.text_color);
+                        }
                     }
                 }
             }
@@ -483,7 +486,8 @@ fn cell_color(
 /// Draws a compact per-bar statistics table under the footprint at the same x coordinates.
 /// Rows show total, bid, ask, delta, minimum and maximum intrabar delta, cumulative delta,
 /// delta percentage, and ask/bid ratio (undefined for zero volume or bid).
-/// A column too narrow for text is left empty; values are still available in [`FootprintBar`].
+/// A column too narrow for text, or cut by the plot edge, is left empty; values are still
+/// available in [`FootprintBar`].
 pub fn render_footprint_statistics(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -521,15 +525,17 @@ pub fn render_footprint_statistics(
                 |value| format!("{label} {}", volume_text(value, false)),
             );
             let galley = painter.layout_no_wrap(text, FontId::monospace(10.0), text_color);
-            if galley.size().x <= mapping.bar_spacing - 2.0 {
-                painter.galley(
-                    pos2(
-                        x - galley.size().x / 2.0,
-                        mapping.rect.top() + 12.0 * line as f32,
-                    ),
-                    galley,
-                    text_color,
-                );
+            let at = pos2(
+                x - galley.size().x / 2.0,
+                mapping.rect.top() + 12.0 * line as f32,
+            );
+            // Whole or absent, as in the cells: a column cut by the plot edge shows no number.
+            if galley.size().x <= mapping.bar_spacing - 2.0
+                && mapping
+                    .rect
+                    .contains_rect(Rect::from_min_size(at, galley.size()))
+            {
+                painter.galley(at, galley, text_color);
             }
         }
     }
@@ -701,14 +707,24 @@ mod tests {
         };
         let map = mapping(102.0);
         // Rows are 13.3 points high, or 10.5 with a top of 102.8: still tall enough for the
-        // default 10-point numbers.
-        for (minimum, auto, high, expected) in [
-            (14.0, None, 102.0, 0),
-            (10.0, None, 102.0, 8),
-            (10.0, Some(30.0), 102.0, 4),
-            (10.0, None, 102.8, 8),
+        // default 10-point numbers. The last case puts the plot edge through the first column:
+        // its numbers are left out.
+        for (minimum, auto, high, left, expected) in [
+            (14.0, None, 102.0, 0.0, 0),
+            (10.0, None, 102.0, 0.0, 8),
+            (10.0, Some(30.0), 102.0, 0.0, 4),
+            (10.0, None, 102.8, 0.0, 8),
+            (10.0, None, 102.0, 30.0, 6),
         ] {
             let map = mapping(high);
+            let plot = ChartMapping::new(
+                Rect::from_min_max(pos2(left, 0.0), rect.max),
+                240.0,
+                0,
+                0,
+                0.0,
+                map.price,
+            );
             let ctx = egui::Context::default();
             let config = FootprintConfig {
                 modes: vec![
@@ -726,7 +742,7 @@ mod tests {
                     screen_rect: Some(rect),
                     ..Default::default()
                 },
-                |ui| render_footprint(ui.painter(), &map, &bars, &flow, &config),
+                |ui| render_footprint(ui.painter(), &plot, &bars, &flow, &config),
             );
             output.textures_delta.clear();
             let texts: Vec<_> = output
@@ -740,7 +756,7 @@ mod tests {
             assert_eq!(
                 texts.len(),
                 expected,
-                "minimum {minimum}, auto {auto:?}, top {high}: {texts:?}"
+                "minimum {minimum}, auto {auto:?}, top {high}, left {left}: {texts:?}"
             );
             if auto.is_some() {
                 assert_eq!(texts, ["2 × 7", "9", "+5", "+5 / 9"]);

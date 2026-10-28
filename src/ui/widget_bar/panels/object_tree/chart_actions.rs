@@ -367,4 +367,133 @@ mod tests {
             }
         }
     }
+
+    /// The rows a host builds from the chart: the main series, the studies and the drawings.
+    fn rows(chart: &Chart) -> Vec<SourceItem> {
+        const STUDIES: usize = usize::MAX / 2;
+        let mut main = SourceItem::data_source(usize::MAX, "AAPL").with_series_id(SeriesId::MAIN);
+        main.visible = chart.is_main_series_visible();
+        let mut rows = vec![main];
+        for (id, study) in chart.indicators() {
+            let item = SourceItem::indicator(STUDIES + id.0, study.name(), egui::Color32::GRAY)
+                .with_series_id(id);
+            rows.push(item);
+        }
+        for drawing in chart.drawings().listed_drawings() {
+            let mut item = SourceItem::drawing(drawing.id, drawing.tool_type, drawing.color32());
+            item.visible = drawing.visible;
+            item.z_index = drawing.z_order;
+            rows.push(item);
+        }
+        rows
+    }
+
+    /// Applies `action` as the host's handler does: one undoable step over the current rows.
+    fn apply(tree: &mut ObjectTreePanel, chart: &mut Chart, action: ObjectTreeAction) {
+        let rows = rows(chart);
+        chart.user_action(|chart| tree.apply_to_chart(chart, &action, &rows));
+    }
+
+    #[test]
+    fn layers_names_copies_and_visibility_apply_as_undoable_steps() {
+        let mut chart = chart(&[100.0], &[200.0]);
+        let mut tree = ObjectTreePanel::new();
+        for id in 1..=3 {
+            let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+            drawing.chart_points = vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 200.0)];
+            drawing.completed = true;
+            chart.drawings_mut().add_synced_drawing(drawing);
+        }
+        let ids: Vec<_> = chart.drawings().drawings.iter().map(|d| d.id).collect();
+        let z_order = |chart: &Chart| {
+            chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.z_order)
+                .collect::<Vec<_>>()
+        };
+        let painted = |chart: &Chart| {
+            let mut order: Vec<_> = chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| (d.z_order, d.id))
+                .collect();
+            order.sort_by_key(|(z, _)| *z);
+            order.into_iter().map(|(_, id)| id).collect::<Vec<_>>()
+        };
+        // The main series hides and shows again through its row.
+        apply(
+            &mut tree,
+            &mut chart,
+            ObjectTreeAction::ToggleVisibility(usize::MAX),
+        );
+        assert!(!chart.is_main_series_visible());
+        assert!(chart.undo());
+        assert!(chart.is_main_series_visible());
+        apply(
+            &mut tree,
+            &mut chart,
+            ObjectTreeAction::ToggleVisibility(ids[0]),
+        );
+        assert!(!chart.drawings().drawings[0].visible);
+        assert!(chart.undo());
+        assert!(chart.drawings().drawings[0].visible);
+        // Tied layers still have a stable paint order. Each move crosses exactly one neighbour.
+        for drawing in &mut chart.drawings_mut().drawings {
+            drawing.z_order = 0;
+        }
+        for (action, expected) in [
+            (
+                ObjectTreeAction::MoveUp(ids[0]),
+                vec![ids[1], ids[0], ids[2]],
+            ),
+            (ObjectTreeAction::MoveDown(ids[0]), ids.clone()),
+            (
+                ObjectTreeAction::BringToFront(ids[0]),
+                vec![ids[1], ids[2], ids[0]],
+            ),
+            (ObjectTreeAction::SendToBack(ids[0]), ids.clone()),
+        ] {
+            let before = z_order(&chart);
+            apply(&mut tree, &mut chart, action);
+            let after = z_order(&chart);
+            assert!(chart.undo());
+            assert_eq!(z_order(&chart), before);
+            assert!(chart.redo());
+            assert_eq!(z_order(&chart), after);
+            assert_eq!(painted(&chart), expected);
+        }
+        apply(
+            &mut tree,
+            &mut chart,
+            ObjectTreeAction::Rename(ids[0], "Support".into()),
+        );
+        assert_eq!(
+            chart.drawings().drawings[0].label.as_deref(),
+            Some("Support")
+        );
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings[0].label, None);
+        apply(&mut tree, &mut chart, ObjectTreeAction::Duplicate(ids[0]));
+        assert_eq!(chart.drawings().drawings.len(), 4);
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings.len(), 3);
+        // A copied study keeps its inputs.
+        let study = chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
+        chart.set_indicator_inputs(study, "2 close");
+        let before: Vec<_> = chart.indicators().map(|(id, _)| id).collect();
+        apply(
+            &mut tree,
+            &mut chart,
+            ObjectTreeAction::Duplicate(usize::MAX / 2 + study.0),
+        );
+        let copy = chart
+            .indicators()
+            .map(|(id, _)| id)
+            .find(|id| !before.contains(id))
+            .unwrap();
+        assert_eq!(chart.indicator_inputs(copy), Some("2 close"));
+    }
 }

@@ -1,12 +1,21 @@
 //! Visible-range requests for host-owned annotations and events.
 
-use super::Chart;
+use super::{Chart, ChartEvent, SeriesId};
 use crate::chart::coords::ChartMapping;
 use crate::chart::renderers::RenderContext;
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{EventVisibility, MarkerZOrder, TimeScaleEvent};
 use crate::services::{Marks, MarksPage, MarksRequest};
+use chrono::{DateTime, Utc};
 use std::sync::{Arc, Mutex, PoisonError};
+
+/// Where a bar mark with a host ID was painted.
+pub(super) struct MarkHit {
+    id: String,
+    series: SeriesId,
+    time: DateTime<Utc>,
+    rect: egui::Rect,
+}
 
 pub(super) struct MarkSource {
     source: Arc<dyn Marks>,
@@ -82,7 +91,7 @@ impl Chart {
         } else {
             bar_marks
         };
-        crate::chart::renderers::render_markers(
+        let hits = crate::chart::renderers::render_markers(
             ctx,
             marks,
             self.state.shown(),
@@ -92,6 +101,59 @@ impl Chart {
                 ..*coords
             },
         );
+        self.record_mark_hits(SeriesId::MAIN, marks, hits);
+    }
+
+    /// Remembers where the marks of `series` with host IDs were painted. `hits` are the
+    /// indices into `marks` and areas that `render_markers` returned.
+    pub(super) fn record_mark_hits(
+        &self,
+        series: SeriesId,
+        marks: &[crate::model::Marker],
+        hits: Vec<(usize, egui::Rect)>,
+    ) {
+        self.mark_hits
+            .borrow_mut()
+            .extend(hits.into_iter().filter_map(|(index, rect)| {
+                let mark = &marks[index];
+                Some(MarkHit {
+                    id: mark.id.clone()?,
+                    series,
+                    time: mark.time,
+                    rect,
+                })
+            }));
+    }
+
+    /// Starts a frame's record of painted marks; clicks resolve against the previous frame's.
+    pub(super) fn begin_mark_hits(&mut self) {
+        self.clickable_marks = std::mem::take(self.mark_hits.get_mut());
+    }
+
+    /// The mark painted on top at `pos`: the last of those painted there. Drawing tools and
+    /// the eraser take the click first.
+    pub(super) fn mark_at(&self, pos: egui::Pos2) -> Option<&MarkHit> {
+        #[cfg(feature = "drawings")]
+        if self.drawings.active_tool.is_some() || self.drawings.eraser_mode {
+            return None;
+        }
+        self.clickable_marks
+            .iter()
+            .rev()
+            .find(|hit| hit.rect.contains(pos))
+    }
+
+    /// Reports a click on a mark with a host ID.
+    pub(super) fn click_mark(&mut self, pos: egui::Pos2) {
+        let Some(hit) = self.mark_at(pos) else {
+            return;
+        };
+        let event = ChartEvent::MarkClick {
+            id: hit.id.clone(),
+            series: hit.series,
+            time: hit.time,
+        };
+        self.host_events.push(event);
     }
 
     /// Connects a source of bar marks and time-axis events. Replacing or removing the source
@@ -412,5 +474,50 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A primary click on marks reports the host ID of the one painted on top, with its series
+    /// and time, and selects nothing; marks without an ID are not reported.
+    #[test]
+    fn clicking_overlapping_marks_reports_the_top_one_and_selects_nothing() {
+        let ctx = Context::default();
+        let mut chart = test_frames::chart(&[95.0], &[105.0]);
+        chart.config_mut().show_volume = false;
+        test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+        let time = chart.state.shown()[70].time;
+        let mark = |id: &str| Marker::new(time).with_pos(MarkerPos::InBar).with_id(id);
+        chart.set_markers(
+            SeriesId::MAIN,
+            vec![mark("first"), mark("top"), Marker::new(time)],
+        );
+        test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
+        test_frames::frame(&ctx, &mut chart, 0.2, vec![]);
+        let pos = chart.clickable_marks.last().unwrap().rect.center();
+        for pressed in [true, false] {
+            test_frames::frame(
+                &ctx,
+                &mut chart,
+                0.3,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }],
+            );
+        }
+        let clicks: Vec<_> = chart
+            .drain_events()
+            .filter(|event| matches!(event, ChartEvent::MarkClick { .. }))
+            .collect();
+        assert_eq!(
+            clicks,
+            [ChartEvent::MarkClick {
+                id: "top".into(),
+                series: SeriesId::MAIN,
+                time
+            }]
+        );
+        assert_eq!(chart.selected_element(), None);
     }
 }
