@@ -1753,9 +1753,9 @@ impl Chart {
                         .and_then(|link| link.footprint.as_ref())
                         .filter(|_| time_based && self.replay.is_none())
                         .map(|flow| {
-                            let first = flow.bars().keys().next();
+                            let first = flow.complete_from();
                             let candles = first.map_or(visible_data.len(), |first| {
-                                visible_data.partition_point(|bar| bar.time < *first)
+                                visible_data.partition_point(|bar| bar.time < first)
                             });
                             (flow, candles)
                         });

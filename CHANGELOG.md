@@ -367,6 +367,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- A footprint built from the feed's trades drops the contribution of each trade the bounded store evicts, summing the bar that lost trades again from those held so its delta high and low agree with them, and keeps at most 5,000 bars and 50,000 price rows, the oldest bars first. `Footprint::complete_from` gives the open of the oldest bar whose executions are all held; bars before it, cut by eviction or the budget, are drawn as candles instead of as complete footprint bars. ([#1114](https://github.com/userFRM/egui-charts/issues/1114))
 - The magnet crosshair also snaps to the visible outputs of studies on shared, independent and unlabelled scales and to the values of visible comparison series, each converted through its own scale. Hidden, missing and non-finite values are skipped, and an equal distance keeps the bar's own price first, then studies, then series. ([#1107](https://github.com/userFRM/egui-charts/issues/1107))
 
 - `ChartLayout` crosshair sync forwards the source chart's main-pane price with its time, so synchronized charts show the horizontal line and price label at the same price. Over volume or an indicator pane only the time is shared, and both clear when the pointer leaves. ([#1108](https://github.com/userFRM/egui-charts/issues/1108))
