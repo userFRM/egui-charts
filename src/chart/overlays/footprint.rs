@@ -316,7 +316,8 @@ fn cell_color(
 /// Draws a compact per-bar statistics table under the footprint at the same x coordinates.
 /// Rows show total, bid, ask, delta, minimum and maximum intrabar delta, cumulative delta,
 /// delta percentage, and ask/bid ratio (undefined for zero volume or bid).
-/// A column too narrow for text, or cut by the plot edge, is left empty; values are still available in [`FootprintBar`].
+/// A column too narrow for text, or cut by the plot edge, is left empty; values are still
+/// available in [`FootprintBar`].
 pub fn render_footprint_statistics(
     painter: &Painter,
     mapping: &ChartMapping,
