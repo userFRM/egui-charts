@@ -3340,6 +3340,55 @@ mod tests {
         }
     }
 
+    /// A starred tool shows on the strip over the chart, and a click on it arms the tool.
+    #[test]
+    fn starred_tool_shows_on_the_favorites_strip_and_arms_on_click() {
+        use eframe::App;
+        use egui_charts::drawings::DrawingToolType;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.drawing_toolbar
+            .toggle_favorite(DrawingToolType::TrendLine);
+        let frame = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+            .drop_without_applying_deltas();
+        };
+        frame(&mut app, vec![]);
+        frame(&mut app, vec![]);
+        let strip = ctx
+            .memory(|memory| memory.area_rect(egui::Id::NULL.with("floating_drawing_toolbar")))
+            .expect("a starred tool shows the strip");
+        // Past the grip, inside the first tool button.
+        let pos = egui::pos2(strip.left() + 28.0, strip.center().y);
+        frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        assert_eq!(
+            app.chart.drawings().active_tool,
+            Some(DrawingToolType::TrendLine)
+        );
+    }
+
     #[test]
     fn chart_click_selects_research_and_the_replay_start() {
         let ctx = egui::Context::default();
