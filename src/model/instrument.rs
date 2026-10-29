@@ -1,7 +1,7 @@
 //! Instrument metadata reported by a feed or a search service.
 
 use super::{Timeframe, TimezoneId};
-use chrono::{NaiveDate, NaiveTime, Weekday};
+use chrono::{NaiveDate, NaiveTime, TimeDelta, Weekday};
 use serde::{Deserialize, Serialize};
 
 /// Symbol type categories for instrument classification.
@@ -117,6 +117,11 @@ pub struct Instrument {
     pub supported_timeframes: Option<Vec<Timeframe>>,
     /// How current the feed's data is. The legend marks delayed and end-of-day data.
     pub data_status: Option<DataStatus>,
+    /// Bar intervals the feed suggests for volume profile studies, by profile length. A profile
+    /// study whose source interval follows the chart reads the shortest suggested interval that
+    /// is shorter than the chart's and serves its length. Empty, the default, suggests none, and
+    /// the studies spread each chart bar's volume over its range.
+    pub profile_resolutions: Vec<ProfileResolution>,
 }
 
 impl Instrument {
@@ -142,6 +147,7 @@ impl Instrument {
             native_timeframes: None,
             supported_timeframes: None,
             data_status: None,
+            profile_resolutions: Vec::new(),
         }
     }
 
@@ -257,6 +263,37 @@ impl Instrument {
     pub fn with_data_status(mut self, status: DataStatus) -> Self {
         self.data_status = Some(status);
         self
+    }
+
+    /// Sets [`profile_resolutions`](Self::profile_resolutions).
+    pub fn with_profile_resolutions(
+        mut self,
+        resolutions: impl IntoIterator<Item = ProfileResolution>,
+    ) -> Self {
+        self.profile_resolutions = resolutions.into_iter().collect();
+        self
+    }
+}
+
+/// A bar interval a feed suggests for volume profile studies, for profiles up to a length.
+/// Report them in [`Instrument::profile_resolutions`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ProfileResolution {
+    /// Interval of the bars whose volume the profile distributes.
+    pub timeframe: Timeframe,
+    /// The longest profile this interval serves, from the open of the profile's first chart
+    /// bar to the close of its last. `None` serves profiles of any length.
+    pub max_span: Option<TimeDelta>,
+}
+
+impl ProfileResolution {
+    /// Suggests `timeframe` for profiles up to `max_span` long, or of any length for `None`.
+    pub fn new(timeframe: Timeframe, max_span: Option<TimeDelta>) -> Self {
+        Self {
+            timeframe,
+            max_span,
+        }
     }
 }
 
