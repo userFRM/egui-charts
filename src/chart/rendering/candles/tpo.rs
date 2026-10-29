@@ -344,6 +344,7 @@ pub fn render_live_tpo(
         poc_color: painter.ctx().active_theme().ui.text,
         ..Default::default()
     };
+    let mut readable = ReadableColors::new();
     place_profiles(
         &units,
         full_data,
@@ -359,6 +360,7 @@ pub fn render_live_tpo(
                 profile,
                 &config,
                 &render_config,
+                &mut readable,
                 anchor_x,
                 column_width,
                 bullish_color,
@@ -499,6 +501,7 @@ fn draw_session_profile(
     profile: &TPOProfile,
     config: &TPOConfig,
     render_config: &TpoRenderConfig,
+    readable: &mut ReadableColors,
     anchor_x: f32,
     column_width: f32,
     bullish_color: Color32,
@@ -598,6 +601,7 @@ fn draw_session_profile(
                 price,
                 profile,
                 &chart,
+                readable,
             );
 
             if use_letters {
@@ -679,6 +683,12 @@ fn draw_session_profile(
     }
 }
 
+/// Readable colours found for one paint, keyed by the entry colour.
+///
+/// Finding one steps through up to 256 blends, and a profile repeats a handful of colours
+/// across thousands of letters. The backgrounds and text colour are fixed within a paint.
+type ReadableColors = HashMap<Color32, Color32>;
+
 /// Pick the color for one TPO entry, honouring the configured color mode.
 fn letter_color(
     render_config: &TpoRenderConfig,
@@ -687,6 +697,7 @@ fn letter_color(
     price: f64,
     profile: &TPOProfile,
     chart: &ChartColors,
+    readable: &mut ReadableColors,
 ) -> Color32 {
     let color = match config.color_mode {
         TPOColorMode::ByPeriod => render_config.color_for_period(period_idx),
@@ -707,12 +718,14 @@ fn letter_color(
             }
         }
     };
-    readable_color(
-        color,
-        chart.axis_text,
-        &[chart.bg, chart.bg.blend(render_config.value_area_color)],
-        4.5,
-    )
+    *readable.entry(color).or_insert_with(|| {
+        readable_color(
+            color,
+            chart.axis_text,
+            &[chart.bg, chart.bg.blend(render_config.value_area_color)],
+            4.5,
+        )
+    })
 }
 
 #[cfg(test)]
@@ -786,8 +799,15 @@ mod tests {
                 };
                 for period in 0..num_colors {
                     for price in [98.0, 103.0, 108.0] {
-                        let color =
-                            letter_color(&config, &model, period, price, &profile, &theme.chart);
+                        let color = letter_color(
+                            &config,
+                            &model,
+                            period,
+                            price,
+                            &profile,
+                            &theme.chart,
+                            &mut ReadableColors::new(),
+                        );
                         for bg in [
                             theme.chart.bg,
                             theme.chart.bg.blend(config.value_area_color),
@@ -854,6 +874,7 @@ mod tests {
                 &profile,
                 &config,
                 &render_config,
+                &mut ReadableColors::new(),
                 10.0,
                 20.0,
                 Color32::GREEN,
