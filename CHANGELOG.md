@@ -454,14 +454,6 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- `LocaleTimeFormatter::new` defaults to a 24-hour clock for `en-GB`, and underscore locale identifiers use the same hour cycle as their hyphenated forms, including the 12-hour clock for `en_US` and `en_CA`. Explicit clock preferences are unchanged. ([#1231](https://github.com/userFRM/egui-charts/issues/1231))
-
-- Subsecond time-axis labels show milliseconds, including fractions within minute and midnight boundaries. At intervals of one second or more, clock marks retain their labels without fractions, including bars with sub-millisecond timestamp offsets. Subsecond crosshair labels place the fraction before the AM/PM marker in both built-in formatters and the `TimeFormatter` default. ([#1227](https://github.com/userFRM/egui-charts/issues/1227), [#1228](https://github.com/userFRM/egui-charts/issues/1228))
-
-- Intraday time axes with day or longer label intervals mark the first available bar of each Monday-anchored day bucket, including weeks whose opening day has no data. Missing Sunday bars no longer hide weekly labels. ([#1219](https://github.com/userFRM/egui-charts/issues/1219))
-
-- Daily time-axis labels use the first supplied bar at or after each calendar boundary, so weekends and holidays with no bar are not labelled. Candidates sharing a bar keep its strongest boundary, and candidates beyond the last bar are omitted. ([#1234](https://github.com/userFRM/egui-charts/issues/1234))
-
 - A dashed or dotted drawing is dashed only where it can be seen. Rectangles, triangles, polylines, arrows, arcs, circles, ellipses, patterns and the other drawings restyled by their line style generated one shape per dash along their whole length, so a drawing reaching far beyond the view, after switching to a shorter interval, pasting into one or loading saved drawings, stalled the frame and could exhaust memory; the point of control line of volume profile drawings and studies did the same. The pattern stays anchored at the start of each stroke, so it does not shift as the view moves. In an 800 x 600 pane, a dashed rectangle reaching a million points beyond it paints fewer than 1,000 dashes instead of 333,000, and a frame with an anchored volume profile anchored 200,000 bars back paints about 500 shapes instead of 100,000. ([#1237](https://github.com/userFRM/egui-charts/issues/1237))
 - Body, centre-handle and multi-selection drags translate every drawing anchor in the price scale's own units. Logarithmic drags preserve the shape and positive prices in either direction. Horizontal drags leave every valid price exactly unchanged, including anchors far outside a tightly zoomed range. Single handles retain their existing pointer clamping and magnet behavior. Migration: `DrawingManager::{update_drag_handle, update_drag_handle_with_coords}` and `HandleService::update_handle` callers pass a price-translation closure after the existing Y-to-price closure; it takes `(price, from_y, to_y)` and shifts the original price in scale units, as `PriceMap::translate_price` does. ([#1255](https://github.com/userFRM/egui-charts/issues/1255))
 
@@ -1164,7 +1156,6 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
-- `TickMarkType::TimeWithMilliseconds` marks fractional-second ticks and subsecond crosshair clocks. Migration: exhaustive `TickMarkType` matches handle the new variant, and custom `TimeFormatter`s format it, as the trait default now asks for it instead of appending the fraction to a seconds clock. ([#1227](https://github.com/userFRM/egui-charts/issues/1227), [#1228](https://github.com/userFRM/egui-charts/issues/1228))
 - Session volume profiles use faint session boxes, blue and violet volume stacks, distinct value-area shading and thin red POC lines in dark and light themes. Default value-area guides, node labels and developing traces are hidden; shared trade-profile rows gain crisp gaps, theme-aware value-area opacity and a thinner POC stroke. ([#1297](https://github.com/userFRM/egui-charts/issues/1297))
 
 - `UserSettings` is `#[non_exhaustive]`, so that fields can be added without a breaking change. Migration: build `UserSettings` with `Default` and assign fields. `IndicatorDialogAction` implements `Clone` and `Debug`, and `SettingsAction` implements `Debug`.
