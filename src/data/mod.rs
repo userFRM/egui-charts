@@ -407,6 +407,10 @@ pub struct HistoryRequest {
 /// One page of history. A page without bars ends scroll-back like `end_of_history` does, unless it
 /// names where older bars continue with [`continue_before`](Self::continue_before), so a feed that
 /// pages by time window can answer an empty window such as a weekend.
+///
+/// Trades streamed through [`Sink::push_tick`] extend the page's newest bar even when they arrive
+/// first. That bar must count only trades the stream did not send, or the feed must hold those
+/// trades until the page is answered. Completed page bars replace bars built from ticks.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct HistoryPage {
@@ -723,9 +727,9 @@ pub struct FeedState {
     /// Most recent feed error, when present.
     pub last_error: Option<FeedError>,
     /// Bars and ticks dropped by validation: non-finite values, a high or low on the wrong side of
-    /// the open and close, negative volume, a tick that would overflow its bar's volume, a time
-    /// too far ahead of the feed's clock (see `Sink::set_server_time`), or pending bar slots
-    /// evicted after overflow (also reported in `last_error`).
+    /// the open and close, negative volume, a tick or history bar that would overflow its slot's
+    /// volume, a time too far ahead of the feed's clock (see `Sink::set_server_time`), or pending
+    /// bar slots evicted after overflow (also reported in `last_error`).
     pub rejected_bars: u64,
     /// Trades older than the last accepted execution or forming bar, dropped.
     pub late_ticks: u64,
