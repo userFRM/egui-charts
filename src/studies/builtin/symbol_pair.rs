@@ -487,7 +487,8 @@ mod tests {
     }
 
     /// Log returns: doubling and tripling twice then halving and thirding give returns
-    /// (ln 2, ln 2, -ln 2) and (ln 3, ln 3, -ln 3), perfectly correlated; a zero price has no log.
+    /// (ln 2, ln 2, -ln 2) and (ln 3, ln 3, -ln 3), perfectly correlated. Negative prices
+    /// remain unavailable even when their ratios are positive and their logs finite.
     #[test]
     fn log_return_correlation_needs_positive_prices() {
         let s = Some;
@@ -506,7 +507,15 @@ mod tests {
         near(
             &run("Correlation Coefficient", &inputs, &a, &zero),
             &[None; 4],
-            "non-positive",
+            "zero",
         );
+        let negative = [s(-1.0), s(-2.0), s(-4.0), s(-2.0)];
+        for (a, b) in [(&negative, &b), (&a, &negative)] {
+            near(
+                &run("Correlation Coefficient", &inputs, a, b),
+                &[None; 4],
+                "negative",
+            );
+        }
     }
 }

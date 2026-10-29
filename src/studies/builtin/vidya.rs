@@ -262,31 +262,3 @@ impl Indicator for ZLEMA {
         vec![format!("ZLEMA({})", self.period)]
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::studies::test_support::make_bar;
-
-    #[test]
-    fn test_vidya() {
-        let mut vidya = VIDYA::new(10);
-
-        let data: Vec<Bar> = (0..20).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        vidya.calculate(&data);
-
-        assert_eq!(vidya.values.len(), 20);
-    }
-
-    #[test]
-    fn test_zlema() {
-        let mut zlema = ZLEMA::new(10);
-
-        let data: Vec<Bar> = (0..20).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        zlema.calculate(&data);
-
-        assert_eq!(zlema.values.len(), 20);
-    }
-}

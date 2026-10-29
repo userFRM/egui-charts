@@ -849,13 +849,17 @@ mod tests {
     #[test]
     fn test_selection() {
         let mut interaction = DrawingInteraction::new();
-
-        assert!(interaction.sel_drawing.is_none());
-
-        interaction.sel_drawing = Some(5);
+        let mut drawing = Drawing::new(5, DrawingToolType::HorizontalLine);
+        drawing.points = vec![Pos2::new(0.0, 100.0)];
+        let drawings = [drawing];
+        let hit = Pos2::new(50.0, 102.0);
+        assert!(interaction.select_at(hit, &drawings, "1D"));
         assert_eq!(interaction.sel_drawing, Some(5));
-
+        assert!(!interaction.select_at(Pos2::new(50.0, 150.0), &drawings, "1D"));
+        assert_eq!(interaction.sel_drawing, None);
+        assert!(interaction.select_at(hit, &drawings, "1D"));
+        assert_eq!(interaction.sel_drawing, Some(5));
         interaction.deselect();
-        assert!(interaction.sel_drawing.is_none());
+        assert_eq!(interaction.sel_drawing, None);
     }
 }

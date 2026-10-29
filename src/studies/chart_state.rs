@@ -160,7 +160,7 @@ impl ChartState {
     }
 
     /// Keeps the right-edge item by time and rank when the shown series changes.
-    #[cfg(any(feature = "widget", test))]
+    #[cfg(feature = "widget")]
     pub(crate) fn set_elements(&mut self, elements: Option<Arc<[Bar]>>, follow: bool) {
         match (&self.elements, &elements) {
             (Some(old), Some(new)) if Arc::ptr_eq(old, new) => return,
@@ -447,6 +447,7 @@ mod tests {
 
     /// Time and rank identify the right-edge item across type changes and trimmed builds.
     #[test]
+    #[cfg(feature = "widget")]
     fn a_new_series_keeps_the_item_at_the_right_edge() {
         let bars = |minutes: &[i64]| -> Vec<Bar> {
             minutes

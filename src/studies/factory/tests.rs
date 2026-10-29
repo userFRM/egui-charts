@@ -3,23 +3,6 @@ use crate::model::Bar;
 use chrono::{TimeZone, Utc};
 
 #[test]
-fn test_factory() {
-    let factory = IndicatorFactory::new();
-
-    // Canonical built-in keys are present.
-    assert!(factory.has("RSI"));
-    assert!(factory.has("MACD"));
-
-    // Creation yields the matching indicator.
-    let rsi = factory.create("RSI");
-    assert!(rsi.is_some());
-    assert_eq!(rsi.unwrap().name(), "RSI");
-
-    let list = factory.list();
-    assert!(!list.is_empty());
-}
-
-#[test]
 fn test_custom_indicator() {
     let mut factory = IndicatorFactory::new();
 

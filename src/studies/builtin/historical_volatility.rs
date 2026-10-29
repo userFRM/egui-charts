@@ -207,37 +207,6 @@ mod tests {
     use crate::studies::test_support::make_bar;
 
     #[test]
-    fn test_hv_calculation() {
-        let mut hv = HistoricalVolatility::new(5);
-
-        // Prices with some volatility
-        let data = vec![
-            make_bar(100.0),
-            make_bar(102.0),
-            make_bar(99.0),
-            make_bar(103.0),
-            make_bar(98.0),
-            make_bar(105.0),
-            make_bar(101.0),
-        ];
-
-        hv.calculate(&data);
-
-        assert_eq!(hv.values.len(), 7);
-
-        // First values should be None
-        for i in 0..5 {
-            assert!(matches!(hv.values.to_rows()[i], IndicatorValue::None));
-        }
-
-        // Should have positive volatility
-        let IndicatorValue::Single(v) = hv.values.to_rows()[6] else {
-            panic!("no value: {:?}", hv.values.to_rows()[6]);
-        };
-        assert!(v > 0.0, "HV should be positive");
-    }
-
-    #[test]
     fn test_hv_no_volatility() {
         let mut hv = HistoricalVolatility::new(3);
 
@@ -275,6 +244,12 @@ mod tests {
 
         hv.calculate(&data);
 
+        for bar in 0..3 {
+            assert!(
+                matches!(hv.values().to_rows()[bar], IndicatorValue::None),
+                "warm-up bar {bar}"
+            );
+        }
         // High volatility should produce large HV values
         let rows = hv.values.to_rows();
         let IndicatorValue::Single(v) = rows.last().unwrap() else {

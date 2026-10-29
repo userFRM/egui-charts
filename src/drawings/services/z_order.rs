@@ -113,43 +113,43 @@ mod tests {
     }
 
     #[test]
-    fn test_bring_to_front() {
-        let mut drawings = vec![make_drawing(1, 0), make_drawing(2, 5), make_drawing(3, 3)];
-        ZOrderService::bring_to_front(&mut drawings, 1);
-        assert_eq!(drawings[0].z_order(), 6);
-    }
-
-    #[test]
-    fn test_send_to_back() {
-        let mut drawings = vec![make_drawing(1, 0), make_drawing(2, 5), make_drawing(3, 3)];
-        ZOrderService::send_to_back(&mut drawings, 2);
-        assert_eq!(drawings[1].z_order(), -1);
-    }
-
-    #[test]
-    fn test_bring_forward() {
-        let mut drawings = vec![make_drawing(1, 0), make_drawing(2, 5), make_drawing(3, 3)];
-        ZOrderService::bring_forward(&mut drawings, 3);
-        // Drawing 3 (z=3) should swap with drawing 2 (z=5)
-        assert_eq!(drawings[2].z_order(), 5);
-        assert_eq!(drawings[1].z_order(), 3);
-    }
-
-    #[test]
-    fn test_send_backward() {
-        let mut drawings = vec![make_drawing(1, 0), make_drawing(2, 5), make_drawing(3, 3)];
-        ZOrderService::send_backward(&mut drawings, 3);
-        // Drawing 3 (z=3) should swap with drawing 1 (z=0)
-        assert_eq!(drawings[2].z_order(), 0);
-        assert_eq!(drawings[0].z_order(), 3);
-    }
-
-    #[test]
-    fn test_sort_by_z_order() {
-        let mut drawings = vec![make_drawing(1, 5), make_drawing(2, 0), make_drawing(3, 3)];
-        ZOrderService::sort_by_z_order(&mut drawings);
-        assert_eq!(drawings[0].z_order(), 0);
-        assert_eq!(drawings[1].z_order(), 3);
-        assert_eq!(drawings[2].z_order(), 5);
+    fn ordering_operations_preserve_drawing_identity() {
+        let cases = [
+            (
+                "front",
+                ZOrderService::bring_to_front as fn(&mut [Drawing], usize),
+                1,
+                [(1, 6), (2, 5), (3, 3)],
+            ),
+            (
+                "back",
+                ZOrderService::send_to_back,
+                2,
+                [(1, 0), (2, -1), (3, 3)],
+            ),
+            (
+                "forward",
+                ZOrderService::bring_forward,
+                3,
+                [(1, 0), (2, 3), (3, 5)],
+            ),
+            (
+                "backward",
+                ZOrderService::send_backward,
+                3,
+                [(1, 3), (2, 5), (3, 0)],
+            ),
+            (
+                "sort",
+                |drawings: &mut [Drawing], _| ZOrderService::sort_by_z_order(drawings),
+                0,
+                [(1, 0), (3, 3), (2, 5)],
+            ),
+        ];
+        for (name, operation, id, expected) in cases {
+            let mut drawings = [make_drawing(1, 0), make_drawing(2, 5), make_drawing(3, 3)];
+            operation(&mut drawings, id);
+            assert_eq!(drawings.map(|d| (d.id, d.z_order())), expected, "{name}");
+        }
     }
 }
