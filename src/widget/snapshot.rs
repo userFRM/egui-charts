@@ -469,6 +469,13 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
             .panes
             .iter()
             .any(|pane| !pane.stretch.is_finite() || pane.stretch <= 0.0)
+        // Pane heights divide by the sum of the stretch factors.
+        || !snapshot
+            .panes
+            .iter()
+            .map(|pane| pane.stretch)
+            .sum::<f32>()
+            .is_finite()
         || !snapshot.bar_spacing.is_finite()
         || snapshot.bar_spacing <= 0.0
         || !snapshot.right_offset.is_finite()
