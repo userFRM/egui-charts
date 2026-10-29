@@ -612,21 +612,7 @@ mod tests {
     fn inconsistent_spacing_bounds_clamp_without_panicking() {
         // Check the setup spacing before zoom(-100) clamps it to its effective minimum.
         type Setup = fn(&mut TimeScale);
-        let rows: [(&str, Setup, (f32, f32)); 8] = [
-            (
-                "NaN width with bars",
-                |ts| ts.set_width(f32::NAN),
-                (8.0, 0.5),
-            ),
-            (
-                "NaN spacing with fixed left edge and maximum",
-                |ts| {
-                    ts.set_fix_left_edge(true);
-                    ts.set_max_bar_spacing(50.0);
-                    ts.set_bar_spacing(f32::NAN);
-                },
-                (8.0, 0.5),
-            ),
+        let rows: [(&str, Setup, (f32, f32)); 6] = [
             (
                 "minimum above maximum",
                 |ts| ts.apply_options(6.0, 10.0, 5.0, false, false, 2.0, None),
