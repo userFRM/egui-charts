@@ -308,7 +308,7 @@ Drawings,Drawings,Elliott triangle wave,done,library,src/drawings/rendering/elli
 Drawings,Drawings,Elliott triple combo wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Ellipse,done,library,src/drawings/rendering/lines.rs
 Drawings,Drawings,Eraser,done,library,src/widget/tool_interaction/selection.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
-Drawings,Drawings,Extended line,done,library,src/drawings/rendering/lines.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/mod.rs;src/drawings/domain/drawing.rs;src/drawings/persistence.rs;src/drawings/rendering/style.rs;src/config/drawing_tool/behavior.rs
+Drawings,Drawings,Extended line,done,library,src/drawings/rendering/lines.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/mod.rs;src/drawings/domain/drawing.rs;src/drawings/persistence.rs;src/drawings/rendering/style.rs
 Drawings,Drawings,Fib channel,done,library,src/drawings/rendering/fibonacci.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Fib circles,done,library,src/drawings/rendering/fibonacci.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Fib retracement,done,library,src/drawings/domain/options.rs;src/drawings/domain/drawing.rs;src/drawings/rendering/fibonacci.rs
