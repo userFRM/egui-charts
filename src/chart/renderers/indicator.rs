@@ -721,7 +721,7 @@ mod tests {
                     .collect();
                 output.drop_without_applying_deltas();
                 if points.len() == 2 {
-                    counts.push((pattern, painted.len(), (100.0 / period) as usize + 2));
+                    counts.push(painted.len());
                 } else {
                     let expected = match pattern {
                         LineStyle::Dashed => {
@@ -736,20 +736,8 @@ mod tests {
                 }
             }
         }
-        assert!(
-            counts
-                .iter()
-                .all(|(_, count, bound)| *count > 0 && count <= bound),
-            "shape counts must follow the visible length: {counts:?}"
-        );
         // Periods 10 and 20 give 10 and 5 dashes; dots include centres on the clip edge.
-        assert_eq!(
-            counts
-                .iter()
-                .map(|(_, count, _)| *count)
-                .collect::<Vec<_>>(),
-            [10, 5, 26, 13]
-        );
+        assert_eq!(counts, [10, 5, 26, 13], "shape counts must follow the visible length");
     }
 
     #[test]
