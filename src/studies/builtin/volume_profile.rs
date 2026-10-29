@@ -13,6 +13,7 @@ use crate::model::{Bar, Instrument, Timeframe};
 use crate::studies::{
     Indicator, IndicatorValues, InputKind, InputValue, StudyData, StudyDataRequest, StudyInput,
 };
+use chrono::{DateTime, Utc};
 use egui::Color32;
 use std::cell::RefCell;
 use std::ops::Range;
@@ -242,6 +243,12 @@ impl ProfileStudy {
         })
     }
 
+    /// The close of the chart bar that opens at `open`, saturating past the calendar's end.
+    fn close(&self, open: DateTime<Utc>) -> DateTime<Utc> {
+        open.checked_add_signed(self.interval.duration())
+            .unwrap_or(DateTime::<Utc>::MAX_UTC)
+    }
+
     fn data_requests(&self) -> Vec<StudyDataRequest> {
         self.finer()
             .map(|timeframe| StudyDataRequest {
@@ -282,10 +289,10 @@ impl ProfileStudy {
         let mut covered = 0;
         for i in range.clone() {
             let start = self.data[i].time;
-            let end = self.data.get(i + 1).map_or_else(
-                || start + chrono::Duration::milliseconds(self.interval.duration_ms()),
-                |next| next.time,
-            );
+            let end = self
+                .data
+                .get(i + 1)
+                .map_or_else(|| self.close(start), |next| next.time);
             let inside = &self.fine[self.fine.partition_point(|bar| bar.time < start)
                 ..self.fine.partition_point(|bar| bar.time < end)];
             if inside.is_empty() {
@@ -989,24 +996,30 @@ mod rendering_tests {
             );
             study
         };
-        let study = source(&fine, Timeframe::Min30);
-        assert_eq!(study.data_requests()[0].timeframe, Some(Timeframe::Min30));
-        let volume = study.volume_profiles(0..2)[0].profile.volume().to_vec();
         let expected = [80.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 40.0];
-        assert!(
-            volume
-                .iter()
-                .zip(expected)
-                .all(|(v, e)| (v - e).abs() < 1e-9),
-            "{volume:?}"
-        );
-        assert_eq!(
-            study.profile_inputs(0..2),
-            [ProfileInput {
-                bars: 0..2,
-                coverage: 0.5
-            }]
-        );
+        for interval in [
+            Timeframe::Hour1,
+            Timeframe::Custom(std::num::NonZeroU64::MAX),
+        ] {
+            let mut study = source(&fine, Timeframe::Min30);
+            study.set_timeframe(interval);
+            assert_eq!(study.data_requests()[0].timeframe, Some(Timeframe::Min30));
+            let volume = study.volume_profiles(0..2)[0].profile.volume().to_vec();
+            assert!(
+                volume
+                    .iter()
+                    .zip(expected)
+                    .all(|(v, e)| (v - e).abs() < 1e-9),
+                "{volume:?}"
+            );
+            assert_eq!(
+                study.profile_inputs(0..2),
+                [ProfileInput {
+                    bars: 0..2,
+                    coverage: 0.5
+                }]
+            );
+        }
 
         // A longer source interval is not requested, and another interval's reply is dropped.
         let mut longer = VolProfileFixed::new(10);
