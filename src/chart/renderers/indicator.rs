@@ -941,7 +941,7 @@ mod tests {
                 assert!(
                     painted
                         .iter()
-                        .any(|shape| matches!(shape, Shape::Mesh(mesh) if mesh.vertices.iter().all(|vertex| vertex.color.a() == 51))),
+                        .any(|shape| matches!(shape, Shape::Mesh(mesh) if mesh.vertices.iter().all(|vertex| vertex.color.a() == 16))),
                     "band between the outer lines"
                 );
             }

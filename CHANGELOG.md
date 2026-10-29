@@ -1109,7 +1109,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
-- Built-in studies use vivid blue averages and bands, warm orange signal and basis lines, clear violet oscillators, muted levels and readable yellow/gold accents. Directional defaults match the dark and light candle colours, with lighter easing histogram bars and translucent fills; default chart volume takes its candle hues from the theme at the existing opacity. Lines stay readable in both themes at their default widths; saved study colours are unchanged. ([#1298](https://github.com/userFRM/egui-charts/issues/1298))
+- Built-in studies use clear blue averages and bands, orange signal and basis lines, violet oscillators and faint band fills. Study legend backdrops fit their text and reveal button backgrounds only with the controls. MACD defaults to four sign-and-direction histogram colours, volume uses cleaner candle-colour tints, and thin ATR and Stochastic lines have more weight. Saved explicit study colours remain unchanged. ([#1298](https://github.com/userFRM/egui-charts/issues/1298))
 
 - `UserSettings` is `#[non_exhaustive]`, so that fields can be added without a breaking change. Migration: build `UserSettings` with `Default` and assign fields. `IndicatorDialogAction` implements `Clone` and `Debug`, and `SettingsAction` implements `Debug`.
 

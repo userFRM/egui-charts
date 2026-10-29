@@ -488,7 +488,7 @@ impl Default for ChartConfig {
             show_indicator_inputs: true,
             show_legend_badge: true,
             show_last_day_change: false,
-            indicator_backdrop_opacity: 1.0,
+            indicator_backdrop_opacity: 0.6,
             show_currency: true,
             show_unit: true,
             show_scale_mode_buttons: true,

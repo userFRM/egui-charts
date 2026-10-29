@@ -108,7 +108,7 @@ impl Default for StatusLineOptions {
             show_change_percent: true,
             show_volume: true,
             show_last_day_change: false,
-            indicator_background_opacity: 100,
+            indicator_background_opacity: 60,
         }
     }
 }

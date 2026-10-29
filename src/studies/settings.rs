@@ -612,6 +612,12 @@ impl Indicator for ConfiguredStudy {
             plot.color = color;
         }
     }
+    fn set_color(&mut self, line: usize, color: Color32) {
+        if let Some(plot) = self.settings.plots.get_mut(line) {
+            self.study.set_color(line, color);
+            plot.color = self.study.plot_style(line).color;
+        }
+    }
     fn line_style(&self, line: usize) -> IndicatorLineStyle {
         let mut style = self.study.line_style(line);
         if let Some(plot) = self.settings.plots.get(line) {
@@ -763,7 +769,12 @@ impl Indicator for ConfiguredStudy {
         if settings.plots.len() != edited.line_count() {
             return Err("one style is required per study plot");
         }
-        edited.set_colors(settings.plots.iter().map(|plot| plot.color).collect());
+        // Unchanged plot colours must retain any per-bar palette stored by the study.
+        for (line, plot) in settings.plots.iter().enumerate() {
+            if plot.color != edited.study.plot_style(line).color {
+                edited.study.set_color(line, plot.color);
+            }
+        }
         self.study = edited.study;
         self.source = edited.source;
         self.calculation_symbol = edited.calculation_symbol;

@@ -67,8 +67,8 @@ impl Volume {
             color_rule: VolumeColorRule::Open,
             overlay: true,
             colors: [
-                palette::UP.gamma_multiply_u8(153),
-                palette::DOWN.gamma_multiply_u8(153),
+                palette::UP.gamma_multiply_u8(191),
+                palette::DOWN.gamma_multiply_u8(191),
                 palette::BLUE,
             ],
             visible: true,
@@ -287,9 +287,9 @@ mod tests {
                     assert_eq!(
                         study.colors()[line],
                         if *is_up {
-                            Color32::from_rgba_unmultiplied(8, 153, 129, 153)
+                            Color32::from_rgba_unmultiplied(8, 153, 129, 191)
                         } else {
-                            Color32::from_rgba_unmultiplied(242, 54, 69, 153)
+                            Color32::from_rgba_unmultiplied(242, 54, 69, 191)
                         }
                     );
                     match expected[i] {

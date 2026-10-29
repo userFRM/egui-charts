@@ -319,7 +319,7 @@ impl IndicatorPane {
             axis_rect: None,
             axis_tags: Vec::new(),
             axis_options,
-            legend_backdrop: 1.0,
+            legend_backdrop: 0.6,
         }
     }
 
@@ -985,7 +985,7 @@ impl IndicatorPane {
                     )
                     .intersect(rect),
                     0.0,
-                    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 51),
+                    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 16),
                 );
             }
             return;
@@ -1657,7 +1657,7 @@ mod tests {
             assert!((bands[0].rect.bottom() - 70.0).abs() < 0.001);
             assert_eq!(
                 bands[0].fill,
-                Color32::from_rgba_unmultiplied(160, 106, 240, 51)
+                Color32::from_rgba_unmultiplied(160, 106, 240, 16)
             );
             let guides: Vec<_> = shapes
                 .iter()

@@ -129,6 +129,13 @@ impl Stochastic {
 }
 
 impl Indicator for Stochastic {
+    fn line_style(&self, _line: usize) -> crate::studies::IndicatorLineStyle {
+        crate::studies::IndicatorLineStyle {
+            width: 1.5,
+            ..Default::default()
+        }
+    }
+
     crate::studies::inputs::study_inputs!(self;
         k_period: length("K period", 1, usize::MAX),
         k_smooth: length("K smooth", 1, usize::MAX),

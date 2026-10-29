@@ -154,7 +154,7 @@ impl Indicator for BollingerBands {
         vec![crate::studies::StudyFill {
             first: crate::studies::FillBoundary::Plot(0),
             second: crate::studies::FillBoundary::Plot(2),
-            color: Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 51),
+            color: Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 16),
             inverted_color: None,
         }]
     }
