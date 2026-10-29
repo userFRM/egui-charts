@@ -209,7 +209,9 @@ impl Sink {
                 live.last_trade = Some(slot);
             }
             if live.forming.is_none_or(|last| slot >= last) {
-                live.last_close = Some(bar.close);
+                if !bar.is_whitespace() {
+                    live.last_close = Some(bar.close);
+                }
                 live.empty = false;
             }
             live.forming = live.forming.max(Some(slot));
@@ -752,6 +754,60 @@ impl Live {
                             .filter(|_| !lost);
                         input.push_book(&self.clock, ts, book.as_ref());
                     }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::merge::merge;
+    use crate::model::Timeframe;
+    use std::collections::BTreeSet;
+
+    /// Whitespace preserves the real close across drains, and cannot seed a heartbeat itself.
+    #[test]
+    fn heartbeats_after_whitespace_keep_the_last_real_close() {
+        for seeded in [true, false] {
+            let clock = BarClock::new(Timeframe::Min1);
+            let inbox = Arc::new(Inbox::default());
+            let sink = inbox.subscribe("ES".into(), clock.clone(), 10, None);
+            let start: DateTime<Utc> = "2024-03-15T10:00:00Z".parse().unwrap();
+            let mut bars = Vec::new();
+            let mut from_ticks = BTreeSet::new();
+            if seeded {
+                sink.push_bar(Bar::new(start, 109.0, 109.0, 109.0, 109.0, 1.0));
+            }
+            sink.push_bar(Bar::whitespace(start + TimeDelta::minutes(1)));
+            for minute in 2..=4 {
+                sink.advance_time(start + TimeDelta::minutes(minute) + TimeDelta::seconds(1));
+                let (_, updates) = inbox.drain().updates.pop().unwrap();
+                assert_eq!(updates.rejected, 0);
+                let merged = merge(
+                    &mut bars,
+                    &mut from_ticks,
+                    &clock,
+                    updates.bars.into_values().collect(),
+                );
+                assert_eq!(merged.rejected, 0);
+            }
+            assert_eq!(bars.len(), if seeded { 5 } else { 1 });
+            assert!(bars[usize::from(seeded)].is_whitespace());
+            if seeded {
+                for (minute, bar) in (2..=4).zip(&bars[2..]) {
+                    assert_eq!(
+                        *bar,
+                        Bar::new(
+                            start + TimeDelta::minutes(minute),
+                            109.0,
+                            109.0,
+                            109.0,
+                            109.0,
+                            0.0
+                        )
+                    );
                 }
             }
         }

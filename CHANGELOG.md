@@ -438,6 +438,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Heartbeats after a pushed whitespace bar keep the last real close for their zero-volume candles instead of creating invalid bars. Whitespace alone does not seed a heartbeat candle. ([#1248](https://github.com/userFRM/egui-charts/issues/1248))
+
 - History pages extend their bars with trades already streamed in the same slot, keeping the page open, the combined range and volume, and the latest trade close, for both chart and study series. Repeated pages do not count the trades again; an overflowing page bar is rejected and counted without discarding the trades. A feed must exclude already streamed trades from its page or answer the page before streaming trades it does not count. ([#1243](https://github.com/userFRM/egui-charts/issues/1243))
 
 - The layout menu's Autosave toggle, the trading lines' order types, take profit and stop loss labels, tick results, tooltips and Buy and Sell button, and the legend's series and study controls, quote boxes, delayed and end-of-day marks and hints and copied values go through the context's translator, so one that changes every key reaches them without recreating the chart. The volume tag on the price scale takes the applied theme's rising or falling candle colour for the last bar instead of a fixed pink, marker outlines take the theme's crosshair label text colour, and event break lines its info colour, so a custom palette reaches them; a marker's own colour is unchanged. ([#1059](https://github.com/userFRM/egui-charts/issues/1059))
