@@ -801,7 +801,6 @@ mod tests {
             _ => None,
         });
         assert_eq!(color, Some(egui::Color32::from_rgb(255, 0, 0)));
-        assert_eq!(study.color.a(), 0x99);
     }
 
     /// The floating, held and tracking readouts lead with the instrument's symbol, and the

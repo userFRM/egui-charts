@@ -150,7 +150,7 @@ Chart,Crosshair and interaction,Drag or wheel on the price axis to zoom,done,lib
 Chart,Crosshair and interaction,Drag to pan,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
 Chart,Crosshair and interaction,Go to date,done,library,src/widget/builder.rs;src/widget/pan_zoom.rs
 Chart,Crosshair and interaction,Horizontal scroll,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
-Chart,Crosshair and interaction,Hover tooltip and floating data window,partial,library,src/chart/renderers/tooltip.rs;src/widget/frame.rs;src/widget/readout.rs
+Chart,Crosshair and interaction,Hover tooltip and floating data window,partial,library,src/widget/frame.rs;src/chart/renderers/tooltip.rs;src/widget/readout.rs
 Chart,Crosshair and interaction,Kinetic scroll,partial,library,src/widget/pan_zoom.rs;src/config/kinetic.rs
 Chart,Crosshair and interaction,Magnet crosshair,partial,library,src/widget/crosshair.rs
 Chart,Crosshair and interaction,Mouse wheel zoom anchored at the cursor,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs;src/model/timescale.rs
@@ -181,10 +181,10 @@ Chart,Keyboard shortcuts,Snapshot,done,library,src/config/keyboard.rs;src/widget
 Chart,Keyboard shortcuts,Type to change symbol,done,host,src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Undo and redo,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/history.rs
 Chart,Legend and data window,Data window panel,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs
-Chart,Legend and data window,Indicator entries in the legend,done,library,src/chart/renderers/legend/mod.rs;src/widget/frame.rs;src/widget/panes.rs;src/widget/indicator_pane.rs
+Chart,Legend and data window,Indicator entries in the legend,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/widget/panes.rs;src/widget/indicator_pane.rs
 Chart,Legend and data window,Legend buttons,partial,library,src/chart/renderers/legend/mod.rs;src/widget/crosshair.rs
 Chart,Legend and data window,Status line values follow the crosshair,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs
-Chart,Legend and data window,Symbol status line,done,library,src/chart/renderers/legend/mod.rs;src/widget/frame.rs
+Chart,Legend and data window,Symbol status line,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs
 Chart,Legend and data window,Volume in the status line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/legend/mod.rs
 Chart,Multi-chart and sync,Grid layout presets,done,library,src/widget/layout.rs;src/ui/top_toolbar/toolbar.rs
 Chart,Multi-chart and sync,Multi-chart layout container,done,library,src/widget/layout.rs

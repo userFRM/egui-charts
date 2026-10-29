@@ -648,9 +648,7 @@ impl<'a> Legend<'a> {
                         };
                         let color = study_colors
                             .get(index)
-                            .copied()
-                            .unwrap_or(colors.text)
-                            .to_opaque();
+                            .map_or(colors.text, |color| color.to_opaque());
                         layout.text(text, theme.text.ohlc, color, bounds.width());
                     }
                 }
