@@ -103,6 +103,8 @@ pub enum SessionBreakType {
     Monthly,
     /// Custom session break
     Custom,
+    /// Yearly session break (end of calendar year)
+    Yearly,
 }
 
 /// Daily session provider with a configurable break hour.
