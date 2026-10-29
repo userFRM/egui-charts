@@ -346,8 +346,8 @@ impl Chart {
             self.quote = None;
             self.quote_action = None;
             self.session_quote = None;
-            self.events.clear();
-            self.time_scale_events.clear();
+            self.events = Default::default();
+            self.time_scale_events = Default::default();
             self.event_click = None;
             self.axis_hover = None;
             self.state.price_scale_mut().set_price_precision(None);

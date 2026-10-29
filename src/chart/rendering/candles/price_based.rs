@@ -368,20 +368,20 @@ pub(crate) fn element_index_at(
 }
 
 /// Maps host marker times to their element slots, excluding unloaded history.
-pub(crate) fn markers(
-    markers: &[crate::model::Marker],
+pub(crate) fn markers<'a>(
+    markers: impl IntoIterator<Item = (usize, &'a crate::model::Marker)>,
     state: &crate::studies::ChartState,
     chart_type: ChartType,
     params: &ChartTypeParams,
     older_bars_drawn: bool,
-) -> Vec<crate::model::Marker> {
+) -> Vec<(usize, crate::model::Marker)> {
     markers
-        .iter()
-        .filter_map(|marker| {
+        .into_iter()
+        .filter_map(|(key, marker)| {
             let index = element_index_at(state, chart_type, params, older_bars_drawn, marker.time)?;
             let mut marker = marker.clone();
             marker.time = state.shown()[index].time;
-            Some(marker)
+            Some((key, marker))
         })
         .collect()
 }
