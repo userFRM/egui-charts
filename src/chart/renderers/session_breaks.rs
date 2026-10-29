@@ -5,7 +5,7 @@
 //! the calendar day, or the configured trading session, changes between two
 //! consecutive bars, following the common day-separator convention on intraday
 //! charts. On daily-and-higher charts the same machinery draws the next coarser
-//! boundary (week, then month) so the dividers stay meaningful rather than
+//! boundary (week, month, then year) so the dividers stay meaningful rather than
 //! landing on every bar.
 //!
 //! Boundaries are detected with [`find_session_breaks`] over the *visible* bar
@@ -79,10 +79,15 @@ pub(crate) fn exchange_session(
         session = Some(hours);
     }
     if local_zone {
-        ExchangeSessionProvider::local(session).with_timeframe(timeframe)
+        ExchangeSessionProvider::local(session)
     } else {
-        ExchangeSessionProvider::new(zone, session).with_timeframe(timeframe)
+        ExchangeSessionProvider::new(zone, session)
     }
+    .with_calendar_zone(match timezone {
+        crate::scales::TimezoneMode::Local => None,
+        _ => Some(timezone.to_tz().unwrap_or_default()),
+    })
+    .with_timeframe(timeframe)
 }
 
 /// Shade complete bar slots only where the supplied session identifies extended hours.
@@ -156,7 +161,7 @@ impl Default for SessionBreakRenderConfig {
 /// Renderer for session-break divider lines.
 ///
 /// Draws a thin vertical line at the first bar of each new session/day/week/
-/// month within the visible range. The emphasis (width and opacity) scales with
+/// month/year within the visible range. The emphasis (width and opacity) scales with
 /// the break type so monthly boundaries read stronger than daily ones, matching
 /// the visual hierarchy on professional terminals.
 pub struct SessionBreakRenderer {
@@ -215,6 +220,7 @@ impl SessionBreakRenderer {
             SessionBreakType::Daily => (base.gamma_multiply(0.6), self.config.line_width),
             SessionBreakType::Weekly => (base.gamma_multiply(0.8), self.config.line_width * 1.5),
             SessionBreakType::Monthly => (base, self.config.line_width * 2.0),
+            SessionBreakType::Yearly => (base, self.config.line_width * 2.5),
             SessionBreakType::Custom => (base.gamma_multiply(0.7), self.config.line_width * 1.2),
         }
     }
