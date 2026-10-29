@@ -22,7 +22,7 @@ Builder API,Builder integration,Embedding with a data feed,done,host,src/widget/
 Builder API,Builder integration,Full trading-terminal UI around the chart,partial,library,src/ui/app_state.rs;src/ui/trading/mod.rs;terminal/src/lib.rs
 Builder API,Builder integration,Minimal embedding,done,library,src/widget/builder.rs;src/widget/frame.rs
 Builder API,Builder integration,Pluggable formatters and session rules,done,library,src/widget/frame.rs;src/widget/builder.rs
-Builder API,Builder integration,Public API surface and structure,done,library,src/prelude.rs;src/lib.rs;src/model/mod.rs;src/widget/mod.rs;src/widget/pan_zoom.rs;src/widget/interaction.rs;src/widget/builder.rs
+Builder API,Builder integration,Public API surface and structure,done,library,src/prelude.rs;src/lib.rs;src/model/mod.rs;src/widget/mod.rs;src/widget/pan_zoom.rs;src/widget/interaction.rs;src/widget/builder.rs;src/styles/mod.rs
 Builder API,Builder integration,Threading model for feeding data,done,library,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/feed.rs;src/data/inbox/sink.rs
 Builder API,Builder integration,WebAssembly target,done,library,src/data/mod.rs
 Builder API,Datafeed API,Bar data model,done,library,src/model/bar/bar.rs;src/widget/builder.rs;src/widget/series.rs;src/chart/rendering/candles/mod.rs

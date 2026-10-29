@@ -456,7 +456,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- `widget::ValueFormatters` is publicly exported so hosts can name, store and pass the formatters used by `Legend`. Public signatures are checked by the `unnameable_types` lint. ([#1310](https://github.com/userFRM/egui-charts/issues/1310))
+- `widget::ValueFormatters` is publicly exported so hosts can name, store and pass the formatters used by `Legend`. The drawing interaction types `widget::{CursorModeState, EraserMode, EraserConfig}` and the toolbar callback's `styles::LayoutContext` are also exported with their respective `drawings` and `ui` features. Public signatures are checked by the `unnameable_types` lint. ([#1310](https://github.com/userFRM/egui-charts/issues/1310))
 
 - `PaperAccount::new` documents its panic when `balance` is NaN or infinite under a Panics heading. ([#1318](https://github.com/userFRM/egui-charts/issues/1318))
 
