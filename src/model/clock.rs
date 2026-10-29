@@ -208,6 +208,31 @@ impl BarClock {
         if timeframe.is_trade_based() {
             return None;
         }
+        if timeframe.duration_ms() < DAY_MS
+            && let Some(session) = &self.session
+        {
+            let opens = session.opens([open]);
+            let n = opens.partition_point(|(start, _)| *start <= open);
+            if let Some((start, _)) = n.checked_sub(1).and_then(|i| opens.get(i)) {
+                let remaining = timeframe.duration_ms()
+                    - (open - *start)
+                        .num_milliseconds()
+                        .rem_euclid(timeframe.duration_ms());
+                let mut next = open.checked_add_signed(TimeDelta::milliseconds(remaining))?;
+                if let Some((start, _)) = opens.get(n) {
+                    next = next.min(*start);
+                }
+                // Touching selected windows keep the bucket open until the grid or a gap.
+                let mut end = session.session_close(open, true);
+                while let Some(close) = end.filter(|close| *close < next) {
+                    end = session.session_close(close, true);
+                    if end.is_none() {
+                        next = close;
+                    }
+                }
+                return Some(next);
+            }
+        }
         if let Timeframe::Months(count) = timeframe {
             let local = open
                 .naive_utc()
@@ -561,6 +586,42 @@ mod tests {
                 assert!(open <= at && at < next, "{at}: {open}..{next}");
                 assert_eq!(clock.bar_open(next - TimeDelta::milliseconds(1)), open);
             }
+        }
+        // Tuesday's overnight window opens before Monday's late daytime window.
+        let clock = BarClock::new(Timeframe::Hour4).with_session(
+            TimezoneId::utc(),
+            Session::new([
+                SessionWindow::new(
+                    [Mon],
+                    NaiveTime::from_hms_opt(23, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(23, 30, 0).unwrap(),
+                ),
+                SessionWindow::new(
+                    [Tue],
+                    NaiveTime::from_hms_opt(1, 0, 0).unwrap(),
+                    NaiveTime::MIN,
+                ),
+            ]),
+            false,
+        );
+        for (at, open, next) in [
+            (
+                "2024-07-08T22:00:00Z",
+                "2024-07-08T21:00:00Z",
+                "2024-07-08T23:00:00Z",
+            ),
+            (
+                "2024-07-08T23:15:00Z",
+                "2024-07-08T23:00:00Z",
+                "2024-07-09T00:00:00Z",
+            ),
+        ] {
+            assert_eq!(clock.bar_open(t(at)), t(open));
+            assert_eq!(clock.next_open(t(open)), Some(t(next)));
+            assert_eq!(
+                clock.bar_open(t(next) - TimeDelta::milliseconds(1)),
+                t(open)
+            );
         }
     }
 }

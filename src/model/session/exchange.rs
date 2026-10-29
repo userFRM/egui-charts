@@ -357,7 +357,8 @@ impl ExchangeSessionProvider {
     /// of a time to 2 days after it (the local date is within a day of the UTC one, a weekly schedule opens
     /// at least once a week, and a window open since the evening closes the next day), or local
     /// midnights without trading hours. The range extends back through closures to a valid
-    /// trading date. Days
+    /// trading date. For times on one UTC day, older opens are omitted once the containing
+    /// session and any overlapping trading date have been visited. Days
     /// far from every time are skipped, so the work follows the times, not the span between
     /// them. An open that falls in a repeated hour is its first instant, and one that falls in
     /// a skipped hour is the instant the clocks jump.
@@ -367,16 +368,17 @@ impl ExchangeSessionProvider {
     ) -> Vec<(DateTime<Utc>, NaiveDate)> {
         // UTC days since the epoch: whole numbers, cheaper per bar than calendar dates.
         let mut days: Vec<i64> = Vec::new();
-        for day in times
-            .into_iter()
-            .map(|time| time.timestamp().div_euclid(86_400))
-        {
+        let mut earliest = DateTime::<Utc>::MAX_UTC;
+        for time in times {
+            earliest = earliest.min(time);
+            let day = time.timestamp().div_euclid(86_400);
             if days.last() != Some(&day) {
                 days.push(day);
             }
         }
         days.sort_unstable();
         days.dedup();
+        let cutoff = (days.len() == 1).then_some(earliest);
         let dates = days
             .into_iter()
             .filter_map(|day| DateTime::from_timestamp(day * 86_400, 0))
@@ -406,31 +408,46 @@ impl ExchangeSessionProvider {
                 _ => ranges.push((first, last)),
             }
         }
-        let days = ranges
-            .into_iter()
-            .flat_map(|(first, last)| first.iter_days().take_while(move |date| *date <= last));
+        let days = ranges.into_iter().flat_map(|(first, last)| {
+            (0..=(last - first).num_days()).map(move |offset| last - Days::new(offset as u64))
+        });
         let midnight = |date: NaiveDate| Some((self.instant(date.and_time(NaiveTime::MIN))?, date));
-        let mut opens: Vec<_> = match &self.session {
-            None => days.filter_map(midnight).collect(),
-            Some(session) => days
-                .filter_map(|date| {
-                    if self.continuous_on(date) {
-                        return if session.holidays.contains(&date) {
-                            None
-                        } else {
-                            midnight(date)
-                        };
-                    }
-                    // All windows of one trading date share its earliest open, including split sessions.
-                    let open = self
-                        .hours_on(date)
-                        .iter()
-                        .filter_map(|hours| self.window_open(date, hours))
-                        .min()?;
-                    Some((open, date))
-                })
-                .collect(),
+        let opening = |date| match &self.session {
+            None => midnight(date),
+            Some(session) => {
+                if self.continuous_on(date) {
+                    return if session.holidays.contains(&date) {
+                        None
+                    } else {
+                        midnight(date)
+                    };
+                }
+                // All windows of one trading date share its earliest open, including split sessions.
+                let open = self
+                    .hours_on(date)
+                    .iter()
+                    .filter_map(|hours| self.window_open(date, hours))
+                    .min()?;
+                Some((open, date))
+            }
         };
+        let mut opens: Vec<_> = days
+            .scan(None, |stop, date| {
+                if stop.is_some_and(|stop| date < stop) {
+                    return None;
+                }
+                let entry = opening(date);
+                if stop.is_none()
+                    && let Some((open, _)) = entry
+                    && cutoff.is_some_and(|time| open <= time)
+                {
+                    // An overnight window may open before the preceding date's daytime window.
+                    *stop = Some(self.wall_time(open).date());
+                }
+                Some(entry)
+            })
+            .flatten()
+            .collect();
         opens.sort_by_key(|(open, _)| *open);
         opens
     }
