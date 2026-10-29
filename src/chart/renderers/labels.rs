@@ -955,7 +955,6 @@ mod tests {
                             })
                             .expect("value text inside its tag");
                         assert_eq!(text.galley.text(), "105.0000");
-                        assert_eq!(text.galley.job.sections[0].format.color, Color32::WHITE);
                     }
                     let separation = (tags[0].center().y - tags[1].center().y).abs();
                     assert!(

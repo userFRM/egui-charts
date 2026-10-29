@@ -1,5 +1,6 @@
 //! Price and time axis rendering
 
+use crate::chart::renderers::tick_decimals;
 use crate::model::PriceLine;
 use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::PriceMap;
@@ -207,7 +208,7 @@ pub(crate) fn render_study_tags(
                 transform.to_scale(value),
                 study
                     .precision()
-                    .unwrap_or_else(|| map.price_precision().unwrap_or(2)),
+                    .unwrap_or_else(|| tag_decimals(map, map.price_to_y(value))),
                 formatter,
             )
         } else {
@@ -217,11 +218,7 @@ pub(crate) fn render_study_tags(
         tags.push((
             map.price_to_y(value),
             named_label(axis.show_study_names, study.name(), label),
-            (
-                axis.study_value_color
-                    .map_or(Color32::WHITE, tag_text_color),
-                color,
-            ),
+            (tag_text_color(color), color),
         ));
     }
     // The lines of one study stack in the order of their prices.
@@ -293,7 +290,7 @@ pub fn render_price_line(
     }
     let label = transform.label(
         transform.to_scale(line.price),
-        price_map.price_precision().unwrap_or(2),
+        tag_decimals(price_map, y),
         None,
     );
     let (text_color, fill) = axis_label_colors(line);
@@ -311,6 +308,13 @@ pub(crate) fn axis_label_colors(line: &PriceLine) -> (Color32, Color32) {
             .unwrap_or_else(|| tag_text_color(fill)),
         fill,
     )
+}
+
+/// The decimals of an automatic price tag at `y`: the scale's precision, else the nearest tick
+/// label's, with at least two.
+pub(crate) fn tag_decimals(map: &PriceMap, y: f32) -> usize {
+    map.price_precision()
+        .unwrap_or_else(|| tick_decimals(map, y).max(2))
 }
 
 // Keep white text on financial colours; pale custom fills still need dark text.
@@ -439,7 +443,6 @@ pub(crate) fn render_quote_tags_with_countdown(
     use crate::scales::{PriceFormatter, VolumeFormatter};
     let mut tags = [None; 3];
     let transform = price_map.transform();
-    let decimals = price_map.price_precision().unwrap_or(2);
     let height = painter
         .layout_no_wrap("0".into(), axis_font(painter.ctx()), Color32::WHITE)
         .size()
@@ -467,7 +470,11 @@ pub(crate) fn render_quote_tags_with_countdown(
                 let price = named_label(
                     true,
                     close_name,
-                    transform.label(transform.to_scale(close.price), decimals, formatter),
+                    transform.label(
+                        transform.to_scale(close.price),
+                        tag_decimals(price_map, close_y),
+                        formatter,
+                    ),
                 );
                 countdown.map_or_else(|| price.clone(), |time| format!("{price}\n{time}"))
             },
@@ -498,7 +505,11 @@ pub(crate) fn render_quote_tags_with_countdown(
         if !allow_overlap && !rows.is_empty() && (y - close_y).abs() < separation {
             y = close_y - separation;
         }
-        let label = transform.label(transform.to_scale(quote.price), decimals, formatter);
+        let label = transform.label(
+            transform.to_scale(quote.price),
+            tag_decimals(price_map, price_map.price_to_y(quote.price)),
+            formatter,
+        );
         rows.push((1, y, format!("{} {label}", quote.qualifier), color));
     }
     if let Some((value, color)) = volume.filter(|(value, _)| value.is_finite() && *value >= 0.0) {
@@ -992,9 +1003,9 @@ mod tests {
         assert_eq!(actions, ["add", "settings"]);
     }
 
-    /// A study's last-value tag carries its name only while the axis shows study names.
+    /// Study tags keep their optional names and choose readable text for the plot fill.
     #[test]
-    fn study_value_tags_lead_with_the_study_name_when_shown() {
+    fn study_value_tags_use_plot_contrast_and_optional_names() {
         use crate::studies::{CustomIndicator, Indicator, IndicatorValue};
         let map = PriceMap::new(
             PriceTransform::default(),
@@ -1006,7 +1017,28 @@ mod tests {
         let mut study = CustomIndicator::new("Mine", |_| vec![IndicatorValue::Single(50.0)]);
         study.calculate(&[]);
         let plot = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 100.0));
-        for (show_study_names, expected) in [(false, "50.00"), (true, "Mine 50.00")] {
+        // White contrast is 1.63:1 on gold, 1.22:1 on yellow and 2.78:1 on green.
+        for (show_study_names, fill, text_color, expected) in [
+            (
+                false,
+                Color32::from_rgb(255, 193, 7),
+                Color32::BLACK,
+                "50.00",
+            ),
+            (
+                true,
+                Color32::from_rgb(255, 235, 59),
+                Color32::BLACK,
+                "Mine 50.00",
+            ),
+            (
+                true,
+                Color32::from_rgb(76, 175, 80),
+                Color32::WHITE,
+                "Mine 50.00",
+            ),
+        ] {
+            study.set_colors(vec![fill]);
             let ctx = Context::default();
             let output = ctx.run_ui(RawInput::default(), |ui| {
                 render_study_tags(
@@ -1027,12 +1059,12 @@ mod tests {
                 .shapes
                 .iter()
                 .filter_map(|shape| match &shape.shape {
-                    Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    Shape::Text(text) => Some((text.galley.text().to_owned(), text.fallback_color)),
                     _ => None,
                 })
                 .collect();
             output.drop_without_applying_deltas();
-            assert_eq!(labels, [expected]);
+            assert_eq!(labels, [(expected.to_owned(), text_color)], "{fill:?}");
         }
     }
 }
