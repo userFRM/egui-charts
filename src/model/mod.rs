@@ -19,7 +19,6 @@ pub(crate) trait PriceBuilder {
 }
 
 mod alert;
-mod annotations;
 pub mod bar;
 mod box_size;
 mod chart_style;
@@ -57,7 +56,6 @@ pub use alert::{
     Alert, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertRule, AlertSource,
     AlertStatus, NotificationSchedule, NotificationWindow,
 };
-pub use annotations::{Annotation, MarkerType};
 #[cfg(feature = "widget")]
 pub(crate) use bar::SpanCache;
 pub use bar::{Bar, BarColors, BarData};

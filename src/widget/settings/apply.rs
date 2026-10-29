@@ -235,6 +235,9 @@ impl ChartSettingsState {
         if !self.crosshair.line_width.is_finite() || self.crosshair.line_width <= 0.0 {
             return Err("Crosshair width must be above zero");
         }
+        if self.scales_appearance.font_size == 0 {
+            return Err("Font sizes must be between 1 and 256");
+        }
         if self.scales_and_lines.lock_price_to_bar_ratio
             && (!self.scales_and_lines.price_to_bar_ratio.is_finite()
                 || self.scales_and_lines.price_to_bar_ratio <= 0.0)
@@ -718,6 +721,9 @@ mod tests {
                     || (visibility == ButtonVisibility::VisibleOnMouseOver && maximized),
                 "{visibility:?}, maximized={maximized}"
             );
+            // A layout saved with this size could not be restored.
+            settings.scales_appearance.font_size = 0;
+            assert!(settings.apply_to_chart(&mut chart).is_err());
         }
     }
 }

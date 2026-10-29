@@ -56,12 +56,12 @@ impl Median {
             atr: ATR::new(atr_length),
             stepper: Stepper::default(),
             colors: [
-                palette::ORANGE,
-                palette::ACCENT,
-                palette::ACCENT,
-                palette::LIGHT_BLUE,
-                palette::GREEN,
-                palette::PURPLE,
+                palette::RED,
+                Color32::from_rgb(0, 230, 118),
+                Color32::from_rgb(224, 64, 251),
+                palette::BLUE,
+                Color32::from_rgb(0, 230, 118),
+                Color32::from_rgb(224, 64, 251),
             ],
             visible: true,
         }
@@ -76,6 +76,13 @@ impl Default for Median {
 }
 
 impl Indicator for Median {
+    fn line_style(&self, line: usize) -> crate::studies::IndicatorLineStyle {
+        crate::studies::IndicatorLineStyle {
+            width: if line == 0 { 3.0 } else { 1.0 },
+            ..Default::default()
+        }
+    }
+
     crate::studies::inputs::study_inputs!(self;
         length: length("Median length", 1, usize::MAX),
         atr_length: length("ATR length", 1, usize::MAX),
@@ -83,7 +90,7 @@ impl Indicator for Median {
     ; {});
 
     fn fills(&self) -> Vec<crate::studies::StudyFill> {
-        let alpha = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 51);
+        let alpha = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 230);
         vec![crate::studies::StudyFill {
             first: crate::studies::FillBoundary::Plot(0),
             second: crate::studies::FillBoundary::Plot(3),

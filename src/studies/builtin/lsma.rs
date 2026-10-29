@@ -49,7 +49,7 @@ impl LSMA {
             period: period.max(1),
             offset: 0,
             values: IndicatorValues::new(),
-            color: palette::GOLD, // Amber
+            color: palette::BLUE,
             visible: true,
         }
     }

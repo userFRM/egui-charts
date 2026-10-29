@@ -121,7 +121,7 @@ impl Seasonality {
             },
             projection: Vec::new(),
             colors: [palette::UP, gray, gray, gray, gray],
-            negative: palette::DOWN,
+            negative: Color32::from_rgb(242, 55, 69),
             visible: true,
         }
     }
@@ -365,11 +365,25 @@ impl Indicator for Seasonality {
         &self.projection
     }
 
+    fn projection_fill_color(&self, projection: &StudyProjection) -> Color32 {
+        let average = self
+            .values
+            .value(2, projection.bars.start as usize)
+            .unwrap_or(0.0);
+        let alpha = ((0.1 + 0.4 * (average.abs() / 10.0).min(1.0)) * 255.0).round() as u8;
+        (if average < 0.0 {
+            self.negative
+        } else {
+            self.colors[0]
+        })
+        .gamma_multiply_u8(alpha)
+    }
+
     fn plot_style(&self, line: usize) -> PlotStyle {
         PlotStyle {
             color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: 1.0,
-            pattern: if line == 1 {
+            pattern: if line < 2 {
                 LineStyle::Dashed
             } else {
                 LineStyle::Solid

@@ -33,7 +33,7 @@ impl LinearRegressionChannel {
             period: period.max(2),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
-            colors: vec![palette::ACCENT, palette::BB_MIDDLE, palette::ACCENT],
+            colors: vec![palette::ACCENT, palette::RED, palette::ACCENT],
             visible: true,
             source: PriceSource::Close,
             extend: false,

@@ -56,7 +56,11 @@ impl<const RATIO: bool, const VOLUME: bool> Default for MarketBreadth<RATIO, VOL
             wait_for_close: true,
             values: IndicatorValues::new(),
             source_values: Vec::new(),
-            color: palette::ORANGE,
+            color: if !RATIO && !VOLUME {
+                palette::LIGHT_BLUE
+            } else {
+                palette::BLUE
+            },
             visible: true,
         }
     }

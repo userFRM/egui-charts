@@ -46,7 +46,7 @@ impl RateOfChange {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::GREEN,
+            color: palette::BLUE,
             visible: true,
         }
     }

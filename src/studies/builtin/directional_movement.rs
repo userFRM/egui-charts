@@ -39,9 +39,9 @@ impl DirectionalMovement {
             stepper: Stepper::default(),
             adx: ADX::new(period),
             colors: vec![
-                palette::GREEN, // Green - +DI
-                palette::RED,   // Red - -DI
-                palette::GOLD,  // Amber - ADX
+                palette::BLUE,                 // +DI
+                palette::ORANGE,               // -DI
+                Color32::from_rgb(245, 0, 87), // ADX
             ],
             visible: true,
         }

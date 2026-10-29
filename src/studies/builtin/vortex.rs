@@ -25,8 +25,8 @@ impl VortexIndicator {
             period: period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                palette::GREEN, // Green - +VI
-                palette::RED,   // Red - -VI
+                palette::BLUE, // +VI
+                palette::PINK, // -VI
             ],
             visible: true,
         }

@@ -21,7 +21,7 @@ impl RankCorrelationIndex {
         Self {
             period: period.max(2),
             values: IndicatorValues::new(),
-            colors: vec![palette::INDIGO],
+            colors: vec![palette::BLUE],
             visible: true,
         }
     }

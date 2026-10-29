@@ -85,8 +85,8 @@ impl TradingSessions {
             values: IndicatorValues::new(),
             colors: [
                 tint(palette::BLUE),
-                tint(palette::DEEP_ORANGE),
-                tint(palette::GREEN),
+                tint(palette::WARM_ORANGE),
+                tint(palette::TEAL),
             ],
             visible: true,
         }

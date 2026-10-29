@@ -19,7 +19,7 @@
 //!
 //! # Default colour
 //!
-//! Orange from [`palette::ORANGE`](crate::studies::palette::ORANGE).
+//! Blue from [`palette::BLUE`](crate::studies::palette::BLUE).
 //!
 //! # Example
 //!
@@ -60,7 +60,7 @@ impl SMA {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::ORANGE, // Orange for MA
+            color: palette::BLUE,
             visible: true,
         }
     }

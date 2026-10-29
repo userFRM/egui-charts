@@ -8,6 +8,9 @@ pub mod focus;
 pub mod icons;
 #[cfg(feature = "ui")]
 pub(crate) mod responsive;
+#[cfg(feature = "ui")]
+#[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
+pub use responsive::LayoutContext;
 pub mod sizing;
 pub mod typography;
 

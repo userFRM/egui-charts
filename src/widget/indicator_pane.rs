@@ -136,8 +136,8 @@ impl IndicatorPaneConfig {
             y_range: Some((0.0, 100.0)),
             show_zones: true,
             zones: vec![
-                (70.0, Color32::from_gray(128), "Overbought"),
-                (30.0, Color32::from_gray(128), "Oversold"),
+                (70.0, Color32::from_rgb(120, 123, 134), "Overbought"),
+                (30.0, Color32::from_rgb(120, 123, 134), "Oversold"),
             ],
             fill_between_zones: true,
             show_legend: true,
@@ -154,7 +154,11 @@ impl IndicatorPaneConfig {
             height: indicator_sizing::MULTI_LINE_HEIGHT,
             y_range: None, // Auto-scale
             show_zones: true,
-            zones: vec![(0.0, DESIGN_TOKENS.semantic.extended.chart_text, "Zero Line")],
+            zones: vec![(
+                0.0,
+                Color32::from_rgba_unmultiplied(120, 123, 134, 128),
+                "Zero Line",
+            )],
             fill_between_zones: false,
             show_legend: true,
             show_name: true,
@@ -171,8 +175,8 @@ impl IndicatorPaneConfig {
             y_range: Some((0.0, 100.0)),
             show_zones: true,
             zones: vec![
-                (80.0, DESIGN_TOKENS.semantic.extended.bearish, "Overbought"),
-                (20.0, DESIGN_TOKENS.semantic.extended.bullish, "Oversold"),
+                (80.0, Color32::from_rgb(120, 123, 134), "Overbought"),
+                (20.0, Color32::from_rgb(120, 123, 134), "Oversold"),
             ],
             fill_between_zones: false,
             show_legend: true,
@@ -319,7 +323,7 @@ impl IndicatorPane {
             axis_rect: None,
             axis_tags: Vec::new(),
             axis_options,
-            legend_backdrop: 1.0,
+            legend_backdrop: 0.6,
         }
     }
 
@@ -342,8 +346,6 @@ impl IndicatorPane {
         let grid_color = colors.grid_line;
 
         // Get live theme colors for zones
-        let bullish = colors.candle_up;
-        let bearish = colors.candle_down;
 
         // Allocate the panel area
         let available_width = ui.available_width();
@@ -376,9 +378,7 @@ impl IndicatorPane {
         }
 
         // Draw horizontal grid lines and zone lines
-        self.draw_horizontal_lines(
-            painter, chart_rect, y_min, y_max, grid_color, bullish, bearish,
-        );
+        self.draw_horizontal_lines(painter, chart_rect, y_min, y_max, grid_color, indicator);
 
         // Draw indicator lines
         self.draw_indicator_lines(
@@ -435,8 +435,6 @@ impl IndicatorPane {
         let grid_color = colors.grid_line;
 
         // Get live theme colors for zones
-        let bullish = colors.candle_up;
-        let bearish = colors.candle_down;
 
         // Allocate the panel area
         let available_width = ui.available_width();
@@ -472,9 +470,7 @@ impl IndicatorPane {
         }
 
         // Draw horizontal grid lines and zone lines
-        self.draw_horizontal_lines(
-            painter, chart_rect, y_min, y_max, grid_color, bullish, bearish,
-        );
+        self.draw_horizontal_lines(painter, chart_rect, y_min, y_max, grid_color, indicator);
 
         // Draw vertical grid lines (aligned with main chart)
         if self.config.show_grid {
@@ -575,8 +571,6 @@ impl IndicatorPane {
         let grid_color = colors.grid_line;
 
         // Get live theme colors for zones
-        let bullish = colors.candle_up;
-        let bearish = colors.candle_down;
 
         // Allocate the panel area with click sense
         let available_width = ui.available_width();
@@ -692,8 +686,7 @@ impl IndicatorPane {
                 y_min,
                 y_max,
                 grid_color,
-                bullish,
-                bearish,
+                indicator,
             );
 
             // Draw vertical grid lines (aligned with main chart)
@@ -977,7 +970,6 @@ impl IndicatorPane {
                 .map(|z| z.0)
                 .fold(f64::NEG_INFINITY, f64::max);
             if lower < upper {
-                let color = indicator.plot_style(0).color;
                 painter.rect_filled(
                     Rect::from_two_pos(
                         Pos2::new(rect.left(), self.value_to_y(upper, rect, y_min, y_max)),
@@ -985,7 +977,7 @@ impl IndicatorPane {
                     )
                     .intersect(rect),
                     0.0,
-                    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 51),
+                    indicator.level_fill_color(),
                 );
             }
             return;
@@ -1034,8 +1026,7 @@ impl IndicatorPane {
         y_min: f64,
         y_max: f64,
         grid_color: Color32,
-        _bullish: Color32,
-        _bearish: Color32,
+        indicator: &dyn Indicator,
     ) {
         // Draw zone lines with dashed style
         if self.config.show_zones {
@@ -1054,23 +1045,22 @@ impl IndicatorPane {
 
                 let y = self.value_to_y(*level, rect, y_min, y_max);
                 if y >= rect.min.y && y <= rect.max.y {
-                    // Draw dashed line
-                    draw_dashed_line(
-                        painter,
-                        Pos2::new(rect.min.x, y),
-                        Pos2::new(rect.max.x, y),
-                        Stroke::new(1.0_f32, live_color),
-                        if self.config.fill_between_zones {
-                            4.0
-                        } else {
-                            5.0
-                        },
-                        if self.config.fill_between_zones {
-                            4.0
-                        } else {
-                            3.0
-                        },
-                    );
+                    let start = Pos2::new(rect.min.x, y);
+                    let end = Pos2::new(rect.max.x, y);
+                    let stroke = Stroke::new(1.0_f32, live_color);
+                    let pattern = indicator.level_style(*level);
+                    if pattern == crate::model::LineStyle::Solid {
+                        painter.line_segment([start, end], stroke);
+                        continue;
+                    }
+                    let (dash, gap) = if pattern == crate::model::LineStyle::Dotted {
+                        (1.0, 3.0)
+                    } else if self.config.fill_between_zones {
+                        (4.0, 4.0)
+                    } else {
+                        pattern.dash_pattern().unwrap_or((5.0, 3.0))
+                    };
+                    draw_dashed_line(painter, start, end, stroke, dash, gap);
                 }
             }
         }
@@ -1123,11 +1113,11 @@ impl IndicatorPane {
         let bars_per_grid = (min_pixel_spacing / coords.bar_spacing).ceil().max(1.0) as usize;
 
         // Round to nice intervals: 1, 2, 5, 10, 20, 50, 100, etc.
-        let bars_per_grid = Self::nice_interval(bars_per_grid);
+        let bars_per_grid = crate::chart::rendering::grid::nice_interval(bars_per_grid);
 
         // Calculate visible bar range
         let chart_width = rect.width();
-        let visible_bars = (chart_width / coords.bar_spacing).ceil() as usize + 2;
+        let visible_bars = ((chart_width / coords.bar_spacing).ceil() as usize).saturating_add(2);
 
         // Use start_idx from coords
         let start_idx = coords.start_idx;
@@ -1141,7 +1131,7 @@ impl IndicatorPane {
 
         // Draw grid lines
         for i in 0..=(visible_bars / bars_per_grid + 2) {
-            let grid_idx = first_visible_idx + i * bars_per_grid;
+            let grid_idx = first_visible_idx.saturating_add(i.saturating_mul(bars_per_grid));
 
             // Convert bar index to x coord using ChartMapping
             let x = mapping.idx_to_x(grid_idx);
@@ -1156,39 +1146,6 @@ impl IndicatorPane {
                 Stroke::new(DESIGN_TOKENS.stroke.extra_thin, grid_color),
             );
         }
-    }
-
-    /// Round to a nice interval (1, 2, 5, 10, 20, 50, 100, etc.)
-    /// Uses the same fixed breakpoints as the main chart for consistent grid alignment
-    fn nice_interval(raw: usize) -> usize {
-        if raw <= 1 {
-            return 1;
-        }
-        if raw <= 2 {
-            return 2;
-        }
-        if raw <= 5 {
-            return 5;
-        }
-        if raw <= 10 {
-            return 10;
-        }
-        if raw <= 20 {
-            return 20;
-        }
-        if raw <= 50 {
-            return 50;
-        }
-        if raw <= 100 {
-            return 100;
-        }
-        if raw <= 200 {
-            return 200;
-        }
-        if raw <= 500 {
-            return 500;
-        }
-        1000
     }
 
     fn draw_indicator_lines(
@@ -1608,6 +1565,28 @@ mod tests {
         assert_eq!(pane.calculate_y_range(&study, &(0..3)), (0.0, 100.0));
     }
 
+    /// The vertical grids of a time-independent main chart and of an indicator pane keep their
+    /// lines the minimum grid spacing apart when a tiny bar spacing shows millions of bars.
+    #[test]
+    fn vertical_grids_stay_bounded_at_any_bar_spacing() {
+        use crate::widget::test_frames::{chart, shapes};
+        let mut chart = chart(&[10.0], &[11.0]);
+        chart.set_chart_type(crate::model::ChartType::Renko);
+        chart.config_mut().grid_line_style = crate::model::LineStyle::Solid;
+        chart.add_indicator(Box::new(crate::studies::RSI::default()));
+        let mut options = chart.chart_options().clone();
+        options.time_scale.max_bar_spacing = 1e-6;
+        chart.set_chart_options(options);
+        let vertical = shapes(&egui::Context::default(), &mut chart, 0.0, Vec::new())
+            .iter()
+            .filter(|shape| {
+                matches!(shape, egui::Shape::LineSegment { points, .. } if points[0].x == points[1].x)
+            })
+            .count();
+        // An 800 point wide chart has room for ten lines 80 points apart in each grid.
+        assert!(vertical <= 30, "{vertical} vertical lines");
+    }
+
     #[test]
     fn rsi_default_paints_only_the_middle_band_and_two_guides() {
         let config = IndicatorPaneConfig::rsi();
@@ -1629,19 +1608,9 @@ mod tests {
             ));
             let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
             let study = crate::studies::RSI::default();
-            assert_eq!(study.colors(), vec![Color32::from_rgb(41, 98, 255)]);
-            assert_eq!(study.plot_style(0).width, 2.0);
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 pane.draw_zone_fills(ui.painter(), rect, 0.0, 100.0, &study);
-                pane.draw_horizontal_lines(
-                    ui.painter(),
-                    rect,
-                    0.0,
-                    100.0,
-                    Color32::BLACK,
-                    Color32::GREEN,
-                    Color32::RED,
-                );
+                pane.draw_horizontal_lines(ui.painter(), rect, 0.0, 100.0, Color32::BLACK, &study);
             });
             let shapes = std::mem::take(&mut output.shapes);
             output.drop_without_applying_deltas();
@@ -1657,13 +1626,13 @@ mod tests {
             assert!((bands[0].rect.bottom() - 70.0).abs() < 0.001);
             assert_eq!(
                 bands[0].fill,
-                Color32::from_rgba_unmultiplied(41, 98, 255, 51)
+                Color32::from_rgba_unmultiplied(126, 87, 194, 26)
             );
             let guides: Vec<_> = shapes
                 .iter()
                 .filter_map(|s| match &s.shape {
                     egui::Shape::LineSegment { points, stroke }
-                        if stroke.color == Color32::from_gray(128) =>
+                        if stroke.color == crate::studies::palette::GRAY =>
                     {
                         Some(points)
                     }

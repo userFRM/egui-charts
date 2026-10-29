@@ -25,7 +25,7 @@ impl VisibleAveragePrice {
             range: 0..usize::MAX,
             values: IndicatorValues::new(),
             mean: None,
-            color: palette::BLUE,
+            color: palette::GRAY,
             visible: true,
         }
     }
@@ -146,6 +146,7 @@ mod tests {
         }
         #[cfg(feature = "widget")]
         {
+            use crate::model::LogicalRange;
             use crate::widget::{Chart, test_frames::frame};
             let bars: Vec<_> = (0..100)
                 .map(|i| {
@@ -189,19 +190,17 @@ mod tests {
             );
             let ctx = egui::Context::default();
             frame(&ctx, &mut chart, 0.0, Vec::new());
-            chart.set_visible_bars(20);
-            for (time, start) in [(1.0, 10), (2.0, 50)] {
-                chart.set_start_idx(start);
+            // Edges halfway through bars 10 and 30 show bars 10 to 30, whose closes average 20.
+            for (time, left, expected) in [(1.0, 10.5, 20.0), (2.0, 50.5, 60.0)] {
+                assert!(chart.set_visible_logical_range(LogicalRange::new(left, left + 19.0)));
                 frame(&ctx, &mut chart, time, Vec::new());
-                let (start, end) = chart.state().visible_range();
-                let expected = (start + end - 1) as f64 / 2.0;
                 for id in [average, consumer] {
                     let study = chart
                         .indicators()
                         .find(|(candidate, _)| *candidate == id)
                         .unwrap()
                         .1;
-                    assert!((study.values().value(0, start).unwrap() - expected).abs() < 1e-10);
+                    assert!((study.values().value(0, 0).unwrap() - expected).abs() < 1e-10);
                 }
             }
         }

@@ -257,6 +257,10 @@ impl Indicator for CandlestickPatterns {
         }
     }
 
+    fn plot_label_colors(&self, line: usize) -> Option<(Color32, Color32)> {
+        self.colors.get(line).map(|&color| (color, Color32::WHITE))
+    }
+
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
         let side = [Bullish, Bearish, Neutral].get(line).copied()?;
         let bearish = self.found(bar, Bearish).next().is_some();

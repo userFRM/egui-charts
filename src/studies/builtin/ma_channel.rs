@@ -23,9 +23,9 @@ impl MAChannel {
             offset_percent: clamp_param(offset_percent, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             colors: vec![
-                palette::GREEN, // Green - Upper
-                palette::BLUE,  // Blue - Middle
-                palette::RED,   // Red - Lower
+                palette::LIGHT_BLUE, // Upper
+                palette::ORANGE,     // Middle
+                palette::ORANGE,     // Lower
             ],
             visible: true,
         }

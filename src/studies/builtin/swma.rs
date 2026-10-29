@@ -49,7 +49,7 @@ impl SWMA {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: palette::PURPLE, // Purple
+            color: palette::BLUE,
             visible: true,
         }
     }
