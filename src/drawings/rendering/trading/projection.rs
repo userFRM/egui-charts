@@ -232,7 +232,7 @@ mod tests {
                 ChartPoint::new(2.0, price),
             ];
             let ctx = egui::Context::default();
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 drawing.draw_projection_labels(
                     ui.painter(),
                     Pos2::new(100.0, 300.0),
@@ -243,6 +243,7 @@ mod tests {
                     Color32::BLUE,
                 );
             });
+            output.textures_delta.clear();
             let texts: Vec<_> = output
                 .shapes
                 .iter()
