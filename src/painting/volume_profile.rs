@@ -128,9 +128,10 @@ fn draw_volume_profile_lines(
     val_y: f32,
     show_value_area_lines: bool,
 ) {
-    let font = egui::FontId::proportional(painter.ctx().active_theme().text.tiny);
+    let theme = painter.ctx().active_theme();
+    let font = egui::FontId::proportional(theme.text.tiny);
 
-    let poc_color = Color32::from_rgb(15, 15, 15);
+    let poc_color = theme.ui.text;
     painter.add(egui::Shape::line(
         vec![Pos2::new(rect.min.x, poc_y), Pos2::new(rect.max.x, poc_y)],
         Stroke::new(stroke::HAIRLINE, poc_color),
@@ -156,7 +157,7 @@ fn draw_volume_profile_lines(
         egui::Align2::CENTER_CENTER,
         "POC",
         font.clone(),
-        Color32::BLACK,
+        theme.chart.bg,
     );
 
     if !show_value_area_lines {
