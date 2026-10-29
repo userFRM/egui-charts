@@ -1,6 +1,6 @@
 //! Price and time axis menus used by the chart's turnkey menus.
 
-use super::context_menu::{ContextMenuAction, MenuEntry, MenuItem, POINTER_GAP, show_menu};
+use super::{ContextMenuAction, MenuEntry, MenuItem, POINTER_GAP, show_menu};
 use crate::icons::icons;
 use crate::scales::{PriceScaleMode, TimezoneMode};
 use crate::theme::ThemeExt;
@@ -221,7 +221,7 @@ impl AxisMenus {
             };
             !self.hidden.contains(&control)
         });
-        super::context_menu::trim_separators(&mut entries);
+        super::trim_separators(&mut entries);
         if entries.is_empty() {
             self.close();
             return None;
