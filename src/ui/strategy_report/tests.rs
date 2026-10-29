@@ -63,6 +63,16 @@ fn report_replacement_selection_export_and_clear() {
             h.state().1,
             [StrategyReportAction::ExportCsv(report.trades_csv())]
         );
+        h.get_by_role_and_label(Role::Button, "Export summary CSV")
+            .click();
+        h.run();
+        assert_eq!(
+            h.state().1.last(),
+            Some(&StrategyReportAction::ExportSummaryCsv {
+                filename: "First-run-FIRST-summary.csv".into(),
+                content: report.summary_csv(&report.performance(), &report.comparison(&[])),
+            })
+        );
         h.get_by_role_and_label(Role::Tab, "List of trades").click();
         h.run();
         h.get_by_label("0.00001234");
