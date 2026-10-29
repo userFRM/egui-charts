@@ -67,9 +67,10 @@ impl OrderBookView {
 
 /// Draws the profile of `queue`'s orders, or of `book` when the feed sends aggregate depth only,
 /// as bars growing left from the right edge of `mapping.rect`, longest 60 points, `tick` high at
-/// each price. Bids use `colors[0]` and asks `colors[1]`, unless the largest order at the price
-/// reaches a tier of the view. Fails, drawing nothing, when the view needs individual orders and
-/// the feed has none, so that the host can say the filtering is unavailable.
+/// each price, centred on it. Bids use `colors[0]` and asks `colors[1]`, unless the largest
+/// order at the price reaches a tier of the view. Fails, drawing nothing, when the view needs
+/// individual orders and the feed has none, so that the host can say the filtering is
+/// unavailable.
 pub fn render_book_profile(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -125,7 +126,10 @@ pub fn render_book_profile(
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
     for (price, bid, size, tier) in bars {
         let color = tier.map_or(colors[usize::from(!bid)], |tier| view.tier_color(tier));
-        let (y0, y1) = (mapping.price_to_y(price), mapping.price_to_y(price + tick));
+        let (y0, y1) = (
+            mapping.price_to_y(price - tick * 0.5),
+            mapping.price_to_y(price + tick * 0.5),
+        );
         let rect = Rect::from_min_max(
             pos2(
                 mapping.rect.right() - 60.0 * (size / max) as f32,

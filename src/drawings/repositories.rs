@@ -2,7 +2,9 @@
 //!
 //! [`DrawingToolsRepository`] supplies category sections and case-insensitive tool
 //! search for host pickers. [`InMemoryToolsRepository`] reads the crate's static
-//! category definitions.
+//! toolbar category definitions in [`categories`], rather than the finer
+//! command-list groups of [`DrawingToolType::categories`]. Measure is a standalone
+//! toolbar button, so it is not included in this repository's category search.
 
 use crate::drawings::DrawingToolType;
 use crate::drawings::categories;
@@ -45,16 +47,10 @@ impl Default for InMemoryToolsRepository {
 
 impl DrawingToolsRepository for InMemoryToolsRepository {
     fn get_all_categories(&self) -> Vec<String> {
-        // Exclude special categories (Favorites/Recent) which are dynamic
-        vec![
-            "Lines".to_string(),
-            "Fibonacci".to_string(),
-            "Patterns".to_string(),
-            "Projection".to_string(),
-            "Brushes/Shapes".to_string(),
-            "Text/Annotations".to_string(),
-            "Icons/Emojis".to_string(),
-        ]
+        categories::CATEGORY_ORDER
+            .iter()
+            .map(|category| category.to_string())
+            .collect()
     }
 
     fn get_category_tools(&self, category: &str) -> Vec<(String, Vec<DrawingToolType>)> {
@@ -98,12 +94,16 @@ impl InMemoryToolsRepository {
 mod tests {
     use super::*;
 
-    /// A tool reports the category it is listed under, and a case-insensitive
-    /// search on part of its name finds it.
+    /// Toolbar categories include cursors, unknown names have no fallback, and
+    /// a case-insensitive search finds tools in their listed category.
     #[test]
     fn tools_are_found_by_category_and_search() {
         let repo = InMemoryToolsRepository::new();
+        assert_eq!(repo.get_all_categories(), categories::CATEGORY_ORDER);
+        assert_eq!(categories::get_category_default_tool("Nonsense"), None);
+        assert!(DrawingToolType::by_category("Nonsense").is_empty());
         let cases = [
+            (DrawingToolType::CrossCursor, "Cursors", "Cursors", "cross"),
             (DrawingToolType::TrendLine, "Lines", "Lines", "trend"),
             (
                 DrawingToolType::FibonacciRetracement,

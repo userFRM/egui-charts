@@ -73,7 +73,7 @@ impl Indicator for AnchoredVWAP {
                 let price = bar.typical_price();
                 state.1 += price * bar.volume;
                 state.2 += bar.volume;
-                IndicatorValue::Single(if state.2.abs() < 1e-10 {
+                IndicatorValue::Single(if state.2 == 0.0 {
                     price
                 } else {
                     state.1 / state.2

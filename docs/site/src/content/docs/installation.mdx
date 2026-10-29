@@ -75,6 +75,7 @@ with `version = "0.2"` and use [the release documentation](https://docs.rs/egui-
 | `widget` | The egui chart, configuration and theme system |
 | `studies` | Built-in studies and `IndicatorFactory`; also works headlessly |
 | `alert-engine` | `services::AlertEngine`, which evaluates alerts on the bars the host feeds it; also works headlessly |
+| `strategies` | `strategies::Backtest`, which runs a `strategies::Strategy` over bars and returns a `StrategyReport`; also works headlessly |
 | `drawings` | Drawing tools, interaction, undo and persistence; enables `widget` |
 | `icons` | Embedded SVG icons; enables `widget` |
 | `ui` | Toolbars, panels, dialogs, `ui_kit` and extension helpers; enables `icons`, `studies` and `drawings` |
