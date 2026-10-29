@@ -649,6 +649,7 @@ mod tests {
     use crate::services::AccountEvent;
     use crate::ui::trading::TradingFormatter;
     use crate::ui::trading::tests::Recorder;
+    use crate::ui::trading::widgets::side_name;
     use crate::ui_kit::notifications::Toasts;
     use crate::widget::settings::TradingSettings;
     use std::sync::Arc;
@@ -1359,7 +1360,7 @@ mod tests {
                         let y = chart.get_chart_mapping().price_to_y(94.0);
                         let at = output.shapes.iter().find_map(|shape| match &shape.shape {
                             egui::Shape::Text(text)
-                                if text.galley.text() == ticket::side_name(side)
+                                if text.galley.text() == side_name(side)
                                     && (y - 12.0..y + 50.0).contains(&text.pos.y) =>
                             {
                                 Some(text.pos + text.galley.size() / 2.0)

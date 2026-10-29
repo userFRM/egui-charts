@@ -9,10 +9,11 @@ use chrono::{DateTime, Utc};
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 
-use super::account_panel::{HISTORY_LIMIT, grouped};
-use super::ticket::{
-    Action, Market, chevron, field, muted, number, order_quantity, side_color, side_fill,
-    side_name, text, time_in_force_menu,
+use super::account_panel::HISTORY_LIMIT;
+use super::ticket::{Action, Market, order_quantity};
+use super::widgets::{
+    chevron, field, grouped, muted, number, side_color, side_fill, side_name, text,
+    time_in_force_menu,
 };
 use crate::chart::{TradingLineAction, decimals, to_step};
 use crate::icons::icons;

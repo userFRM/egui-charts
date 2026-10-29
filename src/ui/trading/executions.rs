@@ -21,7 +21,7 @@ const LENGTH: f32 = 16.0;
 /// The space between a bar and its marks, and between a mark and its label.
 const GAP: f32 = 4.0;
 
-use super::ticket::{side_color, side_name};
+use super::widgets::{side_color, side_name};
 
 /// Draws `fills` on the price pane of `chart`. The fills of one side in one bar form one mark: an
 /// arrow pointing up in the buy colour just under the bar's low, or down in the sell colour just

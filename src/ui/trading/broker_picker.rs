@@ -5,7 +5,7 @@ use egui::{
     Align, Align2, Color32, Context, FontId, Layout, Rect, RichText, Sense, Stroke, Ui, vec2,
 };
 
-use super::account_panel::semibold;
+use super::widgets::semibold;
 use crate::icons::icons;
 use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;

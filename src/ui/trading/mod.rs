@@ -10,6 +10,7 @@ mod executions;
 mod format;
 mod ticket;
 mod view;
+mod widgets;
 
 pub use account_panel::{AccountPanel, AccountPanelAction};
 pub use broker_picker::{BrokerFact, BrokerPicker, BrokerPickerAction, BrokerTile};

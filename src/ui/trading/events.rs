@@ -1,7 +1,8 @@
 //! The broker's pushes and answers: applying them to the controller, and the notifications and
 //! execution sound they raise.
 
-use super::{Trading, ticket, valid};
+use super::widgets::side_name;
+use super::{Trading, valid};
 use crate::chart::TradingLineAction;
 use crate::data::FeedError;
 use crate::model::{OrderId, OrderPreview, OrderRequest, OrderStatus, OrderType, TradingRules};
@@ -237,7 +238,7 @@ impl Trading {
             }
             AccountEvent::Execution(fill) => {
                 let order = self.account_panel.fills.orders.get(&fill.order);
-                let mut text = format!("{} {}", ticket::side_name(fill.side), fill.quantity);
+                let mut text = format!("{} {}", side_name(fill.side), fill.quantity);
                 if let Some(order) = order {
                     text += &format!(" {}", order.symbol);
                 }
@@ -314,7 +315,7 @@ fn order_toast(
     decimals: usize,
     executed: bool,
 ) -> Toast {
-    let side = ticket::side_name(request.side);
+    let side = side_name(request.side);
     let mut toast = Toast::new(
         if executed {
             ToastKind::Success

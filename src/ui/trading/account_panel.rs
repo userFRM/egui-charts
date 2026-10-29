@@ -8,12 +8,12 @@ use chrono::{DateTime, Utc};
 use egui::{Align, Align2, Color32, FontId, Layout, Rect, RichText, Sense, Stroke, Ui, vec2};
 
 use super::Trading;
+use super::widgets::{grouped, semibold, side_color};
 use crate::chart::TradingLineAction;
 use crate::icons::icons;
 use crate::model::{
     BalanceChange, JournalEntry, Order, OrderRequest, OrderSide, OrderStatus, OrderType, Position,
 };
-use crate::scales::{CurrencyFormatter, PriceFormatter};
 use crate::services::AccountEvent;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::ButtonSize;
@@ -238,27 +238,6 @@ struct Row {
 enum RowAction {
     Position(Position),
     Order(Order),
-}
-
-/// `value` with thousands separators and `decimals` decimals, signed with `sign`.
-pub(super) fn grouped(value: f64, decimals: usize, sign: bool) -> String {
-    if !value.is_finite() {
-        return "-".to_owned();
-    }
-    let magnitude = CurrencyFormatter::new("", decimals).format(value.abs());
-    let shown = magnitude.bytes().any(|b| matches!(b, b'1'..=b'9'));
-    match (shown, value < 0.0, sign) {
-        (true, true, _) => format!("-{magnitude}"),
-        (true, false, true) => format!("+{magnitude}"),
-        _ => magnitude,
-    }
-}
-
-/// `text` at `size` in the bundled face's semibold weight.
-pub(super) fn semibold(text: &str, size: f32, color: Color32) -> egui::text::LayoutJob {
-    let mut format = egui::TextFormat::simple(FontId::proportional(size), color);
-    format.coords.push("wght", 600.0);
-    egui::text::LayoutJob::single_section(text.to_owned(), format)
 }
 
 /// The rising colour for a gain, the falling colour for a loss, and the text colour when `text`
@@ -651,7 +630,7 @@ impl Trading {
         };
         let side = |side: OrderSide, text: &str| Cell {
             text: text.to_owned(),
-            color: super::ticket::side_color(&theme, side),
+            color: side_color(&theme, side),
             unit: String::new(),
             symbol: false,
         };
@@ -1384,21 +1363,6 @@ mod tests {
                 reader.records().next().unwrap().unwrap().iter().next_back(),
                 Some("line\rbreak")
             );
-        }
-    }
-
-    #[test]
-    fn figures_group_thousands_and_sign_only_what_they_show() {
-        for (value, sign, text) in [
-            (-123_456.0, false, "-123,456.00"),
-            (-24_932.084, true, "-24,932.08"),
-            (100_050.68, true, "+100,050.68"),
-            (1_234_567.891, false, "1,234,567.89"),
-            (-0.004, true, "0.00"),
-            (0.0, true, "0.00"),
-            (f64::NAN, false, "-"),
-        ] {
-            assert_eq!(grouped(value, 2, sign), text, "{value}");
         }
     }
 }

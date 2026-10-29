@@ -3,21 +3,24 @@
 
 use crate::localization as l10n;
 use egui::{
-    Align, Align2, Color32, FontId, Layout, Rect, Response, RichText, Role, Sense, Stroke,
-    StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2,
+    Align, Align2, Color32, FontId, Layout, Rect, RichText, Role, Sense, Stroke, Ui, WidgetInfo,
+    pos2, vec2,
 };
 use serde::{Deserialize, Serialize};
 
-use super::account_panel::grouped;
 use super::dom::Ladder;
 use super::format::{Numbers, TradingFormatter};
+use super::widgets::{
+    chevron, dropdown, field, grouped, hit, info, muted, number, side_color, side_fill, side_name,
+    swap, text, time_in_force_menu, title, toggle, track,
+};
 use crate::chart::{TradingLineAction, decimals, to_step};
 use crate::icons::icons;
 use crate::model::{
     Capabilities, Order, OrderBook, OrderId, OrderPreview, OrderRequest, OrderSide, OrderType,
     Position, Tick, TimeInForce, TradingRules,
 };
-use crate::theme::{Theme, ThemeExt};
+use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
 
@@ -1406,33 +1409,6 @@ pub(super) fn order_quantity(quantity: f64, rules: &TradingRules) -> Result<f64,
     Ok(quantity)
 }
 
-pub(super) use crate::theme::trading_side_color as side_color;
-
-/// The fill of a button that places an order on a side, under white text.
-pub(super) fn side_fill(theme: &Theme, side: OrderSide) -> Color32 {
-    match side {
-        OrderSide::Buy => theme.ui.accent,
-        OrderSide::Sell => theme.ui.danger_bg,
-    }
-}
-
-/// The fill of a switch's track and of its chosen segment.
-fn track(ui: &Ui) -> (Color32, Color32) {
-    let colors = ui.active_theme().ui;
-    if ui.visuals().dark_mode {
-        (colors.panel_bg_floating, colors.panel_bg_secondary)
-    } else {
-        (colors.panel_bg_secondary, colors.panel_bg)
-    }
-}
-
-pub(super) fn side_name(side: OrderSide) -> &'static str {
-    match side {
-        OrderSide::Buy => "Buy",
-        OrderSide::Sell => "Sell",
-    }
-}
-
 /// An order as the send button and the confirmation write it: "1 ES @ 4,000.25 LIMIT".
 fn summary(request: &OrderRequest, numbers: &Numbers<'_>, quantity_decimals: usize) -> String {
     let at = |price: f64, kind: &str| format!(" @ {} {kind}", numbers.price(price));
@@ -1493,283 +1469,6 @@ pub(super) fn preview_message(
         text.push_str(&format!("\n{warning}"));
     }
     text
-}
-
-/// The name of a time in force in the ticket's menu.
-fn time_in_force_name(time_in_force: TimeInForce) -> &'static str {
-    match time_in_force {
-        TimeInForce::Day => "Day",
-        TimeInForce::Week => "Week",
-        TimeInForce::Month => "Month",
-        TimeInForce::GoodTillCancelled => "Good till cancelled",
-        TimeInForce::ImmediateOrCancel => "Immediate or cancel",
-        TimeInForce::FillOrKill => "Fill or kill",
-    }
-}
-
-/// A full-width menu of the times in force the broker accepts for the symbol.
-pub(super) fn time_in_force_menu(
-    ui: &mut Ui,
-    id: &str,
-    value: &mut TimeInForce,
-    rules: &TradingRules,
-) {
-    let theme = ui.active_theme();
-    ui.spacing_mut().interact_size.y = 36.0;
-    // Drawn like the ticket's fields: the panel's fill in a rounded outline.
-    let widgets = &mut ui.visuals_mut().widgets;
-    for state in [
-        &mut widgets.inactive,
-        &mut widgets.hovered,
-        &mut widgets.active,
-    ] {
-        state.weak_bg_fill = theme.ui.panel_bg;
-        state.corner_radius = 6.into();
-    }
-    widgets.inactive.bg_stroke = Stroke::new(1.0, theme.ui.border_control);
-    egui::ComboBox::from_id_salt(id)
-        .width(ui.available_width())
-        .selected_text(l10n::text(ui.ctx(), time_in_force_name(*value)))
-        .icon(|ui, rect, visuals, open| {
-            chevron(ui, rect.center(), visuals.fg_stroke.color, open);
-        })
-        .show_ui(ui, |ui| {
-            for option in &rules.time_in_force {
-                ui.selectable_value(
-                    value,
-                    *option,
-                    l10n::text(ui.ctx(), time_in_force_name(*option)),
-                );
-            }
-        });
-}
-
-/// A click area over `rect`, announced as `label`.
-fn hit(
-    ui: &mut Ui,
-    rect: Rect,
-    id: impl std::hash::Hash + std::fmt::Debug,
-    label: &str,
-    selected: Option<bool>,
-) -> Response {
-    let response = ui.interact(rect, ui.make_persistent_id(id), Sense::click());
-    let translated_label = l10n::text(ui.ctx(), label);
-    response.widget_info(|| match selected {
-        Some(selected) => {
-            WidgetInfo::selected(Role::Button, ui.is_enabled(), selected, &translated_label)
-        }
-        None => WidgetInfo::labeled(Role::Button, ui.is_enabled(), &translated_label),
-    });
-    response
-}
-
-pub(super) fn text(ui: &Ui, at: egui::Pos2, align: Align2, text: &str, size: f32, color: Color32) {
-    ui.painter().text(
-        at,
-        align,
-        l10n::text(ui.ctx(), text),
-        FontId::proportional(size),
-        color,
-    );
-}
-
-pub(super) fn muted(ui: &mut Ui, text: &str) {
-    let color = ui.active_theme().ui.text_muted;
-    ui.label(
-        RichText::new(l10n::text(ui.ctx(), text))
-            .color(color)
-            .size(13.0),
-    );
-}
-
-fn title(ui: &mut Ui, text: &str) {
-    ui.label(
-        RichText::new(l10n::text(ui.ctx(), text))
-            .strong()
-            .size(15.0),
-    );
-}
-
-/// A label with a small chevron that opens a menu.
-fn dropdown(ui: &mut Ui, label: String) -> Response {
-    let color = ui.active_theme().ui.text_muted;
-    let galley = ui.painter().layout_no_wrap(
-        l10n::text(ui.ctx(), label),
-        FontId::proportional(13.0),
-        color,
-    );
-    let size = vec2(galley.size().x + 16.0, galley.size().y.max(18.0));
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    response.widget_info(|| WidgetInfo::labeled(Role::ComboBox, ui.is_enabled(), galley.text()));
-    let color = if response.hovered() {
-        ui.active_theme().ui.text
-    } else {
-        color
-    };
-    let at = rect.left_center() - vec2(0.0, galley.size().y / 2.0);
-    ui.painter().galley(at, galley, color);
-    chevron(ui, pos2(rect.right() - 5.0, rect.center().y), color, false);
-    response
-}
-
-/// A chevron pointing up or down.
-pub(super) fn chevron(ui: &Ui, center: egui::Pos2, color: Color32, up: bool) {
-    let rise = if up { -2.0 } else { 2.0 };
-    ui.painter().line(
-        vec![
-            center + vec2(-4.0, -rise),
-            center + vec2(0.0, rise),
-            center + vec2(4.0, -rise),
-        ],
-        Stroke::new(1.3, color),
-    );
-}
-
-/// A bordered input box the width of `ui`, laid out from the left.
-pub(super) fn field(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    let theme = ui.active_theme();
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
-    let stroke = Stroke::new(1.0, theme.ui.border_control);
-    ui.painter()
-        .rect(rect, 6.0, theme.ui.panel_bg, stroke, StrokeKind::Inside);
-    let inner = rect.shrink2(vec2(10.0, 0.0));
-    let layout = Layout::left_to_right(Align::Center);
-    ui.scope_builder(UiBuilder::new().max_rect(inner).layout(layout), |ui| {
-        add(ui);
-    });
-}
-
-/// A number typed in place at `places` decimals. Invalid input invalidates the order until
-/// corrected instead of silently submitting the previously entered value.
-pub(super) fn number(
-    ui: &mut Ui,
-    id: impl std::hash::Hash + std::fmt::Debug,
-    value: &mut f64,
-    places: usize,
-) -> Response {
-    let id = ui.make_persistent_id(id);
-    let editing = ui.memory(|memory| memory.has_focus(id));
-    let mut text = match ui.data(|data| data.get_temp::<String>(id)) {
-        Some(text) if editing => text,
-        _ => format!("{value:.places$}"),
-    };
-    let width = (ui.available_width() * 0.5).max(48.0);
-    let response = ui.add(
-        egui::TextEdit::singleline(&mut text)
-            .id(id)
-            .frame(egui::Frame::NONE)
-            .desired_width(width)
-            .font(FontId::proportional(14.0)),
-    );
-    if response.changed() {
-        *value = text
-            .trim()
-            .replace(',', "")
-            .parse::<f64>()
-            .ok()
-            .filter(|value| value.is_finite())
-            .unwrap_or(f64::NAN);
-    }
-    if response.has_focus() {
-        ui.data_mut(|data| data.insert_temp(id, text));
-    }
-    response
-}
-
-/// Two opposite arrows that swap what a field takes.
-fn swap(ui: &mut Ui, tooltip: &str) -> bool {
-    let theme = ui.active_theme();
-    let (rect, response) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-    let translated_label = l10n::text(ui.ctx(), tooltip);
-    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &translated_label));
-    let color = if response.hovered() {
-        theme.ui.text
-    } else {
-        theme.ui.text_muted
-    };
-    let stroke = Stroke::new(1.2, color);
-    let c = rect.center();
-    let painter = ui.painter();
-    painter.line_segment([c + vec2(-6.0, -3.0), c + vec2(6.0, -3.0)], stroke);
-    painter.line(
-        vec![c + vec2(3.0, -6.0), c + vec2(6.0, -3.0), c + vec2(3.0, 0.0)],
-        stroke,
-    );
-    painter.line_segment([c + vec2(6.0, 3.0), c + vec2(-6.0, 3.0)], stroke);
-    painter.line(
-        vec![
-            c + vec2(-3.0, 0.0),
-            c + vec2(-6.0, 3.0),
-            c + vec2(-3.0, 6.0),
-        ],
-        stroke,
-    );
-    response
-        .on_hover_text(l10n::text(ui.ctx(), tooltip))
-        .clicked()
-}
-
-/// An on and off switch.
-fn toggle(ui: &mut Ui, on: &mut bool, label: &str) {
-    let theme = ui.active_theme();
-    let (rect, mut response) = ui.allocate_exact_size(vec2(36.0, 20.0), Sense::click());
-    if response.clicked() {
-        *on = !*on;
-        response.mark_changed();
-    }
-    let translated_label = l10n::text(ui.ctx(), label);
-    response.widget_info(|| {
-        WidgetInfo::selected(Role::Switch, ui.is_enabled(), *on, &translated_label)
-    });
-    let t = ui.ctx().animate_bool_responsive(response.id, *on);
-    let track = if *on {
-        theme.ui.text
-    } else {
-        theme.ui.border_control
-    };
-    ui.painter().rect_filled(rect, rect.height() / 2.0, track);
-    let x = egui::lerp(rect.left() + 10.0..=rect.right() - 10.0, t);
-    ui.painter()
-        .circle_filled(pos2(x, rect.center().y), 7.0, theme.ui.panel_bg);
-}
-
-/// A row of the order info: `label` at the left, `value` and `unit` at the right. Returns the
-/// row's rectangle.
-fn info(ui: &mut Ui, label: &str, value: &str, unit: &str, color: Color32) -> Rect {
-    let theme = ui.active_theme();
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
-    let left = rect.left_center();
-    text(
-        ui,
-        left,
-        Align2::LEFT_CENTER,
-        label,
-        13.0,
-        theme.ui.text_muted,
-    );
-    let mut right = rect.right_center();
-    if !unit.is_empty() {
-        let galley = ui.painter().layout_no_wrap(
-            l10n::text(ui.ctx(), unit),
-            FontId::proportional(11.0),
-            theme.ui.text_muted,
-        );
-        right.x -= galley.size().x;
-        ui.painter().galley(
-            right - vec2(0.0, galley.size().y / 2.0),
-            galley,
-            theme.ui.text_muted,
-        );
-        right.x -= 4.0;
-    }
-    let galley = ui.painter().layout_no_wrap(
-        l10n::text(ui.ctx(), value),
-        FontId::proportional(13.0),
-        color,
-    );
-    let at = right - vec2(galley.size().x, galley.size().y / 2.0);
-    ui.painter().galley(at, galley, color);
-    rect
 }
 
 #[cfg(test)]

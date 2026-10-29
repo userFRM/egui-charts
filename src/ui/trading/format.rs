@@ -1,6 +1,6 @@
 //! The text of the numbers the trading panels show, per symbol.
 
-use super::account_panel::grouped;
+use super::widgets::grouped;
 
 /// Host text for the numbers of the order ticket, the depth ladder and the account tables.
 ///
