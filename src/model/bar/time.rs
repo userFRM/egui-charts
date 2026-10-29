@@ -22,38 +22,58 @@ fn segment(bars: &[Bar], index: usize) -> (usize, usize) {
 }
 
 // Sample the loaded edge, never the viewport: a session closure is not a bar interval.
-fn edge_step(bars: &[Bar], at: usize, timeframe: Option<Timeframe>) -> f64 {
-    if let Some(duration) = timeframe
-        .map(|tf| tf.duration())
-        .filter(|d| *d > Duration::zero())
-    {
-        return seconds(duration);
-    }
+// Returns the seconds from the edge bar to the next slot out, and between later slots.
+fn edge_step(bars: &[Bar], at: usize, timeframe: Option<Timeframe>) -> (f64, f64) {
     let sample = if at == 0 {
         &bars[..bars.len().min(16)]
     } else {
         &bars[bars.len().saturating_sub(16)..]
     };
-    let (left, right) = segment(bars, at);
-    let distinct = (left != right)
-        .then(|| seconds(bars[right].time - bars[left].time) / (right - left) as f64);
-    // Keep the per-index spacing of repeated edge elements.
-    if right - left > 1 {
-        return distinct.unwrap_or(1.0);
+    let step = if let Some(duration) = timeframe
+        .map(|tf| tf.duration())
+        .filter(|d| *d > Duration::zero())
+    {
+        seconds(duration)
+    } else {
+        let (left, right) = segment(bars, at);
+        // Keep the per-index spacing of repeated edge elements.
+        if right - left > 1 {
+            let step = seconds(bars[right].time - bars[left].time) / (right - left) as f64;
+            return (step, step);
+        }
+        let mut steps = [0.0; 15];
+        for (step, pair) in steps.iter_mut().zip(sample.windows(2)) {
+            *step = seconds(pair[1].time - pair[0].time);
+        }
+        steps
+            .into_iter()
+            .filter(|step| *step > 0.0)
+            .max_by(|a, b| {
+                let count = |step| steps.iter().filter(|&&value| value == step).count();
+                // Prefer the shorter spacing when session gaps tie with regular intervals.
+                count(*a).cmp(&count(*b)).then_with(|| b.total_cmp(a))
+            })
+            .unwrap_or(1.0)
+    };
+    // A clock change moves local keys by an hour, so only steps dividing an hour keep a UTC grid.
+    if 3600.0 % step != 0.0 {
+        return (step, step);
     }
-    let mut steps = [0.0; 15];
-    for (step, pair) in steps.iter_mut().zip(sample.windows(2)) {
-        *step = seconds(pair[1].time - pair[0].time);
-    }
-    steps
-        .into_iter()
-        .filter(|step| *step > 0.0)
-        .max_by(|a, b| {
-            let count = |step| steps.iter().filter(|&&value| value == step).count();
-            // Prefer the shorter spacing when session gaps tie with regular intervals.
-            count(*a).cmp(&count(*b)).then_with(|| b.total_cmp(a))
-        })
-        .unwrap_or(1.0)
+    // Slots stay on the grid of the regular pair nearest the edge, past a partial edge bar.
+    let regular = |pair: &&[Bar]| seconds(pair[1].time - pair[0].time) == step;
+    let behind = if at == 0 {
+        sample
+            .windows(2)
+            .find(regular)
+            .map(|pair| pair[0].time - bars[at].time)
+    } else {
+        sample
+            .windows(2)
+            .rev()
+            .find(regular)
+            .map(|pair| bars[at].time - pair[1].time)
+    };
+    (step - behind.map_or(0.0, seconds) % step, step)
 }
 
 fn calendar_months(timeframe: Option<Timeframe>) -> Option<u32> {
@@ -138,7 +158,14 @@ pub(crate) fn time_at_with_timeframe(
             let right = shift_months(bars[at].time, count as i64 + i64::from(months), timezone)?;
             return add_seconds(left, (offset - whole) * seconds(right - left));
         }
-        return add_seconds(bars[at].time, offset * edge_step(bars, at, timeframe));
+        let (near, step) = edge_step(bars, at, timeframe);
+        let slots = offset.abs();
+        let distance = if slots <= 1.0 {
+            slots * near
+        } else {
+            near + (slots - 1.0) * step
+        };
+        return add_seconds(bars[at].time, distance.copysign(offset));
     }
     if offset == 0.0 {
         return Some(bars[at].time);
@@ -186,7 +213,14 @@ pub(crate) fn index_at_with_timeframe(
             let right = shift_months(origin, (whole + 1) * i64::from(months), timezone)?;
             return Some(at as f64 + whole as f64 + seconds(time - left) / seconds(right - left));
         }
-        return Some(at as f64 + seconds(time - origin) / edge_step(bars, at, timeframe));
+        let (near, step) = edge_step(bars, at, timeframe);
+        let distance = seconds(time - origin);
+        let slots = if distance.abs() <= near {
+            distance.abs() / near
+        } else {
+            1.0 + (distance.abs() - near) / step
+        };
+        return Some(at as f64 + slots.copysign(distance));
     }
     let (left, right) = segment(bars, at.saturating_sub(1));
     let step = seconds(bars[right].time - bars[left].time) / (right - left) as f64;

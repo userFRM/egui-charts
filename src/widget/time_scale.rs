@@ -114,7 +114,9 @@ impl Chart {
     /// Between bars the time is interpolated, and in whitespace it is extrapolated, as in
     /// [`Chart::visible_time_range`], by the known timeframe duration or the most common positive
     /// spacing among the outermost 16 bars (shorter spacing breaks ties, one second if none).
-    /// Known month and year timeframes step by calendar months in the display time zone.
+    /// A step that divides an hour keeps the slots on the grid of the regular bars nearest the
+    /// edge, so a partial edge bar does not shift them. Known month and year timeframes step by
+    /// calendar months in the display time zone.
     pub fn index_to_time(&self, index: f64) -> Option<DateTime<Utc>> {
         crate::model::time_at_with_timeframe(
             self.state.shown(),
