@@ -107,7 +107,7 @@ pub struct Marker {
     pub position: MarkerPos,
     /// Shape of the marker
     pub shape: MarkerShape,
-    /// Color of the marker
+    /// Color of the marker; `PLACEHOLDER` (the default of [`Marker::new`]) uses the theme's text colour.
     #[serde(default)]
     pub color: Color32,
     /// Optional text label
@@ -129,7 +129,7 @@ impl Marker {
             time,
             position: MarkerPos::default(),
             shape: MarkerShape::default(),
-            color: Color32::WHITE,
+            color: Color32::PLACEHOLDER,
             text: None,
             tooltip: None,
             size: 1.0,

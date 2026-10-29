@@ -26,7 +26,7 @@ Builder API,Builder integration,Public API surface and structure,done,library,sr
 Builder API,Builder integration,Threading model for feeding data,done,library,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/feed.rs;src/data/inbox/sink.rs
 Builder API,Builder integration,WebAssembly target,done,library,src/data/mod.rs
 Builder API,Datafeed API,Bar data model,done,library,src/model/bar/bar.rs;src/widget/builder.rs;src/widget/series.rs;src/chart/rendering/candles/mod.rs
-Builder API,Datafeed API,Bar marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/chart/renderers/markers.rs;src/widget/events.rs
+Builder API,Datafeed API,Bar marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/chart/renderers/markers.rs;src/model/markers.rs;src/widget/events.rs
 Builder API,Datafeed API,Bounded history size,done,library,src/widget/series.rs;src/widget/feed.rs
 Builder API,Datafeed API,Cache reset and full reload,done,host,src/widget/feed.rs;src/data/inbox/mod.rs;src/widget/anchors.rs;src/data/inbox/sink.rs
 Builder API,Datafeed API,Chart time zone,done,library,src/widget/frame.rs;src/widget/feed.rs;src/chart/renderers/session_breaks.rs
@@ -52,7 +52,7 @@ Builder API,Datafeed API,Resolve symbol to symbol metadata,done,host,src/data/mo
 Builder API,Datafeed API,Server time,done,host,src/data/inbox/mod.rs;src/widget/feed.rs;src/widget/mod.rs;src/widget/frame.rs;src/data/inbox/sink.rs
 Builder API,Datafeed API,Session breaks on intraday charts,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/model/session/mod.rs;src/config/chart.rs;src/widget/palette.rs
 Builder API,Datafeed API,Symbol search,done,host,src/services/search.rs;src/ui/top_toolbar/components/symbol_search/mod.rs;src/ui/top_toolbar/components/symbol_search/service.rs
-Builder API,Datafeed API,Timescale marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs;src/widget/mod.rs
+Builder API,Datafeed API,Timescale marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs;src/model/markers.rs;src/widget/mod.rs
 Builder API,Datafeed API,Trade tick input,done,host,src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed.rs;src/ui/widget_bar/panels/time_and_sales.rs
 Builder API,Datafeed API,Trading session definition from the feed,done,host,src/model/instrument.rs;src/model/session/mod.rs;src/widget/feed.rs
 Builder API,Datafeed API,Update cost and coalescing of fast streams,done,library,src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed.rs;src/widget/series.rs;src/widget/studies.rs
@@ -88,7 +88,7 @@ Builder API,Widget API and customization,Price scale API,done,library,src/scales
 Builder API,Widget API and customization,Screenshots,partial,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed.rs
 Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/price_series.rs;src/widget/time_scale.rs;src/widget/series.rs
 Builder API,Widget API and customization,Style overrides,partial,library,src/widget/mod.rs;src/widget/builder.rs;src/widget/frame.rs;src/config/chart.rs
-Builder API,Widget API and customization,Themes and custom colour schemes,done,library,src/widget/mod.rs;src/theme/context.rs;src/widget/frame.rs;src/chart/renderers/markers.rs;src/config/chart.rs;src/widget/palette.rs
+Builder API,Widget API and customization,Themes and custom colour schemes,done,library,src/widget/mod.rs;src/theme/context.rs;src/widget/frame.rs;src/chart/renderers/markers.rs;src/config/chart.rs;src/widget/palette.rs;src/model/markers.rs
 Builder API,Widget API and customization,Toolbar customisation,done,library,src/ui/top_toolbar/host.rs;src/ui/top_toolbar/toolbar.rs
 Builder API,Widget API and customization,UI component visibility,done,library,src/ui/app_state.rs;src/ui/top_toolbar/toolbar.rs;src/ui/context_menu.rs;src/config/interaction.rs
 Builder API,Widget API and customization,Visible range get and set,done,library,src/widget/sync.rs;src/widget/time_scale.rs;src/scales/pricescale.rs
@@ -101,7 +101,7 @@ Chart,Chart settings and themes,Chart settings dialog,done,library,src/ui/top_to
 Chart,Chart settings and themes,Crosshair appearance,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/crosshair.rs
 Chart,Chart settings and themes,Events tab,done,host,src/model/time_scale_event.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs
 Chart,Chart settings and themes,Grid lines,done,library,src/widget/frame.rs;src/chart/rendering/grid.rs;src/widget/settings/apply.rs
-Chart,Chart settings and themes,Light and dark themes,done,library,src/widget/mod.rs;src/widget/palette.rs;src/widget/frame.rs;src/config/chart.rs
+Chart,Chart settings and themes,Light and dark themes,done,library,src/widget/mod.rs;src/widget/palette.rs;src/widget/frame.rs;src/config/chart.rs;src/model/markers.rs;src/chart/renderers/markers.rs
 Chart,Chart settings and themes,Navigation and pane buttons,done,library,src/widget/navigation.rs;src/widget/frame.rs;src/widget/pane_layout.rs;src/widget/settings/data.rs
 Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
 Chart,Chart settings and themes,Scales text colour and size,done,library,src/widget/settings/data.rs;src/widget/settings/apply.rs;src/chart/rendering/axes.rs;src/chart/renderers/labels.rs
