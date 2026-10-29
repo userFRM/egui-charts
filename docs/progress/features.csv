@@ -461,7 +461,7 @@ Order flow,Order flow data model,Backpressure and per-frame coalescing for high-
 Order flow,Order flow data model,Building bars from trades,done,library,src/data/inbox.rs;src/data/mod.rs
 Order flow,Order flow data model,Depth history store,done,library,src/data/depth_history.rs;src/widget/feed.rs
 Order flow,Order flow data model,Grouping fills into parent market orders,done,library,src/model/quote.rs;src/data/trades.rs;src/widget/feed.rs;src/data/mod.rs
-Order flow,Order flow data model,Historical trades and depth request for a time range,done,library,src/data/mod.rs;src/widget/feed.rs;src/data/trades.rs;src/data/depth_history.rs
+Order flow,Order flow data model,Historical trades and depth paging for a time range,done,library,src/data/mod.rs;src/widget/feed.rs;src/data/trades.rs;src/data/depth_history.rs
 Order flow,Order flow data model,Incremental depth updates with sequence numbers and snapshot resync,done,library,src/data/depth.rs;src/data/inbox.rs;src/widget/feed.rs
 Order flow,Order flow data model,Level 2 order book snapshots,done,library,src/model/quote.rs;src/data/inbox.rs;src/data/depth.rs;src/widget/feed.rs
 Order flow,Order flow data model,Market-by-order events,done,library,src/data/orders.rs;src/data/inbox.rs;src/widget/feed.rs
