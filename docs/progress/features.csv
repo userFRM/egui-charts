@@ -333,7 +333,7 @@ Drawings,Drawings,Ideas,done,host,src/drawings/rendering/media.rs;src/widget/too
 Drawings,Drawings,Image,done,library,src/drawings/rendering/media.rs;src/widget/tool_interaction/text.rs;src/drawings/categories.rs
 Drawings,Drawings,Info line,done,library,src/drawings/rendering/measurements.rs
 Drawings,Drawings,Inside pitchfork,done,library,src/drawings/rendering/pitchfork.rs
-Drawings,Drawings,Long position,done,library,src/drawings/manager/mod.rs;src/drawings/rendering/trading/position.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/manager/edit.rs
+Drawings,Drawings,Long position,done,library,src/drawings/manager/mod.rs;src/drawings/rendering/trading/position.rs;src/drawings/services/handle.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Measure,done,library,src/drawings/rendering/measurements.rs;src/ui/drawing_toolbar/utilities/measure.rs
 Drawings,Drawings,Modified Schiff pitchfork,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Multi-point drawing creation,done,library,src/widget/drawing_api.rs;src/drawings/manager/mod.rs;src/drawings/validation.rs;src/drawings/manager/interaction.rs
@@ -356,7 +356,7 @@ Drawings,Drawings,Rotated rectangle,done,library,src/drawings/rendering/shapes.r
 Drawings,Drawings,Schiff pitchfork,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Screen-anchored drawing creation,done,library,src/drawings/domain/drawing.rs;src/widget/drawing_api.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Drawings,Drawings,Sector,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Short position,done,library,src/drawings/manager/mod.rs;src/drawings/rendering/trading/position.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/manager/edit.rs
+Drawings,Drawings,Short position,done,library,src/drawings/manager/mod.rs;src/drawings/rendering/trading/position.rs;src/drawings/services/handle.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Signpost,done,library,src/drawings/rendering/annotations/signpost.rs;src/widget/tool_interaction/text.rs
 Drawings,Drawings,Sine line,done,library,src/drawings/rendering/cycles.rs
 Drawings,Drawings,Single-point drawing creation,done,library,src/widget/drawing_api.rs;src/drawings/manager/mod.rs;src/drawings/domain/drawing.rs;src/drawings/manager/edit.rs
