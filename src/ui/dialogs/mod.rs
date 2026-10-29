@@ -2,6 +2,7 @@
 //!
 //! Provides modal dialog components:
 //! - Alert creation dialog
+//! - Chart data table
 //! - Drawing properties dialog
 //! - Drawing context menu
 //! - Series settings dialog
@@ -9,6 +10,7 @@
 //! - Study context menu
 
 pub mod alert_dialog;
+pub mod data_table;
 pub mod drawing_context_menu;
 pub mod drawing_properties;
 pub mod keyboard_shortcuts;
@@ -18,6 +20,7 @@ pub mod study_context_menu;
 pub mod templates;
 
 pub use alert_dialog::{AlertDialog, AlertDialogAction, AlertDialogConfig};
+pub use data_table::{DataTableAction, DataTableDialog};
 pub use drawing_context_menu::{DrawingContextMenu, DrawingContextMenuAction};
 pub use drawing_properties::{
     DrawingId, DrawingPropertiesAction, DrawingPropertiesConfig, DrawingPropertiesDialog,

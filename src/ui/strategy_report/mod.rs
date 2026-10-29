@@ -44,8 +44,16 @@ pub enum StrategyReportAction {
     None,
     /// Reveal this trade on the chart.
     SelectTrade(StrategyTradeSelection),
-    /// Save these valid trades as CSV. Summary metrics are recomputed, never exported.
+    /// Save these valid trades as CSV.
     ExportCsv(String),
+    /// Save the summary metrics and run properties shown, as [`StrategyReport::summary_csv`]
+    /// writes them, under the suggested file name.
+    ExportSummaryCsv {
+        /// File name derived from the run's name and symbol, ending in `.csv`.
+        filename: String,
+        /// The CSV text.
+        content: String,
+    },
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -153,6 +161,12 @@ impl StrategyReportPanel {
             if Button::new("Export trades CSV").show(ui).clicked() {
                 action = StrategyReportAction::ExportCsv(data.report.trades_csv());
             }
+            if Button::new("Export summary CSV").show(ui).clicked() {
+                action = StrategyReportAction::ExportSummaryCsv {
+                    filename: summary_filename(&data.report),
+                    content: data.report.summary_csv(&data.performance, &data.comparison),
+                };
+            }
         });
         TabBar::new(&[Tab::Summary, Tab::Trades, Tab::Properties], &mut self.tab).show(ui);
         if data.performance.skipped_trades
@@ -229,6 +243,19 @@ impl StrategyReportPanel {
         }
         action
     }
+}
+
+/// `name-symbol-summary.csv`, with runs of characters other than letters and digits as one `-`.
+fn summary_filename(report: &StrategyReport) -> String {
+    let name = format!("{} {}", report.name, report.symbol);
+    let mut words: Vec<_> = name
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    if words.is_empty() {
+        words.push("strategy");
+    }
+    format!("{}-summary.csv", words.join("-"))
 }
 
 fn number(value: Option<f64>) -> String {

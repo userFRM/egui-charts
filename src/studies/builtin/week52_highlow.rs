@@ -59,7 +59,7 @@ impl Indicator for Week52HighLow {
             &mut self.values,
             |bar| [bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()),
             |bar, high, low| {
-                IndicatorValue::Single(if (high - low).abs() < 1e-15 {
+                IndicatorValue::Single(if high == low {
                     50.0
                 } else {
                     (bar.close - low) / (high - low) * 100.0

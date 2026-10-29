@@ -51,7 +51,7 @@ impl BarClock {
         extended_hours: bool,
     ) -> Self {
         if !extended_hours {
-            session.extended_windows.clear();
+            session.clear_extended_windows();
         }
         self.session = Some(super::ExchangeSessionProvider::new(zone, Some(session)));
         self

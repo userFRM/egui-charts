@@ -103,37 +103,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_empty_query() {
-        let result = fuzzy_match("", "hello");
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().score, 0);
-    }
-
-    #[test]
-    fn test_exact_match() {
-        let result = fuzzy_match("hello", "hello");
-        assert!(result.is_some());
-        let m = result.unwrap();
-        assert!(m.score > 0);
-        assert_eq!(m.matched_indices.len(), 5);
-    }
-
-    #[test]
-    fn test_fuzzy_match() {
-        let result = fuzzy_match("nch", "New Chart");
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_no_match() {
-        let result = fuzzy_match("xyz", "hello");
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_case_insensitive() {
-        let result = fuzzy_match("HELLO", "hello");
-        assert!(result.is_some());
+    fn matches_subsequences_case_insensitively() {
+        for (query, target, indices) in [
+            ("", "hello", Some(&[][..])),
+            ("hello", "hello", Some(&[0, 1, 2, 3, 4][..])),
+            ("nch", "new chart", Some(&[0, 4, 5][..])),
+            ("xyz", "hello", None),
+            ("HELLO", "hello", Some(&[0, 1, 2, 3, 4][..])),
+        ] {
+            let result = fuzzy_match(query, target);
+            assert_eq!(
+                result.as_ref().map(|m| m.matched_indices.as_slice()),
+                indices,
+                "{query:?} in {target:?}"
+            );
+            if query.is_empty() {
+                assert_eq!(result.unwrap().score, 0);
+            }
+        }
     }
 
     #[test]

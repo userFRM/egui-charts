@@ -432,3 +432,134 @@ impl Indicator for Seasonality {
         .to_vec()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Bar;
+    use crate::studies::*;
+    use chrono::{TimeZone, Utc};
+
+    /// Latest table metrics include the developing month; projections use earlier years only.
+    #[test]
+    fn seasonality_heatmap_and_remaining_month_use_calendar_changes() {
+        let bars: Vec<_> = [
+            (2022, 12, 28, 100.0),
+            (2023, 1, 28, 110.0),
+            (2023, 2, 28, 99.0),
+            (2023, 12, 28, 200.0),
+            (2024, 1, 15, 210.0),
+        ]
+        .into_iter()
+        .map(|(y, m, d, c)| {
+            Bar::new(
+                Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap(),
+                c,
+                c,
+                c,
+                c,
+                1.0,
+            )
+        })
+        .collect();
+        let mut study = ConfiguredStudy::new(Box::new(Seasonality::new()));
+        study.set_bar_clock(&crate::model::BarClock::new(crate::model::Timeframe::Day1));
+        study.calculate(&bars);
+        let table = study.table().expect("Seasonality heatmap");
+        let percent = |label: &str, month| {
+            let row = table
+                .rows
+                .iter()
+                .find(|row| row.first() == Some(&StudyCell::Text(label.into())))
+                .unwrap();
+            let StudyCell::Percent(value) = row[month] else {
+                panic!("percentage cell")
+            };
+            value
+        };
+        for (label, month, expected) in [
+            ("2023", 1, 10.0),
+            ("2023", 2, -10.0),
+            ("2024", 1, 5.0),
+            ("Average", 1, 7.5),
+            ("Standard deviation", 1, 2.5),
+            ("Positive", 1, 100.0),
+        ] {
+            assert!(
+                (percent(label, month).unwrap() - expected).abs() < 1e-9,
+                "{label}"
+            );
+        }
+        assert_eq!(percent("2022", 12), None);
+        assert_eq!(percent("2024", 2), None);
+        let zone = study
+            .projections()
+            .last()
+            .expect("remaining month projection");
+        assert_eq!(zone.bars.start, 4.0);
+        // The last two bars are 18 days apart. February 1 is 17/18 of a slot after January 15.
+        assert!((zone.bars.end - (4.0 + 17.0 / 18.0)).abs() < 1e-10);
+        assert!((zone.top - 220.0).abs() < 1e-9);
+        assert_eq!(zone.bottom, 200.0);
+        #[cfg(feature = "widget")]
+        {
+            use crate::chart::{coords::ChartMapping, indicators::hit_test_indicator};
+            use crate::model::BarData;
+            use crate::studies::ChartState;
+            use egui::{Rect, pos2, vec2};
+
+            let mut bars = bars;
+            bars.extend(
+                (16..=31).map(|day| {
+                    Bar::whitespace(Utc.with_ymd_and_hms(2024, 1, day, 0, 0, 0).unwrap())
+                }),
+            );
+            study.calculate(&bars);
+            let mut state = ChartState::new(BarData::from_bars(bars));
+            state.time_scale_mut().set_width(80.0);
+            state.time_scale_mut().set_bar_spacing(8.0);
+            state.time_scale_mut().set_right_offset(0.0);
+            let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(80.0, 200.0));
+            for overlay in [true, false] {
+                study.set_overlay(overlay);
+                state.fit_price_scale([&study as &dyn Indicator]);
+                let price = state.price_scale().map(Default::default(), 0.0, 200.0);
+                if overlay {
+                    assert!(price.range().min <= 200.0 && price.range().max >= 220.0);
+                } else {
+                    use crate::widget::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig};
+                    let mut pane =
+                        IndicatorPane::with_config(IndicatorPaneConfig::from_study(&study));
+                    egui::Context::default()
+                        .run_ui(Default::default(), |ui| {
+                            let interaction = pane
+                                .show_aligned_interactive(
+                                    ui,
+                                    &study,
+                                    &[],
+                                    12..21,
+                                    IndicatorCoordParams::new(8.0, 0.0, 20, 12),
+                                )
+                                .unwrap();
+                            assert!(interaction.y_min <= 200.0 && interaction.y_max >= 220.0);
+                        })
+                        .drop_without_applying_deltas();
+                    continue;
+                }
+                let coords = ChartMapping::new(rect, 8.0, 12, 20, 0.0, price);
+                assert!(
+                    hit_test_indicator(
+                        pos2(coords.idx_to_x(16), price.price_to_y(210.0)),
+                        &study,
+                        0,
+                        12..21,
+                        &coords,
+                        |value| price.price_to_y(value),
+                    )
+                    .is_some(),
+                    "the remaining-month band must be selectable in whitespace"
+                );
+            }
+        }
+    }
+}

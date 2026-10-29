@@ -1,9 +1,9 @@
 //! Typed alerts, as a host or a server stores and evaluates them.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveTime, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 
-use super::{Bar, Timeframe};
+use super::{Bar, Timeframe, TimezoneId};
 
 /// The host's identifier of an alert.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -51,6 +51,10 @@ pub struct Alert {
     /// The alert expires at this time; `None` never expires.
     #[serde(default)]
     pub expires: Option<DateTime<Utc>>,
+    /// When notifications may be delivered; `None` delivers at any time. The schedule restricts
+    /// delivery only: the alert is still evaluated, and fires, outside it.
+    #[serde(default)]
+    pub schedule: Option<Box<NotificationSchedule>>,
     /// Text the host shows or sends when the alert fires. [`Alert::expand_message`] fills in the
     /// placeholders `{{symbol}}`, `{{close}}` and so on when it fires.
     #[serde(default)]
@@ -74,6 +78,7 @@ impl Alert {
             additional_conditions: Vec::new(),
             frequency: AlertFrequency::default(),
             expires: None,
+            schedule: None,
             message: String::new(),
             status: AlertStatus::default(),
         }
@@ -186,6 +191,22 @@ pub enum AlertCondition {
         /// Inclusive upper boundary.
         upper: f64,
     },
+    /// The current value is inside the inclusive channel, `lower <= value <= upper`, whatever the
+    /// previous value was.
+    InsideChannel {
+        /// Inclusive lower boundary, strictly below `upper`.
+        lower: f64,
+        /// Inclusive upper boundary.
+        upper: f64,
+    },
+    /// The current value is outside the inclusive channel, below `lower` or above `upper`,
+    /// whatever the previous value was.
+    OutsideChannel {
+        /// Inclusive lower boundary, strictly below `upper`.
+        lower: f64,
+        /// Inclusive upper boundary.
+        upper: f64,
+    },
     /// Signed change from `bars` bars ago reaches `value`: at least for positive, at most for negative.
     MovingBy {
         /// Signed, nonzero change in source units.
@@ -278,7 +299,10 @@ impl AlertCondition {
             | Self::CrossingDown(v)
             | Self::Above(v)
             | Self::Below(v) => v.is_finite(),
-            Self::EnteringChannel { lower, upper } | Self::ExitingChannel { lower, upper } => {
+            Self::EnteringChannel { lower, upper }
+            | Self::ExitingChannel { lower, upper }
+            | Self::InsideChannel { lower, upper }
+            | Self::OutsideChannel { lower, upper } => {
                 lower.is_finite() && upper.is_finite() && lower < upper
             }
             Self::MovingBy { value, bars } => value.is_finite() && *value != 0.0 && *bars > 0,
@@ -315,6 +339,8 @@ impl std::fmt::Display for AlertCondition {
             Self::Below(v) => write!(f, "Less than {v}"),
             Self::EnteringChannel { lower, upper } => write!(f, "Entering {lower} to {upper}"),
             Self::ExitingChannel { lower, upper } => write!(f, "Exiting {lower} to {upper}"),
+            Self::InsideChannel { lower, upper } => write!(f, "Inside {lower} to {upper}"),
+            Self::OutsideChannel { lower, upper } => write!(f, "Outside {lower} to {upper}"),
             Self::MovingBy { value, bars } => write!(f, "Moving by {value} over {bars} bars"),
             Self::MovingByPercent { percent, bars } => {
                 write!(f, "Moving by {percent}% over {bars} bars")
@@ -346,6 +372,56 @@ impl Alert {
                 .additional_conditions
                 .iter()
                 .all(|rule| rule.source.is_valid() && rule.condition.is_valid())
+            && self
+                .schedule
+                .as_ref()
+                .is_none_or(|schedule| schedule.is_valid())
+    }
+}
+
+/// When an alert's notifications may be delivered: on the selected weekdays, inside the time
+/// windows, both read on the clock of `timezone`, so a daylight-saving change moves the windows
+/// with the local clock.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NotificationSchedule {
+    /// The zone whose weekday and clock decide.
+    pub timezone: TimezoneId,
+    /// Weekdays on which a window starts, at least one.
+    pub days: Vec<Weekday>,
+    /// Delivery windows, at least one.
+    pub windows: Vec<NotificationWindow>,
+}
+
+/// A window of the day, from `start` up to but excluding `end`, in the schedule's zone. A window
+/// whose `end` is before `start` crosses midnight and belongs to the weekday it starts on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationWindow {
+    /// First clock time inside the window.
+    pub start: NaiveTime,
+    /// First clock time after the window; different from `start`.
+    pub end: NaiveTime,
+}
+
+impl NotificationSchedule {
+    /// Whether at least one weekday and one window are selected and no window is empty.
+    pub fn is_valid(&self) -> bool {
+        !self.days.is_empty()
+            && !self.windows.is_empty()
+            && self.windows.iter().all(|w| w.start != w.end)
+    }
+
+    /// Whether a notification raised at `at` may be delivered.
+    pub fn allows(&self, at: DateTime<Utc>) -> bool {
+        let local = at.with_timezone(&self.timezone);
+        let (day, time) = (local.weekday(), local.time());
+        self.windows.iter().any(|w| {
+            if w.start < w.end {
+                self.days.contains(&day) && (w.start..w.end).contains(&time)
+            } else {
+                (self.days.contains(&day) && time >= w.start)
+                    || (self.days.contains(&day.pred()) && time < w.end)
+            }
+        })
     }
 }
 
@@ -363,6 +439,9 @@ pub enum AlertFrequency {
     OncePerBar,
     /// Evaluate only completed bars, at most once per bar.
     OncePerBarClose,
+    /// At most one trigger per clock minute of UTC, identified by the minute's start, whatever the
+    /// chart's interval.
+    OncePerMinute,
 }
 
 impl std::fmt::Display for AlertFrequency {
@@ -372,6 +451,7 @@ impl std::fmt::Display for AlertFrequency {
             Self::EveryTime => "Every time",
             Self::OncePerBar => "Once per bar",
             Self::OncePerBarClose => "Once per bar close",
+            Self::OncePerMinute => "Once per minute",
         })
     }
 }
@@ -472,13 +552,57 @@ mod tests {
     #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 14] = [
+        let rows: [(Edit, bool); 18] = [
             (|a| a.condition = AlertCondition::Crossing(f64::NAN), false),
             (
                 |a| a.condition = AlertCondition::Above(f64::INFINITY),
                 false,
             ),
             (|a| a.condition = AlertCondition::Below(-12.5), true),
+            (
+                |a| {
+                    a.condition = AlertCondition::InsideChannel {
+                        lower: 1.0,
+                        upper: 2.0,
+                    }
+                },
+                true,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::OutsideChannel {
+                        lower: 2.0,
+                        upper: 2.0,
+                    }
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.schedule = Some(Box::new(NotificationSchedule {
+                        timezone: TimezoneId::utc(),
+                        days: Vec::new(),
+                        windows: vec![NotificationWindow {
+                            start: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                            end: NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+                        }],
+                    }))
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.schedule = Some(Box::new(NotificationSchedule {
+                        timezone: TimezoneId::utc(),
+                        days: vec![Weekday::Mon],
+                        windows: vec![NotificationWindow {
+                            start: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                            end: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                        }],
+                    }))
+                },
+                false,
+            ),
             (
                 |a| {
                     a.condition = AlertCondition::EnteringChannel {
@@ -585,9 +709,39 @@ mod tests {
                 condition: AlertCondition::CrossingUp(101.5),
                 frequency: AlertFrequency::Once,
                 expires: None,
+                schedule: None,
                 message: String::new(),
                 status: AlertStatus::Active,
             }
         );
+    }
+
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn a_stored_schedule_round_trips_and_a_window_may_cross_midnight() {
+        let stored = serde_json::json!({
+            "symbol": "AAPL", "condition": {"InsideChannel": {"lower": 1.0, "upper": 2.0}},
+            "frequency": "OncePerMinute",
+            "schedule": {"timezone": "America/New_York", "days": ["Fri"],
+                "windows": [{"start": "22:00:00", "end": "02:00:00"}]}
+        });
+        let alert: Alert = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&alert).unwrap()["schedule"],
+            stored["schedule"]
+        );
+        let schedule = alert.schedule.unwrap();
+        let at = |s: &str| s.parse::<DateTime<Utc>>().unwrap();
+        // Friday 2026-03-06 22:30 EST is 03:30 UTC on Saturday: inside. Saturday 01:59 EST
+        // still belongs to Friday's window; 02:00 does not.
+        assert!(schedule.allows(at("2026-03-07T03:30:00Z")));
+        assert!(schedule.allows(at("2026-03-07T06:59:00Z")));
+        assert!(!schedule.allows(at("2026-03-07T07:00:00Z")));
+        // Thursday 22:30 EST: its weekday is not selected.
+        assert!(!schedule.allows(at("2026-03-06T03:30:00Z")));
+        // After the clocks go forward on Sunday 2026-03-08, Friday 22:30 is 02:30 UTC.
+        assert!(schedule.allows(at("2026-03-14T02:30:00Z")));
+        assert!(schedule.allows(at("2026-03-14T05:59:00Z")));
+        assert!(!schedule.allows(at("2026-03-14T06:00:00Z")));
     }
 }

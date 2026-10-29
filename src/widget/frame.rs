@@ -91,7 +91,9 @@ impl Chart {
             .instrument()
             .and_then(|instrument| instrument.session.as_ref())
             .is_some_and(|session| {
-                !session.windows.is_empty() || !session.extended_windows.is_empty()
+                !session.windows.is_empty()
+                    || !session.extended_windows.is_empty()
+                    || !session.overrides.is_empty()
             })
             || self.config.session_config.is_some();
         if self.bar_close_time.is_none() && session_close.is_none() && has_session {
@@ -1072,7 +1074,12 @@ impl Chart {
                 .iter()
                 .flat_map(|study| study.data_requests())
                 .collect();
-            let sources = self.study_data.data(requests, &self.symbol, self.timeframe);
+            let sources = self.study_data.data(
+                requests,
+                &self.symbol,
+                self.timeframe,
+                self.replay.as_ref().map(|replay| replay.time),
+            );
             for at in super::studies::order(registry.indicators(), &self.study_ids) {
                 if let Some(crate::studies::StudySource::Study { id, .. }) =
                     registry.indicators()[at].source()
@@ -1763,9 +1770,9 @@ impl Chart {
                         .and_then(|link| link.footprint.as_ref())
                         .filter(|_| time_based && self.replay.is_none())
                         .map(|flow| {
-                            let first = flow.bars().keys().next();
+                            let first = flow.complete_from();
                             let candles = first.map_or(visible_data.len(), |first| {
-                                visible_data.partition_point(|bar| bar.time < *first)
+                                visible_data.partition_point(|bar| bar.time < first)
                             });
                             (flow, candles)
                         });
@@ -1817,13 +1824,13 @@ impl Chart {
                             )
                         {
                             let profiles = crate::studies::trade_profiles(flow, &ranges);
-                            crate::chart::overlays::render_trade_profiles(
+                            crate::chart::overlays::render_session_volume_profiles(
                                 &clipped_painter,
                                 &mapping,
                                 bars,
                                 &profiles,
                                 flow.price_step(),
-                                &config,
+                                flow.tick_size(),
                             );
                         }
                     }
@@ -2188,8 +2195,16 @@ impl Chart {
                     .as_ref()
                     .filter(|_| show_price_axis && self.config.show_extended_session_price)
                     .map(|quote| (quote, self.config.extended_session_price_color)),
-                (show_volume && show_price_axis && !cfg!(feature = "studies"))
-                    .then_some((last.volume, egui::Color32::from_rgb(233, 30, 99))),
+                (show_volume && show_price_axis && !cfg!(feature = "studies")).then_some((
+                    last.volume,
+                    // The tag takes the colour of the bar's direction in the applied theme, as
+                    // its volume bar does.
+                    if last.is_bullish() {
+                        ui.active_theme().chart.candle_up
+                    } else {
+                        ui.active_theme().chart.candle_down
+                    },
+                )),
                 axis_edge,
                 countdown.as_deref(),
                 self.instrument()
