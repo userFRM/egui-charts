@@ -141,7 +141,12 @@ impl BigTrades {
 
     /// Stops following the zone `id`, which is no longer retained.
     pub(super) fn forget(&mut self, id: &SignalId) {
-        self.zones.retain(|zone| zone_id(zone.number) != *id);
+        if let Some(number) =
+            id.0.strip_prefix("big-trade-zone-")
+                .and_then(|number| number.parse::<u64>().ok())
+        {
+            self.zones.retain(|zone| zone.number != number);
+        }
     }
 
     /// Detects on `fill`, a valid trade, pushing the changes to `out`.
@@ -345,6 +350,36 @@ fn zone_id(number: u64) -> SignalId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forgetting_a_zone_leaves_markers_and_other_ids_alone() {
+        let mut detector = BigTrades::new(0.25, Some(0));
+        let rule = BigTradeRule {
+            threshold: Threshold::Fixed(1.0),
+            ..BigTradeRule::default()
+        };
+        let fill = Tick::new(
+            DateTime::from_timestamp(1, 0).unwrap(),
+            100.0,
+            1.0,
+            Some(OrderSide::Buy),
+        );
+        let mut out = Vec::new();
+        detector.trade(&fill, &rule, true, &mut out);
+        detector.trade(&fill, &rule, true, &mut out);
+        for id in [
+            "big-trade-1",
+            "big-trade-zone-",
+            "big-trade-zone-x",
+            "big-trade-zone-3",
+        ] {
+            detector.forget(&SignalId(id.into()));
+            assert_eq!(detector.zones.len(), 2, "{id}");
+        }
+        detector.forget(&zone_id(1));
+        assert_eq!(detector.zones.len(), 1);
+        assert_eq!(detector.zones[0].number, 2);
+    }
 
     #[test]
     fn a_repeating_aggressor_keeps_one_aggregate() {

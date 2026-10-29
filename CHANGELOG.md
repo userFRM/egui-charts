@@ -429,6 +429,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Evicting detector zones no longer allocates an id for every followed zone.
+
 - Combined trades keep an equal fill price exactly as their volume-weighted price. Big-trade body-edge zones stay in the body, `Chart::combined_trades` returns the exact price, and time-and-sales order breakdowns keep their sizes and prices.
 
 - A footprint built from the feed's trades drops the contribution of each trade the bounded store evicts, summing the bar that lost trades again from those held so its delta high and low agree with them, and keeps at most 5,000 bars and 50,000 price rows, the oldest bars first. `Footprint::complete_from` gives the open of the oldest bar whose executions are all held; bars before it, cut by eviction or the budget, are drawn as candles instead of as complete footprint bars. ([#1114](https://github.com/userFRM/egui-charts/issues/1114))
