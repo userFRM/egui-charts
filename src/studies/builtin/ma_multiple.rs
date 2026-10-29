@@ -12,10 +12,10 @@ impl MultipleMA {
     /// Create the conventional four-average preset.
     pub fn new() -> Self {
         let colors = [
-            Color32::from_rgb(41, 98, 255),
-            Color32::from_rgb(255, 152, 0),
-            Color32::from_rgb(239, 83, 80),
-            Color32::from_rgb(156, 39, 176),
+            Color32::from_rgb(246, 195, 9),
+            Color32::from_rgb(251, 152, 0),
+            Color32::from_rgb(251, 101, 0),
+            Color32::from_rgb(246, 12, 12),
         ];
         Self {
             inner: MACombination::new(

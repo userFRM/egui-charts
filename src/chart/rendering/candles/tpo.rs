@@ -92,21 +92,19 @@ impl Default for TpoRenderConfig {
 impl TpoRenderConfig {
     /// Default color palette for period-based coloring
     fn default_period_colors() -> Vec<Color32> {
-        let tpo = &DESIGN_TOKENS.semantic.tpo;
-        vec![
-            tpo.period_1,
-            tpo.period_2,
-            tpo.period_3,
-            tpo.period_4,
-            tpo.period_5,
-            tpo.period_6,
-            tpo.period_7,
-            tpo.period_8,
-            tpo.period_9,
-            tpo.period_10,
-            tpo.period_11,
-            tpo.period_12,
+        [
+            (
+                Color32::from_rgb(214, 56, 100),
+                Color32::from_rgb(90, 197, 97),
+            ),
+            (
+                Color32::from_rgb(84, 185, 209),
+                Color32::from_rgb(93, 36, 245),
+            ),
         ]
+        .into_iter()
+        .flat_map(|(start, end)| (0..26).map(move |i| start.lerp_to_gamma(end, i as f32 / 25.0)))
+        .collect()
     }
 
     /// Get color for a specific period index
@@ -347,7 +345,10 @@ pub fn render_live_tpo(
         clock,
         &sessions,
     );
-    let render_config = TpoRenderConfig::default();
+    let render_config = TpoRenderConfig {
+        poc_color: painter.ctx().active_theme().ui.text,
+        ..Default::default()
+    };
     place_profiles(
         &units,
         full_data,
@@ -685,7 +686,10 @@ fn draw_session_profile(
 
     let guide_color = chart.axis_text_secondary;
     if config.show_value_area {
-        let stroke = Stroke::new(DESIGN_TOKENS.stroke.light, guide_color.gamma_multiply(0.65));
+        let stroke = Stroke::new(
+            DESIGN_TOKENS.stroke.light,
+            painter.ctx().active_theme().ui.text,
+        );
         for edge in [profile.value_area_high, profile.value_area_low] {
             let y = coords.price_to_y(edge);
             if price_rect.y_range().contains(y) {

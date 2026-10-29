@@ -100,7 +100,7 @@ pub struct StudyPane {
     pub range: Option<(f64, f64)>,
     /// Reference level, colour and caption.
     pub levels: Vec<(f64, Color32, &'static str)>,
-    /// Fill between the outer levels with the first plot colour at 20% opacity.
+    /// Fill between the outer levels using [`Indicator::level_fill_color`].
     pub fill_between_levels: bool,
 }
 
@@ -153,6 +153,34 @@ pub trait Indicator: Send {
     /// Whether this study stores presentation edits itself. Charts wrap other studies once.
     fn has_settings(&self) -> bool {
         false
+    }
+
+    /// Colour inside a projected price band.
+    fn projection_fill_color(&self, projection: &super::StudyProjection) -> Color32 {
+        self.plot_color(projection.plot, projection.bars.start as usize)
+            .unwrap_or_else(|| self.plot_style(projection.plot).color)
+            .gamma_multiply(0.2)
+    }
+
+    /// Optional background and text colours for captions on plotted markers.
+    fn plot_label_colors(&self, _line: usize) -> Option<(Color32, Color32)> {
+        None
+    }
+
+    /// Optional presentation of crossing markers; absent uses directional triangles.
+    fn marker_style(&self) -> Option<super::PlotStyle> {
+        None
+    }
+
+    /// Stroke pattern for a pane level at the given value.
+    fn level_style(&self, _value: f64) -> crate::model::LineStyle {
+        crate::model::LineStyle::Dashed
+    }
+
+    /// Colour of the band between the outer pane levels.
+    fn level_fill_color(&self) -> Color32 {
+        let color = self.plot_style(0).color;
+        Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 16)
     }
 
     /// Presentation defaults for a zero-based output line.
@@ -480,10 +508,10 @@ pub trait Indicator: Send {
         None
     }
 
-    /// Return the colors used for rendering this indicator's lines.
+    /// Return the plot colours and any extra palette entries used by fills or per-bar colouring.
     ///
-    /// Single-line indicators return a `Vec` with one element; multi-line
-    /// indicators return one color per line (e.g. MACD returns three).
+    /// Extra palette entries are saved with the study and do not add output columns.
+    /// Their layout is specific to the study.
     fn colors(&self) -> Vec<Color32>;
 
     /// Replace all line colors at once.

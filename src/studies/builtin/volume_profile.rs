@@ -122,8 +122,10 @@ impl ProfileStudy {
             values: IndicatorValues::new(),
             colors: vec![
                 Color32::from_rgb(41, 98, 255),
-                Color32::from_rgba_unmultiplied(38, 166, 154, 140),
-                Color32::from_rgba_unmultiplied(239, 83, 80, 140),
+                Color32::from_rgba_unmultiplied(0, 188, 212, 110),
+                Color32::from_rgba_unmultiplied(233, 30, 99, 110),
+                Color32::from_rgba_unmultiplied(0, 188, 212, 163),
+                Color32::from_rgba_unmultiplied(233, 30, 99, 163),
             ],
             visible: true,
         }
@@ -448,6 +450,10 @@ impl ProfileStudy {
         config.display = self.display;
         config.up_color = self.colors[1].to_srgba_unmultiplied();
         config.down_color = self.colors[2].to_srgba_unmultiplied();
+        config.value_area_colors = Some([
+            self.colors[3].to_srgba_unmultiplied(),
+            self.colors[4].to_srgba_unmultiplied(),
+        ]);
         let mut cache = self.cache.borrow_mut();
         let mut profiles = Vec::new();
         for range in ranges {
@@ -598,6 +604,10 @@ macro_rules! profile_study {
                 self.profile.colors.clone()
             }
             fn set_colors(&mut self, colors: Vec<Color32>) {
+                if colors.len() == 3 {
+                    self.profile.colors[3] = colors[1];
+                    self.profile.colors[4] = colors[2];
+                }
                 for (stored, color) in self.profile.colors.iter_mut().zip(colors) {
                     *stored = color;
                 }

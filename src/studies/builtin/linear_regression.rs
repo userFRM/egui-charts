@@ -24,7 +24,7 @@ impl LinearRegression {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::BLUE,
+            color: palette::LIGHT_BLUE,
             visible: true,
         }
     }
@@ -175,7 +175,7 @@ impl LinearRegressionSlope {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::ORANGE,
+            color: Color32::from_rgb(255, 82, 82),
             visible: true,
         }
     }

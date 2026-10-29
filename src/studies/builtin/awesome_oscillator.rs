@@ -24,7 +24,6 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::palette;
 use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -51,8 +50,8 @@ impl AwesomeOscillator {
             fast_period: fast_period.max(1),
             slow_period: slow_period.max(1),
             values: IndicatorValues::new(),
-            positive_color: palette::GREEN, // Green
-            negative_color: palette::RED,   // Red
+            positive_color: crate::studies::palette::DEEP_TEAL,
+            negative_color: crate::studies::palette::BRIGHT_RED,
             visible: true,
         }
     }
@@ -139,7 +138,7 @@ impl Indicator for AwesomeOscillator {
     fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
         let value = self.values.value(0, bar)?;
         let previous = bar.checked_sub(1).and_then(|bar| self.values.value(0, bar));
-        Some(if previous.is_some_and(|previous| value < previous) {
+        Some(if previous.is_some_and(|previous| value <= previous) {
             self.negative_color
         } else {
             self.positive_color

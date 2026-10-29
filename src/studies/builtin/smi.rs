@@ -37,8 +37,8 @@ impl StochasticMomentumIndex {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::BLUE,   // Blue - SMI
-                palette::ORANGE, // Orange - Signal
+                palette::BLUE,        // SMI
+                palette::WARM_ORANGE, // Signal
             ],
             visible: true,
         }

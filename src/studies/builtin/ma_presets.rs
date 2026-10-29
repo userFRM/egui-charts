@@ -12,8 +12,8 @@ impl MixedMACross {
     pub fn new(fast: usize, slow: usize) -> Self {
         Self {
             inner: MACombination::new(vec![
-                AverageLine::new(AverageType::Simple, fast, palette::GREEN),
-                AverageLine::new(AverageType::Exponential, slow, palette::RED),
+                AverageLine::new(AverageType::Simple, fast, palette::ORANGE),
+                AverageLine::new(AverageType::Exponential, slow, palette::DARK_GREEN),
             ])
             .unwrap(),
         }
@@ -27,7 +27,8 @@ impl Default for MixedMACross {
 impl_ma_preset!(
     MixedMACross,
     "SMA/EMA Cross",
-    "Simple and exponential moving averages with crossing markers"
+    "Simple and exponential moving averages with crossing markers",
+    palette::LIGHT_BLUE
 );
 
 /// Three simple averages with independently chosen lengths.
@@ -38,7 +39,7 @@ pub struct TripleMA {
 impl TripleMA {
     /// Three lengths, each clamped to at least one. Marks crossings of the first two.
     pub fn new(fast: usize, middle: usize, slow: usize) -> Self {
-        let colors = [palette::GREEN, palette::ORANGE, palette::RED];
+        let colors = [palette::ORANGE, palette::LIGHT_BLUE, palette::CYAN];
         Self {
             inner: MACombination::new(
                 [fast, middle, slow]

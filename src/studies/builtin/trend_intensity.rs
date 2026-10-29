@@ -186,7 +186,7 @@ impl Qstick {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::PURPLE, // Purple
+            color: palette::PURPLE,
             visible: true,
         }
     }

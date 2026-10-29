@@ -56,8 +56,10 @@ pub struct WoodiesCCI {
     down_color: Color32,
     /// Column colour of a run of two to five values.
     transition_color: Color32,
+    transition_negative: Color32,
     /// Column colour of a first value on a side of zero, or of zero.
     neutral_color: Color32,
+    neutral_negative: Color32,
     visible: bool,
 }
 
@@ -68,10 +70,12 @@ impl WoodiesCCI {
             turbo_length: turbo_length.max(1),
             cci_length: cci_length.max(1),
             values: IndicatorValues::new(),
-            colors: vec![palette::GREEN, palette::GREEN, palette::RED],
-            down_color: palette::RED,
-            transition_color: palette::ORANGE,
-            neutral_color: palette::GRAY,
+            colors: vec![palette::DEEP_TEAL, palette::DEEP_TEAL, palette::BRIGHT_RED],
+            down_color: palette::BRIGHT_RED,
+            transition_color: palette::BRIGHT_RED,
+            transition_negative: palette::DEEP_TEAL,
+            neutral_color: palette::BRIGHT_RED,
+            neutral_negative: palette::DEEP_TEAL,
             visible: true,
         }
     }
@@ -113,6 +117,14 @@ impl Default for WoodiesCCI {
 }
 
 impl Indicator for WoodiesCCI {
+    fn level_style(&self, value: f64) -> crate::model::LineStyle {
+        if value == 0.0 {
+            crate::model::LineStyle::Solid
+        } else {
+            crate::model::LineStyle::Dotted
+        }
+    }
+
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
             crate::model::PriceSource::Close,
@@ -125,15 +137,18 @@ impl Indicator for WoodiesCCI {
         down_color: color("Established down colour"),
         transition_color: color("Transition colour"),
         neutral_color: color("Neutral colour")
-    ; {});
+    ; changed => {
+        if changed == "transition_color" { self.transition_negative = self.transition_color; }
+        if changed == "neutral_color" { self.neutral_negative = self.neutral_color; }
+    });
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
             color: self.colors[line],
-            width: if line == 0 { 1.0 } else { 2.0 },
+            width: 1.0,
             pattern: crate::model::LineStyle::Solid,
             plot_type: if line == 0 {
-                crate::studies::PlotType::Columns
+                crate::studies::PlotType::Histogram
             } else {
                 crate::studies::PlotType::Line
             },
@@ -150,7 +165,9 @@ impl Indicator for WoodiesCCI {
         let previous = (0..bar).rev().filter_map(|bar| self.values.value(0, bar));
         let run = 1 + previous.take_while(|p| p * value > 0.0).take(5).count();
         Some(match run {
+            1 if value < 0.0 => self.neutral_negative,
             1 => self.neutral_color,
+            2..=5 if value < 0.0 => self.transition_negative,
             2..=5 => self.transition_color,
             _ if value > 0.0 => self.colors[0],
             _ => self.down_color,
@@ -192,12 +209,18 @@ impl Indicator for WoodiesCCI {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        self.colors.clone()
+        self.colors
+            .iter()
+            .copied()
+            .chain([self.transition_negative, self.neutral_negative])
+            .collect()
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if colors.len() >= 3 {
-            self.colors = colors;
+            self.colors = colors[..3].to_vec();
+            self.transition_negative = colors.get(3).copied().unwrap_or(self.transition_color);
+            self.neutral_negative = colors.get(4).copied().unwrap_or(self.neutral_color);
         }
     }
 
@@ -292,27 +315,27 @@ mod tests {
             .collect();
         let mut study = WoodiesCCI::new(2, 2);
         study.calculate(&bars);
-        let (n, t, g, r) = (palette::GRAY, palette::ORANGE, palette::GREEN, palette::RED);
+        let (g, r) = (study.colors[0], study.down_color);
         let expected = [
             None,
-            Some(n),
-            Some(t),
-            None,
-            Some(t),
-            Some(t),
-            Some(t),
-            Some(g),
-            Some(n),
-            Some(t),
-            Some(n),
-            Some(n),
-            Some(t),
-            Some(t),
-            Some(t),
-            Some(t),
             Some(r),
-            Some(n),
-            Some(n),
+            Some(r),
+            None,
+            Some(r),
+            Some(r),
+            Some(r),
+            Some(g),
+            Some(g),
+            Some(g),
+            Some(r),
+            Some(g),
+            Some(g),
+            Some(g),
+            Some(g),
+            Some(g),
+            Some(r),
+            Some(r),
+            Some(g),
         ];
         let colours = |study: &WoodiesCCI| -> Vec<_> {
             (0..bars.len())

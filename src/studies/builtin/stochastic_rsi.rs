@@ -71,7 +71,7 @@ impl StochasticRSI {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             k_color: palette::BLUE,
-            d_color: palette::RED,
+            d_color: palette::ORANGE,
             visible: true,
         }
     }

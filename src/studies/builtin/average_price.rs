@@ -21,7 +21,7 @@ impl OHLC4 {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: palette::PURPLE, // Purple
+            color: palette::LIGHT_BLUE,
             visible: true,
         }
     }
@@ -115,7 +115,7 @@ impl HLC3 {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: palette::BLUE, // Blue
+            color: palette::ORANGE,
             visible: true,
         }
     }
@@ -209,7 +209,7 @@ impl HL2 {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: palette::ORANGE, // Orange
+            color: palette::ORANGE,
             visible: true,
         }
     }
@@ -301,7 +301,7 @@ impl TrueRange {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: palette::RED, // Red
+            color: palette::RED,
             visible: true,
         }
     }

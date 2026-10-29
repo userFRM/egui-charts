@@ -21,7 +21,7 @@ impl OhlcVolatility {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            colors: vec![Color32::from_rgb(233, 30, 99)], // Pink
+            colors: vec![Color32::from_rgb(255, 82, 82)], // Violet
             visible: true,
         }
     }

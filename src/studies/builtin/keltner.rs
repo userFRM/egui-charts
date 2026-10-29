@@ -41,6 +41,7 @@ pub struct KeltnerChannels {
     upper_color: Color32,
     middle_color: Color32,
     lower_color: Color32,
+    fill_color: Color32,
     visible: bool,
 }
 
@@ -66,9 +67,10 @@ impl KeltnerChannels {
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            upper_color: palette::PINK,    // Pink
-            middle_color: palette::PURPLE, // Purple
-            lower_color: palette::PINK,    // Pink
+            upper_color: palette::BLUE,
+            middle_color: palette::BLUE,
+            lower_color: palette::BLUE,
+            fill_color: palette::LIGHT_BLUE.gamma_multiply_u8(13),
             visible: true,
         }
     }
@@ -83,6 +85,7 @@ impl KeltnerChannels {
         self.upper_color = upper;
         self.middle_color = middle;
         self.lower_color = lower;
+        self.fill_color = Color32::from_rgba_unmultiplied(upper.r(), upper.g(), upper.b(), 16);
         self
     }
 }
@@ -102,11 +105,10 @@ impl Indicator for KeltnerChannels {
     ; {});
 
     fn fills(&self) -> Vec<crate::studies::StudyFill> {
-        let color = self.upper_color;
         vec![crate::studies::StudyFill {
             first: crate::studies::FillBoundary::Plot(1),
             second: crate::studies::FillBoundary::Plot(2),
-            color: Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 51),
+            color: self.fill_color,
             inverted_color: None,
         }]
     }
@@ -164,7 +166,12 @@ impl Indicator for KeltnerChannels {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.middle_color, self.upper_color, self.lower_color]
+        vec![
+            self.middle_color,
+            self.upper_color,
+            self.lower_color,
+            self.fill_color,
+        ]
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
@@ -176,6 +183,12 @@ impl Indicator for KeltnerChannels {
         }
         if colors.len() > 2 {
             self.lower_color = colors[2];
+        }
+        if let Some(&color) = colors.get(3) {
+            self.fill_color = color;
+        } else if colors.len() > 1 {
+            let color = self.upper_color;
+            self.fill_color = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 16);
         }
     }
 

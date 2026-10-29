@@ -20,7 +20,6 @@
 
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use crate::model::{Bar, Instrument, PriceSource};
-use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -62,7 +61,7 @@ impl TimeWeightedAvgPrice {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             intraday: false,
-            colors: vec![palette::BLUE],
+            colors: vec![Color32::from_rgb(221, 122, 40)],
             visible: true,
         }
     }

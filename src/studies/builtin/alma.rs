@@ -58,7 +58,7 @@ impl ALMA {
             offset,
             sigma,
             values: IndicatorValues::new(),
-            color: palette::DEEP_ORANGE, // Deep Orange
+            color: palette::LIGHT_BLUE,
             visible: true,
         }
     }

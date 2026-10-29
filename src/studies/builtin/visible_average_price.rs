@@ -25,7 +25,7 @@ impl VisibleAveragePrice {
             range: 0..usize::MAX,
             values: IndicatorValues::new(),
             mean: None,
-            color: palette::BLUE,
+            color: palette::GRAY,
             visible: true,
         }
     }
