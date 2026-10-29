@@ -86,7 +86,10 @@ fn describe(request: &OrderRequest) -> String {
 
 impl PaperAccount {
     /// An empty account holding `balance` in `currency`, without leverage or commission.
-    /// Panics if the starting balance is not finite.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `balance` is NaN or infinite.
     pub fn new(currency: impl Into<String>, balance: f64) -> Self {
         assert!(balance.is_finite(), "starting balance must be finite");
         let state = State {
