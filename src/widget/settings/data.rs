@@ -108,7 +108,7 @@ impl Default for StatusLineOptions {
             show_change_percent: true,
             show_volume: true,
             show_last_day_change: false,
-            indicator_background_opacity: 100,
+            indicator_background_opacity: 60,
         }
     }
 }
@@ -482,7 +482,7 @@ impl Default for AlertsSettings {
             sound_volume: 1.0,
             show_alerts: true,
             show_alert_labels: true,
-            alert_color: crate::studies::palette::ORANGE, // Orange
+            alert_color: crate::studies::palette::WARM_ORANGE,
             show_active_only: true,
             notification_seconds: 5,
         }

@@ -54,8 +54,8 @@ impl Stochastic {
             k_smooth: k_smooth.max(1),
             d_period: d_period.max(1),
             values: IndicatorValues::new(),
-            k_color: palette::BLUE,   // Blue
-            d_color: palette::ORANGE, // Orange
+            k_color: palette::BLUE,
+            d_color: palette::ORANGE,
             visible: true,
         }
     }
@@ -193,8 +193,8 @@ impl Indicator for Stochastic {
             height: None,
             range: Some((0.0, 100.0)),
             levels: vec![
-                (80.0, palette::DOWN, "Overbought"),
-                (20.0, palette::UP, "Oversold"),
+                (80.0, palette::MUTED, "Overbought"),
+                (20.0, palette::MUTED, "Oversold"),
             ],
             fill_between_levels: false,
         }

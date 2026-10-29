@@ -21,7 +21,7 @@ impl VWMA {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::GREEN, // Green
+            color: palette::BLUE,
             visible: true,
         }
     }

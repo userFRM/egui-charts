@@ -32,7 +32,7 @@ impl EaseOfMovement {
             period: period.max(1),
             divisor: 10_000.0,
             values: IndicatorValues::new(),
-            color: palette::ORANGE, // Orange
+            color: palette::DARK_GREEN,
             visible: true,
         }
     }

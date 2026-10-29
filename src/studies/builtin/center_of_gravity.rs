@@ -24,8 +24,8 @@ impl CenterOfGravity {
             period: period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                palette::UP,          // Teal - COG
-                palette::DEEP_ORANGE, // Deep Orange - Signal
+                palette::UP,     // Teal - COG
+                palette::ORANGE, // Signal
             ],
             visible: true,
         }

@@ -1,6 +1,5 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::palette;
 use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -21,7 +20,7 @@ impl MajorityRule {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            colors: vec![palette::CYAN],
+            colors: vec![Color32::from_rgb(255, 82, 82)],
             visible: true,
         }
     }

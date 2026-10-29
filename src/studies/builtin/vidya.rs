@@ -25,7 +25,7 @@ impl VIDYA {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::DEEP_PURPLE, // Deep Purple
+            color: palette::BLUE,
             visible: true,
         }
     }
@@ -157,7 +157,7 @@ impl ZLEMA {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::CYAN, // Cyan
+            color: palette::BLUE,
             visible: true,
         }
     }

@@ -165,15 +165,34 @@ impl Drawing {
         let Some(base) = self.pitchfork_base_lines(rect) else {
             return;
         };
-        let config = self.pitchfork.clone().unwrap_or_default();
-        let fill = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            config.background_opacity,
-        );
-        for band in self.pitchfork_bands(rect) {
-            painter.add(egui::Shape::convex_polygon(band, fill, Stroke::NONE));
+        let mut config = self.pitchfork.clone().unwrap_or_default();
+        config
+            .levels
+            .retain(|l| l.value.is_finite() && l.value >= 0.0);
+        config.levels.sort_by(|a, b| a.value.total_cmp(&b.value));
+        let mut bands = self.pitchfork_bands(rect).into_iter();
+        for pair in config
+            .levels
+            .windows(2)
+            .filter(|p| p[0].visible && p[1].visible)
+        {
+            let color = if self.pitchfork.is_some() {
+                pair[1].color
+            } else {
+                self.color
+            };
+            let fill = Color32::from_rgba_unmultiplied(
+                color[0],
+                color[1],
+                color[2],
+                config.background_opacity,
+            );
+            for band in bands
+                .by_ref()
+                .take(level_lines(&base, pair[1].value, rect).len())
+            {
+                painter.add(egui::Shape::convex_polygon(band, fill, Stroke::NONE));
+            }
         }
         for level in config
             .levels

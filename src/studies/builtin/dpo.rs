@@ -54,7 +54,7 @@ impl DetrendedPriceOscillator {
             period: period.max(1),
             centered: false,
             values: IndicatorValues::new(),
-            color: palette::DEEP_PURPLE,
+            color: palette::DARK_GREEN,
             visible: true,
         }
     }
@@ -197,7 +197,7 @@ impl Indicator for DetrendedPriceOscillator {
 
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
-            levels: vec![(0.0, Color32::from_gray(128), "Zero")],
+            levels: vec![(0.0, palette::GRAY, "Zero")],
             ..Default::default()
         }
     }

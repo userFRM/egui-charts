@@ -1,7 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers::calculate_roc;
-use crate::studies::palette;
 use crate::studies::stepper::rolling_mean;
 use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
@@ -33,8 +32,8 @@ impl KnowSureThing {
             signal_period: 9,
             values: IndicatorValues::new(),
             colors: vec![
-                palette::BLUE,   // Blue - KST
-                palette::ORANGE, // Orange - Signal
+                crate::studies::palette::DEEP_TEAL,  // KST
+                crate::studies::palette::BRIGHT_RED, // Signal
             ],
             visible: true,
         }

@@ -452,7 +452,11 @@ mod tests {
             ("dense upright", &upright, 400.0, 1000, 0.15),
             ("dense inverted", &inverted, 400.0, 1000, 0.15),
         ] {
-            drawing.volume_profile = crate::data::VolumeProfileConfig::new(row_count, 0.7);
+            drawing.volume_profile =
+                crate::data::VolumeProfileConfig::new(row_count, 0.7).map(|mut config| {
+                    config.show_value_area_lines = true;
+                    config
+                });
             let view = ChartView {
                 instrument: None,
                 bars: &bars,

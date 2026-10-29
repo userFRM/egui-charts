@@ -48,7 +48,7 @@ impl ChaikinOscillator {
             slow_length: slow_length.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::RED,
+            color: Color32::from_rgb(236, 64, 122),
             visible: true,
         }
     }
@@ -128,7 +128,7 @@ impl Indicator for ChaikinOscillator {
 
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
-            levels: vec![(0.0, Color32::from_gray(128), "Zero")],
+            levels: vec![(0.0, palette::GRAY, "Zero")],
             ..Default::default()
         }
     }

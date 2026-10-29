@@ -70,8 +70,8 @@ fn every_registered_study_round_trips_and_supports_live_updates() {
     }
 }
 
-/// Confirming the settings dialog without an edit hands each plot's colour back through
-/// `set_colors`, which must leave every drawn colour as it was.
+/// Confirming the settings dialog without an edit must preserve every drawn colour,
+/// including per-bar palettes that contain more colours than the study has plots.
 #[test]
 fn unchanged_settings_keep_every_colour() {
     use crate::studies::ConfiguredStudy;

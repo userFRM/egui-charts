@@ -22,7 +22,7 @@ impl ChandeMomentumOscillator {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::PURPLE,
+            color: palette::BLUE,
             visible: true,
         }
     }

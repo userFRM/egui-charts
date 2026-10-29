@@ -1,4 +1,5 @@
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -23,8 +24,8 @@ impl PriceVolumeTrendStudy {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                Color32::from_rgb(38, 166, 154), // PVT line (teal)
-                Color32::from_rgb(255, 152, 0),  // Signal line (orange)
+                palette::BLUE,   // PVT line
+                palette::ORANGE, // Signal line
             ],
             visible: true,
         }

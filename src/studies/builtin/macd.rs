@@ -26,7 +26,7 @@
 //!
 //! - MACD line: blue ([`palette::BLUE`](crate::studies::palette::BLUE))
 //! - Signal line: orange ([`palette::ORANGE`](crate::studies::palette::ORANGE))
-//! - Histogram: green ([`palette::GREEN`](crate::studies::palette::GREEN))
+//! - Histogram: teal above zero and red below, with lighter tints toward zero.
 //!
 //! # Example
 //!
@@ -86,9 +86,12 @@ impl MACD {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::BLUE,   // MACD line
-                palette::ORANGE, // Signal line
-                palette::GREEN,  // Histogram
+                palette::BLUE,           // MACD line
+                palette::ORANGE,         // Signal line
+                palette::HISTOGRAM_TEAL, // Histogram: positive and rising
+                palette::LIGHT_TEAL,
+                palette::HISTOGRAM_RED,
+                palette::LIGHT_RED,
             ],
             visible: true,
         }
@@ -127,6 +130,13 @@ impl Indicator for MACD {
             },
             visible: true,
         }
+    }
+
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        if line != 2 {
+            return None;
+        }
+        histogram_color(&self.values, bar, &self.colors[2..])
     }
 
     fn value_format(&self) -> crate::scales::StudyFormat {
@@ -197,9 +207,20 @@ impl Indicator for MACD {
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if colors.len() >= 3 {
             self.colors = colors;
+            if self.colors.len() < 6 {
+                self.colors.truncate(3);
+            }
+            self.colors.resize(6, self.colors[2]);
         } else if !colors.is_empty() {
-            // If less than 3 colors provided, use the first color for all lines
-            self.colors = vec![colors[0], colors[0], colors[0]];
+            self.colors = vec![colors[0]; 6];
+        }
+    }
+
+    fn set_color(&mut self, line: usize, color: Color32) {
+        match line {
+            0 | 1 => self.colors[line] = color,
+            2 => self.colors[2..].fill(color),
+            _ => {}
         }
     }
 
@@ -207,7 +228,7 @@ impl Indicator for MACD {
         crate::studies::StudyPane {
             height: None,
             range: None,
-            levels: vec![(0.0, palette::WHITE, "Zero Line")],
+            levels: vec![(0.0, palette::MUTED.gamma_multiply_u8(128), "Zero Line")],
             fill_between_levels: false,
         }
     }
@@ -241,5 +262,81 @@ impl Indicator for MACD {
 
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
+    }
+}
+
+/// Column colour of a histogram in output line 2 from `shades`: rising and easing above zero,
+/// then falling and recovering below it.
+pub(super) fn histogram_color(
+    values: &IndicatorValues,
+    bar: usize,
+    shades: &[Color32],
+) -> Option<Color32> {
+    let value = values.value(2, bar)?;
+    let previous = (0..bar).rev().find_map(|bar| values.value(2, bar));
+    let slot = if value >= 0.0 {
+        usize::from(!previous.is_some_and(|p| value > p))
+    } else {
+        2 + usize::from(previous.is_some_and(|p| value > p))
+    };
+    shades.get(slot).copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::studies::ConfiguredStudy;
+
+    #[test]
+    fn histogram_palette_survives_edits_and_saved_explicit_colours() {
+        let study = MACD {
+            values: [1.0, 2.0, 1.5, f64::NAN, -1.0, -2.0, -1.5, 0.0]
+                .into_iter()
+                .map(|value| IndicatorValue::Multiple(vec![0.0, 0.0, value]))
+                .collect(),
+            ..MACD::default()
+        };
+        let expected = [
+            Some(palette::LIGHT_TEAL),
+            Some(palette::HISTOGRAM_TEAL),
+            Some(palette::LIGHT_TEAL),
+            None,
+            Some(palette::HISTOGRAM_RED),
+            Some(palette::HISTOGRAM_RED),
+            Some(palette::LIGHT_RED),
+            Some(palette::HISTOGRAM_TEAL),
+        ];
+        let colours = |study: &dyn Indicator| -> Vec<_> {
+            (0..8).map(|bar| study.plot_color(2, bar)).collect()
+        };
+        assert_eq!(colours(&study), expected);
+        assert_eq!(study.plot_color(0, 1), None);
+        let mut configured = ConfiguredStudy::new(Box::new(study.clone()));
+        configured
+            .apply_settings(&[], configured.settings())
+            .unwrap();
+        assert_eq!(colours(&configured), expected);
+        let mut settings = configured.settings();
+        settings.plots[0].color = Color32::YELLOW;
+        configured.apply_settings(&[], settings).unwrap();
+        assert_eq!(colours(&configured), expected);
+        let snapshot = configured.snapshot_settings();
+        configured.set_color(2, Color32::WHITE);
+        assert_eq!(configured.plot_color(2, 1), Some(Color32::WHITE));
+        configured.restore_settings(&snapshot).unwrap();
+        assert_eq!(colours(&configured), expected);
+        // A saved single histogram colour stays solid even when it equals the new up colour.
+        for color in [palette::UP, palette::HISTOGRAM_TEAL, Color32::YELLOW] {
+            let mut legacy = study.clone();
+            legacy.set_colors(vec![palette::BLUE, palette::ORANGE, color]);
+            assert!(
+                (0..8)
+                    .filter(|&bar| bar != 3)
+                    .all(|bar| legacy.plot_color(2, bar) == Some(color))
+            );
+            let snapshot = legacy.snapshot_settings();
+            configured.restore_settings(&snapshot).unwrap();
+            assert_eq!(colours(&configured), colours(&legacy));
+        }
     }
 }

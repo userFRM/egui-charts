@@ -236,7 +236,7 @@ impl Indicator for KnoxvilleDivergence {
 
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
-            levels: vec![(0.0, Color32::from_gray(128), "Zero")],
+            levels: vec![(0.0, palette::GRAY, "Zero")],
             ..Default::default()
         }
     }

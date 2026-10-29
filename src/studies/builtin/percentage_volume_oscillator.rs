@@ -46,9 +46,12 @@ impl PercentageVolumeOscillator {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::BLUE,   // Blue - PVO
-                palette::ORANGE, // Orange - Signal
-                palette::GREEN,  // Green - Histogram
+                palette::BLUE,   // PVO
+                palette::ORANGE, // Signal
+                palette::HISTOGRAM_TEAL,
+                palette::LIGHT_TEAL,
+                palette::HISTOGRAM_RED,
+                palette::LIGHT_RED, // Histogram
             ],
             visible: true,
         }
@@ -87,6 +90,13 @@ impl Indicator for PercentageVolumeOscillator {
         oscillator_average: choice("Oscillator MA", [OscillatorAverage::Exponential, OscillatorAverage::Simple]),
         signal_average: choice("Signal MA", [OscillatorAverage::Exponential, OscillatorAverage::Simple])
     ; {});
+
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        if line != 2 {
+            return None;
+        }
+        super::macd::histogram_color(&self.values, bar, &self.colors[2..])
+    }
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
@@ -146,9 +156,24 @@ impl Indicator for PercentageVolumeOscillator {
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        // Lines without a colour in `colors` keep theirs.
-        for (line, color) in self.colors.iter_mut().zip(colors) {
-            *line = color;
+        if colors.len() >= 3 {
+            self.colors = colors;
+            if self.colors.len() < 6 {
+                self.colors.truncate(3);
+            }
+            self.colors.resize(6, self.colors[2]);
+        } else {
+            for (stored, color) in self.colors.iter_mut().zip(colors) {
+                *stored = color;
+            }
+        }
+    }
+
+    fn set_color(&mut self, line: usize, color: Color32) {
+        match line {
+            0 | 1 => self.colors[line] = color,
+            2 => self.colors[2..].fill(color),
+            _ => {}
         }
     }
 

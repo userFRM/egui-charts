@@ -229,7 +229,7 @@ macro_rules! input_assign {
 
 #[cfg(feature = "studies")]
 macro_rules! study_inputs {
-    ($this:ident; $($field:ident $([$index:literal])? : $kind:ident($($args:expr),*)),+ $(,)? ; $after:block) => {
+    ($this:ident; $($field:ident $([$index:literal])? : $kind:ident($($args:expr),*)),+ $(,)? ; $($changed:ident =>)? $after:block) => {
         fn inputs(&$this) -> Vec<crate::studies::StudyInput> {
             let defaults = Self::default();
             vec![$(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), $this.$field $([$index])?, $kind($($args),*))
@@ -243,6 +243,7 @@ macro_rules! study_inputs {
                 $(stringify!($field $([$index])?) => { $this.$field $([$index])? = crate::studies::inputs::input_assign!(value, $kind($($args),*)); }),+
                 _ => return Err("unknown study input"),
             }
+            $(let $changed = id;)?
             $after
             $this.calculate(&[]);
             Ok(())

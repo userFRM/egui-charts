@@ -1,5 +1,4 @@
 use crate::model::Bar;
-use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -23,7 +22,7 @@ impl AnchoredVWAP {
             anchor_bar,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            colors: vec![palette::YELLOW],
+            colors: vec![Color32::from_rgb(30, 136, 229)],
             visible: true,
         }
     }

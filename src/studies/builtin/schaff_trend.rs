@@ -42,7 +42,7 @@ impl SchaffTrendCycle {
             cycle: 10,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::CYAN,
+            color: palette::PURPLE,
             visible: true,
         }
     }
