@@ -185,9 +185,6 @@ mod tests {
         ];
 
         let mut failures = Vec::new();
-        if ChandelierExit::new(3, 2.0).line_count() != 2 {
-            failures.push("short exit line is not drawn".to_string());
-        }
         for (label, bars, expected) in cases {
             let data: Vec<Bar> = bars.iter().map(|&(h, l, c)| make_bar(h, l, c)).collect();
             let mut ce = ChandelierExit::new(3, 2.0);

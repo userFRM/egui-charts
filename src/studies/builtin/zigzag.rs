@@ -413,6 +413,13 @@ mod tests {
             .collect();
         let cases: &[Case] = &[
             (
+                // Closes are the lows here; the highs must not set the pivots.
+                "close mode",
+                ZigZag::new(5.0, 1).with_mode(ZigZagMode::Close),
+                &[(120.0, 100.0), (130.0, 110.0), (120.0, 100.0)],
+                &[Some(100.0), Some(110.0), Some(100.0)],
+            ),
+            (
                 // Warm-up bar, NaN bar inside a leg (no value, the leg is drawn as if it were absent),
                 // bars after the last pivot.
                 "swings",
@@ -615,6 +622,7 @@ mod tests {
             let mut zz = zz.clone();
             zz.calculate(&data);
             let extremes: &[(usize, bool)] = match *name {
+                "close mode" => &[(0, false), (1, true), (2, false)],
                 "swings" => &[(1, true), (4, false), (8, true), (10, false)],
                 "both reversals at once" => &[(0, true), (1, false), (2, true)],
                 "swing extreme before the confirming bar" => {
@@ -665,18 +673,5 @@ mod tests {
                 assert!((0..data.len()).all(|bar| zz.values().value(0, bar).is_none()));
             }
         }
-    }
-
-    #[test]
-    fn test_zigzag_modes() {
-        let zz_hl = ZigZag::new(5.0, 1).with_mode(ZigZagMode::HighLow);
-        let zz_close = ZigZag::new(5.0, 1).with_mode(ZigZagMode::Close);
-
-        let bar = make_bar(110.0, 90.0, 105.0);
-
-        assert_eq!(zz_hl.get_price(&bar, true), 110.0);
-        assert_eq!(zz_hl.get_price(&bar, false), 90.0);
-        assert_eq!(zz_close.get_price(&bar, true), 105.0);
-        assert_eq!(zz_close.get_price(&bar, false), 105.0);
     }
 }

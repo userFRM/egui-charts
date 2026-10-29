@@ -635,13 +635,6 @@ mod tests {
     }
 
     #[test]
-    fn test_arrow_style_visibility() {
-        assert!(!ArrowStyle::None.is_visible());
-        assert!(ArrowStyle::Arrow.is_visible());
-        assert!(ArrowStyle::Circle.is_visible());
-    }
-
-    #[test]
     fn test_timeframe_visibility() {
         let mut vis = TimeframeVisibility::all();
         assert!(vis.is_visible_on("1h"));

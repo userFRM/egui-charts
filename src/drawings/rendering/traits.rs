@@ -2,8 +2,7 @@
 //!
 //! Defines the [`DrawingRenderer`] trait interface for rendering drawing tools,
 //! plus helper types ([`RenderContext`], [`HandleHit`]) and utility functions
-//! ([`render_handles`], [`point_near_line`], [`point_near_points`]) used by
-//! the category-specific renderer implementations.
+//! ([`render_handles`], [`point_near_line`], [`point_near_points`]) for custom renderers.
 
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Stroke};

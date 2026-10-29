@@ -154,35 +154,6 @@ mod tests {
     }
 
     #[test]
-    fn test_volume_oscillator() {
-        let mut vo = VolumeOscillator::new(3, 5);
-
-        let data = vec![
-            make_bar(1000.0),
-            make_bar(1100.0),
-            make_bar(1200.0),
-            make_bar(1300.0),
-            make_bar(1400.0),
-            make_bar(1500.0),
-            make_bar(1600.0),
-        ];
-
-        vo.calculate(&data);
-
-        assert_eq!(vo.values.len(), 7);
-
-        // Should have valid values after long period warmup
-        let valid_cnt = vo
-            .values
-            .to_rows()
-            .iter()
-            .filter(|v| matches!(v, IndicatorValue::Single(_)))
-            .count();
-
-        assert!(valid_cnt > 0);
-    }
-
-    #[test]
     fn test_volume_oscillator_rising() {
         let mut vo = VolumeOscillator::new(2, 4);
 

@@ -217,29 +217,18 @@ mod tests {
     use crate::studies::test_support::make_bar;
 
     #[test]
-    fn test_linear_regression_flat() {
-        // Flat prices should return the same value
-        let prices = vec![100.0, 100.0, 100.0, 100.0, 100.0];
-        let result = LSMA::linear_regression(&prices, 0);
-        assert!((result - 100.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_linear_regression_uptrend() {
-        // Perfect uptrend: each bar +1
-        let prices = vec![100.0, 101.0, 102.0, 103.0, 104.0];
-        let result = LSMA::linear_regression(&prices, 0);
-        // Should be close to 104.0 (last point on the line)
-        assert!((result - 104.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_linear_regression_with_offset() {
-        // Perfect uptrend, project 1 bar forward
-        let prices = vec![100.0, 101.0, 102.0, 103.0, 104.0];
-        let result = LSMA::linear_regression(&prices, 1);
-        // Should be close to 105.0 (next point on the line)
-        assert!((result - 105.0).abs() < 0.001);
+    fn regression_endpoint_and_offset_match_hand_values() {
+        for (closes, offset, expected) in [
+            ([100.0; 5], 0, 100.0),
+            ([100.0, 101.0, 102.0, 103.0, 104.0], 0, 104.0),
+            ([100.0, 101.0, 102.0, 103.0, 104.0], 1, 105.0),
+        ] {
+            let data: Vec<Bar> = closes.into_iter().map(make_bar).collect();
+            let mut lsma = LSMA::new(data.len()).with_offset(offset);
+            lsma.calculate(&data);
+            let got = lsma.values().value(0, data.len() - 1).unwrap();
+            assert!((got - expected).abs() < 1e-9, "{closes:?}, offset {offset}");
+        }
     }
 
     #[test]

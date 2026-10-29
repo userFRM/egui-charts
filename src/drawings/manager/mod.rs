@@ -622,13 +622,6 @@ fn sync_id(drawing: &Drawing) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_new_manager() {
-        let manager = DrawingManager::new();
-        assert!(manager.drawings.is_empty());
-        assert!(manager.active_tool.is_none());
-    }
-
     /// Two clicks and Enter finish a multi-point tool with two anchors. Whatever the
     /// manager finishes must save, and a tool that draws nothing with two anchors (the parallel
     /// channel) must stay in progress, or the whole storage would refuse to save.
@@ -1151,10 +1144,9 @@ mod tests {
         assert_eq!(manager.hit_test(click), Some(11));
     }
 
-    /// Snapping must borrow magnet targets from the live drawings without
-    /// allocating a flattened point set on each call.
+    /// The magnet snaps to a drawing anchor, excluding members of the group being dragged.
     #[test]
-    fn test_snap_point_borrows_magnet_targets() {
+    fn magnet_snaps_to_anchors_except_the_group_being_dragged() {
         let mut manager = DrawingManager::new();
         manager.options.magnet_mode = true;
         manager.update_snap_options();

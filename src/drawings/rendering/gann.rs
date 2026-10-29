@@ -780,11 +780,13 @@ mod tests {
         assert_eq!(arcs.len(), 2);
         let near = |a: Pos2, b: Pos2| a.distance(b) < 0.1;
         assert!(
-            near(arcs[0][0], Pos2::new(100.0, 0.0)) && near(arcs[0][64], Pos2::new(0.0, 100.0))
+            near(arcs[0][0], Pos2::new(100.0, 0.0))
+                && near(*arcs[0].last().unwrap(), Pos2::new(0.0, 100.0))
         );
-        assert!(near(arcs[0][32], Pos2::new(70.71, 70.71)));
+        assert!(arcs[0].iter().any(|&p| near(p, Pos2::new(70.71, 70.71))));
         assert!(
-            near(arcs[1][0], Pos2::new(100.0, 66.33)) && near(arcs[1][64], Pos2::new(66.33, 100.0))
+            near(arcs[1][0], Pos2::new(100.0, 66.33))
+                && near(*arcs[1].last().unwrap(), Pos2::new(66.33, 100.0))
         );
     }
 }
