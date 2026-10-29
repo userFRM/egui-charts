@@ -31,7 +31,7 @@ pub mod registry;
 pub mod rendering;
 pub mod repositories;
 pub mod services;
-mod validation;
+pub(crate) mod validation;
 
 // Re-export domain types at module root for convenience
 pub use domain::{

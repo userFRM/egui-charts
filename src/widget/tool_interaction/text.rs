@@ -78,7 +78,7 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
     let frame = ui.ctx().cumulative_frame_nr();
     let opened_frame = *editor.opened_frame.get_or_insert(frame);
     let request_focus = std::mem::take(&mut editor.focus);
-    let font_size = drawing.font_size;
+    let font_size = crate::styles::typography::font_size(drawing.font_size);
     let hint = match drawing.tool_type {
         DrawingToolType::Image => "Image address (https://… or file://…)",
         DrawingToolType::Tweet => "Author on the first line, then the post",

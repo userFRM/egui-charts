@@ -7,7 +7,7 @@ use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, epaint::ColorMode, layer
 impl Drawing {
     /// Size annotations before laying out both the text and its surrounding box.
     pub(super) fn annotation_font(&self) -> egui::FontId {
-        egui::FontId::proportional(self.font_size)
+        egui::FontId::proportional(crate::styles::typography::font_size(self.font_size))
     }
 
     /// Apply common styles to this drawing's paint range. Defaults retain the renderer's

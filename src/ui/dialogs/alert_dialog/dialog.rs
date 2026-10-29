@@ -4,7 +4,7 @@ use crate::localization as l10n;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, Months, NaiveDate, NaiveTime, TimeZone, Timelike, Utc, Weekday};
+use chrono::{DateTime, Months, NaiveDate, NaiveTime, Offset, TimeZone, Timelike, Utc, Weekday};
 use egui::{Context, Ui};
 
 use super::{AlertDialogAction, AlertDialogConfig};
@@ -137,12 +137,18 @@ impl AlertDialog {
             .map_err(|_| "Enter the expiry date as YYYY-MM-DD")?;
         let time = NaiveTime::parse_from_str(self.expiry_time.trim(), "%H:%M")
             .map_err(|_| "Enter the expiry time as HH:MM")?;
-        // Unchanged fields retain the saved seconds and repeated-hour occurrence.
+        // Unchanged fields retain the saved seconds and repeated-hour occurrence. A saved
+        // expiry whose local time is past the representable range matches no entry.
         let saved = self.alert.expires.filter(|saved| {
-            let local = saved.with_timezone(&self.timezone);
-            local.date_naive() == date
-                && local.hour() == time.hour()
-                && local.minute() == time.minute()
+            let offset = saved.with_timezone(&self.timezone).offset().fix();
+            saved
+                .naive_utc()
+                .checked_add_offset(offset)
+                .is_some_and(|local| {
+                    local.date() == date
+                        && local.hour() == time.hour()
+                        && local.minute() == time.minute()
+                })
         });
         let expiry = if let Some(saved) = saved {
             saved
@@ -1049,6 +1055,24 @@ mod tests {
             ),
         ] {
             check(zone, fields, expected);
+        }
+        // A saved expiry at the end of the range has no local time on that side of UTC, so an
+        // entered time replaces it.
+        for (hours, saved) in [
+            (9, DateTime::<Utc>::MAX_UTC),
+            (-9, DateTime::<Utc>::MIN_UTC),
+        ] {
+            let mut dialog = AlertDialog::new();
+            dialog.timezone = east_of_utc(hours);
+            let mut alert = Alert::new("SAMPLE", AlertCondition::Crossing(1.0));
+            alert.expires = Some(saved);
+            dialog.edit(alert);
+            dialog.expiry_date = "2030-01-01".into();
+            dialog.expiry_time = "10:00".into();
+            assert_eq!(
+                dialog.expiry(at(2026, 1, 1, 0, 0)),
+                Ok(Some(at(2030, 1, 1, (10 - hours) as u32, 0)))
+            );
         }
         #[cfg(feature = "timezones")]
         {

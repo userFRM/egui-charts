@@ -1,8 +1,10 @@
 //! Actions from the drawing properties dialog.
 
 use super::tabs::CoordinatesState;
+use crate::drawings::validation::{MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH};
 use crate::drawings::{Drawing, DrawingTemplate, TimeframeVisibility};
 use crate::model::LineStyle;
+use crate::styles::typography::FONT_SIZES;
 use crate::widget::Chart;
 use egui::Color32;
 
@@ -202,12 +204,11 @@ impl DrawingProps {
     }
 
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
-        if !self.line_width.is_finite()
-            || self.line_width <= 0.0
-            || !self.font_size.is_finite()
-            || self.font_size <= 0.0
+        if !(self.line_width > 0.0
+            && self.line_width <= MAX_STROKE_WIDTH
+            && FONT_SIZES.contains(&self.font_size))
         {
-            return Err("Line width and font size must be positive and finite");
+            return Err("Line width must be above 0 and at most 100, font size 1 to 256");
         }
         if let Some(template) = &self.tool_settings {
             let settings = &template.settings;
@@ -221,9 +222,9 @@ impl DrawingProps {
             if settings.pitchfork.as_ref().is_some_and(|c| {
                 c.levels
                     .iter()
-                    .any(|l| !l.value.is_finite() || l.value < 0.0)
+                    .any(|l| !(0.0..=MAX_PITCHFORK_LEVEL).contains(&l.value))
             }) {
-                return Err("Pitchfork multiples must be finite and nonnegative");
+                return Err("Pitchfork multiples must be between 0 and 100");
             }
             if settings.gann.as_ref().is_some_and(|c| {
                 c.price_levels
@@ -303,6 +304,15 @@ mod tests {
         );
         assert_eq!(chart.drawings().drawings[0].font_size, 24.0);
         chart.drawings_mut().edit_drawing(7, |d| d.locked = false);
+        // A size the drawings file would refuse cannot be applied.
+        assert!(
+            DrawingProps {
+                font_size: 300.0,
+                ..props.clone()
+            }
+            .apply_to_chart(DrawingId(7), &mut chart)
+            .is_err()
+        );
         props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
         let mut second = chart.drawings().drawings[0].clone();
         second.id = 8;
