@@ -7,7 +7,7 @@ use crate::config::{ChartConfig, ChartOptions};
 use crate::drawings::DrawingManager;
 #[cfg(feature = "drawings")]
 use crate::drawings::services::HistoryService;
-use crate::model::{ChartType, ChartTypeParams, SeriesScale, Timeframe};
+use crate::model::{ChartType, ChartTypeParams, SeriesAlerts, SeriesScale, Timeframe};
 use crate::scales::PriceScale;
 use crate::studies::{Indicator, StudySettingsSnapshot};
 
@@ -58,6 +58,7 @@ struct Action {
 struct SeriesSet {
     props: Vec<(SeriesId, SeriesOptions, bool)>,
     main_scale: SeriesScale,
+    main_alerts: SeriesAlerts,
     held: Vec<PriceSeries>,
 }
 
@@ -70,12 +71,15 @@ impl SeriesSet {
                 .map(|item| (item.id, item.options.clone(), item.visible))
                 .collect(),
             main_scale: chart.main_series_scale,
+            main_alerts: chart.main_series_style.alerts,
             held: Vec::new(),
         }
     }
 
     fn same(&self, other: &Self) -> bool {
-        self.main_scale == other.main_scale && self.props == other.props
+        self.main_scale == other.main_scale
+            && self.main_alerts == other.main_alerts
+            && self.props == other.props
     }
 }
 
@@ -501,6 +505,7 @@ impl Chart {
             }
         }
         self.main_series_scale = set.main_scale;
+        self.main_series_style.alerts = set.main_alerts;
         *set = SeriesSet { held: pool, ..now };
         if let Some(ChartElementId::Series(id)) = self.selection.selected_id()
             && self.price_series.iter().all(|item| item.id != id)
@@ -1411,5 +1416,42 @@ mod tests {
             ("BBB", 1)
         );
         assert!(!chart.can_redo());
+    }
+
+    #[test]
+    fn series_alert_styles_stay_distinct_through_undo_and_snapshot() {
+        let mut chart = chart(&[1.0], &[2.0]);
+        let other = chart.add_series(crate::widget::price_series::SeriesOptions::default());
+        let main_alerts = SeriesAlerts {
+            visible: false,
+            labels: false,
+            color: Color32::RED,
+        };
+        let other_alerts = SeriesAlerts {
+            color: Color32::BLUE,
+            ..SeriesAlerts::default()
+        };
+        chart.user_action(|chart| {
+            let mut settings = chart.series_settings();
+            settings.alerts = main_alerts;
+            chart.apply_series_settings(&settings);
+            chart.series_style_mut(other).unwrap().alerts = other_alerts;
+        });
+        assert_eq!(chart.series_settings().alerts, main_alerts);
+        assert_eq!(chart.series_style(other).unwrap().alerts, other_alerts);
+        let mut restored = super::super::Chart::new(BarData::default());
+        restored
+            .restore(&chart.snapshot().unwrap())
+            .expect("snapshot restores");
+        assert_eq!(restored.series_settings().alerts, main_alerts);
+        assert!(chart.undo());
+        assert_eq!(chart.series_settings().alerts, SeriesAlerts::default());
+        assert_eq!(
+            chart.series_style(other).unwrap().alerts,
+            SeriesAlerts::default()
+        );
+        assert!(chart.redo());
+        assert_eq!(chart.series_settings().alerts, main_alerts);
+        assert_eq!(chart.series_style(other).unwrap().alerts, other_alerts);
     }
 }

@@ -168,20 +168,7 @@ impl Indicator for AccelerationBands {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-
-    fn make_bar(high: f64, low: f64, close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: (high + low) / 2.0,
-            high,
-            low,
-            close,
-            volume: 1000.0,
-            colors: None,
-            payload: None,
-        }
-    }
+    use crate::studies::test_support::make_range_bar as make_bar;
 
     /// Reference values from Price Headley's definition ("Big Trends in Trading", 2002), computed
     /// independently: upper = SMA(H * (1 + f * (H - L) / (H + L)), n), middle = SMA(C, n),

@@ -21,8 +21,9 @@ use crate::data::{CalendarEvent, NewsStory};
 use crate::icons::icons;
 use crate::model::Quote;
 use crate::scales::{CurrencyFormatter, PriceFormatter, StudyFormat};
-use crate::services::{Listener, Quotes};
+use crate::services::{Listener, Quotes, ShareKind, Sharing};
 use crate::theme::ThemeExt;
+use crate::ui::share_controls::ShareControls;
 use crate::ui_kit::{EmptyState, IconButton};
 
 /// Height shared by market data rows.
@@ -190,6 +191,7 @@ pub struct WatchlistPanel {
     selected: Option<String>,
     service: Option<Arc<dyn Quotes>>,
     inbox: Arc<Inbox>,
+    share: ShareControls,
     listener: Option<Listener>,
     /// Key of the current stream's pushes in the inbox.
     generation: u64,
@@ -222,6 +224,7 @@ impl WatchlistPanel {
             selected: None,
             service: None,
             inbox: Arc::default(),
+            share: ShareControls::default(),
             listener: None,
             generation: 0,
             subscribed: Vec::new(),
@@ -320,9 +323,23 @@ impl WatchlistPanel {
         self.listener = None;
     }
 
+    /// Offers copy-link and save-a-copy on the active list, as `sharing` reports them for
+    /// [`ShareKind::Watchlist`]. A saved copy is added to the lists under the name the host
+    /// answers. [`poll`](Self::poll) receives the answers.
+    pub fn set_sharing(&mut self, sharing: Arc<dyn Sharing>) {
+        self.share.set_service(sharing);
+    }
+
     /// Subscribes again when the symbols to quote changed or the stream lagged, and applies the
     /// quotes the service pushed. The quotes of symbols no longer subscribed are dropped.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        if let Some((source, name)) = self.share.poll(ctx)
+            && let Some(list) = self.lists.iter().find(|list| list.name == source)
+        {
+            let mut copy = list.clone();
+            copy.name = name;
+            self.lists.push(copy);
+        }
         let Some(service) = &self.service else {
             return;
         };
@@ -398,6 +415,7 @@ impl WatchlistPanel {
         let shown_symbols: Vec<String> = self.symbols().map(str::to_owned).collect();
         let Self {
             lists,
+            share,
             active,
             quotes,
             decimals,
@@ -552,6 +570,7 @@ impl WatchlistPanel {
                     text: lists[*active].to_text(),
                 };
             }
+            share.show(ui, ShareKind::Watchlist, &lists[*active].name);
         });
         if let Some(details) = wide {
             ui.horizontal(|ui| {

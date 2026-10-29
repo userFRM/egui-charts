@@ -5,10 +5,10 @@ use egui::{Color32, ImageData, TextureFilter, TextureId, TexturesDelta};
 use std::collections::HashMap;
 
 /// A texture as the frame's deltas leave it.
-struct Texture {
-    size: [usize; 2],
-    pixels: Vec<Color32>,
-    nearest: bool,
+pub(super) struct Texture {
+    pub(super) size: [usize; 2],
+    pub(super) pixels: Vec<Color32>,
+    pub(super) nearest: bool,
 }
 
 impl Texture {
@@ -41,7 +41,7 @@ impl Texture {
 }
 
 /// The textures `delta` sets, applying each full image and patch in order.
-fn textures(delta: &TexturesDelta) -> HashMap<TextureId, Texture> {
+pub(super) fn textures(delta: &TexturesDelta) -> HashMap<TextureId, Texture> {
     let mut textures = HashMap::new();
     for (id, deltas) in &delta.set {
         for delta in deltas {
@@ -78,12 +78,13 @@ fn textures(delta: &TexturesDelta) -> HashMap<TextureId, Texture> {
 
 /// Draws `primitives` over transparent black at one pixel per point, sampling at pixel centres
 /// and blending premultiplied colours in gamma space as egui's renderers do, and returns the
-/// premultiplied pixels row by row. Meshes with a texture that `delta` does not set are skipped.
+/// premultiplied pixels row by row. Fails on host paint callbacks and on meshes with a texture
+/// that `delta` does not set, such as one the host binds itself, instead of leaving them out.
 pub(super) fn rasterize(
     size: [u32; 2],
     primitives: &[ClippedPrimitive],
     delta: &TexturesDelta,
-) -> Vec<Color32> {
+) -> Result<Vec<Color32>, String> {
     let [width, height] = size.map(|side| side as usize);
     let textures = textures(delta);
     let mut pixels = vec![Color32::TRANSPARENT; width * height];
@@ -93,10 +94,13 @@ pub(super) fn rasterize(
     } in primitives
     {
         let Primitive::Mesh(mesh) = primitive else {
-            continue;
+            return Err("Host paint callbacks cannot be drawn into PNG".into());
         };
         let Some(texture) = textures.get(&mesh.texture_id) else {
-            continue;
+            return Err(format!(
+                "{:?} is not a texture of the frame; host textures cannot be drawn into PNG",
+                mesh.texture_id
+            ));
         };
         // The scissor rectangle, rounded to pixels as egui's renderers round it.
         let clip_x = clip_rect.min.x.round().max(0.0) as usize..clip_rect.max.x.round() as usize;
@@ -111,7 +115,7 @@ pub(super) fn rasterize(
             }
         }
     }
-    pixels
+    Ok(pixels)
 }
 
 /// Twice the signed area of `a`, `b`, `p`: positive when `p` is on the inner side of `a` to `b`
@@ -186,4 +190,23 @@ fn fill(
                 Color32::from_rgba_premultiplied(blended[0], blended[1], blended[2], blended[3]);
         }
     }
+}
+
+/// Encodes premultiplied `pixels` of `size` as an sRGB PNG.
+pub(super) fn png(size: [u32; 2], pixels: &[Color32]) -> Result<Vec<u8>, String> {
+    let mut png = Vec::new();
+    let mut encoder = png::Encoder::new(&mut png, size[0], size[1]);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+    let data: Vec<u8> = pixels
+        .iter()
+        .flat_map(|pixel| pixel.to_srgba_unmultiplied())
+        .collect();
+    writer
+        .write_image_data(&data)
+        .map_err(|error| error.to_string())?;
+    writer.finish().map_err(|error| error.to_string())?;
+    Ok(png)
 }

@@ -371,10 +371,7 @@ fn bubble_chart(count: i64, session: bool) -> egui_charts::widget::Chart {
     struct Feed(Vec<Bar>, Vec<Tick>);
     impl Datafeed for Feed {
         fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
-            reply.send(Ok(HistoryPage {
-                bars: self.0.clone(),
-                end_of_history: true,
-            }));
+            reply.send(Ok(HistoryPage::new(self.0.clone(), true)));
         }
         fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
             let mut page = TradePage::default();

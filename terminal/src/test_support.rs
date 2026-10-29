@@ -1,11 +1,11 @@
 //! A deterministic feed, in-memory storage and frame helpers for the terminal's tests.
 
 use super::{Action, Terminal};
-use crate::data::{Datafeed, HistoryPage, HistoryRequest, Reply};
-use crate::model::{Bar, Instrument, Session, SessionWindow, TimezoneId};
-use crate::services::{Storage, StoreKind};
 use chrono::{NaiveTime, TimeDelta, TimeZone, Utc, Weekday};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
+use egui_charts::data::{Datafeed, HistoryPage, HistoryRequest, Reply};
+use egui_charts::model::{Bar, Instrument, Session, SessionWindow, TimezoneId};
+use egui_charts::services::{Storage, StoreKind};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -92,10 +92,7 @@ impl Datafeed for TestFeed {
             .filter(|bar| request.before.is_none_or(|before| bar.time < before))
             .collect();
         let start = bars.len().saturating_sub(request.count);
-        reply.send(Ok(HistoryPage {
-            bars: bars[start..].to_vec(),
-            end_of_history: start == 0,
-        }));
+        reply.send(Ok(HistoryPage::new(bars[start..].to_vec(), start == 0)));
     }
 }
 
