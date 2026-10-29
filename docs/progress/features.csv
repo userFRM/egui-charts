@@ -12,7 +12,7 @@ Builder API,Broker API,Order and position lines on the chart,done,host,src/chart
 Builder API,Broker API,"Order placement, modification and cancellation",done,host,src/services/broker.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Order ticket and order or position dialogs,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket.rs;src/ui/trading/account_panel.rs
 Builder API,Broker API,"Order, position and execution queries",partial,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs
-Builder API,Broker API,Trading entry points in the UI,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs
+Builder API,Broker API,Trading entry points in the UI,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs/trading.rs
 Builder API,Builder integration,Custom drawing tools from a downstream crate,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Builder API,Builder integration,Custom indicator metadata,done,library,src/studies/indicator_trait.rs;src/studies/inputs.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs;src/chart/renderers/study_scale.rs
 Builder API,Builder integration,Custom indicators from a downstream crate,done,library,src/studies/factory/mod.rs;src/ui/top_toolbar/components/indicator_dialog/dialog.rs;src/widget/series.rs;src/studies/custom.rs
@@ -93,22 +93,22 @@ Builder API,Widget API and customization,Toolbar customisation,done,library,src/
 Builder API,Widget API and customization,UI component visibility,done,library,src/ui/app_state.rs;src/ui/top_toolbar/toolbar.rs;src/ui/context_menu.rs;src/config/interaction.rs
 Builder API,Widget API and customization,Visible range get and set,done,library,src/widget/sync.rs;src/widget/time_scale.rs;src/scales/pricescale.rs
 Builder API,Widget API and customization,Widget constructor options,partial,library,src/widget/builder.rs;src/widget/frame.rs;src/widget/stored_drawings.rs
-Chart,Chart settings and themes,Alerts tab,done,host,src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/widget/settings/data.rs
+Chart,Chart settings and themes,Alerts tab,done,host,src/ui/top_toolbar/components/settings_menu/dialog/tabs/trading.rs;src/widget/settings/data.rs
 Chart,Chart settings and themes,Background,done,library,src/widget/settings/apply.rs;src/widget/frame.rs
 Chart,Chart settings and themes,Candle colour customisation,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/rendering/candles/candlestick.rs;src/chart/renderers/candle.rs
-Chart,Chart settings and themes,Canvas tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
+Chart,Chart settings and themes,Canvas tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs/canvas.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
 Chart,Chart settings and themes,Chart settings dialog,done,library,src/ui/top_toolbar/components/settings_menu/dialog/mod.rs;src/widget/settings/apply.rs
 Chart,Chart settings and themes,Crosshair appearance,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/crosshair.rs
-Chart,Chart settings and themes,Events tab,done,host,src/model/time_scale_event.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs
+Chart,Chart settings and themes,Events tab,done,host,src/model/time_scale_event.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs/trading.rs
 Chart,Chart settings and themes,Grid lines,done,library,src/widget/frame.rs;src/chart/rendering/grid.rs;src/widget/settings/apply.rs
 Chart,Chart settings and themes,Light and dark themes,done,library,src/widget/mod.rs;src/widget/palette.rs;src/widget/frame.rs
 Chart,Chart settings and themes,Navigation and pane buttons,done,library,src/widget/navigation.rs;src/widget/frame.rs;src/widget/pane_layout.rs;src/widget/settings/data.rs
-Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
+Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs/scales.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
 Chart,Chart settings and themes,Scales text colour and size,done,library,src/widget/settings/data.rs;src/widget/settings/apply.rs;src/chart/rendering/axes.rs;src/chart/renderers/labels.rs
 Chart,Chart settings and themes,Session background shading,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs
-Chart,Chart settings and themes,Status line tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/widget/settings/apply.rs;src/widget/frame.rs
-Chart,Chart settings and themes,Symbol tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/widget/settings/apply.rs
-Chart,Chart settings and themes,Trading tab,done,host,src/widget/settings/data.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/ui/trading/mod.rs
+Chart,Chart settings and themes,Status line tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs/symbol.rs;src/widget/settings/apply.rs;src/widget/frame.rs
+Chart,Chart settings and themes,Symbol tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs/symbol.rs;src/widget/settings/apply.rs
+Chart,Chart settings and themes,Trading tab,done,host,src/widget/settings/data.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs/trading.rs;src/ui/trading/mod.rs
 Chart,Chart settings and themes,Watermark,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/widget/mod.rs;src/chart/renderers/watermark.rs
 Chart,Chart types,Area,done,library,src/widget/frame.rs;src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs
 Chart,Chart types,Bars,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/candlestick.rs;src/chart/renderers/bar.rs
@@ -240,15 +240,15 @@ Drawings,Drawing management,Default style per tool,done,library,src/drawings/man
 Drawings,Drawing management,Drawing anchors across timeframe and symbol changes,done,library,src/widget/anchors.rs;src/widget/feed/mod.rs;src/widget/series.rs;src/model/bar/time.rs
 Drawings,Drawing management,Drawing on indicator panes,done,library,src/widget/tool_interaction/mod.rs;src/widget/panes.rs;src/drawings/domain/drawing.rs
 Drawings,Drawing management,Drawing templates,done,library,src/drawings/domain/template.rs;src/ui/dialogs/templates/store.rs;src/ui/dialogs/templates/dialog.rs
-Drawings,Drawing management,Drawing tool keyboard shortcuts,done,library,src/widget/keyboard.rs;src/ui/drawing_toolbar/toolbar.rs;src/ui/drawing_toolbar/shortcuts.rs
+Drawings,Drawing management,Drawing tool keyboard shortcuts,done,library,src/widget/keyboard.rs;src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/shortcuts.rs
 Drawings,Drawing management,Drawings on a logarithmic price scale,done,library,src/widget/tool_interaction/mod.rs;src/drawings/domain/drawing.rs;src/drawings/rendering/elliott.rs;src/drawings/manager/interaction.rs;src/drawings/services/handle.rs;src/widget/tool_interaction/selection.rs;src/scales/pricescale.rs
 Drawings,Drawing management,Duplicate drawing,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Edit anchors with handles and move a drawing,done,library,src/drawings/services/handle.rs;src/widget/tool_interaction/selection.rs;src/drawings/manager/interaction.rs;src/scales/pricescale.rs;src/drawings/manager/mod.rs
 Drawings,Drawing management,Hide and show drawings,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
-Drawings,Drawing management,Lock all drawings,done,library,src/ui/drawing_toolbar/toolbar.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
+Drawings,Drawing management,Lock all drawings,done,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Lock and unlock a drawing,done,library,src/widget/tool_interaction/selection.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Magnet modes,done,library,src/widget/tool_interaction/mod.rs;src/drawings/services/snap.rs;src/drawings/manager/mod.rs
-Drawings,Drawing management,Multi-select drawings,done,library,src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs;src/widget/tool_interaction/selection.rs
+Drawings,Drawing management,Multi-select drawings,done,library,src/widget/tool_interaction/selection.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Drawings,Drawing management,Object tree,done,library,src/ui/widget_bar/panels/object_tree/chart_actions.rs;src/ui/widget_bar/panels/object_tree/source_tree.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Per-tool settings dialog,done,library,src/ui/dialogs/drawing_properties/dialog.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
 Drawings,Drawing management,Persistence of drawings per symbol,done,library,src/widget/stored_drawings.rs;src/widget/frame.rs
@@ -296,10 +296,10 @@ Drawings,Drawings,Drawing events,done,library,src/drawings/manager/mod.rs
 Drawings,Drawings,Drawing groups,done,library,src/drawings/domain/drawing.rs;src/drawings/manager/mod.rs;src/drawings/persistence.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Drawing listing and lookup,done,library,src/drawings/manager/mod.rs;src/widget/drawing_api.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Drawing persistence,done,library,src/widget/anchors.rs;src/drawings/persistence.rs
-Drawings,Drawings,Drawing property access,partial,library,src/drawings/manager/mod.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/drawings/rendering/fibonacci.rs;src/drawings/manager/edit.rs
+Drawings,Drawings,Drawing property access,partial,library,src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/drawings/rendering/fibonacci.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Drawing removal,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
-Drawings,Drawings,Drawing stacking order,done,library,src/drawings/manager/mod.rs;src/drawings/services/z_order.rs;src/drawings/manager/edit.rs
-Drawings,Drawings,Drawing tool availability,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/ui/drawing_toolbar/toolbar.rs;src/drawings/manager/interaction.rs
+Drawings,Drawings,Drawing stacking order,done,library,src/drawings/services/z_order.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
+Drawings,Drawings,Drawing tool availability,done,library,src/drawings/registry.rs;src/ui/drawing_toolbar/toolbar/mod.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Drawings,Drawings,Elliott correction wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Elliott double combo wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Elliott impulse wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs
@@ -860,13 +860,13 @@ Terminal,Toolbars and panels,Chart type menu,done,library,src/ui/top_toolbar/too
 Terminal,Toolbars and panels,Compare / add symbol dialog,done,library,src/ui/top_toolbar/components/symbol_search/mod.rs;src/ui/top_toolbar/components/symbol_search/service.rs
 Terminal,Toolbars and panels,Custom intervals,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Data window,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs
-Terminal,Toolbars and panels,Favourite drawing tools floating bar,partial,library,src/ui/drawing_toolbar/toolbar.rs;src/ui/drawing_toolbar/state.rs;src/ui/drawing_toolbar/utilities/favorites.rs;src/services/settings.rs;examples/demo/layouts.rs
-Terminal,Toolbars and panels,Favourite intervals pinned to the toolbar,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs
+Terminal,Toolbars and panels,Favourite drawing tools floating bar,partial,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/toolbar/floating.rs;src/ui/drawing_toolbar/state.rs;src/ui/drawing_toolbar/utilities/favorites.rs;src/services/settings.rs;examples/demo/layouts.rs
+Terminal,Toolbars and panels,Favourite intervals pinned to the toolbar,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs
 Terminal,Toolbars and panels,Fullscreen,done,library,src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Indicators button,done,library,src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Interval menu presets,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Keyboard shortcuts for application actions,done,library,src/widget/keyboard.rs
-Terminal,Toolbars and panels,Left drawing toolbar shell,done,library,src/ui/drawing_toolbar/toolbar.rs;terminal/src/drawings.rs
+Terminal,Toolbars and panels,Left drawing toolbar shell,done,library,src/ui/drawing_toolbar/toolbar/mod.rs;terminal/src/drawings.rs
 Terminal,Toolbars and panels,Notifications / toasts,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/trading/mod.rs
 Terminal,Toolbars and panels,Object tree panel,done,library,src/ui/widget_bar/panels/object_tree/chart_actions.rs;src/ui/widget_bar/panels/object_tree/panel.rs;terminal/src/drawings.rs
 Terminal,Toolbars and panels,Quick search / command palette,done,library,src/ui/top_toolbar/toolbar.rs
