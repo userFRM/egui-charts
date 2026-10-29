@@ -317,7 +317,7 @@ impl Drawing {
 pub(crate) const MAX_CACHED_SPANS: usize = 32;
 
 impl Drawing {
-    /// Renders the drawing as unselected; see [`Drawing::render_with_selection`].
+    /// Renders the drawing as unselected.
     pub fn render_original(&self, painter: &egui::Painter, rect: Rect, view: &ChartView) {
         self.render_with_selection(painter, rect, view, false);
     }
