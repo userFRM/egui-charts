@@ -441,12 +441,10 @@ impl Run {
             self.realized += profit;
             quantity -= closed;
             lot.quantity -= closed;
-            if quantity.is_finite()
-                && quantity <= rounding_tolerance(exit_quantity, 4.0 * f64::EPSILON)
-            {
+            if quantity.is_finite() && quantity <= rounding_tolerance(exit_quantity, 1e-9) {
                 quantity = 0.0;
             }
-            if lot.quantity <= rounding_tolerance(lot.entry_quantity, 4.0 * f64::EPSILON) {
+            if lot.quantity <= rounding_tolerance(lot.entry_quantity, 1e-9) {
                 self.lots.remove(0);
             }
         }
@@ -691,6 +689,17 @@ mod tests {
                 _ => {}
             }
         }
+        fn pyramided_scale_out(bar: usize, context: &mut StrategyContext<'_>) {
+            match bar {
+                0 => {
+                    context.entry("A", Buy, 3.2, OrderType::Market);
+                    context.entry("B", Buy, 3.2, OrderType::Market);
+                }
+                1..=128 => context.exit("X", Some(0.05), None, None),
+                129 => assert_eq!(context.position(), 0.0),
+                _ => {}
+            }
+        }
         fn decimal_tie(bar: usize, context: &mut StrategyContext<'_>) {
             if bar == 0 {
                 context.entry("L", Buy, 1.0, OrderType::Market);
@@ -793,6 +802,22 @@ mod tests {
                     .collect(),
                 vec![10_000.0; 13],
                 10,
+                0,
+                0,
+                0.0,
+            ),
+            (
+                // 2 * 3.2 - 128 * 0.05 = 0: 128 breakevens, flat equity and no open lot.
+                pyramided_scale_out,
+                vec![(100.0, 100.0, 100.0, 100.0); 130],
+                (2..=129)
+                    .map(|exit| {
+                        let label = if exit <= 65 { "A / X" } else { "B / X" };
+                        trade(Buy, 0.05, 1, 100.0, Some((exit, 100.0, 0.0)), label)
+                    })
+                    .collect(),
+                vec![10_000.0; 131],
+                128,
                 0,
                 0,
                 0.0,
