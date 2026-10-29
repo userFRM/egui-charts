@@ -51,10 +51,6 @@ pub struct EraserMode {
 }
 
 impl EraserMode {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Set the currently hovered drawing (for highlight)
     pub fn set_hover(&mut self, drawing_id: Option<usize>) {
         self.hover_drawing = drawing_id;
@@ -68,10 +64,5 @@ impl EraserMode {
     /// Get the highlight stroke width
     pub fn highlight_stroke(&self) -> f32 {
         self.config.highlight_stroke
-    }
-
-    /// Clear eraser state
-    pub fn clear(&mut self) {
-        self.hover_drawing = None;
     }
 }

@@ -496,14 +496,9 @@ impl Chart {
         &self.chart_type_params
     }
 
-    /// Calculates how many bars fit in the given pixel width at the current bar spacing.
-    pub fn calculate_visible_bars(&self, width: f32) -> usize {
-        (width / self.state.time_scale().bar_spacing()).floor() as usize
-    }
-
     /// Calculates the bar spacing (pixels per bar) needed to fit the desired
     /// number of bars in the given pixel width.
-    pub fn calculate_bar_spacing(&self, width: f32, visible_bars: usize) -> f32 {
+    pub(crate) fn calculate_bar_spacing(&self, width: f32, visible_bars: usize) -> f32 {
         if visible_bars == 0 {
             self.chart_options.time_scale.bar_spacing
         } else {
