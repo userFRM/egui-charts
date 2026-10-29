@@ -549,6 +549,8 @@ mod tests {
                 zone(2, 4, None, 98.875, 99.125)
             ]
         );
+        // A late trade from before the sell zone began does not end it.
+        assert!(trade(self::fill(3, 99.5, 1.0, Buy, None)).is_empty());
         assert_eq!(
             trade(self::fill(5, 99.25, 1.0, Buy, None)),
             [zone(2, 4, Some(5), 98.875, 99.125)]
@@ -589,6 +591,43 @@ mod tests {
         assert_eq!(
             removed,
             [SignalEvent::Remove(SignalId("big-trade-zone-3".into()))]
+        );
+    }
+
+    #[test]
+    fn empty_invalid_and_repeated_trades_leave_the_aggregate_alone() {
+        let host = Host::new(Some(10.0));
+        host.detectors.push_history("ES", &[]);
+        assert!(host.events().is_empty());
+        let trade = |price, size| fill(1, price, size, OrderSide::Buy, Some(7)).with_id(1);
+        for (price, size) in [(f64::NAN, 6.0), (100.0, f64::NAN), (100.0, -1.0)] {
+            assert!(host.push(MarketEvent::Trade(trade(price, size))).is_empty());
+        }
+        assert!(host.push(MarketEvent::Trade(trade(100.0, 6.0))).is_empty());
+        assert!(host.push(MarketEvent::Trade(trade(100.0, 6.0))).is_empty());
+        assert!(
+            host.push(MarketEvent::Trade(fill(
+                1,
+                101.0,
+                0.0,
+                OrderSide::Buy,
+                Some(7)
+            )))
+            .is_empty()
+        );
+        // A distinct fill with an earlier time still extends the first copy's aggressor.
+        assert_eq!(
+            host.push(MarketEvent::Trade(fill(
+                0,
+                100.0,
+                4.0,
+                OrderSide::Sell,
+                Some(7)
+            ))),
+            [
+                marker(1, 1, 100.0, Direction::Neutral, "10"),
+                zone(1, 1, None, 100.0, 101.0)
+            ]
         );
     }
 

@@ -28,8 +28,9 @@ const CALIBRATE_EVERY: u64 = 100;
 /// A large trade shows as a marker at its first fill time and volume-weighted price, coloured by
 /// its aggressor side and labelled with its size, and as a zone from its first fill onward over
 /// the prices it filled at, at least one tick high, centred on them. Both follow the later fills
-/// of the same aggressor. A zone ends at the first trade strictly beyond it on the far side:
-/// below it after a buy, above it after a sell, and on either side when the side is unknown.
+/// of the same aggressor. A zone ends at the first trade at or after its start strictly beyond
+/// its far side: below it after a buy, above it after a sell, and on either side when the side is
+/// unknown.
 ///
 /// When the bar of the subscribed time interval that contains the first fill closes, the trade
 /// is in the body of that bar if its volume-weighted price lies between the bar's open and close,
@@ -159,7 +160,11 @@ impl BigTrades {
                 Some(OrderSide::Sell) => fill.price > zone.high,
                 None => fill.price < zone.low || fill.price > zone.high,
             };
-            if zone.to.is_none() && Some(zone.number) != self.large && beyond {
+            if zone.to.is_none()
+                && fill.ts >= zone.from
+                && Some(zone.number) != self.large
+                && beyond
+            {
                 zone.to = Some(fill.ts);
                 out.push(SignalEvent::Upsert(zone.signal()));
             }
