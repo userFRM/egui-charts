@@ -105,7 +105,7 @@ impl ExchangeSessionProvider {
 
     /// The trading date containing `time`, using the earliest window of that date for intraday
     /// bars. Daily and longer bars carry their trading date in UTC, or in their clock's calendar
-    /// or session zone when they open at its first instant of the date.
+    /// or session zone when they open at its first instant of the date or at session midnight.
     pub fn trading_date(&self, time: DateTime<Utc>) -> NaiveDate {
         if self.timeframe.duration_ms() >= Timeframe::Day1.duration_ms() {
             self.bar_date(time)
@@ -114,7 +114,7 @@ impl ExchangeSessionProvider {
         }
     }
 
-    /// The date of a daily or longer bar, recognizing the first instant even if midnight skips.
+    /// The date of a daily or longer bar, recognizing skipped and repeated session midnights.
     fn bar_date(&self, open: DateTime<Utc>) -> NaiveDate {
         let (date, first) = match &self.calendar_zone {
             Some(zone) => {
@@ -136,7 +136,9 @@ impl ExchangeSessionProvider {
             return date;
         }
         let wall = self.wall_time(open);
-        if self.instant(wall.date().and_time(NaiveTime::MIN)) == Some(open) {
+        if wall.time() == NaiveTime::MIN
+            || self.instant(wall.date().and_time(NaiveTime::MIN)) == Some(open)
+        {
             wall.date()
         } else {
             open.date_naive()
@@ -578,6 +580,13 @@ mod tests {
                 &[(1, "2024-07-01")][..],
                 SessionBreakType::Monthly,
             ),
+            // Amman repeats midnight on October 29; all three dates are in week 43.
+            (
+                Timeframe::Day1,
+                &[(2021, 10, 28), (2021, 10, 29), (2021, 10, 30)][..],
+                &[][..],
+                SessionBreakType::Weekly,
+            ),
             // Tehran starts Monday at 01:00 after skipping midnight on March 22.
             (
                 Timeframe::Day1,
@@ -637,6 +646,8 @@ mod tests {
                 ("Asia/Kolkata", "Asia/Tokyo"),
                 ("Asia/Tokyo", "Australia/Sydney"),
                 ("Asia/Tehran", "Asia/Tehran"),
+                ("UTC", "Asia/Amman"),
+                ("Asia/Amman", "Asia/Amman"),
             ] {
                 // Bars stamped at UTC, display or exchange midnight.
                 let zone = TimezoneId::named(display).unwrap();
