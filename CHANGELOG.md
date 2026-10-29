@@ -430,6 +430,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - Estimated volume profiles resolve tied points of control to the lower price row, as executed profiles do. Equal two-row volume sums expand the value area by one row on each side. Both tie rules are documented; a single bar spread over 24 equal rows has POC row 0 and a 70% value area of rows 0 through 16. ([#1288](https://github.com/userFRM/egui-charts/issues/1288))
 
+- Volume profiles built from executions centre each row on its price, so a trade at 100 with a tick of 1 spans 99.5 to 100.5, level with the footprint cells and trade, book and depth profile rows. Migration: `VolumeProfile::from_executions(bar, step, complete)` becomes `VolumeProfile::from_executions(bar, step, flow.tick_size(), complete)`, with the new `Footprint::tick_size`. ([#1289](https://github.com/userFRM/egui-charts/issues/1289))
+
 - Footprint delta-percentage markers, level imbalances and bar bid/ask-ratio markers include exact threshold equality despite floating-point rounding, including fractional execution sizes summed trade by trade. All three comparisons use the same relative tolerance of one part in a billion; a value one lot below the threshold remains below it. ([#1287](https://github.com/userFRM/egui-charts/issues/1287))
 
 - Equal-row volume profiles that start flat rebuild as soon as a later bar changes the traded range, even inside the first row's padding. Studies and drawings then use the requested rows and actual price boundaries, including a one-row configuration; repeated bars at the original flat price still extend without a rebuild. ([#1283](https://github.com/userFRM/egui-charts/issues/1283))

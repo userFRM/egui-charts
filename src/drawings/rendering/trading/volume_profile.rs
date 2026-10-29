@@ -223,9 +223,12 @@ impl Drawing {
                 .keys()
                 .next()
                 .is_some_and(|&t| t <= executed.time);
-            if let Some(profile) =
-                VolumeProfile::from_executions(&executed, flow.price_step(), complete)
-            {
+            if let Some(profile) = VolumeProfile::from_executions(
+                &executed,
+                flow.price_step(),
+                flow.tick_size(),
+                complete,
+            ) {
                 return Rc::new(Some(profile));
             }
         }

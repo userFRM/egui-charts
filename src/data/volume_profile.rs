@@ -264,17 +264,30 @@ impl VolumeProfile {
 
     /// Group the executions of one span into a row per traded price step, from the lowest
     /// traded row to the highest, so untraded rows between them hold zero. `step` is the
-    /// footprint's [`price_step`](super::Footprint::price_step), and `complete` whether
-    /// executions are held from the start of the span. Buys occupy [`Self::up`] and sells
-    /// [`Self::down`]; unclassified volume is in [`Self::volume`] only.
-    /// Returns no profile without executed volume, or for more than 10,000 rows.
-    pub fn from_executions(bar: &FootprintBar, step: f64, complete: bool) -> Option<Self> {
+    /// footprint's [`price_step`](super::Footprint::price_step), `tick_size` its
+    /// [`tick_size`](super::Footprint::tick_size), and `complete` whether executions are held
+    /// from the start of the span. A row spans from half a tick below its first tick to half
+    /// a tick below the next row's, so a trade at 100 with a tick of 1 spans 99.5 to 100.5.
+    /// Buys occupy [`Self::up`] and sells [`Self::down`]; unclassified volume is in
+    /// [`Self::volume`] only. Returns no profile without executed volume, or for more than
+    /// 10,000 rows.
+    pub fn from_executions(
+        bar: &FootprintBar,
+        step: f64,
+        tick_size: f64,
+        complete: bool,
+    ) -> Option<Self> {
         let (&first, &last) = (bar.levels.keys().next()?, bar.levels.keys().next_back()?);
         let count = last as i128 - first as i128 + 1;
-        let (low, high) = (first as f64 * step, (last as f64 + 1.0) * step);
+        let half_tick = tick_size * 0.5;
+        let (low, high) = (
+            first as f64 * step - half_tick,
+            (last as f64 + 1.0) * step - half_tick,
+        );
         if bar.volume() <= 0.0
             || !step.is_finite()
             || step <= 0.0
+            || !tick_size.is_finite()
             || !(1..=10_000).contains(&count)
             || !low.is_finite()
             || !high.is_finite()
@@ -628,7 +641,8 @@ mod tests {
         }
     }
 
-    /// Equal-volume POCs take the lowest row; tied expansion adds a row on each side.
+    /// Equal-volume POCs take the lowest row; tied expansion adds a row on each side. Executed
+    /// rows are centred on their price: the trade at 100 with a tick of 1 spans 99.5 to 100.5.
     #[test]
     fn estimated_and_executed_profiles_agree_on_ties() {
         use crate::data::Footprint;
@@ -661,8 +675,13 @@ mod tests {
                 .unwrap();
             }
             let executed =
-                VolumeProfile::from_executions(flow.bar_at(time).unwrap(), 1.0, true).unwrap();
+                VolumeProfile::from_executions(flow.bar_at(time).unwrap(), 1.0, 1.0, true)
+                    .unwrap();
             assert_eq!(estimated.volume(), executed.volume());
+            assert_eq!(
+                (executed.low(), executed.high()),
+                (99.5, 99.5 + volumes.len() as f64)
+            );
             // 70% of 24 needs 17 unit rows. 60% of 6 needs the POC's 2 plus both tied 1s.
             assert_eq!(
                 (

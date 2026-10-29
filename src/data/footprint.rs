@@ -367,6 +367,11 @@ impl Footprint {
         Ok(())
     }
 
+    /// Instrument tick size before price-row grouping.
+    pub fn tick_size(&self) -> f64 {
+        self.tick_size
+    }
+
     /// Height of one grouped price row.
     pub fn price_step(&self) -> f64 {
         self.step
