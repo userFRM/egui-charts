@@ -227,6 +227,25 @@ impl HandleService {
                     drawing.chart_points[0].bar_idx = x_to_bar(new_pos.x);
                 }
             }
+            DrawingToolType::TimeCycles => {
+                if drawing.points.len() < 2 || drawing.chart_points.len() < 2 {
+                    return;
+                }
+                match handle {
+                    HandlePos::Start | HandlePos::Point(0) => {
+                        drawing.points[0] = new_pos;
+                        drawing.chart_points[0].bar_idx = x_to_bar(new_pos.x);
+                        drawing.chart_points[0].price = y_to_price(new_pos.y);
+                    }
+                    HandlePos::End | HandlePos::Point(1) => {
+                        drawing.points[1].x = new_pos.x;
+                        drawing.chart_points[1].bar_idx = x_to_bar(new_pos.x);
+                    }
+                    _ => return,
+                }
+                drawing.points[1].y = drawing.points[0].y;
+                drawing.chart_points[1].price = drawing.chart_points[0].price;
+            }
             // The target and the stop move in price only; the width handle moves the right
             // edge, where the target and the stop anchors sit, never left of the entry.
             DrawingToolType::LongPos | DrawingToolType::ShortPos => match handle {
@@ -727,6 +746,30 @@ mod tests {
     #[test]
     fn update_handle_moves_screen_and_chart_points() {
         let cases = [
+            (
+                DrawingToolType::TimeCycles,
+                vec![pos2(100.0, 200.0), pos2(300.0, 200.0)],
+                HandlePos::Point(0),
+                pos2(150.0, 250.0),
+                vec![pos2(150.0, 250.0), pos2(300.0, 250.0)],
+                vec![ChartPoint::new(15.0, 750.0), ChartPoint::new(30.0, 750.0)],
+            ),
+            (
+                DrawingToolType::TimeCycles,
+                vec![pos2(100.0, 200.0), pos2(300.0, 200.0)],
+                HandlePos::Point(1),
+                pos2(50.0, 250.0),
+                vec![pos2(100.0, 200.0), pos2(50.0, 200.0)],
+                vec![ChartPoint::new(10.0, 800.0), ChartPoint::new(5.0, 800.0)],
+            ),
+            (
+                DrawingToolType::TimeCycles,
+                vec![pos2(100.0, 200.0), pos2(300.0, 200.0)],
+                HandlePos::Middle,
+                pos2(250.0, 280.0),
+                vec![pos2(150.0, 280.0), pos2(350.0, 280.0)],
+                vec![ChartPoint::new(15.0, 720.0), ChartPoint::new(35.0, 720.0)],
+            ),
             (
                 DrawingToolType::TrendLine,
                 vec![pos2(100.0, 200.0), pos2(300.0, 400.0)],
