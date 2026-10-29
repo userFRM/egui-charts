@@ -31,6 +31,11 @@ const CALIBRATE_EVERY: u64 = 100;
 /// its far side: below it after a buy, above it after a sell, and on either side when the side is
 /// unknown.
 ///
+/// The service uses one interval per symbol, chosen by its latest subscription, for every chart
+/// of that symbol. Intraday bars use the instrument's exchange time zone (UTC when absent) and
+/// regular session; daily and longer bars use UTC calendar boundaries. The chart's display time
+/// zone and extended-hours setting are not inputs to the service.
+///
 /// When the bar of the subscribed time interval that contains the first fill closes, the trade
 /// is in the body of that bar if its volume-weighted price lies between the bar's open and close,
 /// both included, and in a wick otherwise. Zones of the kinds not kept are then removed. Zones

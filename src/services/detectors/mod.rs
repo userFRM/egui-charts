@@ -410,7 +410,7 @@ fn deliver(
     }
 }
 
-/// The bars of `timeframe` the chart draws for `instrument`, or `None` for a trade-based one.
+/// The service bars of `timeframe` for `instrument`, or `None` for a trade-based interval.
 fn clock(instrument: &Instrument, timeframe: Timeframe) -> Option<BarClock> {
     if timeframe.is_trade_based() {
         return None;
