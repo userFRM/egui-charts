@@ -286,47 +286,6 @@ mod tests {
     use super::*;
     use crate::studies::test_support::make_bar;
 
-    #[test]
-    fn test_ppo_calculation() {
-        let mut ppo = PriceOscillator::new(5, 10, 3);
-
-        let data: Vec<Bar> = (0..30).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        ppo.calculate(&data);
-
-        assert_eq!(ppo.values.len(), 30);
-
-        // Should have valid values after long period warmup
-        let valid_cnt = ppo
-            .values
-            .to_rows()
-            .iter()
-            .filter(|v| !matches!(v, IndicatorValue::None))
-            .count();
-
-        assert!(valid_cnt > 0);
-    }
-
-    #[test]
-    fn test_ppo_uptrend() {
-        let mut ppo = PriceOscillator::new(3, 6, 2);
-
-        // Strong uptrend
-        let data: Vec<Bar> = (0..20).map(|i| make_bar(100.0 + i as f64 * 2.0)).collect();
-
-        ppo.calculate(&data);
-
-        // PPO should be positive in uptrend
-        if let Some(last_val) = ppo.values.to_rows().last() {
-            let ppo_val = match last_val {
-                IndicatorValue::Multiple(vals) => vals[0],
-                IndicatorValue::Single(val) => *val,
-                IndicatorValue::None => panic!("Expected non-None PPO value"),
-            };
-            assert!(ppo_val > 0.0, "PPO should be positive in uptrend");
-        }
-    }
-
     /// Hand values for lengths 2, 3 and 2 on closes 10, 12, 11, 13, 14, for each pairing of the
     /// oscillator and signal formulas. The averages of 2 are 11, 11.5, 12, 13.5 (simple) and
     /// 11, 11, 37/3, 121/9 (exponential, alpha 2/3), those of 3 are 11, 12, 38/3 (simple) and

@@ -108,16 +108,6 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
 
-    /// Transform a full OHLC series into its Heikin-Ashi representation.
-    ///
-    /// The input must be the complete dataset (not a visible sub-window) so that
-    /// the recurrence is seeded deterministically from the first bar.
-    fn transform_to_heikin_ashi(bars: &[Bar]) -> Vec<Bar> {
-        let mut ha_bars = Vec::with_capacity(bars.len());
-        extend(&mut ha_bars, bars);
-        ha_bars
-    }
-
     fn bar(i: i64, open: f64, high: f64, low: f64, close: f64) -> Bar {
         Bar {
             time: Utc.timestamp_opt(1_700_000_000 + i * 60, 0).unwrap(),
@@ -142,62 +132,61 @@ mod tests {
         ]
     }
 
-    fn assert_bars_eq(a: &Bar, b: &Bar, ctx: &str) {
-        assert_eq!(a.open.to_bits(), b.open.to_bits(), "{ctx}: open");
-        assert_eq!(a.high.to_bits(), b.high.to_bits(), "{ctx}: high");
-        assert_eq!(a.low.to_bits(), b.low.to_bits(), "{ctx}: low");
-        assert_eq!(a.close.to_bits(), b.close.to_bits(), "{ctx}: close");
-    }
-
-    /// Seeding from a later bar (the old visible-window behavior) produces a
-    /// different early value, confirming the defect the cache fixes.
     #[test]
-    fn windowed_seed_diverges_from_full_seed() {
-        let full = sample_series();
-        let ha_full = transform_to_heikin_ashi(&full);
-        let ha_windowed = transform_to_heikin_ashi(&full[2..]);
-
-        assert_ne!(
-            ha_windowed[0].open.to_bits(),
-            ha_full[2].open.to_bits(),
-            "windowed seed should differ from full-series value"
-        );
-    }
-
-    #[test]
-    fn streaming_updates_retain_the_prefix_and_match_a_fresh_transform() {
+    fn streaming_updates_retain_the_prefix_and_match_hand_computed_bars() {
         use crate::model::BarData;
         use crate::studies::ChartState;
         let mut state = ChartState::new(BarData::new());
         let cache = HeikinAshiCache::default();
-        let check = |state: &ChartState| {
+        let check = |state: &ChartState, expected: &[(f64, f64, f64, f64)]| {
             let full = &state.data().bars;
-            let fresh = transform_to_heikin_ashi(full);
             let cached = cache.bars(full, state.revision());
-            assert_eq!(cached.len(), fresh.len());
-            for (a, b) in cached.iter().zip(&fresh) {
-                assert_bars_eq(a, b, "stream");
-                assert_eq!(a.time, b.time);
-                assert_eq!(a.volume.to_bits(), b.volume.to_bits());
+            let actual: Vec<_> = cached
+                .iter()
+                .map(|bar| (bar.open, bar.high, bar.low, bar.close))
+                .collect();
+            assert_eq!(actual, expected);
+            for (transformed, source) in cached.iter().zip(full) {
+                assert_eq!(transformed.time, source.time);
+                assert_eq!(transformed.volume, source.volume);
             }
             cached.as_ptr()
         };
-        for next in sample_series() {
+        // Each close is OHLC / 4; each later open averages the previous transformed open/close.
+        let expected = [
+            (10.5, 12.0, 9.0, 10.5),
+            (10.5, 13.0, 10.5, 11.75),
+            (11.125, 14.0, 11.125, 12.875),
+            (12.0, 13.5, 11.0, 12.25),
+            (12.125, 12.125, 10.0, 11.0),
+            (11.5625, 11.5625, 9.5, 10.25),
+        ];
+        for (i, next) in sample_series().into_iter().enumerate() {
+            let close = next.close;
             state.edit_bars(|bars| {
                 let from = bars.len();
                 bars.push(next);
                 Some(from)
             });
-            let prefix = check(&state);
-            for tick in [0.25, -0.5, 0.0] {
+            let prefix = check(&state, &expected[..=i]);
+            // Changing only the source close by 1/4 or -1/2 changes HA close by 1/16 or -1/8.
+            for (tick, ha_tick, seed_tick) in [
+                (0.25, 0.0625, 0.125),
+                (-0.5, -0.125, -0.25),
+                (0.0, 0.0, 0.0),
+            ] {
                 state.edit_bars(|bars| {
-                    let from = bars.len() - 1;
-                    bars[from].close += tick;
-                    bars[from].volume += 1.0;
-                    Some(from)
+                    bars[i].close = close + tick;
+                    bars[i].volume += 1.0;
+                    Some(i)
                 });
-                let updated = check(&state);
-                if state.data().len() > 1 {
+                let mut forming = expected[..=i].to_vec();
+                forming[i].3 += ha_tick;
+                if i == 0 {
+                    forming[0].0 += seed_tick;
+                }
+                let updated = check(&state, &forming);
+                if i > 0 {
                     assert_eq!(
                         prefix, updated,
                         "a forming-bar tick must retain the cached prefix"
@@ -215,24 +204,48 @@ mod tests {
             ]);
             Some(from)
         });
-        check(&state);
+        let mut extended = expected.to_vec();
+        extended[5].3 = 10.28125;
+        extended.extend([(10.921875, 12.0, 9.0, 10.5), (10.7109375, 13.0, 10.0, 11.5)]);
+        check(&state, &extended);
         state.edit_bars(|bars| {
             bars[2].close += 0.5;
             Some(2)
         });
-        check(&state);
+        let corrected = [
+            expected[0],
+            expected[1],
+            (11.125, 14.0, 11.125, 13.0),
+            (12.0625, 13.5, 11.0, 12.25),
+            (12.15625, 12.15625, 10.0, 11.0),
+            (11.578125, 11.578125, 9.5, 10.28125),
+            (10.9296875, 12.0, 9.0, 10.5),
+            (10.71484375, 13.0, 10.0, 11.5),
+        ];
+        check(&state, &corrected);
         state.edit_bars(|bars| {
             bars.insert(0, bar(-1, 9.0, 11.0, 8.0, 10.0));
             Some(0)
         });
-        check(&state);
+        let prepended = [
+            (9.5, 11.0, 8.0, 9.5),
+            (9.5, 12.0, 9.0, 10.5),
+            (10.0, 13.0, 10.0, 11.75),
+            (10.875, 14.0, 10.875, 13.0),
+            (11.9375, 13.5, 11.0, 12.25),
+            (12.09375, 12.09375, 10.0, 11.0),
+            (11.546875, 11.546875, 9.5, 10.28125),
+            (10.9140625, 12.0, 9.0, 10.5),
+            (10.70703125, 13.0, 10.0, 11.5),
+        ];
+        check(&state, &prepended);
         state.edit_bars(|bars| {
             bars.truncate(3);
             Some(3)
         });
-        check(&state);
+        check(&state, &prepended[..3]);
         state.set_data(BarData::default());
-        check(&state);
+        check(&state, &[]);
     }
 
     #[test]

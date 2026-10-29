@@ -43,7 +43,7 @@ impl FootprintLevel {
     }
 }
 
-/// How [`TradeProfile::nodes`](crate::studies::TradeProfile::nodes) chooses volume nodes.
+/// How `studies::TradeProfile::nodes` (requires `studies`) chooses volume nodes.
 ///
 /// The default compares each price row with its immediate neighbours, which is the most
 /// sensitive setting. Raising `smoothing` or `prominence` leaves only the broader nodes.

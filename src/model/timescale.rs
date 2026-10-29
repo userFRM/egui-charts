@@ -230,7 +230,7 @@ impl TimeScale {
     }
 
     /// Within 1.5 slots of the live edge, including future whitespace.
-    #[cfg(any(feature = "widget", test))]
+    #[cfg(feature = "widget")]
     pub(crate) fn is_near_live_edge(&self) -> bool {
         self.right_offset >= -1.5
     }

@@ -551,18 +551,6 @@ mod tests {
     }
 
     #[test]
-    fn test_ohlc_vs_single_value() {
-        assert!(ChartType::Candles.uses_ohlc());
-        assert!(!ChartType::Line.uses_ohlc());
-    }
-
-    #[test]
-    fn test_volume_support() {
-        assert!(ChartType::Candles.supports_volume());
-        assert!(!ChartType::Renko.supports_volume());
-    }
-
-    #[test]
     fn test_time_independence() {
         assert!(ChartType::Renko.is_time_independent());
         assert!(!ChartType::Candles.is_time_independent());

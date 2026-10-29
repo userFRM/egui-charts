@@ -564,42 +564,36 @@ mod tests {
     fn test_fixed_precision() {
         let formatter = DefaultPriceFormatter::with_precision(4);
         assert_eq!(formatter.format(123.456), "123.4560");
-        for value in [0.0, 10.0, 100.0, -100.0] {
+        for (value, expected) in [(0.0, "0"), (10.0, "10"), (100.0, "100"), (-100.0, "-100")] {
             assert_eq!(
                 DefaultPriceFormatter::with_precision(0).format(value),
-                format!("{value:.0}")
+                expected
             );
         }
     }
 
     #[test]
     fn test_percentage_formatter() {
-        let formatter = PercentageFormatter::default();
-        assert_eq!(formatter.format(105.0), "+5.00%");
-        assert_eq!(formatter.format(95.0), "-5.00%");
-        assert_eq!(formatter.format(99.999), "+0.00%");
-        assert_eq!(formatter.format(99.994), "-0.01%");
-
-        // A negative base (a spread) reads with the sign of the change.
-        let spread = PercentageFormatter {
-            precision: 2,
-            base_val: -10.0,
-        };
-        assert_eq!(spread.format(-5.0), "+50.00%");
-        assert_eq!(spread.format(-15.0), "-50.00%");
-    }
-
-    #[test]
-    fn test_percentage_formatter_zero_base_is_neutral() {
-        // A zero base has no defined percentage; the formatter must emit a
-        // neutral 0% rather than "inf%"/"NaN%".
-        let formatter = PercentageFormatter {
-            precision: 2,
-            base_val: 0.0,
-        };
-        let out = formatter.format(123.0);
-        assert_eq!(out, "+0.00%");
-        assert!(!out.contains("inf") && !out.contains("NaN"));
+        assert_eq!(PercentageFormatter::default().format(105.0), "+5.00%");
+        // A spread keeps the sign of the change; a zero base has no defined percentage.
+        for (base_val, value, expected) in [
+            (100.0, 95.0, "-5.00%"),
+            (100.0, 99.999, "+0.00%"),
+            (100.0, 99.994, "-0.01%"),
+            (-10.0, -5.0, "+50.00%"),
+            (-10.0, -15.0, "-50.00%"),
+            (0.0, 123.0, "+0.00%"),
+        ] {
+            let formatter = PercentageFormatter {
+                precision: 2,
+                base_val,
+            };
+            assert_eq!(
+                formatter.format(value),
+                expected,
+                "base {base_val}, value {value}"
+            );
+        }
     }
 
     #[test]
@@ -719,16 +713,9 @@ mod tests {
     fn test_scientific_formatter() {
         let formatter = ScientificFormatter::default();
         let result = formatter.format(0.000123);
-        assert!(result.contains("e"));
+        assert_eq!(result, "1.230e-4");
         assert_eq!(formatter.format(-0.0), "0.000e0");
         assert_eq!(formatter.format(-0.001), "-1.000e-3");
-    }
-
-    #[test]
-    fn test_custom_formatter() {
-        let formatter = CustomPriceFormatter::new(|price| format!("Price: {price:.2}"));
-        assert_eq!(formatter.format(123.456), "Price: 123.46");
-        assert_eq!(formatter.clone_box().format(123.456), "Price: 123.46");
     }
 
     #[test]
@@ -740,6 +727,6 @@ mod tests {
             .with_currency("$")
             .with_precision(2)
             .build();
-        assert!(currency_formatter.format(100.0).contains("$"));
+        assert_eq!(currency_formatter.format(100.0), "$100.00");
     }
 }

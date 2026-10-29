@@ -132,7 +132,7 @@ pub trait Datafeed: MaybeSend + 'static {
     /// What the feed offers as a whole, before any symbol is resolved: the intervals, exchanges
     /// and symbol classes its selectors may offer, and the optional services it answers. The
     /// chart asks once when it attaches the feed and keeps the answer in
-    /// [`Chart::feed_capabilities`](crate::widget::Chart::feed_capabilities). The default
+    /// `Chart::feed_capabilities` (requires `widget`). The default
     /// answers [`FeedCapabilities::default`], which reports nothing and so restricts nothing.
     fn capabilities(&self, reply: Reply<FeedCapabilities>) {
         reply.send(Ok(FeedCapabilities::default()));
@@ -144,7 +144,7 @@ pub trait Datafeed: MaybeSend + 'static {
     }
 
     /// Describes `symbol` with its prices converted to `conversion`, the currency or unit the
-    /// host chose with [`Chart::set_conversion`](crate::widget::Chart::set_conversion). Label the
+    /// host chose with `Chart::set_conversion` (requires `widget`). Label the
     /// instrument with the converted [`currency`](Instrument::currency) and
     /// [`unit`](Instrument::unit). The library converts nothing: the default answers
     /// [`FeedError::NotSupported`], which shows no data rather than unconverted data under a
@@ -392,7 +392,7 @@ pub struct HistoryRequest {
     /// Only bars that open at or after this instant: the start of the range is inclusive. With
     /// `before` it bounds the range as `[since, before)`; answer the newest `count` bars of it.
     /// The chart sets it when it needs bars back to a time it does not hold, such as for
-    /// [`Chart::scroll_to_time`](crate::widget::Chart::scroll_to_time). `None` bounds the range
+    /// `Chart::scroll_to_time` (requires `widget`). `None` bounds the range
     /// by `count` alone.
     pub since: Option<DateTime<Utc>>,
     /// Bars wanted. Fewer is fine; the chart asks again as the user scrolls back.

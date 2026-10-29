@@ -245,35 +245,15 @@ mod tests {
             make_bar(100.0), // 0
         ];
 
-        let mut study = ConnorsRSI::new();
-        for (i, expected) in [0.0, 1.0, 2.0, -1.0, -2.0, 0.0].into_iter().enumerate() {
-            study.update(&data[..=i], i);
-            assert_eq!(study.stepper.state().streak, expected);
+        // Wilder RSI(2): price = 100, 50, 25, 25; streak = 100, 25, 50/3, 450/7.
+        // The last two returns rank the current return at 0, 0, 0, then 100 percent.
+        let expected = [200.0 / 3.0, 25.0, 125.0 / 9.0, 1325.0 / 21.0];
+        let mut study = ConnorsRSI::new().with_periods(2, 2, 2);
+        study.calculate(&data);
+        for (bar, want) in (2..data.len()).zip(expected) {
+            let got = study.values().value(0, bar).expect("defined Connors RSI");
+            assert!((got - want).abs() < 1e-9, "bar {bar}: {got} != {want}");
         }
-    }
-
-    #[test]
-    fn test_connors_rsi_calculation() {
-        let mut crsi = ConnorsRSI::new().with_periods(3, 2, 20);
-
-        // Create enough data
-        let data: Vec<Bar> = (0..50)
-            .map(|i| make_bar(100.0 + (i as f64 * 0.5).sin() * 5.0))
-            .collect();
-
-        crsi.calculate(&data);
-
-        assert_eq!(crsi.values.len(), 50);
-
-        // Should have valid values after warm-up period
-        let valid_cnt = crsi
-            .values
-            .to_rows()
-            .iter()
-            .filter(|v| matches!(v, IndicatorValue::Single(_)))
-            .count();
-
-        assert!(valid_cnt > 0);
     }
 
     /// A flat series has no gains or losses: both RSI components are the neutral 50 and no

@@ -1,3 +1,20 @@
+// Without the widget these items are not built; point their links at the feature table.
+#![cfg_attr(
+    not(feature = "widget"),
+    doc = "
+[`Chart`]: crate#feature-flags
+[`Chart::show`]: crate#feature-flags
+[`ChartBuilder::with_feed`]: crate#feature-flags
+[`guide`]: crate#feature-flags
+[`widget`]: crate#feature-flags
+[`config`]: crate#feature-flags
+[`theme`]: crate#feature-flags
+[`styles`]: crate#feature-flags
+[`localization`]: crate#feature-flags
+[`theme::apply_to_egui`]: crate#feature-flags
+[`localization::set_translator`]: crate#feature-flags
+"
+)]
 //! Interactive financial charts for [egui](https://docs.rs/egui), using your historical and streaming data.
 //!
 //! [`Chart`] provides price and volume panes, pan and zoom, crosshairs and live bar

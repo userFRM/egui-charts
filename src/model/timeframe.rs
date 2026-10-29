@@ -437,6 +437,8 @@ mod tests {
 
     #[test]
     fn test_from_str_presets() {
+        assert_eq!("1s".parse::<Timeframe>(), Ok(Timeframe::Sec1));
+        assert_eq!("5min".parse::<Timeframe>(), Ok(Timeframe::Min5));
         assert_eq!("1min".parse::<Timeframe>(), Ok(Timeframe::Min1));
         let ticks = Timeframe::Ticks(NonZeroU64::new(10).unwrap());
         assert_eq!("10t".parse::<Timeframe>(), Ok(ticks));
@@ -478,39 +480,21 @@ mod tests {
             assert_eq!(Timeframe::from_resolution(label), Some(timeframe));
             assert_eq!(serde_json::from_str::<Timeframe>(saved).unwrap(), timeframe);
         }
-        for text in ["0w", "0month", "-1month", "4294967296month"] {
-            assert!(text.parse::<Timeframe>().is_err());
+        for text in [
+            "0s",
+            "0min",
+            "xyz",
+            "",
+            "0w",
+            "0month",
+            "-1month",
+            "4294967296month",
+        ] {
+            assert!(text.parse::<Timeframe>().is_err(), "{text:?}");
         }
         for text in [r#"{"Weeks":0}"#, r#"{"Months":0}"#] {
             assert!(serde_json::from_str::<Timeframe>(text).is_err());
         }
-    }
-
-    #[test]
-    fn test_from_str_custom_zero_rejected() {
-        assert!("0s".parse::<Timeframe>().is_err());
-        assert!("0min".parse::<Timeframe>().is_err());
-    }
-
-    #[test]
-    fn test_from_str_invalid() {
-        assert!("xyz".parse::<Timeframe>().is_err());
-        assert!("".parse::<Timeframe>().is_err());
-    }
-
-    #[test]
-    fn test_custom_display() {
-        assert_eq!(custom(45).to_string(), "45s");
-        assert_eq!(custom(180).to_string(), "3min");
-        assert_eq!(custom(7200).to_string(), "2h");
-    }
-
-    #[test]
-    fn test_preset_from_str_takes_precedence() {
-        // "1s" should resolve to preset Sec1, not Custom(1)
-        assert_eq!("1s".parse::<Timeframe>(), Ok(Timeframe::Sec1));
-        assert_eq!("5min".parse::<Timeframe>(), Ok(Timeframe::Min5));
-        assert_eq!("1h".parse::<Timeframe>(), Ok(Timeframe::Hour1));
     }
 
     #[test]

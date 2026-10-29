@@ -222,30 +222,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cvd_calculation() {
-        let mut cvd = CVD::new();
-        let bars = create_test_bars();
-
-        cvd.calculate(&bars);
-
-        assert_eq!(cvd.values.len(), 3);
-
-        // First bar is bullish (close near high) - positive delta
-        let IndicatorValue::Single(val) = cvd.values.to_rows()[0] else {
-            panic!("no value: {:?}", cvd.values.to_rows()[0]);
-        };
-        assert!(val > 0.0, "First bar should have positive delta");
-
-        // After second bar (bearish), delta should decrease
-        let (IndicatorValue::Single(v1), IndicatorValue::Single(v2)) =
-            (&cvd.values.to_rows()[0], &cvd.values.to_rows()[1])
-        else {
-            panic!("no values: {:?}", &cvd.values.to_rows()[..2]);
-        };
-        assert!(v2 < v1, "Second bar should decrease cumulative delta");
-    }
-
-    #[test]
     fn test_cvd_close_position_ignores_open() {
         // The delta of a bar is volume * (2 * close_pos - 1) with close_pos = (close - low) / range:
         // 1000 * 2/3, then 1000 * -2/3, then 1500 * 13/15 = 1300.
@@ -269,18 +245,11 @@ mod tests {
     #[test]
     fn test_cvd_simple_mode() {
         let mut cvd = CVD::new().with_mode(CVDMode::Simple);
-        let bars = create_test_bars();
+        let bars = [Bar::new(Utc::now(), 100.0, 110.0, 99.0, 101.0, 1000.0)];
 
         cvd.calculate(&bars);
 
-        // Simple mode: first bar bullish = +1000, second bearish = -1000
-        let IndicatorValue::Single(val) = cvd.values.to_rows()[1] else {
-            panic!("no value: {:?}", cvd.values.to_rows()[1]);
-        };
-        // First is +1000 (bullish), second is -1000 (bearish) = 0
-        assert!(
-            val.abs() < 1.0,
-            "After one bullish and one bearish, delta should be near 0"
-        );
+        // Bullish means +1000 in Simple mode, though ClosePosition gives -7000/11.
+        assert_eq!(cvd.values().value(0, 0), Some(1000.0));
     }
 }

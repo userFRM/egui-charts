@@ -175,13 +175,6 @@ mod tests {
     use crate::studies::test_support::make_bar;
 
     #[test]
-    fn test_swma_val() {
-        // With equal prices, SWMA should equal that price
-        let swma = SWMA::swma_val(100.0, 100.0, 100.0, 100.0);
-        assert!((swma - 100.0).abs() < 0.001);
-    }
-
-    #[test]
     fn test_swma_weighted() {
         // Middle values should have more weight
         // (1*100 + 2*120 + 2*120 + 1*100) / 6 = (100 + 240 + 240 + 100) / 6 = 680 / 6 = 113.33

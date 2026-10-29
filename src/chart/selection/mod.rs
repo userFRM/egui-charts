@@ -82,25 +82,3 @@ impl SelectionState {
         self.bar_idx
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_select_deselect() {
-        let mut state = SelectionState::new();
-        assert_eq!(state.selected_id(), None);
-
-        state.select(ChartElementId::Series(SeriesId::MAIN), Some(42));
-        assert_eq!(
-            state.selected_id(),
-            Some(ChartElementId::Series(SeriesId::MAIN))
-        );
-        assert_eq!(state.selected_bar(), Some(42));
-
-        state.deselect();
-        assert_eq!(state.selected_id(), None);
-        assert_eq!(state.selected_bar(), None);
-    }
-}

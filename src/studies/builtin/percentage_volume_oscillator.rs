@@ -214,17 +214,29 @@ mod tests {
     /// The PVO of a volume series is the PPO of the same series as closes, for a chosen formula.
     #[test]
     fn chosen_averages_apply_to_volume() {
-        let bar = |x: f64| Bar::new(chrono::Utc::now(), x, x, x, x, x);
-        let data: Vec<Bar> = [10.0, 12.0, 11.0, 13.0, 14.0]
+        let volumes = [10.0, 12.0, 11.0, 13.0, 14.0];
+        let data: Vec<Bar> = volumes
             .into_iter()
-            .map(bar)
+            .map(|v| Bar::new(chrono::Utc::now(), 100.0, 100.0, 100.0, 100.0, v))
+            .collect();
+        let prices: Vec<Bar> = volumes
+            .into_iter()
+            .map(crate::studies::test_support::make_bar)
             .collect();
         let averages = (OscillatorAverage::Simple, OscillatorAverage::Exponential);
         let mut pvo =
             PercentageVolumeOscillator::new(2, 3, 2).with_averages(averages.0, averages.1);
         let mut ppo = PriceOscillator::new(2, 3, 2).with_averages(averages.0, averages.1);
         pvo.calculate(&data);
-        ppo.calculate(&data);
-        assert_eq!(format!("{:?}", pvo.values()), format!("{:?}", ppo.values()));
+        ppo.calculate(&prices);
+        for bar in 2..data.len() {
+            for line in 0..3 {
+                assert_eq!(
+                    pvo.values().value(line, bar),
+                    ppo.values().value(line, bar),
+                    "line {line}, bar {bar}"
+                );
+            }
+        }
     }
 }

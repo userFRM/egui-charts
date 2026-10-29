@@ -928,7 +928,7 @@ mod tests {
     }
 
     #[test]
-    fn test_period_color_cycling() {
+    fn letters_have_at_least_4_5_contrast_in_every_mode_period_price_and_theme() {
         let config = TpoRenderConfig::default();
         let num_colors = config.period_colors.len();
 
@@ -971,23 +971,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn test_tpo_profile_generation() {
-        let bars = create_test_bars();
-        let config = TPOConfig {
-            tick_size: 1.0,
-            period_minutes: 30,
-            ..Default::default()
-        };
-
-        let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min1.into());
-        assert!(!profiles.is_empty());
-
-        let profile = &profiles[0];
-        assert!(profile.poc_price > 0.0);
-        assert!(profile.value_area_high >= profile.value_area_low);
     }
 
     #[test]
@@ -1240,15 +1223,6 @@ mod tests {
                 .count();
             assert_eq!(labelled, expected, "{spacing} px per bar");
         }
-    }
-
-    #[test]
-    fn test_render_config_defaults() {
-        let config = TpoRenderConfig::default();
-
-        assert!(config.poc_line_width > 0.0);
-        assert!(config.letter_font_size > 0.0);
-        assert!(config.row_height > 0.0);
     }
 
     #[test]

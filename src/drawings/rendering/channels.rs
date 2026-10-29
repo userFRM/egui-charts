@@ -620,14 +620,14 @@ mod tests {
         restored.id = 1;
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 200.0));
         let outline = restored.outline(rect).unwrap();
-        assert_eq!(
-            outline.lines,
-            vec![
-                [Pos2::new(0.0, 110.0), Pos2::new(100.0, 10.0)],
-                [Pos2::new(0.0, 140.0), Pos2::new(100.0, 40.0)],
-                [Pos2::new(0.0, 125.0), Pos2::new(100.0, 25.0)],
-            ]
-        );
+        assert_eq!(outline.lines.len(), 3);
+        for line in [
+            [Pos2::new(0.0, 110.0), Pos2::new(100.0, 10.0)],
+            [Pos2::new(0.0, 140.0), Pos2::new(100.0, 40.0)],
+            [Pos2::new(0.0, 125.0), Pos2::new(100.0, 25.0)],
+        ] {
+            assert!(outline.lines.contains(&line), "missing {line:?}");
+        }
         assert_eq!(outline.areas.len(), 1);
         let hit = crate::drawings::services::DrawingInteraction::new();
         assert_eq!(

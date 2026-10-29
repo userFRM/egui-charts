@@ -268,103 +268,92 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_snap_to_price() {
-        let service = SnapService::new();
-        let targets = SnapTargets::with_price_time(vec![100.0, 150.0, 200.0], vec![]);
-
-        // Point near 150 should snap
-        let point = Pos2::new(50.0, 152.0);
-        let snapped = service.snap_point(point, &targets);
-        assert_eq!(snapped.y, 150.0);
-        assert_eq!(snapped.x, 50.0); // X unchanged
-    }
-
-    #[test]
-    fn test_snap_to_time() {
-        let service = SnapService::new();
-        let targets = SnapTargets::with_price_time(vec![], vec![100.0, 200.0, 300.0]);
-
-        // Point near 200 should snap
-        let point = Pos2::new(203.0, 50.0);
-        let snapped = service.snap_point(point, &targets);
-        assert_eq!(snapped.x, 200.0);
-        assert_eq!(snapped.y, 50.0); // Y unchanged
-    }
-
-    #[test]
-    fn test_no_snap_outside_distance() {
-        let service = SnapService::new(); // default snap_distance = 10
-        let targets = SnapTargets::with_price_time(vec![100.0], vec![200.0]);
-
-        // Point too far from targets
-        let point = Pos2::new(250.0, 150.0);
-        let snapped = service.snap_point(point, &targets);
-        assert_eq!(snapped, point); // Unchanged
-    }
-
-    #[test]
-    fn test_magnet_mode() {
-        let mut service = SnapService::new();
-        service.set_magnet_mode(true);
-
-        let targets = SnapTargets::with_price_time(vec![], vec![])
-            .with_drawing_points(vec![Pos2::new(100.0, 100.0), Pos2::new(200.0, 200.0)]);
-
-        // Point near first drawing point
-        let point = Pos2::new(105.0, 103.0);
-        let snapped = service.snap_point(point, &targets);
-        assert_eq!(snapped, Pos2::new(100.0, 100.0));
-    }
-
-    #[test]
-    fn test_magnet_outside_distance() {
-        let mut service = SnapService::new();
-        service.set_magnet_mode(true);
-        service.set_magnet_distance(10.0);
-
-        let targets = SnapTargets::with_price_time(vec![], vec![])
-            .with_drawing_points(vec![Pos2::new(100.0, 100.0)]);
-
-        // Point too far
-        let point = Pos2::new(150.0, 150.0);
-        let snapped = service.snap_point(point, &targets);
-        assert_eq!(snapped, point);
-    }
-
-    #[test]
-    fn test_disabled_snap() {
-        let mut service = SnapService::new();
-        service.set_snap_to_price(false);
-        service.set_snap_to_time(false);
-
-        let targets = SnapTargets::with_price_time(vec![100.0], vec![100.0]);
-
-        let point = Pos2::new(101.0, 101.0);
-        let snapped = service.snap_point(point, &targets);
-        assert_eq!(snapped, point); // No snapping
-    }
-
-    #[test]
-    fn test_snap_to_price_ignores_non_finite_values() {
-        let service = SnapService::new();
-        let nan = f32::NAN;
-        // (point y, price targets, expected y)
+    fn snap_respects_targets_modes_and_distances() {
+        let defaults = SnapOptions::default();
+        let magnet = SnapOptions {
+            magnet_mode: true,
+            ..defaults.clone()
+        };
+        let disabled = SnapOptions {
+            snap_to_price: false,
+            snap_to_time: false,
+            ..defaults.clone()
+        };
+        // (options, targets, point, expected)
         let cases = [
-            (10.5, vec![10.0, nan], 10.0),
-            (10.5, vec![nan, 10.0], 10.0),
-            (nan, vec![10.0, 11.0], nan),
-            (10.5, vec![f32::INFINITY], 10.5),
+            (
+                defaults.clone(),
+                SnapTargets::with_price_time(vec![100.0, 150.0, 200.0], vec![]),
+                Pos2::new(50.0, 152.0),
+                Pos2::new(50.0, 150.0),
+            ),
+            (
+                defaults.clone(),
+                SnapTargets::with_price_time(vec![], vec![100.0, 200.0, 300.0]),
+                Pos2::new(203.0, 50.0),
+                Pos2::new(200.0, 50.0),
+            ),
+            (
+                defaults.clone(),
+                SnapTargets::with_price_time(vec![100.0], vec![200.0]),
+                Pos2::new(250.0, 150.0),
+                Pos2::new(250.0, 150.0),
+            ),
+            (
+                magnet.clone(),
+                SnapTargets::new()
+                    .with_drawing_points(vec![Pos2::new(100.0, 100.0), Pos2::new(200.0, 200.0)]),
+                Pos2::new(105.0, 103.0),
+                Pos2::new(100.0, 100.0),
+            ),
+            (
+                SnapOptions {
+                    magnet_distance: 10.0,
+                    ..magnet
+                },
+                SnapTargets::new().with_drawing_points(vec![Pos2::new(100.0, 100.0)]),
+                Pos2::new(150.0, 150.0),
+                Pos2::new(150.0, 150.0),
+            ),
+            (
+                disabled,
+                SnapTargets::with_price_time(vec![100.0], vec![100.0]),
+                Pos2::new(101.0, 101.0),
+                Pos2::new(101.0, 101.0),
+            ),
+            (
+                defaults.clone(),
+                SnapTargets::with_price_time(vec![10.0, f32::NAN], vec![]),
+                Pos2::new(0.0, 10.5),
+                Pos2::new(0.0, 10.0),
+            ),
+            (
+                defaults.clone(),
+                SnapTargets::with_price_time(vec![f32::NAN, 10.0], vec![]),
+                Pos2::new(0.0, 10.5),
+                Pos2::new(0.0, 10.0),
+            ),
+            (
+                defaults.clone(),
+                SnapTargets::with_price_time(vec![10.0, 11.0], vec![]),
+                Pos2::new(0.0, f32::NAN),
+                Pos2::new(0.0, f32::NAN),
+            ),
+            (
+                defaults,
+                SnapTargets::with_price_time(vec![f32::INFINITY], vec![]),
+                Pos2::new(0.0, 10.5),
+                Pos2::new(0.0, 10.5),
+            ),
         ];
-        for (y, prices, expected) in cases {
-            let snapped = service.snap_point(
-                Pos2::new(0.0, y),
-                &SnapTargets::with_price_time(prices.clone(), vec![]),
-            );
-            assert!(
-                snapped.y == expected || (snapped.y.is_nan() && expected.is_nan()),
-                "y {y} targets {prices:?}: got {}",
-                snapped.y
-            );
+        for (i, (options, targets, point, expected)) in cases.into_iter().enumerate() {
+            let snapped = SnapService::with_options(options).snap_point(point, &targets);
+            for (got, want) in [(snapped.x, expected.x), (snapped.y, expected.y)] {
+                assert!(
+                    got == want || (got.is_nan() && want.is_nan()),
+                    "case {i}: {point:?}, {targets:?}: got {snapped:?}, want {expected:?}"
+                );
+            }
         }
     }
 

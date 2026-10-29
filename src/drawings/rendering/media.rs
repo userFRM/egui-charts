@@ -583,6 +583,7 @@ mod tests {
             (Rect::EVERYTHING, 10_000),
         ] {
             let ctx = Context::default();
+            ctx.tessellation_options_mut(|options| options.feathering = false);
             let input = RawInput {
                 screen_rect: Some(viewport),
                 ..Default::default()
@@ -591,8 +592,22 @@ mod tests {
                 drawing.render_image(&Painter::new(ctx.clone(), LayerId::background(), clip));
             });
             let n = output.shapes.len();
+            let check_color = DESIGN_TOKENS.semantic.extended.gray.gamma_multiply(0.8);
+            let mut area = 0.0;
+            for primitive in ctx.tessellate(output.shapes.clone(), output.pixels_per_point) {
+                if let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive {
+                    for triangle in mesh.indices.as_chunks::<3>().0 {
+                        let vertices = triangle.map(|i| mesh.vertices[i as usize]);
+                        if vertices.iter().all(|v| v.color == check_color) {
+                            let [a, b, c] = vertices.map(|v| v.pos);
+                            area +=
+                                ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() / 2.0;
+                        }
+                    }
+                }
+            }
             output.drop_without_applying_deltas();
-            assert!(n > 10, "the visible pattern must still be drawn");
+            assert_eq!(area, dark_squares as f32 * 100.0, "visible checker area");
             assert!(
                 n <= dark_squares + 10,
                 "{n} shapes for {dark_squares} visible squares"

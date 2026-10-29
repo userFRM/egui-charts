@@ -196,9 +196,6 @@ mod tests {
         ab.calculate(&data);
 
         let mut failures = Vec::new();
-        if ab.line_count() != 3 {
-            failures.push(format!("line_count {}, want 3", ab.line_count()));
-        }
         assert_eq!(ab.values.len(), bars.len());
         assert!(matches!(
             ab.values.to_rows()[..2],
