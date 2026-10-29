@@ -76,14 +76,7 @@ impl Stream {
 
     fn failed(&mut self, error: &FeedError, now: f64) {
         if error.is_recoverable() {
-            let backoff = std::time::Duration::from_secs(1 << self.failures.min(6))
-                .min(std::time::Duration::from_secs(60));
-            let delay = match error {
-                FeedError::RateLimited {
-                    retry_after: Some(after),
-                } => backoff.max(*after),
-                _ => backoff,
-            };
+            let delay = super::feed::retry_delay(self.failures, error);
             self.retry_at = Some(now + delay.as_secs_f64());
             self.failures = self.failures.saturating_add(1);
         }

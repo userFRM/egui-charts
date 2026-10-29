@@ -360,24 +360,22 @@ impl DrawingManager {
         let before: Vec<_> = self
             .drawings
             .iter()
-            .filter(|d| d.selectable && self.selection.is_selected(d.id) && !d.locked)
-            .cloned()
+            .enumerate()
+            .filter(|(_, d)| d.selectable && self.selection.is_selected(d.id) && !d.locked)
+            .map(|(index, d)| (index, d.clone()))
             .collect();
         if before.is_empty() {
             return;
         }
-        let snapshot = self.drawings.clone();
-        for old in &before {
-            if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == old.id) {
-                edit(drawing);
-            }
+        for (index, old) in &before {
+            edit(&mut self.drawings[*index]);
             self.queue_edit(old);
         }
         self.painted
             .get_mut()
             .unwrap_or_else(|e| e.into_inner())
-            .retain(|p| !before.iter().any(|d| d.id == p.id));
-        self.history.push_snapshot(snapshot);
+            .retain(|p| !before.iter().any(|(_, d)| d.id == p.id));
+        self.history.push_snapshot(before);
     }
 
     /// Deselects all drawings.
@@ -714,7 +712,12 @@ mod tests {
             manager.drawings.push(line);
 
             manager.start_drag_handle(3, HandlePos::Start);
-            manager.update_drag_handle(Pos2::new(50.0, 50.0), |x| x, f64::from);
+            manager.update_drag_handle(
+                Pos2::new(50.0, 50.0),
+                |x| x,
+                f64::from,
+                |price, from, to| price + f64::from(to - from),
+            );
             manager.end_drag_handle();
             manager.delete_drawing(3);
             edit(&mut manager, |d| d.font_size = 30.0);
@@ -752,18 +755,26 @@ mod tests {
         }
     }
 
+    /// A bulk command on drawing 2 records only that drawing, so its undo and redo keep
+    /// changes made to the others outside history.
     #[test]
     fn bulk_edits_preserve_unrelated_host_changes_and_drawing_order() {
         for edit in [
-            (|d: &mut Drawing| d.folder = vec!["Analysis".into()]) as fn(&mut Drawing),
-            |d| d.visible = false,
-            |d| d.locked = true,
+            (|m: &mut DrawingManager| m.edit_drawings(&[2], |d| d.folder = vec!["Analysis".into()]))
+                as fn(&mut DrawingManager),
+            |m| m.edit_drawings(&[2], |d| d.visible = false),
+            |m| m.edit_drawings(&[2], |d| d.locked = true),
+            |m| {
+                m.select(2);
+                m.edit_selected(|d| d.color = [255, 0, 0, 255]);
+            },
+            |m| m.set_group(&[2], Some("Group".into())),
         ] {
             let mut manager = DrawingManager::new();
             manager.drawings = (0..3)
                 .map(|id| Drawing::new(id, DrawingToolType::HorizontalLine))
                 .collect();
-            manager.edit_drawings(&[2], edit);
+            edit(&mut manager);
             manager.pending_sync.lock().unwrap().clear();
             // Host updates outside this edit must survive both history directions.
             manager.drawings[0].label = Some("Host update".into());
@@ -1168,8 +1179,8 @@ mod tests {
     }
 
     /// A position's stop is an anchor of its own: it starts mirrored around
-    /// the entry, moves without dragging the target along, and its handle
-    /// stays at the end of the stop line, which ends where the target line does.
+    /// the entry and moves without dragging the target along. The target and
+    /// stop handles change price only; the width handle moves both to its x.
     #[test]
     fn position_stop_moves_independently_of_target() {
         let mut manager = DrawingManager::new();
@@ -1186,16 +1197,39 @@ mod tests {
         assert_eq!(manager.drawings[0].chart_points[2].price, 50.0);
 
         manager.start_drag_handle(id, HandlePos::Point(2));
-        manager.update_drag_handle(Pos2::new(50.0, 105.0), x_to_bar, y_to_price);
+        manager.update_drag_handle(
+            Pos2::new(50.0, 105.0),
+            x_to_bar,
+            y_to_price,
+            |price, from, to| price - f64::from(to - from),
+        );
         manager.end_drag_handle();
         let points = &manager.drawings[0].chart_points;
         assert_eq!((points[1].price, points[2].price), (150.0, 95.0));
         assert_eq!(points[2].bar_idx, 110.0);
 
         manager.start_drag_handle(id, HandlePos::Point(1));
-        manager.update_drag_handle(Pos2::new(40.0, 85.0), x_to_bar, y_to_price);
+        manager.update_drag_handle(
+            Pos2::new(40.0, 85.0),
+            x_to_bar,
+            y_to_price,
+            |price, from, to| price - f64::from(to - from),
+        );
         manager.end_drag_handle();
         let points = &manager.drawings[0].chart_points;
-        assert_eq!((points[2].bar_idx, points[2].price), (40.0, 95.0));
+        assert_eq!((points[1].bar_idx, points[1].price), (110.0, 115.0));
+        assert_eq!((points[2].bar_idx, points[2].price), (110.0, 95.0));
+
+        manager.start_drag_handle(id, HandlePos::End);
+        manager.update_drag_handle(
+            Pos2::new(260.0, 30.0),
+            x_to_bar,
+            y_to_price,
+            |price, from, to| price - f64::from(to - from),
+        );
+        manager.end_drag_handle();
+        let points = &manager.drawings[0].chart_points;
+        assert_eq!((points[1].bar_idx, points[1].price), (260.0, 115.0));
+        assert_eq!((points[2].bar_idx, points[2].price), (260.0, 95.0));
     }
 }

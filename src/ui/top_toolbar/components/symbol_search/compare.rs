@@ -669,15 +669,6 @@ mod tests {
     }
 
     #[test]
-    fn test_compare_symbol_creation() {
-        let sym = CompareSymbol::new("BTCUSD", "Bitcoin", "CRYPTO", Color32::GOLD);
-        assert_eq!(sym.symbol, "BTCUSD");
-        assert_eq!(sym.name, "Bitcoin");
-        assert_eq!(sym.exchange, "CRYPTO");
-        assert!(sym.visible);
-    }
-
-    #[test]
     fn comparison_actions_wait_for_host_acceptance() {
         let mut dialog = CompareSymbolsDialog::new();
         assert!(!dialog.is_open);

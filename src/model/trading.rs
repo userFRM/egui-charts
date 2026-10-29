@@ -6,6 +6,14 @@
 
 use chrono::{DateTime, Utc};
 
+/// A relative bound at `scale` for floating-point comparisons.
+/// Partial closes accumulate rounding, so quantities use a `1e-9` relative bound at the original
+/// quantity's scale, or the larger of the held and filled quantities without that history.
+/// Price-distance ties use four ulps for a single step.
+pub(crate) fn rounding_tolerance(scale: f64, relative: f64) -> f64 {
+    relative * scale.abs()
+}
+
 /// Identifies an order. The broker chooses it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OrderId(
@@ -43,6 +51,12 @@ impl OrderSide {
             OrderSide::Sell => "SELL",
         }
     }
+
+    /// Whether an exit on this side reduces `position`, a signed net quantity: not once the
+    /// position is flat or on this side, as after a close or a reverse.
+    pub(crate) fn reduces(self, position: f64) -> bool {
+        position != 0.0 && (self == OrderSide::Buy) != (position > 0.0)
+    }
 }
 
 /// How an order executes. Prices are in the symbol's price units.
@@ -62,6 +76,37 @@ pub enum OrderType {
         /// Limit price of the order after triggering.
         limit: f64,
     },
+}
+
+impl OrderType {
+    /// Where an order of this type on `side` fills while the price moves from `start` to `end`,
+    /// or `None` if it does not: a market order at `start`, a limit or stop already reached at
+    /// `start` there, one the movement reaches at its price. A stop-limit order returns the
+    /// point where its stop triggered; the caller continues it from there as a limit order.
+    pub(crate) fn fill_price(&self, side: OrderSide, start: f64, end: f64) -> Option<f64> {
+        let buy = side == OrderSide::Buy;
+        let reach = |price: f64, at_or_below: bool| {
+            let reached = |at: f64| {
+                if at_or_below {
+                    at <= price
+                } else {
+                    at >= price
+                }
+            };
+            if reached(start) {
+                Some(start)
+            } else if reached(end) {
+                Some(price)
+            } else {
+                None
+            }
+        };
+        match *self {
+            OrderType::Market => Some(start),
+            OrderType::Limit(limit) => reach(limit, buy),
+            OrderType::Stop(stop) | OrderType::StopLimit { stop, .. } => reach(stop, !buy),
+        }
+    }
 }
 
 /// The role of an exit order attached to the net position in its symbol.
@@ -452,6 +497,11 @@ pub struct TradingRules {
     /// The profit or loss in the account's currency of one unit moving by one price unit: 1 for
     /// a share, the contract multiplier for a future.
     pub point_value: f64,
+    /// The profit or loss in the account's currency of one unit moving by one pip. `None` when the
+    /// broker reports none: the ticket then takes the instrument's
+    /// [`pip_size`](crate::model::Instrument::pip_size) times
+    /// [`point_value`](Self::point_value), and shows no pip value for an instrument without pips.
+    pub pip_value: Option<f64>,
     /// The times in force the broker accepts for the symbol, the default first. Never empty.
     pub time_in_force: Vec<TimeInForce>,
     /// The trade value per unit of margin, such as 20 for 20:1, if the broker trades the symbol
@@ -469,8 +519,62 @@ impl TradingRules {
             min_quantity: 1.0,
             max_quantity: None,
             point_value: 1.0,
+            pip_value: None,
             time_in_force: vec![TimeInForce::Day],
             leverage: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fill_price_follows_the_side_and_the_movement() {
+        use OrderSide::{Buy, Sell};
+        let stop_limit = OrderType::StopLimit {
+            stop: 100.0,
+            limit: 101.0,
+        };
+        // (order type, side, start, end, fill)
+        let cases = [
+            (OrderType::Market, Buy, 103.0, 97.0, Some(103.0)),
+            (OrderType::Market, Sell, 97.0, 103.0, Some(97.0)),
+            // Gap: already beyond the price at the start, so filled there.
+            (OrderType::Limit(100.0), Buy, 98.0, 95.0, Some(98.0)),
+            (OrderType::Limit(100.0), Sell, 102.0, 105.0, Some(102.0)),
+            (OrderType::Stop(100.0), Buy, 102.0, 105.0, Some(102.0)),
+            (OrderType::Stop(100.0), Sell, 98.0, 95.0, Some(98.0)),
+            (stop_limit, Buy, 102.0, 105.0, Some(102.0)),
+            // Through: the movement reaches the price, so filled at it.
+            (OrderType::Limit(100.0), Buy, 103.0, 97.0, Some(100.0)),
+            (OrderType::Limit(100.0), Buy, 103.0, 100.0, Some(100.0)),
+            (OrderType::Limit(100.0), Sell, 97.0, 103.0, Some(100.0)),
+            (OrderType::Stop(100.0), Buy, 97.0, 103.0, Some(100.0)),
+            (OrderType::Stop(100.0), Sell, 103.0, 97.0, Some(100.0)),
+            (stop_limit, Buy, 97.0, 103.0, Some(100.0)),
+            (stop_limit, Sell, 103.0, 97.0, Some(100.0)),
+            // Not reached, including a movement away from the price.
+            (OrderType::Limit(100.0), Buy, 103.0, 101.0, None),
+            (OrderType::Limit(100.0), Sell, 97.0, 99.0, None),
+            (OrderType::Limit(100.0), Sell, 99.0, 97.0, None),
+            (OrderType::Stop(100.0), Buy, 97.0, 99.0, None),
+            (OrderType::Stop(100.0), Sell, 103.0, 101.0, None),
+            (stop_limit, Buy, 97.0, 99.0, None),
+            (stop_limit, Sell, 103.0, 101.0, None),
+            // A single price, as the paper account passes it.
+            (OrderType::Limit(100.0), Buy, 100.0, 100.0, Some(100.0)),
+            (OrderType::Limit(100.0), Buy, 100.5, 100.5, None),
+            (OrderType::Stop(100.0), Sell, 100.0, 100.0, Some(100.0)),
+            (OrderType::Stop(100.0), Sell, 100.5, 100.5, None),
+        ];
+        for (order_type, side, start, end, fill) in cases {
+            assert_eq!(
+                order_type.fill_price(side, start, end),
+                fill,
+                "{side:?} {order_type:?} from {start} to {end}"
+            );
         }
     }
 }
