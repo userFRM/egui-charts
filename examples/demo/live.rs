@@ -716,17 +716,18 @@ impl Simulation {
 }
 
 fn live_signal(time: DateTime<Utc>, price: f64) -> Signal {
-    Signal {
-        id: SignalId("live".into()),
-        shape: SignalShape::Marker {
+    let mut signal = Signal::new(
+        SignalId("live".into()),
+        SignalShape::Marker {
             time,
             price: Some(price),
             direction: Direction::Neutral,
         },
-        category: "Live analytics".into(),
-        label: Some("Host tick".into()),
-        tooltip: Some("Synthetic analytics updated by the demo host.".into()),
-    }
+        "Live analytics",
+    );
+    signal.label = Some("Host tick".into());
+    signal.tooltip = Some("Synthetic analytics updated by the demo host.".into());
+    signal
 }
 
 impl Signals for LiveFeed {
@@ -738,28 +739,30 @@ impl Signals for LiveFeed {
         if let Some(last) = bars.last() {
             events.push(SignalEvent::Upsert(live_signal(last.time, last.close)));
             let first = &bars[bars.len().saturating_sub(20)];
-            events.push(SignalEvent::Upsert(Signal {
-                id: SignalId("zone".into()),
-                shape: SignalShape::Zone {
+            let mut signal = Signal::new(
+                SignalId("zone".into()),
+                SignalShape::Zone {
                     from: first.time,
                     to: Some(last.time),
                     low: first.low,
                     high: first.high,
                 },
-                category: "Zones".into(),
-                label: Some("Host zone".into()),
-                tooltip: Some("A price zone supplied by the demo host.".into()),
-            }));
-            events.push(SignalEvent::Upsert(Signal {
-                id: SignalId("level".into()),
-                shape: SignalShape::Level {
+                "Zones",
+            );
+            signal.label = Some("Host zone".into());
+            signal.tooltip = Some("A price zone supplied by the demo host.".into());
+            events.push(SignalEvent::Upsert(signal));
+            let mut signal = Signal::new(
+                SignalId("level".into()),
+                SignalShape::Level {
                     price: first.high,
                     from: Some(first.time),
                 },
-                category: "Levels".into(),
-                label: Some("Host level".into()),
-                tooltip: Some("A level supplied by the demo host.".into()),
-            }));
+                "Levels",
+            );
+            signal.label = Some("Host level".into());
+            signal.tooltip = Some("A level supplied by the demo host.".into());
+            events.push(SignalEvent::Upsert(signal));
         }
         self.state().signals.push(events);
     }

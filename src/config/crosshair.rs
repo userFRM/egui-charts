@@ -9,6 +9,7 @@ use egui::Color32;
 
 /// Crosshair mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum CrosshairMode {
     /// Normal crosshair (snaps x to the bar center and follows the pointer value)
     #[default]
@@ -29,6 +30,7 @@ impl CrosshairMode {
 
 /// Crosshair visual style
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum CrosshairStyle {
     /// Full crosshair with vertical and horizontal lines (default)
     #[default]

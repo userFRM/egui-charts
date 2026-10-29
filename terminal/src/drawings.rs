@@ -213,6 +213,7 @@ impl Terminal {
                 CrosshairStyle::Arrow | CrosshairStyle::Hidden => CursorType::Arrow,
                 CrosshairStyle::Demonstration => CursorType::Demonstration,
                 CrosshairStyle::Magic => CursorType::Magic,
+                _ => CursorType::Cross,
             },
             eraser_mode_enabled: manager.eraser_mode,
             stay_in_drawing_mode: manager.stay_in_drawing_mode,

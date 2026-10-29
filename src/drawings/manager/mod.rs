@@ -50,6 +50,7 @@ pub enum DrawingSyncAction {
 /// of each frame to ensure the manager stays in sync with toolbar selections,
 /// keyboard shortcuts, and other UI actions that modify drawing state.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct DrawingState {
     /// Currently selected drawing tool. `None` means selection/pointer mode.
     pub active_tool: Option<DrawingToolType>,
@@ -74,6 +75,7 @@ const DEFAULT_DRAWING_COLOR: [u8; 4] = [233, 30, 99, 255];
 /// Controls default colors, snapping behavior, magnet mode thresholds, and
 /// selection handle appearance.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct DrawingManagerOptions {
     /// Default color for new drawings as RGBA bytes.
     pub default_color: [u8; 4],
@@ -232,6 +234,15 @@ pub struct DrawingManager {
     pub pending_sync: Arc<Mutex<Vec<DrawingSyncAction>>>,
     /// Whether edits emit per-drawing storage notifications.
     pub(crate) sync_enabled: bool,
+}
+
+impl std::fmt::Debug for DrawingManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DrawingManager")
+            .field("active_tool", &self.active_tool)
+            .field("drawings", &self.drawings.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for DrawingManager {

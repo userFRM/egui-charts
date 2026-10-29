@@ -58,6 +58,16 @@ pub struct ChartView<'a> {
     pub executions: Option<&'a crate::data::Footprint>,
 }
 
+impl std::fmt::Debug for ChartView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChartView")
+            .field("revision", &self.revision)
+            .field("time_axis", &self.time_axis)
+            .field("bars", &self.bars.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Index of the first bar and the bars from anchor `a` to anchor `b`
 /// (inclusive, either order), clamped to the series; `None` when no bar lies
 /// between them.

@@ -48,6 +48,7 @@ pub enum FootprintColor {
 /// it with its chart settings; fields missing from older documents take their defaults.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct FootprintConfig {
     /// One to four columns per bar; only the first four entries are drawn.
     pub modes: Vec<FootprintMode>,

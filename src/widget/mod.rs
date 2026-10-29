@@ -442,6 +442,16 @@ pub struct Chart {
     merge_groups: merge::Groups,
 }
 
+impl std::fmt::Debug for Chart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Chart")
+            .field("symbol", &self.symbol())
+            .field("timeframe", &self.timeframe())
+            .field("bars", &self.bars(SeriesId::MAIN).len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// The object a right-click landed on, with the data needed to position and
 /// populate a context menu.
 ///

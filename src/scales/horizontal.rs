@@ -9,7 +9,7 @@
 
 use super::time_formatter::TimeFormatter;
 use super::timescale_marks::{
-    TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkType, TickMarkWeight, keep_spaced,
+    TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkWeight, keep_spaced,
 };
 use crate::model::Bar;
 use chrono::{DateTime, Utc};
@@ -246,13 +246,13 @@ fn weighted_marks(
 ) -> Vec<TickMark> {
     let marks = points
         .iter()
-        .map(|&(time, index)| TickMark {
-            time,
-            mark_type: TickMarkType::Time,
-            weight: TickMarkWeight::new(weight(time_key(time))),
-            label: String::new(),
-            index,
-            bold: false,
+        .map(|&(time, index)| {
+            TickMark::new(
+                time,
+                index,
+                TickMarkWeight::new(weight(time_key(time))),
+                String::new(),
+            )
         })
         .collect();
     let mut kept = keep_spaced(

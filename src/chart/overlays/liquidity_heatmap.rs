@@ -28,6 +28,14 @@ pub struct LiquidityHeatmap {
     colors: Option<[Color32; 2]>,
 }
 
+impl std::fmt::Debug for LiquidityHeatmap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiquidityHeatmap")
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
+}
+
 impl LiquidityHeatmap {
     /// Draws the history using the pane's price mapping and the host's time-to-x conversion.
     /// `step` is the instrument tick size times the history's ticks per row. Buy and sell

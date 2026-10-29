@@ -614,6 +614,7 @@ impl SymbolDetails {
 }
 
 /// A live subscription: push its updates into `sink` until [`Datafeed::unsubscribe`] gets `id`.
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct Subscription {
     /// Identifier passed back to the feed when unsubscribing.

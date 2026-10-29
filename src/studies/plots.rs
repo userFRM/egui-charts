@@ -4,6 +4,7 @@ use egui::Color32;
 
 /// One boundary of a study band, in the study's value scale.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum FillBoundary {
     /// A zero-based output line, including its offset and visibility.
     Plot(usize),

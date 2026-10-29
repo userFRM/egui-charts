@@ -6,6 +6,7 @@
 use crate::drawings::domain::Drawing;
 
 /// Service for managing drawing z-order (render layering)
+#[derive(Debug)]
 pub struct ZOrderService;
 
 impl ZOrderService {

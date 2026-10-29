@@ -30,6 +30,12 @@ pub struct ValueFormatters<'a> {
     pub percentage: Option<&'a dyn PriceFormatter>,
 }
 
+impl std::fmt::Debug for ValueFormatters<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ValueFormatters").finish_non_exhaustive()
+    }
+}
+
 /// One visible study plot's value at the selected bar. Missing or warming-up values stay absent.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StudyValue {

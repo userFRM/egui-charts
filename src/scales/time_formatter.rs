@@ -73,6 +73,7 @@ pub trait TimeFormatter: Send + Sync {
 
 /// Default time formatter using standard formats
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct DefaultTimeFormatter {
     /// Whether to use 24-hour format
     pub use_24_hour: bool,
@@ -247,6 +248,7 @@ impl Style<'_> {
 /// The names need the `locales` cargo feature, on by default; without it they
 /// are English, as with an unknown locale.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct LocaleTimeFormatter {
     /// Locale identifier: language and region, such as `"en-US"`, `"ja-JP"` or
     /// `"de-DE"` (`"de_DE"` also works). Unknown identifiers use English names.
@@ -314,6 +316,13 @@ impl TimeFormatter for LocaleTimeFormatter {
 #[derive(Clone)]
 pub struct CustomTimeFormatter {
     formatter: Arc<dyn Fn(DateTime<Utc>, TickMarkType) -> String + Send + Sync>,
+}
+
+impl std::fmt::Debug for CustomTimeFormatter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomTimeFormatter")
+            .finish_non_exhaustive()
+    }
 }
 
 impl CustomTimeFormatter {
@@ -528,6 +537,19 @@ pub struct TimeFormatterBuilder {
     formatter: Option<Box<dyn TimeFormatter>>,
     timezone: Option<TimezoneMode>,
     time_visible: bool,
+}
+
+impl std::fmt::Debug for TimeFormatterBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TimeFormatterBuilder")
+            .field("use_24_hour", &self.use_24_hour)
+            .field("show_seconds", &self.show_seconds)
+            .field("locale", &self.locale)
+            .field("date_format", &self.date_format)
+            .field("timezone", &self.timezone)
+            .field("time_visible", &self.time_visible)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TimeFormatterBuilder {

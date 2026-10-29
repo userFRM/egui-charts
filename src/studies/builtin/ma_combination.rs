@@ -11,6 +11,7 @@ use egui::Color32;
 
 /// Average formula used by a line of [`MACombination`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AverageType {
     /// Arithmetic mean of a complete window.
     Simple,
@@ -52,6 +53,7 @@ impl AverageType {
 
 /// One moving average's formula, length, input price and colour.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct AverageLine {
     /// Average formula.
     pub kind: AverageType,

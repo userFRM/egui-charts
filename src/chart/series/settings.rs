@@ -9,6 +9,7 @@ use egui::Color32;
 
 /// Settings for chart series appearance
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct SeriesSettings {
     /// Active chart type, used by the dialog to choose the controls to show.
     /// Applying settings keeps the chart's currently selected type.

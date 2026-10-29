@@ -87,6 +87,7 @@ impl TickMarkWeight {
 
 /// A single tick mark on the time axis
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TickMark {
     /// Time of this tick mark
     pub time: DateTime<Utc>,
@@ -105,6 +106,28 @@ pub struct TickMark {
 
     /// Whether the label is drawn bold where the time scale options allow bold labels
     pub bold: bool,
+}
+
+impl TickMark {
+    /// A mark at the bar `index` whose key is `time`, for a
+    /// [`HorizontalScale`](crate::scales::HorizontalScale) to return. It is of type
+    /// [`TickMarkType::Time`] and not bold; assign [`mark_type`](Self::mark_type) and
+    /// [`bold`](Self::bold) to change that.
+    pub fn new(
+        time: DateTime<Utc>,
+        index: usize,
+        weight: TickMarkWeight,
+        label: impl Into<String>,
+    ) -> Self {
+        Self {
+            time,
+            mark_type: TickMarkType::Time,
+            weight,
+            label: label.into(),
+            index,
+            bold: false,
+        }
+    }
 }
 
 /// Configuration for tick mark generation
@@ -144,6 +167,15 @@ pub struct TickMarkGenerator {
     config: TickMarkGeneratorConfig,
     formatter: Box<dyn TimeFormatter>,
     uniform_distribution: bool,
+}
+
+impl std::fmt::Debug for TickMarkGenerator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TickMarkGenerator")
+            .field("config", &self.config)
+            .field("uniform_distribution", &self.uniform_distribution)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TickMarkGenerator {

@@ -20,6 +20,7 @@ pub struct StudyDataRequest {
 /// A requested series available during calculation, sorted by time with unique bars.
 /// Metric points use their value for OHLC and zero volume, without interval aggregation.
 /// An unavailable history has no bars; it is never substituted with the chart's prices.
+#[derive(Debug)]
 pub struct StudyData<'a> {
     /// The declaration this series answers, before resolving chart defaults.
     pub request: StudyDataRequest,

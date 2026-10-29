@@ -94,6 +94,17 @@ pub struct PrimitiveView<'a> {
     pub visible: Range<usize>,
 }
 
+impl std::fmt::Debug for PrimitiveView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrimitiveView")
+            .field("series", &self.series)
+            .field("mapping", &self.mapping)
+            .field("visible", &self.visible)
+            .field("bars", &self.bars.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl PrimitiveView<'_> {
     /// Aligned source ranges for a custom renderer's merge hook. Groups start at multiples
     /// of `factor`, include the visible range's edge groups and never exceed `bars`.

@@ -16,6 +16,7 @@ use std::collections::HashSet;
 /// `Start`, `End`, and `Middle`; rectangles use the four corner handles;
 /// multi-point tools use indexed `Point(i)` handles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HandlePos {
     /// First anchor point of the drawing.
     Start,
@@ -38,6 +39,7 @@ pub enum HandlePos {
 
 /// Arrow/arrowhead style for line drawings
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ArrowStyle {
     /// No arrowhead
     None,
@@ -92,6 +94,7 @@ pub use crate::config::FontWeight;
 ///
 /// Allows drawings to be visible only on specific timeframes.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TimeframeVisibility {
     /// If true, show on all timeframes (default behavior)
     pub show_on_all: bool,
@@ -148,6 +151,7 @@ impl TimeframeVisibility {
 
 /// Drawing interaction options
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct DrawingOptions {
     /// Enable snap to OHLC prices
     pub snap_to_price: bool,
@@ -190,6 +194,7 @@ impl Default for DrawingOptions {
 
 /// Configuration for a single Fibonacci level
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FibonacciLevel {
     /// The ratio value (e.g., 0.236, 0.382, 0.618)
     pub value: f32,
@@ -377,6 +382,7 @@ impl Default for RegressionTrendConfig {
 /// in the account currency per price point. Defaults retain unit sizing without rounding.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct PositionSizing {
     /// Account-currency value of one price point per underlying unit.
     pub point_value: f64,
@@ -427,6 +433,7 @@ impl PositionSizing {
 
 /// How a long or short position drawing sizes its quantity.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum PositionSize {
     /// A fixed quantity, interpreted as lots by [`Self::quantity_with_sizing`].
     Quantity(f64),

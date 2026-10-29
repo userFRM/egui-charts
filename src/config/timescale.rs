@@ -10,6 +10,7 @@ use egui::Color32;
 /// Time Scale Options.
 /// Controls bar spacing, scrolling constraints, and time display.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct TimeScaleOptions {
     /// The margin space in bars from the right side of the chart, kept
     /// whenever the view returns to the live edge.

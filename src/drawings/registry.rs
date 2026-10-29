@@ -25,6 +25,7 @@ pub trait DrawingRenderer: Send + Sync {
 /// Whether a built-in tool appears in a picker and can create new drawings. Existing drawings
 /// remain visible and editable, so hiding a tool never makes a saved annotation disappear.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ToolAvailability {
     /// Include the tool in picker lists.
     pub visible: bool,
@@ -52,10 +53,19 @@ pub struct RegisteredDrawingTool {
     pub implementation: Arc<dyn DrawingRenderer>,
 }
 
+impl std::fmt::Debug for RegisteredDrawingTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegisteredDrawingTool")
+            .field("name", &self.name)
+            .field("anchors", &self.anchors)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Per-manager catalogue. Register stable host-owned string ids before loading drawings.
 /// Unknown custom ids stay in storage but are not rendered or hit until registered.
 /// Clone the catalogue into a host picker to share implementations and availability.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct DrawingToolRegistry {
     custom: BTreeMap<String, RegisteredDrawingTool>,
     builtins: HashMap<DrawingToolType, ToolAvailability>,

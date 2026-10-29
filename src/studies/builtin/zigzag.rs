@@ -6,6 +6,7 @@ use egui::Color32;
 
 /// ZigZag mode - what price to use
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ZigZagMode {
     /// Use high/low for zigzag points
     #[default]
@@ -18,6 +19,7 @@ pub enum ZigZagMode {
 
 /// One swing extreme in source-bar order. The last pivot is provisional and can move.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ZigZagPivot {
     /// Index in the bars passed to [`Indicator::calculate`], including skipped bars.
     pub bar_index: usize,

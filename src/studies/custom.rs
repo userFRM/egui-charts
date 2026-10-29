@@ -73,6 +73,14 @@ pub struct CustomIndicator {
     plot_color: Option<PlotColorFn>,
 }
 
+impl std::fmt::Debug for CustomIndicator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomIndicator")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
 impl CustomIndicator {
     /// Create a new custom indicator.
     ///

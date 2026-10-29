@@ -13,6 +13,7 @@ use egui::Color32;
 /// Saved settings without a field take its default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct CandleColorConfig {
     /// Colour each candle by its close against the previous close instead of its open.
     pub color_by_previous_close: bool,
@@ -64,6 +65,7 @@ impl Default for CandleColorConfig {
 /// Status line display options. Saved settings without a field take its default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct StatusLineOptions {
     /// Whether the legend shows the host's instrument logo before the title.
     pub show_logo: bool,
@@ -263,6 +265,7 @@ impl Default for MarginsSettings {
 /// Scales and lines tab settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct ScalesAndLinesSettings {
     /// Display host-supplied currency metadata.
     pub show_currency: bool,
@@ -359,6 +362,7 @@ impl Default for ScalesAndLinesSettings {
 /// Saved settings without a field take its default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct TradingSettings {
     /// Buy and Sell place a market order of the order quantity at once instead of opening the
     /// order ticket.
@@ -455,6 +459,7 @@ impl TradingNotifications {
 /// Alerts tab settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct AlertsSettings {
     /// Ask the host to play a local sound when an alert fires.
     pub play_sound: bool,
@@ -491,6 +496,7 @@ impl Default for AlertsSettings {
 
 /// Serializable display settings shared by the chart and its settings dialog.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ChartSettingsState {
     // Symbol tab
     /// Active representation used to select the Symbol controls. Applying settings keeps the chart type.

@@ -155,6 +155,14 @@ pub struct Sink {
     pub(crate) id: SubscriptionId,
 }
 
+impl std::fmt::Debug for Sink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sink")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Sink {
     /// Starts a new replay position on this subscription. The next chart drain clears prior
     /// bars, trades, depth, quote and sampled history before applying subsequent pushes. Resets

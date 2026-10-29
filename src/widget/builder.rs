@@ -601,6 +601,16 @@ pub struct ChartBuilder {
     study_factory: Option<crate::studies::IndicatorFactory>,
 }
 
+impl std::fmt::Debug for ChartBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChartBuilder")
+            .field("symbol", &self.symbol)
+            .field("timeframe", &self.timeframe)
+            .field("chart_type", &self.chart_type)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ChartBuilder {
     /// Create a new chart builder with sensible defaults
     ///

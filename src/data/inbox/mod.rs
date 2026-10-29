@@ -276,6 +276,15 @@ pub struct Reply<T: Send + 'static> {
     answer: PhantomData<fn(T)>,
 }
 
+impl<T: Send + 'static> std::fmt::Debug for Reply<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reply")
+            .field("request", &self.request)
+            .field("sent", &self.sent)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<T: Send + 'static> Reply<T> {
     /// Delivers `result` to the chart.
     pub fn send(mut self, result: Result<T, FeedError>) {

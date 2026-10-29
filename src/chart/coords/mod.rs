@@ -14,6 +14,7 @@ use egui::{Pos2, Rect};
 ///
 /// Share the mapping with overlays and hit tests to keep them aligned with the pane.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct ChartMapping {
     /// The chart rectangle (rendering area)
     pub rect: Rect,

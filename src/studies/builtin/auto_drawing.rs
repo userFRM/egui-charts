@@ -8,6 +8,7 @@ use egui::Color32;
 
 /// Construction to place on the latest Zig Zag pivots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AutoDrawingKind {
     /// Last two pivots of the same kind, including the moving last extreme.
     TrendLine,

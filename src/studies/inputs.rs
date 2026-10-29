@@ -5,6 +5,7 @@ use egui::Color32;
 
 /// A price series or an output of another study on the chart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum StudySource {
     /// A field or average of fields of the input bars.
     Price(PriceSource),
@@ -71,6 +72,7 @@ pub enum InputKind {
 
 /// An editable input, with a stable study-local id and its current value.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct StudyInput {
     /// Id passed to [`Indicator::set_input`](super::Indicator::set_input).
     pub id: String,

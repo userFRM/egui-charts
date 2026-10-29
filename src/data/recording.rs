@@ -11,6 +11,7 @@ const MAX_RECORD: usize = 16 * 1024 * 1024;
 /// Writes a compact binary recording: a version header, then length-framed events with fixed
 /// little-endian numbers, optional-id flags and UTF-8 symbols. No runtime or filesystem policy
 /// is imposed; a host can use a buffered file on native targets or bytes in a browser.
+#[derive(Debug)]
 pub struct RecordingWriter<W: Write> {
     writer: W,
 }
@@ -129,6 +130,7 @@ impl<W: Write> RecordingWriter<W> {
 
 /// Reads one binary event at a time. Limits allocation to 16 MiB per record, rejects unknown
 /// versions, malformed values and truncated records, and distinguishes clean EOF from truncation.
+#[derive(Debug)]
 pub struct RecordingReader<R: Read> {
     reader: R,
 }

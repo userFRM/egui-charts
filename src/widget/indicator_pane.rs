@@ -69,6 +69,7 @@ mod indicator_sizing {
 /// for common indicators via [`IndicatorPaneConfig::rsi`],
 /// [`IndicatorPaneConfig::macd`], and [`IndicatorPaneConfig::stochastic`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct IndicatorPaneConfig {
     /// Panel height in egui logical points.
     pub height: f32,
@@ -251,6 +252,7 @@ impl IndicatorCoordParams {
 /// Returned by [`IndicatorPane::show_aligned_interactive`]. Besides the rects
 /// and y-axis range used for click hit-testing, it carries the [`Response`] for
 /// the legend's close "x" so the host can offer one-click pane removal.
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct PaneInteraction {
     /// Full panel rect, including the y-axis label gutter.
@@ -298,6 +300,15 @@ pub struct IndicatorPane {
     pub(super) axis_tags: Vec<Option<Rect>>,
     pub(super) axis_options: crate::config::PriceAxisOptions,
     pub(super) legend_backdrop: f32,
+}
+
+impl std::fmt::Debug for IndicatorPane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IndicatorPane")
+            .field("config", &self.config)
+            .field("overlay", &self.overlay)
+            .finish_non_exhaustive()
+    }
 }
 
 impl IndicatorPane {

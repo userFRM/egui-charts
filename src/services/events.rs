@@ -20,6 +20,15 @@ pub struct Events<T: Send + 'static> {
     event: PhantomData<fn(T)>,
 }
 
+impl<T: Send + 'static> std::fmt::Debug for Events<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Events")
+            .field("key", &self.key)
+            .field("active", &self.is_active())
+            .finish_non_exhaustive()
+    }
+}
+
 impl<T: Send + 'static> Events<T> {
     /// Delivers `event` to the terminal, or nothing once the stream is inactive.
     pub fn push(&self, event: T) {

@@ -52,6 +52,7 @@ const DAY_MS: i64 = 86_400_000;
 
 /// The period at whose start [`RelativeVolumeAtTime`] restarts its comparison.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RelativeVolumeAnchor {
     /// Each trading day.
     #[default]

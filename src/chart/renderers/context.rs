@@ -11,6 +11,14 @@ pub struct RenderContext<'a> {
     pub rect: Rect,
 }
 
+impl std::fmt::Debug for RenderContext<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderContext")
+            .field("rect", &self.rect)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> RenderContext<'a> {
     /// Bind a painter to the rectangle available for rendering.
     pub fn new(painter: &'a Painter, rect: Rect) -> Self {

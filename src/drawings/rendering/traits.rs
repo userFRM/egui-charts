@@ -48,6 +48,18 @@ pub struct RenderContext<'a> {
     pub handle_size: f32,
 }
 
+impl std::fmt::Debug for RenderContext<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderContext")
+            .field("chart_rect", &self.chart_rect)
+            .field("stroke", &self.stroke)
+            .field("fill_color", &self.fill_color)
+            .field("show_handles", &self.show_handles)
+            .field("handle_size", &self.handle_size)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> RenderContext<'a> {
     /// Create a new render context
     pub fn new(painter: &'a Painter, chart_rect: Rect) -> Self {

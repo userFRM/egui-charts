@@ -111,6 +111,7 @@ pub enum SessionBreakType {
 /// matching NYSE regular-session close in exchange time, or [`continuous`](Self::continuous)
 /// for 24/7 markets (midnight UTC).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct DailySessionProvider {
     /// Hour of day for session break (0-23)
     pub break_hour: u32,
@@ -317,6 +318,14 @@ impl SessionProvider for CompositeSessionProvider {
 
     fn name(&self) -> &str {
         "Composite Sessions"
+    }
+}
+
+impl std::fmt::Debug for CompositeSessionProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompositeSessionProvider")
+            .field("providers", &self.providers.len())
+            .finish_non_exhaustive()
     }
 }
 
