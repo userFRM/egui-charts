@@ -230,6 +230,7 @@ The default build includes the chart, studies, drawings and UI components, plus 
 | `widget`, `drawings` | Chart widget and drawing interaction |
 | `studies` | Study calculations without egui |
 | `alert-engine` | `AlertEngine`, an alerts service that evaluates alerts on the bars the host feeds it, without egui |
+| `detectors` | `OrderFlowDetectors`, a signals service that finds order-flow events in the trades and depth the host feeds it, without egui |
 | `strategies` | `Backtest`, which runs a `Strategy` over bars and returns a `StrategyReport`, without egui |
 | None | Data types, scales and host service contracts without egui |
 

@@ -39,6 +39,36 @@ pub fn run(name: &str, frames: usize) {
         }
         return;
     }
+    if name == "trade-replay" {
+        let fills: Vec<_> = (0..100_000)
+            .map(|id| {
+                egui_charts::model::Tick::new(
+                    chrono::DateTime::from_timestamp(id, 0).unwrap(),
+                    100.0,
+                    1.0,
+                    None,
+                )
+                .with_id(id as u64)
+            })
+            .collect();
+        let mut replay = fills.clone();
+        replay.extend(fills.iter().cloned().map(|fill| {
+            let id = fill.id.unwrap();
+            fill.with_aggressor_order_id(id + 1)
+        }));
+        let aggregate = |fills: &[_]| {
+            egui_charts::data::aggregate_trades(
+                black_box(fills),
+                egui_charts::model::Timeframe::Min1,
+            )
+            .unwrap()
+        };
+        let expected = aggregate(&fills);
+        for _ in 0..frames {
+            assert_eq!(aggregate(&replay), expected);
+        }
+        return;
+    }
     if name == "depth" {
         depth(frames);
         return;
