@@ -8,7 +8,8 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2, epaint::StrokeKind};
 
 /// Render markers on the chart. Times between bars interpolate; whitespace extends the
-/// nearest distinct pair (one second for a single bar). Vertical placement uses the nearest bar.
+/// most common positive spacing among the outermost 16 bars (shorter spacing breaks ties,
+/// one second if none). Vertical placement uses the nearest bar.
 /// Returns the index and visible hit area of each marker drawn, in painting order.
 pub fn render_markers(
     context: &RenderContext,
@@ -21,7 +22,8 @@ pub fn render_markers(
     let price_y =
         |marker: &Marker, bar: &Bar| price_scale.price_to_y(marker.price.unwrap_or(bar.close));
     let mut tooltip_shown = false;
-    let background = context.painter.ctx().active_theme().chart.bg;
+    let theme = context.painter.ctx().active_theme().chart;
+    let background = theme.bg;
     for (marker_index, marker) in markers.iter().enumerate() {
         if !marker.size.is_finite() || marker.size <= 0.0 {
             continue;
@@ -63,15 +65,10 @@ pub fn render_markers(
             }
 
             let pos = Pos2::new(x, y);
+            let color = themed(marker.color, theme.axis_text);
 
             // Render the marker shape
-            render_marker_shape(
-                context.painter,
-                pos,
-                marker.shape,
-                marker.color,
-                marker.size,
-            );
+            render_marker_shape(context.painter, pos, marker.shape, color, marker.size);
 
             let mut hit_rect = Rect::from_center_size(pos, Vec2::splat(24.0 * marker.size));
             let ctx = context.painter.ctx();
@@ -80,7 +77,7 @@ pub fn render_markers(
                 let galley = context.painter.layout_no_wrap(
                     text.clone(),
                     FontId::proportional(10.0 * marker.size),
-                    marker.color,
+                    color,
                 );
                 let rect = egui::Align2::CENTER_TOP
                     .anchor_size(Pos2::new(pos.x, pos.y + 12.0 * marker.size), galley.size());
@@ -88,7 +85,7 @@ pub fn render_markers(
                 context
                     .painter
                     .rect_filled(rect.expand(1.0), 2.0, background);
-                context.painter.galley(rect.min, galley, marker.color);
+                context.painter.galley(rect.min, galley, color);
                 hit_rect = hit_rect.union(rect);
             }
 
@@ -125,6 +122,15 @@ pub fn render_markers(
     hits
 }
 
+/// A marker colour with `PLACEHOLDER` resolved to the theme's text colour.
+fn themed(color: Color32, text: Color32) -> Color32 {
+    if color == Color32::PLACEHOLDER {
+        text
+    } else {
+        color
+    }
+}
+
 /// Draws a change mark at `pos`: a dot with a chevron above it for a rise or below it for a
 /// fall.
 pub(crate) fn render_change_mark(painter: &Painter, pos: Pos2, up: bool, color: Color32) {
@@ -150,7 +156,7 @@ pub(crate) fn render_event_breaks(
     coords: &ChartMapping,
 ) {
     let painter = ui.painter().with_clip_rect(coords.rect);
-    let stroke = Stroke::new(1.0, DESIGN_TOKENS.semantic.extended.info);
+    let stroke = Stroke::new(1.0, ui.ctx().active_theme().ui.info);
     for &time in times {
         let Some(at) = crate::model::index_at(visible_data, time) else {
             continue;
@@ -170,9 +176,10 @@ pub(crate) fn render_event_breaks(
 
 /// Draws host-supplied event badges just above `baseline`, using the chart's time mapping.
 /// An event between bars uses the first bar at or after its time; whitespace extrapolates the
-/// nearest bar interval. Colliding badges stack upward. Returns the clicked event ID;
-/// callers handle that action before starting a chart drag. The badges use the event's colour,
-/// text and tooltip, without assigning any market meaning to them.
+/// most common positive spacing among the outermost 16 bars. Colliding badges stack upward.
+/// Returns the clicked event ID; callers handle that action before starting a chart drag.
+/// The badges use the event's colour, text and tooltip, without assigning any market meaning
+/// to them.
 pub fn render_event_band(
     ui: &mut egui::Ui,
     events: &[Marker],
@@ -183,6 +190,7 @@ pub fn render_event_band(
     let mut clicked = None;
     visible_data.first()?;
     let mut placed = Vec::<Rect>::new();
+    let theme = ui.ctx().active_theme().chart;
     for (index, event) in events.iter().enumerate() {
         let at = crate::model::index_at(visible_data, event.time)?.ceil();
         let x = coords.idx_to_x(coords.start_idx) + at as f32 * coords.bar_spacing;
@@ -202,20 +210,16 @@ pub fn render_event_band(
             ui.scope_id().with(("event", &event.id, index)),
             egui::Sense::click(),
         );
+        let color = themed(event.color, theme.axis_text);
         let painter = ui.painter().with_clip_rect(rect);
-        painter.circle(
-            rect.center(),
-            10.0,
-            ui.ctx().active_theme().chart.bg,
-            Stroke::new(1.2, event.color),
-        );
+        painter.circle(rect.center(), 10.0, theme.bg, Stroke::new(1.2, color));
         if let Some(text) = &event.text {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 text,
                 FontId::proportional(11.0),
-                event.color,
+                color,
             );
         }
         let label = event
@@ -240,6 +244,7 @@ fn render_marker_shape(
     size: f32,
 ) {
     let base_size = 8.0 * size;
+    let outline = painter.ctx().active_theme().chart.crosshair_label_text;
 
     match shape {
         MarkerShape::Circle => {
@@ -247,10 +252,7 @@ fn render_marker_shape(
             painter.circle_stroke(
                 pos,
                 base_size,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
             );
         }
         MarkerShape::Square => {
@@ -262,10 +264,7 @@ fn render_marker_shape(
             painter.rect_stroke(
                 Rect::from_center_size(pos, Vec2::splat(base_size * 2.0)),
                 0.0,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
                 StrokeKind::Outside,
             );
         }
@@ -279,10 +278,7 @@ fn render_marker_shape(
             painter.add(Shape::convex_polygon(
                 points,
                 color,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
             ));
         }
         MarkerShape::ArrowDown => {
@@ -295,10 +291,7 @@ fn render_marker_shape(
             painter.add(Shape::convex_polygon(
                 points,
                 color,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
             ));
         }
         MarkerShape::TriangleUp => {
@@ -338,10 +331,7 @@ fn render_marker_shape(
             painter.add(Shape::convex_polygon(
                 points,
                 color,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
             ));
         }
         MarkerShape::Star => {
@@ -361,10 +351,7 @@ fn render_marker_shape(
             painter.add(Shape::convex_polygon(
                 points,
                 color,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
             ));
         }
         MarkerShape::Cross => {
@@ -393,10 +380,7 @@ fn render_marker_shape(
             painter.add(Shape::convex_polygon(
                 points,
                 color,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
             ));
         }
     }
@@ -503,12 +487,91 @@ mod tests {
             }
         }
     }
+
+    /// A marker without a colour follows the theme's text colour, so it reads on the light
+    /// chart; one with a colour keeps it.
+    #[test]
+    fn default_marker_colour_reads_on_the_light_theme() {
+        let ctx = egui::Context::default();
+        let light = crate::theme::Theme::light();
+        crate::theme::apply_to_egui(&ctx, &light);
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(160.0, 500.0));
+        let t = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let bars = [0, 2].map(|seconds| {
+            Bar::new(
+                t + chrono::Duration::seconds(seconds),
+                100.0,
+                105.0,
+                95.0,
+                104.0,
+                1.0,
+            )
+        });
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(90.0, 110.0),
+            0.0,
+            500.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 10.0, 12, 13, 2.0, map);
+        let markers = [
+            Marker::new(t).with_text("default"),
+            Marker::new(t + chrono::Duration::seconds(2))
+                .with_shape(MarkerShape::Circle)
+                .with_color(Color32::RED)
+                .with_text("explicit"),
+            Marker::new(t + chrono::Duration::seconds(4)).with_color(Color32::WHITE),
+        ];
+        let markers: Vec<Marker> =
+            serde_json::from_str(&serde_json::to_string(&markers).unwrap()).unwrap();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let painter = Painter::new(ui.ctx().clone(), egui::LayerId::background(), rect);
+            render_markers(
+                &RenderContext::new(&painter, rect),
+                &markers,
+                &bars,
+                &map,
+                &coords,
+            );
+        });
+        let fills: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Circle(circle) if circle.fill != Color32::TRANSPARENT => Some(circle.fill),
+                _ => None,
+            })
+            .collect();
+        let text_matches = [
+            ("default", light.chart.axis_text),
+            ("explicit", Color32::RED),
+        ]
+        .map(|(label, color)| {
+            output.shapes.iter().any(|shape| {
+                matches!(&shape.shape,
+                Shape::Text(text) if text.galley.text() == label
+                    && text.galley.job.sections.iter().all(|s| s.format.color == color))
+            })
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(fills.len(), 3);
+        // 3:1 is the minimum contrast for graphical objects.
+        assert!(crate::theme::contrast(fills[0], light.chart.bg) >= 3.0);
+        assert_eq!(fills[1], Color32::RED);
+        assert_eq!(fills[2], Color32::WHITE);
+        assert_eq!(markers[0].color, Color32::PLACEHOLDER);
+        assert!(text_matches.into_iter().all(|matches| matches));
+    }
+
     /// x = 500 - (35 + offset - index + 0.5) * spacing - 1.
     /// Events at slots 11 and 30 keep distinct click targets, including a stacked duplicate.
     #[test]
     fn event_band_follows_time_mapping_and_returns_the_clicked_id() {
         use egui::{Context, Event, Modifiers, PointerButton, RawInput};
         let ctx = Context::default();
+        let light = crate::theme::Theme::light();
+        crate::theme::apply_to_egui(&ctx, &light);
         let time = Utc.with_ymd_and_hms(2024, 10, 1, 14, 30, 0).unwrap();
         let bars: Vec<_> = (0..30)
             .map(|i| {
@@ -522,11 +585,12 @@ mod tests {
                 )
             })
             .collect();
-        let event =
-            Marker::event(bars[10].time + chrono::Duration::minutes(15), "E").with_id("event-42");
+        let event = Marker::new(bars[10].time + chrono::Duration::minutes(15))
+            .with_text("E")
+            .with_id("event-42");
         let events = [
             event.clone(),
-            event.with_id("event-43"),
+            event.with_id("event-43").with_color(Color32::RED),
             Marker::event(bars[29].time + chrono::Duration::hours(1), "N").with_id("future"),
         ];
         for (spacing, offset, x) in [(10.0, 0.0, [254.0, 444.0]), (15.0, 2.0, [101.5, 386.5])] {
@@ -565,12 +629,19 @@ mod tests {
                         .shapes
                         .iter()
                         .filter_map(|shape| match &shape.shape {
-                            Shape::Circle(circle) => Some(circle.center),
+                            Shape::Circle(circle) => Some((circle.center, circle.stroke.color)),
                             _ => None,
                         })
                         .collect();
                     output.drop_without_applying_deltas();
-                    assert_eq!(circles, centres);
+                    assert_eq!(
+                        circles,
+                        [
+                            (centres[0], light.chart.axis_text),
+                            (centres[1], Color32::RED),
+                            (centres[2], events[2].color),
+                        ]
+                    );
                 }
                 assert_eq!(clicked.as_deref(), event.id.as_deref());
             }

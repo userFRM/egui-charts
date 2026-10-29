@@ -207,20 +207,7 @@ impl Indicator for KAMA {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-
-    fn make_bar(close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: close,
-            high: close,
-            low: close,
-            close,
-            volume: 1000.0,
-            colors: None,
-            payload: None,
-        }
-    }
+    use crate::studies::test_support::make_bar;
 
     /// Expected values from Kaufman's definition (n price changes per
     /// efficiency ratio), seeded with the simple average of the first n

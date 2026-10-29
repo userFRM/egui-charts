@@ -1,5 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::helpers::calculate_roc;
 use crate::studies::stepper::rolling_mean;
 use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
@@ -56,21 +57,6 @@ impl KnowSureThing {
         self.colors = colors;
         self
     }
-
-    fn calculate_roc(closes: &[f64], period: usize) -> Vec<f64> {
-        let mut roc = Vec::with_capacity(closes.len());
-
-        for i in 0..closes.len() {
-            if i < period || closes[i - period] == 0.0 {
-                roc.push(f64::NAN);
-            } else {
-                let change = (closes[i] - closes[i - period]) / closes[i - period] * 100.0;
-                roc.push(change);
-            }
-        }
-
-        roc
-    }
 }
 
 impl Default for KnowSureThing {
@@ -87,10 +73,10 @@ impl KnowSureThing {
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
 
         // Calculate ROC for each period
-        let roc1 = Self::calculate_roc(&closes, self.roc_periods[0]);
-        let roc2 = Self::calculate_roc(&closes, self.roc_periods[1]);
-        let roc3 = Self::calculate_roc(&closes, self.roc_periods[2]);
-        let roc4 = Self::calculate_roc(&closes, self.roc_periods[3]);
+        let roc1 = calculate_roc(&closes, self.roc_periods[0]);
+        let roc2 = calculate_roc(&closes, self.roc_periods[1]);
+        let roc3 = calculate_roc(&closes, self.roc_periods[2]);
+        let roc4 = calculate_roc(&closes, self.roc_periods[3]);
 
         // Smooth each ROC
         let sroc1 = rolling_mean(&roc1, self.sma_periods[0]);

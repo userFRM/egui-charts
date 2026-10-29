@@ -126,7 +126,9 @@ pub use price_series::SeriesOptions;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId};
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
-pub use snapshot::{ChartSnapshot, SavedLayout, SavedPane, SavedStudy};
+pub use snapshot::{
+    ChartSnapshot, SavedAnnotations, SavedLayout, SavedPane, SavedSeries, SavedStudy,
+};
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 pub(crate) mod sync;
@@ -331,6 +333,7 @@ pub struct Chart {
     series_formatters:
         std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
+    conversion: Option<String>,
     pub(crate) measured_axis_width: f32,
     /// Last usable widget width and its first frame, including discarded sizing passes.
     last_layout: Option<(f32, u64)>,
@@ -922,8 +925,10 @@ impl Chart {
     ///
     /// The view is kept: the bar spacing changes only when `time_scale.bar_spacing` changes or
     /// the new spacing bounds exclude it, and the chart scrolls only when `time_scale.right_offset`
-    /// or `right_offset_pixels` changes.
+    /// or `right_offset_pixels` changes. A non-finite `bar_spacing`, `right_offset` or
+    /// `right_offset_pixels` keeps its previous value.
     pub fn set_chart_options(&mut self, options: ChartOptions) {
+        let options = self.finite_time_scale_options(options);
         let (old, new) = (&self.chart_options.time_scale, &options.time_scale);
         if (
             old.bar_spacing,
@@ -965,6 +970,21 @@ impl Chart {
             }
         }
         self.chart_options = options;
+    }
+
+    /// Retain configured values before comparison, since a stored NaN never equals itself.
+    fn finite_time_scale_options(&self, mut options: ChartOptions) -> ChartOptions {
+        let (old, new) = (&self.chart_options.time_scale, &mut options.time_scale);
+        if !new.bar_spacing.is_finite() {
+            new.bar_spacing = old.bar_spacing;
+        }
+        if !new.right_offset.is_finite() {
+            new.right_offset = old.right_offset;
+        }
+        if !new.right_offset_pixels.is_none_or(f32::is_finite) {
+            new.right_offset_pixels = old.right_offset_pixels;
+        }
+        options
     }
 
     /// Gives the chart an explicit size in points instead of filling the space `show` is given;

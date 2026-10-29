@@ -214,20 +214,7 @@ impl Indicator for LSMA {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-
-    fn make_bar(close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: close,
-            high: close,
-            low: close,
-            close,
-            volume: 1000.0,
-            colors: None,
-            payload: None,
-        }
-    }
+    use crate::studies::test_support::make_bar;
 
     #[test]
     fn test_linear_regression_flat() {

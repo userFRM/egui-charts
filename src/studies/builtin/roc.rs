@@ -11,6 +11,7 @@
 //!
 //! # Calculation
 //! ROC = ((Close - Close[n]) / Close[n]) * 100
+//! A previous close of exactly zero has no defined rate of change.
 //!
 //! # Example
 //! ```
@@ -80,8 +81,8 @@ impl RateOfChange {
                 values.push(IndicatorValue::None);
             } else {
                 let prev_close = data[i - self.period].close;
-                if prev_close.abs() < 1e-10 {
-                    values.push(IndicatorValue::Single(0.0));
+                if prev_close == 0.0 {
+                    values.push(IndicatorValue::None);
                 } else {
                     let roc = ((data[i].close - prev_close) / prev_close) * 100.0;
                     values.push(IndicatorValue::Single(roc));

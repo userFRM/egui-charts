@@ -473,7 +473,7 @@ impl Indicator for VolumeWeightedAvgPrice {
                 state.tp_volume += tp * bar.volume;
                 state.tp2_volume += tp * tp * bar.volume;
 
-                let (vwap, sigma) = if state.volume.abs() < 1e-10 {
+                let (vwap, sigma) = if state.volume == 0.0 {
                     (tp, 0.0)
                 } else {
                     let vwap = state.tp_volume / state.volume;

@@ -79,7 +79,7 @@ impl BollingerBandsWidth {
             let upper = sma + self.std_dev * stdev;
             let lower = sma - self.std_dev * stdev;
 
-            widths.push(if sma.abs() < 1e-15 {
+            widths.push(if sma == 0.0 {
                 0.0
             } else {
                 (upper - lower) / sma * 100.0

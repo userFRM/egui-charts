@@ -546,7 +546,8 @@ impl Default for ChartConfig {
 }
 
 impl ChartConfig {
-    /// Apply the theme's background, grid, axis text and candle colours to this configuration.
+    /// Apply the theme's background, grid, axis text, candle, session break and watermark
+    /// colours to this configuration.
     ///
     /// Only the configuration changes. A chart paints its legend, quote boxes, labels and
     /// overlays from its own theme, which [`ChartBuilder::with_theme`](crate::ChartBuilder::with_theme)
@@ -564,6 +565,20 @@ impl ChartConfig {
         self.bearish_border_color = Some(theme.chart.candle_down);
         self.bullish_wick_color = Some(theme.chart.candle_up);
         self.bearish_wick_color = Some(theme.chart.candle_down);
+        self.session_break_color = theme.chart.grid_line_major;
+        self.watermark_color = theme.chart.grid_line;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_theme_recolours_session_breaks_and_watermark() {
+        let config = ChartConfig::default().with_theme(&Theme::light());
+        assert_eq!(config.session_break_color, Color32::from_rgb(209, 209, 209));
+        assert_eq!(config.watermark_color, Color32::from_rgb(209, 209, 209));
     }
 }

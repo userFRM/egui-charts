@@ -239,7 +239,7 @@ impl Indicator for VwapAutoAnchored {
                     }
                     state.volume += bar.volume;
                     state.weighted += price * bar.volume;
-                    IndicatorValue::Single(if state.volume.abs() < 1e-10 {
+                    IndicatorValue::Single(if state.volume == 0.0 {
                         price
                     } else {
                         state.weighted / state.volume
@@ -271,7 +271,7 @@ impl Indicator for VwapAutoAnchored {
                     self.values.set_value(
                         0,
                         i,
-                        if volume.abs() < 1e-10 {
+                        if volume == 0.0 {
                             price
                         } else {
                             weighted / volume
@@ -303,7 +303,7 @@ impl Indicator for VwapAutoAnchored {
                 self.values.set_value(
                     0,
                     point.source,
-                    if volume.abs() < 1e-10 {
+                    if volume == 0.0 {
                         point.price
                     } else {
                         weighted / volume

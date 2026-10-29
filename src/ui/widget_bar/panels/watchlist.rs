@@ -7,32 +7,29 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use egui::text::{LayoutJob, TextFormat};
+use egui::text::LayoutJob;
 use egui::{
     Align, Align2, Color32, EventFilter, FontId, Key, Label, Layout, Modifiers, RichText, Sense,
     Shape, Stroke, TextStyle, Ui, pos2, vec2,
 };
 
 use super::market_details::WatchlistDetails;
-use super::object_tree::price_decimals;
 use super::symbol_details::detail_section;
+use super::{HEADER_HEIGHT, grouped, price_decimals, signed, weighted};
 use crate::data::inbox::Inbox;
 use crate::data::{CalendarEvent, NewsStory};
 use crate::icons::icons;
 use crate::model::Quote;
-use crate::scales::{CurrencyFormatter, PriceFormatter, StudyFormat};
-use crate::services::{Listener, Quotes};
+use crate::scales::StudyFormat;
+use crate::services::{Listener, Quotes, ShareKind, Sharing};
 use crate::theme::ThemeExt;
+use crate::ui::share_controls::ShareControls;
 use crate::ui_kit::{EmptyState, IconButton};
 
-/// Height shared by market data rows.
-pub(super) const ROW_HEIGHT: f32 = 26.0;
 /// Height of a watchlist row, which fits its symbol mark.
 const LIST_ROW_HEIGHT: f32 = 30.0;
 /// Diameter of a symbol's mark.
 const MARK_SIZE: f32 = 18.0;
-/// Height of a panel header row, which fits its title and action buttons.
-pub(super) const HEADER_HEIGHT: f32 = 40.0;
 
 pub use crate::model::{Watchlist, WatchlistFlag, WatchlistItem};
 
@@ -190,6 +187,7 @@ pub struct WatchlistPanel {
     selected: Option<String>,
     service: Option<Arc<dyn Quotes>>,
     inbox: Arc<Inbox>,
+    share: ShareControls,
     listener: Option<Listener>,
     /// Key of the current stream's pushes in the inbox.
     generation: u64,
@@ -222,6 +220,7 @@ impl WatchlistPanel {
             selected: None,
             service: None,
             inbox: Arc::default(),
+            share: ShareControls::default(),
             listener: None,
             generation: 0,
             subscribed: Vec::new(),
@@ -320,9 +319,23 @@ impl WatchlistPanel {
         self.listener = None;
     }
 
+    /// Offers copy-link and save-a-copy on the active list, as `sharing` reports them for
+    /// [`ShareKind::Watchlist`]. A saved copy is added to the lists under the name the host
+    /// answers. [`poll`](Self::poll) receives the answers.
+    pub fn set_sharing(&mut self, sharing: Arc<dyn Sharing>) {
+        self.share.set_service(sharing);
+    }
+
     /// Subscribes again when the symbols to quote changed or the stream lagged, and applies the
     /// quotes the service pushed. The quotes of symbols no longer subscribed are dropped.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        if let Some((source, name)) = self.share.poll(ctx)
+            && let Some(list) = self.lists.iter().find(|list| list.name == source)
+        {
+            let mut copy = list.clone();
+            copy.name = name;
+            self.lists.push(copy);
+        }
         let Some(service) = &self.service else {
             return;
         };
@@ -398,6 +411,7 @@ impl WatchlistPanel {
         let shown_symbols: Vec<String> = self.symbols().map(str::to_owned).collect();
         let Self {
             lists,
+            share,
             active,
             quotes,
             decimals,
@@ -552,6 +566,7 @@ impl WatchlistPanel {
                     text: lists[*active].to_text(),
                 };
             }
+            share.show(ui, ShareKind::Watchlist, &lists[*active].name);
         });
         if let Some(details) = wide {
             ui.horizontal(|ui| {
@@ -1060,31 +1075,6 @@ impl WatchlistPanel {
     }
 }
 
-/// Text in the bundled face at `weight`, such as 700 for bold.
-pub(super) fn weighted(size: f32, weight: f32, color: Color32) -> TextFormat {
-    let mut format = TextFormat::simple(FontId::proportional(size), color);
-    format.coords.push("wght", weight);
-    format
-}
-
-/// `value` with an explicit sign, unsigned when it rounds to zero, or a dash when not finite.
-pub(super) fn signed(value: f64, decimals: usize) -> String {
-    let text = grouped(value, decimals);
-    if value > 0.0 && text.bytes().any(|b| matches!(b, b'1'..=b'9')) {
-        format!("+{text}")
-    } else {
-        text
-    }
-}
-
-/// A price with thousands separators and `decimals` decimals, or a dash when not finite.
-pub(super) fn grouped(value: f64, decimals: usize) -> String {
-    if !value.is_finite() {
-        return "-".to_owned();
-    }
-    CurrencyFormatter::new("", decimals).format(value)
-}
-
 /// Rows of the wide view's section, for the symbols in `focus`; returns the symbol the user
 /// clicked.
 fn detail_rows(
@@ -1298,25 +1288,6 @@ mod tests {
         WatchlistItem::Symbol {
             symbol: symbol.into(),
             flag: None,
-        }
-    }
-
-    #[test]
-    fn panel_numbers_group_digits_and_omit_signs_at_rounded_zero() {
-        for (value, decimals, price, change) in [
-            (43237.45, 2, "43,237.45", "+43,237.45"),
-            (-1234567.0, 0, "-1,234,567", "-1,234,567"),
-            (863.83, 2, "863.83", "+863.83"),
-            (100000.5, 1, "100,000.5", "+100,000.5"),
-            (0.000123, 6, "0.000123", "+0.000123"),
-            (-0.0, 2, "0.00", "0.00"),
-            (-0.001, 2, "0.00", "0.00"),
-            (0.001, 2, "0.00", "0.00"),
-            (f64::INFINITY, 2, "-", "-"),
-            (f64::NAN, 2, "-", "-"),
-        ] {
-            assert_eq!(grouped(value, decimals), price);
-            assert_eq!(signed(value, decimals), change);
         }
     }
 

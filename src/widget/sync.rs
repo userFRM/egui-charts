@@ -1,7 +1,6 @@
 //! Multi-chart crosshair and time-scale synchronization.
 
 use super::Chart;
-use crate::model::{index_at, time_at};
 use chrono::{DateTime, Utc};
 
 /// UTC timestamps at the left and right edges of a chart's plot.
@@ -56,19 +55,19 @@ impl Chart {
             .map(|(_, price)| price);
     }
 
-    /// The visible UTC range, including whitespace extrapolated with the nearest distinct
-    /// pair of bar times (one second for a single bar). Empty charts return `None`.
+    /// The visible UTC range, including whitespace mapped by [`Self::index_to_time`].
+    /// Empty charts return `None`.
     /// Between bars, time is interpolated, so session gaps retain fractional edge positions.
     pub fn visible_time_range(&self) -> Option<VisibleTimeRange> {
         let scale = self.state.time_scale();
-        let bars = self.state.shown();
         // Keep fractional indices in f64: a rounded edge can move minutes across a session gap.
         Some(VisibleTimeRange {
-            from: time_at(bars, scale.coord_to_idx_precise(0.0, 0.0, scale.width()))?,
-            to: time_at(
-                bars,
-                scale.coord_to_idx_precise(scale.width() - 1.0, 0.0, scale.width()),
-            )?,
+            from: self.index_to_time(scale.coord_to_idx_precise(0.0, 0.0, scale.width()))?,
+            to: self.index_to_time(scale.coord_to_idx_precise(
+                scale.width() - 1.0,
+                0.0,
+                scale.width(),
+            ))?,
         })
     }
 
@@ -79,8 +78,10 @@ impl Chart {
         if range.from >= range.to {
             return false;
         }
-        let bars = self.state.shown();
-        let Some((from, to)) = index_at(bars, range.from).zip(index_at(bars, range.to)) else {
+        let Some((from, to)) = self
+            .time_to_index(range.from)
+            .zip(self.time_to_index(range.to))
+        else {
             return false;
         };
         let scale = self.state.time_scale_mut();
@@ -131,7 +132,7 @@ impl Chart {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Bar, BarData};
+    use crate::model::{Bar, BarData, index_at, time_at};
     use chrono::Duration;
 
     fn chart(times: &[i64], width: f32) -> Chart {

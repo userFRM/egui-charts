@@ -84,7 +84,7 @@ impl WilliamsR {
                 let (highest, lowest) = (highest[i], lowest[i]);
                 let range = highest - lowest;
 
-                if range.abs() < 1e-10 {
+                if range == 0.0 {
                     values.push(IndicatorValue::Single(-50.0)); // Middle value
                 } else {
                     let r = (highest - data[i].close) / range * -100.0;

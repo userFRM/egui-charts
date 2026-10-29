@@ -117,3 +117,93 @@ impl Indicator for VisibleAveragePrice {
         vec!["Avg Price".into()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::model::Bar;
+    use crate::studies::*;
+    use chrono::{TimeZone, Utc};
+
+    /// The visible mean uses exactly the supplied bars and changes with the viewport.
+    #[test]
+    fn visible_average_follows_the_visible_range() {
+        let bars: Vec<_> = [2.0, 4.0, 12.0, 20.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), c, c, c, c, 1.0))
+            .collect();
+        let mut study = ConfiguredStudy::new(
+            IndicatorFactory::new()
+                .create("Visible Average Price")
+                .expect("Visible Average Price study"),
+        );
+        for (range, expected) in [(0..2, Some(3.0)), (1..4, Some(12.0)), (4..99, None)] {
+            study.set_visible_range(range.clone());
+            study.calculate(&bars);
+            for i in 0..bars.len() {
+                assert_eq!(study.values().value(0, i), expected);
+            }
+        }
+        #[cfg(feature = "widget")]
+        {
+            use crate::widget::{Chart, test_frames::frame};
+            let bars: Vec<_> = (0..100)
+                .map(|i| {
+                    let c = i as f64;
+                    Bar::new(Utc.timestamp_opt(i, 0).unwrap(), c, c, c, c, 1.0)
+                })
+                .collect();
+            let mut chart = Chart::new(crate::model::BarData::from_bars(bars));
+            use crate::studies::{InputValue, StudySource};
+            let source = chart.add_indicator(Box::new(SMA::new(1)));
+            let average = chart.add_indicator(Box::new(study));
+            chart
+                .set_indicator_source(
+                    average,
+                    StudySource::Study {
+                        id: source.0,
+                        plot: 0,
+                    },
+                )
+                .unwrap();
+            let consumer = chart.add_indicator(Box::new(SMA::new(1)));
+            chart
+                .set_indicator_source(
+                    consumer,
+                    StudySource::Study {
+                        id: average.0,
+                        plot: 0,
+                    },
+                )
+                .unwrap();
+            assert!(
+                chart
+                    .indicators()
+                    .find(|(id, _)| *id == average)
+                    .unwrap()
+                    .1
+                    .inputs()
+                    .iter()
+                    .any(|input| input.id == "source"
+                        && matches!(input.value, InputValue::Source(_)))
+            );
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            chart.set_visible_bars(20);
+            for (time, start) in [(1.0, 10), (2.0, 50)] {
+                chart.set_start_idx(start);
+                frame(&ctx, &mut chart, time, Vec::new());
+                let (start, end) = chart.state().visible_range();
+                let expected = (start + end - 1) as f64 / 2.0;
+                for id in [average, consumer] {
+                    let study = chart
+                        .indicators()
+                        .find(|(candidate, _)| *candidate == id)
+                        .unwrap()
+                        .1;
+                    assert!((study.values().value(0, start).unwrap() - expected).abs() < 1e-10);
+                }
+            }
+        }
+    }
+}

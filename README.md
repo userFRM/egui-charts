@@ -131,7 +131,7 @@ Financial charts for Rust applications built with egui 0.37.
 
 egui-charts draws price series, computes studies and handles chart interaction inside your egui application. Start with a `Chart`, or assemble a workspace from the toolbars, panels and dialogs. Your application supplies market data, broker connections and durable storage.
 
-`ui::terminal::Terminal` assembles them on your `Datafeed` and performs their actions; each component also works on its own, as the [demo](examples/demo) shows.
+The [`terminal`](terminal) package assembles them on your `Datafeed` and performs their actions; each component also works on its own, as the [demo](examples/demo) shows.
 
 ## Status
 
@@ -211,45 +211,7 @@ Add trend lines, channels, Fibonacci drawings, shapes and annotations. `DrawingT
 
 ## Build a workspace
 
-In the default build, `Terminal` assembles the toolbars, menus and charts on your `Datafeed` and performs their actions:
-
-```rust,no_run
-use std::sync::Arc;
-
-use eframe::egui;
-use egui_charts::data::{Datafeed, HistoryPage, HistoryRequest, Reply, Subscription};
-use egui_charts::ui::terminal::Terminal;
-
-/// Your market data: history on request, then live updates.
-struct MyFeed;
-
-impl Datafeed for MyFeed {
-    fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
-        // Up to `request.count` bars that open before `request.before`, or the latest bars
-        // when it is `None`. Fetch them on another thread or task and reply from there.
-        let _ = request;
-        reply.send(Ok(HistoryPage::default()));
-    }
-
-    fn subscribe(&self, subscription: Subscription) {
-        // Push live bars, trades and depth into `subscription.sink` from your connection
-        // until `Sink::is_active` turns false.
-        let _ = subscription;
-    }
-}
-
-fn main() -> eframe::Result {
-    let mut terminal = Terminal::new(Arc::new(MyFeed)).with_symbol("AAPL");
-    eframe::run_ui_native("My terminal", eframe::NativeOptions::default(), move |ui, _frame| {
-        for action in terminal.show(ui) {
-            // Actions you intercepted, host entries and actions without a default.
-            let _ = action;
-        }
-    })
-}
-```
-
-`with_intercept` returns chosen actions to your app instead of performing them, and `run` performs one after your own checks. Storage, symbol search, alerts, brokers, signals, marks, quotes, notifications and chats are passed as services with the `with_` methods, and file export and sounds as callbacks; a control whose service is absent stays hidden. `examples/terminal.rs` runs a terminal on a synthetic feed. The components also work on their own: each returns an action for your app to apply, as the [demo](examples/demo) does. The library does not connect to a market data provider.
+The [`terminal`](terminal) package assembles the toolbars, menus and charts on your `Datafeed` and performs their actions, as an application on top of the library. Each component also works on its own: it returns an action for your app to apply, as the [demo](examples/demo) does. The library does not connect to a market data provider.
 
 `ChartLayout` arranges charts in grids or tabs and can synchronize symbols, intervals, crosshairs, time ranges and drawings.
 
@@ -268,6 +230,7 @@ The default build includes the chart, studies, drawings and UI components, plus 
 | `widget`, `drawings` | Chart widget and drawing interaction |
 | `studies` | Study calculations without egui |
 | `alert-engine` | `AlertEngine`, an alerts service that evaluates alerts on the bars the host feeds it, without egui |
+| `strategies` | `Backtest`, which runs a `Strategy` over bars and returns a `StrategyReport`, without egui |
 | None | Data types, scales and host service contracts without egui |
 
 For example:

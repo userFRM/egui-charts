@@ -149,11 +149,7 @@ impl Indicator for StochasticRSI {
                     state.loss =
                         (state.loss * (self.rsi_period - 1) as f64 + loss) / self.rsi_period as f64;
                 }
-                let rsi = if state.loss.abs() < 1e-10 {
-                    100.0
-                } else {
-                    100.0 - 100.0 / (1.0 + state.gain / state.loss)
-                };
+                let rsi = super::rsi::from_averages(state.gain, state.loss);
                 state.rsi.push_back(rsi);
                 if state.rsi.len() > self.stoch_period {
                     state.rsi.pop_front();
@@ -181,7 +177,7 @@ impl Indicator for StochasticRSI {
                     state.d.pop_front();
                 }
                 if state.d.len() < self.smooth_d {
-                    return IndicatorValue::None;
+                    return IndicatorValue::Multiple(vec![k * 100.0, f64::NAN]);
                 }
                 let d = state.d.iter().sum::<f64>() / self.smooth_d as f64;
                 if k.is_nan() || d.is_nan() {

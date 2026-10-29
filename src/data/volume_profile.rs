@@ -168,8 +168,7 @@ pub enum ProfileSource {
     },
 }
 
-/// The executions behind an exact profile, whose POC and value area follow
-/// [`FootprintBar`] rather than the estimated profile's rule.
+/// The executions behind an exact profile, whose POC and value area follow [`FootprintBar`].
 #[derive(Clone, Debug, PartialEq)]
 struct Executions {
     first_level: i64,
@@ -186,6 +185,8 @@ pub struct VolumeProfile {
     pub(crate) high: f64,
     pub(crate) row_height: f64,
     fixed_height: bool,
+    /// Original price of an all-flat equal-row span, before padding its grid.
+    flat_price: Option<f64>,
     /// Volume per row, lowest prices first.
     pub(crate) volume: Vec<f64>,
     pub(crate) up: Vec<f64>,
@@ -250,6 +251,7 @@ impl VolumeProfile {
             high,
             row_height: row_size,
             fixed_height: false,
+            flat_price: None,
             volume: vec![0.0; count as usize],
             up: vec![0.0; count as usize],
             down: vec![0.0; count as usize],
@@ -274,17 +276,30 @@ impl VolumeProfile {
 
     /// Group the executions of one span into a row per traded price step, from the lowest
     /// traded row to the highest, so untraded rows between them hold zero. `step` is the
-    /// footprint's [`price_step`](super::Footprint::price_step), and `complete` whether
-    /// executions are held from the start of the span. Buys occupy [`Self::up`] and sells
-    /// [`Self::down`]; unclassified volume is in [`Self::volume`] only.
-    /// Returns no profile without executed volume, or for more than 10,000 rows.
-    pub fn from_executions(bar: &FootprintBar, step: f64, complete: bool) -> Option<Self> {
+    /// footprint's [`price_step`](super::Footprint::price_step), `tick_size` its
+    /// [`tick_size`](super::Footprint::tick_size), and `complete` whether executions are held
+    /// from the start of the span. A row spans from half a tick below its first tick to half
+    /// a tick below the next row's, so a trade at 100 with a tick of 1 spans 99.5 to 100.5.
+    /// Buys occupy [`Self::up`] and sells [`Self::down`]; unclassified volume is in
+    /// [`Self::volume`] only. Returns no profile without executed volume, or for more than
+    /// 10,000 rows.
+    pub fn from_executions(
+        bar: &FootprintBar,
+        step: f64,
+        tick_size: f64,
+        complete: bool,
+    ) -> Option<Self> {
         let (&first, &last) = (bar.levels.keys().next()?, bar.levels.keys().next_back()?);
         let count = last as i128 - first as i128 + 1;
-        let (low, high) = (first as f64 * step, (last as f64 + 1.0) * step);
+        let half_tick = tick_size * 0.5;
+        let (low, high) = (
+            first as f64 * step - half_tick,
+            (last as f64 + 1.0) * step - half_tick,
+        );
         if bar.volume() <= 0.0
             || !step.is_finite()
             || step <= 0.0
+            || !tick_size.is_finite()
             || !(1..=10_000).contains(&count)
             || !low.is_finite()
             || !high.is_finite()
@@ -296,6 +311,7 @@ impl VolumeProfile {
             high,
             row_height: step,
             fixed_height: true,
+            flat_price: None,
             volume: vec![0.0; count as usize],
             up: vec![0.0; count as usize],
             down: vec![0.0; count as usize],
@@ -365,6 +381,7 @@ impl VolumeProfile {
         if rows == 0 || rows > 10_000 {
             return None;
         }
+        let flat_price = (row_size.is_none() && low == high).then_some(low);
         let (low, high, row_height, rows) = if let Some(height) = row_size {
             let (low, high, rows) = fixed_grid(low, high, height)?;
             (low, high, height, rows)
@@ -382,6 +399,7 @@ impl VolumeProfile {
             high,
             row_height,
             fixed_height: row_size.is_some(),
+            flat_price,
             volume: vec![0.0; rows],
             up: vec![0.0; rows],
             down: vec![0.0; rows],
@@ -418,7 +436,12 @@ impl VolumeProfile {
             }
             profile.low = low;
             profile.high = high;
-        } else if bar.low < self.low || bar.high > self.high {
+        } else if self
+            .flat_price
+            .is_some_and(|price| bar.low != price || bar.high != price)
+            || bar.low < self.low
+            || bar.high > self.high
+        {
             return None;
         }
         profile.add(bar);
@@ -462,7 +485,8 @@ impl VolumeProfile {
 
     /// The row with the most volume (point of control), and the lowest and
     /// highest row of the value area, which holds `share` of the volume;
-    /// `None` when no volume traded.
+    /// `None` when no volume traded. POC ties take the lower row; value-area
+    /// ties add one row on each side.
     pub fn poc_and_value_area(&self, share: f64) -> Option<(usize, (usize, usize))> {
         if !share.is_finite() || share <= 0.0 || share > 1.0 {
             return None;
@@ -477,7 +501,8 @@ impl VolumeProfile {
             let (low, high) = e.bar.value_area(share)?;
             return Some((row(e.bar.poc()?), (row(low), row(high))));
         }
-        let poc = (0..volume.len()).max_by(|&a, &b| volume[a].total_cmp(&volume[b]))?;
+        let poc = (0..volume.len())
+            .max_by(|&a, &b| volume[a].total_cmp(&volume[b]).then_with(|| b.cmp(&a)))?;
         Some((poc, value_area(volume, poc, total * share)))
     }
 }
@@ -518,12 +543,18 @@ fn fixed_grid(low: f64, high: f64, height: f64) -> Option<(f64, f64, usize)> {
 
 /// Rows around the POC that hold `target` volume. Market Profile rule: grow
 /// toward whichever of the next two rows above or the next two rows below
-/// holds more volume, one row at a time.
+/// holds more volume, one row at a time. Equal sums add one row on each side.
 fn value_area(volume: &[f64], poc: usize, target: f64) -> (usize, usize) {
     let (mut low, mut high, mut sum) = (poc, poc, volume[poc]);
     while sum < target && (low > 0 || high + 1 < volume.len()) {
         let above: f64 = volume[high + 1..].iter().take(2).sum();
         let below: f64 = volume[..low].iter().rev().take(2).sum();
+        if low > 0 && high + 1 < volume.len() && above == below {
+            low -= 1;
+            high += 1;
+            sum += volume[low] + volume[high];
+            continue;
+        }
         let up = high + 1 < volume.len() && (low == 0 || above >= below);
         for _ in 0..2 {
             if up && high + 1 < volume.len() {
@@ -619,6 +650,109 @@ mod tests {
                 Some((2, value_area)),
                 "share {share}"
             );
+        }
+    }
+
+    /// Equal-volume POCs take the lowest row; tied expansion adds a row on each side. Executed
+    /// rows are centred on their price: the trade at 100 with a tick of 1 spans 99.5 to 100.5.
+    #[test]
+    fn estimated_and_executed_profiles_agree_on_ties() {
+        use crate::data::Footprint;
+        use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+        let time = chrono::DateTime::UNIX_EPOCH;
+        // One bar of 24 over 24 rows, and five unit-high bars holding 1, 1, 2, 1 and 1.
+        let single = vec![Bar::new(time, 100.0, 124.0, 100.0, 124.0, 24.0)];
+        let peak_rows = vec![1.0, 1.0, 2.0, 1.0, 1.0];
+        let peak: Vec<_> = peak_rows
+            .iter()
+            .enumerate()
+            .map(|(i, &volume)| {
+                let low = 100.0 + i as f64;
+                Bar::new(time, low, low + 1.0, low, low + 1.0, volume)
+            })
+            .collect();
+        for (bars, volumes, share, expected) in [
+            (single, vec![1.0; 24], 0.7, (0, (0, 16))),
+            (peak, peak_rows, 0.6, (2, (1, 3))),
+        ] {
+            let estimated = VolumeProfile::of(&bars, volumes.len(), None).unwrap();
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for (i, &volume) in volumes.iter().enumerate() {
+                flow.push(&Tick::new(
+                    time,
+                    100.0 + i as f64,
+                    volume,
+                    Some(OrderSide::Buy),
+                ))
+                .unwrap();
+            }
+            let executed =
+                VolumeProfile::from_executions(flow.bar_at(time).unwrap(), 1.0, 1.0, true).unwrap();
+            assert_eq!(estimated.volume(), executed.volume());
+            assert_eq!(
+                (executed.low(), executed.high()),
+                (99.5, 99.5 + volumes.len() as f64)
+            );
+            // 70% of 24 needs 17 unit rows. 60% of 6 needs the POC's 2 plus both tied 1s.
+            assert_eq!(
+                (
+                    estimated.poc_and_value_area(share),
+                    executed.poc_and_value_area(share)
+                ),
+                (Some(expected), Some(expected)),
+                "rows {volumes:?}, share {share}"
+            );
+        }
+    }
+
+    /// A flat span's padding is not its traded range: even a bar inside it needs a new grid.
+    #[test]
+    fn with_bar_rebuilds_when_a_flat_span_gains_range() {
+        let time = chrono::DateTime::UNIX_EPOCH;
+        for price in [0.000_02, 0.5, 2.0, 100.0] {
+            for rows in [1, 24] {
+                let flat = Bar::new(time, price, price, price, price, 100.0);
+                let profile = VolumeProfile::of(std::slice::from_ref(&flat), rows, None).unwrap();
+                assert_eq!(
+                    profile.with_bar(&flat),
+                    VolumeProfile::of(&[flat.clone(), flat.clone()], rows, None)
+                );
+                let range = (price.abs() * 1e-6).max(1e-6) * 0.4;
+                let next = Bar::new(time, price, price + range, price - range, price, 100.0);
+                assert!(next.low > profile.low() && next.high < profile.high());
+                assert!(
+                    profile.with_bar(&next).is_none(),
+                    "price {price}, rows {rows}"
+                );
+                // A different flat price also changes the span, even by one representable step.
+                let moved = Bar::new(time, price, price.next_up(), price, price, 100.0);
+                assert!(profile.with_bar(&moved).is_none());
+                let bars = [flat.clone(), next.clone()];
+                let rebuilt = VolumeProfile::of(&bars, rows, None).unwrap();
+                assert_eq!(rebuilt.volume().len(), rows);
+                assert_eq!((rebuilt.low(), rebuilt.high()), (next.low, next.high));
+                assert_close(rebuilt.row_height(), 2.0 * range / rows as f64);
+                // The flat bar lies in the middle row; the second bar spreads 100 evenly over all rows.
+                assert!((rebuilt.volume()[rows / 2] - (100.0 + 100.0 / rows as f64)).abs() < 1e-6);
+                let third = Bar::new(
+                    time,
+                    price,
+                    price + range / 2.0,
+                    price - range / 2.0,
+                    price,
+                    100.0,
+                );
+                let updated = rebuilt.with_bar(&third).unwrap();
+                assert_eq!(
+                    Some(updated.clone()),
+                    VolumeProfile::of(&[flat, next, third], rows, None)
+                );
+                assert!(
+                    (updated.volume()[rows / 2] - (100.0 + if rows == 1 { 200.0 } else { 12.5 }))
+                        .abs()
+                        < 1e-6
+                );
+            }
         }
     }
 

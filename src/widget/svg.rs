@@ -8,7 +8,8 @@ use std::fmt::Write;
 
 /// Renders `shapes` as an SVG document of `size` points, embedding the textures that `delta`
 /// sets as PNG. Fails on shapes the format cannot take over unchanged: host callbacks, host
-/// textures, rotated or underlined text, gradient strokes and non-linear mesh colours.
+/// textures without supplied pixels, rotated or underlined text, gradient strokes and non-linear
+/// mesh colours.
 pub(super) fn svg(
     size: [u32; 2],
     shapes: &[ClippedShape],
@@ -70,7 +71,7 @@ struct Svg {
     textures: std::collections::HashMap<TextureId, Texture>,
     defs: String,
     body: String,
-    embedded: HashSet<TextureId>,
+    embedded: HashSet<(TextureId, Color32)>,
     ids: usize,
 }
 
@@ -513,29 +514,34 @@ impl Svg {
         self.image(mesh.texture_id, pos, uv, v[0].color)
     }
 
-    /// The `uv` part of a frame texture in `pos`, white or fading with `tint`'s alpha.
+    /// The `uv` part of a frame texture in `pos`, multiplied by `tint`.
     fn image(&mut self, key: TextureId, pos: Rect, uv: Rect, tint: Color32) -> Result<(), String> {
         let Some(texture) = self.textures.get(&key) else {
             return Err(format!(
-                "{key:?} is not a texture of the frame; host textures cannot be written as SVG"
+                "{key:?} is not a texture of the frame; host textures cannot be written as SVG without their pixels in ImageExportOptions::textures"
             ));
         };
-        let [r, g, b, a] = tint.to_array();
-        if !(r == a && g == a && b == a) {
-            return Err("Tinted images cannot be written as SVG".into());
-        }
+        let id = format!(
+            "{}_{:08x}",
+            self.texture_ids(key),
+            u32::from_be_bytes(tint.to_array())
+        );
         let [tw, th] = texture.size.map(|side| side as f32);
         let crop = Rect::from_min_max(
             Pos2::new(uv.min.x * tw, uv.min.y * th),
             Pos2::new(uv.max.x * tw, uv.max.y * th),
         );
-        if self.embedded.insert(key) {
+        if self.embedded.insert((key, tint)) {
             let pixels = &self.textures[&key];
-            let data = png(
-                [pixels.size[0] as u32, pixels.size[1] as u32],
-                &pixels.pixels,
-            )?;
-            let id = self.texture_ids(key);
+            // Multiply premultiplied channels in gamma space, as the frame's renderer does.
+            let tinted: Vec<_> = pixels.pixels.iter().map(|pixel| *pixel * tint).collect();
+            if tinted
+                .iter()
+                .any(|pixel| pixel.a() == 0 && *pixel != Color32::TRANSPARENT)
+            {
+                return Err(format!("Additive texture {key:?} cannot be written as SVG"));
+            }
+            let data = png([pixels.size[0] as u32, pixels.size[1] as u32], &tinted)?;
             let rendering = if pixels.nearest {
                 r#" style="image-rendering:pixelated""#
             } else {
@@ -547,10 +553,9 @@ impl Svg {
                 base64(&data)
             );
         }
-        let id = self.texture_ids(key);
         let _ = write!(
             self.body,
-            r##"<svg x="{}" y="{}" width="{}" height="{}" viewBox="{} {} {} {}" preserveAspectRatio="none" overflow="hidden" opacity="{}"><use href="#t{id}"/></svg>"##,
+            r##"<svg x="{}" y="{}" width="{}" height="{}" viewBox="{} {} {} {}" preserveAspectRatio="none" overflow="hidden"><use href="#t{id}"/></svg>"##,
             pos.min.x,
             pos.min.y,
             pos.width(),
@@ -558,17 +563,16 @@ impl Svg {
             crop.min.x,
             crop.min.y,
             crop.width(),
-            crop.height(),
-            f32::from(a) / 255.0
+            crop.height()
         );
         Ok(())
     }
 
-    /// A stable small number for a texture.
-    fn texture_ids(&self, id: TextureId) -> u64 {
+    /// Keep managed and user ids distinct, including user ids with their highest bit set.
+    fn texture_ids(&self, id: TextureId) -> String {
         match id {
-            TextureId::Managed(n) => n,
-            TextureId::User(n) => n | 1 << 63,
+            TextureId::Managed(n) => format!("m{n}"),
+            TextureId::User(n) => format!("u{n}"),
         }
     }
 }

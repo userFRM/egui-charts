@@ -55,14 +55,14 @@ mod watchlist;
 
 pub use alert::{
     Alert, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertRule, AlertSource,
-    AlertStatus,
+    AlertStatus, NotificationSchedule, NotificationWindow,
 };
 pub use annotations::{Annotation, MarkerType};
 #[cfg(feature = "widget")]
 pub(crate) use bar::SpanCache;
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
-pub(crate) use bar::{index_at, time_at};
+pub(crate) use bar::{index_at, index_at_with_timeframe, time_at, time_at_with_timeframe};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub use chart_style::{
@@ -73,7 +73,9 @@ pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParam
 pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
-pub use instrument::{DataStatus, Instrument, Session, SessionWindow, SymbolType};
+pub use instrument::{
+    DataStatus, Instrument, OverrideWindow, Session, SessionOverride, SessionWindow, SymbolType,
+};
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{
     LineBreakConfig, LineBreakLine, LineBreakSignal, LineDirection,
@@ -116,6 +118,7 @@ pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLetter, TPOProfile,
     derive_tick_size, to_tpo_profiles,
 };
+pub(crate) use trading::rounding_tolerance;
 pub use trading::{
     Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderPreview,
     OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce,

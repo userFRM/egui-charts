@@ -54,9 +54,9 @@
 //! | [`scales`] | Price ranges, coordinate mapping, axis ticks and label formatting |
 //! | [`config`] | Chart appearance and interaction options |
 //! | [`services`] | Host storage, symbol search, quotes, alerts, signals and broker contracts |
+//! | `strategies` | Strategies that trade on closed bars and the backtest engine that runs them |
 //! | [`theme`], [`tokens`], [`styles`] | Theme presets, design tokens and UI styling helpers |
 //! | `ui`, `ui_kit` | Chart controls and reusable UI components placed in the host's layout |
-//! | `ui::terminal` | The assembled terminal: toolbars, menus and charts that perform their actions |
 //! | `icons` | Embedded SVG icons |
 //! | [`localization`] | Host translations scoped to an egui context |
 //! | [`prelude`] | Common types and traits for chart integration |
@@ -73,6 +73,7 @@
 //! | `drawings` | via `ui` | Drawing tools, interaction, undo and persistence; enables `widget` |
 //! | `studies` | via `ui` | Built-in studies, `IndicatorFactory` and study templates; usable without egui |
 //! | `alert-engine` | off | `services::AlertEngine`, an `Alerts` service that evaluates alerts on the bars the host feeds it; needs no egui |
+//! | `strategies` | off | `strategies::Backtest`, which runs a `Strategy` over bars and returns a `StrategyReport`; needs no egui |
 //! | `icons` | via `ui` | Embedded SVG icons and their image loaders; enables `widget` |
 //! | `ui` | on | Toolbars, panels, dialogs and `ui_kit`; enables `icons`, `studies` and `drawings` |
 //! | `locales` | on | Localized month and weekday names and AM/PM markers through chrono; otherwise English |
@@ -82,8 +83,7 @@
 //! # Application integration
 //!
 //! Keep a chart across frames so its viewport, studies and drawings persist.
-//! Application UI components return actions for the host to apply, or
-//! `ui::terminal::Terminal` assembles them and performs their actions. The crate does
+//! Application UI components return actions for the host to apply. The crate does
 //! not connect to a market data provider on its own.
 //!
 //! Apply [`theme::apply_to_egui`] at startup and after changing the theme. It installs
@@ -139,6 +139,10 @@ pub mod studies;
 pub mod config;
 pub mod data;
 pub mod services;
+#[cfg(feature = "strategies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "strategies")))]
+#[warn(missing_docs)]
+pub mod strategies;
 
 // ─── Theme & design system ───────────────────────────────────────────────────
 

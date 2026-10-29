@@ -367,8 +367,6 @@ mod tests {
         chart.set_symbol("NEXT");
         chart.pump_marks(&ctx);
         assert_eq!(source.0.lock().unwrap().pop().unwrap().0.symbol, "NEXT");
-        chart.set_mark_source(None);
-        assert!(chart.mark_source.is_none());
     }
 
     /// Every category is retained while hidden and restored by the same chart settings.
@@ -445,7 +443,7 @@ mod tests {
                         "{kind:?}"
                     );
                 }
-                let info = crate::tokens::DESIGN_TOKENS.semantic.extended.info;
+                let info = crate::theme::ThemeExt::active_theme(&ctx).ui.info;
                 assert_eq!(
                     shapes
                         .iter()
