@@ -123,9 +123,13 @@ impl DepthHistory {
     }
 
     /// Merges a historical page, preserving every held column on overlap and keeping time gaps.
+    /// Older columns merge to the oldest tier's resolution; an adjacent page can complete its
+    /// short oldest column. Full columns merge only when their tier overflows.
     /// Columns must use this history's grid and sorted, unique rows, with finite non-negative
     /// sizes and at most `config.rows` per side. Invalid pages leave the history unchanged.
-    /// Memory remains bounded by the configured tiers. Returns the number of columns accepted.
+    /// Memory remains bounded by the configured tiers. Returns the number of input columns
+    /// retained, including those merged to a coarser resolution. Columns beyond the oldest
+    /// tier's capacity are dropped and do not count.
     pub fn merge_page(&mut self, mut page: Vec<DepthColumn>) -> Result<usize, FeedError> {
         let cadence = self.config.cadence;
         let valid_side = |side: &[(i64, f64)], bid: bool| {
@@ -158,7 +162,7 @@ impl DepthHistory {
         }
         page.sort_by_key(|c| c.time);
         let mut held: Vec<_> = self.shared().cloned().collect();
-        let mut accepted = 0;
+        let mut accepted = Vec::new();
         for column in page {
             let at = held.partition_point(|c| c.time < column.time);
             let overlaps = (at > 0 && held[at - 1].time + held[at - 1].span > column.time)
@@ -166,22 +170,62 @@ impl DepthHistory {
                     .get(at)
                     .is_some_and(|c| c.time < column.time + column.span);
             if !overlaps {
-                held.insert(at, Arc::new(column));
-                accepted += 1;
+                let column = Arc::new(column);
+                held.insert(at, Arc::clone(&column));
+                accepted.push(column);
             }
         }
-        self.clear();
-        for column in held {
-            self.push(column);
+        if accepted.is_empty() {
+            return Ok(0);
         }
-        Ok(accepted)
+        let mut older = 0;
+        if let Some(k) = self.tiers.iter().rposition(|tier| !tier.is_empty()) {
+            older = accepted.partition_point(|c| c.time < self.tiers[k][0].time);
+            let mut columns: VecDeque<_> = accepted[..older].iter().cloned().collect();
+            // Complete a short page boundary before it consumes a whole coarse-tier slot.
+            if let Some(span) = self.config.cadence.checked_mul(1 << k) {
+                while columns.back().is_some_and(|older| {
+                    let newer = &self.tiers[k][0];
+                    older.time + older.span == newer.time && older.span + newer.span <= span
+                }) {
+                    let older = columns.pop_back().expect("an older column");
+                    let newer = self.tiers[k].pop_front().expect("a held column");
+                    self.tiers[k].push_front(Arc::new(merge(&older, &newer, self.config.rows)));
+                }
+            }
+            // Work back from the held boundary, leaving a short column at the oldest end.
+            for _ in 0..k {
+                let mut merged = VecDeque::new();
+                while let Some(newer) = columns.pop_back() {
+                    let column = match columns.back() {
+                        Some(older) if older.time + older.span == newer.time => {
+                            let older = columns.pop_back().expect("an older column");
+                            Arc::new(merge(&older, &newer, self.config.rows))
+                        }
+                        _ => newer,
+                    };
+                    merged.push_front(column);
+                }
+                columns = merged;
+            }
+            columns.append(&mut self.tiers[k]);
+            self.tiers[k] = columns;
+        }
+        for column in accepted[older..].iter().cloned() {
+            self.insert_column(column);
+        }
+        self.compact();
+        let oldest = self.columns().next().expect("accepted columns").time;
+        Ok(accepted.len() - accepted.partition_point(|c| c.time < oldest))
     }
 
+    #[cfg(feature = "widget")]
     pub(crate) fn clear(&mut self) {
         self.tiers.iter_mut().for_each(VecDeque::clear);
     }
 
     /// Live columns supersede overlapping history, including a page answered in the same drain.
+    #[cfg(any(feature = "widget", test))]
     pub(crate) fn push(&mut self, column: impl Into<Arc<DepthColumn>>) {
         let column = column.into();
         if self
@@ -190,40 +234,65 @@ impl DepthHistory {
             .is_some_and(|last| last.time + last.span > column.time)
         {
             let end = column.time + column.span;
-            let mut held: Vec<_> = self
-                .shared()
-                .filter(|c| c.time >= end || c.time + c.span <= column.time)
-                .cloned()
-                .collect();
-            held.push(column);
-            held.sort_by_key(|c| c.time);
-            self.clear();
-            for c in held {
-                self.push_tail(c);
+            for tier in &mut self.tiers {
+                tier.retain(|c| c.time >= end || c.time + c.span <= column.time);
             }
+            self.insert_column(column);
         } else {
-            self.push_tail(column);
+            self.tiers[0].push_back(column);
         }
+        self.compact();
     }
 
-    /// Appends a newer column and merges the oldest of each full tier.
-    fn push_tail(&mut self, column: Arc<DepthColumn>) {
-        self.tiers[0].push_back(column);
+    /// Places a column by its span, constrained by the ages of the held tiers. Older live
+    /// corrections join the oldest occupied tier, leaving the newer resolutions intact.
+    fn insert_column(&mut self, column: Arc<DepthColumn>) {
+        let tier = if let Some(k) = self.tiers.iter().rposition(|tier| !tier.is_empty())
+            && column.time < self.tiers[k][0].time
+        {
+            k
+        } else {
+            let resolution = (0..TIERS - 1)
+                .find(|&k| {
+                    self.config
+                        .cadence
+                        .checked_mul(1 << k)
+                        .is_none_or(|span| column.span <= span)
+                })
+                .unwrap_or(TIERS - 1);
+            let lower = self
+                .tiers
+                .iter()
+                .rposition(|tier| tier.back().is_some_and(|c| c.time > column.time))
+                .unwrap_or(0);
+            let upper = self
+                .tiers
+                .iter()
+                .position(|tier| tier.front().is_some_and(|c| c.time < column.time))
+                .unwrap_or(TIERS - 1);
+            resolution.clamp(lower, upper)
+        };
+        let at = self.tiers[tier].partition_point(|c| c.time < column.time);
+        self.tiers[tier].insert(at, column);
+    }
+
+    /// Promotes only overflow, keeping columns in all other tiers at their held resolution.
+    fn compact(&mut self) {
         for tier in 0..TIERS {
-            if self.tiers[tier].len() <= self.config.columns {
-                return;
-            }
-            let older = self.tiers[tier].pop_front().expect("a full tier");
-            // A column lost between the two would be averaged over the time it does not cover.
-            let merged = match self.tiers[tier].front() {
-                Some(newer) if older.time + older.span == newer.time => {
-                    let newer = self.tiers[tier].pop_front().expect("a newer column");
-                    Arc::new(merge(&older, &newer, self.config.rows))
+            while self.tiers[tier].len() > self.config.columns {
+                let older = self.tiers[tier].pop_front().expect("a full tier");
+                if tier == TIERS - 1 {
+                    continue;
                 }
-                _ => older,
-            };
-            if let Some(next) = self.tiers.get_mut(tier + 1) {
-                next.push_back(merged);
+                // A column lost between the two would be averaged over the time it does not cover.
+                let merged = match self.tiers[tier].front() {
+                    Some(newer) if older.time + older.span == newer.time => {
+                        let newer = self.tiers[tier].pop_front().expect("a newer column");
+                        Arc::new(merge(&older, &newer, self.config.rows))
+                    }
+                    _ => older,
+                };
+                self.tiers[tier + 1].push_back(merged);
             }
         }
     }
@@ -432,6 +501,105 @@ mod tests {
             };
             assert!(history.merge_page(vec![edge]).is_err());
             assert_eq!(history.columns().cloned().collect::<Vec<_>>(), before);
+        }
+
+        // One streamed hour, then default-sized pages back through the promised 42 hours.
+        let mut history = DepthHistory::new(DepthHistoryConfig::default()).unwrap();
+        for second in 0..3_600 {
+            history.push(column(second, 1, second as f64));
+        }
+        for page in 1..=246 {
+            let before = history.columns().next().unwrap().time.timestamp();
+            let older = (before - 600..before)
+                .map(|s| column(s, 1, s.unsigned_abs() as f64))
+                .collect();
+            assert_eq!(history.merge_page(older).unwrap(), 600, "page {page}");
+            assert!(
+                history.columns().next().unwrap().time < at(before),
+                "page {page}"
+            );
+        }
+        assert_eq!(history.columns().next().unwrap().time, at(-41 * 3_600));
+        // At capacity, the accepted count must match the samples that actually survive.
+        let mut accepted = 600;
+        for _ in 0..16 {
+            let before = history.columns().next().unwrap().time.timestamp();
+            accepted = history
+                .merge_page((before - 600..before).map(|s| column(s, 1, 1.0)).collect())
+                .unwrap();
+            let oldest = history.columns().next().unwrap().time.timestamp();
+            assert_eq!(accepted, (before - oldest) as usize);
+            if accepted == 0 {
+                break;
+            }
+        }
+        assert_eq!(accepted, 0);
+    }
+
+    /// Paging and live corrections must leave unrelated, already merged columns at their
+    /// resolution, including when a page fills a gap inside the held history.
+    #[test]
+    fn history_updates_preserve_held_resolution() {
+        let mut history = DepthHistory::new(config_columns(2)).unwrap();
+        for second in 0..40 {
+            history.push(column(second, 1, second as f64));
+        }
+        let before = history.tiers.clone();
+        for page in [vec![], vec![column(0, 40, 99.0)]] {
+            assert_eq!(history.merge_page(page).unwrap(), 0);
+            assert_eq!(history.tiers, before);
+        }
+        for page in 1..=5 {
+            let older = (-8 * page..-8 * (page - 1))
+                .map(|s| column(s, 1, s.unsigned_abs() as f64))
+                .collect();
+            assert_eq!(history.merge_page(older).unwrap(), 8);
+            for held in before.iter().flatten() {
+                assert!(history.shared().any(|c| Arc::ptr_eq(c, held)));
+            }
+        }
+        assert_eq!(history.columns().next().unwrap().time, at(-40));
+        history.push(column(39, 1, 99.0));
+        for held in before.iter().flatten().filter(|c| c.time < at(39)) {
+            assert!(history.shared().any(|c| Arc::ptr_eq(c, held)));
+        }
+        let paged = history;
+
+        // A coarse column followed by samples, with room for a page at each resolution.
+        let mut history = DepthHistory::new(config_columns(3)).unwrap();
+        history.merge_page(vec![column(0, 8, 4.0)]).unwrap();
+        history.push(column(20, 1, 20.0));
+        let held: Vec<_> = history.shared().cloned().collect();
+        assert_eq!(
+            history
+                .merge_page(vec![column(8, 4, 8.0), column(16, 1, 16.0)])
+                .unwrap(),
+            2
+        );
+        history.push(column(12, 4, 12.0));
+        for c in held {
+            assert!(history.shared().any(|h| Arc::ptr_eq(h, &c)));
+        }
+        assert_eq!(
+            history
+                .columns()
+                .map(|c| (c.time.timestamp(), c.span.num_seconds()))
+                .collect::<Vec<_>>(),
+            [(0, 8), (8, 4), (12, 4), (16, 1), (20, 1)]
+        );
+        for history in [&paged, &history] {
+            assert!(
+                history
+                    .tiers
+                    .iter()
+                    .all(|tier| tier.len() <= history.config.columns)
+            );
+            let columns: Vec<_> = history.columns().collect();
+            assert!(
+                columns
+                    .windows(2)
+                    .all(|w| w[0].time + w[0].span <= w[1].time)
+            );
         }
     }
 
