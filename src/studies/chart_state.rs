@@ -15,11 +15,11 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Copy)]
 struct ZoomState {
     /// Pixels per bar at the time of the snapshot.
-    pub bar_spacing: f32,
+    bar_spacing: f32,
     /// Right offset in bars from the chart edge.
-    pub right_offset: f64,
+    right_offset: f64,
     /// Manual price range in prices, or `None` when auto-scaled.
-    pub price_range: Option<(f64, f64)>,
+    price_range: Option<(f64, f64)>,
 }
 
 /// Backend chart state -- owns bar data, time-scale coordinate system,

@@ -103,16 +103,14 @@
 //! public fields. Include a fallback arm when matching a `#[non_exhaustive]` enum.
 //!
 //! A few types stay exhaustive on purpose. `widget::SeriesOptions`,
-//! `chart::overlays::VolumeBubblesConfig`, `model::ChartTypeParams` and `theme::Theme`
-//! are built in one expression that ends in `..Default::default()` or
-//! `..Theme::light()`, which keeps compiling when a field is added.
+//! `chart::overlays::VolumeBubblesConfig`, `model::ChartTypeParams`, `theme::Theme` and
+//! `drawings::{FibonacciConfig, PitchforkConfig, GannConfig}` are built in one expression
+//! that ends in `..Default::default()` or `..Theme::light()`, which keeps compiling when a
+//! field is added. The records a custom study returns from `studies::Indicator` methods,
+//! such as `studies::PlotStyle` and `studies::StudyZone`, stay exhaustive so that a study
+//! can build them directly; studies grow through new default trait methods instead.
 //! `widget::MismatchDirection`, `model::PriceLineSource` and `model::LogicalRange` are
 //! complete by meaning.
-//! The drawing configurations `drawings::{FibonacciConfig, PitchforkConfig, GannConfig}`
-//! are built the same way, and the records a custom study returns from
-//! `studies::Indicator` methods, such as `studies::PlotStyle` and `studies::StudyZone`,
-//! stay exhaustive so that a study can build them directly; studies grow through new
-//! default trait methods instead.
 
 // ─── Crate-level lint configuration ──────────────────────────────────────────
 #![warn(missing_debug_implementations)]
