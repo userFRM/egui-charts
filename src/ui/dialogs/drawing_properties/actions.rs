@@ -281,7 +281,7 @@ impl DrawingProps {
             }
             if settings.ghost_feed.is_some_and(|c| !c.is_valid()) {
                 return Err(
-                    "Ghost feed spacing must be positive and wick nonnegative, both finite",
+                    "Ghost feed average range must be positive and noise nonnegative, both finite",
                 );
             }
             if !settings.position_sizing.is_valid() {

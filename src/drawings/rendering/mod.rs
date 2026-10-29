@@ -429,7 +429,8 @@ impl Drawing {
             DrawingToolType::ShortPos => self.render_pos_tool(painter, view, false, selected),
             DrawingToolType::Forecast => self.render_forecast(painter, view),
             DrawingToolType::BarsPattern => self.render_bars_pattern(painter, view),
-            DrawingToolType::GhostFeed => self.render_ghost_feed(painter),
+            // Candle colours and the neutral path are independent of the common drawing style.
+            DrawingToolType::GhostFeed => return self.render_ghost_feed(painter, view),
             DrawingToolType::ProjectionTool => self.render_projection_tool(painter, rect, view),
 
             // Volume (3 tools)
@@ -541,7 +542,6 @@ impl Drawing {
                 | T::ShortPos
                 | T::Forecast
                 | T::BarsPattern
-                | T::GhostFeed
                 | T::FixedRangeVolumeProfile
                 | T::Measure
                 | T::DateAndPriceRange
