@@ -39,6 +39,7 @@ pub mod financials;
 pub mod floating_replay_control;
 pub mod ideas;
 pub mod multi_chart;
+pub mod profile;
 pub mod replay_status;
 mod share_controls;
 pub mod strategy_report;

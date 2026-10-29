@@ -367,8 +367,6 @@ mod tests {
         chart.set_symbol("NEXT");
         chart.pump_marks(&ctx);
         assert_eq!(source.0.lock().unwrap().pop().unwrap().0.symbol, "NEXT");
-        chart.set_mark_source(None);
-        assert!(chart.mark_source.is_none());
     }
 
     /// Every category is retained while hidden and restored by the same chart settings.

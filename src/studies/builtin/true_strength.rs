@@ -167,20 +167,7 @@ impl Indicator for TrueStrengthIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-
-    fn make_bar(close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: close,
-            high: close,
-            low: close,
-            close,
-            volume: 1000.0,
-            colors: None,
-            payload: None,
-        }
-    }
+    use crate::studies::test_support::make_bar;
 
     /// Blau, "Momentum, Direction, and Divergence" (1995): TSI = 100 * EMA(EMA(m, r), s) / EMA(EMA(|m|, r), s),
     /// m = close - previous close, signal = EMA(TSI, q), each EMA seeded with its first input, the change on bar 1.

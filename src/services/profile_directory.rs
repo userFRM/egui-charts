@@ -89,8 +89,13 @@ impl ProfileDirectory {
                     Ok(ProfileEvent::Remove(id)) => {
                         self.profiles.remove(&id);
                         self.operations.remove(&id);
+                        self.requests.retain(|_, profile| profile != &id);
                     }
-                    Ok(ProfileEvent::Clear) => self.profiles.clear(),
+                    Ok(ProfileEvent::Clear) => {
+                        self.profiles.clear();
+                        self.operations.clear();
+                        self.requests.clear();
+                    }
                     Err(_) => {}
                 }
             } else if let Some(id) = self.requests.remove(&key)
@@ -235,10 +240,35 @@ mod tests {
         // Another account: nothing of the old one stays, and its late answer is ignored.
         directory.follow(&id, false);
         let (_, late) = old.0.lock().unwrap().1.pop().unwrap();
-        directory.set_service(Arc::new(Host::default()));
+        let next = Arc::new(Host::default());
+        directory.set_service(next.clone());
         late.send(Ok(()));
         directory.poll(&ctx);
         assert_eq!(directory.profile(&id).map(|p| p.followed), Some(false));
         assert!(directory.operation(&id).is_none());
+
+        // Removing or clearing profiles invalidates their requests, even if the same id returns.
+        for event in [ProfileEvent::Remove(id.clone()), ProfileEvent::Clear] {
+            directory.follow(&id, true);
+            let (_, stale) = next.0.lock().unwrap().1.pop().unwrap();
+            let held = next.0.lock().unwrap();
+            let events = held.0.as_ref().unwrap();
+            events.push(event);
+            events.push(ProfileEvent::Upsert(Profile::new(id.clone(), "Ada")));
+            drop(held);
+            directory.poll(&ctx);
+            assert!(directory.operation(&id).is_none());
+            directory.follow(&id, true);
+            let (_, current) = next.0.lock().unwrap().1.pop().unwrap();
+            stale.send(Err(FeedError::Other("stale refusal".into())));
+            directory.poll(&ctx);
+            assert_eq!(
+                directory.operation(&id).unwrap().status,
+                FollowStatus::Pending
+            );
+            current.send(Err(FeedError::Other("current refusal".into())));
+            directory.poll(&ctx);
+            directory.dismiss(&id);
+        }
     }
 }
