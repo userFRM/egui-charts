@@ -625,7 +625,7 @@ impl CompareSymbolsDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::top_toolbar::components::symbol_search::tests::create_test_symbols;
+    use crate::ui::dialogs::symbol_search::tests::create_test_symbols;
     use egui::Context;
 
     #[test]
