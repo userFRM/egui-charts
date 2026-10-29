@@ -339,7 +339,8 @@ impl PriceFormatter for VolumeFormatter {
             };
             formatted = format_decimal(value / unit, self.precision);
         }
-        format!("{formatted}{suffix}")
+        formatted.push_str(suffix);
+        formatted
     }
 
     fn clone_box(&self) -> Box<dyn PriceFormatter> {
