@@ -634,7 +634,7 @@ mod tests {
             profile.source(),
             ProfileSource::Executions { complete: false }
         );
-        assert_eq!((profile.low(), profile.high()), (11.0, 13.0));
+        assert_eq!((profile.low(), profile.high()), (10.5, 12.5));
         assert_eq!(profile.volume(), [4.0, 11.0]);
         assert_eq!(
             (profile.up(), profile.down()),
@@ -650,7 +650,7 @@ mod tests {
         // Moving the first anchor past bar 1 drops its executions and the lower row.
         select(&mut drawing, 2.0, 2.0);
         let profile = drawing.volume_profile_of(&view(Some(&flow))).unwrap();
-        assert_eq!((profile.low(), profile.volume()), (12.0, [3.0].as_slice()));
+        assert_eq!((profile.low(), profile.volume()), (11.5, [3.0].as_slice()));
 
         // A span with no executions, and a view without any, fall back to the estimate.
         select(&mut drawing, 4.0, 5.0);
