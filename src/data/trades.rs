@@ -9,7 +9,7 @@
 
 use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 /// Size taken from one resting order, or from an unidentified one, at one price.
 #[derive(Clone, Debug, PartialEq)]
@@ -129,8 +129,10 @@ impl CombinedTrade {
 pub(crate) struct Trades {
     trades: VecDeque<Tick>,
     capacity: usize,
-    /// Ids of the held trades.
-    ids: HashSet<u64>,
+    /// Position stamps of the held trades, relative to `front` by wrapping subtraction.
+    ids: HashMap<u64, usize>,
+    /// Position stamp of the deque's front, moving with pushes and evictions at either end.
+    front: usize,
     /// Time of the newest trade a page added: live trades without an id at or before it repeat it.
     paged_until: Option<DateTime<Utc>>,
     /// Time of the newest trade without an id a page added: any live trade at or before it may
@@ -147,7 +149,8 @@ impl Trades {
         Self {
             trades: VecDeque::new(),
             capacity,
-            ids: HashSet::new(),
+            ids: HashMap::new(),
+            front: 0,
             paged_until: None,
             paged_without_id_until: None,
             lost_until: None,
@@ -209,9 +212,13 @@ impl Trades {
     /// [`push`](Self::push), calling `changed` with the trade if it is added (`true`) and with
     /// the trade it evicts (`false`).
     fn insert(&mut self, trade: Tick, changed: &mut impl FnMut(&Tick, bool)) {
-        if trade.id.is_some_and(|id| !self.ids.insert(id)) {
+        if trade.id.is_some_and(|id| self.ids.contains_key(&id)) {
             self.annotate(&trade);
             return;
+        }
+        if let Some(id) = trade.id {
+            self.ids
+                .insert(id, self.front.wrapping_add(self.trades.len()));
         }
         self.revision = next_revision();
         changed(&trade, true);
@@ -219,6 +226,7 @@ impl Trades {
         if self.trades.len() > self.capacity
             && let Some(evicted) = self.trades.pop_front()
         {
+            self.front = self.front.wrapping_add(1);
             if let Some(id) = evicted.id {
                 self.ids.remove(&id);
             }
@@ -230,9 +238,9 @@ impl Trades {
     /// A tape print may precede the order execution or recorded fill that identifies its orders.
     fn annotate(&mut self, trade: &Tick) {
         if (trade.aggressor_order_id.is_some() || trade.resting_order_id.is_some())
-            && let Some(id) = trade.id.filter(|id| self.ids.contains(id))
-            && let Some(held) = self.trades.iter_mut().rev().find(|t| t.id == Some(id))
+            && let Some(at) = trade.id.and_then(|id| self.ids.get(&id))
         {
+            let held = &mut self.trades[at.wrapping_sub(self.front)];
             held.aggressor_order_id = held.aggressor_order_id.or(trade.aggressor_order_id);
             held.resting_order_id = held.resting_order_id.or(trade.resting_order_id);
         }
@@ -247,7 +255,7 @@ impl Trades {
                 Some(_) => self.paged_without_id_until,
                 None => self.paged_until,
             };
-            if trade.id.is_some_and(|id| self.ids.contains(&id))
+            if trade.id.is_some_and(|id| self.ids.contains_key(&id))
                 || paged_until.is_none_or(|until| trade.ts > until)
             {
                 self.insert(trade, changed);
@@ -282,7 +290,7 @@ impl Trades {
         let mut room = self.capacity.saturating_sub(self.trades.len());
         let mut added = Vec::new();
         for trade in page.into_iter().rev() {
-            if trade.id.is_some_and(|id| self.ids.contains(&id)) {
+            if trade.id.is_some_and(|id| self.ids.contains_key(&id)) {
                 continue;
             }
             if room == 0 {
@@ -292,7 +300,8 @@ impl Trades {
             }
             room -= 1;
             if let Some(id) = trade.id {
-                self.ids.insert(id);
+                self.ids
+                    .insert(id, self.front.wrapping_sub(added.len() + 1));
             }
             added.push(trade);
         }
@@ -303,6 +312,7 @@ impl Trades {
             }
             self.revision = next_revision();
             changed(&trade, true);
+            self.front = self.front.wrapping_sub(1);
             self.trades.push_front(trade);
         }
         rejected
@@ -318,6 +328,40 @@ pub(super) fn valid(trade: &Tick) -> bool {
 mod tests {
     use super::*;
     use chrono::TimeDelta;
+
+    /// Reconnects and overlapping pages must annotate retained fills without a scan per id.
+    #[test]
+    fn replay_with_order_ids_has_bounded_cost() {
+        let count = 100_000;
+        let fill = |id: usize| trade(id as i64, 100.0).with_id(id as u64);
+        for path in ["push", "append", "prepend"] {
+            let mut store = Trades::new(count);
+            for id in 0..count {
+                store.push(fill(id));
+            }
+            let page: Vec<_> = (0..count)
+                .map(|id| fill(id).with_aggressor_order_id(id as u64 + 1))
+                .collect();
+            let started = std::time::Instant::now();
+            match path {
+                "push" => page.into_iter().for_each(|t| store.push(t)),
+                "append" => {
+                    let mut pending = store.empty();
+                    page.into_iter().for_each(|t| pending.push(t));
+                    store.append(pending, &mut |_, _| panic!("repeated fill"));
+                }
+                _ => {
+                    store.prepend(page, &mut |_, _| panic!("repeated fill"));
+                }
+            }
+            let elapsed = started.elapsed();
+            assert!(elapsed.as_secs_f64() < 2.0, "{path}: {elapsed:?}");
+            assert_eq!(store.iter().count(), count, "{path}");
+            for (id, held) in store.iter().enumerate() {
+                assert_eq!(held.aggressor_order_id, Some(id as u64 + 1), "{path}");
+            }
+        }
+    }
 
     /// A trade `second` seconds after 10:00, told apart by its price.
     fn trade(second: i64, price: f64) -> Tick {
@@ -466,6 +510,9 @@ mod tests {
         };
         #[rustfmt::skip]
         let cases = [
+            ("zero capacity holds no ids", 0,
+                vec![Live(vec![id(trade(1, 1.0), 1)]), Page(vec![id(trade(0, 0.0), 0)]),
+                    Live(vec![id(trade(2, 2.0), 1)])], vec![], 0),
             ("the oldest trades make room", 3,
                 vec![Live(vec![id(trade(10, 10.0), 10), trade(11, 11.0), trade(12, 12.0)]),
                     Live(vec![trade(13, 13.0)])],
@@ -541,6 +588,15 @@ mod tests {
             assert_eq!((held, dropped), (prices, rejected), "{name}");
             let ids = store.iter().filter(|trade| trade.id.is_some()).count();
             assert_eq!(store.ids.len(), ids, "{name}: held ids");
+            let repeats: Vec<_> = store.iter().filter(|t| t.id.is_some()).cloned().collect();
+            for trade in repeats {
+                let id = trade.id.unwrap();
+                store.push(trade.with_aggressor_order_id(id).with_resting_order_id(id));
+            }
+            for trade in store.iter().filter(|t| t.id.is_some()) {
+                assert_eq!(trade.aggressor_order_id, trade.id, "{name}");
+                assert_eq!(trade.resting_order_id, trade.id, "{name}");
+            }
         }
     }
 }
