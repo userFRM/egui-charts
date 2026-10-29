@@ -12,8 +12,8 @@ impl MACross {
     /// Create two simple averages with lengths clamped to at least one.
     pub fn new(fast_period: usize, slow_period: usize) -> Self {
         let mut inner = MACombination::new(vec![
-            AverageLine::new(AverageType::Simple, fast_period, palette::BLUE),
-            AverageLine::new(AverageType::Simple, slow_period, palette::ORANGE),
+            AverageLine::new(AverageType::Simple, fast_period, palette::ORANGE),
+            AverageLine::new(AverageType::Simple, slow_period, palette::DARK_GREEN),
         ])
         .unwrap();
         inner.wait_for_all = true;
@@ -30,5 +30,6 @@ impl Default for MACross {
 impl_ma_preset!(
     MACross,
     "MA Cross",
-    "MA Cross - Two simple averages with crossing markers"
+    "MA Cross - Two simple averages with crossing markers",
+    palette::BLUE
 );

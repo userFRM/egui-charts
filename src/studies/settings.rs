@@ -829,6 +829,17 @@ impl Indicator for ConfiguredStudy {
     fn line_names(&self) -> Vec<String> {
         self.study.line_names()
     }
+    fn projection_fill_color(&self, projection: &super::StudyProjection) -> Color32 {
+        self.study.projection_fill_color(projection)
+    }
+    fn plot_label_colors(&self, line: usize) -> Option<(Color32, Color32)> {
+        self.study
+            .plot_label_colors(line)
+            .map(|(_, text)| (self.plot_style(line).color, text))
+    }
+    fn marker_style(&self) -> Option<PlotStyle> {
+        self.study.marker_style()
+    }
     fn markers(&self) -> &[super::IndicatorMarker] {
         self.study.markers()
     }
@@ -846,6 +857,12 @@ impl Indicator for ConfiguredStudy {
     }
     fn is_volume(&self) -> bool {
         self.study.is_volume()
+    }
+    fn level_style(&self, value: f64) -> LineStyle {
+        self.study.level_style(value)
+    }
+    fn level_fill_color(&self) -> Color32 {
+        self.study.level_fill_color()
     }
     fn pane(&self) -> super::StudyPane {
         self.study.pane()
@@ -924,14 +941,14 @@ mod tests {
         }
     }
 
-    /// New Net Volume, PPO and PVO studies draw their signed volume and oscillator differences as
-    /// columns and their oscillator lines as lines, and a saved plot type replaces the default.
+    /// Net Volume starts as a line; PPO and PVO keep columns for their differences.
+    /// A saved plot type replaces each default.
     #[test]
     fn histogram_defaults_yield_to_a_saved_plot_type() {
         use super::super::{NetVolume, PercentageVolumeOscillator, PriceOscillator};
         let (line, columns) = (PlotType::Line, PlotType::Columns);
         let studies: [(Box<dyn Indicator>, &[PlotType]); 3] = [
-            (Box::new(NetVolume::default()), &[columns]),
+            (Box::new(NetVolume::default()), &[line]),
             (Box::new(PriceOscillator::default()), &[line, line, columns]),
             (
                 Box::new(PercentageVolumeOscillator::default()),

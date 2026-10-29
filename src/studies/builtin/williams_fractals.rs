@@ -41,7 +41,6 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::palette;
 use crate::studies::stepper::{rolling_max, update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValues};
 use egui::Color32;
@@ -62,8 +61,8 @@ impl WilliamsFractals {
         Self {
             periods: periods.max(2),
             values: IndicatorValues::new(),
-            up_color: palette::TEAL,
-            down_color: palette::RED,
+            up_color: Color32::from_rgb(0, 150, 136),
+            down_color: Color32::from_rgb(244, 67, 54),
             visible: true,
         }
     }

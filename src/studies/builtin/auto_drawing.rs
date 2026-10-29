@@ -55,6 +55,7 @@ pub struct AutoDrawing {
     kind: AutoDrawingKind,
     zigzag: ZigZag,
     fibonacci: FibonacciConfig,
+    fork_colors: [Color32; 2],
     drawings: Vec<Drawing>,
     values: IndicatorValues,
 }
@@ -63,17 +64,69 @@ impl AutoDrawing {
     /// Construct with a Zig Zag deviation in percent and confirmation depth in bars.
     /// Parameters have the same bounds and skipped-bar policy as [`ZigZag::new`].
     pub fn new(kind: AutoDrawingKind, deviation_percent: f64, depth: usize) -> Self {
+        let mut fibonacci = if kind == AutoDrawingKind::FibonacciExtension {
+            FibonacciConfig::extension_default()
+        } else {
+            FibonacciConfig::default()
+        };
+        for level in &mut fibonacci.levels {
+            let hex = match level.value {
+                0.0 | 1.0 => [120, 123, 134, 255],
+                0.236 | 2.618 => [244, 67, 54, 255],
+                0.382 => [129, 199, 132, 255],
+                0.5 => [76, 175, 80, 255],
+                0.618 => [0, 150, 136, 255],
+                0.786 => [100, 181, 246, 255],
+                1.618 => [41, 98, 255, 255],
+                _ => level.color,
+            };
+            level.color = hex;
+            if level.value == 1.272 || level.value == 2.0 {
+                level.visible = false;
+            }
+        }
+        fibonacci.show_background = true;
+        fibonacci.background_opacity = 38;
+        fibonacci.extend_right = true;
         Self {
             kind,
-            zigzag: ZigZag::new(deviation_percent, depth),
-            fibonacci: if kind == AutoDrawingKind::FibonacciExtension {
-                FibonacciConfig::extension_default()
-            } else {
-                FibonacciConfig::default()
-            },
+            zigzag: ZigZag::new(deviation_percent, depth).with_color(
+                if kind == AutoDrawingKind::Pitchfork {
+                    Color32::from_rgb(244, 67, 54)
+                } else {
+                    crate::studies::palette::BLUE
+                },
+            ),
+            fibonacci,
+            fork_colors: [
+                crate::studies::palette::GREEN,
+                crate::studies::palette::BLUE,
+            ],
             drawings: Vec::new(),
             values: IndicatorValues::new(),
         }
+    }
+
+    fn fork_config(&self) -> crate::drawings::PitchforkConfig {
+        let mut config = crate::drawings::PitchforkConfig::default();
+        let colors = [
+            self.zigzag.colors()[0],
+            self.fork_colors[0],
+            self.fork_colors[1],
+        ];
+        for level in &mut config.levels {
+            level.visible = level.value <= 1.0;
+            level.color = colors[if level.value == 0.0 {
+                0
+            } else if level.value == 0.5 {
+                1
+            } else {
+                2
+            }]
+            .to_srgba_unmultiplied();
+        }
+        config.background_opacity = 38;
+        config
     }
 
     /// Set the levels, orientation and price measurement of a Fibonacci construction.
@@ -169,6 +222,9 @@ impl Indicator for AutoDrawing {
         ) {
             drawing.fib_config = Some(self.fibonacci.clone());
         }
+        if self.kind == AutoDrawingKind::Pitchfork {
+            drawing.pitchfork = Some(self.fork_config());
+        }
         self.drawings.push(drawing);
     }
 
@@ -183,10 +239,33 @@ impl Indicator for AutoDrawing {
         &self.drawings
     }
     fn colors(&self) -> Vec<Color32> {
-        self.zigzag.colors()
+        let mut colors = self.zigzag.colors();
+        if self.kind == AutoDrawingKind::Pitchfork {
+            colors.extend(self.fork_colors);
+        }
+        colors
     }
     fn set_colors(&mut self, colors: Vec<Color32>) {
+        if self.kind == AutoDrawingKind::Pitchfork
+            && let Some(&color) = colors.first()
+        {
+            self.fork_colors = [
+                colors.get(1).copied().unwrap_or(color),
+                colors.get(2).copied().unwrap_or(color),
+            ];
+        }
         self.zigzag.set_colors(colors);
+        if self.kind == AutoDrawingKind::Pitchfork {
+            let config = self.fork_config();
+            for drawing in &mut self.drawings {
+                drawing.pitchfork = Some(config.clone());
+            }
+        }
+    }
+    fn set_color(&mut self, line: usize, color: Color32) {
+        if line == 0 {
+            self.set_colors(vec![color]);
+        }
     }
     fn is_overlay(&self) -> bool {
         true

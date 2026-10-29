@@ -27,7 +27,6 @@
 
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use crate::model::{Bar, Instrument, PriceSource, Timeframe};
-use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -120,7 +119,7 @@ impl VwapAutoAnchored {
             intraday: false,
             shown_start: 0,
             shown_indices: Vec::new(),
-            colors: vec![palette::YELLOW],
+            colors: vec![Color32::from_rgb(30, 136, 229)],
             visible: true,
         }
     }

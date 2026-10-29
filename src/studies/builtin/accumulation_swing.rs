@@ -35,7 +35,7 @@ impl AccumulationSwingIndex {
             limit_move: clamp_param(limit_move, f64::EPSILON, f64::MAX),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::UP, // Teal
+            color: palette::LIGHT_BLUE, // Teal
             visible: true,
         }
     }

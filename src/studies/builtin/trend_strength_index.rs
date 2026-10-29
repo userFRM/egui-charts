@@ -123,7 +123,7 @@ impl Indicator for TrendStrengthIndex {
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             range: Some((-1.0, 1.0)),
-            levels: vec![(0.0, Color32::from_gray(128), "Zero")],
+            levels: vec![(0.0, palette::GRAY.gamma_multiply_u8(128), "Zero")],
             ..Default::default()
         }
     }

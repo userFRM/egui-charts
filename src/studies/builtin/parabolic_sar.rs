@@ -64,8 +64,8 @@ impl ParabolicSAR {
             max_af: clamp_param(max_af, initial_af, 1.0),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            bullish_color: palette::UP,
-            bearish_color: palette::DOWN,
+            bullish_color: palette::BLUE,
+            bearish_color: palette::BLUE,
             visible: true,
         }
     }
@@ -112,7 +112,7 @@ impl Indicator for ParabolicSAR {
             color: self.colors()[line],
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
-            plot_type: crate::studies::PlotType::Circles,
+            plot_type: crate::studies::PlotType::Crosses,
             visible: true,
         }
     }

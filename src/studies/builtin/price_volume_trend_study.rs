@@ -24,7 +24,7 @@ impl PriceVolumeTrendStudy {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::TEAL,   // PVT line
+                palette::BLUE,   // PVT line
                 palette::ORANGE, // Signal line
             ],
             visible: true,

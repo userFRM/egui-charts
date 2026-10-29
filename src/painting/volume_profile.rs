@@ -4,7 +4,7 @@ use crate::data::{ProfileDisplay, VolumeProfile, VolumeProfileConfig};
 use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Shape, Stroke, epaint::StrokeKind};
+use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 use std::ops::Range;
 
 pub(crate) fn paint_profile(
@@ -59,13 +59,20 @@ pub(crate) fn paint_profile(
             );
         };
         let rgba = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+        let [up, down] = if (va_low..=va_high).contains(&row) {
+            config
+                .value_area_colors
+                .unwrap_or([config.up_color, config.down_color])
+        } else {
+            [config.up_color, config.down_color]
+        };
         match config.display {
             ProfileDisplay::Total => paint(left, width, bar_color),
             ProfileDisplay::UpDown => {
                 let up_width = (profile.up[row] / max_volume) as f32 * max_width;
                 let down_width = (profile.down[row] / max_volume) as f32 * max_width;
-                paint(left, up_width, rgba(config.up_color));
-                paint(left + up_width, down_width, rgba(config.down_color));
+                paint(left, up_width, rgba(up));
+                paint(left + up_width, down_width, rgba(down));
                 // Volume of unknown side, which only executions can leave over.
                 let unknown = width - up_width - down_width;
                 if unknown > 0.01 {
@@ -78,11 +85,7 @@ pub(crate) fn paint_profile(
             }
             ProfileDisplay::Delta => {
                 let delta = profile.up[row] - profile.down[row];
-                let color = if delta >= 0.0 {
-                    config.up_color
-                } else {
-                    config.down_color
-                };
+                let color = if delta >= 0.0 { up } else { down };
                 paint(
                     left,
                     (delta.abs() / max_volume) as f32 * max_width,
@@ -104,6 +107,7 @@ pub(crate) fn paint_profile(
         poc_y,
         y_at_row(va_high + 1),
         y_at_row(va_low),
+        config.show_value_area_lines,
     );
     painter.rect_stroke(
         rect,
@@ -122,20 +126,18 @@ fn draw_volume_profile_lines(
     poc_y: f32,
     vah_y: f32,
     val_y: f32,
+    show_value_area_lines: bool,
 ) {
     let font = egui::FontId::proportional(painter.ctx().active_theme().text.tiny);
 
-    // Draw POC line (dashed, extends across range)
-    let poc_color = DESIGN_TOKENS.semantic.extended.favorite_gold;
-    painter.extend(Shape::dashed_line(
-        &[Pos2::new(rect.min.x, poc_y), Pos2::new(rect.max.x, poc_y)],
+    let poc_color = Color32::from_rgb(15, 15, 15);
+    painter.add(egui::Shape::line(
+        vec![Pos2::new(rect.min.x, poc_y), Pos2::new(rect.max.x, poc_y)],
         Stroke::new(stroke::HAIRLINE, poc_color),
-        8.0,
-        4.0,
     ));
 
     let va_color = Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 200);
-    for y in [vah_y, val_y] {
+    for y in [vah_y, val_y].into_iter().filter(|_| show_value_area_lines) {
         painter.hline(
             rect.min.x..=rect.max.x,
             y,
@@ -156,6 +158,10 @@ fn draw_volume_profile_lines(
         font.clone(),
         Color32::BLACK,
     );
+
+    if !show_value_area_lines {
+        return;
+    }
 
     // Each label sits outside the value area, away from the other line;
     // the VAH line is the lower one on an inverted scale.

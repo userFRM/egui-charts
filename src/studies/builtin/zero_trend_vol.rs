@@ -24,7 +24,7 @@ impl ZeroTrendVol {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            colors: vec![palette::PURPLE],
+            colors: vec![palette::LIGHT_BLUE],
             visible: true,
         }
     }

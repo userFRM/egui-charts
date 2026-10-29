@@ -287,6 +287,13 @@ impl Default for ZigZag {
 }
 
 impl Indicator for ZigZag {
+    fn line_style(&self, _line: usize) -> crate::studies::IndicatorLineStyle {
+        crate::studies::IndicatorLineStyle {
+            width: 2.0,
+            ..Default::default()
+        }
+    }
+
     crate::studies::inputs::study_inputs!(self;
         deviation_percent: number("Deviation percent", 0.0, f64::MAX),
         depth: length("Depth", 1, usize::MAX),

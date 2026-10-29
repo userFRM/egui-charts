@@ -74,7 +74,7 @@ impl Default for TpoRenderConfig {
             letter_font_size: 10.0,
             row_height: 14.0,
             poc_color: tpo.poc,
-            poc_line_width: 2.0,
+            poc_line_width: 1.0,
             value_area_color: tpo.value_area,
             initial_balance_color: tpo.initial_balance,
             single_print_color: tpo.single_print,
@@ -87,21 +87,19 @@ impl Default for TpoRenderConfig {
 impl TpoRenderConfig {
     /// Default color palette for period-based coloring
     fn default_period_colors() -> Vec<Color32> {
-        let tpo = &DESIGN_TOKENS.semantic.tpo;
-        vec![
-            tpo.period_1,  // Red
-            tpo.period_2,  // Orange
-            tpo.period_3,  // Yellow
-            tpo.period_4,  // Green
-            tpo.period_5,  // Blue
-            tpo.period_6,  // Deep Purple
-            tpo.period_7,  // Pink
-            tpo.period_8,  // Cyan
-            tpo.period_9,  // Light Green
-            tpo.period_10, // Brown
-            tpo.period_11, // Blue Grey
-            tpo.period_12, // Deep Orange
+        [
+            (
+                Color32::from_rgb(214, 56, 100),
+                Color32::from_rgb(90, 197, 97),
+            ),
+            (
+                Color32::from_rgb(84, 185, 209),
+                Color32::from_rgb(93, 36, 245),
+            ),
         ]
+        .into_iter()
+        .flat_map(|(start, end)| (0..26).map(move |i| start.lerp_to_gamma(end, i as f32 / 25.0)))
+        .collect()
     }
 
     /// Get color for a specific period index
@@ -327,7 +325,10 @@ pub fn render_live_tpo(
         clock,
         &sessions,
     );
-    let render_config = TpoRenderConfig::default();
+    let render_config = TpoRenderConfig {
+        poc_color: painter.ctx().active_theme().ui.text,
+        ..Default::default()
+    };
     place_profiles(
         &units,
         full_data,
@@ -622,7 +623,7 @@ fn draw_session_profile(
                     [Pos2::new(anchor_x, ey), Pos2::new(max_right, ey)],
                     Stroke::new(
                         DESIGN_TOKENS.stroke.hairline,
-                        render_config.value_area_color.gamma_multiply(2.0),
+                        painter.ctx().active_theme().ui.text,
                     ),
                 );
             }

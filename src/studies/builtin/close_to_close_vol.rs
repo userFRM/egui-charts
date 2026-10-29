@@ -21,7 +21,7 @@ impl CloseToCloseVol {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            colors: vec![palette::PURPLE], // Purple
+            colors: vec![palette::LIGHT_BLUE], // Purple
             visible: true,
         }
     }

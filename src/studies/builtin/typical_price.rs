@@ -20,7 +20,7 @@ impl TypicalPrice {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: palette::ORANGE, // Orange
+            color: palette::ORANGE,
             visible: true,
         }
     }
@@ -112,7 +112,7 @@ impl WeightedClose {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: palette::BLUE, // Blue
+            color: palette::BLUE,
             visible: true,
         }
     }
@@ -206,7 +206,7 @@ impl MedianPrice {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: palette::PURPLE, // Purple
+            color: palette::ORANGE,
             visible: true,
         }
     }

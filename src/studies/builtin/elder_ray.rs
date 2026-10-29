@@ -27,8 +27,8 @@ impl ElderRay {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::GREEN, // Green - Bull Power
-                palette::RED,   // Red - Bear Power
+                palette::TEAL, // Bull Power
+                palette::RED,  // Bear Power
             ],
             visible: true,
         }
@@ -49,6 +49,16 @@ impl Default for ElderRay {
 }
 
 impl Indicator for ElderRay {
+    fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.colors[line],
+            plot_type: crate::studies::PlotType::Columns,
+            width: 1.0,
+            pattern: crate::model::LineStyle::Solid,
+            visible: true,
+        }
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX)
     ; {});

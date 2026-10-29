@@ -35,7 +35,11 @@ impl BollingerBandsWidth {
             expansion: 125,
             contraction: 125,
             values: IndicatorValues::new(),
-            colors: vec![palette::PURPLE, palette::MUTED, palette::MUTED],
+            colors: vec![
+                palette::BLUE,
+                palette::RED.gamma_multiply_u8(128),
+                palette::TEAL.gamma_multiply_u8(128),
+            ],
             visible: true,
         }
     }

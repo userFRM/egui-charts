@@ -42,7 +42,7 @@ impl DEMA {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::BLUE,
+            color: palette::DARK_GREEN,
             visible: true,
         }
     }

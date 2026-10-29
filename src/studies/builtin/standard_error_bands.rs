@@ -23,7 +23,7 @@ impl StandardErrorBands {
             period: period.max(2),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
-            colors: vec![palette::BLUE, palette::BB_MIDDLE, palette::BLUE],
+            colors: vec![palette::LIGHT_BLUE, palette::ORANGE, palette::LIGHT_BLUE],
             visible: true,
         }
     }

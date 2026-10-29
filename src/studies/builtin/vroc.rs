@@ -22,7 +22,7 @@ impl VolumeRateOfChange {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::DEEP_PURPLE, // Purple
+            color: palette::DEEP_PURPLE,
             visible: true,
         }
     }

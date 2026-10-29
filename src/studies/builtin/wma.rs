@@ -39,7 +39,7 @@ impl WMA {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::BLUE,
+            color: palette::LIGHT_BLUE,
             visible: true,
         }
     }

@@ -26,7 +26,7 @@ impl HistoricalVolatility {
             period: period.max(1),
             trading_days: 252.0, // Default for stocks
             values: IndicatorValues::new(),
-            color: palette::ORANGE, // Deep Orange
+            color: palette::BLUE, // Deep Orange
             visible: true,
         }
     }

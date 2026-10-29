@@ -1,6 +1,5 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::palette;
 use crate::studies::stepper::{rolling_mean, update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -25,8 +24,8 @@ impl RelativeVigorIndex {
             period: period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                palette::GREEN,  // Green - RVI
-                palette::ORANGE, // Signal
+                Color32::from_rgb(0, 128, 0), // RVI
+                Color32::from_rgb(255, 0, 0), // Signal
             ],
             visible: true,
         }

@@ -68,11 +68,9 @@ impl<const RATIO: bool, const CORRELATION: bool> SymbolPair<RATIO, CORRELATION> 
             pairs: Vec::new(),
             values: IndicatorValues::new(),
             color: if CORRELATION {
-                palette::PURPLE
-            } else if RATIO {
-                palette::TEAL
+                palette::LIGHT_BLUE
             } else {
-                palette::ORANGE
+                Color32::from_rgba_unmultiplied(128, 0, 128, 166)
             },
             visible: true,
         }
@@ -142,6 +140,13 @@ impl<const RATIO: bool, const CORRELATION: bool> Default for SymbolPair<RATIO, C
 }
 
 impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO, CORRELATION> {
+    fn line_style(&self, _line: usize) -> crate::studies::IndicatorLineStyle {
+        crate::studies::IndicatorLineStyle {
+            width: if CORRELATION { 1.0 } else { 2.0 },
+            ..Default::default()
+        }
+    }
+
     fn name(&self) -> &str {
         if CORRELATION {
             "Correlation Coefficient"
@@ -320,7 +325,7 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
         crate::studies::StudyPane {
             range: CORRELATION.then_some((-1.1, 1.1)),
             levels: if CORRELATION {
-                vec![(0.0, Color32::from_gray(128), "Zero")]
+                vec![(0.0, palette::GRAY.gamma_multiply_u8(128), "Zero")]
             } else {
                 Vec::new()
             },

@@ -23,22 +23,15 @@ impl GuppyMA {
         Self {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            colors: vec![
-                // Short group - shades of green
-                Color32::from_rgb(72, 163, 146),
-                Color32::from_rgb(61, 155, 138),
-                Color32::from_rgb(50, 147, 130),
-                Color32::from_rgb(43, 139, 122),
-                Color32::from_rgb(38, 131, 115),
-                Color32::from_rgb(34, 123, 108),
-                // Long group - shades of red
-                Color32::from_rgb(216, 112, 121),
-                Color32::from_rgb(210, 102, 112),
-                Color32::from_rgb(204, 93, 104),
-                Color32::from_rgb(198, 85, 96),
-                Color32::from_rgb(190, 79, 90),
-                Color32::from_rgb(182, 73, 84),
-            ],
+            colors: [217, 224, 232, 240, 247, 255]
+                .into_iter()
+                .map(|alpha| Color32::from_rgba_unmultiplied(0, 255, 255, alpha))
+                .chain(
+                    [217, 224, 232, 240, 247, 255]
+                        .into_iter()
+                        .map(|alpha| Color32::from_rgba_unmultiplied(255, 0, 0, alpha)),
+                )
+                .collect(),
             visible: true,
         }
     }

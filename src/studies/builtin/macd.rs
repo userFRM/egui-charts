@@ -86,11 +86,11 @@ impl MACD {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::BLUE,   // MACD line
-                palette::ORANGE, // Signal line
-                palette::UP,     // Histogram: positive and rising
-                palette::LIGHT_GREEN,
-                palette::DOWN,
+                palette::BLUE,           // MACD line
+                palette::ORANGE,         // Signal line
+                palette::HISTOGRAM_TEAL, // Histogram: positive and rising
+                palette::LIGHT_TEAL,
+                palette::HISTOGRAM_RED,
                 palette::LIGHT_RED,
             ],
             visible: true,
@@ -138,10 +138,10 @@ impl Indicator for MACD {
         }
         let value = self.values.value(line, bar)?;
         let previous = (0..bar).rev().find_map(|bar| self.values.value(line, bar));
-        let slot = if value > 0.0 {
+        let slot = if value >= 0.0 {
             usize::from(!previous.is_some_and(|p| value > p))
         } else {
-            2 + usize::from(!previous.is_some_and(|p| value < p))
+            2 + usize::from(previous.is_some_and(|p| value > p))
         };
         Some(self.colors[2 + slot])
     }
@@ -235,7 +235,7 @@ impl Indicator for MACD {
         crate::studies::StudyPane {
             height: None,
             range: None,
-            levels: vec![(0.0, palette::MUTED, "Zero Line")],
+            levels: vec![(0.0, palette::MUTED.gamma_multiply_u8(128), "Zero Line")],
             fill_between_levels: false,
         }
     }
@@ -287,14 +287,14 @@ mod tests {
             ..MACD::default()
         };
         let expected = [
-            Some(palette::LIGHT_GREEN),
-            Some(palette::UP),
-            Some(palette::LIGHT_GREEN),
+            Some(palette::LIGHT_TEAL),
+            Some(palette::HISTOGRAM_TEAL),
+            Some(palette::LIGHT_TEAL),
             None,
-            Some(palette::DOWN),
-            Some(palette::DOWN),
+            Some(palette::HISTOGRAM_RED),
+            Some(palette::HISTOGRAM_RED),
             Some(palette::LIGHT_RED),
-            Some(palette::LIGHT_RED),
+            Some(palette::HISTOGRAM_TEAL),
         ];
         let colours = |study: &dyn Indicator| -> Vec<_> {
             (0..8).map(|bar| study.plot_color(2, bar)).collect()
@@ -316,7 +316,7 @@ mod tests {
         configured.restore_settings(&snapshot).unwrap();
         assert_eq!(colours(&configured), expected);
         // A saved single histogram colour stays solid even when it equals the new up colour.
-        for color in [palette::UP, Color32::YELLOW] {
+        for color in [palette::UP, palette::HISTOGRAM_TEAL, Color32::YELLOW] {
             let mut legacy = study.clone();
             legacy.set_colors(vec![palette::BLUE, palette::ORANGE, color]);
             assert!(

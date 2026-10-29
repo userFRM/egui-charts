@@ -32,8 +32,8 @@ impl ChandelierExit {
             atr: ATR::new(period),
             stepper: Stepper::default(),
             colors: vec![
-                palette::GREEN, // Green - Long exit
-                palette::RED,   // Red - Short exit
+                palette::BLUE,   // Long exit
+                palette::ORANGE, // Short exit
             ],
             visible: true,
         }

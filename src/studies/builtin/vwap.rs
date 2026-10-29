@@ -171,7 +171,7 @@ impl VolumeWeightedAvgPrice {
             shared: None,
             daily: true,
             timeframe: None,
-            colors: vec![palette::GOLD], // Amber
+            colors: vec![palette::BLUE], // Amber
             visible: true,
             anchor: VwapAnchor::Session,
             time_zone: TimezoneId::utc(),
@@ -223,10 +223,17 @@ impl VolumeWeightedAvgPrice {
         self
     }
 
-    /// One colour per line; lines added by more bands take the VWAP colour at half intensity.
+    /// One colour per line, with green, olive and dark teal for successive band pairs.
     fn fit_colors(&mut self) {
-        let band_color = self.colors[0].gamma_multiply(0.5);
-        self.colors.resize(self.line_count(), band_color);
+        let colors = [
+            palette::GREEN,
+            Color32::from_rgb(128, 128, 0),
+            Color32::from_rgb(0, 137, 123),
+        ];
+        while self.colors.len() < self.line_count() {
+            let band = (self.colors.len() - 1) / 2;
+            self.colors.push(colors[band.min(2)]);
+        }
     }
 
     /// Adds symmetric bands at percentages of the absolute VWAP. Percentages

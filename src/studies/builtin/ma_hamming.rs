@@ -19,7 +19,7 @@ impl HammingMA {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::BLUE,
+            color: palette::GREEN,
             visible: true,
         }
     }

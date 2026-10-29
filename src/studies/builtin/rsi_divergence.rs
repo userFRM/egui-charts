@@ -71,6 +71,7 @@ pub struct RsiDivergence {
     stepper: Stepper<State>,
     undo: Vec<(usize, usize, f64)>,
     rsi_color: Color32,
+    fill_color: Color32,
     bull_color: Color32,
     bear_color: Color32,
     visible: bool,
@@ -125,7 +126,8 @@ impl RsiDivergence {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             undo: Vec::new(),
-            rsi_color: palette::PURPLE,
+            rsi_color: palette::BLUE,
+            fill_color: palette::LIGHT_BLUE.gamma_multiply_u8(26),
             bull_color: palette::GREEN,
             bear_color: palette::RED,
             visible: true,
@@ -159,6 +161,14 @@ impl Default for RsiDivergence {
 }
 
 impl Indicator for RsiDivergence {
+    fn level_style(&self, _value: f64) -> crate::model::LineStyle {
+        crate::model::LineStyle::Dotted
+    }
+
+    fn level_fill_color(&self) -> Color32 {
+        self.fill_color
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("RSI period", 1, usize::MAX),
         right: length("Pivot lookback right", 1, usize::MAX),
@@ -352,9 +362,9 @@ impl Indicator for RsiDivergence {
             3 => (self.bear_color, PlotType::Line),
             4 => (hidden(self.bear_color), PlotType::Line),
             5 => (self.bull_color, PlotType::TriangleUp),
-            6 => (hidden(self.bull_color), PlotType::TriangleUp),
+            6 => (self.bull_color, PlotType::TriangleUp),
             7 => (self.bear_color, PlotType::TriangleDown),
-            _ => (hidden(self.bear_color), PlotType::TriangleDown),
+            _ => (self.bear_color, PlotType::TriangleDown),
         };
         crate::studies::PlotStyle {
             color,
@@ -363,6 +373,17 @@ impl Indicator for RsiDivergence {
             plot_type,
             visible: true,
         }
+    }
+
+    fn plot_label_colors(&self, line: usize) -> Option<(Color32, Color32)> {
+        (line >= 5).then_some((
+            if line < 7 {
+                self.bull_color
+            } else {
+                self.bear_color
+            },
+            Color32::WHITE,
+        ))
     }
 
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
@@ -379,10 +400,20 @@ impl Indicator for RsiDivergence {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.rsi_color, self.bull_color, self.bear_color]
+        vec![
+            self.rsi_color,
+            self.bull_color,
+            self.bear_color,
+            self.fill_color,
+        ]
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
+        if let Some(&color) = colors.first() {
+            self.fill_color = colors.get(3).copied().unwrap_or_else(|| {
+                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 16)
+            });
+        }
         for (color, slot) in colors.into_iter().zip([
             &mut self.rsi_color,
             &mut self.bull_color,
@@ -392,8 +423,17 @@ impl Indicator for RsiDivergence {
         }
     }
 
+    fn set_color(&mut self, line: usize, color: Color32) {
+        match line {
+            0 => self.rsi_color = color,
+            1 => self.bull_color = color,
+            2 => self.bear_color = color,
+            _ => {}
+        }
+    }
+
     fn pane(&self) -> crate::studies::StudyPane {
-        let gray = Color32::from_gray(128);
+        let gray = palette::GRAY;
         crate::studies::StudyPane {
             height: Some(138.0),
             range: Some((0.0, 100.0)),

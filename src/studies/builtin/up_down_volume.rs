@@ -31,8 +31,8 @@ impl UpDownVolume {
             clock: BarClock::new(Timeframe::Min1),
             values: IndicatorValues::new(),
             colors: [
-                palette::UP.gamma_multiply(0.35),
-                palette::DOWN.gamma_multiply(0.35),
+                palette::GREEN.gamma_multiply_u8(102),
+                palette::DOWN.gamma_multiply_u8(102),
                 palette::GRAY,
             ],
             visible: true,
@@ -220,7 +220,7 @@ impl Indicator for UpDownVolume {
             .then(|| {
                 self.values.value(2, bar).map(|delta| {
                     let [r, g, b, _] =
-                        self.colors[usize::from(delta < 0.0)].to_srgba_unmultiplied();
+                        self.colors[usize::from(delta <= 0.0)].to_srgba_unmultiplied();
                     Color32::from_rgb(r, g, b)
                 })
             })

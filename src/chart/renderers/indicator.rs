@@ -539,13 +539,19 @@ impl IndicatorRenderer {
                     } else {
                         (-(plot.width + 4.0), egui::Align2::CENTER_BOTTOM)
                     };
-                    painter.text(
-                        at + egui::vec2(0.0, gap),
-                        anchor,
-                        text,
-                        egui::FontId::proportional(11.0),
-                        indicator.plot_color(line_idx, i).unwrap_or(plot.color),
-                    );
+                    let color = indicator.plot_color(line_idx, i).unwrap_or(plot.color);
+                    let (background, foreground) = indicator
+                        .plot_label_colors(line_idx)
+                        .map_or((None, color), |(background, foreground)| {
+                            (Some(background), foreground)
+                        });
+                    let galley =
+                        painter.layout_no_wrap(text, egui::FontId::proportional(11.0), foreground);
+                    let bounds = anchor.anchor_size(at + egui::vec2(0.0, gap), galley.size());
+                    if let Some(background) = background {
+                        painter.rect_filled(bounds.expand(2.0), 0.0, background);
+                    }
+                    painter.galley(bounds.min, galley, foreground);
                 }
             }
         }
@@ -568,6 +574,19 @@ impl IndicatorRenderer {
                 CrossDirection::Down => (-1.0, DESIGN_TOKENS.semantic.extended.error),
             };
             if !at.is_finite() {
+                continue;
+            }
+            if let Some(style) = indicator.marker_style() {
+                let half = style.width + 2.0;
+                let stroke = Stroke::new(style.width, style.color);
+                painter.line_segment(
+                    [at - egui::vec2(half, 0.0), at + egui::vec2(half, 0.0)],
+                    stroke,
+                );
+                painter.line_segment(
+                    [at - egui::vec2(0.0, half), at + egui::vec2(0.0, half)],
+                    stroke,
+                );
                 continue;
             }
             let triangle = vec![
@@ -893,8 +912,8 @@ mod tests {
 
     #[test]
     fn overlay_lines_use_joined_one_point_strokes_and_keep_gaps_and_study_colours() {
-        let blue = Color32::from_rgb(50, 107, 250);
-        let orange = Color32::from_rgb(224, 128, 36);
+        let blue = Color32::from_rgb(41, 98, 255);
+        let orange = Color32::from_rgb(255, 109, 0);
         let custom = Color32::from_rgb(10, 200, 90);
         let mut recoloured = BollingerBands::default();
         recoloured.set_colors(vec![custom]);
@@ -903,13 +922,17 @@ mod tests {
         let cases: [(Box<dyn Indicator>, Vec<Color32>); 5] = [
             (
                 Box::new(BollingerBands::default()),
-                vec![blue, orange, blue],
+                vec![
+                    Color32::from_rgb(242, 54, 69),
+                    blue,
+                    Color32::from_rgb(8, 153, 129),
+                ],
             ),
             (Box::new(sma), vec![custom]),
             (Box::new(recoloured), vec![custom; 3]),
             (
                 Box::new(StandardErrorBands::new(20, 2.0)),
-                vec![blue, orange],
+                vec![Color32::from_rgb(33, 150, 243), orange],
             ),
             (
                 Box::new(
@@ -933,6 +956,7 @@ mod tests {
         ];
         for (study, colours) in cases {
             let name = study.name().to_owned();
+            let fill_alpha = study.fills().first().map(|fill| fill.color.a());
             let mut chart = chart(&[100.0], &[110.0]);
             chart.add_indicator(study);
             let ctx = Context::default();
@@ -941,7 +965,7 @@ mod tests {
                 assert!(
                     painted
                         .iter()
-                        .any(|shape| matches!(shape, Shape::Mesh(mesh) if mesh.vertices.iter().all(|vertex| vertex.color.a() == 16))),
+                        .any(|shape| matches!(shape, Shape::Mesh(mesh) if mesh.vertices.iter().all(|vertex| Some(vertex.color.a()) == fill_alpha))),
                     "band between the outer lines"
                 );
             }

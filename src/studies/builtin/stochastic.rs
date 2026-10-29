@@ -54,8 +54,8 @@ impl Stochastic {
             k_smooth: k_smooth.max(1),
             d_period: d_period.max(1),
             values: IndicatorValues::new(),
-            k_color: palette::PURPLE,
-            d_color: palette::ORANGE, // Orange
+            k_color: palette::BLUE,
+            d_color: palette::ORANGE,
             visible: true,
         }
     }
@@ -129,13 +129,6 @@ impl Stochastic {
 }
 
 impl Indicator for Stochastic {
-    fn line_style(&self, _line: usize) -> crate::studies::IndicatorLineStyle {
-        crate::studies::IndicatorLineStyle {
-            width: 1.5,
-            ..Default::default()
-        }
-    }
-
     crate::studies::inputs::study_inputs!(self;
         k_period: length("K period", 1, usize::MAX),
         k_smooth: length("K smooth", 1, usize::MAX),

@@ -39,7 +39,7 @@ impl BollingerBars {
         Self {
             candles: Vec::new(),
             values: IndicatorValues::new(),
-            colors: [palette::ACCENT, palette::UP, palette::DOWN],
+            colors: [Color32::from_rgb(13, 52, 158), palette::UP, palette::DOWN],
             visible: true,
         }
     }

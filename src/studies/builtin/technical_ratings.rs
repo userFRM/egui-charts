@@ -129,7 +129,7 @@ pub struct TechnicalRatings {
     sources: Vec<usize>,
     values: IndicatorValues,
     table: StudyTable,
-    colors: [Color32; 3],
+    colors: Vec<Color32>,
     visible: bool,
 }
 
@@ -166,7 +166,17 @@ impl TechnicalRatings {
                     .to_vec(),
                 rows: Vec::new(),
             },
-            colors: [palette::ACCENT, palette::ORANGE, palette::TEAL],
+            colors: vec![
+                palette::DISABLED,
+                palette::DISABLED,
+                palette::DISABLED,
+                palette::BLUE,
+                palette::BLUE,
+                palette::BLUE,
+                Color32::from_rgb(244, 67, 54),
+                Color32::from_rgb(244, 67, 54),
+                Color32::from_rgb(244, 67, 54),
+            ],
             visible: true,
         }
     }
@@ -395,7 +405,7 @@ impl Indicator for TechnicalRatings {
             color: self.colors[line % 3],
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
-            plot_type: crate::studies::PlotType::Line,
+            plot_type: crate::studies::PlotType::Columns,
             visible: line < 3,
         }
     }
@@ -405,25 +415,71 @@ impl Indicator for TechnicalRatings {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        self.colors.to_vec()
+        self.colors.clone()
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        for (old, new) in self.colors.iter_mut().zip(colors) {
-            *old = new;
+        if colors.len() < 9 {
+            for (line, color) in colors.into_iter().take(3).enumerate() {
+                self.set_color(line, color);
+            }
+        } else {
+            for (old, new) in self.colors.iter_mut().zip(colors) {
+                *old = new;
+            }
         }
     }
 
+    fn set_color(&mut self, line: usize, color: Color32) {
+        if line < 3 {
+            for slot in [line, line + 3, line + 6] {
+                self.colors[slot] = color;
+            }
+        }
+    }
+
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        if line >= 3 {
+            return None;
+        }
+        let value = self.values.value(line, bar)?;
+        let neutral = self.colors[line];
+        let endpoint = self.colors[line + if value >= 0.0 { 3 } else { 6 }];
+        if neutral == endpoint {
+            return Some(neutral);
+        }
+        let color = neutral.lerp_to_gamma(endpoint, (value.abs() / 0.2).min(1.0) as f32);
+        let mut previous = value;
+        let mut streak = 0;
+        for at in (0..bar).rev().take(5) {
+            let Some(earlier) = self.values.value(line, at) else {
+                break;
+            };
+            if (value > 0.0 && previous > earlier) || (value < 0.0 && previous < earlier) {
+                streak += 1;
+                previous = earlier;
+            } else {
+                break;
+            }
+        }
+        Some(color.gamma_multiply_u8(((0.5 + streak as f32 * 0.1) * 255.0).round() as u8))
+    }
+
     fn pane(&self) -> crate::studies::StudyPane {
-        let gray = Color32::from_gray(128);
         crate::studies::StudyPane {
             height: None,
             range: Some((-1.1, 1.1)),
             levels: vec![
-                (0.5, gray, "Strong Buy"),
-                (0.1, gray, "Buy"),
-                (-0.1, gray, "Sell"),
-                (-0.5, gray, "Strong Sell"),
+                (
+                    0.5,
+                    Color32::from_rgba_unmultiplied(91, 156, 246, 128),
+                    "Strong Buy",
+                ),
+                (
+                    -0.5,
+                    Color32::from_rgba_unmultiplied(239, 154, 154, 128),
+                    "Strong Sell",
+                ),
             ],
             fill_between_levels: false,
         }

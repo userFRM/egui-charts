@@ -21,6 +21,17 @@ pub struct StudyTable {
 }
 
 #[cfg(feature = "widget")]
+fn rating_color(rating: &str) -> egui::Color32 {
+    match rating {
+        "Strong Buy" => egui::Color32::from_rgb(41, 98, 255),
+        "Buy" => egui::Color32::from_rgb(91, 156, 246),
+        "Strong Sell" => egui::Color32::from_rgb(244, 67, 54),
+        "Sell" => egui::Color32::from_rgb(239, 154, 154),
+        _ => egui::Color32::from_rgb(168, 173, 188),
+    }
+}
+
+#[cfg(feature = "widget")]
 pub(crate) fn paint(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -30,6 +41,7 @@ pub(crate) fn paint(
     use crate::theme::ThemeExt;
     use egui::{Align2, FontId, Rect, Stroke, StrokeKind, pos2, vec2};
 
+    let rating_table = table.title == "Technical Ratings";
     let painter = ui.painter().clone();
     let theme = ui.active_theme();
     let font = FontId::proportional(11.0);
@@ -82,7 +94,14 @@ pub(crate) fn paint(
     painter.rect_stroke(
         bounds,
         3.0,
-        Stroke::new(1.0, theme.ui.border),
+        Stroke::new(
+            if rating_table { 2.0 } else { 1.0 },
+            if rating_table {
+                egui::Color32::WHITE
+            } else {
+                theme.ui.border
+            },
+        ),
         StrokeKind::Inside,
     );
     painter.text(
@@ -105,7 +124,7 @@ pub(crate) fn paint(
                 ui.allocate_exact_size(vec2(width, height - 22.0), egui::Sense::hover());
             let painter = ui.painter();
             let mut y = content.top();
-            for row in std::iter::once(
+            for (row_index, row) in std::iter::once(
                 table
                     .columns
                     .iter()
@@ -114,29 +133,70 @@ pub(crate) fn paint(
                     .collect::<Vec<_>>(),
             )
             .chain(table.rows.iter().cloned())
+            .enumerate()
             {
                 let mut x = content.left();
                 for (cell, width) in row.iter().zip(&widths) {
+                    let cell_rect = Rect::from_min_size(pos2(x, y), vec2(*width, 22.0));
                     let color = match cell {
-                        StudyCell::Percent(Some(value)) if value.is_finite() && *value != 0.0 => {
-                            let color = if *value > 0.0 {
-                                theme.chart.candle_up
-                            } else {
-                                theme.chart.candle_down
+                        _ if rating_table && row_index == 0 => {
+                            painter.rect_filled(
+                                cell_rect,
+                                0.0,
+                                egui::Color32::from_rgb(41, 91, 121),
+                            );
+                            egui::Color32::WHITE
+                        }
+                        _ if rating_table => {
+                            let rating = match row.get(2) {
+                                Some(StudyCell::Text(text)) => text.as_str(),
+                                _ => "Neutral",
                             };
-                            let tint = color
-                                .gamma_multiply(0.15 + 0.5 * (value.abs() / 10.0).min(1.0) as f32);
+                            painter.rect_filled(cell_rect, 0.0, rating_color(rating));
+                            painter.rect_stroke(
+                                cell_rect,
+                                0.0,
+                                Stroke::new(1.0, egui::Color32::WHITE),
+                                StrokeKind::Inside,
+                            );
+                            egui::Color32::WHITE
+                        }
+                        StudyCell::Percent(Some(value)) if value.is_finite() => {
+                            let color = if *value >= 0.0 {
+                                egui::Color32::from_rgb(8, 153, 129)
+                            } else {
+                                egui::Color32::from_rgb(242, 55, 69)
+                            };
+                            let tint = color.gamma_multiply(
+                                0.1 + if table.title == "Seasonality" {
+                                    0.4
+                                } else {
+                                    0.2
+                                } * (value.abs() / 10.0).min(1.0) as f32,
+                            );
                             painter.rect_filled(
                                 Rect::from_min_size(pos2(x, y), vec2(*width, 22.0)),
                                 0.0,
                                 tint,
                             );
-                            crate::theme::readable_color(
-                                color,
-                                theme.ui.text,
-                                &[theme.ui.panel_bg_floating.blend(tint)],
-                                4.5,
-                            )
+                            color
+                        }
+                        _ if matches!(table.title.as_str(), "Performance" | "Seasonality") => {
+                            let alpha = if matches!(cell, StudyCell::Percent(None)) {
+                                if table.title == "Seasonality" {
+                                    128
+                                } else {
+                                    26
+                                }
+                            } else {
+                                51
+                            };
+                            painter.rect_filled(
+                                cell_rect,
+                                0.0,
+                                egui::Color32::from_rgba_unmultiplied(120, 123, 134, alpha),
+                            );
+                            theme.ui.text
                         }
                         _ => theme.ui.text,
                     };

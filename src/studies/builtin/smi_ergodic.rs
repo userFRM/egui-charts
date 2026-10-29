@@ -65,7 +65,7 @@ impl<const OSCILLATOR: bool> SMIErgodic<OSCILLATOR> {
             values: IndicatorValues::new(),
             tsi: TrueStrengthIndex::new(long_length, short_length, signal_length),
             colors: if OSCILLATOR {
-                vec![palette::RED]
+                vec![Color32::from_rgb(255, 82, 82)]
             } else {
                 vec![palette::BLUE, palette::ORANGE]
             },

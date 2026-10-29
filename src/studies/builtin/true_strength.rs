@@ -36,8 +36,8 @@ impl TrueStrengthIndex {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::BLUE,   // Blue - TSI
-                palette::ORANGE, // Signal
+                palette::BLUE, // TSI
+                palette::PINK, // Signal
             ],
             visible: true,
         }

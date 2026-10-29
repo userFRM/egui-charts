@@ -34,9 +34,9 @@ impl Envelopes {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::BLUE,      // Upper
-                palette::BB_MIDDLE, // Middle
-                palette::BLUE,      // Lower
+                palette::BLUE,   // Upper
+                palette::ORANGE, // Middle
+                palette::BLUE,   // Lower
             ],
             visible: true,
         }

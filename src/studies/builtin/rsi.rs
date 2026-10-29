@@ -32,7 +32,7 @@
 //!
 //! # Default colour
 //!
-//! Blue (#2962ff), with a two-pixel line.
+//! Purple (#7E57C2), with a one-pixel line.
 //!
 //! # Example
 //!
@@ -63,6 +63,7 @@ pub struct RSI {
     values: IndicatorValues,
     stepper: Stepper<State>,
     color: Color32,
+    fill_color: Color32,
     visible: bool,
 }
 
@@ -136,13 +137,14 @@ impl RSI {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             color: palette::PURPLE,
+            fill_color: palette::PURPLE.gamma_multiply_u8(26),
             visible: true,
         }
     }
 
     /// Set a custom line colour (builder pattern).
     pub fn with_color(mut self, color: Color32) -> Self {
-        self.color = color;
+        self.set_colors(vec![color]);
         self
     }
 }
@@ -155,6 +157,10 @@ impl Default for RSI {
 }
 
 impl Indicator for RSI {
+    fn level_fill_color(&self) -> Color32 {
+        self.fill_color
+    }
+
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
             crate::model::PriceSource::Close,
@@ -167,13 +173,6 @@ impl Indicator for RSI {
 
     fn name(&self) -> &str {
         "RSI"
-    }
-
-    fn line_style(&self, _line: usize) -> crate::studies::IndicatorLineStyle {
-        crate::studies::IndicatorLineStyle {
-            width: 2.0,
-            ..Default::default()
-        }
     }
 
     fn precision(&self) -> Option<usize> {
@@ -205,12 +204,15 @@ impl Indicator for RSI {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.color]
+        vec![self.color, self.fill_color]
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.color = colors[0];
+            self.fill_color = colors.get(1).copied().unwrap_or_else(|| {
+                Color32::from_rgba_unmultiplied(self.color.r(), self.color.g(), self.color.b(), 16)
+            });
         }
     }
 

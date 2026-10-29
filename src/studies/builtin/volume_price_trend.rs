@@ -21,7 +21,7 @@ impl VolumePriceTrend {
         Self {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::UP, // Teal
+            color: palette::BLUE, // Teal
             visible: true,
         }
     }
@@ -165,8 +165,8 @@ impl NegativeVolumeIndex {
         Self {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::RED,           // Red
-            signal_color: palette::ORANGE, // Orange
+            color: palette::BLUE,
+            signal_color: palette::WARM_ORANGE,
             visible: true,
         }
     }
@@ -279,8 +279,8 @@ impl PositiveVolumeIndex {
         Self {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::GREEN,         // Green
-            signal_color: palette::ORANGE, // Orange
+            color: palette::BLUE,
+            signal_color: palette::WARM_ORANGE,
             visible: true,
         }
     }

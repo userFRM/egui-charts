@@ -1,6 +1,6 @@
 use super::ma_combination::impl_ma_preset;
 use super::{AverageLine, AverageType, MACombination};
-use crate::studies::palette;
+use egui::Color32;
 
 /// Simple averages of lengths 20, 50, 100 and 200, as a combination preset.
 #[derive(Clone)]
@@ -12,10 +12,10 @@ impl MultipleMA {
     /// Create the conventional four-average preset.
     pub fn new() -> Self {
         let colors = [
-            palette::BLUE,
-            palette::ORANGE,
-            palette::RED,
-            palette::PURPLE,
+            Color32::from_rgb(246, 195, 9),
+            Color32::from_rgb(251, 152, 0),
+            Color32::from_rgb(251, 101, 0),
+            Color32::from_rgb(246, 12, 12),
         ];
         Self {
             inner: MACombination::new(

@@ -42,7 +42,6 @@
 
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use crate::model::{Bar, Instrument, Timeframe};
-use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -132,17 +131,17 @@ impl PivotPoints {
     pub fn new() -> Self {
         // Pivot amber, resistances red and supports green, darker further out.
         let colors = vec![
-            palette::GOLD,
-            palette::RED,
-            palette::GREEN,
-            palette::DARK_RED,
-            palette::DARK_GREEN,
-            palette::DEEP_RED,
-            palette::DEEP_GREEN,
-            palette::DEEP_RED,
-            palette::DEEP_GREEN,
-            palette::DEEP_RED,
-            palette::DEEP_GREEN,
+            Color32::from_rgb(251, 140, 0),
+            Color32::from_rgb(251, 140, 0),
+            Color32::from_rgb(251, 140, 0),
+            Color32::from_rgb(251, 140, 0),
+            Color32::from_rgb(251, 140, 0),
+            Color32::from_rgb(251, 140, 0),
+            Color32::from_rgb(251, 140, 0),
+            Color32::from_rgb(251, 140, 0),
+            Color32::from_rgb(251, 140, 0),
+            Color32::from_rgb(251, 140, 0),
+            Color32::from_rgb(251, 140, 0),
         ];
         Self {
             method: PivotMethod::Traditional,

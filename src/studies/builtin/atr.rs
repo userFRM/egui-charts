@@ -59,7 +59,7 @@ impl ATR {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::PURPLE,
+            color: palette::DARK_RED,
             visible: true,
         }
     }
@@ -88,13 +88,6 @@ impl Default for ATR {
 }
 
 impl Indicator for ATR {
-    fn line_style(&self, _line: usize) -> crate::studies::IndicatorLineStyle {
-        crate::studies::IndicatorLineStyle {
-            width: 1.5,
-            ..Default::default()
-        }
-    }
-
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX)
     ; {});

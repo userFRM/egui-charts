@@ -54,6 +54,10 @@ pub struct VolumeProfileConfig {
     pub up_color: [u8; 4],
     /// Colour of falling bars in split and delta modes.
     pub down_color: [u8; 4],
+    /// Optional colours inside the value area; absent uses the ordinary side colours.
+    pub value_area_colors: Option<[[u8; 4]; 2]>,
+    /// Draw the high and low boundaries of the value area.
+    pub show_value_area_lines: bool,
 }
 
 /// Stored settings of a volume profile, checked by [`VolumeProfileConfig::new`] on load.
@@ -69,6 +73,10 @@ struct VolumeProfileFields {
     up_color: [u8; 4],
     #[serde(default = "profile_down_color")]
     down_color: [u8; 4],
+    #[serde(default)]
+    value_area_colors: Option<[[u8; 4]; 2]>,
+    #[serde(default)]
+    show_value_area_lines: bool,
 }
 
 impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
@@ -80,6 +88,8 @@ impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
         config.display = fields.display;
         config.up_color = fields.up_color;
         config.down_color = fields.down_color;
+        config.value_area_colors = fields.value_area_colors;
+        config.show_value_area_lines = fields.show_value_area_lines;
         config
             .with_row_size(fields.row_size)
             .ok_or("volume profile row height must be finite and positive")
@@ -138,6 +148,8 @@ impl Default for VolumeProfileConfig {
             display: ProfileDisplay::Total,
             up_color: profile_up_color(),
             down_color: profile_down_color(),
+            value_area_colors: None,
+            show_value_area_lines: false,
         }
     }
 }

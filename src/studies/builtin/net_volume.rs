@@ -20,7 +20,7 @@ impl NetVolume {
         Self {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            colors: vec![palette::TEAL], // Teal
+            colors: vec![palette::BLUE], // Teal
             visible: true,
         }
     }
@@ -44,7 +44,7 @@ impl Indicator for NetVolume {
             color: self.colors[0],
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
-            plot_type: crate::studies::PlotType::Columns,
+            plot_type: crate::studies::PlotType::Line,
             visible: true,
         }
     }
