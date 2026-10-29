@@ -85,7 +85,7 @@ Builder API,Widget API and customization,Locale-aware date formatting,done,libra
 Builder API,Widget API and customization,Localisation of UI text,done,library,src/localization.rs;src/ui/top_toolbar/components/layout_menu.rs;src/chart/renderers/trading_lines.rs;src/chart/renderers/legend/mod.rs
 Builder API,Widget API and customization,Multiple charts per widget,done,library,src/widget/layout.rs;src/ui/multi_chart.rs
 Builder API,Widget API and customization,Price scale API,done,library,src/scales/pricescale.rs;src/widget/mod.rs;src/widget/price_series.rs;src/widget/frame.rs
-Builder API,Widget API and customization,Screenshots,partial,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed/mod.rs
+Builder API,Widget API and customization,Screenshots,done,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed/mod.rs
 Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/price_series.rs;src/widget/time_scale.rs;src/widget/series.rs
 Builder API,Widget API and customization,Style overrides,partial,library,src/widget/mod.rs;src/widget/builder.rs;src/widget/frame.rs;src/config/chart.rs
 Builder API,Widget API and customization,Themes and custom colour schemes,done,library,src/widget/mod.rs;src/theme/context.rs;src/widget/frame.rs;src/chart/renderers/markers.rs;src/config/chart.rs;src/widget/palette.rs;src/model/markers.rs
