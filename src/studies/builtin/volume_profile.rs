@@ -883,16 +883,21 @@ mod rendering_tests {
             .count();
         output.drop_without_applying_deltas();
         assert!(poc && rows >= 2, "profile rows {rows}, POC {poc}");
-        for (x, expected) in [(395.0, true), (285.0, false)] {
+        // Equal row volumes put the POC at y=125; its line extends past the row fill.
+        for (x, y, expected) in [
+            (395.0, 125.0, true),
+            (285.0, 125.0, true),
+            (285.0, 75.0, false),
+        ] {
             let hit = crate::chart::indicators::hit_test_indicator(
-                egui::pos2(x, 125.0),
+                egui::pos2(x, y),
                 indicators[0].as_ref(),
                 0,
                 0..1,
                 &coords,
                 |value| price.price_to_y(value),
             );
-            assert_eq!(hit.is_some(), expected, "profile selection at x={x}");
+            assert_eq!(hit.is_some(), expected, "profile selection at ({x}, {y})");
         }
 
         // The first bar is outside the painted viewport and must not stretch its scale.

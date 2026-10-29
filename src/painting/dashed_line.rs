@@ -127,6 +127,65 @@ fn append_dashed_segment(
     let Some(clip) = finite_clip(painter) else {
         return;
     };
+    let pixels_per_point = painter.pixels_per_point();
+    // Callers reserve the mesh for the clipped spans, so adding dots never copies growing buffers.
+    let square_dots =
+        dash_len == 1.0 && stroke.width == 1.0 && (start.x == end.x || start.y == end.y);
+    visible_dashes(start, end, clip, dash_len, gap_len, phase, |a, b| {
+        if square_dots {
+            // A mesh keeps one-point dots square; thin rectangles are tessellated as lines.
+            let half_width = if start.x == end.x {
+                egui::vec2(stroke.width / 2.0, 0.0)
+            } else {
+                egui::vec2(0.0, stroke.width / 2.0)
+            };
+            let rect = Rect::from_two_pos(a, b).expand2(half_width);
+            let rect = Rect::from_min_size(rect.min.round_to_pixels(pixels_per_point), rect.size());
+            dots.add_colored_rect(rect, stroke.color);
+        } else {
+            painter.line_segment([a, b], stroke);
+        }
+    });
+}
+
+/// The dashes of a polyline that lie inside `clip`, as line segments, with the dash phase carried
+/// across its vertices, for restyling shapes that have no painter.
+///
+/// Only the visible part of each segment is dashed, so the cost is bounded by the visible length
+/// however far off screen the vertices are. The pattern stays anchored at the first point.
+#[cfg(feature = "drawings")]
+pub(crate) fn dashed_polyline_shapes(
+    points: &[Pos2],
+    stroke: Stroke,
+    dash_len: f32,
+    gap_len: f32,
+    clip: Rect,
+) -> Vec<egui::Shape> {
+    let mut shapes = Vec::new();
+    let mut phase = 0.0;
+    let period = f64::from(dash_len) + f64::from(gap_len);
+    for pair in points.windows(2) {
+        visible_dashes(pair[0], pair[1], clip, dash_len, gap_len, phase, |a, b| {
+            shapes.push(egui::Shape::line_segment([a, b], stroke));
+        });
+        let dx = f64::from(pair[1].x) - f64::from(pair[0].x);
+        let dy = f64::from(pair[1].y) - f64::from(pair[0].y);
+        phase = (phase + dx.hypot(dy)).rem_euclid(period);
+    }
+    shapes
+}
+
+/// Calls `dash` with the ends of each dash of `start..end` inside `clip`, the pattern offset by
+/// `phase` along the segment. Work is bounded by the visible length.
+fn visible_dashes(
+    start: Pos2,
+    end: Pos2,
+    clip: Rect,
+    dash_len: f32,
+    gap_len: f32,
+    phase: f64,
+    mut dash: impl FnMut(Pos2, Pos2),
+) {
     let (x0, y0) = (f64::from(start.x), f64::from(start.y));
     let (dx, dy) = (f64::from(end.x) - x0, f64::from(end.y) - y0);
     let total_len = dx.hypot(dy);
@@ -170,33 +229,11 @@ fn append_dashed_segment(
     // Integer dash indices covering [from, to]: at most visible_len / period + 2 steps.
     let first = ((from + phase) / period).floor() as i64;
     let last = ((to + phase) / period).ceil() as i64;
-    let pixels_per_point = painter.pixels_per_point();
-    let square_dots = dash_len == 1.0 && stroke.width == 1.0 && (dx == 0.0 || dy == 0.0);
-    if square_dots {
-        // Reserve the clipped span once so adding dots never copies growing mesh buffers.
-        let count = (last - first) as usize;
-        dots.reserve_vertices(count * 4);
-        dots.reserve_triangles(count * 2);
-    }
     for k in first..last {
         let dash_start = (k as f64 * period - phase).max(from);
         let dash_end = (k as f64 * period - phase + f64::from(dash_len)).min(to);
         if dash_start < dash_end {
-            let (start, end) = (at(dash_start), at(dash_end));
-            if square_dots {
-                // A mesh keeps one-point dots square; thin rectangles are tessellated as lines.
-                let half_width = if dx == 0.0 {
-                    egui::vec2(stroke.width / 2.0, 0.0)
-                } else {
-                    egui::vec2(0.0, stroke.width / 2.0)
-                };
-                let rect = Rect::from_two_pos(start, end).expand2(half_width);
-                let rect =
-                    Rect::from_min_size(rect.min.round_to_pixels(pixels_per_point), rect.size());
-                dots.add_colored_rect(rect, stroke.color);
-            } else {
-                painter.line_segment([start, end], stroke);
-            }
+            dash(at(dash_start), at(dash_end));
         }
     }
 }

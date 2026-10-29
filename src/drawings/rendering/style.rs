@@ -19,6 +19,7 @@ impl Drawing {
             || self.font_weight == FontWeight::Bold
             || self.extend_left
             || self.extend_right;
+        let clip = crate::painting::dashed_line::finite_clip(painter);
         painter.ctx().graphics_mut(|g| {
             let list = g.entry(painter.layer_id());
             // Segments that continue one another become one path, which the tessellator joins
@@ -69,7 +70,7 @@ impl Drawing {
             }
             if styled {
                 for index in start..list.next_idx().0 {
-                    list.mutate_shape(ShapeIdx(index), |s| self.style_shape(&mut s.shape));
+                    list.mutate_shape(ShapeIdx(index), |s| self.style_shape(&mut s.shape, clip));
                 }
             }
         });
@@ -85,10 +86,12 @@ impl Drawing {
         });
     }
 
-    fn style_shape(&self, shape: &mut Shape) {
+    /// Restyles one shape. Dashes are generated only inside `clip`, so a drawing reaching far off
+    /// screen costs no more than its visible part; without a finite clip nothing is dashed.
+    fn style_shape(&self, shape: &mut Shape, clip: Option<Rect>) {
         if let Shape::Vec(shapes) = shape {
             for s in shapes {
-                self.style_shape(s);
+                self.style_shape(s, clip);
             }
             return;
         }
@@ -224,7 +227,11 @@ impl Drawing {
         if let Some((dash, gap)) = dash
             && !stroke.is_empty()
         {
-            let mut shapes = Shape::dashed_line(&path, stroke, dash, gap);
+            let mut shapes = clip.map_or_else(Vec::new, |clip| {
+                // Widened by the stroke so an edge just outside the clip keeps its visible half.
+                let clip = clip.expand(stroke.width);
+                crate::painting::dashed_line::dashed_polyline_shapes(&path, stroke, dash, gap, clip)
+            });
             if !matches!(shape, Shape::LineSegment { .. }) {
                 shapes.insert(0, std::mem::replace(shape, Shape::Noop));
             }
@@ -418,6 +425,55 @@ mod tests {
                 let error = (radius - (center.distance(a.lerp(b, 0.5)))) * ppp;
                 assert!((0.0..=0.25).contains(&error), "{case}: {error} px");
             }
+        }
+    }
+
+    /// Guards the frame cost of dashed drawings: a rect, a circle and an ellipse reaching a
+    /// million points beyond an 800 x 600 pane are dashed only inside it, rather than with one
+    /// shape per dash along their whole outline.
+    #[test]
+    fn far_reaching_dashed_outlines_are_dashed_only_inside_the_pane() {
+        use crate::drawings::rendering::ChartView;
+        use egui::{Context, RawInput};
+        fn leaves(shape: &Shape) -> usize {
+            match shape {
+                Shape::Vec(shapes) => shapes.iter().map(leaves).sum(),
+                _ => 1,
+            }
+        }
+        let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        for (tool, a, b) in [
+            (DrawingToolType::Rect, (-1e6, 100.0), (1e6, 200.0)),
+            (
+                DrawingToolType::Circle,
+                (400.0, 1e6 + 300.0),
+                (400.0, 300.0),
+            ),
+            (DrawingToolType::Ellipse, (-1e6, 300.0), (1e6, 2e6 + 300.0)),
+        ] {
+            let mut drawing = Drawing::new(1, tool);
+            drawing.line_style = LineStyle::Dashed;
+            drawing.points = vec![Pos2::new(a.0, a.1), Pos2::new(b.0, b.1)];
+            let ctx = Context::default();
+            let input = RawInput {
+                screen_rect: Some(pane),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                let view = ChartView {
+                    instrument: None,
+                    bars: &[],
+                    revision: 0,
+                    bar_to_x: &|b| b,
+                    price_to_y: &|p| p as f32,
+                    time_axis: true,
+                    executions: None,
+                };
+                drawing.render_original(ui.painter(), pane, &view);
+            });
+            let shapes: usize = output.shapes.iter().map(|s| leaves(&s.shape)).sum();
+            output.drop_without_applying_deltas();
+            assert!((1..1_000).contains(&shapes), "{tool:?}: {shapes} shapes");
         }
     }
 }
