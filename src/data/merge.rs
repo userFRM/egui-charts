@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 /// Where an incoming bar comes from, which decides what happens to a stored bar of the same slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Origin {
-    /// A history page: the stored bar wins unless it was built from ticks.
+    /// A history page: extends the page bar with stored ticks; other stored bars win.
     History,
     /// A live bar: replaces the stored bar.
     Live,
@@ -31,7 +31,7 @@ pub(crate) struct Merged {
 /// Merges `incoming`, in any order, into `bars` by the rules of each bar's origin. `bars` are the
 /// bars of one series: valid, in time order, at most one per slot of `clock`, which must be the
 /// same for every merge into the series. `from_ticks` holds the times of the series' bars built
-/// from ticks, which a history bar of the same slot replaces; keep it with the bars.
+/// from ticks, which extend a history bar of the same slot once; keep it with the bars.
 pub(crate) fn merge(
     bars: &mut Vec<Bar>,
     from_ticks: &mut BTreeSet<DateTime<Utc>>,
@@ -87,7 +87,7 @@ pub(crate) fn merge(
         let old = stored.next_if(|old| slot(old) == at);
         let new = match (old, origin) {
             (Some(old), Origin::Ticks(trades)) => {
-                // Trades filling a whitespace bar build it from ticks, which history replaces.
+                // Trades filling a whitespace bar extend its eventual history bar.
                 if old.is_whitespace() {
                     from_ticks.insert(old.time);
                 }
@@ -97,7 +97,17 @@ pub(crate) fn merge(
                 })
             }
             (Some(old), Origin::History) if !from_ticks.contains(&old.time) => old.clone(),
-            (Some(old), _) => {
+            (Some(old), Origin::History) => match fold(&bar, old) {
+                Some(folded) => {
+                    from_ticks.remove(&old.time);
+                    folded
+                }
+                None => {
+                    merged.rejected += 1;
+                    old.clone()
+                }
+            },
+            (Some(old), Origin::Live) => {
                 from_ticks.remove(&old.time);
                 bar
             }
@@ -219,10 +229,30 @@ mod tests {
                 vec![(Live, vec![bar(2, 7.0), bar(3, 8.0)]),
                     (History, vec![bar(2, 99.0), bar(1, 2.0), bar(0, 1.0), bar(1, 5.0)])],
                 vec![bar(0, 1.0), bar(1, 5.0), bar(2, 7.0), bar(3, 8.0)], (Some(0), 0, 0)),
-            ("a page bar replaces a bar built from ticks in its slot",
+            ("a page bar folds in the trades already in its slot",
                 vec![(History, vec![bar(0, 1.0)]), (Ticks(1), vec![bar(1, 4.0)]),
                     (History, vec![bar_at(1, 20, 6.0)])],
-                vec![bar(0, 1.0), bar_at(1, 20, 6.0)], (Some(1), 0, 0)),
+                vec![bar(0, 1.0), Bar::new(at(1, 20), 6.0, 6.0, 4.0, 4.0, 2.0)], (Some(1), 0, 0)),
+            ("trades before history retain the page open and every execution",
+                vec![(Ticks(1), vec![ohlcv(1, [205.0, 205.0, 205.0, 205.0, 2.0])]),
+                    (Ticks(1), vec![ohlcv(1, [210.0, 210.0, 210.0, 210.0, 2.0])]),
+                    (Ticks(1), vec![ohlcv(1, [207.0, 207.0, 207.0, 207.0, 2.0])]),
+                    (History, vec![ohlcv(1, [200.0, 201.0, 199.0, 200.0, 50.0])])],
+                vec![ohlcv(1, [200.0, 210.0, 199.0, 207.0, 56.0])], (Some(0), 0, 0)),
+            ("history before trades gives the same values",
+                vec![(History, vec![ohlcv(1, [200.0, 201.0, 199.0, 200.0, 50.0])]),
+                    (Ticks(1), vec![ohlcv(1, [205.0, 205.0, 205.0, 205.0, 2.0])]),
+                    (Ticks(1), vec![ohlcv(1, [210.0, 210.0, 210.0, 210.0, 2.0])]),
+                    (Ticks(1), vec![ohlcv(1, [207.0, 207.0, 207.0, 207.0, 2.0])])],
+                vec![ohlcv(1, [200.0, 210.0, 199.0, 207.0, 56.0])], (Some(0), 0, 0)),
+            ("a repeated page does not fold the same trades twice",
+                vec![(Ticks(2), vec![ohlcv(1, [200.0, 200.0, 90.0, 90.0, 4.0])]),
+                    (History, vec![bar(1, 105.0)]), (History, vec![bar(1, 105.0)])],
+                vec![ohlcv(1, [105.0, 200.0, 90.0, 90.0, 5.0])], (None, 0, 0)),
+            ("a page that would overflow is rejected and leaves trades for a retry",
+                vec![(Ticks(3), vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1e308])]),
+                    (History, vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1.5e308])])],
+                vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1e308])], (None, 1, 0)),
             ("a live bar that replaced a bar built from ticks wins over a page",
                 vec![(Ticks(1), vec![bar(1, 4.0)]), (Live, vec![bar(1, 5.0)]),
                     (History, vec![bar(1, 6.0)])],
@@ -248,10 +278,10 @@ mod tests {
                 vec![(History, vec![Bar::whitespace(at(1, 0))]),
                     (Live, vec![Bar::whitespace(at(1, 0))])],
                 vec![Bar::whitespace(at(1, 0))], (None, 0, 0)),
-            ("trades fill a whitespace bar, which a page bar then replaces",
+            ("trades fill a whitespace bar and then extend its page bar",
                 vec![(History, vec![bar(0, 1.0), Bar::whitespace(at(1, 0))]),
                     (Ticks(1), vec![bar_at(1, 10, 4.0)]), (History, vec![bar_at(1, 20, 6.0)])],
-                vec![bar(0, 1.0), bar_at(1, 20, 6.0)], (Some(1), 0, 0)),
+                vec![bar(0, 1.0), Bar::new(at(1, 20), 6.0, 6.0, 4.0, 4.0, 2.0)], (Some(1), 0, 0)),
         ];
         let clock = BarClock::new(Timeframe::Min1);
         for (name, steps, bars, expected) in cases {
