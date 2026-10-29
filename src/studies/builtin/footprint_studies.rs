@@ -456,6 +456,26 @@ mod tests {
                 assert!(!marked(&pair(54.0, 50.0), &ratio(1.1), ratio_kind));
             }
         }
+        // Sizes summed trade by trade: 209 buys against 190 sells of 0.01 are 1.1, and 129 buys
+        // against 71 sells of 0.1 are a delta of 29%.
+        let lots = |buys: usize, sells: usize, size: f64| {
+            let mut trades = vec![(0, 100.0, size, buy); buys];
+            trades.extend(vec![(0, 100.0, size, sell); sells]);
+            trades
+        };
+        let accumulated = lots(209, 190, 0.01);
+        assert_eq!(
+            flow(&accumulated)
+                .bars()
+                .values()
+                .next()
+                .unwrap()
+                .imbalance(100, 1.1, false),
+            (false, true)
+        );
+        assert!(marked(&accumulated, &ratio(1.1), RatioAsk));
+        assert!(!marked(&lots(208, 190, 0.01), &ratio(1.1), RatioAsk));
+        assert!(marked(&lots(129, 71, 0.1), &delta(29.0), DeltaAsk));
         // Delta POC: 100 nets +2 and 101 nets -3; at a tie of 3 the lower price wins.
         let rows = [(0, 100.0, 2.0, buy), (1, 101.0, 3.0, sell)];
         let tied = [(0, 100.0, 3.0, buy), (1, 101.0, 3.0, sell)];

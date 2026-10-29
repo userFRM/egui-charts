@@ -7,9 +7,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
-/// Inclusive thresholds allow rounding error from floating-point products and quotients.
+/// Inclusive thresholds allow a relative error of 1e-9, which covers the rounding of sizes
+/// summed trade by trade, and is far below one lot at any realistic volume.
 pub(crate) fn meets_threshold(value: f64, threshold: f64) -> bool {
-    value >= threshold * (1.0 - 4.0 * f64::EPSILON)
+    value >= threshold * (1.0 - 1e-9)
 }
 
 /// Executed volume at one grouped price, with sells on the bid and buys on the ask.
