@@ -183,8 +183,8 @@ struct Lot {
 /// interval before the first bar, then the account value at each bar's close, stamped with the
 /// bar's time. Bar times are used for every fill and equity point.
 ///
-/// Bars are oldest first, in strictly increasing time order. A bar without finite prices fills
-/// no orders and has no equity value.
+/// Bars are oldest first, in strictly increasing time order. A bar without finite prices, or
+/// whose high and low do not contain its open and close, fills no orders and has no equity value.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Backtest {
@@ -243,7 +243,9 @@ impl Backtest {
         for (index, bar) in bars.iter().enumerate() {
             let valid = [bar.open, bar.high, bar.low, bar.close]
                 .iter()
-                .all(|price| price.is_finite());
+                .all(|price| price.is_finite())
+                && bar.low <= bar.open.min(bar.close)
+                && bar.high >= bar.open.max(bar.close);
             if valid {
                 let up = bar.high - bar.open;
                 let down = bar.open - bar.low;
@@ -677,10 +679,17 @@ mod tests {
                 context.exit("B", None, Some(1.2), Some(1.1));
             }
         }
+        fn invalid_range(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("L", Buy, 1.0, OrderType::Limit(104.0));
+            }
+        }
         // Decimal lots close at their entry price: two breakevens, flat equity and no open lot.
         // Thirds realise 3 * 0.1 * (102 - 100) = 0.6, all winners. B keeps 0.5 at 104,
         // so its mark at 102 is -1 and final equity is 9999.6. No fourth closed trade.
         // Decimal tie: high first closes 1 long at 1.2 from 1.15, profit 0.05, one winner.
+        // Invalid open and close bars do not fill or value the account. The next valid bar
+        // opens the long at 103, with no closed trades or realised profit and equity 10000.
         for (script, prices, expected, equity, closed, open, wins, profit) in [
             (
                 decimals as fn(usize, &mut StrategyContext<'_>),
@@ -729,6 +738,21 @@ mod tests {
                 1,
                 0.05,
             ),
+            (
+                invalid_range,
+                vec![
+                    (100.0, 101.0, 99.0, 100.0),
+                    (105.0, 101.0, 99.0, 100.0),
+                    (100.0, 101.0, 99.0, 102.0),
+                    (103.0, 104.0, 102.0, 103.0),
+                ],
+                vec![trade(Buy, 1.0, 3, 103.0, None, "L")],
+                vec![10_000.0, 10_000.0, f64::NAN, f64::NAN, 10_000.0],
+                0,
+                1,
+                0,
+                0.0,
+            ),
         ] {
             let source: Vec<_> = prices
                 .into_iter()
@@ -748,13 +772,18 @@ mod tests {
                 }
                 assert_eq!(actual, expected);
             }
-            assert_eq!(
-                report.equity,
-                (-1..source.len() as i64)
-                    .map(hour)
-                    .zip(equity)
-                    .collect::<Vec<_>>()
-            );
+            assert_eq!(report.equity.len(), equity.len());
+            let skipped = equity.iter().filter(|value| value.is_nan()).count();
+            for ((time, actual), (expected_time, expected)) in report
+                .equity
+                .iter()
+                .zip((-1..source.len() as i64).map(hour).zip(equity))
+            {
+                assert_eq!(*time, expected_time);
+                assert!(*actual == expected || (actual.is_nan() && expected.is_nan()));
+            }
+            assert_eq!(report.performance().skipped_equity_points, skipped);
+            assert_eq!(report.comparison(&source).skipped_bars, skipped);
             let metrics = report.performance();
             assert_eq!(
                 (
@@ -766,7 +795,10 @@ mod tests {
                 (closed, open, wins, 0)
             );
             assert!((metrics.net_profit - profit).abs() < 1e-15);
-            assert_eq!(metrics.win_rate, Some(wins as f64 / closed as f64));
+            assert_eq!(
+                metrics.win_rate,
+                (closed > 0).then(|| wins as f64 / closed as f64)
+            );
             assert_eq!(metrics.profit_factor, None);
         }
     }
