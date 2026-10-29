@@ -3,11 +3,11 @@
 //! Pass host-managed [`ReplayStatus`] to [`ReplayStatusIndicator`] to show playback
 //! state, progress and optional execution counts.
 
+use super::model::ReplayProgress;
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
-use crate::ui::model::ReplayProgress;
 use egui::{Response, RichText, Sense, Ui, Vec2, Widget};
 
 /// Replay status for the indicator
