@@ -398,7 +398,10 @@ impl VolumeBubbles {
         }
         let slot = self.clock.timeframe().map_or(0, |t| t.duration_ms());
         // The clock walks a calendar for each call, so each bar's open is asked once.
-        let opens: Vec<_> = bars.iter().map(|bar| self.clock.bar_open(bar.time)).collect();
+        let opens: Vec<_> = bars
+            .iter()
+            .map(|bar| self.clock.bar_open(bar.time))
+            .collect();
         let open_of = |i: usize| opens[i];
         let slot_of = |i: usize| match bars.get(i + 1) {
             Some(_) if slot > 0 => slot.min((open_of(i + 1) - open_of(i)).num_milliseconds()),

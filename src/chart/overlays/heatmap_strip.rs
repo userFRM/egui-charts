@@ -455,7 +455,9 @@ mod tests {
             );
             assert!(cells.iter().all(|r| rect.contains_rect(*r)));
             assert!(
-                cells.windows(2).all(|pair| pair[0].right() <= pair[1].left() + 1e-3),
+                cells
+                    .windows(2)
+                    .all(|pair| pair[0].right() <= pair[1].left() + 1e-3),
                 "translucent cells do not stack, range {range:?}, offset {offset}"
             );
         }
