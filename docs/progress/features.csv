@@ -22,7 +22,7 @@ Builder API,Builder integration,Embedding with a data feed,done,host,src/widget/
 Builder API,Builder integration,Full trading-terminal UI around the chart,partial,library,src/ui/app_state.rs;src/ui/trading/mod.rs;terminal/src/lib.rs
 Builder API,Builder integration,Minimal embedding,done,library,src/widget/builder.rs;src/widget/frame.rs
 Builder API,Builder integration,Pluggable formatters and session rules,done,library,src/widget/frame.rs;src/widget/builder.rs
-Builder API,Builder integration,Public API surface and structure,done,library,src/prelude.rs;src/lib.rs;src/widget/mod.rs
+Builder API,Builder integration,Public API surface and structure,done,library,src/prelude.rs;src/lib.rs;src/widget/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/model/signal.rs;src/scales/timescale_marks.rs;src/studies/mod.rs;src/studies/settings.rs;src/drawings/persistence.rs;src/drawings/registry.rs
 Builder API,Builder integration,Threading model for feeding data,done,library,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/feed.rs;src/data/inbox/sink.rs
 Builder API,Builder integration,WebAssembly target,done,library,src/data/mod.rs
 Builder API,Datafeed API,Bar data model,done,library,src/model/bar/bar.rs;src/widget/builder.rs;src/widget/series.rs;src/chart/rendering/candles/mod.rs
@@ -86,7 +86,7 @@ Builder API,Widget API and customization,Localisation of UI text,done,library,sr
 Builder API,Widget API and customization,Multiple charts per widget,done,library,src/widget/layout.rs;src/ui/multi_chart.rs
 Builder API,Widget API and customization,Price scale API,done,library,src/scales/pricescale.rs;src/widget/mod.rs;src/widget/price_series.rs;src/widget/frame.rs
 Builder API,Widget API and customization,Screenshots,partial,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed.rs
-Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/price_series.rs;src/widget/time_scale.rs;src/widget/series.rs
+Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/price_series.rs;src/widget/time_scale.rs;src/widget/series.rs;src/widget/change_marks.rs
 Builder API,Widget API and customization,Style overrides,partial,library,src/widget/mod.rs;src/widget/builder.rs;src/widget/frame.rs;src/config/chart.rs
 Builder API,Widget API and customization,Themes and custom colour schemes,done,library,src/widget/mod.rs;src/theme/context.rs;src/widget/frame.rs;src/chart/renderers/markers.rs
 Builder API,Widget API and customization,Toolbar customisation,done,library,src/ui/top_toolbar/host.rs;src/ui/top_toolbar/toolbar.rs
