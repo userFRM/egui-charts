@@ -119,12 +119,16 @@ impl Chart {
                     });
                 }
             }
-            storage.add_drawing(drawing_to_stored_with(drawing, |index, price| {
+            let mut stored = drawing_to_stored_with(drawing, |index, price| {
                 StoredCoord::from_time(
                     time_at(self.state.shown(), index as f64).expect("validated anchor"),
                     price,
                 )
-            }));
+            });
+            stored.pane = self
+                .drawing_pane(drawing.id)
+                .and_then(|pane| self.stored_pane(pane));
+            storage.add_drawing(stored);
         }
         // Validate all settings too, before a host replaces its last good save.
         storage.to_json()?;
@@ -138,6 +142,17 @@ impl Chart {
     /// Restored drawings do not queue writes or enter undo history. Screen coordinates follow
     /// on the next frame. Account, filesystem and cloud storage remain the host's responsibility.
     pub fn load_drawings(&mut self, json: &str) -> Result<Vec<SkippedDrawing>, serde_json::Error> {
+        self.load_drawings_remapped(json, false)
+    }
+
+    /// [`Self::load_drawings`]; with `remap`, a drawing whose study was replaced when a snapshot
+    /// was restored takes the replacement before its stored pane is matched, since a study's
+    /// input naming another study as its source holds that study's local id.
+    pub(super) fn load_drawings_remapped(
+        &mut self,
+        json: &str,
+        remap: bool,
+    ) -> Result<Vec<SkippedDrawing>, serde_json::Error> {
         let (storage, skipped) = DrawingStorage::from_json(json)?;
         if storage.symbol != self.symbol() {
             return Err(serde::de::Error::custom(
@@ -157,7 +172,7 @@ impl Chart {
         manager.eraser_mode = self.drawings.eraser_mode;
         manager.curr_timeframe = self.drawings.curr_timeframe.clone();
         for stored in storage.drawings() {
-            let drawing = stored_to_drawing_with(
+            let mut drawing = stored_to_drawing_with(
                 stored,
                 |point| {
                     point
@@ -167,6 +182,15 @@ impl Chart {
                 },
                 0,
             );
+            if let Some(id) = drawing
+                .pane
+                .filter(|_| remap)
+                .and_then(|pane| self.restored_studies.get(&pane))
+            {
+                drawing.pane = Some(*id);
+            } else if let Some(pane) = &stored.pane {
+                drawing.pane = self.stored_pane_owner(pane);
+            }
             manager.add_synced_drawing(drawing);
         }
         self.drawings = manager;

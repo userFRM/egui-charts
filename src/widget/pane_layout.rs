@@ -2,8 +2,13 @@
 
 use super::{Chart, SeriesId};
 use crate::config::NavigationButtons;
+#[cfg(feature = "drawings")]
+use crate::drawings::persistence::StoredPane;
 use crate::localization as l10n;
 use egui::{Color32, Pos2, Rect, Sense, Ui};
+
+/// A study's name and input values, which identify it across charts.
+type PaneStudy = (String, Vec<(String, serde_json::Value)>);
 
 /// Identifies a pane of a chart. [`PaneId::MAIN`] is the price pane; [`Chart::add_pane`] and
 /// [`Chart::panes`] return the others. An id stays valid until its pane is removed and is never
@@ -358,36 +363,60 @@ impl Chart {
     /// the same order. Of several such panes the n-th here corresponds to the n-th there. The
     /// price pane and panes without studies have no counterpart.
     pub fn linked_pane(&self, pane: PaneId, other: &Chart) -> Option<PaneId> {
+        let (studies, rank) = self.pane_identity(pane)?;
+        other.identified_pane(&studies, rank)
+    }
+
+    /// The studies of study pane `pane` and its rank among the panes holding the same ones, or
+    /// `None` for the price pane and panes without studies.
+    fn pane_identity(&self, pane: PaneId) -> Option<(Vec<PaneStudy>, usize)> {
         let studies = self.pane_studies(pane);
         if pane == PaneId::MAIN || studies.is_empty() {
             return None;
         }
-        let nth = self
+        let rank = self
             .panes()
             .into_iter()
             .take_while(|other| *other != pane)
-            .filter(|other| self.pane_studies(*other) == studies)
+            .filter(|other| *other != PaneId::MAIN && self.pane_studies(*other) == studies)
             .count();
-        other
-            .panes()
+        Some((studies, rank))
+    }
+
+    /// The `rank`-th study pane holding `studies`, from the top.
+    fn identified_pane(&self, studies: &[PaneStudy], rank: usize) -> Option<PaneId> {
+        self.panes()
             .into_iter()
-            .filter(|pane| other.pane_studies(*pane) == studies)
-            .nth(nth)
+            .filter(|pane| *pane != PaneId::MAIN && self.pane_studies(*pane) == studies)
+            .nth(rank)
+    }
+
+    /// The identity of study pane `pane` for a stored drawing, as in [`Self::linked_pane`].
+    #[cfg(feature = "drawings")]
+    pub(crate) fn stored_pane(&self, pane: PaneId) -> Option<StoredPane> {
+        self.pane_identity(pane)
+            .map(|(studies, rank)| StoredPane { studies, rank })
+    }
+
+    /// The study a drawing stored in `stored` belongs to on this chart: the first study of the
+    /// corresponding pane, or `None`, the price pane, when there is none.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn stored_pane_owner(&self, stored: &StoredPane) -> Option<usize> {
+        let pane = self.identified_pane(&stored.studies, stored.rank)?;
+        self.pane_series(pane).first().map(|id| id.0)
     }
 
     /// The name and input values of each study in `pane`, in legend order.
-    fn pane_studies(
-        &self,
-        pane: PaneId,
-    ) -> Vec<(String, Vec<(String, crate::studies::InputValue)>)> {
+    fn pane_studies(&self, pane: PaneId) -> Vec<PaneStudy> {
         self.pane_series(pane)
             .into_iter()
             .filter_map(|id| self.indicators().find(|(study, _)| *study == id))
             .map(|(_, study)| {
-                let inputs = study
-                    .inputs()
-                    .into_iter()
-                    .map(|input| (input.id, input.value));
+                // Parsed from text like a stored pane's values, which can differ in the last bit.
+                let inputs = study.inputs().into_iter().map(|input| {
+                    let text = serde_json::to_string(&input.value).unwrap_or_default();
+                    (input.id, serde_json::from_str(&text).unwrap_or_default())
+                });
                 (study.name().to_owned(), inputs.collect())
             })
             .collect()
