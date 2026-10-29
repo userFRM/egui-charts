@@ -530,6 +530,18 @@ impl Drawing {
         }
     }
 
+    /// Puts a Time cycles second anchor on the first anchor's price, so the second only sets
+    /// the period.
+    pub(crate) fn level_time_cycles(&mut self) {
+        if self.tool_type == DrawingToolType::TimeCycles
+            && self.points.len() >= 2
+            && self.chart_points.len() >= 2
+        {
+            self.points[1].y = self.points[0].y;
+            self.chart_points[1].price = self.chart_points[0].price;
+        }
+    }
+
     /// Add a screen point (legacy method)
     pub fn add_point(&mut self, point: egui::Pos2) {
         self.points.push(point);
