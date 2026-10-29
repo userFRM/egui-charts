@@ -97,7 +97,7 @@ impl ExchangeSessionProvider {
     }
 
     /// Draw week boundaries on daily bars, month boundaries on multi-day and weekly bars,
-    /// and year boundaries on monthly bars.
+    /// and year boundaries on monthly bars shorter than a year. Yearly and longer bars have no dividers.
     pub fn with_timeframe(mut self, timeframe: Timeframe) -> Self {
         self.timeframe = timeframe;
         self
@@ -339,7 +339,9 @@ impl ExchangeSessionProvider {
     }
 
     fn period(&self, date: NaiveDate) -> (i32, u32) {
-        if self.timeframe.duration_ms() < Timeframe::Day1.duration_ms() {
+        if self.timeframe.duration_ms() >= 12 * Timeframe::Month1.duration_ms() {
+            (0, 0)
+        } else if self.timeframe.duration_ms() < Timeframe::Day1.duration_ms() {
             (date.year(), date.ordinal())
         } else if self.timeframe.duration_ms() == Timeframe::Day1.duration_ms() {
             (date.iso_week().year(), date.iso_week().week())
@@ -510,6 +512,23 @@ mod tests {
     #[test]
     fn calendar_dividers_follow_bar_dates_and_coarser_periods() {
         for (timeframe, dates, expected, break_type) in [
+            (
+                "12month".parse().unwrap(),
+                &[
+                    (2015, 1, 1),
+                    (2016, 1, 1),
+                    (2017, 1, 1),
+                    (2018, 1, 1),
+                    (2019, 1, 1),
+                    (2020, 1, 1),
+                    (2021, 1, 1),
+                    (2022, 1, 1),
+                    (2023, 1, 1),
+                    (2024, 1, 1),
+                ][..],
+                &[][..],
+                SessionBreakType::Yearly,
+            ),
             (
                 Timeframe::Day1,
                 &[
