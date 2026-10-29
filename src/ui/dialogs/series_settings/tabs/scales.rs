@@ -1,5 +1,6 @@
 //! Scales and lines tab - price scale and line visibility settings.
 
+use super::SymbolTab;
 use crate::chart::series::SeriesSettings;
 use crate::localization as l10n;
 use crate::scales::PriceScaleMode;
@@ -61,6 +62,29 @@ impl ScalesTab {
             let label = ui.label(l10n::text(ui.ctx(), "Show previous close line"));
             ui.checkbox(&mut settings.show_prev_close_line, "")
                 .labelled_by(label.id);
+            ui.end_row();
+        });
+
+        ui.space_xl();
+        ui.separator();
+        ui.space_xl();
+
+        ui.label(l10n::text(ui.ctx(), "Alert levels"));
+        ui.space_sm();
+
+        FormGrid::new("scales_alerts_grid").show(ui, |ui| {
+            let label = ui.label(l10n::text(ui.ctx(), "Show alerts"));
+            ui.checkbox(&mut settings.alerts.visible, "")
+                .labelled_by(label.id);
+            ui.end_row();
+
+            let label = ui.label(l10n::text(ui.ctx(), "Show alert labels"));
+            ui.checkbox(&mut settings.alerts.labels, "")
+                .labelled_by(label.id);
+            ui.end_row();
+
+            ui.label(l10n::text(ui.ctx(), "Alert colour"));
+            SymbolTab::color_picker(ui, &mut settings.alerts.color);
             ui.end_row();
         });
     }

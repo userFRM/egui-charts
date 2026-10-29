@@ -81,6 +81,21 @@ impl Watchlist {
         }
     }
 
+    /// A copy named after this list and `taken` names: "Name copy", then "Name copy 2" and so on.
+    /// Sections, symbol order and flags carry over.
+    pub fn duplicate<'a>(&self, taken: impl IntoIterator<Item = &'a str>) -> Self {
+        let taken: Vec<&str> = taken.into_iter().collect();
+        let base = format!("{} copy", self.name);
+        let name = std::iter::once(base.clone())
+            .chain((2..).map(|n| format!("{base} {n}")))
+            .find(|name| !taken.contains(&name.as_str()))
+            .expect("an unused name exists");
+        Self {
+            name,
+            items: self.items.clone(),
+        }
+    }
+
     /// The symbols of the list, in list order.
     pub fn symbols(&self) -> impl Iterator<Item = &str> {
         self.items.iter().filter_map(|item| match item {

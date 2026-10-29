@@ -16,6 +16,9 @@ pub struct ImageExportOptions {
     pub include_title: bool,
     /// Include the export time in the chart's time zone above the chart.
     pub include_timestamp: bool,
+    /// Draw the symbol watermark and the one set with [`Chart::set_watermark`], as they show on
+    /// screen, independently of the title and timestamp.
+    pub include_watermark: bool,
     /// Omit the chart and header backgrounds, retaining plot and drawing colours.
     pub transparent_background: bool,
     /// Draw the crosshair where the pointer last placed it over the plots, or where
@@ -29,6 +32,7 @@ impl Default for ImageExportOptions {
             size: [1440, 900],
             include_title: true,
             include_timestamp: true,
+            include_watermark: true,
             transparent_background: false,
             include_crosshair: false,
         }
@@ -51,6 +55,48 @@ pub struct ChartImage {
     pub textures_delta: egui::TexturesDelta,
 }
 
+/// The loaded bars and visible study plots as text, aligned by chart time: what
+/// [`Chart::export_csv`] writes and the chart data table lists.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct DataTable {
+    /// Column titles: time, open, high, low, close and volume, then one per visible study plot.
+    pub headers: Vec<String>,
+    /// One row per loaded bar, oldest first. A missing or non-finite value is an empty cell.
+    pub rows: Vec<Vec<String>>,
+}
+
+impl DataTable {
+    /// CSV text of the `columns` (indices into [`Self::headers`]) in the given order.
+    pub fn csv(
+        &self,
+        columns: &[usize],
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let mut writer = csv::Writer::from_writer(Vec::new());
+        writer.write_record(columns.iter().map(|&column| &self.headers[column]))?;
+        for row in &self.rows {
+            writer.write_record(columns.iter().map(|&column| &row[column]))?;
+        }
+        Ok(String::from_utf8(writer.into_inner()?)?)
+    }
+
+    /// Tab-separated text of the `columns` with a header line, for pasting into a spreadsheet.
+    pub fn tsv(&self, columns: &[usize]) -> String {
+        let line = |cells: &mut dyn Iterator<Item = &String>| {
+            cells.map(String::as_str).collect::<Vec<_>>().join("\t")
+        };
+        let mut lines = vec![line(
+            &mut columns.iter().map(|&column| &self.headers[column]),
+        )];
+        lines.extend(
+            self.rows
+                .iter()
+                .map(|row| line(&mut columns.iter().map(|&column| &row[column]))),
+        );
+        lines.join("\n")
+    }
+}
+
 impl Chart {
     fn export_time(&self, time: DateTime<Utc>) -> String {
         match self.display_timezone() {
@@ -71,6 +117,14 @@ impl Chart {
     /// Prices inherit instrument precision (two decimals without metadata); study overrides and
     /// non-price units retain their precision. Missing/non-finite values are empty cells.
     pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let table = self.data_table();
+        table.csv(&(0..table.headers.len()).collect::<Vec<_>>())
+    }
+
+    /// The cells of [`Self::export_csv`] as a table, with the same bars, study plots, times and
+    /// precision. During replay it holds the bars the replay cutoff has completed, and on
+    /// price-based chart types still the source bars. Loads nothing: only loaded bars are listed.
+    pub fn data_table(&self) -> DataTable {
         let bars = &self.state.data().bars;
         let price_precision = self
             .instrument()
@@ -135,8 +189,7 @@ impl Chart {
                 String::new()
             }
         };
-        let mut writer = csv::Writer::from_writer(Vec::new());
-        writer.write_record(header)?;
+        let mut rows = Vec::with_capacity(bars.len());
         for (index, bar) in bars.iter().enumerate() {
             let mut row = vec![if self.horizontal_scale.is_some() {
                 self.format_time(bar.time)
@@ -157,9 +210,12 @@ impl Chart {
                     .plot_value(line, index)
                     .map_or_else(String::new, |value| number(value, precision))
             }));
-            writer.write_record(row)?;
+            rows.push(row);
         }
-        Ok(String::from_utf8(writer.into_inner()?)?)
+        DataTable {
+            headers: header,
+            rows,
+        }
     }
 
     /// Renders an isolated image frame using the same chart, studies, primitives, drawings and
@@ -182,6 +238,29 @@ impl Chart {
         options: &ImageExportOptions,
         overlay: impl Fn(&mut egui::Ui, &mut Chart),
     ) -> Result<ChartImage, String> {
+        let (shapes, textures_delta, image_ctx) = self.export_shapes(ctx, options, overlay)?;
+        Ok(ChartImage {
+            size: options.size,
+            primitives: image_ctx.tessellate(shapes, 1.0),
+            textures_delta,
+        })
+    }
+
+    /// The shapes of the last pass of the offscreen frame, the textures it sets and the context
+    /// whose fonts laid it out.
+    fn export_shapes(
+        &self,
+        ctx: &egui::Context,
+        options: &ImageExportOptions,
+        overlay: impl Fn(&mut egui::Ui, &mut Chart),
+    ) -> Result<
+        (
+            Vec<egui::epaint::ClippedShape>,
+            egui::TexturesDelta,
+            egui::Context,
+        ),
+        String,
+    > {
         let size = options.size;
         if size.iter().any(|&side| !(100..=7680).contains(&side))
             || u64::from(size[0]) * u64::from(size[1]) > 33_177_600
@@ -196,6 +275,10 @@ impl Chart {
         let mut chart = self.export_snapshot();
         chart.config.skip_background = options.transparent_background;
         chart.config.show_symbol_labels &= options.include_title;
+        if !options.include_watermark {
+            chart.config.show_watermark = false;
+            chart.watermark = None;
+        }
         let mut theme = self
             .theme_override
             .clone()
@@ -231,7 +314,7 @@ impl Chart {
         let mut textures_delta = egui::TexturesDelta::default();
         // Resolve pane layout, axis measurement and each pending element study before the final frame.
         let passes = chart.studies.indicators().len() + 3;
-        let mut primitives = Vec::new();
+        let mut shapes = Vec::new();
         for pass in 0..passes {
             let output = image_ctx.run_ui(
                 egui::RawInput {
@@ -259,18 +342,15 @@ impl Chart {
                 },
             );
             textures_delta.append(output.textures_delta);
-            primitives = image_ctx.tessellate(output.shapes, 1.0);
+            shapes = output.shapes;
         }
-        Ok(ChartImage {
-            size,
-            primitives,
-            textures_delta,
-        })
+        Ok((shapes, textures_delta, image_ctx))
     }
 
     /// Renders the image of [`Self::export_image`] on the CPU and encodes it as PNG, so the host
-    /// needs no renderer or GPU readback. Images whose textures the host binds itself, such as a
-    /// legend badge from a user texture, are left out.
+    /// needs no renderer or GPU readback. Fails with the reason for content it cannot draw, host
+    /// paint callbacks and images whose textures the host binds itself, such as a legend badge
+    /// from a user texture, instead of leaving it out.
     pub fn export_png(
         &self,
         ctx: &egui::Context,
@@ -286,24 +366,34 @@ impl Chart {
         overlay: impl Fn(&mut egui::Ui, &mut Chart),
     ) -> Result<Vec<u8>, String> {
         let mut image = self.export_image_with(ctx, options, overlay)?;
-        let [width, height] = image.size;
         let pixels = super::raster::rasterize(image.size, &image.primitives, &image.textures_delta);
         image.textures_delta.clear();
-        let mut png = Vec::new();
-        let mut encoder = png::Encoder::new(&mut png, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
-        let data: Vec<u8> = pixels
-            .iter()
-            .flat_map(|pixel| pixel.to_srgba_unmultiplied())
-            .collect();
-        writer
-            .write_image_data(&data)
-            .map_err(|error| error.to_string())?;
-        writer.finish().map_err(|error| error.to_string())?;
-        Ok(png)
+        super::raster::png(image.size, &pixels?)
+    }
+
+    /// Renders the frame of [`Self::export_image`] as an SVG document of the options' size, with
+    /// the same title, timestamp, watermark and background. Text stays text, in the font family
+    /// class of the on-screen font, and the frame's textures, such as legend icons, are embedded
+    /// as PNG. Fails with the reason for content SVG cannot take over unchanged, such as host
+    /// paint callbacks and textures the host binds itself, instead of leaving it out.
+    pub fn export_svg(
+        &self,
+        ctx: &egui::Context,
+        options: &ImageExportOptions,
+    ) -> Result<String, String> {
+        self.export_svg_with(ctx, options, |_, _| {})
+    }
+
+    pub(crate) fn export_svg_with(
+        &self,
+        ctx: &egui::Context,
+        options: &ImageExportOptions,
+        overlay: impl Fn(&mut egui::Ui, &mut Chart),
+    ) -> Result<String, String> {
+        let (shapes, mut textures_delta, _) = self.export_shapes(ctx, options, overlay)?;
+        let svg = super::svg::svg(options.size, &shapes, &textures_delta);
+        textures_delta.clear();
+        svg
     }
 
     fn export_snapshot(&self) -> Self {
@@ -342,6 +432,7 @@ impl Chart {
         chart.series_scales = self.series_scales.clone();
         chart.symbol = self.symbol.clone();
         chart.timeframe = self.timeframe;
+        chart.feed_link = self.feed_link.as_ref().map(super::feed::FeedLink::frozen);
         chart.legend_instrument = self.instrument().cloned();
         chart.legend_badge = self.legend_badge.clone();
         chart.watermark = self.watermark.clone();
@@ -662,6 +753,7 @@ mod tests {
             size: [480, 320],
             include_title: false,
             include_timestamp: false,
+            include_watermark: true,
             transparent_background: false,
             include_crosshair: false,
         };
@@ -748,6 +840,97 @@ mod tests {
                     )
                     .is_err()
             );
+        }
+    }
+
+    #[test]
+    fn table_text_holds_the_chosen_columns_with_their_missing_cells() {
+        let table = DataTable {
+            headers: vec!["time".into(), "close".into(), "SMA: 5".into()],
+            rows: vec![
+                vec!["t0".into(), "1.50".into(), String::new()],
+                vec!["t1".into(), "2.50".into(), "2.00".into()],
+            ],
+        };
+        assert_eq!(table.csv(&[0, 2]).unwrap(), "time,SMA: 5\nt0,\nt1,2.00\n");
+        assert_eq!(table.tsv(&[2, 1]), "SMA: 5\tclose\n\t1.50\n2.00\t2.50");
+    }
+
+    #[test]
+    fn svg_images_apply_the_options_and_report_what_they_cannot_hold() {
+        use crate::widget::test_frames::{chart, frame};
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0, 12.0], &[14.0, 13.0]);
+        chart.symbol = "EXPORT TEST".into();
+        chart.config.show_watermark = true;
+        chart.config.watermark_text = Some("WATERMARK".into());
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let base = ImageExportOptions {
+            size: [480, 320],
+            include_title: false,
+            include_timestamp: false,
+            include_watermark: true,
+            transparent_background: false,
+            include_crosshair: false,
+        };
+        let svg = |options: &ImageExportOptions| chart.export_svg(&ctx, options).unwrap();
+        let opaque = svg(&base);
+        assert!(opaque.starts_with("<svg") && opaque.contains(r#"width="480" height="320""#));
+        assert!(opaque.contains("WATERMARK"), "watermark was dropped");
+        assert!(
+            opaque.contains("data:image/png;base64,"),
+            "frame textures were dropped"
+        );
+        assert!(!opaque.contains("EXPORT TEST"));
+        let no_watermark = svg(&ImageExportOptions {
+            include_watermark: false,
+            include_title: true,
+            ..base.clone()
+        });
+        assert!(!no_watermark.contains("WATERMARK") && no_watermark.contains("EXPORT TEST"));
+        let [r, g, b, _] = chart.config.background_color.to_srgba_unmultiplied();
+        let bg = format!(r#"fill="rgb({r},{g},{b})""#);
+        assert!(opaque.contains(&bg));
+        let transparent = svg(&ImageExportOptions {
+            transparent_background: true,
+            ..base.clone()
+        });
+        assert!(!transparent.contains(&bg), "background was retained");
+        let callback = |ui: &mut egui::Ui, _: &mut Chart| {
+            ui.painter().add(egui::PaintCallback {
+                rect: ui.max_rect(),
+                callback: std::sync::Arc::new(()),
+            });
+        };
+        let host_texture = |ui: &mut egui::Ui, _: &mut Chart| {
+            ui.painter().image(
+                egui::TextureId::User(7),
+                ui.max_rect(),
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        };
+        for (error, reason) in [
+            (chart.export_svg_with(&ctx, &base, callback), "callbacks"),
+            (
+                chart
+                    .export_png_with(&ctx, &base, callback)
+                    .map(|_| String::new()),
+                "callbacks",
+            ),
+            (
+                chart.export_svg_with(&ctx, &base, host_texture),
+                "host textures",
+            ),
+            (
+                chart
+                    .export_png_with(&ctx, &base, host_texture)
+                    .map(|_| String::new()),
+                "host textures",
+            ),
+        ] {
+            let error = error.unwrap_err();
+            assert!(error.contains(reason), "{error}");
         }
     }
 
