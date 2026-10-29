@@ -7,7 +7,6 @@ use crate::scales::{
     HorizontalScale, PriceFormatter, PriceMap, PriceMark, PriceScaleId, TickMark, TickMarkLayout,
 };
 use crate::theme::ThemeExt;
-use chrono::Duration;
 use egui::layers::ShapeIdx;
 use egui::{Color32, FontId, Pos2, Rect, Shape};
 
@@ -202,40 +201,19 @@ fn min_time_label_spacing(options: &TimeScaleOptions) -> f32 {
 
 /// The tick marks of the time axis from `scale`, and the keys they are placed by: the bars in
 /// view with their logical indices, extended into the whitespace on either side by keys
-/// extrapolated at the median step. [`render_time_labels`] paints them.
+/// mapped by `time_at` from the full chart history. [`render_time_labels`] paints them.
 pub(crate) fn time_axis_marks(
     context: &RenderContext,
     visible_data: &[Bar],
     coords: &ChartMapping,
     scale: &dyn HorizontalScale,
     options: &TimeScaleOptions,
+    time_at: impl Fn(f64) -> Option<chrono::DateTime<chrono::Utc>>,
 ) -> (Vec<TickMark>, Vec<(chrono::DateTime<chrono::Utc>, usize)>) {
     if visible_data.is_empty() {
         return (Vec::new(), Vec::new());
     }
 
-    let mut deltas_ms: Vec<i64> = visible_data
-        .windows(2)
-        .filter_map(|pair| {
-            let delta = (pair[1].time - pair[0].time).num_milliseconds().abs();
-            if delta > 0 { Some(delta) } else { None }
-        })
-        .collect();
-
-    let bar_duration_ms = if deltas_ms.is_empty() {
-        60_000
-    } else {
-        deltas_ms.sort_unstable();
-        deltas_ms[deltas_ms.len() / 2]
-    };
-
-    let bar_duration_ms = bar_duration_ms.max(1);
-    // Safe: guarded by is_empty() check above
-    let (Some(first), Some(last)) = (visible_data.first(), visible_data.last()) else {
-        return (Vec::new(), Vec::new());
-    };
-    let first_visible_time = first.time;
-    let last_visible_time = last.time;
     let first_visible_idx = coords.start_idx;
     let last_visible_idx = coords.start_idx + visible_data.len().saturating_sub(1);
 
@@ -248,12 +226,11 @@ pub(crate) fn time_axis_marks(
         + 2;
 
     // Extrapolation stops where chrono's range ends, so a bar near it cannot panic.
-    let step = |i: i64| Duration::milliseconds(bar_duration_ms.saturating_mul(i));
     // Extrapolated bars BEFORE the visible data (for grid lines that fall before the visible range)
     let mut bars: Vec<_> = (1..=extra_left)
         .map_while(|i| {
-            let time = first_visible_time.checked_sub_signed(step(i))?;
-            Some((time, first_visible_idx.saturating_sub(i as usize)))
+            let index = first_visible_idx.saturating_sub(i as usize);
+            Some((time_at(index as f64)?, index))
         })
         .collect();
     bars.reverse();
@@ -265,8 +242,8 @@ pub(crate) fn time_axis_marks(
     );
     // Extrapolated bars AFTER the visible data (for grid lines in the future)
     bars.extend((1..=extra_right).map_while(|i| {
-        let time = last_visible_time.checked_add_signed(step(i))?;
-        Some((time, last_visible_idx.saturating_add(i as usize)))
+        let index = last_visible_idx.saturating_add(i as usize);
+        Some((time_at(index as f64)?, index))
     }));
     let layout = TickMarkLayout {
         width: context.rect.width(),

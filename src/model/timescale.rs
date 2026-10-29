@@ -105,6 +105,8 @@ impl TimeScale {
 
     /// Apply options coming from `TimeScaleOptions`
     /// Note: this does not own `TimeScaleOptions` to avoid a dependency cycle.
+    /// Non-finite spacing retains the current spacing, clamped to the new bounds.
+    /// Non-finite right offsets retain their previous values.
     pub fn apply_options(
         &mut self,
         bar_spacing: f32,
@@ -124,8 +126,12 @@ impl TimeScale {
         // Apply spacing with clamping
         self.set_bar_spacing(bar_spacing);
 
-        self.live_right_offset = right_offset_bars;
-        self.live_right_offset_pixels = right_offset_pixels;
+        if right_offset_bars.is_finite() {
+            self.live_right_offset = right_offset_bars;
+        }
+        if right_offset_pixels.is_none_or(f32::is_finite) {
+            self.live_right_offset_pixels = right_offset_pixels;
+        }
         self.set_right_offset(self.live_edge_offset());
     }
 
@@ -138,8 +144,12 @@ impl TimeScale {
             }) as f32
     }
 
-    /// Set the width of the chart area (must be called when chart resizes)
+    /// Set the width of the chart area (must be called when chart resizes).
+    /// Non-finite values are ignored.
     pub fn set_width(&mut self, width: f32) {
+        if !width.is_finite() {
+            return;
+        }
         self.width = width;
         // CRITICAL: Changing width changes visible_bars calculation in constraints
         self.apply_constraints();
@@ -152,7 +162,7 @@ impl TimeScale {
         self.apply_constraints();
     }
 
-    /// Set bar spacing (with clamping to constraints)
+    /// Set bar spacing (with clamping to constraints). Non-finite values are ignored.
     pub fn set_bar_spacing(&mut self, spacing: f32) {
         self.bar_spacing = self.clamp_spacing(spacing as f64);
         // CRITICAL: Changing bar_spacing changes visible_bars calculation,
@@ -188,9 +198,13 @@ impl TimeScale {
         self.apply_constraints();
     }
 
-    /// Set right offset (with constraint checking)
+    /// Set right offset (with constraint checking). Non-finite values are ignored.
     pub fn set_right_offset(&mut self, offset: impl Into<f64>) {
-        self.right_offset = offset.into();
+        let offset = offset.into();
+        if !offset.is_finite() {
+            return;
+        }
+        self.right_offset = offset;
         self.apply_constraints();
     }
 
@@ -290,22 +304,31 @@ impl TimeScale {
         self.apply_constraints();
     }
 
-    /// Scroll by number of bars (negative = left, positive = right)
+    /// Scroll by number of bars (negative = left, positive = right).
+    /// Non-finite deltas are ignored.
     pub fn scroll_bars(&mut self, bars: f32) {
-        self.right_offset -= f64::from(bars);
-        self.apply_constraints();
+        if !bars.is_finite() {
+            return;
+        }
+        self.set_right_offset(self.right_offset - f64::from(bars));
     }
 
-    /// Scroll by pixels
+    /// Scroll by pixels. Non-finite deltas are ignored.
     pub fn scroll_pixels(&mut self, pixels: f32) {
-        self.right_offset -= pixels as f64 / self.bar_spacing;
-        self.apply_constraints();
+        if !pixels.is_finite() {
+            return;
+        }
+        self.set_right_offset(self.right_offset - pixels as f64 / self.bar_spacing);
     }
 
     /// Zoom at a specific point
     ///
     /// IMPORTANT: rect_width must be the actual width of the chart rect being zoomed.
+    /// Non-finite deltas, anchors and widths are ignored.
     pub fn zoom(&mut self, delta: f32, anchor_x: f32, _rect_min_x: f32, rect_width: f32) {
+        if !delta.is_finite() || !anchor_x.is_finite() || !rect_width.is_finite() {
+            return;
+        }
         let old_spacing = self.bar_spacing;
         let anchor_distance = f64::from(rect_width) - f64::from(anchor_x) - 1.0;
 
@@ -316,7 +339,8 @@ impl TimeScale {
         self.bar_spacing = self.clamp_spacing(new_spacing);
 
         // The absolute bar index cancels: only the change in distance from the right matters.
-        self.right_offset += anchor_distance / self.bar_spacing - anchor_distance / old_spacing;
+        let right_offset = self.right_offset
+            + (anchor_distance / self.bar_spacing - anchor_distance / old_spacing);
 
         // Debug logging - check for width mismatch
         if (rect_width - self.width).abs() > 0.1 {
@@ -328,8 +352,8 @@ impl TimeScale {
         }
 
         // Apply constraints after setting right_offset
-        let before_constraint = self.right_offset;
-        self.apply_constraints();
+        let before_constraint = right_offset;
+        self.set_right_offset(right_offset);
 
         // Log if constraints modified right_offset
         if (self.right_offset - before_constraint).abs() > 0.01 {
@@ -368,7 +392,7 @@ impl TimeScale {
 
     /// Apply edge constraints
     fn apply_constraints(&mut self) {
-        if self.width <= 0.0 || self.bar_spacing <= 0.0 || self.bar_cnt == 0 {
+        if !(self.width > 0.0 && self.bar_spacing > 0.0) || self.bar_cnt == 0 {
             return;
         }
 
@@ -401,7 +425,7 @@ impl TimeScale {
     /// `fix_left_edge` to the first bar at the left edge, also when every bar fits;
     /// without it to 100 bars past the first.
     fn calculate_min_right_offset(&self) -> Option<f64> {
-        if self.bar_cnt == 0 || self.bar_spacing <= 0.0 || self.width <= 0.0 {
+        if self.bar_cnt == 0 || !(self.width > 0.0 && self.bar_spacing > 0.0) {
             return None;
         }
 
@@ -447,6 +471,11 @@ impl TimeScale {
     }
 
     fn clamp_spacing(&self, spacing: f64) -> f64 {
+        let spacing = if spacing.is_finite() {
+            spacing
+        } else {
+            self.bar_spacing
+        };
         match self.spacing_bounds() {
             (min, max) if max > 0.0 => spacing.clamp(min, max),
             (min, _) => spacing.max(min),
@@ -542,19 +571,57 @@ mod tests {
     }
 
     #[test]
+    fn non_finite_inputs_keep_the_time_scale_state() {
+        type Change = fn(&mut TimeScale, f32);
+        let changes: [(&str, Change); 9] = [
+            ("width", TimeScale::set_width),
+            ("spacing", TimeScale::set_bar_spacing),
+            ("offset", |ts, value| ts.set_right_offset(value)),
+            ("bars", TimeScale::scroll_bars),
+            ("pixels", TimeScale::scroll_pixels),
+            ("zoom delta", |ts, value| ts.zoom(value, 400.0, 0.0, 800.0)),
+            ("zoom anchor", |ts, value| ts.zoom(1.0, value, 0.0, 800.0)),
+            ("zoom width", |ts, value| ts.zoom(1.0, 400.0, 0.0, value)),
+            ("options", |ts, value| {
+                ts.apply_options(value, 0.5, 50.0, true, false, value, Some(value));
+            }),
+        ];
+        for count in [0, 100] {
+            for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                for (name, change) in changes {
+                    let mut ts = TimeScale::new();
+                    ts.set_bar_cnt(count);
+                    ts.apply_options(8.0, 0.5, 50.0, true, false, 7.0, Some(80.0));
+                    change(&mut ts, invalid);
+                    assert_eq!(ts.width(), 800.0, "{name}, {invalid}");
+                    assert_eq!(ts.bar_spacing(), 8.0, "{name}, {invalid}");
+                    assert_eq!(ts.right_offset(), 10.0, "{name}, {invalid}");
+                    ts.set_bar_cnt(100);
+                    ts.scroll_bars(1.0);
+                    ts.scroll_to_realtime();
+                    assert_eq!(ts.right_offset(), 10.0, "{name}, {invalid}");
+                    ts.apply_options(8.0, 0.5, 50.0, true, false, invalid, None);
+                    assert_eq!(ts.right_offset(), 7.0, "bar offset, {invalid}");
+                    assert_eq!(ts.visible_logical_range(), LogicalRange::new(7.0, 106.0));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn inconsistent_spacing_bounds_clamp_without_panicking() {
-        // zoom(-100) asks for -9 times the spacing, so each row ends at its effective minimum.
+        // Check the setup spacing before zoom(-100) clamps it to its effective minimum.
         type Setup = fn(&mut TimeScale);
-        let rows: [(&str, Setup, f32); 3] = [
+        let rows: [(&str, Setup, (f32, f32)); 6] = [
             (
                 "minimum above maximum",
                 |ts| ts.apply_options(6.0, 10.0, 5.0, false, false, 2.0, None),
-                5.0,
+                (5.0, 5.0),
             ),
             (
                 "NaN minimum",
                 |ts| ts.apply_options(6.0, f32::NAN, 0.0, false, false, 2.0, None),
-                0.5,
+                (6.0, 0.5),
             ),
             (
                 "minimum set above maximum",
@@ -562,15 +629,34 @@ mod tests {
                     ts.set_max_bar_spacing(5.0);
                     ts.set_min_bar_spacing(10.0);
                 },
-                5.0,
+                (5.0, 5.0),
+            ),
+            (
+                "NaN spacing with a raised minimum",
+                |ts| ts.apply_options(f32::NAN, 10.0, 0.0, false, false, 2.0, None),
+                (10.0, 10.0),
+            ),
+            (
+                "NaN spacing with a lowered maximum",
+                |ts| ts.apply_options(f32::NAN, 0.5, 5.0, false, false, 2.0, None),
+                (5.0, 0.5),
+            ),
+            (
+                "NaN spacing with a lowered maximum and fixed left edge",
+                |ts| {
+                    ts.set_bar_spacing(6.0);
+                    ts.apply_options(f32::NAN, 0.5, 4.0, true, false, 2.0, None);
+                },
+                (4.0, 0.5),
             ),
         ];
-        for (name, setup, expected) in rows {
+        for (name, setup, (set, zoomed)) in rows {
             let mut ts = TimeScale::new();
             ts.set_bar_cnt(100);
             setup(&mut ts);
+            assert_eq!(ts.bar_spacing(), set, "{name}");
             ts.zoom(-100.0, 400.0, 0.0, 800.0);
-            assert_eq!(ts.bar_spacing(), expected, "{name}");
+            assert_eq!(ts.bar_spacing(), zoomed, "{name}");
         }
     }
 }

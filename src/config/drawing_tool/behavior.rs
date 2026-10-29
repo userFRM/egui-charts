@@ -283,6 +283,11 @@ mod tests {
                 );
             }
             assert_eq!(manager.drawings.len(), 1, "{tool:?}");
+            // A position's level handles sit on the box's left edge, away from its anchors;
+            // `HandleService`'s `get_handles_by_tool` covers them.
+            if matches!(tool, LongPos | ShortPos) {
+                continue;
+            }
             let drawing = &manager.drawings[0];
             let handles = crate::drawings::services::DrawingInteraction::new().get_handles(drawing);
             for point in &drawing.points {
