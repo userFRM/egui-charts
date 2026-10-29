@@ -24,7 +24,7 @@ The engine is designed so that each kind of creative addition has one clear home
 
 Built-in indicators live in [`src/studies/builtin/`](src/studies/builtin), one file per indicator (for example `ema.rs`, `rsi.rs`, `bollinger_bands.rs`). Each implements the `Indicator` trait defined in [`src/studies/indicator_trait.rs`](src/studies/indicator_trait.rs).
 
-To add one: create a new file in `src/studies/builtin/`, implement `Indicator` (the core methods are `name`, `calculate`, `values`, `colors`, `set_colors`, `set_visible`, and `clone_box`), give it a `Default` impl with conventional parameters, declare the module, and register the type in `register_builtins!` in [`src/studies/factory.rs`](src/studies/factory.rs) so it is reachable by name through `IndicatorFactory`. For runtime, closure-based indicators without a new struct, see `CustomIndicator` in [`src/studies/custom.rs`](src/studies/custom.rs).
+To add one: create a new file in `src/studies/builtin/`, implement `Indicator` (the core methods are `name`, `calculate`, `values`, `colors`, `set_colors`, `set_visible`, and `clone_box`), give it a `Default` impl with conventional parameters, declare the module, and register the type in `register_builtins!` in [`src/studies/factory/mod.rs`](src/studies/factory/mod.rs) so it is reachable by name through `IndicatorFactory`. For runtime, closure-based indicators without a new struct, see `CustomIndicator` in [`src/studies/custom.rs`](src/studies/custom.rs).
 
 ### A new drawing tool
 

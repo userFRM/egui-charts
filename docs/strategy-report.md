@@ -56,7 +56,8 @@ converting a fraction to a displayed percentage overflows.
 CSV exports only valid trades using `StrategyReport::trades_csv`, retaining its existing
 columns, quoting and UTC timestamps. Export summary CSV returns
 `StrategyReportAction::ExportSummaryCsv` with a suggested file name and the metrics and
-properties shown, as `StrategyReport::summary_csv` writes them.
+properties shown, as `StrategyReport::summary_csv` writes them: a dot as the decimal
+separator, no thousands separator, and an empty cell for an unavailable value.
 
 ## Metric definitions
 

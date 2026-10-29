@@ -154,15 +154,19 @@ impl HandleService {
     ///
     /// For the `Middle` handle, all points are translated by the delta between
     /// the old and new centroid positions (move entire drawing).
-    pub fn update_handle<F, G>(
+    /// `translate_price(price, from_y, to_y)` shifts their prices in scale units;
+    /// other handles use `y_to_price`.
+    pub fn update_handle<F, G, H>(
         drawing: &mut Drawing,
         handle: HandlePos,
         new_pos: Pos2,
         x_to_bar: F,
         y_to_price: G,
+        translate_price: H,
     ) where
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
+        H: Fn(f64, f32, f32) -> f64,
     {
         if handle == HandlePos::Middle {
             if let Some((_, center)) = Self::get_handles(drawing)
@@ -170,13 +174,12 @@ impl HandleService {
                 .find(|(h, _)| *h == handle)
             {
                 let bars = x_to_bar(new_pos.x) - x_to_bar(center.x);
-                let price = y_to_price(new_pos.y) - y_to_price(center.y);
-                for point in &mut drawing.points {
-                    *point += new_pos - center;
-                }
                 for point in &mut drawing.chart_points {
                     point.bar_idx += bars;
-                    point.price += price;
+                    point.price = translate_price(point.price, center.y, new_pos.y);
+                }
+                for point in &mut drawing.points {
+                    *point += new_pos - center;
                 }
             }
             return;
@@ -668,10 +671,54 @@ mod tests {
             ),
         ];
         for (tool, points, handle, to, screen, chart) in cases {
-            let mut drawing = create_test_drawing(tool, points);
-            HandleService::update_handle(&mut drawing, handle, to, x_to_bar, y_to_price);
-            assert_eq!(drawing.points, screen, "{tool:?} {handle:?}");
-            assert_eq!(drawing.chart_points, chart, "{tool:?} {handle:?}");
+            for logarithmic in [false, true] {
+                let price = |y: f32| {
+                    if logarithmic {
+                        1000.0 * (-f64::from(y) / 100.0).exp()
+                    } else {
+                        y_to_price(y)
+                    }
+                };
+                let mut drawing = create_test_drawing(tool, points.clone());
+                for (anchor, point) in drawing.chart_points.iter_mut().zip(&drawing.points) {
+                    anchor.price = price(point.y);
+                }
+                HandleService::update_handle(
+                    &mut drawing,
+                    handle,
+                    to,
+                    x_to_bar,
+                    |y: f32| price(y.clamp(0.0, 350.0)),
+                    |p, from, to| {
+                        if logarithmic {
+                            p * (-f64::from(to - from) / 100.0).exp()
+                        } else {
+                            p - f64::from(to - from)
+                        }
+                    },
+                );
+                assert_eq!(drawing.points, screen, "{tool:?} {handle:?}");
+                let expected = if logarithmic {
+                    screen
+                        .iter()
+                        .map(|p| ChartPoint::new(x_to_bar(p.x), price(p.y)))
+                        .collect()
+                } else {
+                    chart.clone()
+                };
+                if logarithmic && handle == HandlePos::Middle {
+                    assert_eq!(drawing.chart_points.len(), expected.len());
+                    for (got, want) in drawing.chart_points.iter().zip(&expected) {
+                        assert_eq!(got.bar_idx, want.bar_idx, "{tool:?} {handle:?}");
+                        assert!(
+                            (got.price - want.price).abs() < 1e-12 * want.price.abs(),
+                            "{tool:?} {handle:?}: {got:?}, expected {want:?}"
+                        );
+                    }
+                } else {
+                    assert_eq!(drawing.chart_points, expected, "{tool:?} {handle:?}");
+                }
+            }
         }
     }
 }

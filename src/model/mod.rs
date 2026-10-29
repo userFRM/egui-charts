@@ -55,7 +55,7 @@ mod watchlist;
 
 pub use alert::{
     Alert, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertRule, AlertSource,
-    AlertStatus,
+    AlertStatus, NotificationSchedule, NotificationWindow,
 };
 pub use annotations::{Annotation, MarkerType};
 #[cfg(feature = "widget")]
@@ -73,7 +73,9 @@ pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParam
 pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
-pub use instrument::{DataStatus, Instrument, Session, SessionWindow, SymbolType};
+pub use instrument::{
+    DataStatus, Instrument, OverrideWindow, Session, SessionOverride, SessionWindow, SymbolType,
+};
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{
     LineBreakConfig, LineBreakLine, LineBreakSignal, LineDirection,
@@ -96,7 +98,7 @@ pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
 pub use replay::ReplaySession;
 pub(crate) use revision::next_revision;
 pub use series_scale::SeriesScale;
-pub use series_style::{AutoscaleProvider, PriceLineSource, SeriesStyle};
+pub use series_style::{AutoscaleProvider, PriceLineSource, SeriesAlerts, SeriesStyle};
 pub use session::{
     CompositeSessionProvider, DailySessionProvider, ExchangeSessionProvider,
     MonthlySessionProvider, SessionBreak, SessionBreakType, SessionProvider, WeeklySessionProvider,

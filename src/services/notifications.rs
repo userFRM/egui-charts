@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 
-use super::Events;
+use super::{Events, ProfileId};
 use crate::data::MaybeSend;
 
 /// Events the host tells the user about, such as alert triggers, filled orders or a lost
@@ -46,6 +46,18 @@ pub struct Notification {
     pub body: String,
     /// The symbol the entry is about, which the panel offers to open.
     pub symbol: Option<String>,
+    /// The profile or chat room a social entry is about, which the panel offers to open.
+    pub target: Option<NotificationTarget>,
+}
+
+/// What a social notification opens.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NotificationTarget {
+    /// The profile of a user, as [`Profiles`](super::Profiles) knows it.
+    Profile(ProfileId),
+    /// A chat room, by the identifier [`Chats`](super::Chats) uses.
+    Room(String),
 }
 
 impl Notification {
@@ -56,6 +68,7 @@ impl Notification {
             title: title.into(),
             body: String::new(),
             symbol: None,
+            target: None,
         }
     }
 }

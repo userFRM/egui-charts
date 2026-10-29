@@ -4,13 +4,14 @@ use crate::localization as l10n;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, Months, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Months, NaiveDate, NaiveTime, TimeZone, Timelike, Utc, Weekday};
 use egui::{Context, Ui};
 
 use super::{AlertDialogAction, AlertDialogConfig};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{
-    Alert, AlertComparison, AlertCondition, AlertFrequency, AlertRule, AlertSource, TimezoneId,
+    Alert, AlertComparison, AlertCondition, AlertFrequency, AlertRule, AlertSource,
+    NotificationSchedule, NotificationWindow, TimezoneId,
 };
 use crate::services::{Storage, StoreKind};
 use crate::ui_kit::FormGrid;
@@ -39,6 +40,14 @@ pub struct AlertDialog {
     expiry_date: String,
     /// The expiry time as `HH:MM` in [`timezone`](Self::timezone).
     expiry_time: String,
+    /// Whether the staged alert limits when notifications are delivered.
+    scheduled: bool,
+    /// The schedule's zone name.
+    schedule_zone: String,
+    /// The selected weekdays, Monday first.
+    schedule_days: [bool; 7],
+    /// The windows as `HH:MM` start and end texts.
+    schedule_windows: Vec<[String; 2]>,
     preset_name: String,
     presets: BTreeMap<String, Alert>,
     storage: Option<Arc<dyn Storage>>,
@@ -67,6 +76,10 @@ impl AlertDialog {
             expires: false,
             expiry_date: String::new(),
             expiry_time: String::new(),
+            scheduled: false,
+            schedule_zone: String::new(),
+            schedule_days: [false; 7],
+            schedule_windows: Vec::new(),
             preset_name: String::new(),
             presets: BTreeMap::new(),
             storage: None,
@@ -97,6 +110,7 @@ impl AlertDialog {
     pub fn edit(&mut self, alert: Alert) {
         self.expires = alert.expires.is_some();
         self.set_expiry_fields(alert.expires);
+        self.set_schedule_fields(alert.schedule.as_deref());
         self.alert = alert;
         self.is_open = true;
     }
@@ -144,6 +158,60 @@ impl AlertDialog {
             return Err("Choose an expiry after the current time");
         }
         Ok(Some(expiry))
+    }
+
+    /// Fill the schedule fields with `schedule`, or clear them.
+    fn set_schedule_fields(&mut self, schedule: Option<&NotificationSchedule>) {
+        self.scheduled = schedule.is_some();
+        self.schedule_zone =
+            schedule.map_or_else(|| self.timezone.name().into(), |s| s.timezone.name().into());
+        self.schedule_days = std::array::from_fn(|i| {
+            schedule.is_some_and(|s| s.days.contains(&Weekday::try_from(i as u8).unwrap()))
+        });
+        self.schedule_windows = schedule.map_or_else(Vec::new, |s| {
+            let text = |t: NaiveTime| t.format("%H:%M").to_string();
+            s.windows
+                .iter()
+                .map(|w| [text(w.start), text(w.end)])
+                .collect()
+        });
+    }
+
+    /// The staged schedule: none when notifications go out at any time, otherwise the entered
+    /// zone, weekdays and windows.
+    fn schedule(&self) -> Result<Option<NotificationSchedule>, &'static str> {
+        if !self.scheduled {
+            return Ok(None);
+        }
+        let timezone = TimezoneId::named(self.schedule_zone.trim())
+            .ok_or("Enter a known time zone, such as UTC or America/New_York")?;
+        let days: Vec<Weekday> = (0..7u8)
+            .filter(|&i| self.schedule_days[usize::from(i)])
+            .map(|i| Weekday::try_from(i).unwrap())
+            .collect();
+        let time = |text: &str| NaiveTime::parse_from_str(text.trim(), "%H:%M");
+        let windows = self
+            .schedule_windows
+            .iter()
+            .map(|[start, end]| match (time(start), time(end)) {
+                (Ok(start), Ok(end)) => Ok(NotificationWindow { start, end }),
+                _ => Err("Enter the window times as HH:MM"),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let schedule = NotificationSchedule {
+            timezone,
+            days,
+            windows,
+        };
+        if schedule.days.is_empty() {
+            Err("Select at least one weekday")
+        } else if schedule.windows.is_empty() {
+            Err("Add a notification window")
+        } else if !schedule.is_valid() {
+            Err("A window needs different start and end times")
+        } else {
+            Ok(Some(schedule))
+        }
     }
 
     /// Dismiss without saving.
@@ -245,6 +313,7 @@ impl AlertDialog {
                 }
                 ui.separator();
                 let mut expiry = Ok(None);
+                let mut schedule = Ok(None);
                 let mut valid = false;
                 egui::ScrollArea::vertical()
                     .max_height(
@@ -255,7 +324,8 @@ impl AlertDialog {
                     .show(ui, |ui| {
                         self.form(ui);
                         expiry = self.expiry(Utc::now());
-                        valid = self.alert.is_valid() && expiry.is_ok();
+                        schedule = self.schedule();
+                        valid = self.alert.is_valid() && expiry.is_ok() && schedule.is_ok();
                         if !self.alert.is_valid() {
                             status_message(
                                 ui,
@@ -264,6 +334,9 @@ impl AlertDialog {
                             );
                         }
                         if let Err(error) = expiry {
+                            status_message(ui, MessageKind::Error, error);
+                        }
+                        if let Err(error) = schedule {
                             status_message(ui, MessageKind::Error, error);
                         }
                         if let Some(error) = &self.error {
@@ -280,6 +353,7 @@ impl AlertDialog {
                 }
                 if save {
                     self.alert.expires = expiry.unwrap();
+                    self.alert.schedule = schedule.unwrap().map(Box::new);
                     action = AlertDialogAction::Create(Box::new(self.alert.clone()));
                     self.close();
                 }
@@ -364,6 +438,7 @@ impl AlertDialog {
                         (AlertFrequency::EveryTime, "Every time"),
                         (AlertFrequency::OncePerBar, "Once per bar"),
                         (AlertFrequency::OncePerBarClose, "Once per bar close"),
+                        (AlertFrequency::OncePerMinute, "Once per minute"),
                     ] {
                         ui.selectable_value(
                             &mut self.alert.frequency,
@@ -407,6 +482,51 @@ impl AlertDialog {
                         .hint_text(l10n::text(ui.ctx(), "HH:MM")),
                 )
                 .accessible_name(time_label);
+                ui.end_row();
+            }
+            ui.label(l10n::text(ui.ctx(), "Notifications"));
+            let mut any_time = !self.scheduled;
+            if ui
+                .checkbox(&mut any_time, l10n::text(ui.ctx(), "Any time"))
+                .changed()
+            {
+                self.scheduled = !any_time;
+            }
+            ui.end_row();
+            if self.scheduled {
+                ui.label(l10n::text(ui.ctx(), "Time zone"));
+                ui.text_edit_singleline(&mut self.schedule_zone)
+                    .accessible_name(l10n::text(ui.ctx(), "Time zone"));
+                ui.end_row();
+                ui.label(l10n::text(ui.ctx(), "Days"));
+                ui.horizontal_wrapped(|ui| {
+                    for (selected, day) in self.schedule_days.iter_mut().zip(DAYS) {
+                        ui.toggle_value(selected, l10n::text(ui.ctx(), day));
+                    }
+                });
+                ui.end_row();
+                ui.label(l10n::text(ui.ctx(), "Windows"));
+                ui.vertical(|ui| {
+                    let mut remove = None;
+                    for (index, [start, end]) in self.schedule_windows.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(start).desired_width(48.0))
+                                .accessible_name(l10n::text(ui.ctx(), "Window start"));
+                            ui.label("-");
+                            ui.add(egui::TextEdit::singleline(end).desired_width(48.0))
+                                .accessible_name(l10n::text(ui.ctx(), "Window end"));
+                            if ui.button(l10n::text(ui.ctx(), "Remove")).clicked() {
+                                remove = Some(index);
+                            }
+                        });
+                    }
+                    if let Some(index) = remove {
+                        self.schedule_windows.remove(index);
+                    }
+                    if ui.button(l10n::text(ui.ctx(), "Add window")).clicked() {
+                        self.schedule_windows.push(["09:00".into(), "17:00".into()]);
+                    }
+                });
                 ui.end_row();
             }
             ui.label(l10n::text(ui.ctx(), "Message"));
@@ -464,9 +584,10 @@ impl AlertDialog {
                         egui::Button::new(l10n::text(ui.ctx(), "Save preset")),
                     )
                     .clicked()
-                    && let Ok(expiry) = self.expiry(Utc::now())
+                    && let (Ok(expiry), Ok(schedule)) = (self.expiry(Utc::now()), self.schedule())
                 {
                     self.alert.expires = expiry;
+                    self.alert.schedule = schedule.map(Box::new);
                     self.save_preset();
                 }
             });
@@ -493,6 +614,8 @@ impl AlertDialog {
         }
     }
 }
+
+const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PresetDocument {
@@ -565,6 +688,20 @@ pub(crate) fn rule_form(
             "Exiting channel",
         ),
         (
+            AlertCondition::InsideChannel {
+                lower: level,
+                upper: level + 1.0,
+            },
+            "Inside channel",
+        ),
+        (
+            AlertCondition::OutsideChannel {
+                lower: level,
+                upper: level + 1.0,
+            },
+            "Outside channel",
+        ),
+        (
             AlertCondition::MovingBy {
                 value: 1.0,
                 bars: 1,
@@ -627,7 +764,9 @@ pub(crate) fn rule_form(
                 .accessible_name(l10n::text(ui.ctx(), "Level"));
         }
         AlertCondition::EnteringChannel { lower, upper }
-        | AlertCondition::ExitingChannel { lower, upper } => {
+        | AlertCondition::ExitingChannel { lower, upper }
+        | AlertCondition::InsideChannel { lower, upper }
+        | AlertCondition::OutsideChannel { lower, upper } => {
             ui.label(l10n::text(ui.ctx(), "Lower / upper"));
             ui.add(egui::DragValue::new(lower))
                 .accessible_name(l10n::text(ui.ctx(), "Lower"));
@@ -933,6 +1072,36 @@ mod tests {
                 check(new_york(), Some(fields), expected);
             }
         }
+    }
+
+    #[test]
+    fn schedule_fields_resolve_to_a_valid_schedule_or_name_the_problem() {
+        let mut dialog = AlertDialog::new();
+        assert_eq!(dialog.schedule(), Ok(None));
+        dialog.scheduled = true;
+        dialog.schedule_zone = "UTC".into();
+        assert_eq!(dialog.schedule(), Err("Select at least one weekday"));
+        dialog.schedule_days[4] = true;
+        assert_eq!(dialog.schedule(), Err("Add a notification window"));
+        dialog.schedule_windows = vec![["22:00".into(), "22:00".into()]];
+        assert_eq!(
+            dialog.schedule(),
+            Err("A window needs different start and end times")
+        );
+        dialog.schedule_windows = vec![["22:00".into(), "2am".into()]];
+        assert_eq!(dialog.schedule(), Err("Enter the window times as HH:MM"));
+        dialog.schedule_windows = vec![["22:00".into(), "02:00".into()]];
+        dialog.schedule_zone = "Mars/Olympus".into();
+        assert!(dialog.schedule().is_err());
+        dialog.schedule_zone = "UTC".into();
+        let schedule = dialog.schedule().unwrap().unwrap();
+        assert_eq!(schedule.days, [Weekday::Fri]);
+        // Editing a saved alert shows the same fields.
+        let mut alert = Alert::new("SAMPLE", AlertCondition::Crossing(1.0));
+        alert.schedule = Some(Box::new(schedule.clone()));
+        let mut other = AlertDialog::new();
+        other.edit(alert);
+        assert_eq!(other.schedule(), Ok(Some(schedule)));
     }
 
     #[test]

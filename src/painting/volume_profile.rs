@@ -1,10 +1,11 @@
 //! Price-row profile painting shared by studies and drawing tools.
 
 use crate::data::{ProfileDisplay, VolumeProfile, VolumeProfileConfig};
+use crate::painting::dashed_line::draw_dashed_line;
 use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Shape, Stroke, epaint::StrokeKind};
+use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 use std::ops::Range;
 
 pub(crate) fn paint_profile(
@@ -127,12 +128,14 @@ fn draw_volume_profile_lines(
 
     // Draw POC line (dashed, extends across range)
     let poc_color = DESIGN_TOKENS.semantic.extended.favorite_gold;
-    painter.extend(Shape::dashed_line(
-        &[Pos2::new(rect.min.x, poc_y), Pos2::new(rect.max.x, poc_y)],
+    draw_dashed_line(
+        painter,
+        Pos2::new(rect.min.x, poc_y),
+        Pos2::new(rect.max.x, poc_y),
         Stroke::new(stroke::HAIRLINE, poc_color),
         8.0,
         4.0,
-    ));
+    );
 
     let va_color = Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 200);
     for y in [vah_y, val_y] {
@@ -168,5 +171,52 @@ fn draw_volume_profile_lines(
             font.clone(),
             va_color,
         );
+    }
+}
+
+#[cfg(all(test, feature = "drawings"))]
+mod tests {
+    use crate::drawings::domain::ChartPoint;
+    use crate::drawings::{Drawing, DrawingToolType};
+    use crate::model::{Bar, BarData};
+    use chrono::{TimeZone, Utc};
+    use egui::{Context, Pos2, RawInput, Rect, Shape};
+
+    /// Guards the frame cost of the POC line: an anchored volume profile restored from saved
+    /// drawings with its anchor 200,000 bars before the view dashes its POC line only inside the
+    /// view, rather than with one shape per dash from the anchor.
+    #[test]
+    fn far_anchored_profile_dashes_its_poc_line_only_in_view() {
+        fn leaves(shape: &Shape) -> usize {
+            match shape {
+                Shape::Vec(shapes) => shapes.iter().map(leaves).sum(),
+                _ => 1,
+            }
+        }
+        let bars = (0..200)
+            .map(|i| {
+                let time = Utc.timestamp_opt(i * 60, 0).unwrap();
+                Bar::new(time, 100.0, 101.0, 99.0, 100.5, 1.0)
+            })
+            .collect();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        chart.set_symbol("A");
+        let mut profile = Drawing::new(1, DrawingToolType::AnchoredVolumeProfile);
+        profile.chart_points = vec![ChartPoint::new(-200_000.0, 100.0)];
+        profile.completed = true;
+        chart.drawings_mut().drawings.push(profile);
+        let saved = chart.save_drawings().unwrap().to_json().unwrap();
+        chart.load_drawings(&saved).unwrap();
+        let ctx = Context::default();
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            ..Default::default()
+        };
+        let output = ctx.run_ui(input, |ui| {
+            chart.show(ui);
+        });
+        let shapes: usize = output.shapes.iter().map(|s| leaves(&s.shape)).sum();
+        output.drop_without_applying_deltas();
+        assert!(shapes < 5_000, "{shapes} shapes in an 800 x 600 frame");
     }
 }

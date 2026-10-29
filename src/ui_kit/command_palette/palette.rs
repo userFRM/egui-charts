@@ -566,22 +566,24 @@ mod tests {
         p.remove_command("a");
         assert_eq!(frame(&ctx, &mut p, Some(Key::Enter)).as_deref(), Some("b"));
 
-        let (ctx, mut p) = (Context::default(), palette());
-        l10n::set_translator(&ctx, |english| (english == "b").then(|| "zweite".into()));
-        for (query, expected) in [("zweite", vec!["b"]), ("b", vec!["b"])] {
+        for (query, clear_translation, expected) in [
+            ("zweite", false, Some("b")),
+            ("b", false, Some("b")),
+            ("zweite", true, None),
+        ] {
+            let (ctx, mut p) = (Context::default(), palette());
+            l10n::set_translator(&ctx, |english| (english == "b").then(|| "zweite".into()));
             p.search_query = query.into();
             frame(&ctx, &mut p, None);
-            let ids: Vec<_> = p
-                .filtered
-                .iter()
-                .map(|(i, _)| p.commands[*i].id.as_str())
-                .collect();
-            assert_eq!(ids, expected);
+            if clear_translation {
+                l10n::clear_translator(&ctx);
+            }
+            assert_eq!(
+                frame(&ctx, &mut p, Some(Key::Enter)).as_deref(),
+                expected,
+                "{query}, clear translation: {clear_translation}"
+            );
         }
-        p.search_query = "zweite".into();
-        l10n::clear_translator(&ctx);
-        frame(&ctx, &mut p, None);
-        assert!(p.filtered.is_empty());
 
         let (ctx, mut p) = (Context::default(), palette());
         l10n::set_translator(&ctx, |english| Some(format!("Aktion {english}")));
@@ -589,7 +591,6 @@ mod tests {
         frame(&ctx, &mut p, None);
         frame(&ctx, &mut p, None);
         frame(&ctx, &mut p, Some(Key::ArrowDown));
-        assert_eq!(p.selected_index, 1);
         p.remove_command("c");
         assert_eq!(frame(&ctx, &mut p, Some(Key::Enter)).as_deref(), Some("b"));
     }

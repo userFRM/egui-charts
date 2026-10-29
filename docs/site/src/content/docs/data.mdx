@@ -30,10 +30,7 @@ impl Datafeed for InMemory {
             request.before.is_none_or(|before| bar.time < before)
         });
         let start = end.saturating_sub(request.count);
-        reply.send(Ok(HistoryPage {
-            bars: self.0[start..end].to_vec(),
-            end_of_history: start == 0,
-        }));
+        reply.send(Ok(HistoryPage::new(self.0[start..end].to_vec(), start == 0)));
     }
 }
 ```
@@ -42,6 +39,10 @@ Pass an `Arc` of your feed to `ChartBuilder::with_feed`. The chart calls feed
 methods from `show` on the UI thread. Return promptly; a worker or browser task
 can answer `Reply` later. Set `end_of_history` only when no earlier page remains.
 The chart asks for older pages as the viewport reaches the start of loaded history.
+A request covers `[since, before)`: `since` is inclusive and set when the chart needs
+bars back to a time it does not hold, `before` is exclusive. A window with no bars,
+such as a weekend, answers `HistoryPage::with_continue_before` to say where older
+bars continue; an empty page without it ends history. Trade and depth pages work the same way.
 
 ## Stream through the subscription sink
 

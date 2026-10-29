@@ -54,6 +54,13 @@ use crate::model::{
 /// and stays active. [`EveryTime`](AlertFrequency::EveryTime) fires on every evaluation that
 /// holds, [`OncePerBar`](AlertFrequency::OncePerBar) at most once per bar open time, and
 /// [`OncePerBarClose`](AlertFrequency::OncePerBarClose) evaluates each completed bar once.
+/// [`OncePerMinute`](AlertFrequency::OncePerMinute) fires at most once per minute of the update
+/// time `now`.
+///
+/// *Schedule.* An alert's `schedule` restricts the delivery of a trigger only: the alert is still
+/// evaluated, it still fires and pushes its [`AlertEvent::TriggeredForSymbol`], and
+/// [`on_trigger`](Self::on_trigger) is not called for a trigger whose time the schedule does not
+/// allow.
 ///
 /// *Expiry.* Every `update` and [`tick`](Self::tick) first marks active alerts whose expiry has
 /// passed as [`Expired`](AlertStatus::Expired), so an alert never fires at or after its expiry
@@ -105,7 +112,8 @@ struct Run {
     newest: Option<DateTime<Utc>>,
     /// The previous evaluation, which the next one is compared with.
     seen: Option<Seen>,
-    /// Open time of the bar the alert last fired on.
+    /// The occurrence the alert last fired on: the open time of a bar, or the minute for a
+    /// per-minute alert.
     fired: Option<DateTime<Utc>>,
     /// A watchlist alert with frequency once has fired on this symbol.
     done: bool,
@@ -137,8 +145,8 @@ impl AlertEngine {
         }
     }
 
-    /// Calls `deliver` with the alert and its [`AlertEvent::TriggeredForSymbol`] on every trigger,
-    /// after the event is pushed, so that the host can send it by email, push notification or web
+    /// Calls `deliver` with the alert and its [`AlertEvent::TriggeredForSymbol`] on every trigger
+    /// the alert's schedule allows, after the event is pushed, so that the host can send it by email, push notification or web
     /// request. The call comes from the thread that fed the engine and must return at once; it
     /// may use the engine.
     pub fn on_trigger(
@@ -236,7 +244,7 @@ impl AlertEngine {
                 }
             }
             let run = runs.entry((id.clone(), symbol.to_owned())).or_default();
-            let Some((bar, message)) = evaluate(alert, run, (symbol, timeframe), bars, &value)
+            let Some((bar, message)) = evaluate(alert, run, (symbol, timeframe), bars, now, &value)
             else {
                 continue;
             };
@@ -247,7 +255,7 @@ impl AlertEngine {
                     alert.status = AlertStatus::Triggered;
                 }
             }
-            run.fired = Some(bar.time);
+            run.fired = Some(occurrence(alert.frequency, bar, now));
             if let Some(events) = events
                 && alert.status != AlertStatus::Active
             {
@@ -263,7 +271,13 @@ impl AlertEngine {
             if let Some(events) = events {
                 events.push(event.clone());
             }
-            fired.push((alert.clone(), event));
+            if alert
+                .schedule
+                .as_ref()
+                .is_none_or(|schedule| schedule.allows(now))
+            {
+                fired.push((alert.clone(), event));
+            }
         }
         runs.retain(|(id, _), _| {
             alerts
@@ -373,6 +387,7 @@ fn evaluate<'a>(
     run: &mut Run,
     (symbol, timeframe): (&str, Timeframe),
     bars: &'a [Bar],
+    now: DateTime<Utc>,
     value: &impl Fn(&AlertSource, usize) -> Option<f64>,
 ) -> Option<(&'a Bar, String)> {
     let closed = alert.frequency == AlertFrequency::OncePerBarClose;
@@ -447,14 +462,26 @@ fn evaluate<'a>(
         && match alert.frequency {
             AlertFrequency::Once => !run.done,
             AlertFrequency::EveryTime => true,
-            AlertFrequency::OncePerBar | AlertFrequency::OncePerBarClose => {
-                run.fired != Some(bar.time)
+            AlertFrequency::OncePerBar
+            | AlertFrequency::OncePerBarClose
+            | AlertFrequency::OncePerMinute => {
+                run.fired != Some(occurrence(alert.frequency, bar, now))
             }
         };
     fires.then(|| {
         let message = alert.expand_message(symbol, timeframe, bar, |src| source(src, index));
         (bar, message)
     })
+}
+
+/// What a frequency fires at most once per: the bar, or for a per-minute alert the minute of `now`.
+fn occurrence(frequency: AlertFrequency, bar: &Bar, now: DateTime<Utc>) -> DateTime<Utc> {
+    match frequency {
+        AlertFrequency::OncePerMinute => {
+            DateTime::from_timestamp(now.timestamp().div_euclid(60) * 60, 0).unwrap_or(now)
+        }
+        _ => bar.time,
+    }
 }
 
 /// Whether `condition` holds for `value`, given the previous value of the source, the current and
@@ -497,6 +524,8 @@ fn condition_holds(
             .is_some_and(|p| (p < *lower || p > *upper) && value >= *lower && value <= *upper),
         AlertCondition::ExitingChannel { lower, upper } => previous
             .is_some_and(|p| p >= *lower && p <= *upper && (value < *lower || value > *upper)),
+        AlertCondition::InsideChannel { lower, upper } => value >= *lower && value <= *upper,
+        AlertCondition::OutsideChannel { lower, upper } => value < *lower || value > *upper,
         AlertCondition::MovingBy {
             value: change,
             bars: back,

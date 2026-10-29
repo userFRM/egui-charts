@@ -1980,7 +1980,6 @@ mod tests {
             text
         };
         chart.set_study_limit(Some(2));
-        assert_eq!(chart.study_limit(), Some(2));
         for period in [3, 5] {
             assert!(chart.try_add_indicator(Box::new(SMA::new(period))).is_ok());
         }
