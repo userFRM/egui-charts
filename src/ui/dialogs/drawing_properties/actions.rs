@@ -204,8 +204,9 @@ impl DrawingProps {
     }
 
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
-        if !(self.line_width > 0.0 && self.line_width <= MAX_STROKE_WIDTH)
-            || !FONT_SIZES.contains(&self.font_size)
+        if !(self.line_width > 0.0
+            && self.line_width <= MAX_STROKE_WIDTH
+            && FONT_SIZES.contains(&self.font_size))
         {
             return Err("Line width must be above 0 and at most 100, font size 1 to 256");
         }
