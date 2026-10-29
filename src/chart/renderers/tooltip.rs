@@ -723,6 +723,8 @@ mod tests {
                     let mut options = chart.chart_options().clone();
                     options.tooltip.mode = mode;
                     if mode == TooltipMode::Tracking {
+                        // The volume study's rows would keep the tracking text from being empty.
+                        chart.config_mut().show_volume = false;
                         options.tooltip.show_ohlc = false;
                         options.tooltip.show_time = false;
                         options.tooltip.show_volume = false;
