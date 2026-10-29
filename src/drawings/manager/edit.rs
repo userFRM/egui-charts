@@ -18,12 +18,12 @@ impl DrawingManager {
         if self.drawings.iter().any(|d| d.id == id && d.locked) {
             return;
         }
-        if let Some(drawing) = self.drawings.iter().find(|d| d.id == id).cloned() {
-            self.drawings.retain(|d| d.id != id);
+        if let Some(index) = self.drawings.iter().position(|d| d.id == id) {
+            let drawing = self.drawings.remove(index);
             if drawing.saveable {
                 self.queue(DrawingSyncAction::Delete(sync_id(&drawing)));
             }
-            self.history.push_delete(drawing);
+            self.history.push_delete(drawing, index);
         }
         self.selection.deselect(id);
     }
@@ -39,7 +39,7 @@ impl DrawingManager {
         if before.is_empty() {
             return;
         }
-        let snapshot = self.drawings.clone();
+        let snapshot = self.drawings.iter().cloned().enumerate().collect();
         for drawing in &before {
             if drawing.saveable {
                 self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
@@ -59,7 +59,8 @@ impl DrawingManager {
     /// [`Self::cancel_curr_drawing`] and [`Self::deselect`]. A bulk removal is one undo step.
     pub fn clear_all(&mut self) {
         if self.drawings.iter().any(|drawing| !drawing.locked) {
-            self.history.push_snapshot(self.drawings.clone());
+            self.history
+                .push_snapshot(self.drawings.iter().cloned().enumerate().collect());
         }
         for drawing in self.drawings.iter().filter(|d| !d.locked) {
             if drawing.saveable {
@@ -197,7 +198,12 @@ impl DrawingManager {
         }
         let ids: HashSet<_> = ids.iter().copied().collect();
         let mut before = Vec::new();
-        for drawing in self.drawings.iter_mut().filter(|d| ids.contains(&d.id)) {
+        for (index, drawing) in self
+            .drawings
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, d)| ids.contains(&d.id))
+        {
             let old = drawing.clone();
             edit(drawing);
             if old.locked && drawing.locked {
@@ -217,9 +223,9 @@ impl DrawingManager {
             if !drawing.selectable {
                 self.selection.deselect(old.id);
             }
-            before.push(old);
+            before.push((index, old));
         }
-        for old in &before {
+        for (_, old) in &before {
             self.queue_edit(old);
         }
         self.history.push_snapshot(before);
@@ -354,7 +360,8 @@ impl DrawingManager {
         {
             return;
         }
-        self.history.push_snapshot(self.drawings.clone());
+        self.history
+            .push_snapshot(self.drawings.iter().cloned().enumerate().collect());
         for drawing in self
             .drawings
             .iter_mut()
@@ -383,7 +390,8 @@ impl DrawingManager {
             .iter()
             .any(|drawing| drawing.locked == all_locked)
         {
-            self.history.push_snapshot(self.drawings.clone());
+            self.history
+                .push_snapshot(self.drawings.iter().cloned().enumerate().collect());
         }
         for drawing in self.drawings.iter_mut().filter(|d| d.locked == all_locked) {
             drawing.locked = !all_locked;
@@ -449,7 +457,7 @@ impl DrawingManager {
     /// Assigns or removes group membership for live ids as one undo step. Locked drawings
     /// keep their membership. Group names are host-owned and are saved with each member.
     pub fn set_group(&mut self, ids: &[usize], group: Option<String>) {
-        let before = self.drawings.clone();
+        let before = self.drawings.iter().cloned().enumerate().collect();
         let mut changed = Vec::new();
         for drawing in &mut self.drawings {
             if ids.contains(&drawing.id) && !drawing.locked && drawing.group != group {

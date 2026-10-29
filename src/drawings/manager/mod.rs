@@ -366,7 +366,7 @@ impl DrawingManager {
         if before.is_empty() {
             return;
         }
-        let snapshot = self.drawings.clone();
+        let snapshot = self.drawings.iter().cloned().enumerate().collect();
         for old in &before {
             if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == old.id) {
                 edit(drawing);

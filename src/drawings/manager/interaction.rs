@@ -158,6 +158,7 @@ impl DrawingManager {
                             .unwrap_or(drawing)
                             .clone()
                     })
+                    .enumerate()
                     .collect();
                 self.history.push_snapshot(snapshot);
             }
