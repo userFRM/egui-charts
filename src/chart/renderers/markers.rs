@@ -10,21 +10,22 @@ use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2, epaint::St
 /// Render markers on the chart. Times between bars interpolate; whitespace extends the
 /// most common positive spacing among the outermost 16 bars (shorter spacing breaks ties,
 /// one second if none). Vertical placement uses the nearest bar.
-/// Returns the index and visible hit area of each marker drawn, in painting order.
-pub fn render_markers(
+/// `markers` come numbered by the caller, which names each tooltip. Returns each marker drawn
+/// with its visible hit area, in painting order.
+pub fn render_markers<'a>(
     context: &RenderContext,
-    markers: &[Marker],
+    markers: impl IntoIterator<Item = (usize, &'a Marker)>,
     visible_data: &[Bar],
     price_scale: &PriceMap,
     coords: &ChartMapping,
-) -> Vec<(usize, Rect)> {
+) -> Vec<(&'a Marker, Rect)> {
     let mut hits = Vec::new();
     let price_y =
         |marker: &Marker, bar: &Bar| price_scale.price_to_y(marker.price.unwrap_or(bar.close));
     let mut tooltip_shown = false;
     let theme = context.painter.ctx().active_theme().chart;
     let background = theme.bg;
-    for (marker_index, marker) in markers.iter().enumerate() {
+    for (marker_index, marker) in markers {
         if !marker.size.is_finite() || marker.size <= 0.0 {
             continue;
         }
@@ -93,7 +94,7 @@ pub fn render_markers(
                 .intersect(context.rect)
                 .intersect(context.painter.clip_rect());
             if hit_rect.is_positive() {
-                hits.push((marker_index, hit_rect));
+                hits.push((marker, hit_rect));
             }
             if !tooltip_shown
                 && let Some(tooltip) = &marker.tooltip
@@ -187,11 +188,28 @@ pub fn render_event_band(
     coords: &ChartMapping,
     baseline: f32,
 ) -> Option<String> {
+    render_event_badges(
+        ui,
+        events.iter().enumerate(),
+        visible_data,
+        coords,
+        baseline,
+    )
+}
+
+/// [`render_event_band`] for events with their own keys, which name the badges' interactions.
+pub(crate) fn render_event_badges<'a>(
+    ui: &mut egui::Ui,
+    events: impl IntoIterator<Item = (usize, &'a Marker)>,
+    visible_data: &[Bar],
+    coords: &ChartMapping,
+    baseline: f32,
+) -> Option<String> {
     let mut clicked = None;
     visible_data.first()?;
     let mut placed = Vec::<Rect>::new();
     let theme = ui.ctx().active_theme().chart;
-    for (index, event) in events.iter().enumerate() {
+    for (index, event) in events {
         let at = crate::model::index_at(visible_data, event.time)?.ceil();
         let x = coords.idx_to_x(coords.start_idx) + at as f32 * coords.bar_spacing;
         let mut rect = Rect::from_center_size(Pos2::new(x, baseline - 11.0), Vec2::splat(22.0));
@@ -457,7 +475,7 @@ mod tests {
                                 );
                                 render_markers(
                                     &RenderContext::new(&painter, rect),
-                                    std::slice::from_ref(&marker),
+                                    [(0, &marker)],
                                     &bars,
                                     &map,
                                     &coords,
@@ -529,7 +547,7 @@ mod tests {
             let painter = Painter::new(ui.ctx().clone(), egui::LayerId::background(), rect);
             render_markers(
                 &RenderContext::new(&painter, rect),
-                &markers,
+                markers.iter().enumerate(),
                 &bars,
                 &map,
                 &coords,

@@ -535,33 +535,63 @@ impl Chart {
                 coords.rect.bottom()
             };
             coords.rect.max.y = baseline;
-            let mut events = self.events.clone();
+            // Source pages cover the view; host lists are windowed before cloning or formatting.
+            // Keys keep each badge's interaction stable as the view moves.
+            let (from, to) = super::marks::window(self.state.shown(), &coords, coords.rect);
+            let mut events: Vec<_> = self
+                .events
+                .within(from, to)
+                .into_iter()
+                .map(|index| (index, self.events[index].clone()))
+                .collect();
+            let mut key = self.events.len();
             if let Some(source) = source_marks {
-                events.extend_from_slice(&source.time_scale_marks);
+                events.extend(
+                    source
+                        .time_scale_marks
+                        .iter()
+                        .cloned()
+                        .enumerate()
+                        .map(|(index, event)| (key + index, event)),
+                );
+                key += source.time_scale_marks.len();
             }
-            let mut breaks = Vec::new();
-            for event in self
+            let typed_count = self.time_scale_events.len();
+            let typed = self
                 .time_scale_events
-                .iter()
-                .chain(source_marks.into_iter().flat_map(|p| &p.events))
-            {
+                .within(from, to)
+                .into_iter()
+                .map(|index| (key + index, &self.time_scale_events[index]))
+                .chain(source_marks.into_iter().flat_map(|page| {
+                    page.events
+                        .iter()
+                        .enumerate()
+                        .map(move |(index, event)| (key + typed_count + index, event))
+                }));
+            let mut breaks = Vec::new();
+            for (key, event) in typed {
                 if event.kind == crate::model::EventKind::Earnings
                     && self.event_visibility.show_earnings_breaks
                 {
                     breaks.push(event.time);
                 }
                 if self.event_visibility.shows(event.kind) {
-                    events.push(
+                    events.push((
+                        key,
                         crate::model::Marker::event(event.time, event.kind.label())
                             .with_id(&event.id)
                             .with_tooltip(format!("{}\n{}", event.title, event.details)),
-                    );
+                    ));
                 }
             }
             renderers::render_event_breaks(ui, &breaks, self.state.shown(), &coords);
-            if let Some(id) =
-                renderers::render_event_band(ui, &events, self.state.shown(), &coords, baseline)
-            {
+            if let Some(id) = renderers::render_event_badges(
+                ui,
+                events.iter().map(|(key, event)| (*key, event)),
+                self.state.shown(),
+                &coords,
+                baseline,
+            ) {
                 self.event_click = Some(id);
             }
         }
@@ -1124,7 +1154,8 @@ impl Chart {
             .map(|source| &source.page.bar_marks);
         let marker_prices = self
             .marker_prices(
-                self.marks.iter().chain(source_marks.into_iter().flatten()),
+                &self.marks,
+                source_marks.map_or(&[], |marks| &marks[..]),
                 self.marker_options,
             )
             .filter(|_| self.main_series_visible && time_based)

@@ -172,7 +172,7 @@ pub(super) struct PriceSeries {
     pub revision: u64,
     pub heikin_ashi: rendering::candles::HeikinAshiCache,
     pub feed: FeedState,
-    pub markers: Vec<Marker>,
+    pub markers: super::marks::TimeOrdered<Marker>,
     pub marker_options: MarkerOptions,
     pub change_marks: Option<super::change_marks::ChangeMarks>,
     pub lines: Vec<(super::PriceLineId, PriceLine)>,
@@ -306,7 +306,7 @@ impl Chart {
             revision: crate::model::next_revision(),
             heikin_ashi: Default::default(),
             feed: FeedState::default(),
-            markers: Vec::new(),
+            markers: Default::default(),
             marker_options: MarkerOptions::default(),
             change_marks: None,
             lines: Vec::new(),
@@ -604,23 +604,33 @@ impl Chart {
         }
     }
 
-    /// The prices of the price-anchored `markers` in view, when `options` fit them.
+    /// The prices of price-anchored markers of `markers` and `more` in view, when `options` fit them.
     pub(super) fn marker_prices<'a>(
         &self,
-        markers: impl IntoIterator<Item = &'a Marker>,
+        markers: &'a super::marks::TimeOrdered<Marker>,
+        more: &'a [Marker],
         options: MarkerOptions,
-    ) -> impl Iterator<Item = f64> {
+    ) -> impl Iterator<Item = f64> + 'a {
         let window = self.visible_times().filter(|_| options.auto_scale);
-        markers.into_iter().filter_map(move |marker| {
-            let (first, last) = window?;
-            let anchored = matches!(
-                marker.position,
-                MarkerPos::AtPriceTop | MarkerPos::AtPriceBottom | MarkerPos::AtPriceMiddle
-            );
-            (anchored && (first..=last).contains(&marker.time))
-                .then_some(marker.price)
-                .flatten()
-        })
+        window
+            .into_iter()
+            .flat_map(move |(first, last)| {
+                markers
+                    .within(Some(first), Some(last))
+                    .into_iter()
+                    .map(move |index| &markers[index])
+                    .chain(
+                        more.iter()
+                            .filter(move |marker| (first..=last).contains(&marker.time)),
+                    )
+            })
+            .filter(|marker| {
+                matches!(
+                    marker.position,
+                    MarkerPos::AtPriceTop | MarkerPos::AtPriceBottom | MarkerPos::AtPriceMiddle
+                )
+            })
+            .filter_map(|marker| marker.price)
     }
 
     fn series_transform(&self, item: &PriceSeries) -> PriceTransform {
@@ -723,7 +733,7 @@ impl Chart {
                 f64::INFINITY,
                 f64::NEG_INFINITY,
             ));
-            let markers = self.marker_prices(&item.markers, item.marker_options);
+            let markers = self.marker_prices(&item.markers, &[], item.marker_options);
             for value in self
                 .series_fit(item)
                 .into_iter()
@@ -1174,7 +1184,13 @@ impl Chart {
         item: &PriceSeries,
         map: PriceMap,
     ) {
-        for marker in &item.markers {
+        let (from, to) = super::marks::window(self.state.shown(), &self.get_chart_mapping(), rect);
+        for marker in item
+            .markers
+            .within(from, to)
+            .into_iter()
+            .map(|index| &item.markers[index])
+        {
             let Some(index) = crate::model::index_at(self.state.shown(), marker.time) else {
                 continue;
             };
@@ -1195,12 +1211,12 @@ impl Chart {
                 };
                 let hits = crate::chart::renderers::render_markers(
                     &RenderContext::new(plot, rect),
-                    std::slice::from_ref(marker),
+                    [(0, marker)],
                     &[bar],
                     &map,
                     &coords,
                 );
-                self.record_mark_hits(item.id, std::slice::from_ref(marker), hits);
+                self.record_mark_hits(item.id, hits);
             }
         }
     }

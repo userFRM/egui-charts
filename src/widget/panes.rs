@@ -296,7 +296,7 @@ impl Chart {
                     self.series_fit(item)
                         .into_iter()
                         .flat_map(|(min, max)| [min, max])
-                        .chain(self.marker_prices(&item.markers, item.marker_options))
+                        .chain(self.marker_prices(&item.markers, &[], item.marker_options))
                         .chain(self.primitive_prices(item.id))
                 })
                 .filter(|price| price.is_finite())
