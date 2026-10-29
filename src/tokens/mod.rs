@@ -254,12 +254,7 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
         },
         position_tool: PositionToolSizingTokens {
             min_width: 200.0,
-            label_info_width: 350.0,
-            label_info_height: 25.0,
-            label_target_width: 180.0,
-            label_offset_x: 10.0,
             label_offset_y: 20.0,
-            text_offset_x: 15.0,
         },
         charts_ext: ChartsExtSizingTokens {
             volume_bubbles_max_diameter: 40.0,
