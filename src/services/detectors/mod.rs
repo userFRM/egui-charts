@@ -32,8 +32,12 @@ const TRADE_IDS: usize = 100_000;
 /// counts once even when the feed also sends it as a trade. Fills group by the aggressor id on
 /// their first copy; later copies cannot identify it retroactively. A feed that prints the tape
 /// first must carry that id on the print or push the order execution before its tape copy.
-/// Trades that are not finite numbers or have a negative size are ignored. [`push_history`](Self::push_history) runs loaded trades
-/// through the same detection.
+/// Trades that are not finite numbers or have a negative size are ignored.
+/// [`push_history`](Self::push_history) runs loaded trades through the same detection.
+/// Trade timestamps must be valid feed times, including in loaded
+/// history: the service trusts them without a tolerance against observation time. A far-future
+/// timestamp can end zones at that time and advance the forming bar past later prints, preventing
+/// body and wick classification until [`reset`](Self::reset). Validate times before pushing them.
 ///
 /// *Book.* Depth snapshots and deltas, and order snapshots and events, keep the symbol's book
 /// with the sequencing rules of the `Sink`: a gap or an invalid event clears the book without a

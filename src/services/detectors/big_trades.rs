@@ -157,6 +157,7 @@ impl BigTrades {
         enabled: bool,
         out: &mut Vec<SignalEvent>,
     ) {
+        // shortcut: history has no observation clock, add a feed-time policy before rejecting jumps.
         let open = self.clock.as_ref().map(|clock| clock.bar_open(fill.ts));
         if let (Some(open), Some(bar)) = (open, &self.bar)
             && open > bar.open_time
