@@ -7,8 +7,10 @@ use crate::data::{MaybeSend, Reply};
 use crate::model::{Alert, AlertId};
 
 /// The host's alerts. The host stores and evaluates them, on its own prices or on a server; the
-/// library shows what the host pushes, sends every change the user makes through
-/// [`save`](Alerts::save) and [`remove`](Alerts::remove), and evaluates nothing.
+/// library shows what the host pushes and sends every change the user makes through
+/// [`save`](Alerts::save) and [`remove`](Alerts::remove). With the `alert-engine` feature,
+/// [`AlertEngine`](crate::services::AlertEngine) is a ready-made implementation that evaluates
+/// the alerts on the bars the host feeds it; without it the library evaluates nothing.
 ///
 /// The host is the source of truth. The terminal shows only the alerts and triggers that
 /// [`watch`](Alerts::watch) pushed: an alert the user creates appears once the host pushes it, and
@@ -143,5 +145,8 @@ pub enum AlertEvent {
         time: DateTime<Utc>,
         /// Price observed by the host when available.
         price: Option<f64>,
+        /// The alert's message with its placeholders filled in, as [`Alert::expand_message`]
+        /// does, empty if the alert has none. The terminal shows it in the popup and the log.
+        message: String,
     },
 }

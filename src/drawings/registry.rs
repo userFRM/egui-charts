@@ -172,6 +172,7 @@ mod tests {
                     bars: &[],
                     revision: 0,
                     time_axis: true,
+                    executions: None,
                     bar_to_x: &|x| x,
                     price_to_y: &|y| y as f32,
                 },

@@ -281,6 +281,7 @@ pub struct TimeframeSelector {
     /// Custom timeframe dialog state
     custom_dialog: CustomTimeframeDialog,
     supported_timeframes: Option<HashSet<crate::model::Timeframe>>,
+    feed_timeframes: Option<HashSet<crate::model::Timeframe>>,
     hidden_timeframes: HashSet<Timeframe>,
     last_non_favorite: Option<Timeframe>,
 }
@@ -303,6 +304,7 @@ impl TimeframeSelector {
             show_custom_input: false,
             custom_dialog: CustomTimeframeDialog::default(),
             supported_timeframes: None,
+            feed_timeframes: None,
             hidden_timeframes: HashSet::new(),
             last_non_favorite: None,
         }
@@ -316,10 +318,25 @@ impl TimeframeSelector {
         self.supported_timeframes = timeframes.map(|values| values.into_iter().collect());
     }
 
-    pub(crate) fn supports(&self, timeframe: Timeframe) -> bool {
-        self.supported_timeframes
+    /// Restrict interval choices to those the feed serves at all, known before any symbol
+    /// resolves: pass [`Chart::feed_capabilities`](crate::widget::Chart::feed_capabilities).
+    /// An unreported list allows every interval; an empty one allows none. A symbol's
+    /// [`set_supported_timeframes`](Self::set_supported_timeframes) narrows this further.
+    pub fn set_feed_capabilities(&mut self, capabilities: &crate::data::FeedCapabilities) {
+        self.feed_timeframes = capabilities
+            .timeframes
             .as_ref()
-            .is_none_or(|supported| supported.contains(&timeframe))
+            .map(|values| values.iter().copied().collect());
+    }
+
+    pub(crate) fn supports(&self, timeframe: Timeframe) -> bool {
+        [&self.supported_timeframes, &self.feed_timeframes]
+            .into_iter()
+            .all(|supported| {
+                supported
+                    .as_ref()
+                    .is_none_or(|supported| supported.contains(&timeframe))
+            })
     }
 
     /// Export the interval lists for the host's persisted user settings.
@@ -1160,6 +1177,34 @@ mod tests {
                         .any(|(label, _)| *label == display_long(custom))
                 );
             }
+        }
+    }
+
+    /// The feed's intervals and the symbol's both apply, and an empty list differs from none.
+    #[test]
+    fn feed_and_symbol_intervals_both_restrict_choices() {
+        use crate::data::FeedCapabilities;
+        let feed = |timeframes: Option<Vec<Model>>| {
+            let mut capabilities = FeedCapabilities::new();
+            capabilities.timeframes = timeframes;
+            capabilities
+        };
+        for (feed_list, symbol_list, min1, day1) in [
+            (None, None, true, true),
+            (Some(vec![]), None, false, false),
+            (Some(vec![Model::Min1]), None, true, false),
+            (
+                Some(vec![Model::Min1, Model::Day1]),
+                Some(vec![Model::Day1]),
+                false,
+                true,
+            ),
+        ] {
+            let mut selector = TimeframeSelector::default();
+            selector.set_feed_capabilities(&feed(feed_list));
+            selector.set_supported_timeframes(symbol_list);
+            assert_eq!(selector.supports(Model::Min1), min1);
+            assert_eq!(selector.supports(Model::Day1), day1);
         }
     }
 

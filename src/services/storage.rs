@@ -27,6 +27,8 @@ pub enum StoreKind {
     Layouts,
     /// Recently opened instruments, newest first.
     RecentSymbols,
+    /// Named screener screens: the universe, column set, filters, sort order and description.
+    Screens,
 }
 
 /// The host's revision of a stored document, such as a version counter, an entity tag or a

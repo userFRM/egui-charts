@@ -7,8 +7,10 @@
 //! - Keep drawing toggle
 //! - Lock drawings toggle
 //! - Hide/show objects dropdown with drawing templates
+//! - Favourite tools strip toggle
 //! - Remove objects dropdown
 
+mod favorites;
 mod hide_menu;
 mod lock;
 mod magnet;
@@ -18,6 +20,7 @@ mod stay_in_drawing;
 mod templates;
 mod zoom;
 
+pub use favorites::FavoritesButton;
 pub use hide_menu::HideMenu;
 pub use lock::LockButton;
 pub use magnet::MagnetButton;

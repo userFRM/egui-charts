@@ -9,13 +9,13 @@
 //! cargo run --example terminal
 //! ```
 
-#[path = "live_feed.rs"]
+#[path = "../../examples/live_feed.rs"]
 #[allow(dead_code, reason = "only the feed of the example is used")]
 mod live_feed;
 
 use egui_charts::model::{Instrument, Timeframe};
 use egui_charts::ui::export::ExportFormat;
-use egui_charts::ui::terminal::{ExportContents, Terminal};
+use egui_charts_terminal::{ExportContents, Terminal};
 use std::sync::Arc;
 
 fn main() -> eframe::Result {

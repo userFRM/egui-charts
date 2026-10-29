@@ -3,13 +3,13 @@
 //!
 //! [`Terminal`] performs every action its controls emit unless the host intercepts it, and
 //! returns what it does not perform. The host supplies data and services through the traits of
-//! [`crate::data`] and [`crate::services`], and the outputs only it can perform (files, sounds)
+//! [`egui_charts::data`] and [`egui_charts::services`], and the outputs only it can perform (files, sounds)
 //! as callbacks. One terminal per viewport: its dialogs use fixed egui ids.
 //!
 //! ```no_run
 //! # use std::sync::Arc;
 //! # use egui_charts::data::{Datafeed, HistoryPage, HistoryRequest, Reply};
-//! use egui_charts::ui::terminal::Terminal;
+//! use egui_charts_terminal::Terminal;
 //! # struct MyFeed;
 //! # impl Datafeed for MyFeed {
 //! #     fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
@@ -46,21 +46,21 @@ mod trading;
 pub use action::Action;
 pub use services::{ExportContents, ExportFile};
 
-use crate::data::Datafeed;
-use crate::model::{StrategyReport, Timeframe};
-use crate::services::{
+use egui_charts::data::Datafeed;
+use egui_charts::model::{StrategyReport, Timeframe};
+use egui_charts::services::{
     Alerts, Broker, Chats, Marks, Notification, Notifications, Quotes, SettingsStore, Signals,
     Storage, SymbolSearch,
 };
-use crate::theme::Theme;
-use crate::ui::Control;
-use crate::ui::context_menu::ChartMenus;
-use crate::ui::export::ExportFormat;
-use crate::ui::top_toolbar::{TopToolbar, TopToolbarConfig};
-use crate::ui::trading::BrokerTile;
-use crate::ui_kit::notifications::Toasts;
-use crate::widget::{ChartEvent, ChartLayout};
-use crate::{Chart, ChartBuilder};
+use egui_charts::theme::Theme;
+use egui_charts::ui::Control;
+use egui_charts::ui::context_menu::ChartMenus;
+use egui_charts::ui::export::ExportFormat;
+use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarConfig};
+use egui_charts::ui::trading::BrokerTile;
+use egui_charts::ui_kit::notifications::Toasts;
+use egui_charts::widget::{ChartEvent, ChartLayout};
+use egui_charts::{Chart, ChartBuilder};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -349,9 +349,9 @@ impl Terminal {
     /// Passes `action` along the groups until one performs it, and returns what is left.
     /// A group that takes an action only in its own state comes before the group that performs
     /// the default. Host entries are always left for the host.
-    pub(super) fn perform(&mut self, action: Action) -> Option<Action> {
-        use crate::ui::context_menu::ChartContextAction;
-        use crate::ui::top_toolbar::TopToolbarAction;
+    pub(crate) fn perform(&mut self, action: Action) -> Option<Action> {
+        use egui_charts::ui::context_menu::ChartContextAction;
+        use egui_charts::ui::top_toolbar::TopToolbarAction;
         if matches!(
             action,
             Action::TopToolbar(TopToolbarAction::Host(_))
@@ -389,10 +389,10 @@ impl Drop for Terminal {
 mod tests {
     use super::test_support::{self, MemoryStorage, SIZE, TestFeed, click, frame, key};
     use super::*;
-    use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
-    use crate::ui::top_toolbar::TopToolbarAction;
-    use crate::widget::ShortcutRequest;
     use egui::{Key, Modifiers, vec2};
+    use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+    use egui_charts::ui::top_toolbar::TopToolbarAction;
+    use egui_charts::widget::ShortcutRequest;
 
     #[test]
     fn intercepted_actions_are_returned_not_performed() {
@@ -489,7 +489,7 @@ mod tests {
                         assert_eq!(chart.config().background_color, expected.chart.bg);
                     }
                     let ctx = terminal.ctx.clone().unwrap();
-                    assert_eq!(crate::theme::ThemeExt::active_theme(&ctx), expected);
+                    assert_eq!(egui_charts::theme::ThemeExt::active_theme(&ctx), expected);
                 }
                 drop(terminal);
                 let mut restored = Terminal::new(Arc::new(TestFeed))

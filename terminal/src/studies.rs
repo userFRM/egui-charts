@@ -3,23 +3,23 @@
 use super::core::Direction;
 use super::layout::Region;
 use super::{Action, Terminal};
-use crate::scales::{DefaultPriceFormatter, PriceFormatter, instrument_price_precision};
-use crate::services::UserSettings;
-use crate::studies::{Indicator, InputKind, InputValue, StudySource};
-use crate::ui::Control;
-use crate::ui::context_menu::{ChartContextAction, ContextMenuAction};
-use crate::ui::dialogs::{
+use egui_charts::scales::{DefaultPriceFormatter, PriceFormatter, instrument_price_precision};
+use egui_charts::services::UserSettings;
+use egui_charts::studies::{Indicator, InputKind, InputValue, StudySource};
+use egui_charts::ui::Control;
+use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
+use egui_charts::ui::dialogs::{
     KeyboardShortcutsDialog, SeriesContextMenuAction, StudyContextMenuAction,
 };
-use crate::ui::drawing_toolbar::DrawingToolbarAction;
-use crate::ui::top_toolbar::components::indicator_dialog::{
+use egui_charts::ui::drawing_toolbar::DrawingToolbarAction;
+use egui_charts::ui::top_toolbar::components::indicator_dialog::{
     IndicatorDialog, IndicatorDialogAction, IndicatorPreferences, IndicatorSettingsDialog,
 };
-use crate::ui::top_toolbar::components::settings_menu::SettingsAction;
-use crate::ui::top_toolbar::{SettingsDialog, SymbolSearchDialog, TopToolbarAction};
-use crate::ui::widget_bar::{RightBarIcon, WidgetBarAction};
-use crate::widget::settings::ChartSettingsState;
-use crate::widget::{ChartElementId, ChartEvent, PointerTarget, SeriesId};
+use egui_charts::ui::top_toolbar::components::settings_menu::SettingsAction;
+use egui_charts::ui::top_toolbar::{SettingsDialog, SymbolSearchDialog, TopToolbarAction};
+use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBarAction};
+use egui_charts::widget::settings::ChartSettingsState;
+use egui_charts::widget::{ChartElementId, ChartEvent, PointerTarget, SeriesId};
 
 #[derive(Default)]
 pub(super) struct State {
@@ -358,7 +358,11 @@ impl Terminal {
         state
             .indicators
             .set_metric_source(Some(self.feed.clone()), chart.symbol());
-        state.indicators.set_full(chart.study_limit_reached());
+        state.indicators.set_full(
+            chart
+                .study_limit()
+                .is_some_and(|limit| chart.indicators().count() >= limit),
+        );
         match state.indicators.show(ctx, theme) {
             IndicatorDialogAction::None | IndicatorDialogAction::Close => {}
             action => emitted.push(Action::Indicators(action)),
@@ -384,7 +388,7 @@ impl Terminal {
     /// Applies the inputs and styles the study settings dialog returned as one undoable step.
     fn apply_study_edit(
         &mut self,
-        edit: crate::ui::top_toolbar::components::indicator_dialog::StudyEdit,
+        edit: egui_charts::ui::top_toolbar::components::indicator_dialog::StudyEdit,
     ) {
         let result: Result<(), &'static str> = self.user_action(|terminal| {
             let chart = terminal.chart_mut();
@@ -407,13 +411,13 @@ impl Terminal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::BackgroundStyle;
-    use crate::model::LineStyle;
-    use crate::studies::SMA;
-    use crate::ui::dialogs::SeriesContextMenuAction;
-    use crate::ui::terminal::test_support::{self, MemoryStorage, SIZE, TestFeed, click, frame};
-    use crate::widget::settings::{BackgroundType, PrecisionMode, WatermarkMode};
+    use crate::test_support::{self, MemoryStorage, SIZE, TestFeed, click, frame};
     use egui::{Color32, Event, PointerButton, Pos2};
+    use egui_charts::config::BackgroundStyle;
+    use egui_charts::model::LineStyle;
+    use egui_charts::studies::SMA;
+    use egui_charts::ui::dialogs::SeriesContextMenuAction;
+    use egui_charts::widget::settings::{BackgroundType, PrecisionMode, WatermarkMode};
     use std::sync::Arc;
 
     fn terminal() -> Terminal {
@@ -585,7 +589,7 @@ mod tests {
     /// and that applying it unchanged leaves the chart as it was.
     #[test]
     fn opening_settings_keeps_the_charts_current_display() {
-        for (_, theme) in crate::theme::presets() {
+        for (_, theme) in egui_charts::theme::presets() {
             let mut terminal = terminal();
             let mut config = terminal.chart().config().clone().with_theme(&theme);
             config.show_quote_boxes = false;
@@ -593,7 +597,8 @@ mod tests {
             config.show_right_axis = false;
             config.show_countdown = false;
             let chart = terminal.chart_mut();
-            chart.price_scale_mut().options_mut().mode = crate::scales::PriceScaleMode::Percentage;
+            chart.price_scale_mut().options_mut().mode =
+                egui_charts::scales::PriceScaleMode::Percentage;
             chart.price_scale_mut().set_range(-5.0, 5.0);
             *chart.config_mut() = config.clone();
             terminal.run(Action::TopToolbar(TopToolbarAction::OpenSettings));
@@ -670,7 +675,7 @@ mod tests {
             ("EURUSD", 1.12345678, "1.12346"),
         ] {
             terminal.run(Action::SymbolPicked(Box::new(
-                crate::model::Instrument::new(symbol),
+                egui_charts::model::Instrument::new(symbol),
             )));
             for _ in 0..4 {
                 frame(&mut terminal, SIZE, vec![]);
@@ -681,7 +686,7 @@ mod tests {
             assert_eq!(copied(&terminal).last().map(String::as_str), Some(expected));
         }
         terminal.run(Action::SymbolPicked(Box::new(
-            crate::model::Instrument::new("AAPL"),
+            egui_charts::model::Instrument::new("AAPL"),
         )));
         for _ in 0..4 {
             frame(&mut terminal, SIZE, vec![]);

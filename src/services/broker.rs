@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 use super::Events;
 use crate::data::{FeedError, FeedStatus, MaybeSend, Reply};
 use crate::model::{
-    Account, BalanceChange, Execution, JournalEntry, Order, OrderId, OrderRequest, Position,
-    TradingRules,
+    Account, BalanceChange, Execution, JournalEntry, Order, OrderId, OrderPreview, OrderRequest,
+    Position, TradingRules,
 };
 
 /// One trading account at the host's broker, real or simulated. The library holds no balances or
@@ -120,6 +120,15 @@ pub trait Broker: MaybeSend + 'static {
     /// By default every change is refused as [`FeedError::NotSupported`].
     fn modify(&self, id: OrderId, order: OrderRequest, reply: Reply<()>) {
         let _ = (id, order);
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Estimates what `order` would cost without placing it. Called only for an account whose
+    /// [`Capabilities::preview`](crate::model::Capabilities::preview) is set, when the user asks
+    /// to preview an order; the terminal places the previewed order only after the user confirms
+    /// it. By default every preview is refused as [`FeedError::NotSupported`].
+    fn preview(&self, order: OrderRequest, reply: Reply<OrderPreview>) {
+        let _ = order;
         reply.send(Err(FeedError::NotSupported));
     }
 
