@@ -741,8 +741,8 @@ Studies,Indicators,Williams %R,done,library,src/studies/builtin/williams_r.rs;sr
 Studies,Indicators,Williams Alligator,done,library,src/studies/builtin/williams_alligator.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Williams Fractal,done,library,src/studies/builtin/williams_fractals.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Woodies CCI,partial,library,src/studies/builtin/woodies_cci.rs
-Studies,Indicators,Zig Zag,done,library,src/studies/builtin/zigzag.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
-Studies,Strategy tester,Backtest engine,missing,library,
+Studies,Indicators,Zig Zag,done,library,src/studies/builtin/zigzag.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Strategy tester,Backtest engine,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs;src/services/paper.rs;docs/strategy-report.md;
 Studies,Strategy tester,Built-in Bollinger Bands strategy,missing,library,
 Studies,Strategy tester,Built-in Bollinger Bands strategy Directed,missing,library,
 Studies,Strategy tester,Built-in Consecutive Up/Down strategy,missing,library,
@@ -769,10 +769,10 @@ Studies,Strategy tester,Commission models,missing,library,
 Studies,Strategy tester,Deep backtesting and bar magnifier,missing,library,
 Studies,Strategy tester,Equity curve and drawdown chart,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs;src/ui/strategy_report/plot.rs
 Studies,Strategy tester,Export trades and report,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs
-Studies,Strategy tester,Limit and stop orders,missing,library,
+Studies,Strategy tester,Limit and stop orders,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs
 Studies,Strategy tester,List of trades,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs
-Studies,Strategy tester,"Long and short positions, margin and leverage",missing,library,
-Studies,Strategy tester,Order fill model,missing,library,
+Studies,Strategy tester,"Long and short positions, margin and leverage",partial,library,src/strategies/backtest.rs
+Studies,Strategy tester,Order fill model,partial,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs
 Studies,Strategy tester,Parameter optimisation,missing,library,
 Studies,Strategy tester,Performance summary,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs
 Studies,Strategy tester,Position sizing,missing,library,
@@ -885,7 +885,7 @@ Terminal,Trading panel,"Drag orders, take-profit and stop-loss on the chart to m
 Terminal,Trading panel,Execution markers on the chart,done,library,src/ui/trading/mod.rs;src/ui/trading/executions.rs
 Terminal,Trading panel,Order and position lines on the chart,done,library,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Terminal,Trading panel,Order ticket,done,library,src/ui/trading/ticket.rs;src/ui/trading/mod.rs
-Terminal,Trading panel,Paper trading account,done,library,src/services/paper.rs
+Terminal,Trading panel,Paper trading account,done,library,src/services/paper.rs;src/model/trading.rs
 Terminal,Trading panel,Place an order from the chart context menu,done,host,src/ui/context_menu.rs;src/ui/trading/mod.rs
 Terminal,Trading panel,"Position line with P&L, close and reverse",done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Terminal,Trading panel,"Show/hide positions, orders and executions",done,library,src/ui/trading/mod.rs
