@@ -324,7 +324,7 @@ Drawings,Drawings,Gann box,done,library,src/drawings/rendering/gann.rs;src/ui/di
 Drawings,Drawings,Gann fan,done,library,src/drawings/rendering/gann.rs
 Drawings,Drawings,Gann square,done,library,src/drawings/rendering/gann.rs;src/drawings/domain/gann.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
 Drawings,Drawings,Gann square fixed,done,library,src/drawings/rendering/gann.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
-Drawings,Drawings,Ghost feed,done,library,src/drawings/rendering/trading/ghost_feed.rs;src/drawings/categories.rs;src/drawings/domain/ghost_feed.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
+Drawings,Drawings,Ghost feed,done,library,src/ui/dialogs/drawing_properties/actions.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/persistence.rs;src/drawings/rendering/trading/ghost_feed.rs;src/drawings/categories.rs;src/drawings/domain/ghost_feed.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
 Drawings,Drawings,Head and shoulders,done,library,src/drawings/rendering/patterns.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Highlighter,done,library,src/drawings/rendering/shapes.rs;src/widget/tool_interaction/interaction.rs
 Drawings,Drawings,Horizontal line,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs

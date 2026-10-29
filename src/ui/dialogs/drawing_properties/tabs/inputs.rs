@@ -123,11 +123,11 @@ impl InputsTab {
                 FormGrid::new("ghost_feed_inputs").show(ui, |ui| {
                     number(
                         ui,
-                        "Candle spacing (bars)",
-                        &mut config.spacing,
-                        0.1..=100.0,
+                        "Average range (ticks)",
+                        &mut config.average_range_ticks,
+                        f64::MIN_POSITIVE..=f64::MAX,
                     );
-                    number(ui, "Wick (fraction of range)", &mut config.wick, 0.0..=1.0);
+                    number(ui, "Noise (ticks)", &mut config.noise_ticks, 0.0..=f64::MAX);
                 });
                 if config != original {
                     drawing.ghost_feed = Some(config);

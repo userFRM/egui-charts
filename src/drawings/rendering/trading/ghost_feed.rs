@@ -1,156 +1,135 @@
-//! Ghost feed rendering
+//! Ghost feed rendering.
 
 use crate::drawings::domain::Drawing;
-use crate::drawings::rendering::utils::draw_dashed_line;
-use crate::localization as l10n;
-use crate::styles::{stroke, typography};
-use crate::theme::ThemeExt;
-use crate::tokens::DESIGN_TOKENS;
+use crate::drawings::rendering::ChartView;
 use egui::{Color32, Pos2, Rect, Stroke};
 
 impl Drawing {
-    /// Renders Ghost Feed with opacity control and historical overlay.
-    /// Features: semi-transparent historical price action, time shift indicator.
-    pub(crate) fn render_ghost_feed(&self, painter: &egui::Painter) {
-        if self.points.is_empty() {
-            return;
-        }
-
-        let base_color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        // Ghost color (more transparent)
-        let ghost_alpha = 60;
-        let ghost_color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            ghost_alpha,
-        );
-
-        self.draw_ghost_candles(painter);
-
-        // Draw the ghost price path with gradient fade
-        self.draw_ghost_path(painter, ghost_alpha);
-
-        // Anchor point at start (solid)
-        self.draw_ghost_anchor(painter, base_color);
-
-        // End point indicator
-        if let Some(&last) = self.points.last() {
-            painter.circle_filled(last, DESIGN_TOKENS.rounding.md, ghost_color);
-        }
-
-        // Dashed connection to current price area (if we have chart points)
-        self.draw_ghost_projection(painter, ghost_color);
-    }
-
-    /// The projected candles, translucent and outlined in the drawing's colour so they read as
-    /// a projection rather than market data: rising ones filled, falling ones hollow.
-    fn draw_ghost_candles(&self, painter: &egui::Painter) {
-        let [r, g, b, _] = self.color;
-        let outline = Stroke::new(
-            self.stroke_width.max(stroke::HAIRLINE),
-            Color32::from_rgba_unmultiplied(r, g, b, 160),
-        );
-        for c in &self.ghost_candles {
-            painter.vline(c.x, c.high.min(c.low)..=c.high.max(c.low), outline);
-            let body = Rect::from_x_y_ranges(
-                c.x - c.half_width..=c.x + c.half_width,
-                c.open.min(c.close)..=c.open.max(c.close).max(c.open.min(c.close) + 1.0),
-            );
-            if c.rising {
-                painter.rect_filled(body, 0.0, Color32::from_rgba_unmultiplied(r, g, b, 60));
+    /// Project translucent candles in instrument ticks along a thin neutral path.
+    pub(crate) fn render_ghost_feed(&self, painter: &egui::Painter, view: &ChartView) {
+        // Without tick metadata, one price unit is one tick.
+        let tick_size = view
+            .instrument
+            .and_then(|i| i.tick_size)
+            .filter(|tick| tick.is_finite() && *tick > 0.0)
+            .unwrap_or(1.0);
+        let neutral = Color32::from_rgba_unmultiplied(128, 128, 128, 128);
+        for c in self.ghost_candles(tick_size) {
+            let x = (view.bar_to_x)(c.bar_idx + 0.5);
+            let half_width =
+                ((view.bar_to_x)(c.bar_idx + 1.0) - (view.bar_to_x)(c.bar_idx)).abs() * 0.35;
+            let [open, high, low, close] = [c.open, c.high, c.low, c.close].map(view.price_to_y);
+            if ![x, half_width, open, high, low, close]
+                .into_iter()
+                .all(f32::is_finite)
+            {
+                continue;
             }
-            painter.rect_stroke(body, 0.0, outline, egui::StrokeKind::Inside);
+            let (body, border) = if c.close >= c.open {
+                ([184, 227, 220], [8, 153, 129])
+            } else {
+                ([237, 165, 166], [242, 54, 69])
+            };
+            painter.vline(x, high.min(low)..=high.max(low), Stroke::new(1.0, neutral));
+            let rect = Rect::from_min_max(
+                Pos2::new(x - half_width, open.min(close)),
+                Pos2::new(x + half_width, open.max(close).max(open.min(close) + 1.0)),
+            );
+            painter.rect(
+                rect,
+                0.0,
+                Color32::from_rgba_unmultiplied(body[0], body[1], body[2], 128),
+                Stroke::new(
+                    1.0,
+                    Color32::from_rgba_unmultiplied(border[0], border[1], border[2], 128),
+                ),
+                egui::StrokeKind::Inside,
+            );
+        }
+        for pair in self.points.windows(2) {
+            painter.line_segment([pair[0], pair[1]], Stroke::new(1.0, neutral));
         }
     }
+}
 
-    fn draw_ghost_path(&self, painter: &egui::Painter, ghost_alpha: u8) {
-        let ghost_color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            ghost_alpha,
-        );
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::rendering::ChartView;
+    use crate::drawings::{ChartPoint, DrawingToolType};
+    use egui::Shape;
 
-        let num_points = self.points.len();
-        for (i, &point) in self.points.iter().enumerate() {
-            if i > 0 {
-                // Fade in from left to right
-                let progress = i as f32 / num_points as f32;
-                let alpha = (ghost_alpha as f32 * (0.3 + 0.7 * progress)) as u8;
-                let fade_color = Color32::from_rgba_unmultiplied(
-                    self.color[0],
-                    self.color[1],
-                    self.color[2],
-                    alpha,
+    #[test]
+    fn ghost_candles_keep_direction_colours_without_decorations() {
+        for direction in [-1.0, 1.0] {
+            let mut drawing = Drawing::new(1404, DrawingToolType::GhostFeed);
+            drawing.chart_points = vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(32.0, 11.0)];
+            drawing.stroke_width = 4.0;
+            drawing.fill_color = Some([255, 0, 255, 255]);
+            let bar_to_x = |b| 20.0 + b * 10.0;
+            let price_to_y = |p| 200.0 + direction * p as f32 * 10.0;
+            drawing.update_screen_coords(bar_to_x, price_to_y);
+            let instrument = crate::model::Instrument::new("TEST").with_tick_size(0.25);
+            let view = ChartView {
+                instrument: Some(&instrument),
+                bars: &[],
+                revision: 0,
+                bar_to_x: &bar_to_x,
+                price_to_y: &price_to_y,
+                time_axis: true,
+                executions: None,
+            };
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let painter = ui.painter();
+                drawing.render(
+                    painter,
+                    Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(600.0, 400.0)),
+                    &view,
                 );
-
-                painter.line_segment(
-                    [self.points[i - 1], point],
-                    Stroke::new(self.stroke_width.max(1.5), fade_color),
-                );
+            });
+            output.textures_delta.clear();
+            let mut up = 0;
+            let mut down = 0;
+            let mut lines = 0;
+            for shape in &output.shapes {
+                match &shape.shape {
+                    Shape::Rect(body) => {
+                        let rising =
+                            body.fill == Color32::from_rgba_unmultiplied(184, 227, 220, 128);
+                        let (fill, border, count) = if rising {
+                            ([184, 227, 220], [8, 153, 129], &mut up)
+                        } else {
+                            ([237, 165, 166], [242, 54, 69], &mut down)
+                        };
+                        assert_eq!(
+                            body.fill,
+                            Color32::from_rgba_unmultiplied(fill[0], fill[1], fill[2], 128)
+                        );
+                        assert_eq!(
+                            body.stroke.color,
+                            Color32::from_rgba_unmultiplied(border[0], border[1], border[2], 128)
+                        );
+                        assert_eq!(body.stroke.width, 1.0);
+                        let price = f64::from((body.rect.center().y - 200.0) * direction / 10.0);
+                        // The path is 10..11, displaced by at most 5 ticks of 0.25.
+                        assert!((8.7..=12.3).contains(&price), "tick-scaled body: {price}");
+                        *count += 1;
+                    }
+                    Shape::LineSegment { stroke, .. } => {
+                        assert_eq!(stroke.width, 1.0);
+                        assert_eq!(
+                            stroke.color,
+                            Color32::from_rgba_unmultiplied(128, 128, 128, 128)
+                        );
+                        lines += 1;
+                    }
+                    shape => panic!("unexpected ghost decoration: {shape:?}"),
+                }
             }
-
-            // Draw dots at each point (hollow)
-            if i % 5 == 0 {
-                // Every 5th point to reduce clutter
-                painter.circle_stroke(
-                    point,
-                    DESIGN_TOKENS.rounding.sm,
-                    Stroke::new(stroke::HAIRLINE, ghost_color),
-                );
-            }
-        }
-    }
-
-    fn draw_ghost_anchor(&self, painter: &egui::Painter, base_color: Color32) {
-        if let Some(&first) = self.points.first() {
-            painter.circle_filled(first, DESIGN_TOKENS.rounding.lg, base_color);
-            painter.circle_stroke(
-                first,
-                DESIGN_TOKENS.rounding.lg,
-                Stroke::new(stroke::MEDIUM, Color32::WHITE),
-            );
-
-            // The path fades, but its label must stay readable.
-            let chart = painter.ctx().active_theme().chart;
-            let font = egui::FontId::proportional(typography::XS);
-            let label_bg = Rect::from_center_size(
-                Pos2::new(first.x + 35.0, first.y - 12.0),
-                egui::vec2(60.0, 16.0),
-            );
-            painter.rect_filled(label_bg, DESIGN_TOKENS.rounding.sm, chart.bg_tooltip);
-            painter.text(
-                label_bg.center(),
-                egui::Align2::CENTER_CENTER,
-                l10n::text(painter.ctx(), "Ghost"),
-                font,
-                chart.axis_text,
-            );
-        }
-    }
-
-    fn draw_ghost_projection(&self, painter: &egui::Painter, ghost_color: Color32) {
-        if !self.chart_points.is_empty() && self.points.len() >= 2 {
-            let last = self.points[self.points.len() - 1];
-            // Draw dashed line to indicate projection
-            let proj_end = Pos2::new(last.x + 50.0, last.y);
-            let dash = 6.0;
-            let gap = 4.0;
-            draw_dashed_line(
-                painter,
-                last,
-                proj_end,
-                Stroke::new(stroke::HAIRLINE, ghost_color),
-                dash,
-                gap,
-            );
+            assert!(up > 0 && down > 0);
+            assert_eq!(up + down, 32);
+            assert_eq!(lines, 33);
         }
     }
 }

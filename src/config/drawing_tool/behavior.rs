@@ -44,6 +44,7 @@ impl DrawingToolType {
                 | Self::FibonacciSpeedResistanceArcs
                 | Self::FibonacciWedge
                 | Self::Pitchfan
+                | Self::GhostFeed
                 | Self::LongPos
                 | Self::ShortPos
                 | Self::AnchoredVWAP
@@ -285,7 +286,6 @@ impl DrawingToolType {
                     | Self::DisjointChannel
                     | Self::FibonacciChannel
                     | Self::BarsPattern
-                    | Self::GhostFeed
                     | Self::ElliottDoubleCombo
                     | Self::Triangle
                     | Self::ParallelChannel
@@ -300,7 +300,7 @@ impl DrawingToolType {
                     Self::XABCDPattern | Self::CypherPattern | Self::ElliottTripleCombo => Some(5),
                     Self::ElliottImpulse | Self::ElliottTriangle => Some(6),
                     Self::HeadAndShoulders | Self::ThreeDrivesPattern => Some(7),
-                    // Polyline, Path have no fixed limit
+                    // Polyline, Path and Ghost Feed have no fixed limit
                     _ => None,
                 }
             }
@@ -343,9 +343,11 @@ mod tests {
             (ArrowMarker, DrawingInteractionMode::ClickClick, 2),
             (LongPos, DrawingInteractionMode::SingleClick, 1),
             (ShortPos, DrawingInteractionMode::SingleClick, 1),
+            (GhostFeed, DrawingInteractionMode::MultiPoint, 5),
         ] {
             assert_eq!(tool.interaction_mode(), mode, "{tool:?}");
-            assert_eq!(tool.required_points(), Some(count), "{tool:?}");
+            let required = if tool == GhostFeed { None } else { Some(count) };
+            assert_eq!(tool.required_points(), required, "{tool:?}");
             let mut manager = crate::drawings::DrawingManager::new();
             manager.start_drawing_with_coords(
                 tool,
@@ -361,7 +363,14 @@ mod tests {
                     |y| 1000.0 - f64::from(y),
                 );
             }
+            if required.is_none() {
+                assert!(manager.drawings.is_empty(), "{tool:?} completed too soon");
+                manager.complete_curr_drawing();
+            }
             assert_eq!(manager.drawings.len(), 1, "{tool:?}");
+            if required.is_none() {
+                assert_eq!(manager.drawings[0].chart_points.len(), count, "{tool:?}");
+            }
             // A position's level handles sit on the box's left edge, away from its anchors;
             // `HandleService`'s `get_handles_by_tool` covers them.
             if matches!(tool, LongPos | ShortPos) {

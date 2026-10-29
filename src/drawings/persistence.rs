@@ -177,9 +177,7 @@ impl StoredDrawing {
         if let Some(i) = self.points.iter().position(|p| bad(p.price)) {
             return Some(format!("points[{i}].price"));
         }
-        if d.ghost_feed
-            .is_some_and(|c| !c.spacing.is_finite() || !c.wick.is_finite())
-        {
+        if d.ghost_feed.is_some_and(|c| !c.is_valid()) {
             return Some("ghost_feed".into());
         }
         let sizing = d.position_sizing;
@@ -933,8 +931,8 @@ mod tests {
                 arc_ratios: vec![0.75],
             });
             drawing.ghost_feed = Some(crate::drawings::GhostFeedConfig {
-                spacing: 2.5,
-                wick: 0.5,
+                average_range_ticks: 2.5,
+                noise_ticks: 0.5,
             });
             drawing.update_screen_coords(bar_to_x, price_to_y);
             let mut fork = crate::drawings::PitchforkConfig::default();
@@ -1385,7 +1383,7 @@ mod tests {
                         .drawing
                         .ghost_feed
                         .get_or_insert_with(Default::default)
-                        .spacing = f64::NAN
+                        .average_range_ticks = f64::NAN
                 },
                 "invalid ghost_feed",
             ),
