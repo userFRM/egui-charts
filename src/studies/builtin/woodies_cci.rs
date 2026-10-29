@@ -70,16 +70,12 @@ impl WoodiesCCI {
             turbo_length: turbo_length.max(1),
             cci_length: cci_length.max(1),
             values: IndicatorValues::new(),
-            colors: vec![
-                Color32::from_rgb(0, 150, 136),
-                Color32::from_rgb(0, 150, 136),
-                Color32::from_rgb(244, 67, 54),
-            ],
-            down_color: Color32::from_rgb(244, 67, 54),
-            transition_color: Color32::from_rgb(244, 67, 54),
-            transition_negative: Color32::from_rgb(0, 150, 136),
-            neutral_color: Color32::from_rgb(244, 67, 54),
-            neutral_negative: Color32::from_rgb(0, 150, 136),
+            colors: vec![palette::DEEP_TEAL, palette::DEEP_TEAL, palette::BRIGHT_RED],
+            down_color: palette::BRIGHT_RED,
+            transition_color: palette::BRIGHT_RED,
+            transition_negative: palette::DEEP_TEAL,
+            neutral_color: palette::BRIGHT_RED,
+            neutral_negative: palette::DEEP_TEAL,
             visible: true,
         }
     }

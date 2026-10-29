@@ -94,3 +94,12 @@ pub const LIGHT_TEAL: Color32 = Color32::from_rgb(178, 223, 219);
 
 /// Default histogram red study colour.
 pub const HISTOGRAM_RED: Color32 = Color32::from_rgb(255, 82, 82);
+
+/// Default bright red study colour.
+pub const BRIGHT_RED: Color32 = Color32::from_rgb(244, 67, 54);
+
+/// Default dark orange study colour.
+pub const DARK_ORANGE: Color32 = Color32::from_rgb(251, 140, 0);
+
+/// Default deep teal study colour.
+pub const DEEP_TEAL: Color32 = Color32::from_rgb(0, 150, 136);

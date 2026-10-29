@@ -171,7 +171,7 @@ impl VolumeWeightedAvgPrice {
             shared: None,
             daily: true,
             timeframe: None,
-            colors: vec![palette::BLUE], // Amber
+            colors: vec![palette::BLUE],
             visible: true,
             anchor: VwapAnchor::Session,
             time_zone: TimezoneId::utc(),

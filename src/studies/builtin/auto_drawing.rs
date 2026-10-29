@@ -92,7 +92,7 @@ impl AutoDrawing {
             kind,
             zigzag: ZigZag::new(deviation_percent, depth).with_color(
                 if kind == AutoDrawingKind::Pitchfork {
-                    Color32::from_rgb(244, 67, 54)
+                    crate::studies::palette::BRIGHT_RED
                 } else {
                     crate::studies::palette::BLUE
                 },

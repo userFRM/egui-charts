@@ -136,14 +136,7 @@ impl Indicator for MACD {
         if line != 2 {
             return None;
         }
-        let value = self.values.value(line, bar)?;
-        let previous = (0..bar).rev().find_map(|bar| self.values.value(line, bar));
-        let slot = if value >= 0.0 {
-            usize::from(!previous.is_some_and(|p| value > p))
-        } else {
-            2 + usize::from(previous.is_some_and(|p| value > p))
-        };
-        Some(self.colors[2 + slot])
+        histogram_color(&self.values, bar, &self.colors[2..])
     }
 
     fn value_format(&self) -> crate::scales::StudyFormat {
@@ -270,6 +263,23 @@ impl Indicator for MACD {
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
     }
+}
+
+/// Column colour of a histogram in output line 2 from `shades`: rising and easing above zero,
+/// then falling and recovering below it.
+pub(super) fn histogram_color(
+    values: &IndicatorValues,
+    bar: usize,
+    shades: &[Color32],
+) -> Option<Color32> {
+    let value = values.value(2, bar)?;
+    let previous = (0..bar).rev().find_map(|bar| values.value(2, bar));
+    let slot = if value >= 0.0 {
+        usize::from(!previous.is_some_and(|p| value > p))
+    } else {
+        2 + usize::from(previous.is_some_and(|p| value > p))
+    };
+    shades.get(slot).copied()
 }
 
 #[cfg(test)]

@@ -61,8 +61,8 @@ impl WilliamsFractals {
         Self {
             periods: periods.max(2),
             values: IndicatorValues::new(),
-            up_color: Color32::from_rgb(0, 150, 136),
-            down_color: Color32::from_rgb(244, 67, 54),
+            up_color: crate::studies::palette::DEEP_TEAL,
+            down_color: crate::studies::palette::BRIGHT_RED,
             visible: true,
         }
     }

@@ -76,7 +76,7 @@ impl ChopZone {
                 palette::CYAN,
                 palette::DARK_GREEN,
                 palette::LIGHT_GREEN,
-                Color32::from_rgb(0, 150, 136),
+                palette::DEEP_TEAL,
                 palette::YELLOW,
                 palette::LIGHT_ORANGE,
                 palette::ORANGE,

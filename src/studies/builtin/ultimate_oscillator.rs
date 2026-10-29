@@ -53,7 +53,7 @@ impl UltimateOscillator {
             period2: period2.max(1),
             period3: period3.max(1),
             values: IndicatorValues::new(),
-            color: Color32::from_rgb(244, 67, 54),
+            color: crate::studies::palette::BRIGHT_RED,
             visible: true,
         }
     }

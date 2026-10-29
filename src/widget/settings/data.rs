@@ -482,7 +482,7 @@ impl Default for AlertsSettings {
             sound_volume: 1.0,
             show_alerts: true,
             show_alert_labels: true,
-            alert_color: Color32::from_rgb(255, 152, 0), // Orange
+            alert_color: crate::studies::palette::WARM_ORANGE,
             show_active_only: true,
             notification_seconds: 5,
         }

@@ -24,7 +24,7 @@ impl ForceIndex {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: Color32::from_rgb(244, 67, 54), // Teal
+            color: crate::studies::palette::BRIGHT_RED,
             visible: true,
         }
     }

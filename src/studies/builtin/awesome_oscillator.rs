@@ -50,8 +50,8 @@ impl AwesomeOscillator {
             fast_period: fast_period.max(1),
             slow_period: slow_period.max(1),
             values: IndicatorValues::new(),
-            positive_color: Color32::from_rgb(0, 150, 136), // Green
-            negative_color: Color32::from_rgb(244, 67, 54), // Red
+            positive_color: crate::studies::palette::DEEP_TEAL,
+            negative_color: crate::studies::palette::BRIGHT_RED,
             visible: true,
         }
     }

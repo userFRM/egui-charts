@@ -48,7 +48,7 @@ impl Aroon {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            up_color: Color32::from_rgb(251, 140, 0),
+            up_color: palette::DARK_ORANGE,
             down_color: palette::BLUE,
             visible: true,
         }

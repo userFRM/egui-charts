@@ -95,14 +95,7 @@ impl Indicator for PercentageVolumeOscillator {
         if line != 2 {
             return None;
         }
-        let value = self.values.value(line, bar)?;
-        let previous = (0..bar).rev().find_map(|bar| self.values.value(line, bar));
-        let slot = if value >= 0.0 {
-            usize::from(!previous.is_some_and(|p| value > p))
-        } else {
-            2 + usize::from(previous.is_some_and(|p| value > p))
-        };
-        Some(self.colors[2 + slot])
+        super::macd::histogram_color(&self.values, bar, &self.colors[2..])
     }
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {

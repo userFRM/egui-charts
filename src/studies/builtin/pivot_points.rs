@@ -129,20 +129,8 @@ struct State {
 impl PivotPoints {
     /// Traditional pivots, timeframe Auto, for the last 15 periods.
     pub fn new() -> Self {
-        // Pivot amber, resistances red and supports green, darker further out.
-        let colors = vec![
-            Color32::from_rgb(251, 140, 0),
-            Color32::from_rgb(251, 140, 0),
-            Color32::from_rgb(251, 140, 0),
-            Color32::from_rgb(251, 140, 0),
-            Color32::from_rgb(251, 140, 0),
-            Color32::from_rgb(251, 140, 0),
-            Color32::from_rgb(251, 140, 0),
-            Color32::from_rgb(251, 140, 0),
-            Color32::from_rgb(251, 140, 0),
-            Color32::from_rgb(251, 140, 0),
-            Color32::from_rgb(251, 140, 0),
-        ];
+        // The pivot and every resistance and support level share one colour.
+        let colors = vec![crate::studies::palette::DARK_ORANGE; 11];
         Self {
             method: PivotMethod::Traditional,
             timeframe: PivotTimeframe::Auto,

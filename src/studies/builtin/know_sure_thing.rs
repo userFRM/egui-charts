@@ -31,8 +31,8 @@ impl KnowSureThing {
             signal_period: 9,
             values: IndicatorValues::new(),
             colors: vec![
-                Color32::from_rgb(0, 150, 136), // KST
-                Color32::from_rgb(244, 67, 54), // Signal
+                crate::studies::palette::DEEP_TEAL,  // KST
+                crate::studies::palette::BRIGHT_RED, // Signal
             ],
             visible: true,
         }

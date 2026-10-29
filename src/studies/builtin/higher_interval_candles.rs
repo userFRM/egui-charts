@@ -37,8 +37,8 @@ impl HigherIntervalCandles {
             candles: Vec::new(),
             values: IndicatorValues::new(),
             colors: [
-                Color32::from_rgb(0, 150, 136),
-                Color32::from_rgb(244, 67, 54),
+                crate::studies::palette::DEEP_TEAL,
+                crate::studies::palette::BRIGHT_RED,
             ],
             visible: true,
         }

@@ -38,8 +38,8 @@ impl TRIX {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                Color32::from_rgb(244, 67, 54), // TRIX
-                palette::ORANGE,                // Signal
+                palette::BRIGHT_RED, // TRIX
+                palette::ORANGE,     // Signal
             ],
             visible: true,
         }

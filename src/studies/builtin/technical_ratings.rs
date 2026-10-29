@@ -173,9 +173,9 @@ impl TechnicalRatings {
                 palette::BLUE,
                 palette::BLUE,
                 palette::BLUE,
-                Color32::from_rgb(244, 67, 54),
-                Color32::from_rgb(244, 67, 54),
-                Color32::from_rgb(244, 67, 54),
+                palette::BRIGHT_RED,
+                palette::BRIGHT_RED,
+                palette::BRIGHT_RED,
             ],
             visible: true,
         }
