@@ -93,6 +93,11 @@ Core i7-10700KF (16 threads, release build, 60 s of market time):
 | 1,000 levels, 50 ms columns | 1.8 µs | 1.0 / 2.2 / 3.5 ms | 394 KB/s | 7.3 MB | 20 MB |
 | the same, history filled to every resolution | 2.2 µs | 2.1 / 3.9 / 5.8 ms | 367 KB/s | 16.8 MB | 56 MB |
 
+Depth deltas sort their changes and merge only the touched suffix of each side, reusing buffers.
+Small updates near the touch do not copy the whole book and allocate nothing once those buffers
+reach their working size. Empty sides of a delta leave the corresponding book side untouched.
+A change buffer with capacity beyond 10,000 entries is released after the delta.
+
 The sink time is the aggregation of a delta into the live book and, once per period, the book
 into a depth column. A frame includes layout, painting, applying the update and tessellation;
 the chart draws about 1,000 columns of 2,000 rows in those frames. The upload of one frame is at
