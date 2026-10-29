@@ -2,7 +2,7 @@
 //! balance history and trading journal, shown at the bottom of the terminal.
 
 use crate::localization as l10n;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use egui::{Align, Align2, Color32, FontId, Layout, Rect, RichText, Sense, Stroke, Ui, vec2};
@@ -12,7 +12,8 @@ use super::widgets::{grouped, semibold, side_color};
 use crate::chart::TradingLineAction;
 use crate::icons::icons;
 use crate::model::{
-    BalanceChange, JournalEntry, Order, OrderRequest, OrderSide, OrderStatus, OrderType, Position,
+    BalanceChange, Execution, JournalEntry, Order, OrderId, OrderRequest, OrderSide, OrderStatus,
+    OrderType, Position,
 };
 use crate::services::AccountEvent;
 use crate::theme::ThemeExt;
@@ -26,6 +27,75 @@ const ROW_HEIGHT: f32 = 36.0;
 const ACTIONS_WIDTH: f32 = 64.0;
 /// Maximum entries retained in each completed account history.
 pub(super) const HISTORY_LIMIT: usize = 1_000;
+
+/// The account's orders and executions, shared by the ladder, chart and account history.
+#[derive(Default)]
+pub(super) struct Fills {
+    pub(super) orders: HashMap<OrderId, OrderRequest>,
+    pub(super) executions: Vec<Execution>,
+    working: HashSet<OrderId>,
+    filled: HashMap<OrderId, f64>,
+    /// Latest fill for each symbol, independent of execution-history eviction.
+    latest: HashMap<String, Execution>,
+}
+
+impl Fills {
+    pub(super) fn order(&mut self, order: &Order) {
+        self.orders.insert(order.id.clone(), order.request.clone());
+        if order.status == OrderStatus::Working {
+            self.working.insert(order.id.clone());
+        } else {
+            self.working.remove(&order.id);
+        }
+        if let Some(fill) = self
+            .executions
+            .iter()
+            .filter(|fill| fill.order == order.id)
+            .max_by_key(|fill| fill.time)
+            .cloned()
+        {
+            self.remember(&order.request.symbol, &fill);
+        }
+    }
+
+    pub(super) fn execution(&mut self, fill: &Execution) {
+        *self.filled.entry(fill.order.clone()).or_default() += fill.quantity;
+        if let Some(order) = self.orders.get(&fill.order) {
+            let symbol = order.symbol.clone();
+            self.remember(&symbol, fill);
+        }
+        self.executions.push(fill.clone());
+        if self.executions.len() > HISTORY_LIMIT {
+            let old = self.executions.remove(0);
+            self.forget(&old.order);
+        }
+    }
+
+    pub(super) fn forget(&mut self, id: &OrderId) {
+        if !self.working.contains(id) && !self.executions.iter().any(|fill| &fill.order == id) {
+            self.orders.remove(id);
+            self.filled.remove(id);
+        }
+    }
+
+    fn remember(&mut self, symbol: &str, fill: &Execution) {
+        if self
+            .latest
+            .get(symbol)
+            .is_none_or(|old| old.time <= fill.time)
+        {
+            self.latest.insert(symbol.to_owned(), fill.clone());
+        }
+    }
+
+    pub(super) fn price(&self, symbol: &str) -> Option<f64> {
+        self.latest.get(symbol).map(|fill| fill.price)
+    }
+
+    pub(super) fn filled_quantity(&self, id: &OrderId) -> f64 {
+        self.filled.get(id).copied().unwrap_or_default()
+    }
+}
 
 /// What the user asked for in the [`AccountPanel`] that the host carries out. Cancelling or
 /// changing an order and closing a position go to the broker from the panel itself.
@@ -77,7 +147,7 @@ pub struct AccountPanel {
     tab: Tab,
     hidden: HashSet<(Tab, &'static str)>,
     history: Vec<Order>,
-    pub(super) fills: super::dom::Fills,
+    pub(super) fills: Fills,
     show_executions: bool,
     balance: Vec<BalanceChange>,
     journal: Vec<JournalEntry>,
@@ -320,7 +390,7 @@ impl AccountPanel {
     /// Forgets the history, as a new stream from the broker starts from nothing.
     pub(super) fn clear(&mut self) {
         self.history.clear();
-        self.fills = super::dom::Fills::default();
+        self.fills = Fills::default();
         self.balance.clear();
         self.journal.clear();
         self.editing = None;
@@ -1223,7 +1293,6 @@ fn csv(columns: &[(usize, &Column)], rows: &[Row]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Execution;
 
     #[test]
     fn history_keeps_each_partial_fill_and_discards_stale_edits() {
@@ -1364,5 +1433,32 @@ mod tests {
                 Some("line\rbreak")
             );
         }
+    }
+
+    #[test]
+    fn last_fill_belongs_to_its_order_symbol_and_newest_execution() {
+        let mut fills = Fills::default();
+        let order = Order::new(
+            OrderId::new("a"),
+            OrderRequest::new("ES", OrderSide::Buy, 2.0, OrderType::Market),
+            crate::model::OrderStatus::Working,
+        );
+        fills.order(&order);
+        let now = chrono::Utc::now();
+        let mut fill = Execution::new(order.id.clone(), now, OrderSide::Buy, 100.0, 1.0);
+        fills.execution(&fill);
+        fill.time -= chrono::Duration::seconds(1);
+        fill.price = 99.0;
+        fills.execution(&fill);
+        fill.order = OrderId::new("unknown");
+        fills.execution(&fill);
+        assert_eq!(fills.price("ES"), Some(100.0));
+        assert_eq!(fills.price("NQ"), None);
+        let mut delayed = order.clone();
+        delayed.id = fill.order.clone();
+        delayed.request.symbol = "NQ".into();
+        fills.order(&delayed);
+        assert_eq!(fills.price("NQ"), Some(99.0));
+        assert_eq!(fills.price("ES"), Some(100.0));
     }
 }

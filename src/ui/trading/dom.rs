@@ -3,13 +3,12 @@
 //! the ladder.
 
 use crate::localization as l10n;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 
-use super::account_panel::HISTORY_LIMIT;
 use super::ticket::{Action, Market, order_quantity};
 use super::widgets::{
     chevron, field, grouped, muted, number, side_color, side_fill, side_name, text,
@@ -17,9 +16,7 @@ use super::widgets::{
 };
 use crate::chart::{TradingLineAction, decimals, to_step};
 use crate::icons::icons;
-use crate::model::{
-    Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType, Tick, TimeInForce,
-};
+use crate::model::{Order, OrderId, OrderRequest, OrderSide, OrderType, Tick, TimeInForce};
 use crate::theme::ThemeExt;
 
 /// Height of a price row.
@@ -79,75 +76,6 @@ pub(super) struct Ladder {
     accumulation: Accumulation,
     /// The newest trade at the last reset: later trades accumulate, however often the feed updates.
     reset_after: Option<DateTime<Utc>>,
-}
-
-/// The account's orders and executions, shared by the ladder, chart and account history.
-#[derive(Default)]
-pub(super) struct Fills {
-    pub(super) orders: HashMap<OrderId, OrderRequest>,
-    pub(super) executions: Vec<Execution>,
-    working: HashSet<OrderId>,
-    filled: HashMap<OrderId, f64>,
-    /// Latest fill for each symbol, independent of execution-history eviction.
-    latest: HashMap<String, Execution>,
-}
-
-impl Fills {
-    pub(super) fn order(&mut self, order: &Order) {
-        self.orders.insert(order.id.clone(), order.request.clone());
-        if order.status == OrderStatus::Working {
-            self.working.insert(order.id.clone());
-        } else {
-            self.working.remove(&order.id);
-        }
-        if let Some(fill) = self
-            .executions
-            .iter()
-            .filter(|fill| fill.order == order.id)
-            .max_by_key(|fill| fill.time)
-            .cloned()
-        {
-            self.remember(&order.request.symbol, &fill);
-        }
-    }
-
-    pub(super) fn execution(&mut self, fill: &Execution) {
-        *self.filled.entry(fill.order.clone()).or_default() += fill.quantity;
-        if let Some(order) = self.orders.get(&fill.order) {
-            let symbol = order.symbol.clone();
-            self.remember(&symbol, fill);
-        }
-        self.executions.push(fill.clone());
-        if self.executions.len() > HISTORY_LIMIT {
-            let old = self.executions.remove(0);
-            self.forget(&old.order);
-        }
-    }
-
-    pub(super) fn forget(&mut self, id: &OrderId) {
-        if !self.working.contains(id) && !self.executions.iter().any(|fill| &fill.order == id) {
-            self.orders.remove(id);
-            self.filled.remove(id);
-        }
-    }
-
-    fn remember(&mut self, symbol: &str, fill: &Execution) {
-        if self
-            .latest
-            .get(symbol)
-            .is_none_or(|old| old.time <= fill.time)
-        {
-            self.latest.insert(symbol.to_owned(), fill.clone());
-        }
-    }
-
-    pub(super) fn price(&self, symbol: &str) -> Option<f64> {
-        self.latest.get(symbol).map(|fill| fill.price)
-    }
-
-    pub(super) fn filled_quantity(&self, id: &OrderId) -> f64 {
-        self.filled.get(id).copied().unwrap_or_default()
-    }
 }
 
 /// Sell aggressors trade at the bid, buys at the ask. Unclassified prints contribute only to
@@ -1498,32 +1426,5 @@ mod tests {
             traded(&refs, 0.25, 401, 3),
             vec![[0.0, 13.0, 0.0], [5.0, 7.0, 11.0], [0.0, 0.0, 0.0],]
         );
-    }
-
-    #[test]
-    fn last_fill_belongs_to_its_order_symbol_and_newest_execution() {
-        let mut fills = Fills::default();
-        let order = Order::new(
-            OrderId::new("a"),
-            OrderRequest::new("ES", OrderSide::Buy, 2.0, OrderType::Market),
-            crate::model::OrderStatus::Working,
-        );
-        fills.order(&order);
-        let now = chrono::Utc::now();
-        let mut fill = Execution::new(order.id.clone(), now, OrderSide::Buy, 100.0, 1.0);
-        fills.execution(&fill);
-        fill.time -= chrono::Duration::seconds(1);
-        fill.price = 99.0;
-        fills.execution(&fill);
-        fill.order = OrderId::new("unknown");
-        fills.execution(&fill);
-        assert_eq!(fills.price("ES"), Some(100.0));
-        assert_eq!(fills.price("NQ"), None);
-        let mut delayed = order.clone();
-        delayed.id = fill.order.clone();
-        delayed.request.symbol = "NQ".into();
-        fills.order(&delayed);
-        assert_eq!(fills.price("NQ"), Some(99.0));
-        assert_eq!(fills.price("ES"), Some(100.0));
     }
 }
