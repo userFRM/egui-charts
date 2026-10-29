@@ -1,0 +1,22 @@
+[package]
+name = "egui-charts-terminal"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+# Standalone like `examples/demo`: built on its own, never by the library crate.
+[workspace]
+
+[dependencies]
+egui-charts = { path = "..", features = ["ui"] }
+egui = "0.37.0"
+chrono = "0.4.43"
+egui_extras = { version = "0.37.0", default-features = false }
+serde_json = "1.0.149"
+
+[dev-dependencies]
+# `examples/terminal.rs` is a standalone `eframe` app over the library's synthetic feed; the
+# windowing features match the library's examples.
+eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "glow", "x11", "wayland"] }
+rand = "0.10.0"

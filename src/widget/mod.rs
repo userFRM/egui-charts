@@ -126,7 +126,9 @@ pub use price_series::SeriesOptions;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId};
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
-pub use snapshot::{ChartSnapshot, SavedLayout, SavedPane, SavedStudy};
+pub use snapshot::{
+    ChartSnapshot, SavedAnnotations, SavedLayout, SavedPane, SavedSeries, SavedStudy,
+};
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 pub(crate) mod sync;
@@ -331,6 +333,7 @@ pub struct Chart {
     series_formatters:
         std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
+    conversion: Option<String>,
     pub(crate) measured_axis_width: f32,
     /// Last usable widget width and its first frame, including discarded sizing passes.
     last_layout: Option<(f32, u64)>,

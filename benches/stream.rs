@@ -258,10 +258,10 @@ impl Datafeed for Feed {
             .bars
             .partition_point(|bar| request.before.is_none_or(|t| bar.time < t));
         let start = end.saturating_sub(request.count);
-        reply.send(Ok(HistoryPage {
-            bars: self.bars[start..end].to_vec(),
-            end_of_history: start == 0,
-        }));
+        reply.send(Ok(HistoryPage::new(
+            self.bars[start..end].to_vec(),
+            start == 0,
+        )));
     }
     fn subscribe(&self, subscription: Subscription) {
         if !self.streaming {

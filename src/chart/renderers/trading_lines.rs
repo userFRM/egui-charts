@@ -5,6 +5,7 @@ use egui::{Color32, CursorIcon, FontId, Pos2, Rect, Sense, Stroke, Ui, pos2, vec
 
 use crate::chart::coords::ChartMapping;
 use crate::chart::rendering::{draw_dashed_polyline, render_price_line};
+use crate::localization as l10n;
 use crate::model::{
     LineStyle, Order, OrderRequest, OrderSide, OrderType, Position, PositionBracket, PriceLine,
 };
@@ -236,9 +237,9 @@ pub fn render_trading_lines<'a>(
                 level
             };
             let (name, color) = match appearance {
-                Level::Entry => (kind.to_owned(), side_color(request.side)),
-                Level::TakeProfit => ("TP".to_owned(), theme.ui.take_profit),
-                Level::StopLoss => ("SL".to_owned(), theme.ui.stop_loss),
+                Level::Entry => (l10n::text(ui.ctx(), kind), side_color(request.side)),
+                Level::TakeProfit => (l10n::text(ui.ctx(), "TP"), theme.ui.take_profit),
+                Level::StopLoss => (l10n::text(ui.ctx(), "SL"), theme.ui.stop_loss),
             };
             // A bracket's result if it is reached, from the entry or, for a market order, the
             // last price.
@@ -246,12 +247,13 @@ pub fn render_trading_lines<'a>(
                 .map(|p| p.average_price)
                 .or(parent_price)
                 .or(options.last_price);
+            let ctx = ui.ctx().clone();
             let body = |price: f64| match (appearance, options.bracket_pnl, entry) {
                 (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
                     let gain = (price - entry)
                         * parent.map_or(direction(request.side), |p| p.quantity.signum());
                     let money = gain * open * options.point_value;
-                    pnl_text(unit, money, gain, entry, options).0
+                    pnl_text(&ctx, unit, money, gain, entry, options).0
                 }
                 _ => name.clone(),
             };
@@ -361,6 +363,7 @@ fn direction(side: OrderSide) -> f64 {
 /// A profit or loss of `money` in the account's currency, or of `gain` in price from `entry`,
 /// written in `unit`, and the value written, whose sign colours it.
 fn pnl_text(
+    ctx: &egui::Context,
     unit: PnlUnit,
     money: f64,
     gain: f64,
@@ -378,7 +381,10 @@ fn pnl_text(
         }
         PnlUnit::Ticks => {
             let value = (gain / options.tick_size).round();
-            (value, format!("{} ticks", value.abs()))
+            (
+                value,
+                l10n::format_text(ctx, "{0} ticks", &[("0", value.abs().to_string())]),
+            )
         }
         PnlUnit::Percent => {
             let value = round(gain / entry * 100.0, 2);
@@ -430,6 +436,7 @@ fn show_position(
     // The result the position makes when the price moves by `gain` in its favour.
     let result = |unit, gain: f64| {
         pnl_text(
+            ui.ctx(),
             unit,
             gain * size * options.point_value,
             gain,
@@ -448,7 +455,7 @@ fn show_position(
             })?;
         let (text, value) = match (unit, position.unrealized_pnl) {
             // The broker's own figure, when it reports one.
-            (PnlUnit::Money, Some(pnl)) => pnl_text(unit, pnl, gain, entry, options),
+            (PnlUnit::Money, Some(pnl)) => pnl_text(ui.ctx(), unit, pnl, gain, entry, options),
             _ => result(unit, gain),
         };
         let text_color = if value > 0.0 {
@@ -464,7 +471,9 @@ fn show_position(
         (options.take_profit, "TP", theme.ui.take_profit),
         (options.stop_loss, "SL", theme.ui.stop_loss),
     ]
-    .map(|(offered, name, color)| offered.then(|| (name, layout(name.to_owned(), color), color)));
+    .map(|(offered, name, color)| {
+        offered.then(|| (name, layout(l10n::text(ui.ctx(), name), color), color))
+    });
     let quantity = layout(format!("{size}"), Color32::WHITE);
     let close = if options.close { HEIGHT } else { 0.0 };
     let total = exits
@@ -543,7 +552,7 @@ fn show_position(
                 key.with("reverse"),
                 Sense::click(),
             )
-            .on_hover_text("Reverse position");
+            .on_hover_text(l10n::text(ui.ctx(), "Reverse position"));
         painter.rect(rect, 4.0, theme.chart.bg, stroke, egui::StrokeKind::Inside);
         if response.hovered() {
             painter.rect_filled(rect.shrink(1.0), 1.0, color.gamma_multiply(0.2));
@@ -566,11 +575,14 @@ fn show_position(
         let id = key.with(name);
         let response = ui
             .interact(rect.intersect(mapping.rect), id, Sense::drag())
-            .on_hover_text(if name == "TP" {
-                "Drag to place a take profit"
-            } else {
-                "Drag to place a stop loss"
-            });
+            .on_hover_text(l10n::text(
+                ui.ctx(),
+                if name == "TP" {
+                    "Drag to place a take profit"
+                } else {
+                    "Drag to place a stop loss"
+                },
+            ));
         if response.hovered() || response.dragged() {
             ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
         }
@@ -663,10 +675,11 @@ fn show_position(
         tags.push((price, exit_color));
         let text = match options.bracket_pnl {
             Some(unit) => format!(
-                "{name} {}",
+                "{} {}",
+                l10n::text(ui.ctx(), name),
                 result(unit, (price - entry) * direction(side)).0
             ),
-            None => name.to_owned(),
+            None => l10n::text(ui.ctx(), name),
         };
         let text = layout(text, exit_color);
         let y = mapping.price_to_y(price);
@@ -735,7 +748,7 @@ fn show_position(
                 key.with("close"),
                 Sense::click(),
             )
-            .on_hover_text("Close position");
+            .on_hover_text(l10n::text(ui.ctx(), "Close position"));
         painter.vline(rect.left(), rect.y_range(), stroke);
         if response.hovered() {
             painter.rect_filled(rect.shrink(1.0), 1.0, color.gamma_multiply(0.2));
@@ -943,7 +956,7 @@ impl Label<'_> {
                     key.with(index),
                     Sense::click(),
                 )
-                .on_hover_text("Cancel");
+                .on_hover_text(l10n::text(ui.ctx(), "Cancel"));
             if response.hovered() {
                 clipped.rect_filled(cell.shrink(1.0), 1.0, line.color.gamma_multiply(0.2));
             }
@@ -968,11 +981,14 @@ impl Label<'_> {
                 .put(
                     button,
                     egui::Button::new(
-                        egui::RichText::new(if side == OrderSide::Buy {
-                            "Buy"
-                        } else {
-                            "Sell"
-                        })
+                        egui::RichText::new(l10n::text(
+                            ui.ctx(),
+                            if side == OrderSide::Buy {
+                                "Buy"
+                            } else {
+                                "Sell"
+                            },
+                        ))
                         .color(Color32::WHITE),
                     )
                     .fill(line.color),

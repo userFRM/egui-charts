@@ -903,10 +903,7 @@ impl Datafeed for LiveFeed {
         };
         let end = bars.partition_point(|b| request.before.is_none_or(|before| b.time < before));
         let start = end.saturating_sub(request.count);
-        reply.send(Ok(HistoryPage {
-            bars: bars[start..end].to_vec(),
-            end_of_history: start == 0,
-        }));
+        reply.send(Ok(HistoryPage::new(bars[start..end].to_vec(), start == 0)));
     }
 
     fn subscribe(&self, subscription: Subscription) {

@@ -47,22 +47,6 @@ impl CoppockCurve {
         self.color = color;
         self
     }
-
-    /// Calculate Rate of Change
-    fn calculate_roc(prices: &[f64], period: usize) -> Vec<f64> {
-        let mut roc = Vec::with_capacity(prices.len());
-
-        for i in 0..prices.len() {
-            if i < period || prices[i - period] == 0.0 {
-                roc.push(f64::NAN);
-            } else {
-                let change = (prices[i] - prices[i - period]) / prices[i - period] * 100.0;
-                roc.push(change);
-            }
-        }
-
-        roc
-    }
 }
 
 impl Default for CoppockCurve {
@@ -90,8 +74,8 @@ impl CoppockCurve {
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
 
         // Calculate both ROCs
-        let long_roc = Self::calculate_roc(&closes, self.long_roc);
-        let short_roc = Self::calculate_roc(&closes, self.short_roc);
+        let long_roc = helpers::calculate_roc(&closes, self.long_roc);
+        let short_roc = helpers::calculate_roc(&closes, self.short_roc);
 
         // Sum of ROCs
         let roc_sum: Vec<f64> = long_roc
