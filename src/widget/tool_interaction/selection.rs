@@ -186,16 +186,20 @@ mod tests {
     #[test]
     fn modifier_drags_constrain_points_and_copy_once() {
         use egui::{Modifiers, pos2, vec2};
-        for (tool, off_pane) in [
-            (DrawingToolType::TrendLine, false),
-            (DrawingToolType::Ray, false),
-            (DrawingToolType::ParallelChannel, false),
-            (DrawingToolType::TrendLine, true),
-            (DrawingToolType::Ray, true),
+        for (tool, off_pane, pan) in [
+            (DrawingToolType::TrendLine, false, egui::Vec2::ZERO),
+            (DrawingToolType::Ray, false, egui::Vec2::ZERO),
+            (DrawingToolType::ParallelChannel, false, egui::Vec2::ZERO),
+            (DrawingToolType::TrendLine, true, egui::Vec2::ZERO),
+            (DrawingToolType::Ray, true, egui::Vec2::ZERO),
+            (DrawingToolType::TrendLine, false, vec2(20.0, 0.0)),
+            (DrawingToolType::TrendLine, false, vec2(0.0, 20.0)),
         ] {
             for body in [false, true] {
                 for modifiers in [Modifiers::SHIFT, Modifiers::CTRL, Modifiers::COMMAND] {
-                    if off_pane && (body || modifiers != Modifiers::SHIFT) {
+                    if (off_pane || pan != egui::Vec2::ZERO)
+                        && (body || modifiers != Modifiers::SHIFT)
+                    {
                         continue;
                     }
                     let ctx = Context::default();
@@ -248,12 +252,22 @@ mod tests {
                         pressed,
                         modifiers,
                     };
-                    for events in [
+                    for (frame, events) in [
                         vec![Event::PointerMoved(from)],
                         vec![button(from, true)],
                         vec![Event::PointerMoved(to)],
                         vec![button(to, false)],
-                    ] {
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let offset = if frame == 3 { pan } else { egui::Vec2::ZERO };
+                        if offset != egui::Vec2::ZERO {
+                            manager.update_pane_screen_coords(
+                                |bar| bar + offset.x,
+                                |price| price as f32 + offset.y,
+                            );
+                        }
                         ctx.run_ui(
                             RawInput {
                                 screen_rect: Some(pane),
@@ -274,8 +288,10 @@ mod tests {
                                     &mut cursors,
                                     &response,
                                     pane,
-                                    &|x| x,
-                                    &|y: f32| f64::from(y.clamp(pane.top(), pane.bottom())),
+                                    &|x| x - offset.x,
+                                    &|y: f32| {
+                                        f64::from(y.clamp(pane.top(), pane.bottom()) - offset.y)
+                                    },
                                     &|price, from, to| price + f64::from(to - from),
                                 );
                             },
@@ -288,7 +304,9 @@ mod tests {
                         assert_eq!(manager.drawings[0].chart_points, before);
                     }
                     let moved = manager.drawings.last().unwrap();
-                    let expected = if off_pane {
+                    let expected = if pan != egui::Vec2::ZERO {
+                        pos2(210.0 + pan.x, 210.0 + pan.y)
+                    } else if off_pane {
                         if tool == DrawingToolType::Ray {
                             pos2(140.0, -100.0)
                         } else {
@@ -311,7 +329,7 @@ mod tests {
                     );
                     assert_eq!(
                         moved.chart_points[1],
-                        ChartPoint::new(expected.x, f64::from(expected.y))
+                        ChartPoint::new(expected.x - pan.x, f64::from(expected.y - pan.y))
                     );
                     if copying {
                         assert_eq!(moved.stored_id, None);

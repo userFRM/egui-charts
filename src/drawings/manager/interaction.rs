@@ -81,8 +81,16 @@ impl DrawingManager {
         let Some(old) = self.drag_old_state.take() else {
             return;
         };
+        let primary_id = old.id;
         let mut copies = std::mem::take(&mut self.drag_group);
         copies.push(old);
+        copies.sort_by_key(|copy| {
+            (
+                copy.z_order,
+                self.drawings.iter().position(|d| d.id == copy.id),
+            )
+        });
+        let primary = copies.iter().position(|d| d.id == primary_id).unwrap();
         for copy in &mut copies {
             copy.id = self.take_id();
             copy.stored_id = None;
@@ -90,7 +98,7 @@ impl DrawingManager {
             copy.z_order = self.top_z_order();
             self.drawings.push(copy.clone());
         }
-        let old = copies.pop().unwrap();
+        let old = copies.remove(primary);
         self.dragging_handle = Some((old.id, handle));
         self.drag_old_state = Some(old.clone());
         self.drag_group = copies;
@@ -214,7 +222,7 @@ impl DrawingManager {
                 } else {
                     snapped.x = origin.x;
                 }
-            } else if let Some(old) = &self.drag_old_state {
+            } else if let Some(drawing) = self.drawings.iter().find(|d| d.id == id) {
                 let index = match handle {
                     HandlePos::Start => Some(0),
                     HandlePos::End => Some(1),
@@ -222,15 +230,18 @@ impl DrawingManager {
                     _ => None,
                 };
                 if let Some(index) = index {
-                    snapped = self.constrain_angle(old, index, snapped);
+                    snapped = self.constrain_angle(drawing, index, snapped);
+                    let anchor_index = if index == 0 { 1 } else { index - 1 };
                     if self.interaction_modifiers.shift
-                        && Self::constrains_angle(old.tool_type)
-                        && old.custom_tool.is_none()
-                        && let Some((point, chart_point)) =
-                            old.points.get(index).zip(old.chart_points.get(index))
+                        && Self::constrains_angle(drawing.tool_type)
+                        && drawing.custom_tool.is_none()
+                        && let Some((anchor, chart_anchor)) = drawing
+                            .points
+                            .get(anchor_index)
+                            .zip(drawing.chart_points.get(anchor_index))
                     {
-                        // A constrained ray can miss the pane; retain its price beyond pointer bounds.
-                        constrained_price = Some((chart_point.price, point.y));
+                        // Use the fixed anchor's current projection, including after a view change.
+                        constrained_price = Some((chart_anchor.price, anchor.y));
                     }
                 }
             }
@@ -312,6 +323,7 @@ impl DrawingManager {
                     .map(|d| d.id)
                     .collect();
                 ids.push(old_state.id);
+                ids.sort_by_key(|id| self.drawings.iter().position(|d| d.id == *id));
                 for &id in &ids {
                     self.queue(DrawingSyncAction::SaveDrawing(id));
                 }
@@ -707,6 +719,81 @@ impl DrawingManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copied_groups_keep_their_layers_locally_and_when_synced() {
+        fn top_tool(manager: &DrawingManager) -> DrawingToolType {
+            let id = manager.hit_test(Pos2::new(75.0, 100.0)).unwrap();
+            manager
+                .drawings
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap()
+                .tool_type
+        }
+        for (background_layer, line_layer, expected) in [
+            (2, 5, DrawingToolType::TrendLine),
+            (5, 5, DrawingToolType::TrendLine),
+            (5, 2, DrawingToolType::Rect),
+        ] {
+            let mut manager = DrawingManager::new();
+            for (id, tool, layer, points) in [
+                (
+                    7,
+                    DrawingToolType::Rect,
+                    background_layer,
+                    [Pos2::new(50.0, 50.0), Pos2::new(150.0, 150.0)],
+                ),
+                (
+                    8,
+                    DrawingToolType::TrendLine,
+                    line_layer,
+                    [Pos2::new(50.0, 100.0), Pos2::new(150.0, 100.0)],
+                ),
+            ] {
+                let mut drawing = Drawing::new(id, tool);
+                drawing.z_order = layer;
+                drawing.completed = true;
+                drawing.fill_color = Some([30, 60, 95, 255]);
+                drawing.points = points.to_vec();
+                drawing.chart_points = points
+                    .iter()
+                    .map(|p| ChartPoint::new(p.x / 10.0, 200.0 - f64::from(p.y)))
+                    .collect();
+                manager.drawings.push(drawing);
+            }
+            manager.select_drawings([7, 8]);
+            manager.start_drag_body(7, Pos2::new(75.0, 75.0));
+            manager.copy_dragged_drawings();
+            manager.end_drag_handle();
+            manager.deselect();
+            assert_eq!(manager.drawings.len(), 4);
+            assert_eq!(top_tool(&manager), expected);
+            let mut peer = DrawingManager::new();
+            for action in manager.pending_sync.lock().unwrap().iter() {
+                if let DrawingSyncAction::SaveDrawing(id) = action {
+                    let mut copy = manager
+                        .drawings
+                        .iter()
+                        .find(|d| d.id == *id)
+                        .unwrap()
+                        .clone();
+                    copy.stored_id = Some(id.to_string());
+                    peer.add_synced_drawing(copy);
+                }
+            }
+            peer.update_all_screen_coords(|bar| bar * 10.0, |price| (200.0 - price) as f32);
+            assert_eq!(peer.drawings.len(), 2);
+            assert_eq!(top_tool(&peer), expected);
+            assert!(manager.undo());
+            assert_eq!(manager.drawings.len(), 2);
+            assert!(!manager.undo());
+            assert!(manager.redo());
+            assert_eq!(manager.drawings.len(), 4);
+            manager.update_all_screen_coords(|bar| bar * 10.0, |price| (200.0 - price) as f32);
+            assert_eq!(top_tool(&manager), expected);
+        }
+    }
 
     #[test]
     fn copy_drag_ignores_non_pointer_edits() {
