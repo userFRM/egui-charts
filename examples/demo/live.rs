@@ -324,8 +324,8 @@ impl LiveFeed {
     }
 
     /// The quote of the chart's symbol: the last displayed trade and the previous session close,
-    /// or for a symbol with trading hours its regular-hours price and the extended-hours trade after it, with the
-    /// session volume and the book's best bid and ask.
+    /// or for a symbol with trading hours its regular-hours price and the extended-hours trade
+    /// after it, with the session volume and the book's best bid and ask.
     pub(super) fn quote(&self, now: DateTime<Utc>) -> Option<Quote> {
         let mut quote = watchlist_quote(&self.state().symbol, now)?;
         if let Some((last, prev_close)) = self.day_change() {
@@ -1362,7 +1362,8 @@ mod tests {
             assert_eq!(frame(&mut panel, after), Duration::MAX);
         }
 
-        // Symbols without trading hours stamp every frame, though details only displays hours and minutes.
+        // Symbols without trading hours stamp every frame, though details only displays hours and
+        // minutes.
         live.set_symbol("SPX");
         panel = WatchlistPanel::new(vec![Watchlist::new("Watchlist")]);
         panel.set_service(quotes.clone());

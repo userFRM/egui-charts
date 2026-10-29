@@ -182,7 +182,7 @@ pub fn us_equity_hours() -> egui_charts::model::ExchangeSessionProvider {
 ///
 /// Symbols with [`DemoSymbol::has_hours`] show only the bars inside the selected session of
 /// [`us_equity_hours`]. Their synthetic dividend, a Monday in winter at 09:30 New York time with a
-/// rate of 2% to 4% taken from the symbol's seed, reduces earlier OHLC prices when adjusted;
+/// rate of 1% to 3% taken from the symbol's seed, reduces earlier OHLC prices when adjusted;
 /// volumes and timestamps do not change.
 pub fn session_bars(
     symbol: &str,
