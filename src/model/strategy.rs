@@ -552,7 +552,9 @@ impl StrategyReport {
     /// Columns: `section` (`summary` or `properties`), `name` (as the panel labels it), `value`,
     /// `unit` and `currency`. The unit is `money` (in `currency`, empty when the report has none),
     /// `percent` (100 is 100%), `ratio`, `count` or `text`. Numbers use the shortest form that
-    /// reads back to the same value, and a value that is unavailable is `N/A`, as in the panel.
+    /// reads back to the same value, with a dot as the decimal separator and no thousands
+    /// separator, and a value that is unavailable is an empty cell, so numeric columns stay numeric
+    /// in a spreadsheet.
     pub fn summary_csv(
         &self,
         performance: &StrategyPerformance,
@@ -571,7 +573,7 @@ impl StrategyReport {
         let number = |value: Option<f64>| {
             value
                 .filter(|v| v.is_finite())
-                .map_or_else(|| "N/A".into(), |v| v.to_string())
+                .map_or_else(String::new, |v| v.to_string())
         };
         let p = performance;
         for (name, value, unit) in [
@@ -625,7 +627,7 @@ impl StrategyReport {
         row(
             "properties",
             "Currency",
-            self.currency.clone().unwrap_or_else(|| "N/A".into()),
+            self.currency.clone().unwrap_or_default(),
             "text",
         );
         row(
@@ -1286,9 +1288,9 @@ mod tests {
              summary,Fees,5,money,USD\n\
              summary,Maximum drawdown,90,money,USD\n\
              summary,Maximum drawdown %,0.8928571428571428,percent,\n\
-             summary,Sharpe ratio,N/A,ratio,\n\
-             summary,Sortino ratio,N/A,ratio,\n\
-             summary,Buy-and-hold return,N/A,percent,\n\
+             summary,Sharpe ratio,,ratio,\n\
+             summary,Sortino ratio,,ratio,\n\
+             summary,Buy-and-hold return,,percent,\n\
              summary,Largest winning trade,48,money,USD\n\
              summary,Largest losing trade,-21,money,USD\n\
              summary,Consecutive wins,1,count,\n\
@@ -1306,11 +1308,11 @@ mod tests {
              properties,Risk-free rate,0,percent,\n\
              properties,\"Fast, length\",\"say \"\"hi\"\"\",text,\n"
         );
-        // Nothing to compute from: counts are zero, everything else is unavailable, never blank.
+        // Nothing to compute from: counts are zero, everything else is an empty cell.
         let empty = report(0.0);
         let csv = empty.summary_csv(&empty.performance(), &empty.comparison(&[]));
-        assert!(csv.contains("summary,Win rate,N/A,percent,\n"), "{csv}");
+        assert!(csv.contains("summary,Win rate,,percent,\n"), "{csv}");
         assert!(csv.contains("summary,Net profit,0,money,\n"), "{csv}");
-        assert!(csv.contains("properties,Currency,N/A,text,\n"), "{csv}");
+        assert!(csv.contains("properties,Currency,,text,\n"), "{csv}");
     }
 }

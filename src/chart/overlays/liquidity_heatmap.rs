@@ -44,6 +44,7 @@ impl LiquidityHeatmap {
         if !step.is_finite() || step <= 0.0 {
             return;
         }
+        let half_tick = step / f64::from(history.config().ticks_per_row) * 0.5;
         let size = painter.ctx().input(|i| i.max_texture_side).clamp(1, 256);
         if self.size != size || self.colors != Some(colors) {
             *self = Self {
@@ -153,7 +154,7 @@ impl LiquidityHeatmap {
                 // scale can draw the whole tile with one quad.
                 let stride = if nonlinear { 1 } else { size };
                 for offset in (0..size).step_by(stride) {
-                    let lo = (row as f64 * size as f64 + offset as f64) * step;
+                    let lo = (row as f64 * size as f64 + offset as f64) * step - half_tick;
                     let hi = lo + stride as f64 * step;
                     if nonlinear && lo <= 0.0 {
                         continue;
@@ -187,7 +188,7 @@ impl LiquidityHeatmap {
                 (&column.source.asks, colors[1]),
             ] {
                 if let Some(&(level, _)) = levels.first() {
-                    let y = mapping.price_to_y(level as f64 * step);
+                    let y = mapping.price_to_y(level as f64 * step - half_tick);
                     if y.is_finite() {
                         painter.line_segment(
                             [pos2(left, y), pos2(right, y)],
