@@ -60,7 +60,7 @@ impl Chart {
     ///
     /// Returns `Some(delta_y)` when the wheel was over the price axis, signaling
     /// that price zoom should be applied downstream (deferred to avoid borrow conflicts).
-    pub fn handle_mouse_wheel(
+    pub(crate) fn handle_mouse_wheel(
         &mut self,
         ui: &Ui,
         response: &Response,
@@ -163,7 +163,7 @@ impl Chart {
     ///
     /// Native zoom events and contact-based pinches share the pointer anchor.
     /// Contact gestures take precedence when a backend reports both.
-    pub fn handle_pinch_zoom(
+    pub(crate) fn handle_pinch_zoom(
         &mut self,
         ui: &Ui,
         response: &Response,
@@ -260,7 +260,7 @@ impl Chart {
     /// axis. Starting on the price axis enables price scale dragging.
     /// Starting on the time axis enables drag-to-zoom the time scale. Also
     /// tracks velocity for kinetic scrolling continuation after release.
-    pub fn handle_drag_pan(
+    pub(crate) fn handle_drag_pan(
         &mut self,
         ui: &Ui,
         response: &Response,
@@ -427,7 +427,7 @@ impl Chart {
     /// Applies the current velocity to the right-offset, then damps the velocity
     /// using the configured damping coefficient. Stops when velocity drops below
     /// the minimum threshold. Requests a repaint to keep the animation running.
-    pub fn apply_kinetic_scroll(&mut self, ui: &Ui) {
+    pub(crate) fn apply_kinetic_scroll(&mut self, ui: &Ui) {
         let options = self.chart_options.kinetic_scroll;
         if !(options.enabled || options.mouse) || !self.kinetic_scroll.is_active {
             return;
@@ -467,7 +467,7 @@ impl Chart {
     }
 
     /// Reset axes on double-click: time axis jumps to latest, price axis re-enables auto-scale.
-    pub fn handle_double_click(
+    pub(crate) fn handle_double_click(
         &mut self,
         response: &Response,
         price_axis_rect: Rect,
@@ -504,7 +504,7 @@ impl Chart {
     ///
     /// On press, starts tracking the selection rectangle. On release, zooms into the rectangle.
     /// Returns `true` if a zoom was successfully applied this frame.
-    pub fn handle_box_zoom(
+    pub(crate) fn handle_box_zoom(
         &mut self,
         ui: &Ui,
         response: &Response,
@@ -546,10 +546,10 @@ impl Chart {
         zoom_applied
     }
 
-    /// Execute box-zoom: compute new bar spacing and right-offset to fill the viewport
-    /// with the selected region, and apply price zoom to match the vertical selection.
+    /// Zoom programmatically to a screen rectangle from `start` to `end`, filling the
+    /// viewport with the selected time and price ranges. [`Self::zoom_back`] undoes it.
     ///
-    /// Returns `false` if the selection rectangle is too small (< 20px in either dimension).
+    /// Returns `false` if either dimension of the selection is 20 points or less.
     pub fn execute_box_zoom(
         &mut self,
         start: Pos2,
@@ -633,7 +633,7 @@ impl Chart {
 
     /// Apply pending timescale configuration: width, initial visible bars,
     /// lock-on-resize behavior, and pending start-index jumps.
-    pub fn apply_timescale_config(&mut self, chart_width: f32) {
+    pub(crate) fn apply_timescale_config(&mut self, chart_width: f32) {
         // Hidden or collapsed layouts cannot establish a zoom or a resize baseline.
         if !chart_width.is_finite() || chart_width <= 1.0 {
             return;

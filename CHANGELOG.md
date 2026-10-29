@@ -1133,6 +1133,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- `Chart`'s per-frame pan, zoom, tracking, focus and keyboard handlers and `calculate_bar_spacing` are now crate-private; unused `calculate_visible_bars` is removed. Migration: input is handled by `Chart::show`; dispatch host shortcuts with `Chart::dispatch_shortcuts`, and zoom from code with `set_visible_logical_range` or `execute_box_zoom`. `execute_box_zoom` remains public and `zoom_back` undoes it. ([#1311](https://github.com/userFRM/egui-charts/issues/1311))
+
 - `UserSettings` is `#[non_exhaustive]`, so that fields can be added without a breaking change. Migration: build `UserSettings` with `Default` and assign fields. `IndicatorDialogAction` implements `Clone` and `Debug`, and `SettingsAction` implements `Debug`.
 
 - Migration for scale settings: `ScalesAndLinesSettings`, `ChartConfig` and `PriceAxisOptions` literals add the new display fields or use `..Default::default()`. Older saved settings take their defaults. `chart::render_axis_currency` takes an optional unit before the currency choices; pass `None` for the previous header. `PriceScale::set_bar_ratio` accepts a positive finite number of scale units per bar, with `None` unlocking it; logarithmic axes measure natural logarithms of prices.
