@@ -1401,14 +1401,15 @@ mod tests {
         use crate::model::{Capabilities, OrderBook, OrderBookLevel, TradingRules};
         let ctx = egui::Context::default();
         let mut ladder = Ladder::default();
+        ladder.columns[1] = true;
         let rules = TradingRules::new("ES");
         for (size, expected) in [
-            (Some(5.0), None),
-            (Some(0.0), Some(-5.0)),
-            (Some(3.0), Some(3.0)),
-            (None, None),
-            (Some(4.0), None),
-            (Some(2.0), Some(-2.0)),
+            (Some(5.0), "-|-"),
+            (Some(0.0), "-5|-"),
+            (Some(3.0), "+3|-"),
+            (None, "-|-"),
+            (Some(4.0), "-|-"),
+            (Some(2.0), "-2|-"),
         ] {
             let book = size.map(|size| OrderBook {
                 ts: chrono::Utc::now(),
@@ -1447,13 +1448,32 @@ mod tests {
                 session_open: None,
                 last_fill: None,
             };
-            ctx.run_ui(egui::RawInput::default(), |ui| {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 ladder.show(ui, "ES", &market, &mut 1.0, &mut TimeInForce::Day);
-            })
-            .drop_without_applying_deltas();
+            });
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.pos + text.galley.size() / 2.0,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            let price = labels
+                .iter()
+                .find(|(label, _)| label == "100.00")
+                .unwrap()
+                .1;
+            let change = labels
+                .iter()
+                .find(|(_, pos)| pos.x > price.x && (pos.y - price.y).abs() < 0.5);
             assert_eq!(
-                ladder.changes[0].get(&400).copied(),
-                expected,
+                change.map(|(label, _)| label.as_str()),
+                Some(expected),
                 "size {size:?}"
             );
         }

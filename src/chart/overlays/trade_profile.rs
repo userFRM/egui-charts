@@ -4,6 +4,8 @@ use crate::chart::coords::ChartMapping;
 use crate::chart::overlays::{FootprintConfig, FootprintMode};
 use crate::model::Bar;
 use crate::studies::TradeProfile;
+use crate::theme::ThemeExt;
+use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, FontId, Painter, Rect, Stroke, pos2};
 
 /// Draws bid/ask stacks, total volume or signed delta profiles, their POC, value area,
@@ -22,10 +24,50 @@ pub fn render_trade_profiles(
     tick: f64,
     config: &FootprintConfig,
 ) {
+    render_profiles(painter, mapping, bars, profiles, step, tick, config, false);
+}
+
+/// Draws the session volume profile chart: each session fills its bar span inside a faint box,
+/// with up volume stacked before down volume, a POC across the session, and the value area shown
+/// by row opacity alone (no guides, node labels or developing POC).
+pub(crate) fn render_session_volume_profiles(
+    painter: &Painter,
+    mapping: &ChartMapping,
+    bars: &[Bar],
+    profiles: &[TradeProfile],
+    step: f64,
+    tick: f64,
+) {
+    let theme = painter.ctx().active_theme();
+    let config = FootprintConfig {
+        ask_color: DESIGN_TOKENS.semantic.brand.accent,
+        bid_color: DESIGN_TOKENS.semantic.tpo.period_6,
+        neutral_color: theme.chart.axis_text_secondary,
+        text_color: DESIGN_TOKENS.semantic.chart.bearish,
+        value_area_high: None,
+        value_area_low: None,
+        min_text_height: f32::INFINITY,
+        ..Default::default()
+    };
+    render_profiles(painter, mapping, bars, profiles, step, tick, &config, true);
+}
+
+fn render_profiles(
+    painter: &Painter,
+    mapping: &ChartMapping,
+    bars: &[Bar],
+    profiles: &[TradeProfile],
+    step: f64,
+    tick: f64,
+    config: &FootprintConfig,
+    session: bool,
+) {
     if !step.is_finite() || step <= 0.0 || !tick.is_finite() || tick <= 0.0 || bars.is_empty() {
         return;
     }
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
+    let theme = painter.ctx().active_theme();
+    let pixel = 1.0 / painter.pixels_per_point();
     for profile in profiles {
         let first = bars.partition_point(|b| b.time < profile.range.start);
         let end = bars.partition_point(|b| b.time < profile.range.end);
@@ -37,9 +79,14 @@ pub fn render_trade_profiles(
             continue;
         }
         let x = x.max(mapping.rect.left());
-        let width = ((end - first) as f32 * mapping.bar_spacing * 0.7)
-            .clamp(1.0, 160.0)
-            .min((mapping.idx_to_x(end - 1) + mapping.bar_spacing * 0.5 - x).max(1.0));
+        let session_width = (mapping.idx_to_x(end - 1) + mapping.bar_spacing * 0.5 - x).max(1.0);
+        let width = if session {
+            session_width
+        } else {
+            ((end - first) as f32 * mapping.bar_spacing * 0.7)
+                .clamp(1.0, 160.0)
+                .min(session_width)
+        };
         let max = profile
             .volume
             .levels
@@ -48,6 +95,27 @@ pub fn render_trade_profiles(
             .fold(0.0, f64::max);
         if max <= 0.0 {
             continue;
+        }
+        if session
+            && let (Some((&low, _)), Some((&high, _))) = (
+                profile.volume.levels.first_key_value(),
+                profile.volume.levels.last_key_value(),
+            )
+        {
+            let y0 = mapping.price_to_y(low as f64 * step - tick * 0.5);
+            let y1 = mapping.price_to_y((high as f64 + 1.0) * step - tick * 0.5);
+            if y0.is_finite() && y1.is_finite() {
+                let fill = theme
+                    .chart
+                    .bg
+                    .lerp_to_gamma(theme.chart.axis_text, 0.035)
+                    .lerp_to_gamma(config.ask_color, if theme.dark { 0.065 } else { 0.035 });
+                painter.rect_filled(
+                    Rect::from_min_max(pos2(x, y0.min(y1)), pos2(x + width, y0.max(y1))),
+                    0.0,
+                    fill,
+                );
+            }
         }
         let area = config.value_area.and_then(|s| profile.volume.value_area(s));
         let (high, low) = profile.nodes(config.node_sensitivity);
@@ -58,12 +126,21 @@ pub fn render_trade_profiles(
             if !y0.is_finite() || !y1.is_finite() {
                 continue;
             }
-            let top = y0.min(y1);
-            let bottom = y0.max(y1);
-            let alpha = if area.is_some_and(|(a, b)| (a..=b).contains(&row.level)) {
-                0.65
-            } else {
-                0.3
+            let mut top = y0.min(y1);
+            let mut bottom = y0.max(y1);
+            // Keep a physical-pixel gutter only when the row has room for it.
+            if bottom - top >= 2.0 * pixel {
+                top = (top / pixel).round() * pixel;
+                bottom = (bottom / pixel).round() * pixel - pixel;
+            }
+            let alpha = match (
+                area.is_some_and(|(a, b)| (a..=b).contains(&row.level)),
+                theme.dark,
+            ) {
+                (true, true) => 0.9,
+                (true, false) => 0.82,
+                (false, true) => 0.32,
+                (false, false) => 0.24,
             };
             let mut left = x;
             let mode = config
@@ -72,6 +149,11 @@ pub fn render_trade_profiles(
                 .copied()
                 .unwrap_or(FootprintMode::BidAsk);
             let segments = match mode {
+                FootprintMode::BidAsk if session => vec![
+                    (row.ask, config.ask_color),
+                    (row.bid, config.bid_color),
+                    (row.unknown, config.neutral_color),
+                ],
                 FootprintMode::BidAsk => vec![
                     (row.bid, config.bid_color),
                     (row.ask, config.ask_color),
@@ -115,7 +197,7 @@ pub fn render_trade_profiles(
             if config.show_poc && poc == Some(row.level) {
                 painter.line_segment(
                     [pos2(x, (y0 + y1) * 0.5), pos2(x + width, (y0 + y1) * 0.5)],
-                    Stroke::new(1.5, config.text_color),
+                    Stroke::new(DESIGN_TOKENS.stroke.hairline, config.text_color),
                 );
             }
         }
@@ -129,7 +211,7 @@ pub fn render_trade_profiles(
                         pos2(x + width + 3.0, (y0 + y1) * 0.5),
                         Align2::LEFT_CENTER,
                         label,
-                        FontId::monospace(9.0),
+                        FontId::monospace(crate::styles::typography::TINY),
                         config.text_color,
                     );
                 }
@@ -148,6 +230,9 @@ pub fn render_trade_profiles(
                     painter.line_segment([pos2(x, y), pos2(x + width, y)], stroke);
                 }
             }
+        }
+        if session {
+            continue;
         }
         let mut previous = None;
         for &(time, poc) in &profile.developing_poc {

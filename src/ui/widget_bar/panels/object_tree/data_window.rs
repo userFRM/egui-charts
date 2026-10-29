@@ -11,6 +11,7 @@ use crate::scales::{PriceFormatter, VolumeFormatter};
 use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;
 
+use super::super::format_price;
 use super::types::DataWindowInfo;
 use crate::ui_kit::ext::UiExt;
 
@@ -201,28 +202,6 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
         });
 }
 
-/// Format price with decimals chosen by its magnitude, so a negative price
-/// keeps the decimals of the positive price of the same size
-pub(crate) fn format_price(price: f64, decimals: Option<u8>) -> String {
-    if !price.is_finite() {
-        return "\u{2014}".to_owned();
-    }
-    let decimals = decimals.unwrap_or_else(|| price_decimals(price));
-    format!("{:.*}", usize::from(decimals), price)
-}
-
-/// Decimals of a price label without instrument precision, chosen by the price's magnitude
-pub(crate) fn price_decimals(price: f64) -> u8 {
-    match price.abs() {
-        m if m >= 10000.0 => 0,
-        m if m >= 1000.0 => 1,
-        m if m >= 10.0 => 2,
-        m if m >= 1.0 => 4,
-        m if m >= 0.001 => 6,
-        _ => 8,
-    }
-}
-
 /// Format volume with K/M/B suffixes
 fn format_volume(volume: f64) -> String {
     if volume == 0.0 {
@@ -235,26 +214,6 @@ fn format_volume(volume: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_format_price() {
-        assert_eq!(format_price(0.0, None), "0.00000000");
-        assert_eq!(format_price(f64::NAN, Some(2)), "\u{2014}");
-        assert_eq!(format_price(50000.0, None), "50000");
-        assert_eq!(format_price(1234.5, None), "1234.5");
-        assert_eq!(format_price(99.99, None), "99.99");
-        assert_eq!(format_price(1.2345, None), "1.2345");
-        assert_eq!(format_price(0.001234, None), "0.001234");
-        assert_eq!(format_price(-37.63, None), "-37.63");
-        for (price, decimals, expected) in [
-            (50000.25, 2, "50000.25"),
-            (-37.625, 3, "-37.625"),
-            (0.0, 2, "0.00"),
-            (1.2345, 4, "1.2345"),
-        ] {
-            assert_eq!(format_price(price, Some(decimals)), expected);
-        }
-    }
 
     #[test]
     fn instrument_precision_formats_prices_change_and_volume() {
