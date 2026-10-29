@@ -357,40 +357,27 @@ mod selection_tests {
     }
 
     #[test]
-    fn click_on_empty_area_returns_none() {
-        let (mapping, bars) = fixture();
-        // A point near the top of the chart, above every candle body and on no
-        // indicator line.
-        let pos = Pos2::new(mapping.idx_to_x(2), mapping.rect.min.y + 1.0);
-        let hit = hit_test_main_chart(
-            pos,
-            &IndicatorRegistry::new(),
-            &[],
-            &[SeriesId::MAIN],
-            &mapping,
-            None,
-            &bars,
-            100.0,
-            0..bars.len(),
-            crate::chart::hit_test::HIT_TOLERANCE,
-            None,
-        );
-        assert!(hit.is_none());
-    }
-
-    #[test]
     fn click_on_candle_or_near_its_wick_selects_main_series() {
         let (mapping, bars) = fixture();
         // The center of bar 2's body (close = 12.4, open = 11.6), and its upper wick at 12.45,
         // 8 points from the bar's centre: outside the default 5 point tolerance, inside 10.
         let bar = &bars[2];
         let mid_price = (bar.open + bar.close) / 2.0;
-        for (dx, price, tolerance, selected) in [
-            (0.0, mid_price, crate::chart::hit_test::HIT_TOLERANCE, true),
-            (8.0, 12.45, crate::chart::hit_test::HIT_TOLERANCE, false),
-            (8.0, 12.45, 10.0, true),
+        let at = |dx, price| Pos2::new(mapping.idx_to_x(2) + dx, mapping.price_to_y(price));
+        let tolerance = crate::chart::hit_test::HIT_TOLERANCE;
+        let selected = Some((ChartElementId::Series(SeriesId::MAIN), 2));
+        for (bars, pos, tolerance, expected) in [
+            (bars.as_slice(), at(0.0, mid_price), tolerance, selected),
+            (bars.as_slice(), at(8.0, 12.45), tolerance, None),
+            (bars.as_slice(), at(8.0, 12.45), 10.0, selected),
+            (
+                bars.as_slice(),
+                Pos2::new(mapping.idx_to_x(2), mapping.rect.min.y + 1.0),
+                tolerance,
+                None,
+            ),
+            (&[][..], mapping.rect.center(), tolerance, None),
         ] {
-            let pos = Pos2::new(mapping.idx_to_x(2) + dx, mapping.price_to_y(price));
             let hit = hit_test_main_chart(
                 pos,
                 &IndicatorRegistry::new(),
@@ -398,17 +385,13 @@ mod selection_tests {
                 &[SeriesId::MAIN],
                 &mapping,
                 None,
-                &bars,
+                bars,
                 100.0,
                 0..bars.len(),
                 tolerance,
                 None,
             );
-            assert_eq!(
-                hit,
-                selected.then_some((ChartElementId::Series(SeriesId::MAIN), 2)),
-                "{dx} {price} {tolerance}"
-            );
+            assert_eq!(hit, expected, "{pos:?}, {tolerance}, {} bars", bars.len());
         }
     }
 
@@ -474,7 +457,7 @@ mod selection_tests {
     }
 
     #[test]
-    fn hidden_or_pane_indicator_does_not_steal_overlay_priority() {
+    fn pane_indicator_does_not_steal_overlay_priority() {
         let (mapping, bars) = fixture();
         // A non-overlay (pane) indicator must be ignored by the main-chart hit
         // test even though its values sit on the candle body.
@@ -505,26 +488,6 @@ mod selection_tests {
         );
         // Falls through to the series, since the pane indicator is not an overlay.
         assert_eq!(hit, Some((ChartElementId::Series(SeriesId::MAIN), 2)));
-    }
-
-    #[test]
-    fn empty_data_returns_none() {
-        let (mapping, _) = fixture();
-        let pos = mapping.rect.center();
-        let hit = hit_test_main_chart(
-            pos,
-            &IndicatorRegistry::new(),
-            &[],
-            &[SeriesId::MAIN],
-            &mapping,
-            None,
-            &[],
-            100.0,
-            0..0,
-            crate::chart::hit_test::HIT_TOLERANCE,
-            None,
-        );
-        assert!(hit.is_none());
     }
 
     /// Guards stable study ids: with ids taken from positions, removing a study moved the

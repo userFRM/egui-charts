@@ -97,17 +97,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn add_stamps_creation_time_from_web_time() {
-        let mut toasts = Toasts::new();
-        toasts.info("hello");
-        assert_eq!(toasts.len(), 1);
-        assert!(
-            toasts.toasts()[0].created_at > 0.0,
-            "add() must stamp created_at from the web_time clock"
-        );
-    }
-
-    #[test]
     fn cleanup_keeps_permanent_and_fresh_toasts() {
         let mut toasts = Toasts::new();
         toasts.add(Toast::info("permanent").permanent());

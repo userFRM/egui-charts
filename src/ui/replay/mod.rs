@@ -518,10 +518,10 @@ mod tests {
     #[test]
     fn test_find_bar_at_date() {
         let (bars, ts) = create_test_bars(24);
-        let controller = ReplayController::new(bars, ts);
+        let mut controller = ReplayController::new(bars, ts);
 
         let target = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
-        let idx = controller.find_bar_at_date(&target);
-        assert_eq!(idx, Some(12));
+        controller.handle_action(ReplayAction::JumpToDate(target));
+        assert_eq!(controller.state.curr_bar, 12);
     }
 }
