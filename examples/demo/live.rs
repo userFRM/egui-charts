@@ -19,7 +19,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::market::Market;
 use crate::sampledata::{
-    DemoSymbol, session_bars, us_equity_hours, us_equity_session, us_equity_zone,
+    DemoSymbol, dividend_date, dividend_factor, session_bars, us_equity_hours, us_equity_session,
+    us_equity_zone,
 };
 use egui_charts::ui::timeframe_toolbar::SessionType;
 
@@ -47,6 +48,8 @@ struct Simulation {
     paused: bool,
     continuous: bool,
     adjusted: bool,
+    /// The ex-date and price factor stay fixed for the life of the feed.
+    dividend: Option<(DateTime<Utc>, f64)>,
     subscription: Option<Subscription>,
     signals: Vec<Events<SignalEvent>>,
     options: Vec<(OptionsVolumeQuery, OptionsVolumeSink)>,
@@ -79,6 +82,8 @@ impl LiveFeed {
             paused: false,
             continuous: true,
             adjusted: false,
+            dividend: DemoSymbol::has_hours(symbol)
+                .then(|| (dividend_date(symbol, now), dividend_factor(symbol))),
             subscription: None,
             signals: Vec::new(),
             options: Vec::new(),
@@ -114,6 +119,7 @@ impl LiveFeed {
             paused: sim.paused,
             continuous: sim.continuous,
             adjusted: sim.adjusted,
+            dividend: sim.dividend,
             subscription: None,
             signals: Vec::new(),
             options: Vec::new(),
@@ -563,16 +569,23 @@ impl Simulation {
     }
 
     fn shown_history(&self, extended_hours: bool) -> Vec<Bar> {
+        let Some((dividend, _)) = self.dividend else {
+            return self.history.clone();
+        };
         session_bars(
             &self.symbol,
             &self.history,
             self.session(extended_hours),
             self.adjusted,
+            dividend,
         )
     }
 
     fn shown_trade(&self, trade: &Tick, extended_hours: bool) -> Option<Tick> {
-        if !DemoSymbol::has_hours(&self.symbol) || (self.continuous && !self.adjusted) {
+        let Some((dividend, _)) = self.dividend else {
+            return Some(trade.clone());
+        };
+        if self.continuous && !self.adjusted {
             return Some(trade.clone());
         }
         let bar = Bar::new(
@@ -588,6 +601,7 @@ impl Simulation {
             &[bar],
             self.session(extended_hours),
             self.adjusted,
+            dividend,
         )
         .first()
         .map(|bar| {
@@ -1024,6 +1038,53 @@ mod tests {
         let trade = Tick::new("2026-10-23T21:30:00Z".parse().unwrap(), 100.0, 1.0, None);
         assert!(feed.state().shown_trade(&trade, true).is_some());
         assert!(feed.state().shown_trade(&trade, false).is_none());
+    }
+
+    /// Adjustment changes older OHLC prices in the live history, while later bars, timestamps
+    /// and volumes keep their raw values in either session.
+    #[test]
+    fn the_dividend_adjustment_shows_in_the_live_history() {
+        for now in [
+            "2026-10-24T15:00:00Z",
+            "2026-10-27T03:00:00Z",
+            "2026-03-09T14:00:00Z",
+            "2026-11-02T15:00:00Z",
+        ] {
+            let now = now.parse().unwrap();
+            for symbol in ["AAPL", "MSFT", "NVDA", "TSLA", "SAMPLE"] {
+                let feed = LiveFeed::new(symbol, now);
+                for (session, extended) in [
+                    (SessionType::RTH, false),
+                    (SessionType::ETH, true),
+                    (SessionType::Full24x7, false),
+                ] {
+                    let bars = |adjusted| {
+                        feed.set_view(session, adjusted);
+                        feed.snapshot(Timeframe::Min1, BarClock::new(Timeframe::Min1), extended)
+                    };
+                    let (raw, adjusted) = (bars(false), bars(true));
+                    let split = raw
+                        .iter()
+                        .zip(&adjusted)
+                        .take_while(|(raw, adjusted)| raw.close != adjusted.close)
+                        .count();
+                    assert_eq!(raw.len(), adjusted.len(), "{symbol} at {now}");
+                    assert!(0 < split && split < raw.len(), "{symbol} at {now}: {split}");
+                    assert_eq!(&raw[split..], &adjusted[split..]);
+                    let factor = 1.0 - 0.01 * (1 + DemoSymbol::find(symbol).seed % 3) as f64;
+                    for (raw, adjusted) in raw[..split].iter().zip(&adjusted) {
+                        assert_eq!((raw.time, raw.volume), (adjusted.time, adjusted.volume));
+                        for (raw, adjusted) in [raw.open, raw.high, raw.low, raw.close]
+                            .into_iter()
+                            .zip([adjusted.open, adjusted.high, adjusted.low, adjusted.close])
+                        {
+                            assert!((raw * factor - adjusted).abs() < 1e-9);
+                        }
+                    }
+                    assert_eq!(bars(false), raw);
+                }
+            }
+        }
     }
 
     /// Minute volume must reflect clustered arrivals and the daily activity profile.

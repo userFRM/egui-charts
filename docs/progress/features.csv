@@ -36,7 +36,7 @@ Builder API,Datafeed API,Datafeed configuration handshake,partial,host,src/data/
 Builder API,Datafeed API,Depth of market feed,done,host,src/data/inbox.rs;src/widget/feed.rs;src/ui/trading/dom.rs
 Builder API,Datafeed API,End of history and gap signalling,partial,host,src/data/mod.rs;src/widget/feed.rs
 Builder API,Datafeed API,Error and retry signalling,done,host,src/data/inbox.rs;src/widget/feed.rs;src/widget/series.rs
-Builder API,Datafeed API,Extended hours,done,host,src/model/instrument.rs;src/data/mod.rs;src/widget/feed.rs;src/widget/frame.rs
+Builder API,Datafeed API,Extended hours,done,host,src/model/instrument.rs;src/data/mod.rs;src/widget/feed.rs;src/widget/frame.rs;examples/demo/sampledata.rs;examples/demo/live.rs
 Builder API,Datafeed API,HTTP history and streaming adapter,missing,host,
 Builder API,Datafeed API,History paging when scrolling back,done,host,src/widget/frame.rs;src/widget/feed.rs
 Builder API,Datafeed API,History request parameters,partial,host,src/data/mod.rs;src/widget/feed.rs
@@ -54,7 +54,7 @@ Builder API,Datafeed API,Session breaks on intraday charts,done,library,src/widg
 Builder API,Datafeed API,Symbol search,done,host,src/services/search.rs;src/ui/top_toolbar/components/symbol_search.rs;src/ui/top_toolbar/components/symbol_search/service.rs
 Builder API,Datafeed API,Timescale marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs;src/widget/mod.rs
 Builder API,Datafeed API,Trade tick input,done,host,src/data/inbox.rs;src/widget/feed.rs;src/ui/widget_bar/panels/time_and_sales.rs
-Builder API,Datafeed API,Trading session definition from the feed,partial,host,src/model/instrument.rs;src/model/session/mod.rs;src/widget/feed.rs
+Builder API,Datafeed API,Trading session definition from the feed,partial,host,src/model/instrument.rs;src/model/session/mod.rs;src/widget/feed.rs;examples/demo/sampledata.rs;examples/demo/live.rs
 Builder API,Datafeed API,Update cost and coalescing of fast streams,done,library,src/data/inbox.rs;src/widget/feed.rs;src/widget/series.rs;src/widget/studies.rs
 Builder API,Datafeed API,Validation of incoming bars,done,library,src/widget/builder.rs;src/widget/series.rs;src/data/merge.rs;src/data/inbox.rs
 Builder API,Datafeed API,Volume precision,done,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/tooltip.rs;src/widget/frame.rs

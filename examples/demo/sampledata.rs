@@ -4,6 +4,7 @@
 //! price series seeded from its name. Switching symbols therefore yields a
 //! stable, distinct chart rather than random noise that changes each frame.
 
+use chrono::{DateTime, Utc};
 use egui_charts::model::{Bar, Instrument, SymbolType};
 
 /// A tradable instrument the demo knows how to render, including the seed and
@@ -178,29 +179,51 @@ pub fn us_equity_hours() -> egui_charts::model::ExchangeSessionProvider {
     egui_charts::model::ExchangeSessionProvider::new(us_equity_zone(), Some(us_equity_session()))
 }
 
+/// An ex-dividend instant inside the live history: one to three trading days before the clock,
+/// with a distinct minute after the regular open taken from each symbol's seed.
+pub fn dividend_date(symbol: &str, now: DateTime<Utc>) -> DateTime<Utc> {
+    use chrono::{Datelike, Duration, TimeZone};
+    let seed = DemoSymbol::find(symbol).seed;
+    let zone = us_equity_zone();
+    let mut day = now.with_timezone(&zone).date_naive();
+    let mut days = 1 + seed % 3;
+    while days > 0 {
+        day -= Duration::days(1);
+        if day.weekday().num_days_from_monday() < 5 {
+            days -= 1;
+        }
+    }
+    zone.from_local_datetime(&day.and_hms_opt(9, 30, 0).unwrap())
+        .single()
+        .expect("the regular open exists")
+        .to_utc()
+        + Duration::minutes((seed % 390) as i64)
+}
+
+/// The synthetic dividend's price factor, taken from the symbol's seed.
+pub fn dividend_factor(symbol: &str) -> f64 {
+    1.0 - 0.01 * (1 + DemoSymbol::find(symbol).seed % 3) as f64
+}
+
 /// Derive a displayed session and dividend basis from the unchanged source history.
 ///
 /// Symbols with [`DemoSymbol::has_hours`] show only the bars inside the selected session of
-/// [`us_equity_hours`]. Their synthetic dividend, a Monday in winter at 09:30 New York time with a
-/// rate of 1% to 3% taken from the symbol's seed, reduces earlier OHLC prices when adjusted;
-/// volumes and timestamps do not change.
+/// [`us_equity_hours`]. Their synthetic dividend at `dividend` reduces earlier OHLC prices by
+/// [`dividend_factor`] when adjusted; volumes and timestamps do not change.
 pub fn session_bars(
     symbol: &str,
     source: &[Bar],
     session: egui_charts::ui::timeframe_toolbar::SessionType,
     adjusted: bool,
+    dividend: DateTime<Utc>,
 ) -> Vec<Bar> {
-    use chrono::{Duration, TimeZone, Utc};
     use egui_charts::ui::timeframe_toolbar::SessionType;
 
     if !DemoSymbol::has_hours(symbol) {
         return source.to_vec();
     }
     let hours = us_equity_hours();
-    let seed = DemoSymbol::find(symbol).seed;
-    let dividend = Utc.with_ymd_and_hms(2026, 1, 26, 14, 30, 0).unwrap()
-        + Duration::weeks(((seed - 1) % 4) as i64);
-    let factor = 1.0 - 0.01 * (1 + seed % 3) as f64;
+    let factor = dividend_factor(symbol);
     source
         .iter()
         .filter(|bar| {
@@ -225,7 +248,7 @@ pub fn visible_bars_for_range(
     range: egui_charts::ui::timeframe_toolbar::DateRange,
     bars: &[Bar],
 ) -> usize {
-    use chrono::{Datelike, Duration, Months, TimeZone, Utc};
+    use chrono::{Datelike, Duration, Months, TimeZone};
     use egui_charts::ui::timeframe_toolbar::DateRange;
     let Some(last) = bars.last() else {
         return 0;
@@ -263,13 +286,14 @@ mod tests {
             .iter()
             .map(|time| Bar::new(time.parse().unwrap(), 100.0, 102.0, 99.0, 101.0, 640.0))
             .collect();
+        let dividend = "2026-01-26T14:30:00Z".parse().unwrap();
         for (session, indices) in [
             (SessionType::RTH, vec![1, 4]),
             (SessionType::ETH, vec![0, 1, 2, 4]),
             (SessionType::Full24x7, vec![0, 1, 2, 3, 4]),
         ] {
-            let raw = session_bars("SAMPLE", &source, session, false);
-            let adjusted = session_bars("SAMPLE", &source, session, true);
+            let raw = session_bars("SAMPLE", &source, session, false, dividend);
+            let adjusted = session_bars("SAMPLE", &source, session, true, dividend);
             assert_eq!(
                 raw,
                 indices
@@ -284,11 +308,11 @@ mod tests {
             }
         }
         // Stocks keep the same hours with a dividend of their own; continuous markets are untouched.
-        let msft = session_bars("MSFT", &source, SessionType::RTH, true);
+        let msft = session_bars("MSFT", &source, SessionType::RTH, true, dividend);
         assert_eq!(msft.len(), 2);
         assert!((msft[0].close - 101.0 * 0.97).abs() < 1e-9);
         assert_eq!(
-            session_bars("BTCUSD", &source, SessionType::RTH, true),
+            session_bars("BTCUSD", &source, SessionType::RTH, true, dividend),
             source
         );
         for (range, count) in [
@@ -300,5 +324,122 @@ mod tests {
             assert_eq!(visible_bars_for_range(range, &source), count);
         }
         assert_eq!(visible_bars_for_range(DateRange::All, &[]), 0);
+    }
+
+    /// Each symbol has its own instant, with bars on both sides even across a weekend or DST.
+    #[test]
+    fn ex_dates_have_distinct_offsets_inside_the_live_history() {
+        for (now, dates) in [
+            (
+                "2026-10-24T15:00:00Z",
+                [
+                    "2026-10-22T13:43:00Z",
+                    "2026-10-21T13:53:00Z",
+                    "2026-10-21T13:59:00Z",
+                    "2026-10-22T14:07:00Z",
+                    "2026-10-22T13:31:00Z",
+                ],
+            ),
+            (
+                "2026-03-11T15:00:00Z",
+                [
+                    "2026-03-09T13:43:00Z",
+                    "2026-03-06T14:53:00Z",
+                    "2026-03-06T14:59:00Z",
+                    "2026-03-09T14:07:00Z",
+                    "2026-03-09T13:31:00Z",
+                ],
+            ),
+            (
+                "2026-11-03T15:00:00Z",
+                [
+                    "2026-10-30T13:43:00Z",
+                    "2026-10-29T13:53:00Z",
+                    "2026-10-29T13:59:00Z",
+                    "2026-10-30T14:07:00Z",
+                    "2026-10-30T13:31:00Z",
+                ],
+            ),
+        ] {
+            let now = now.parse().unwrap();
+            for (symbol, date) in ["AAPL", "MSFT", "NVDA", "TSLA", "SAMPLE"]
+                .into_iter()
+                .zip(dates)
+            {
+                let date = date.parse::<DateTime<Utc>>().unwrap();
+                assert_eq!(dividend_date(symbol, now), date, "{symbol} at {now}");
+                assert!(now - chrono::Duration::days(6) < date && date < now);
+                assert!(us_equity_hours().is_open(date, false));
+            }
+        }
+    }
+
+    /// New York opens and closes move with both clock changes; weekends and nights stay closed.
+    #[test]
+    fn session_boundaries_follow_both_dst_changes() {
+        for (day, pre, regular, close, end) in [
+            ("2026-03-06T00:00:00Z", 540, 870, 1260, 1500),
+            ("2026-03-09T00:00:00Z", 480, 810, 1200, 1440),
+            ("2026-10-30T00:00:00Z", 480, 810, 1200, 1440),
+            ("2026-11-02T00:00:00Z", 540, 870, 1260, 1500),
+        ] {
+            let day = day.parse::<DateTime<Utc>>().unwrap();
+            let source: Vec<_> = [
+                pre - 1,
+                pre,
+                regular - 1,
+                regular,
+                close - 1,
+                close,
+                end - 1,
+                end,
+            ]
+            .into_iter()
+            .map(|minutes| {
+                Bar::new(
+                    day + chrono::Duration::minutes(minutes),
+                    100.0,
+                    102.0,
+                    99.0,
+                    101.0,
+                    640.0,
+                )
+            })
+            .chain([Bar::new(
+                "2026-03-08T15:00:00Z".parse().unwrap(),
+                100.0,
+                102.0,
+                99.0,
+                101.0,
+                640.0,
+            )])
+            .collect();
+            for spec in DemoSymbol::catalog() {
+                let has_hours = matches!(spec.symbol, "AAPL" | "MSFT" | "NVDA" | "TSLA" | "SAMPLE");
+                for (session, expected) in [
+                    (SessionType::RTH, vec![3, 4]),
+                    (SessionType::ETH, vec![1, 2, 3, 4, 5, 6]),
+                    (SessionType::Full24x7, (0..9).collect()),
+                ] {
+                    for adjusted in [false, true] {
+                        let bars = session_bars(spec.symbol, &source, session, adjusted, day);
+                        let indices = if has_hours {
+                            expected.clone()
+                        } else {
+                            (0..9).collect()
+                        };
+                        assert_eq!(
+                            bars.iter().map(|bar| bar.time).collect::<Vec<_>>(),
+                            indices.iter().map(|&i| source[i].time).collect::<Vec<_>>(),
+                            "{} at {day}, {session:?}, adjusted {adjusted}",
+                            spec.symbol
+                        );
+                        if !has_hours {
+                            assert_eq!(bars, source);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
