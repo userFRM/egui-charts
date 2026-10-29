@@ -646,7 +646,11 @@ impl<'a> Legend<'a> {
                         } else {
                             "∅".to_owned()
                         };
-                        let color = study_colors.get(index).copied().unwrap_or(colors.text);
+                        let color = study_colors
+                            .get(index)
+                            .copied()
+                            .unwrap_or(colors.text)
+                            .to_opaque();
                         layout.text(text, theme.text.ohlc, color, bounds.width());
                     }
                 }
@@ -954,6 +958,9 @@ impl<'a> Layout<'a> {
     }
 
     fn text(&mut self, text: String, size: f32, color: Color32, max_width: f32) {
+        if text.is_empty() {
+            return;
+        }
         let mut job =
             egui::text::LayoutJob::simple_singleline(text, FontId::proportional(size), color);
         job.wrap.max_width = max_width;
