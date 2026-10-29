@@ -844,7 +844,7 @@ mod tests {
                         config,
                         [0, 0, 255, 255],
                         100.0..300.0,
-                        right_aligned,
+                        crate::painting::volume_profile::ProfileStyle::Study { right_aligned },
                         &|price| price as f32 * direction,
                     );
                 });
