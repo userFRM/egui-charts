@@ -412,12 +412,11 @@ impl Chart {
     }
 }
 
-/// Checks `snapshot` as [`Chart::restore_with`] does before changing the chart: returns its
-/// studies built through `factory`, in order, and its drawings document.
-fn check(
-    snapshot: &ChartSnapshot,
-    factory: &IndicatorFactory,
-) -> Result<(Vec<Box<dyn crate::studies::Indicator>>, Option<String>), String> {
+/// The studies of a checked snapshot, built in order, and its drawings document.
+type Checked = (Vec<Box<dyn crate::studies::Indicator>>, Option<String>);
+
+/// Checks `snapshot` as [`Chart::restore_with`] does before changing the chart.
+fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked, String> {
     let studies = snapshot
         .studies
         .iter()
@@ -499,11 +498,11 @@ fn check(
             options.time_scale.max_bar_spacing,
         ]
         .into_iter()
-        .any(|spacing| spacing != 0.0 && !(spacing >= 0.01))
+        .any(|spacing| spacing != 0.0 && !(0.01..).contains(&spacing))
     {
         return Err("Bar spacing limits must be 0 or at least 0.01".into());
     }
-    let font_sizes = &crate::drawings::validation::FONT_SIZES;
+    let font_sizes = &crate::styles::typography::FONT_SIZES;
     if snapshot
         .options
         .iter()

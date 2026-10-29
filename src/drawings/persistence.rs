@@ -142,7 +142,8 @@ impl StoredDrawing {
     /// The first field holding NaN or an infinity, which JSON cannot store, or a size or
     /// pitchfork level outside the range drawings are drawn at.
     pub(super) fn invalid_field(&self) -> Option<String> {
-        use super::validation::{FONT_SIZES, MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH};
+        use super::validation::{MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH};
+        use crate::styles::typography::FONT_SIZES;
         let d = &self.drawing;
         let bad = |value: f64| !value.is_finite();
         if !(d.stroke_width > 0.0 && d.stroke_width <= MAX_STROKE_WIDTH) {
@@ -237,7 +238,7 @@ impl StoredDrawing {
             } else {
                 f32::MAX
             };
-            if let Some(i) = values.iter().position(|v| !(v.abs() <= limit)) {
+            if let Some(i) = values.iter().position(|v| !(-limit..=limit).contains(v)) {
                 let suffix = if name.ends_with(".levels") {
                     ".value"
                 } else {

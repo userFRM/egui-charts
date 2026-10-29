@@ -7,13 +7,13 @@
 
 use super::context::{ChartMapping, RenderContext, StyleColors};
 use crate::config::{TooltipMode, TooltipOptions};
-use crate::drawings::validation::font_size;
 use crate::model::{Bar, Instrument, percent_change};
 use crate::scales::price_decimals;
 use crate::scales::{
     DefaultPriceFormatter, HorizontalScale, PriceFormatter, PriceMap, VolumeFormatter,
     instrument_price_precision,
 };
+use crate::styles::typography::font_size;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{FontId, Painter, Pos2, Rect, Stroke, Vec2, epaint::StrokeKind};
