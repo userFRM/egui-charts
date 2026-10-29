@@ -987,6 +987,153 @@ mod tests {
     }
 
     #[test]
+    fn profile_cells_preserve_period_colors_and_pixel_alignment() {
+        let bars: Vec<_> = [(0, 101.0), (60, 102.0), (150, 101.0)]
+            .into_iter()
+            .map(|(minute, high)| {
+                Bar::new(
+                    chrono::DateTime::UNIX_EPOCH + Duration::minutes(minute),
+                    100.0,
+                    high,
+                    100.0,
+                    100.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let model = TPOConfig {
+            tick_size: 1.0,
+            show_single_prints: false,
+            show_initial_balance: false,
+            show_opening_range: false,
+            ..Default::default()
+        };
+        let mut profile = to_tpo_profiles(&bars, &model, &Timeframe::Min30.into()).remove(0);
+        profile.poc_price = 101.0;
+        profile.value_area_low = 101.0;
+        profile.value_area_high = 101.0;
+        let cells = [
+            (102.0, 2, 0),
+            (101.0, 0, 0),
+            (101.0, 2, 1),
+            (101.0, 5, 2),
+            (100.0, 0, 0),
+            (100.0, 2, 1),
+            (100.0, 5, 2),
+        ];
+        let render = TpoRenderConfig::default();
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            rect.top(),
+            rect.bottom(),
+            false,
+        );
+        for theme in [crate::theme::Theme::dark(), crate::theme::Theme::light()] {
+            for mode in [
+                TPOColorMode::ByPeriod,
+                TPOColorMode::Solid,
+                TPOColorMode::ByValueArea,
+                TPOColorMode::ByInitialBalance,
+            ] {
+                for (display_mode, column) in [
+                    (TPODisplayMode::Letters, 12.0),
+                    (TPODisplayMode::Letters, 3.5),
+                    (TPODisplayMode::Blocks, 12.0),
+                ] {
+                    for (show_poc, show_value_area) in [(false, false), (false, true), (true, true)]
+                    {
+                        for density in [1.0, 1.5] {
+                            let config = TPOConfig {
+                                color_mode: mode,
+                                display_mode,
+                                show_poc,
+                                show_value_area,
+                                ..model.clone()
+                            };
+                            let ctx = egui::Context::default();
+                            crate::theme::apply_to_egui(&ctx, &theme);
+                            ctx.set_pixels_per_point(density);
+                            ctx.begin_pass(egui::RawInput::default());
+                            draw_session_profile(
+                                &ctx.layer_painter(egui::LayerId::background()),
+                                rect,
+                                &coords,
+                                &profile,
+                                &config,
+                                &render,
+                                10.25,
+                                column,
+                                false,
+                                Color32::GREEN,
+                                Color32::RED,
+                            );
+                            let mut output = ctx.end_pass();
+                            output.textures_delta.clear();
+                            let painted: Vec<_> = output
+                                .shapes
+                                .iter()
+                                .filter(|s| matches!(s.shape, Shape::Rect(_) | Shape::Text(_)))
+                                .collect();
+                            assert_eq!(painted.len(), cells.len());
+                            let letters = display_mode == TPODisplayMode::Letters && column >= 7.0;
+                            for (shape, (price, period, col)) in painted.iter().zip(cells) {
+                                let mut color = if letters {
+                                    letter_color(
+                                        &render,
+                                        &config,
+                                        period,
+                                        price,
+                                        &profile,
+                                        &theme.chart,
+                                    )
+                                } else {
+                                    readable_color(
+                                        entry_color(&render, &config, period, price, &profile),
+                                        theme.chart.axis_text,
+                                        &[theme.chart.bg],
+                                        3.0,
+                                    )
+                                };
+                                if show_poc && price == 101.0 {
+                                    color = readable_color(
+                                        render.poc_color,
+                                        theme.chart.axis_text,
+                                        &[theme.chart.bg],
+                                        if letters { 4.5 } else { 3.0 },
+                                    );
+                                } else if !letters && show_value_area && price != 101.0 {
+                                    color = theme.chart.bg.lerp_to_gamma(color, 0.45);
+                                }
+                                match &shape.shape {
+                                    Shape::Rect(block) if !letters => {
+                                        assert_eq!(block.fill, color);
+                                        let gap = 1.0 / density;
+                                        let expected = Rect::from_center_size(
+                                            Pos2::new(
+                                                10.25 + (col as f32 + 0.5) * column,
+                                                coords.price_to_y(price),
+                                            ),
+                                            egui::vec2((column - gap).max(gap), 16.0 - gap),
+                                        )
+                                        .round_to_pixels(density);
+                                        assert_eq!(block.rect, expected);
+                                    }
+                                    Shape::Text(text) if letters => {
+                                        assert_eq!(text.fallback_color, color)
+                                    }
+                                    _ => panic!("unexpected cell: {:?}", shape.shape),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn single_print_rows_are_highlighted_only_when_enabled() {
         let model = TPOConfig {
             tick_size: 1.0,
