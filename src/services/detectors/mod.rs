@@ -383,36 +383,38 @@ impl Tracked {
 fn deliver(
     tracked: Option<&mut Tracked>,
     subscription: Option<&mut Subscription>,
-    mut events: Vec<SignalEvent>,
+    events: Vec<SignalEvent>,
 ) {
-    let mut removed = Vec::new();
+    let mut delivered = Vec::new();
     if let Some(tracked) = tracked {
-        for event in &events {
+        for event in events {
+            delivered.push(event.clone());
             let detections = &mut tracked.detections;
             match event {
                 SignalEvent::Upsert(signal) => {
                     match detections.iter().rposition(|kept| kept.id == signal.id) {
-                        Some(at) => detections[at] = signal.clone(),
+                        Some(at) => detections[at] = signal,
                         None => {
                             if detections.len() == RETAINED
                                 && let Some(old) = detections.pop_front()
                             {
                                 tracked.big_trades.forget(&old.id);
-                                removed.push(SignalEvent::Remove(old.id));
+                                delivered.push(SignalEvent::Remove(old.id));
                             }
-                            detections.push_back(signal.clone());
+                            detections.push_back(signal);
                         }
                     }
                 }
-                SignalEvent::Remove(id) => detections.retain(|kept| kept.id != *id),
+                SignalEvent::Remove(id) => detections.retain(|kept| kept.id != id),
                 SignalEvent::Clear => detections.clear(),
             }
         }
+    } else {
+        delivered = events;
     }
-    events.extend(removed);
     if let Some(subscription) = subscription {
         subscription.streams.retain(Events::is_active);
-        for event in events {
+        for event in delivered {
             for stream in &subscription.streams {
                 stream.push(event.clone());
             }
@@ -651,6 +653,44 @@ mod tests {
     fn detections_past_the_retained_5000_leave_the_live_chart_too() {
         let mut host = Host::new(Some(10.0));
         let buy = |price| fill(1, price, 10.0, OrderSide::Buy, None);
+        // One page evicts the first marker and zone, then ends all 2,501 zones.
+        let history: Vec<Tick> = std::iter::once(buy(50.0))
+            .chain(std::iter::repeat_n(buy(100.0), 2500))
+            .chain(std::iter::once(fill(2, 49.0, 1.0, OrderSide::Sell, None)))
+            .collect();
+        host.detectors.push_history("ES", &history);
+        let mut live = HashMap::new();
+        for event in host.events() {
+            match event {
+                SignalEvent::Upsert(signal) => {
+                    live.insert(signal.id.clone(), signal);
+                }
+                SignalEvent::Remove(id) => {
+                    live.remove(&id);
+                }
+                SignalEvent::Clear => live.clear(),
+            }
+        }
+        host.listeners.clear();
+        host.subscribe();
+        let replay = host.events();
+        // 5,002 detections lose marker 1 and zone 1; restoring ended zone 1 loses marker 2.
+        assert_eq!(replay.len(), 5000);
+        assert!(replay.contains(&zone(1, 1, Some(2), 49.875, 50.125)));
+        assert!(!replay.contains(&marker(1, 1, 50.0, Direction::Up, "10")));
+        assert!(!replay.contains(&marker(2, 1, 100.0, Direction::Up, "10")));
+        assert_eq!(live.len(), 5000, "live detections after one history page");
+        let replay: HashMap<_, _> = replay
+            .into_iter()
+            .map(|event| match event {
+                SignalEvent::Upsert(signal) => (signal.id.clone(), signal),
+                _ => panic!("replay must contain only detections"),
+            })
+            .collect();
+        assert_eq!(live, replay);
+
+        let mut host = Host::new(Some(10.0));
+        let buy = |price| fill(1, price, 10.0, OrderSide::Buy, None);
         // A big buy at 50 and 2,499 at 100: a marker and a zone each, 5,000 detections.
         let history: Vec<Tick> = std::iter::once(buy(50.0))
             .chain(std::iter::repeat_n(buy(100.0), 2499))
@@ -662,8 +702,8 @@ mod tests {
             host.push(MarketEvent::Trade(buy(100.0))),
             [
                 marker(2501, 1, 100.0, Direction::Up, "10"),
-                zone(2501, 1, None, 99.875, 100.125),
                 SignalEvent::Remove(SignalId("big-trade-1".into())),
+                zone(2501, 1, None, 99.875, 100.125),
                 SignalEvent::Remove(SignalId("big-trade-zone-1".into()))
             ]
         );
