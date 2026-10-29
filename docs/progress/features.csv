@@ -21,15 +21,15 @@ Builder API,Builder integration,Desktop webview integration,missing,library,
 Builder API,Builder integration,Embedding with a data feed,done,host,src/widget/builder.rs;src/widget/frame.rs;src/widget/feed/mod.rs
 Builder API,Builder integration,Full trading-terminal UI around the chart,partial,library,src/ui/app_state.rs;src/ui/trading/mod.rs;terminal/src/lib.rs
 Builder API,Builder integration,Minimal embedding,done,library,src/widget/builder.rs;src/widget/frame.rs
-Builder API,Builder integration,Pluggable formatters and session rules,done,library,src/widget/frame.rs;src/widget/builder.rs
-Builder API,Builder integration,Public API surface and structure,done,library,src/prelude.rs;src/lib.rs;src/model/mod.rs;src/widget/mod.rs;src/widget/pan_zoom.rs;src/widget/interaction.rs;src/widget/builder.rs;src/styles/mod.rs
+Builder API,Builder integration,Pluggable formatters and session rules,done,library,src/widget/frame.rs;src/widget/builder.rs;src/model/session/mod.rs
+Builder API,Builder integration,Public API surface and structure,done,library,src/prelude.rs;src/lib.rs;src/widget/mod.rs;src/model/mod.rs;src/widget/pan_zoom.rs;src/widget/interaction.rs;src/widget/builder.rs;src/styles/mod.rs
 Builder API,Builder integration,Threading model for feeding data,done,library,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Builder API,Builder integration,WebAssembly target,done,library,src/data/mod.rs
 Builder API,Datafeed API,Bar data model,done,library,src/model/bar/bar.rs;src/widget/builder.rs;src/widget/series.rs;src/chart/rendering/candles/mod.rs
 Builder API,Datafeed API,Bar marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/chart/renderers/markers.rs;src/model/markers.rs;src/widget/events.rs
 Builder API,Datafeed API,Bounded history size,done,library,src/widget/series.rs;src/widget/feed/mod.rs
 Builder API,Datafeed API,Cache reset and full reload,done,host,src/widget/anchors.rs;src/widget/feed/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs
-Builder API,Datafeed API,Chart time zone,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/widget/feed/mod.rs;src/widget/time_scale.rs;src/model/bar/time.rs
+Builder API,Datafeed API,Chart time zone,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/widget/feed/mod.rs;src/widget/time_scale.rs;src/model/bar/time.rs;src/model/clock.rs;src/model/session/exchange.rs
 Builder API,Datafeed API,Connection status and symbol list notifications,done,host,src/widget/series.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs
 Builder API,Datafeed API,"Data status, currency and unit metadata",done,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/axis_currency.rs;src/data/mod.rs;src/widget/feed/mod.rs;src/widget/studies_data.rs
 Builder API,Datafeed API,Datafeed configuration handshake,done,host,src/data/mod.rs;src/model/instrument.rs;src/widget/feed/mod.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/components/symbol_search/mod.rs
@@ -41,7 +41,7 @@ Builder API,Datafeed API,HTTP history and streaming adapter,missing,host,
 Builder API,Datafeed API,History paging when scrolling back,done,host,src/widget/frame.rs;src/widget/feed/mod.rs;src/widget/studies_data.rs;src/data/merge.rs;src/widget/feed/pump.rs
 Builder API,Datafeed API,History request parameters,done,host,src/data/mod.rs;src/widget/feed/mod.rs
 Builder API,Datafeed API,Host data feed contract,done,host,src/data/mod.rs;src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs;src/data/merge.rs;src/prelude.rs
-Builder API,Datafeed API,Interval resampling,done,library,src/data/mod.rs;src/data/resample.rs
+Builder API,Datafeed API,Interval resampling,done,library,src/data/mod.rs;src/data/resample.rs;src/model/clock.rs;src/model/session/exchange.rs
 Builder API,Datafeed API,Live bar stream lifecycle,done,host,src/widget/feed/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs
 Builder API,Datafeed API,Paginated symbol search,done,host,src/services/search.rs;src/ui/top_toolbar/components/symbol_search/service.rs;src/ui/top_toolbar/components/symbol_search/mod.rs
 Builder API,Datafeed API,Per-symbol resolution capabilities,done,host,src/model/instrument.rs;src/widget/feed/mod.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs
@@ -210,7 +210,7 @@ Chart,Panes,Volume area in the main pane,done,library,src/widget/volume.rs;src/w
 Chart,Scales and axes,Auto-scale,done,library,src/widget/frame.rs;src/studies/chart_state.rs;src/scales/pricescale.rs;src/ui/top_toolbar/components/settings_menu/menu.rs
 Chart,Scales and axes,Bar spacing and time zoom,done,library,src/model/timescale.rs;src/widget/pan_zoom.rs;src/config/timescale.rs;src/widget/sync.rs;src/widget/mod.rs;src/widget/builder.rs
 Chart,Scales and axes,Bid and ask lines,done,host,src/widget/mod.rs;src/widget/settings/apply.rs;src/widget/frame.rs
-Chart,Scales and axes,Countdown to bar close,done,library,src/widget/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
+Chart,Scales and axes,Countdown to bar close,done,library,src/widget/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs;src/model/session/exchange.rs
 Chart,Scales and axes,Extended hours,done,host,src/widget/feed/mod.rs;src/widget/frame.rs;src/chart/renderers/session_breaks.rs
 Chart,Scales and axes,High and low price labels,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Chart,Scales and axes,Index-based time axis,done,library,src/model/timescale.rs;src/widget/frame.rs
@@ -230,7 +230,7 @@ Chart,Scales and axes,Regular price scale,done,library,src/scales/pricescale.rs;
 Chart,Scales and axes,Right offset,done,library,src/model/timescale.rs;src/widget/mod.rs;src/widget/builder.rs;src/widget/time_scale.rs;src/widget/pan_zoom.rs;src/widget/sync.rs
 Chart,Scales and axes,Right price scale,done,library,src/widget/mod.rs;src/widget/frame.rs;src/chart/renderers/labels.rs
 Chart,Scales and axes,Scale margins,done,library,src/widget/settings/apply.rs;src/scales/pricescale.rs;src/widget/frame.rs
-Chart,Scales and axes,Session breaks,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/ui/axis_context_menu.rs;src/config/chart.rs;src/widget/palette.rs
+Chart,Scales and axes,Session breaks,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/ui/axis_context_menu.rs;src/config/chart.rs;src/widget/palette.rs;src/model/session/exchange.rs;src/model/session/mod.rs;src/model/clock.rs
 Chart,Scales and axes,Symbol name label on the scale,done,library,;src/config/chart.rs;src/chart/rendering/axes.rs;src/widget/frame.rs;src/widget/price_series.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
 Chart,Scales and axes,Time axis labels,done,library,src/scales/timescale_marks.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/chart/renderers/labels.rs;src/widget/frame.rs;src/model/bar/time.rs;src/widget/time_scale.rs
 Chart,Scales and axes,Time zone selection,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/widget/time_scale.rs;src/model/bar/time.rs
@@ -460,7 +460,7 @@ Order flow,Order flow,Volume bubble colour modes,done,library,src/chart/overlays
 Order flow,Order flow,Volume bubble size scaling and outlier handling,done,library,src/chart/overlays/volume_bubbles.rs;src/widget/frame.rs
 Order flow,Order flow data model,Aggregation of trades into per-bar price levels,done,library,src/data/footprint.rs;src/widget/feed/mod.rs;src/data/mod.rs
 Order flow,Order flow data model,Backpressure and per-frame coalescing for high-rate feeds,done,library,src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
-Order flow,Order flow data model,Building bars from trades,done,library,src/data/inbox/mod.rs;src/data/mod.rs;src/data/inbox/sink.rs;src/data/inbox/tests.rs;src/data/merge.rs;src/widget/studies_data.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs
+Order flow,Order flow data model,Building bars from trades,done,library,src/data/inbox/mod.rs;src/data/mod.rs;src/data/inbox/sink.rs;src/model/clock.rs;src/data/inbox/tests.rs;src/data/merge.rs;src/widget/studies_data.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs
 Order flow,Order flow data model,Depth history store,done,library,src/data/depth_history.rs;src/widget/feed/mod.rs
 Order flow,Order flow data model,Grouping fills into parent market orders,done,library,src/model/quote.rs;src/data/trades.rs;src/widget/feed/mod.rs;src/data/mod.rs
 Order flow,Order flow data model,Historical trades and depth paging for a time range,done,library,src/data/mod.rs;src/widget/feed/mod.rs;src/data/trades.rs;src/data/depth_history.rs
@@ -860,7 +860,7 @@ Terminal,Toolbars and panels,Bottom time bar,done,library,src/ui/timeframe_toolb
 Terminal,Toolbars and panels,Chart settings button and applying the dialog,done,library,src/ui/top_toolbar/toolbar.rs;src/widget/settings/apply.rs
 Terminal,Toolbars and panels,Chart type menu,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/chart_type_selector.rs
 Terminal,Toolbars and panels,Compare / add symbol dialog,done,library,src/ui/top_toolbar/components/symbol_search/mod.rs;src/ui/top_toolbar/components/symbol_search/service.rs
-Terminal,Toolbars and panels,Custom intervals,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs
+Terminal,Toolbars and panels,Custom intervals,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs;src/model/timeframe.rs;src/model/session/exchange.rs
 Terminal,Toolbars and panels,Data window,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs
 Terminal,Toolbars and panels,Favourite drawing tools floating bar,partial,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/toolbar/floating.rs;src/ui/drawing_toolbar/state.rs;src/ui/drawing_toolbar/utilities/favorites.rs;src/services/settings.rs;examples/demo/layouts.rs
 Terminal,Toolbars and panels,Favourite intervals pinned to the toolbar,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs

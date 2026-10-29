@@ -87,11 +87,20 @@ impl BarClock {
             let n = opens.partition_point(|(open, _)| *open <= t);
             if let Some((open, _)) = n.checked_sub(1).and_then(|i| opens.get(i)) {
                 let elapsed = (t - *open).num_milliseconds();
-                return open
+                let bucket = open
                     .checked_add_signed(TimeDelta::milliseconds(
                         elapsed - elapsed.rem_euclid(timeframe.duration_ms()),
                     ))
                     .unwrap_or(t);
+                // Touching selected windows share a bucket; only a gap closes it.
+                let mut end = session.session_close(bucket, true);
+                while let Some(close) = end.filter(|close| *close <= t) {
+                    end = session.session_close(close, true);
+                    if end.is_none() {
+                        return close;
+                    }
+                }
+                return bucket;
             }
         }
         let offset = self.offset_at(t);
@@ -148,6 +157,16 @@ impl BarClock {
                 return DateTime::from_timestamp_millis(hi).unwrap_or(open);
             }
         }
+        if period > TimeDelta::hours(1).num_milliseconds()
+            && period < DAY_MS
+            && let Some(next) = boundary.checked_add_signed(timeframe.duration())
+        {
+            // The first pass of the next boundary may already have opened a bar.
+            let next = self.local_boundary(next, open);
+            if next > open && next <= t {
+                return next;
+            }
+        }
         open
     }
 
@@ -192,12 +211,27 @@ impl BarClock {
         if timeframe.duration_ms() < DAY_MS
             && let Some(session) = &self.session
         {
-            let next = open.checked_add_signed(timeframe.duration())?;
-            return Some(
-                session
-                    .session_close(open, true)
-                    .map_or(next, |close| next.min(close)),
-            );
+            let opens = session.opens([open]);
+            let n = opens.partition_point(|(start, _)| *start <= open);
+            if let Some((start, _)) = n.checked_sub(1).and_then(|i| opens.get(i)) {
+                let remaining = timeframe.duration_ms()
+                    - (open - *start)
+                        .num_milliseconds()
+                        .rem_euclid(timeframe.duration_ms());
+                let mut next = open.checked_add_signed(TimeDelta::milliseconds(remaining))?;
+                if let Some((start, _)) = opens.get(n) {
+                    next = next.min(*start);
+                }
+                // Touching selected windows keep the bucket open until the grid or a gap.
+                let mut end = session.session_close(open, true);
+                while let Some(close) = end.filter(|close| *close < next) {
+                    end = session.session_close(close, true);
+                    if end.is_none() {
+                        next = close;
+                    }
+                }
+                return Some(next);
+            }
         }
         if let Timeframe::Months(count) = timeframe {
             let local = open
@@ -264,7 +298,9 @@ impl BarClock {
             (None, Some(zone)) => super::ExchangeSessionProvider::new(zone.clone(), None),
             (None, None) => super::ExchangeSessionProvider::local(None),
         };
-        sessions.with_timeframe(self.timeframe.unwrap_or(Timeframe::Min1))
+        sessions
+            .with_calendar_zone(self.timezone.clone())
+            .with_timeframe(self.timeframe.unwrap_or(Timeframe::Min1))
     }
 
     /// Whether `a` and `b` fall in the same bar, so a feed may stamp a bar with any instant
@@ -317,6 +353,13 @@ mod tests {
             assert_eq!(clock.bar_open(t(at)), t(open), "{timeframe} at {at}");
         }
         for (timeframe, at, open, next, zone) in [
+            (
+                "90min".parse().unwrap(),
+                "2024-11-03T06:10:00Z",
+                "2024-11-03T05:30:00Z",
+                "2024-11-03T06:30:00Z",
+                "America/New_York",
+            ),
             (
                 "3month".parse().unwrap(),
                 "2024-04-01T03:59:59Z",
@@ -425,5 +468,160 @@ mod tests {
             clock.next_open(t("2024-03-15T23:55:00Z")),
             Some(t("2024-03-16T00:00:00Z"))
         );
+    }
+
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn intraday_bars_partition_repeated_hours() {
+        for (zone, transition, intervals) in [
+            (
+                "America/New_York",
+                "2024-11-03T06:00:00Z",
+                &[61, 75, 80, 90, 100][..],
+            ),
+            (
+                "America/Chicago",
+                "2024-11-03T07:00:00Z",
+                &[61, 75, 80, 100][..],
+            ),
+            ("Europe/London", "2024-10-27T01:00:00Z", &[90][..]),
+            ("America/St_Johns", "2024-11-03T04:30:00Z", &[90][..]),
+            (
+                "Europe/Berlin",
+                "2024-10-27T01:00:00Z",
+                &[61, 75, 80, 150][..],
+            ),
+            (
+                "Australia/Sydney",
+                "2024-04-06T16:00:00Z",
+                &[61, 75, 80, 150][..],
+            ),
+            (
+                "Europe/Chisinau",
+                "2024-10-27T00:00:00Z",
+                &[61, 75, 80, 150][..],
+            ),
+            (
+                "Pacific/Chatham",
+                "2024-04-06T14:00:00Z",
+                &[61, 100, 180][..],
+            ),
+            (
+                "America/Sao_Paulo",
+                "2018-02-18T02:00:00Z",
+                &[61, 75, 100][..],
+            ),
+        ] {
+            for &minutes in intervals {
+                let clock = BarClock::new(format!("{minutes}min").parse().unwrap())
+                    .with_timezone(TimezoneId::named(zone).unwrap());
+                let start = t(transition) - TimeDelta::hours(14);
+                let mut previous = clock.bar_open(start);
+                let mut trades = Vec::new();
+                for step in 0..=240 {
+                    let at = start + TimeDelta::minutes(step * 10);
+                    let open = clock.bar_open(at);
+                    let next = clock.next_open(open).unwrap();
+                    assert!(
+                        previous <= open && open <= at && at < next,
+                        "{zone} {minutes}min {at}: {open}..{next}"
+                    );
+                    assert_eq!(clock.bar_open(open), open);
+                    assert_eq!(clock.bar_open(next), next);
+                    assert_eq!(clock.bar_open(next - TimeDelta::milliseconds(1)), open);
+                    previous = open;
+                    trades.push(crate::model::Tick::new(at, 100.0, 1.0, None));
+                }
+                assert!(crate::data::aggregate_trades(&trades, clock).is_ok());
+            }
+        }
+    }
+
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn closed_session_ticks_open_separate_bars() {
+        use crate::model::{Session, SessionWindow};
+        use chrono::Weekday::*;
+        for (close_minute, split, after, expected) in [
+            (0, false, "2024-03-12T20:10:00Z", "2024-03-12T20:00:00Z"),
+            (15, false, "2024-03-12T20:20:00Z", "2024-03-12T20:15:00Z"),
+            (15, true, "2024-03-12T20:20:00Z", "2024-03-12T20:15:00Z"),
+        ] {
+            let mut session = Session::new([SessionWindow::new(
+                [Mon, Tue, Wed, Thu, Fri],
+                NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
+                NaiveTime::from_hms_opt(16, close_minute, 0).unwrap(),
+            )]);
+            if split {
+                let boundary = NaiveTime::from_hms_opt(11, 15, 0).unwrap();
+                session.windows[0].close = boundary;
+                session.windows.push(SessionWindow::new(
+                    [Mon, Tue, Wed, Thu, Fri],
+                    boundary,
+                    NaiveTime::from_hms_opt(16, close_minute, 0).unwrap(),
+                ));
+            }
+            let clock = BarClock::new(Timeframe::Hour1).with_session(
+                TimezoneId::named("America/New_York").unwrap(),
+                session,
+                false,
+            );
+            assert_eq!(clock.bar_open(t(after)), t(expected));
+            let inbox = std::sync::Arc::new(crate::data::inbox::Inbox::default());
+            let sink = inbox.subscribe("SAMPLE".into(), clock.clone(), 100, None);
+            for time in ["2024-03-12T19:59:00Z", after] {
+                sink.push_tick(crate::model::Tick::new(t(time), 100.0, 1.0, None));
+            }
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            assert_eq!(
+                updates.bars.keys().copied().collect::<Vec<_>>(),
+                [t("2024-03-12T19:30:00Z"), t(expected)]
+            );
+            assert!(updates.bars.values().all(|(bar, _)| bar.volume == 1.0));
+            // Include the opening, the shortened last bar and the following off-session bar.
+            for step in 0..=600 {
+                let at = t("2024-03-12T13:00:00Z") + TimeDelta::minutes(step);
+                let open = clock.bar_open(at);
+                let next = clock.next_open(open).unwrap();
+                assert!(open <= at && at < next, "{at}: {open}..{next}");
+                assert_eq!(clock.bar_open(next - TimeDelta::milliseconds(1)), open);
+            }
+        }
+        // Tuesday's overnight window opens before Monday's late daytime window.
+        let clock = BarClock::new(Timeframe::Hour4).with_session(
+            TimezoneId::utc(),
+            Session::new([
+                SessionWindow::new(
+                    [Mon],
+                    NaiveTime::from_hms_opt(23, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(23, 30, 0).unwrap(),
+                ),
+                SessionWindow::new(
+                    [Tue],
+                    NaiveTime::from_hms_opt(1, 0, 0).unwrap(),
+                    NaiveTime::MIN,
+                ),
+            ]),
+            false,
+        );
+        for (at, open, next) in [
+            (
+                "2024-07-08T22:00:00Z",
+                "2024-07-08T21:00:00Z",
+                "2024-07-08T23:00:00Z",
+            ),
+            (
+                "2024-07-08T23:15:00Z",
+                "2024-07-08T23:00:00Z",
+                "2024-07-09T00:00:00Z",
+            ),
+        ] {
+            assert_eq!(clock.bar_open(t(at)), t(open));
+            assert_eq!(clock.next_open(t(open)), Some(t(next)));
+            assert_eq!(
+                clock.bar_open(t(next) - TimeDelta::milliseconds(1)),
+                t(open)
+            );
+        }
     }
 }

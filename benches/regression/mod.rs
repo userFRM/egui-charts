@@ -7,6 +7,38 @@ use egui_charts::widget::SeriesId;
 use std::hint::black_box;
 
 pub fn run(name: &str, frames: usize) {
+    if name == "session-resample" {
+        use chrono::{Duration, NaiveTime, Weekday::*};
+        use egui_charts::data::resample;
+        use egui_charts::model::{Bar, BarClock, Session, SessionWindow, Timeframe, TimezoneId};
+
+        let source = BarClock::new(Timeframe::Hour1).with_session(
+            TimezoneId::named("America/New_York").unwrap(),
+            Session::new([SessionWindow::new(
+                [Mon, Tue, Wed, Thu, Fri],
+                NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
+                NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+            )]),
+            false,
+        );
+        let start = "2024-07-08T13:30:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        let data: Vec<_> = (0..4)
+            .flat_map(|week| (0..5).map(move |day| week * 7 + day))
+            .flat_map(|day| {
+                (0..7).map(move |hour| start + Duration::days(day) + Duration::hours(hour))
+            })
+            .map(|time| Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0))
+            .collect();
+        // Include each day's shortened 15:30 bar as well as its regular hourly bars.
+        for _ in 0..1 + frames {
+            let output = resample(black_box(&data), source.clone(), Timeframe::Day1).unwrap();
+            assert_eq!(output.len(), 20);
+            black_box(output);
+        }
+        return;
+    }
     if name == "trade-replay" {
         let fills: Vec<_> = (0..100_000)
             .map(|id| {
