@@ -3,7 +3,8 @@
 //! [`CATEGORY_ORDER`] and [`get_category_sections`] define the toolbar's grouped
 //! menus. [`DrawingToolType::categories`] and [`DrawingToolType::by_category`]
 //! provide finer groups for command lists. They group the same tools differently,
-//! except [`DrawingToolType::Measure`], which is a standalone toolbar button.
+//! and [`DrawingToolType::Measure`] is a standalone toolbar button outside the
+//! toolbar groups.
 
 use crate::drawings::DrawingToolType;
 

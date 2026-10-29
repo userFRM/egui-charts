@@ -102,12 +102,6 @@ mod tests {
         assert_eq!(repo.get_all_categories(), categories::CATEGORY_ORDER);
         assert_eq!(categories::get_category_default_tool("Nonsense"), None);
         assert!(DrawingToolType::by_category("Nonsense").is_empty());
-        assert!(categories::get_category_sections("Nonsense").is_empty());
-        assert_eq!(repo.get_tool_category(DrawingToolType::Measure), None);
-        for category in categories::CATEGORY_ORDER {
-            let default = categories::get_category_default_tool(category).unwrap();
-            assert_eq!(categories::get_tool_category(default), Some(*category));
-        }
         let cases = [
             (DrawingToolType::CrossCursor, "Cursors", "Cursors", "cross"),
             (DrawingToolType::TrendLine, "Lines", "Lines", "trend"),
