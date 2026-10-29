@@ -221,7 +221,7 @@ Chart,Scales and axes,Last price line and label,done,library,src/widget/frame.rs
 Chart,Scales and axes,Left price scale and moving the scale,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/widget/frame.rs;src/widget/price_series.rs;src/ui/axis_context_menu.rs
 Chart,Scales and axes,Lock price to bar ratio,done,library,src/ui/axis_context_menu.rs;src/widget/frame.rs;src/scales/pricescale.rs
 Chart,Scales and axes,Logarithmic scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/frame.rs;src/ui/axis_context_menu.rs;src/scales/pricescale_marks.rs
-Chart,Scales and axes,Maturity horizontal scale,done,library,src/scales/horizontal.rs;src/widget/mod.rs
+Chart,Scales and axes,Maturity horizontal scale,done,library,src/scales/horizontal.rs;src/widget/time_scale.rs
 Chart,Scales and axes,Multiple price scales and pin to scale,done,library,src/model/series_scale.rs;src/widget/price_series.rs
 Chart,Scales and axes,Percent scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/settings/apply.rs;src/widget/frame.rs
 Chart,Scales and axes,Previous close line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
