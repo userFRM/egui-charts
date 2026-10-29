@@ -1,6 +1,7 @@
 //! Named text documents kept by the host on behalf of the library.
 
-use crate::data::{MaybeSend, Reply};
+use super::Events;
+use crate::data::{FeedError, MaybeSend, Reply};
 
 /// What a stored document holds. Each kind is its own namespace of names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -30,6 +31,48 @@ pub enum StoreKind {
     Screens,
 }
 
+/// The host's revision of a stored document, such as a version counter, an entity tag or a
+/// content hash. The library compares revisions for equality only and hands them back unchanged.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Revision(
+    /// The host's own token, different for every stored version of a document.
+    pub String,
+);
+
+/// A stored document with the revision it was read at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Versioned {
+    /// The document as stored.
+    pub document: String,
+    /// Its revision.
+    pub revision: Revision,
+}
+
+/// The host's answer to [`Storage::save_versioned`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SaveOutcome {
+    /// The document was written, at this revision.
+    Saved(Revision),
+    /// Nothing was written because the stored document is not at the expected revision. Carries
+    /// the stored version so that the user can load it, or `None` if it was deleted meanwhile.
+    Conflict(Option<Versioned>),
+}
+
+/// How the user settles a refused save. Until one is chosen the unsaved document stays in memory
+/// and nothing is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ConflictChoice {
+    /// Load the stored version and drop the unsaved changes.
+    ReloadRemote,
+    /// Save the unsaved changes as a separate document named after the original with
+    /// " (local copy)" appended, then load the stored version.
+    KeepLocalCopy,
+    /// Write the unsaved changes over the stored version, which is now the expected revision.
+    Retry,
+}
+
 /// Where the library keeps settings and drawings between sessions: files, browser storage or a
 /// server, as the host chooses. The library reads and writes nothing on its own.
 ///
@@ -45,6 +88,15 @@ pub enum StoreKind {
 /// rather than dropping a document. The library waits for the answer to one call before it makes
 /// another for the same document, so different calls may be worked on concurrently. Renaming is a
 /// `save` under the new name and, once that succeeds, a `delete` of the old one.
+///
+/// A host shared by several clients can also keep revisions, with
+/// [`load_versioned`](Storage::load_versioned), [`save_versioned`](Storage::save_versioned) and
+/// [`watch`](Storage::watch). The library then writes a document only over the revision it read,
+/// so a client never overwrites a newer version unnoticed: a refused save keeps the unsaved
+/// document in memory and is settled with a [`ConflictChoice`]. A host that answers
+/// `load_versioned` with [`FeedError::NotSupported`], as the default does, keeps the plain
+/// behaviour above. Switching accounts means a new `Storage`; the library drops the old one's
+/// pending answers and streams, so nothing of the old account reaches the new one.
 ///
 /// ```
 /// use std::collections::HashMap;
@@ -103,4 +155,36 @@ pub trait Storage: MaybeSend + 'static {
 
     /// Removes the document `name` of `kind`. Removing a document that does not exist succeeds.
     fn delete(&self, kind: StoreKind, name: &str, reply: Reply<()>);
+
+    /// Like [`load`](Self::load), with the revision of the document. Answer
+    /// [`FeedError::NotSupported`] if the host keeps no revisions; the library then uses `load`
+    /// and `save` for that document. By default every call is refused so.
+    fn load_versioned(&self, kind: StoreKind, name: &str, reply: Reply<Option<Versioned>>) {
+        let _ = (kind, name);
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Stores `document` only if the stored one is at revision `expected`, or does not exist when
+    /// `expected` is `None`. Answer [`SaveOutcome::Saved`] with the new revision once it is kept.
+    /// If the stored document differs, change nothing and answer [`SaveOutcome::Conflict`] with
+    /// the stored version. The check and the write must be one atomic step.
+    fn save_versioned(
+        &self,
+        kind: StoreKind,
+        name: &str,
+        document: String,
+        expected: Option<Revision>,
+        reply: Reply<SaveOutcome>,
+    ) {
+        let _ = (kind, name, document, expected);
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Pushes the new revision each time another client changes the document `name` of `kind`,
+    /// until `events` is inactive. Writes of this client may be pushed too; the library ignores
+    /// the revisions it knows. Called after the document was read, only for the library's own
+    /// documents that follow remote changes, and by default pushes nothing.
+    fn watch(&self, kind: StoreKind, name: &str, events: Events<Revision>) {
+        let _ = (kind, name, events);
+    }
 }

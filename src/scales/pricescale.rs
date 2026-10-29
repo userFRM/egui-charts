@@ -239,7 +239,11 @@ impl PriceTransform {
         let value = self.axis_value(value);
         match (formatter, self.mode) {
             (Some(formatter), _) => formatter.format(value),
-            (None, PriceScaleMode::Percentage) => format!("{value:+.decimals$}%"),
+            (None, PriceScaleMode::Percentage) => {
+                let formatted = super::price_formatter::format_decimal(value, decimals);
+                let sign = if formatted.starts_with('-') { "" } else { "+" };
+                format!("{sign}{formatted}%")
+            }
             (None, _) => DefaultPriceFormatter::with_precision(decimals).format(value),
         }
     }
@@ -407,10 +411,14 @@ impl PriceScale {
     ///
     /// The bounds are in the units of the transform the last fit returned
     /// ([`ChartState::fit_price_scale`](crate::studies::ChartState::fit_price_scale)).
+    /// Non-finite, equal or reversed bounds, or an overflowing span, leave the scale unchanged.
     pub fn set_range(&mut self, min: f64, max: f64) {
+        if !min.is_finite() || !max.is_finite() || min >= max || !(max - min).is_finite() {
+            return;
+        }
         if let Some(ratio) = &mut self.bar_ratio {
             let span = self.range.max - self.range.min;
-            if span > 0.0 && span.is_finite() && (max - min).is_finite() && max > min {
+            if span > 0.0 && span.is_finite() {
                 *ratio *= (max - min) / span;
             } else {
                 self.bar_ratio = None;
@@ -583,6 +591,22 @@ impl PriceMap {
         self.transform.to_price(self.y_to_scale(y))
     }
 
+    /// Translates a price by the scale-unit offset between two y coordinates.
+    ///
+    /// Equal y coordinates keep valid prices exactly unchanged. Non-positive logarithmic
+    /// prices start from their bounded off-pane coordinate.
+    pub fn translate_price(&self, price: f64, from_y: f32, to_y: f32) -> f64 {
+        if self.transform.mode == PriceScaleMode::Logarithmic && price <= 0.0 {
+            return self.y_to_price(self.price_to_y(price) + (to_y - from_y));
+        }
+        if from_y == to_y {
+            return price;
+        }
+        let shift = self.y_to_scale(to_y) - self.y_to_scale(from_y);
+        self.transform
+            .to_price(self.transform.to_scale(price) + shift)
+    }
+
     /// Converts scale units to a y coordinate.
     ///
     /// A flat range has no vertical extent to map onto, so every value lands on
@@ -624,6 +648,65 @@ impl PriceMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn percentage_labels_round_zero_without_a_minus() {
+        let transform = PriceTransform::new(PriceScaleMode::Percentage, 100.0);
+        for (price, expected) in [
+            (99.996, "+0.00%"),
+            (100.0, "+0.00%"),
+            (100.004, "+0.00%"),
+            (99.994, "-0.01%"),
+            (100.006, "+0.01%"),
+        ] {
+            assert_eq!(
+                transform.label(transform.to_scale(price), 2, None),
+                expected
+            );
+        }
+        for (min, max, expected) in [(-0.35, 0.45, "+0.000%"), (-0.0, 1e-10, "+0e0%")] {
+            let map = PriceMap::new(transform, PriceRange::new(min, max), 0.0, 500.0, false);
+            let zero = map
+                .marks()
+                .into_iter()
+                .find(|m| m.price.abs() < (max - min) * 1e-9)
+                .unwrap();
+            assert_eq!(zero.label, expected);
+        }
+    }
+
+    #[test]
+    fn invalid_manual_ranges_leave_the_scale_unchanged() {
+        for (min, max) in [
+            (f64::NAN, f64::NAN),
+            (f64::NAN, 100.0),
+            (0.0, f64::NAN),
+            (f64::NEG_INFINITY, 100.0),
+            (0.0, f64::INFINITY),
+            (200.0, 100.0),
+            (100.0, 100.0),
+            (-f64::MAX, f64::MAX),
+        ] {
+            for locked in [false, true] {
+                let mut scale = PriceScale::new(PriceScaleOptions::default());
+                scale.autoscale(100.0, 170.0);
+                if locked {
+                    scale.set_bar_ratio_locked(true, 10.0, 500.0);
+                }
+                let before = serde_json::to_value(&scale).unwrap();
+                scale.set_range(min, max);
+                assert_eq!(
+                    serde_json::to_value(&scale).unwrap(),
+                    before,
+                    "{min}..{max}"
+                );
+                if !locked {
+                    scale.autoscale(200.0, 270.0);
+                    assert!(scale.range().min > 170.0);
+                }
+            }
+        }
+    }
 
     /// Hand-computed positions on a pane from y = 0 (top) to y = 100 (bottom).
     #[test]

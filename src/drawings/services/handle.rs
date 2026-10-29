@@ -112,6 +112,25 @@ impl HandleService {
                     handles.push((HandlePos::Middle, mid));
                 }
             }
+            // A position: the entry and the width on the entry line, the target and the stop
+            // on the box's left edge, and the box's centre, which the body drag moves.
+            DrawingToolType::LongPos | DrawingToolType::ShortPos => {
+                if let &[entry, target, ..] = drawing.points.as_slice() {
+                    let right = Drawing::position_right(entry, target);
+                    handles.push((HandlePos::Start, entry));
+                    handles.push((HandlePos::End, Pos2::new(right, entry.y)));
+                    handles.push((HandlePos::Point(1), Pos2::new(entry.x, target.y)));
+                    if let Some(stop) = drawing.points.get(2) {
+                        handles.push((HandlePos::Point(2), Pos2::new(entry.x, stop.y)));
+                    }
+                    handles.push((
+                        HandlePos::Middle,
+                        Pos2::new((entry.x + right) / 2.0, entry.y),
+                    ));
+                } else if let Some(&entry) = drawing.points.first() {
+                    handles.push((HandlePos::Start, entry));
+                }
+            }
             // Multi-point tools - show indexed handles
             _ => {
                 for (i, &point) in drawing.points.iter().enumerate() {
@@ -154,15 +173,19 @@ impl HandleService {
     ///
     /// For the `Middle` handle, all points are translated by the delta between
     /// the old and new centroid positions (move entire drawing).
-    pub fn update_handle<F, G>(
+    /// `translate_price(price, from_y, to_y)` shifts their prices in scale units;
+    /// other handles use `y_to_price`.
+    pub fn update_handle<F, G, H>(
         drawing: &mut Drawing,
         handle: HandlePos,
         new_pos: Pos2,
         x_to_bar: F,
         y_to_price: G,
+        translate_price: H,
     ) where
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
+        H: Fn(f64, f32, f32) -> f64,
     {
         if handle == HandlePos::Middle {
             if let Some((_, center)) = Self::get_handles(drawing)
@@ -170,13 +193,12 @@ impl HandleService {
                 .find(|(h, _)| *h == handle)
             {
                 let bars = x_to_bar(new_pos.x) - x_to_bar(center.x);
-                let price = y_to_price(new_pos.y) - y_to_price(center.y);
-                for point in &mut drawing.points {
-                    *point += new_pos - center;
-                }
                 for point in &mut drawing.chart_points {
                     point.bar_idx += bars;
-                    point.price += price;
+                    point.price = translate_price(point.price, center.y, new_pos.y);
+                }
+                for point in &mut drawing.points {
+                    *point += new_pos - center;
                 }
             }
             return;
@@ -205,14 +227,30 @@ impl HandleService {
                     drawing.chart_points[0].bar_idx = x_to_bar(new_pos.x);
                 }
             }
-            DrawingToolType::LongPos | DrawingToolType::ShortPos => {
-                Self::update_multi_point_handle(drawing, handle, new_pos, &x_to_bar, &y_to_price);
-                // The stop line ends where the target line does; keep its handle there.
-                if drawing.points.len() > 2 && drawing.chart_points.len() > 2 {
-                    drawing.points[2].x = drawing.points[1].x;
-                    drawing.chart_points[2].bar_idx = drawing.chart_points[1].bar_idx;
+            // The target and the stop move in price only; the width handle moves the right
+            // edge, where the target and the stop anchors sit, never left of the entry.
+            DrawingToolType::LongPos | DrawingToolType::ShortPos => match handle {
+                HandlePos::Point(level @ (1 | 2))
+                    if level < drawing.points.len() && level < drawing.chart_points.len() =>
+                {
+                    drawing.points[level].y = new_pos.y;
+                    drawing.chart_points[level].price = y_to_price(new_pos.y);
                 }
-            }
+                HandlePos::End if drawing.points.len() > 1 && drawing.chart_points.len() > 1 => {
+                    let x = new_pos.x.max(drawing.points[0].x);
+                    for level in 1..drawing.points.len().min(drawing.chart_points.len()) {
+                        drawing.points[level].x = x;
+                        drawing.chart_points[level].bar_idx = x_to_bar(x);
+                    }
+                }
+                _ => Self::update_multi_point_handle(
+                    drawing,
+                    handle,
+                    new_pos,
+                    &x_to_bar,
+                    &y_to_price,
+                ),
+            },
             _ => {
                 Self::update_multi_point_handle(drawing, handle, new_pos, &x_to_bar, &y_to_price);
             }
@@ -350,12 +388,50 @@ impl HandleService {
         };
         let radius = config.size / 2.0;
 
+        let position = matches!(
+            drawing.tool_type,
+            DrawingToolType::LongPos | DrawingToolType::ShortPos
+        );
         for (pos, point) in Self::get_handles(drawing) {
-            if dragging_handle == Some(pos) {
-                painter.circle_filled(point, radius, color(config.selected_color));
+            // A position moves by its body; its target and stop handles are squares.
+            if position && pos == HandlePos::Middle {
+                continue;
+            }
+            let ring = if dragging_handle == Some(pos) {
+                None
             } else {
-                painter.circle_filled(point, radius, color(config.color));
-                painter.circle_filled(point, radius - RING_WIDTH, theme.chart.bg);
+                Some(theme.chart.bg)
+            };
+            let mut fill = color(if ring.is_some() {
+                config.color
+            } else {
+                config.selected_color
+            });
+            if position && ring.is_some() {
+                fill = fill.lerp_to_gamma(theme.chart.bg, 0.15);
+            }
+            if position && matches!(pos, HandlePos::Point(_)) {
+                let square = egui::Rect::from_center_size(point, egui::Vec2::splat(2.0 * radius));
+                let corner = radius / 2.0;
+                painter.rect(
+                    square,
+                    corner,
+                    ring.unwrap_or(fill),
+                    egui::Stroke::new(1.0, fill),
+                    egui::StrokeKind::Inside,
+                );
+            } else if position {
+                painter.circle(
+                    point,
+                    radius - 0.5,
+                    ring.unwrap_or(fill),
+                    egui::Stroke::new(1.0, fill),
+                );
+            } else {
+                painter.circle_filled(point, radius, fill);
+                if let Some(bg) = ring {
+                    painter.circle_filled(point, radius - RING_WIDTH, bg);
+                }
             }
         }
     }
@@ -412,6 +488,29 @@ mod tests {
                     (BottomLeft, pos2(100.0, 300.0)),
                     (BottomRight, pos2(200.0, 300.0)),
                     (Middle, pos2(150.0, 200.0)),
+                ],
+            ),
+            (
+                DrawingToolType::LongPos,
+                vec![pos2(100.0, 200.0), pos2(400.0, 100.0), pos2(400.0, 250.0)],
+                vec![
+                    (Start, pos2(100.0, 200.0)),
+                    (End, pos2(400.0, 200.0)),
+                    (Point(1), pos2(100.0, 100.0)),
+                    (Point(2), pos2(100.0, 250.0)),
+                    (Middle, pos2(250.0, 200.0)),
+                ],
+            ),
+            // Narrower than the minimum width: the width handle sits at the box's drawn edge.
+            (
+                DrawingToolType::ShortPos,
+                vec![pos2(100.0, 200.0), pos2(150.0, 250.0), pos2(150.0, 120.0)],
+                vec![
+                    (Start, pos2(100.0, 200.0)),
+                    (End, pos2(300.0, 200.0)),
+                    (Point(1), pos2(100.0, 250.0)),
+                    (Point(2), pos2(100.0, 120.0)),
+                    (Middle, pos2(200.0, 200.0)),
                 ],
             ),
             (
@@ -549,8 +648,6 @@ mod tests {
                     DrawingToolType::BarsPattern,
                     DrawingToolType::GhostFeed,
                     DrawingToolType::ElliottDoubleCombo,
-                    DrawingToolType::LongPos,
-                    DrawingToolType::ShortPos,
                 ],
                 3,
             ),
@@ -668,10 +765,54 @@ mod tests {
             ),
         ];
         for (tool, points, handle, to, screen, chart) in cases {
-            let mut drawing = create_test_drawing(tool, points);
-            HandleService::update_handle(&mut drawing, handle, to, x_to_bar, y_to_price);
-            assert_eq!(drawing.points, screen, "{tool:?} {handle:?}");
-            assert_eq!(drawing.chart_points, chart, "{tool:?} {handle:?}");
+            for logarithmic in [false, true] {
+                let price = |y: f32| {
+                    if logarithmic {
+                        1000.0 * (-f64::from(y) / 100.0).exp()
+                    } else {
+                        y_to_price(y)
+                    }
+                };
+                let mut drawing = create_test_drawing(tool, points.clone());
+                for (anchor, point) in drawing.chart_points.iter_mut().zip(&drawing.points) {
+                    anchor.price = price(point.y);
+                }
+                HandleService::update_handle(
+                    &mut drawing,
+                    handle,
+                    to,
+                    x_to_bar,
+                    |y: f32| price(y.clamp(0.0, 350.0)),
+                    |p, from, to| {
+                        if logarithmic {
+                            p * (-f64::from(to - from) / 100.0).exp()
+                        } else {
+                            p - f64::from(to - from)
+                        }
+                    },
+                );
+                assert_eq!(drawing.points, screen, "{tool:?} {handle:?}");
+                let expected = if logarithmic {
+                    screen
+                        .iter()
+                        .map(|p| ChartPoint::new(x_to_bar(p.x), price(p.y)))
+                        .collect()
+                } else {
+                    chart.clone()
+                };
+                if logarithmic && handle == HandlePos::Middle {
+                    assert_eq!(drawing.chart_points.len(), expected.len());
+                    for (got, want) in drawing.chart_points.iter().zip(&expected) {
+                        assert_eq!(got.bar_idx, want.bar_idx, "{tool:?} {handle:?}");
+                        assert!(
+                            (got.price - want.price).abs() < 1e-12 * want.price.abs(),
+                            "{tool:?} {handle:?}: {got:?}, expected {want:?}"
+                        );
+                    }
+                } else {
+                    assert_eq!(drawing.chart_points, expected, "{tool:?} {handle:?}");
+                }
+            }
         }
     }
 }

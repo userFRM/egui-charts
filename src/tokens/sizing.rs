@@ -507,18 +507,8 @@ pub struct CrosshairSizingTokens {
 pub struct PositionToolSizingTokens {
     /// Minimum width, in egui logical points.
     pub min_width: f32,
-    /// Label info width, in egui logical points.
-    pub label_info_width: f32,
-    /// Minimum label info height, in egui logical points.
-    pub label_info_height: f32,
-    /// Label target width, in egui logical points.
-    pub label_target_width: f32,
-    /// Horizontal label offset, in egui logical points.
-    pub label_offset_x: f32,
     /// Vertical label offset, in egui logical points.
     pub label_offset_y: f32,
-    /// Horizontal text offset, in egui logical points.
-    pub text_offset_x: f32,
 }
 
 /// Charts additional sizing defaults in egui logical points.

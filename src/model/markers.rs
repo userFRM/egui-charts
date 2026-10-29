@@ -67,7 +67,7 @@ pub enum MarkerPos {
 }
 
 /// Where a series' markers are painted among the other content of the price pane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum MarkerZOrder {
     /// With their series: over it, under the series added after it and under the studies.
     #[default]
@@ -79,7 +79,7 @@ pub enum MarkerZOrder {
 }
 
 /// How the markers of one series are fitted and layered; see `Chart::set_marker_options`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkerOptions {
     /// Whether the prices of the [`MarkerPos::AtPriceTop`], [`AtPriceBottom`](MarkerPos::AtPriceBottom)
     /// and [`AtPriceMiddle`](MarkerPos::AtPriceMiddle) markers in view widen the autoscaled price
@@ -107,8 +107,9 @@ pub struct Marker {
     pub position: MarkerPos,
     /// Shape of the marker
     pub shape: MarkerShape,
-    /// Color of the marker
-    #[serde(skip)]
+    /// Color of the marker; `PLACEHOLDER`, the default of [`Marker::new`], uses the theme's text
+    /// colour.
+    #[serde(default)]
     pub color: Color32,
     /// Optional text label
     pub text: Option<String>,
@@ -129,7 +130,7 @@ impl Marker {
             time,
             position: MarkerPos::default(),
             shape: MarkerShape::default(),
-            color: Color32::WHITE,
+            color: Color32::PLACEHOLDER,
             text: None,
             tooltip: None,
             size: 1.0,
@@ -313,7 +314,7 @@ impl LineStyle {
 }
 
 /// A horizontal line at a price on a series' scale, with an optional title and a price axis label.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PriceLine {
     /// Price in the series' units.
     pub price: f64,

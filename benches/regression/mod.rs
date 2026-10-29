@@ -37,6 +37,23 @@ pub fn run(name: &str, frames: usize) {
         }
         return;
     }
+    if name == "bubbles" {
+        // One 390 bar session on an exchange clock, whose bar opens are costly to look up.
+        let count = 23_400;
+        let mut chart = super::bubble_chart(count, true);
+        let samples = super::frame::run(vec2(1440.0, 900.0), pos2(700.0, 400.0), frames, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                chart.show(ui);
+            });
+        });
+        black_box(samples);
+        assert_eq!(
+            chart.trades(SeriesId::MAIN).count(),
+            count as usize,
+            "every trade reaches the chart"
+        );
+        return;
+    }
     let bars = match name {
         "frame-1000" => 1_000,
         "frame-1000000" => 1_000_000,

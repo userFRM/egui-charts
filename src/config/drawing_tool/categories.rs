@@ -1,7 +1,9 @@
-//! Category groupings and enumeration methods for [`DrawingToolType`].
+//! Fine category groupings and enumeration methods for [`DrawingToolType`].
 //!
-//! Provides methods to query tools by category name, list all available
-//! categories, enumerate all tools, and look up SVG icon paths.
+//! [`DrawingToolType::categories`] and [`DrawingToolType::by_category`] supply
+//! command lists with finer groups than the toolbar's `drawings::categories`.
+//! They group the same tools differently; Measure is a standalone toolbar button
+//! but belongs to Measurers here. This module also enumerates tools and icon paths.
 
 use super::DrawingToolType;
 
@@ -13,7 +15,7 @@ impl DrawingToolType {
     /// `"projection"`, `"volume"`, `"measurers"`, `"brushes"`, `"arrows"`,
     /// `"shapes"`, `"annotations"`, `"content"`, `"icons"`.
     ///
-    /// Returns `[TrendLine]` for unrecognized categories as a safe fallback.
+    /// Returns an empty vector for an unknown category name.
     pub fn by_category(category: &str) -> Vec<Self> {
         match category.to_lowercase().as_str() {
             "cursors" => vec![
@@ -136,11 +138,14 @@ impl DrawingToolType {
             ],
             "content" => vec![Self::Image, Self::Tweet, Self::Idea],
             "icons" => vec![Self::FontIcon, Self::Sticker],
-            _ => vec![Self::TrendLine],
+            _ => vec![],
         }
     }
 
     /// Returns the names of all 18 tool categories in display order.
+    ///
+    /// These are the finer command-list groups, not the toolbar menu groups
+    /// defined by `drawings::categories`.
     pub fn categories() -> &'static [&'static str] {
         &[
             "Cursors",
