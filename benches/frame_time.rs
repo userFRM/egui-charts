@@ -249,16 +249,14 @@ fn price_based(filters: &[String], frames: usize) {
         .map(|i| {
             let open = close;
             close += step();
-            Bar {
-                time: start + Duration::minutes(i),
+            Bar::new(
+                start + Duration::minutes(i),
                 open,
+                open.max(close) + 0.05,
+                open.min(close) - 0.05,
                 close,
-                high: open.max(close) + 0.05,
-                low: open.min(close) - 0.05,
-                volume: 100.0,
-                colors: None,
-                payload: None,
-            }
+                100.0,
+            )
         })
         .collect();
     let size = RenkoConfig::from_atr(&bars, 14, 0.5).brick_size;

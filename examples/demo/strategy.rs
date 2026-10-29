@@ -209,21 +209,22 @@ impl Signals for ReportSignals {
                     Direction::Down,
                 ),
             ] {
-                events.push(SignalEvent::Upsert(Signal {
-                    id: SignalId(format!("sample-backtest-{index}-{fill}")),
-                    shape: SignalShape::Marker {
+                let mut signal = Signal::new(
+                    SignalId(format!("sample-backtest-{index}-{fill}")),
+                    SignalShape::Marker {
                         time,
                         price: Some(price),
                         direction,
                     },
-                    category: "Sample backtest".into(),
-                    label: Some(format!("{fill} {}", index + 1)),
-                    tooltip: Some(format!(
-                        "{} · {fill} {} @ {price}",
-                        self.report.name,
-                        index + 1
-                    )),
-                }));
+                    "Sample backtest",
+                );
+                signal.label = Some(format!("{fill} {}", index + 1));
+                signal.tooltip = Some(format!(
+                    "{} · {fill} {} @ {price}",
+                    self.report.name,
+                    index + 1
+                ));
+                events.push(SignalEvent::Upsert(signal));
             }
         }
     }

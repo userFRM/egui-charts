@@ -27,17 +27,18 @@ use crate::model::{Signal, SignalId, Timeframe};
 ///             while events.is_active() {
 ///                 std::thread::sleep(Duration::from_secs(1));
 ///                 count += 1;
-///                 events.push(SignalEvent::Upsert(Signal {
-///                     id: SignalId(format!("{symbol}-breakout-{count}")),
-///                     shape: SignalShape::Marker {
+///                 let mut signal = Signal::new(
+///                     SignalId(format!("{symbol}-breakout-{count}")),
+///                     SignalShape::Marker {
 ///                         time: chrono::Utc::now(),
 ///                         price: None,
 ///                         direction: Direction::Up,
 ///                     },
-///                     category: "Breakouts".into(),
-///                     label: Some("B".into()),
-///                     tooltip: Some(format!("Breakout {count} on {symbol}")),
-///                 }));
+///                     "Breakouts",
+///                 );
+///                 signal.label = Some("B".into());
+///                 signal.tooltip = Some(format!("Breakout {count} on {symbol}"));
+///                 events.push(SignalEvent::Upsert(signal));
 ///             }
 ///         });
 ///     }

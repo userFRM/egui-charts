@@ -37,6 +37,7 @@ impl SeriesId {
 /// Read the chart's current selection with [`Chart::selected_element`](crate::Chart::selected_element).
 /// Series and studies can be selected in the main pane or an additional pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ChartElementId {
     /// A bar or volume series.
     Series(SeriesId),

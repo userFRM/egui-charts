@@ -150,6 +150,7 @@ impl fmt::Display for PriceScaleId {
 
 /// Configuration options for a [`PriceScale`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct PriceScaleOptions {
     /// Price scale mode
     pub mode: PriceScaleMode,

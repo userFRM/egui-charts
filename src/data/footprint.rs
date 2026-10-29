@@ -54,6 +54,7 @@ pub struct NodeSensitivity {
 
 /// One bar's executed volume and intrabar delta path, starting at zero.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FootprintBar {
     /// Bar open, obtained from the supplied [`BarClock`].
     pub time: DateTime<Utc>,

@@ -101,6 +101,13 @@
 //!
 //! Construct extensible options with their constructors or `Default`, then assign
 //! public fields. Include a fallback arm when matching a `#[non_exhaustive]` enum.
+//!
+//! A few types stay exhaustive on purpose. `widget::SeriesOptions`,
+//! `chart::overlays::VolumeBubblesConfig`, `model::ChartTypeParams` and `theme::Theme`
+//! are built in one expression that ends in `..Default::default()` or
+//! `..Theme::light()`, which keeps compiling when a field is added.
+//! `widget::MismatchDirection`, `model::PriceLineSource` and `model::LogicalRange` are
+//! complete by meaning.
 
 // ─── Crate-level lint configuration ──────────────────────────────────────────
 #![allow(clippy::too_many_arguments)]

@@ -167,6 +167,7 @@ impl PriceFormatter for PercentageFormatter {
 /// If the thousands and decimal separators match, grouping is omitted so an amount
 /// never uses the same character for both separators, including after direct field edits.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CurrencyFormatter {
     /// Currency symbol (e.g., "$", "€", "£", "¥")
     pub symbol: String,

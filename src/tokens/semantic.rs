@@ -16,6 +16,7 @@ use egui::Color32;
 /// Each field groups defaults and fallbacks for a specific domain, including chart
 /// rendering and drawing tools. UI chrome reads the applied theme.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct SemanticTokens {
     /// Neutral engine fallback; UI chrome reads the applied theme.
     pub ui: UiSemanticTokens,
@@ -39,6 +40,7 @@ pub struct SemanticTokens {
 
 /// Neutral fallback still used by volume bubbles. UI chrome reads the applied theme.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct UiSemanticTokens {
     /// Neutral default retained for engine volume bubbles.
     pub text_muted_dark: Color32,
@@ -51,6 +53,7 @@ pub struct UiSemanticTokens {
 /// Defines colors for the chart background, grid lines, axis text, crosshair,
 /// candle/bar colors (bullish/bearish), volume bar alpha, and watermark.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct ChartSemanticTokens {
     /// Background color.
     pub bg: Color32,
@@ -86,6 +89,7 @@ pub struct ChartSemanticTokens {
 
 /// Brand accent colors (consistent across light/dark themes).
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct BrandSemanticTokens {
     /// Accent color.
     pub accent: Color32,
@@ -162,6 +166,7 @@ pub struct TpoSemanticTokens {
 
 /// Legacy moving average colours still used by drawing defaults. Studies use `studies::palette`.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct IndicatorSemanticTokens {
     /// Generic moving average line color.
     pub ma: Color32,

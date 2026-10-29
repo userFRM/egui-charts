@@ -17,6 +17,7 @@ use drawings::DrawingLinks;
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
 )]
+#[non_exhaustive]
 pub enum ChartLayoutMode {
     /// One chart.
     #[default]
@@ -152,6 +153,7 @@ impl std::fmt::Display for ChartLayoutMode {
 
 /// Independent synchronization switches within each layout group.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ChartSyncOptions {
     /// Synchronize scrolling and zooming using UTC plot edges.
     pub sync_time_axis: bool,

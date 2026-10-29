@@ -678,12 +678,12 @@ impl DemoApp {
             }
         }
         self.refresh_active_chart();
-        self.settings_state = egui_charts::widget::settings::ChartSettingsState {
-            alerts: self.settings_state.alerts.clone(),
-            trading: self.trading.display.clone(),
-            adjust_for_dividends: self.timeframe_toolbar.state.adjust_for_dividends,
-            ..egui_charts::widget::settings::ChartSettingsState::from_chart(&self.chart)
-        };
+        let mut settings =
+            egui_charts::widget::settings::ChartSettingsState::from_chart(&self.chart);
+        settings.alerts = self.settings_state.alerts.clone();
+        settings.trading = self.trading.display.clone();
+        settings.adjust_for_dividends = self.timeframe_toolbar.state.adjust_for_dividends;
+        self.settings_state = settings;
     }
 
     /// The settings the demo keeps between sessions.

@@ -73,6 +73,7 @@ pub trait TimeFormatter: Send + Sync {
 
 /// Default time formatter using standard formats
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct DefaultTimeFormatter {
     /// Whether to use 24-hour format
     pub use_24_hour: bool,
@@ -247,6 +248,7 @@ impl Style<'_> {
 /// The names need the `locales` cargo feature, on by default; without it they
 /// are English, as with an unknown locale.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct LocaleTimeFormatter {
     /// Locale identifier: language and region, such as `"en-US"`, `"ja-JP"` or
     /// `"de-DE"` (`"de_DE"` also works). Unknown identifiers use English names.

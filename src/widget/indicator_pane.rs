@@ -69,6 +69,7 @@ mod indicator_sizing {
 /// for common indicators via [`IndicatorPaneConfig::rsi`],
 /// [`IndicatorPaneConfig::macd`], and [`IndicatorPaneConfig::stochastic`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct IndicatorPaneConfig {
     /// Panel height in egui logical points.
     pub height: f32,

@@ -1684,6 +1684,7 @@ impl DemoApp {
                     CrosshairStyle::Arrow | CrosshairStyle::Hidden => CursorType::Arrow,
                     CrosshairStyle::Demonstration => CursorType::Demonstration,
                     CrosshairStyle::Magic => CursorType::Magic,
+                    _ => CursorType::Cross,
                 },
                 eraser_mode_enabled: dm.eraser_mode,
                 stay_in_drawing_mode: dm.stay_in_drawing_mode,

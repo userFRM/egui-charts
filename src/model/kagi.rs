@@ -23,6 +23,7 @@ use chrono::{DateTime, Utc};
 
 /// A single vertical segment in a Kagi chart.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct KagiLine {
     /// Timestamp when this segment was created (from the source bar).
     pub ts: DateTime<Utc>,
@@ -73,6 +74,7 @@ impl KagiLine {
 /// The reversal amount can be set directly, derived from ATR, or
 /// computed as a percentage of price.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct KagiConfig {
     /// Reversal amount - price movement needed to create a new line
     pub reversal_amount: f64,

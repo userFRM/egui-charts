@@ -15,6 +15,7 @@ use chrono::{DateTime, Utc};
 
 /// A single Renko brick representing a fixed-size price movement.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct RenkoBrick {
     /// Timestamp of the source bar that completed this brick.
     pub ts: DateTime<Utc>,
@@ -60,6 +61,7 @@ impl RenkoBrick {
 /// The brick size can be set directly or derived from ATR via
 /// [`from_atr`](Self::from_atr).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct RenkoConfig {
     /// Size of each brick in price units
     pub brick_size: f64,

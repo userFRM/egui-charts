@@ -6,6 +6,7 @@
 
 /// Kinetic scroll animation parameters.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct KineticScrollOptions {
     /// Continue scrolling after a horizontal touch drag is released
     /// Default: false (chart stops immediately on release)

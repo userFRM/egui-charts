@@ -10,6 +10,7 @@ use super::sizing::{LayoutTokens, RoundingTokens, ShadowTokens, SizingTokens, St
 /// and semantic color tokens. UI colors and text, spacing and radius scales come
 /// from the applied [`Theme`](crate::theme::Theme).
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct DesignTokens {
     /// Spacing defaults.
     pub spacing: SpacingTokens,

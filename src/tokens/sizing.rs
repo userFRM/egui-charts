@@ -17,6 +17,7 @@
 /// General sizing values (icons, buttons, list items) are at the top level.
 /// Component-specific sizing is nested in sub-structs (toolbar, panel, dialog, etc.).
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct SizingTokens {
     /// Target minimum, in egui logical points.
     pub target_min: f32,
