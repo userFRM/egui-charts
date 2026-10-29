@@ -1723,15 +1723,30 @@ impl Chart {
                 }
                 if let Some((flow, config)) = footprint.filter(|_| time_based) {
                     if show_volume && !cfg!(feature = "studies") {
-                        rendering::candles::volume::render_volume_bars(
-                            &clipped_volume_ctx,
-                            visible_data,
-                            start_idx,
-                            max_volume,
-                            &colors,
-                            chart_rect.min.x,
-                            idx_to_coord,
-                        );
+                        // Volume merges as bars, including beneath a merged line.
+                        match merged
+                            .as_ref()
+                            .map(|(bars, volume)| volume.as_ref().unwrap_or(bars))
+                        {
+                            Some(volume) => rendering::candles::volume::render_volume_bars(
+                                &clipped_volume_ctx,
+                                &volume.bars[volume.start..],
+                                volume.start,
+                                max_volume,
+                                &colors,
+                                chart_rect.min.x,
+                                |index, min_x| merged_x(volume, index, min_x),
+                            ),
+                            None => rendering::candles::volume::render_volume_bars(
+                                &clipped_volume_ctx,
+                                visible_data,
+                                start_idx,
+                                max_volume,
+                                &colors,
+                                chart_rect.min.x,
+                                idx_to_coord,
+                            ),
+                        }
                     }
                     crate::chart::overlays::render_footprint(
                         &clipped_painter,
@@ -1772,7 +1787,15 @@ impl Chart {
                             (flow, candles)
                         });
                     if let Some((_, candles)) = executions {
-                        data.visible_data = &visible_data[..candles];
+                        data.visible_data = match &merged {
+                            // Merged candles end before the group of the first execution.
+                            Some((merged, _)) if candles < visible_data.len() => {
+                                let end = merged.count_before(start_idx + candles, factor);
+                                &merged.bars[merged.start..end.max(merged.start)]
+                            }
+                            Some(_) => data.visible_data,
+                            None => &visible_data[..candles],
+                        };
                     }
                     rendering::render_chart_type(self.chart_type, &data, params, |index, min_x| {
                         match &merged {
@@ -4440,7 +4463,7 @@ mod tests {
 
     #[test]
     fn zoomed_out_bars_merge_per_pixel_and_keep_their_extremes() {
-        use crate::model::{Bar, BarData};
+        use crate::model::{Bar, BarData, ChartType};
         use chrono::{TimeZone, Utc};
         let bars = (0..65_536)
             .map(|i| {
@@ -4527,6 +4550,19 @@ mod tests {
         let bottom = ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         assert!((top - map.price_to_y(1000.0)).abs() < 1.0, "{top}");
         assert!((bottom - map.price_to_y(1.0)).abs() < 1.0, "{bottom}");
+
+        // Without executions the footprint types draw the same merged candles.
+        for chart_type in [ChartType::VolumeFootprint, ChartType::SessionVolumeProfile] {
+            chart.set_chart_type(chart_type);
+            let drawn = painted_ys(&mut chart, 0.2);
+            assert!(
+                drawn == ys,
+                "{chart_type:?}: {} points against {}",
+                drawn.len(),
+                ys.len()
+            );
+        }
+        chart.set_chart_type(ChartType::Candles);
 
         // A live bar opening a group, then updating it, is drawn in it, with its volume.
         let time = Utc.timestamp_opt(1_600_000_000 + 65_536 * 60, 0).unwrap();
