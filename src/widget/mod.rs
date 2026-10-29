@@ -292,9 +292,12 @@ pub struct Chart {
     #[cfg(feature = "drawings")]
     pub(crate) drawings: DrawingManager,
     #[cfg(feature = "drawings")]
-    symbol_drawings: std::collections::HashMap<String, (DrawingManager, Vec<crate::model::Marker>)>,
+    symbol_drawings: std::collections::HashMap<
+        String,
+        (DrawingManager, marks::TimeOrdered<crate::model::Marker>),
+    >,
     #[cfg(not(feature = "drawings"))]
-    symbol_markers: std::collections::HashMap<String, Vec<crate::model::Marker>>,
+    symbol_markers: std::collections::HashMap<String, marks::TimeOrdered<crate::model::Marker>>,
     /// Where each symbol's drawings are kept; see [`Chart::set_storage`].
     #[cfg(feature = "drawings")]
     drawing_store: Option<stored_drawings::DrawingStore>,
@@ -347,8 +350,8 @@ pub struct Chart {
     restored_palettes: Vec<ChartConfig>,
     host_events: events::HostEvents,
     pub(crate) indicator_source_request: Option<crate::studies::StudySource>,
-    events: Vec<crate::model::Marker>,
-    time_scale_events: Vec<crate::model::TimeScaleEvent>,
+    events: marks::TimeOrdered<crate::model::Marker>,
+    time_scale_events: marks::TimeOrdered<crate::model::TimeScaleEvent>,
     event_visibility: crate::model::EventVisibility,
     mark_source: Option<marks::MarkSource>,
     signal_sources: Vec<signals::SignalSource>,
@@ -398,7 +401,7 @@ pub struct Chart {
     // Marks (Widget API)
     // =========================================================================
     /// Bar marks (annotations on chart bars, e.g., trade signals); see [`Chart::set_markers`].
-    pub(crate) marks: Vec<crate::model::Marker>,
+    pub(crate) marks: marks::TimeOrdered<crate::model::Marker>,
     /// Fit and layer of the main series' marks; see [`Chart::set_marker_options`].
     marker_options: crate::model::MarkerOptions,
     /// Marks of the main series' recent changes; see [`Chart::set_change_markers`].
@@ -640,7 +643,7 @@ impl Chart {
 
     /// Supplies event badges at the time-axis boundary, separately from bar annotations.
     pub fn set_events(&mut self, events: Vec<crate::model::Marker>) {
-        self.events = events;
+        self.events = events.into();
     }
 
     /// Takes the ID of the last clicked event badge.

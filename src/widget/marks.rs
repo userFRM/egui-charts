@@ -4,7 +4,7 @@ use super::{Chart, ChartEvent, SeriesId};
 use crate::chart::coords::ChartMapping;
 use crate::chart::renderers::RenderContext;
 use crate::data::{FeedError, inbox::Inbox};
-use crate::model::{EventVisibility, MarkerZOrder, TimeScaleEvent};
+use crate::model::{Bar, EventVisibility, Marker, MarkerZOrder, TimeScaleEvent};
 use crate::services::{Marks, MarksPage, MarksRequest};
 use chrono::{DateTime, Utc};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -24,6 +24,96 @@ pub(super) struct MarkSource {
     wake: Arc<Mutex<egui::ViewportId>>,
     pub(super) page: MarksPage,
     error: Option<FeedError>,
+}
+
+/// A time, as markers and time scale events carry.
+pub(crate) trait Timed {
+    fn time(&self) -> DateTime<Utc>;
+}
+
+impl Timed for Marker {
+    fn time(&self) -> DateTime<Utc> {
+        self.time
+    }
+}
+
+impl Timed for TimeScaleEvent {
+    fn time(&self) -> DateTime<Utc> {
+        self.time
+    }
+}
+
+/// Items in supplied painting order, indexed by time so a frame visits only those near the view.
+#[derive(Clone)]
+pub(crate) struct TimeOrdered<T> {
+    items: Vec<T>,
+    /// Indices into `items` by time; equal times keep the supplied order.
+    by_time: Vec<usize>,
+}
+
+impl<T> Default for TimeOrdered<T> {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            by_time: Vec::new(),
+        }
+    }
+}
+
+impl<T: Timed> From<Vec<T>> for TimeOrdered<T> {
+    fn from(items: Vec<T>) -> Self {
+        let mut by_time: Vec<usize> = (0..items.len()).collect();
+        by_time.sort_by_key(|&index| items[index].time());
+        Self { items, by_time }
+    }
+}
+
+impl<T> std::ops::Deref for TimeOrdered<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        &self.items
+    }
+}
+
+impl<T: Timed> TimeOrdered<T> {
+    /// Indices timed from `from` through `to`, a side open when `None`, in supplied order.
+    pub(crate) fn within(
+        &self,
+        from: Option<DateTime<Utc>>,
+        to: Option<DateTime<Utc>>,
+    ) -> Vec<usize> {
+        let time = |index: &usize| self.items[*index].time();
+        let start = from.map_or(0, |from| self.by_time.partition_point(|i| time(i) < from));
+        let end = to.map_or(self.by_time.len(), |to| {
+            self.by_time.partition_point(|i| time(i) <= to)
+        });
+        if end.saturating_sub(start) == self.items.len() {
+            return (0..self.items.len()).collect();
+        }
+        let mut indices = self.by_time[start..end.max(start)].to_vec();
+        indices.sort_unstable();
+        indices
+    }
+}
+
+/// Times a point and a bar beyond `rect` in `coords`, open past the data or without an inverse.
+/// This includes every marker or badge drawn in the rect; renderers still test each position.
+pub(super) fn window(
+    bars: &[Bar],
+    coords: &ChartMapping,
+    rect: egui::Rect,
+) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    if bars.is_empty() || !(f32::EPSILON..).contains(&coords.bar_spacing) {
+        return (None, None);
+    }
+    let last = (bars.len() - 1) as f64;
+    let left = (coords.x_to_idx_f64(rect.left() - 1.0) - 1.0).floor();
+    let right = (coords.x_to_idx_f64(rect.right() + 1.0) + 1.0).ceil();
+    (
+        (left > 0.0 && left <= last).then(|| bars[left as usize].time),
+        (right >= 0.0 && right < last).then(|| bars[right as usize].time),
+    )
 }
 
 impl Chart {
@@ -62,60 +152,64 @@ impl Chart {
         if self.marker_options.z_order != layer {
             return;
         }
-        let source_marks = self.mark_source.as_ref().map(|source| &source.page);
-        let combined_marks;
-        let bar_marks = if let Some(source) = source_marks.filter(|p| !p.bar_marks.is_empty()) {
-            combined_marks = self
-                .marks
-                .iter()
-                .chain(&source.bar_marks)
-                .cloned()
-                .collect::<Vec<_>>();
-            &combined_marks
-        } else {
-            &self.marks
-        };
-        if bar_marks.is_empty() {
+        let source: &[Marker] = self
+            .mark_source
+            .as_ref()
+            .map_or(&[], |source| &source.page.bar_marks);
+        if self.marks.is_empty() && source.is_empty() {
             return;
         }
-        let markers;
-        let marks = if self.chart_type.is_time_independent() {
-            markers = crate::chart::rendering::candles::price_based::markers(
-                bar_marks,
+        // Source pages already cover the view; keep manual then source painting order and keys.
+        let (from, to) = window(self.state.shown(), coords, ctx.rect);
+        let marks = self
+            .marks
+            .within(from, to)
+            .into_iter()
+            .map(|index| (index, &self.marks[index]))
+            .chain(
+                source
+                    .iter()
+                    .enumerate()
+                    .map(|(index, mark)| (self.marks.len() + index, mark)),
+            );
+        let mapping = ChartMapping {
+            start_idx: 0,
+            ..*coords
+        };
+        if self.chart_type.is_time_independent() {
+            let mapped = crate::chart::rendering::candles::price_based::markers(
+                marks,
                 &self.state,
                 self.chart_type,
                 &self.chart_type_params,
                 self.older_bars_drawn,
             );
-            &markers
+            let hits = crate::chart::renderers::render_markers(
+                ctx,
+                mapped.iter().map(|(index, mark)| (*index, mark)),
+                self.state.shown(),
+                &coords.price,
+                &mapping,
+            );
+            self.record_mark_hits(SeriesId::MAIN, hits);
         } else {
-            bar_marks
-        };
-        let hits = crate::chart::renderers::render_markers(
-            ctx,
-            marks,
-            self.state.shown(),
-            &coords.price,
-            &ChartMapping {
-                start_idx: 0,
-                ..*coords
-            },
-        );
-        self.record_mark_hits(SeriesId::MAIN, marks, hits);
+            let hits = crate::chart::renderers::render_markers(
+                ctx,
+                marks,
+                self.state.shown(),
+                &coords.price,
+                &mapping,
+            );
+            self.record_mark_hits(SeriesId::MAIN, hits);
+        }
     }
 
-    /// Remembers where the marks of `series` with host IDs were painted. `hits` are the
-    /// indices into `marks` and areas that `render_markers` returned.
-    pub(super) fn record_mark_hits(
-        &self,
-        series: SeriesId,
-        marks: &[crate::model::Marker],
-        hits: Vec<(usize, egui::Rect)>,
-    ) {
+    /// Remembers where the marks of `series` with host IDs were painted, from the marks and
+    /// areas that `render_markers` returned.
+    pub(super) fn record_mark_hits(&self, series: SeriesId, hits: Vec<(&Marker, egui::Rect)>) {
         self.mark_hits
             .borrow_mut()
-            .extend(hits.into_iter().filter_map(|(index, rect)| {
-                let mark = &marks[index];
+            .extend(hits.into_iter().filter_map(|(mark, rect)| {
                 Some(MarkHit {
                     id: mark.id.clone()?,
                     series,
@@ -188,7 +282,7 @@ impl Chart {
     /// Supplies typed corporate, economic and news events independently of a mark source.
     /// Replaces the previous list; `set_events` continues to accept generic badges.
     pub fn set_time_scale_events(&mut self, events: Vec<TimeScaleEvent>) {
-        self.time_scale_events = events;
+        self.time_scale_events = events.into();
     }
 
     /// Visibility of typed time-axis events, shared with the chart settings dialog.
@@ -367,6 +461,67 @@ mod tests {
         chart.set_symbol("NEXT");
         chart.pump_marks(&ctx);
         assert_eq!(source.0.lock().unwrap().pop().unwrap().0.symbol, "NEXT");
+    }
+
+    /// Windowing keeps sub-bar edge marks, future-margin marks and supplied painting order.
+    #[test]
+    fn markers_near_the_view_are_drawn_and_hit_in_list_order() {
+        let ctx = Context::default();
+        let mut chart = test_frames::chart(&[95.0], &[105.0]);
+        chart.config_mut().show_volume = false;
+        let bars = chart.bars(SeriesId::MAIN).to_vec();
+        let series = chart.add_series(crate::widget::SeriesOptions::default());
+        chart.set_data(series, bars.clone());
+        test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.apply_synced_time_scale(20.0, 4.0);
+        test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
+        let left = chart
+            .get_chart_mapping()
+            .x_to_idx_f64(chart.get_rendered_price_rect().left());
+        let time = |index| crate::model::time_at(&bars, index).unwrap();
+        let marks: Vec<_> = [
+            ("far-left", 0.0),
+            ("future-in", 102.0),
+            ("edge-in", left + 0.25),
+            ("future-out", 104.0),
+            ("edge-out", left - 0.25),
+            ("middle", 90.0),
+        ]
+        .into_iter()
+        .map(|(id, index)| Marker::new(time(index)).with_id(id))
+        .collect();
+        chart.set_markers(SeriesId::MAIN, marks.clone());
+        chart.set_markers(series, marks);
+        chart.set_time_scale_events(
+            [0.0, 90.0, 102.0, 104.0]
+                .into_iter()
+                .map(|index| TimeScaleEvent {
+                    id: index.to_string(),
+                    time: time(index),
+                    kind: EventKind::News,
+                    title: "Headline".into(),
+                    details: String::new(),
+                })
+                .collect(),
+        );
+        let shapes = test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
+        for series in [SeriesId::MAIN, series] {
+            let hits = chart.mark_hits.borrow();
+            let ids: Vec<_> = hits
+                .iter()
+                .filter(|hit| hit.series == series)
+                .map(|hit| hit.id.as_str())
+                .collect();
+            assert_eq!(ids, ["future-in", "edge-in", "middle"]);
+        }
+        assert_eq!(
+            shapes
+                .iter()
+                .filter(|shape| matches!(shape,
+            Shape::Circle(circle) if circle.radius == 10.0 && circle.stroke.width == 1.2))
+                .count(),
+            2
+        );
     }
 
     /// Every category is retained while hidden and restored by the same chart settings.

@@ -71,7 +71,7 @@ impl Drawing {
         self.draw_projection_labels(painter, start, end, proj_end, dy, color, dashed_color);
     }
 
-    fn draw_projection_main_line(
+    pub(super) fn draw_projection_main_line(
         &self,
         painter: &egui::Painter,
         start: Pos2,

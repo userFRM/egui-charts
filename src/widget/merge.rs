@@ -26,7 +26,10 @@ pub(super) fn line_style(chart_type: ChartType) -> Option<bool> {
         | ChartType::VolumeCandles
         | ChartType::Columns
         | ChartType::HlcArea
-        | ChartType::HighLow => Some(false),
+        | ChartType::HighLow
+        // Bars without executions are candles; executions are drawn per bar.
+        | ChartType::VolumeFootprint
+        | ChartType::SessionVolumeProfile => Some(false),
         ChartType::Line
         | ChartType::LineWithMarkers
         | ChartType::StepLine
@@ -260,6 +263,13 @@ impl Merged {
         }
         merged
     }
+
+    /// The merged bars before the group of source bar `index` at `factor` bars a group: those
+    /// a chart drawn from executions from `index` on still draws as candles.
+    pub fn count_before(&self, index: usize, factor: usize) -> usize {
+        let first = (index / factor * factor) as f32;
+        self.index.partition_point(|&at| at < first)
+    }
 }
 
 #[cfg(test)]
@@ -314,6 +324,10 @@ mod tests {
             assert!(merged.bars[8..12].iter().all(Bar::is_whitespace));
             assert_eq!(merged.bars[5].colors, bars[5].colors);
             assert!(merged.bars.len() < bars.len());
+            // Groups 0 to 2 retain their 12 bars; the first execution's group is excluded.
+            for (index, before) in [(0, 0), (5, 4), (12, 12), (15, 12)] {
+                assert_eq!(merged.count_before(index, 4), before, "{index}");
+            }
         }
     }
 }

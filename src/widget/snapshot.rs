@@ -181,7 +181,7 @@ impl Chart {
                 visible: item.visible,
                 pane: pane_of(item.id),
                 annotations: SavedAnnotations {
-                    markers: item.markers.clone(),
+                    markers: item.markers.to_vec(),
                     options: item.marker_options,
                     price_lines: item.lines.iter().map(|(_, line)| line.clone()).collect(),
                 },
@@ -208,7 +208,7 @@ impl Chart {
             studies,
             series: Some(series),
             main_annotations: Some(SavedAnnotations {
-                markers: self.marks.clone(),
+                markers: self.marks.to_vec(),
                 options: self.marker_options,
                 price_lines: self
                     .price_lines

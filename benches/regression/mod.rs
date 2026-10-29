@@ -94,7 +94,7 @@ pub fn run(name: &str, frames: usize) {
         "frame-1000" => 1_000,
         "frame-1000000" => 1_000_000,
         "frame-100000" | "heikin" | "tick" | "tick-studies" | "append" | "append-studies"
-        | "studies" | "drawings" => 100_000,
+        | "studies" | "drawings" | "markers" | "events" => 100_000,
         _ => panic!("unknown regression scenario: {name}"),
     };
     if name == "studies" {
@@ -128,6 +128,12 @@ pub fn run(name: &str, frames: usize) {
             super::Drawings::None
         },
         min_bar_spacing: 0.5,
+        chart_type: egui_charts::ChartType::Candles,
+        annotations: match name {
+            "markers" => super::Annotations::Markers,
+            "events" => super::Annotations::Events,
+            _ => super::Annotations::None,
+        },
     });
     let mut config = chart.config().clone();
     config.show_volume = false;
