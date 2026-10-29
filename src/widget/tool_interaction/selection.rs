@@ -23,11 +23,11 @@ pub fn handle_selection<F1, F2, F3>(
     price_rect: Rect,
     x_to_bar: &F1,
     y_to_price: &F2,
-    y_to_price_unclamped: &F3,
+    translate_price: &F3,
 ) where
     F1: Fn(f32) -> f32,
     F2: Fn(f32) -> f64,
-    F3: Fn(f32) -> f64,
+    F3: Fn(f64, f32, f32) -> f64,
 {
     let pointer_pos = if response.clicked() || response.drag_started() || response.dragged() {
         response.interact_pointer_pos()
@@ -44,7 +44,7 @@ pub fn handle_selection<F1, F2, F3>(
                 price_rect.clamp(pos),
                 x_to_bar,
                 y_to_price,
-                y_to_price_unclamped,
+                translate_price,
             );
         }
         if response.drag_stopped() {
@@ -104,7 +104,7 @@ pub fn handle_selection<F1, F2, F3>(
                 price_rect.clamp(pos),
                 x_to_bar,
                 y_to_price,
-                y_to_price_unclamped,
+                translate_price,
             );
         } else if response.clicked() {
             if ui.input(|i| i.modifiers.shift) {
@@ -239,7 +239,7 @@ mod tests {
                                     pane,
                                     &|x| x,
                                     &f64::from,
-                                    &f64::from,
+                                    &|price, from, to| price + f64::from(to - from),
                                 );
                             },
                         )
@@ -534,25 +534,30 @@ mod tests {
         }
     }
 
-    /// Body and centre grabs translate every anchor by the same screen offset on a log
-    /// scale, with one history step and one host update per drawing.
+    /// Body and centre grabs preserve scale offsets and horizontal drags preserve exact prices,
+    /// with one history step and one host update per drawing.
     #[test]
     fn body_drags_translate_every_anchor_once_unless_locked() {
+        use crate::scales::{PriceMap, PriceRange, PriceScaleMode, PriceTransform};
         for tool in [
             DrawingToolType::TrendLine,
             DrawingToolType::Rect,
             DrawingToolType::FibonacciChannel,
         ] {
-            for (locked, multi, centre, dy) in [
-                (false, false, false),
-                (true, false, false),
-                (false, true, false),
-                (false, false, true),
-            ]
-            .into_iter()
-            .flat_map(|(locked, multi, centre)| {
-                [-30.0, 30.0].map(move |dy| (locked, multi, centre, dy))
-            }) {
+            for (locked, multi, centre, dy, tight) in
+                [(false, true, false, 0.0, true)].into_iter().chain(
+                    [
+                        (false, false, false),
+                        (true, false, false),
+                        (false, true, false),
+                        (false, false, true),
+                    ]
+                    .into_iter()
+                    .flat_map(|(locked, multi, centre)| {
+                        [-30.0, 0.0, 30.0].map(move |dy| (locked, multi, centre, dy, false))
+                    }),
+                )
+            {
                 let ctx = Context::default();
                 let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 400.0));
                 let mut manager = DrawingManager::new();
@@ -565,25 +570,51 @@ mod tests {
                 if tool == DrawingToolType::FibonacciChannel {
                     drawing.points.push(Pos2::new(150.0, 200.0));
                 }
-                let price = |y: f32| 1000.0 * (-(y as f64) / 100.0).exp();
+                let map = if tight {
+                    PriceMap::new(
+                        PriceTransform::default(),
+                        PriceRange::new(100.0, 100.01),
+                        pane.top(),
+                        pane.bottom(),
+                        false,
+                    )
+                } else {
+                    PriceMap::new(
+                        PriceTransform {
+                            mode: PriceScaleMode::Logarithmic,
+                            base: 0.0,
+                        },
+                        PriceRange::new(1000.0_f64.ln() - 4.0, 1000.0_f64.ln()),
+                        pane.top(),
+                        pane.bottom(),
+                        false,
+                    )
+                };
+                let price = |y: f32| map.y_to_price(y);
                 drawing.chart_points = drawing
                     .points
                     .iter()
                     .map(|p| ChartPoint::new(p.x / 10.0, price(p.y)))
                     .collect();
-                drawing.update_screen_coords(|b| b * 10.0, |p| (-100.0 * (p / 1000.0).ln()) as f32);
+                if tight {
+                    drawing.chart_points[0].price = 100.005123456789;
+                    drawing.chart_points[1].price = 1000.0;
+                }
+                drawing.update_screen_coords(|b| b * 10.0, |p| map.price_to_y(p));
                 drawing.locked = locked;
                 let before = drawing.chart_points.clone();
                 manager.drawings.push(drawing.clone());
                 manager.select(7);
                 if multi {
                     drawing.id = 8;
-                    drawing.points.iter_mut().for_each(|p| p.y += 20.0);
-                    drawing.chart_points = drawing
-                        .points
-                        .iter()
-                        .map(|p| ChartPoint::new(p.x / 10.0, price(p.y)))
-                        .collect();
+                    if !tight {
+                        drawing.points.iter_mut().for_each(|p| p.y += 20.0);
+                        drawing.chart_points = drawing
+                            .points
+                            .iter()
+                            .map(|p| ChartPoint::new(p.x / 10.0, price(p.y)))
+                            .collect();
+                    }
                     manager.drawings.push(drawing);
                     manager.select_drawings([8, 7]);
                 }
@@ -601,7 +632,12 @@ mod tests {
                         .unwrap()
                         .1
                 } else {
-                    drawing.points[0].lerp(drawing.points[1], 0.25)
+                    let fraction = if tight {
+                        30.0 / (drawing.points[1].y - drawing.points[0].y).abs()
+                    } else {
+                        0.25
+                    };
+                    drawing.points[0].lerp(drawing.points[1], fraction)
                 };
                 let to = from + egui::vec2(40.0, dy);
                 let button = |pos, pressed| Event::PointerButton {
@@ -634,14 +670,32 @@ mod tests {
                                 pane,
                                 &|x| x / 10.0,
                                 &|y: f32| price(y.clamp(pane.top(), pane.bottom())),
-                                &price,
+                                &|price, from, to| map.translate_price(price, from, to),
                             );
                         },
                     )
                     .drop_without_applying_deltas();
                 }
-                let screen_y = |price: f64| -100.0 * (price / 1000.0).ln();
+                let screen_y = |price: f64| {
+                    if tight {
+                        f64::from(map.price_to_y(price))
+                    } else {
+                        -100.0 * (price / 1000.0).ln()
+                    }
+                };
                 for (drawing, original) in manager.drawings.iter().zip(&before_group) {
+                    if dy == 0.0 {
+                        assert_eq!(
+                            drawing
+                                .chart_points
+                                .iter()
+                                .map(|p| p.price)
+                                .collect::<Vec<_>>(),
+                            original.iter().map(|p| p.price).collect::<Vec<_>>(),
+                            "{tool:?}, tight {tight}, member {}: horizontal prices",
+                            drawing.id
+                        );
+                    }
                     for (old, moved) in original.iter().zip(&drawing.chart_points) {
                         assert!(
                             (moved.bar_idx - old.bar_idx - if locked { 0.0 } else { 4.0 }).abs()

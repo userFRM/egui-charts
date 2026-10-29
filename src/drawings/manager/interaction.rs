@@ -76,40 +76,36 @@ impl DrawingManager {
 
     /// Updates the position of the currently dragged handle to `new_pos`,
     /// applying snap behavior and coordinate conversion.
-    /// `y_to_price_unclamped` maps translated anchors outside the pane for whole-drawing moves;
+    /// `translate_price(price, from_y, to_y)` shifts whole-drawing prices in scale units;
     /// `y_to_price` retains the pointer bounds for individual handles.
     pub fn update_drag_handle<F, G, H>(
         &mut self,
         new_pos: Pos2,
         x_to_bar: F,
         y_to_price: G,
-        y_to_price_unclamped: H,
+        translate_price: H,
     ) where
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
-        H: Fn(f32) -> f64,
+        H: Fn(f64, f32, f32) -> f64,
     {
         if let Some((id, handle)) = self.dragging_handle {
             // Compute snapped position before mutable borrow
             let snapped = self.snap_point(new_pos, &self.drawings);
             if let Some(origin) = self.drag_origin {
                 let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
-                let dy = snapped.y - origin.y;
                 for old in &self.drag_group {
                     if let Some(drawing) = self
                         .drawings
                         .iter_mut()
                         .find(|d| d.id == old.id && !d.locked)
                     {
-                        for ((point, before), screen) in drawing
-                            .chart_points
-                            .iter_mut()
-                            .zip(&old.chart_points)
-                            .zip(&old.points)
+                        for (point, before) in
+                            drawing.chart_points.iter_mut().zip(&old.chart_points)
                         {
                             *point = ChartPoint::new(
                                 before.bar_idx + bars,
-                                y_to_price_unclamped(screen.y + dy),
+                                translate_price(before.price, origin.y, snapped.y),
                             );
                         }
                         for (point, before) in drawing.points.iter_mut().zip(&old.points) {
@@ -127,16 +123,10 @@ impl DrawingManager {
             if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
                 if let (Some(origin), Some(old)) = (self.drag_origin, &self.drag_old_state) {
                     let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
-                    let dy = snapped.y - origin.y;
-                    for ((point, before), screen) in drawing
-                        .chart_points
-                        .iter_mut()
-                        .zip(&old.chart_points)
-                        .zip(&old.points)
-                    {
+                    for (point, before) in drawing.chart_points.iter_mut().zip(&old.chart_points) {
                         *point = ChartPoint::new(
                             before.bar_idx + bars,
-                            y_to_price_unclamped(screen.y + dy),
+                            translate_price(before.price, origin.y, snapped.y),
                         );
                     }
                     for (point, before) in drawing.points.iter_mut().zip(&old.points) {
@@ -149,7 +139,7 @@ impl DrawingManager {
                         snapped,
                         x_to_bar,
                         y_to_price,
-                        y_to_price_unclamped,
+                        translate_price,
                     );
                 }
                 if drawing.screen_anchor.is_some()
@@ -522,19 +512,19 @@ impl DrawingManager {
         self.complete_curr_drawing();
     }
 
-    /// Alias for [`Self::update_drag_handle`], with the same pointer and unclamped anchor mappings.
+    /// Alias for [`Self::update_drag_handle`], with the same pointer mapping and price translation.
     pub fn update_drag_handle_with_coords<F, G, H>(
         &mut self,
         new_pos: Pos2,
         x_to_bar: F,
         y_to_price: G,
-        y_to_price_unclamped: H,
+        translate_price: H,
     ) where
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
-        H: Fn(f32) -> f64,
+        H: Fn(f64, f32, f32) -> f64,
     {
-        self.update_drag_handle(new_pos, x_to_bar, y_to_price, y_to_price_unclamped);
+        self.update_drag_handle(new_pos, x_to_bar, y_to_price, translate_price);
     }
 
     /// Hit test a handle by drawing ID

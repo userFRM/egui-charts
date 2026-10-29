@@ -437,7 +437,12 @@ mod tests {
                 manager.update_pane_anchors(pane);
                 manager.select(9);
                 manager.start_drag_body(9, pos2(135.0, 365.0));
-                manager.update_drag_handle(pos2(175.0, 405.0), |x| x, f64::from, f64::from);
+                manager.update_drag_handle(
+                    pos2(175.0, 405.0),
+                    |x| x,
+                    f64::from,
+                    |price, from, to| price + f64::from(to - from),
+                );
                 manager.end_drag_handle();
                 manager.update_all_screen_coords(|x| x, |y| y as f32);
                 manager.update_pane_anchors(pane);

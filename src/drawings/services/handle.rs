@@ -153,19 +153,20 @@ impl HandleService {
     /// and chart coordinates using the provided conversion closures.
     ///
     /// For the `Middle` handle, all points are translated by the delta between
-    /// the old and new centroid positions (move entire drawing). `y_to_price_unclamped`
-    /// maps those translated anchors even outside the pane; other handles use `y_to_price`.
+    /// the old and new centroid positions (move entire drawing).
+    /// `translate_price(price, from_y, to_y)` shifts their prices in scale units;
+    /// other handles use `y_to_price`.
     pub fn update_handle<F, G, H>(
         drawing: &mut Drawing,
         handle: HandlePos,
         new_pos: Pos2,
         x_to_bar: F,
         y_to_price: G,
-        y_to_price_unclamped: H,
+        translate_price: H,
     ) where
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
-        H: Fn(f32) -> f64,
+        H: Fn(f64, f32, f32) -> f64,
     {
         if handle == HandlePos::Middle {
             if let Some((_, center)) = Self::get_handles(drawing)
@@ -173,10 +174,9 @@ impl HandleService {
                 .find(|(h, _)| *h == handle)
             {
                 let bars = x_to_bar(new_pos.x) - x_to_bar(center.x);
-                let dy = new_pos.y - center.y;
-                for (point, screen) in drawing.chart_points.iter_mut().zip(&drawing.points) {
+                for point in &mut drawing.chart_points {
                     point.bar_idx += bars;
-                    point.price = y_to_price_unclamped(screen.y + dy);
+                    point.price = translate_price(point.price, center.y, new_pos.y);
                 }
                 for point in &mut drawing.points {
                     *point += new_pos - center;
@@ -689,7 +689,13 @@ mod tests {
                     to,
                     x_to_bar,
                     |y: f32| price(y.clamp(0.0, 350.0)),
-                    price,
+                    |p, from, to| {
+                        if logarithmic {
+                            p * (-f64::from(to - from) / 100.0).exp()
+                        } else {
+                            p - f64::from(to - from)
+                        }
+                    },
                 );
                 assert_eq!(drawing.points, screen, "{tool:?} {handle:?}");
                 let expected = if logarithmic {
@@ -700,10 +706,18 @@ mod tests {
                 } else {
                     chart.clone()
                 };
-                assert_eq!(
-                    drawing.chart_points, expected,
-                    "{tool:?} {handle:?}, log {logarithmic}"
-                );
+                if logarithmic && handle == HandlePos::Middle {
+                    assert_eq!(drawing.chart_points.len(), expected.len());
+                    for (got, want) in drawing.chart_points.iter().zip(&expected) {
+                        assert_eq!(got.bar_idx, want.bar_idx, "{tool:?} {handle:?}");
+                        assert!(
+                            (got.price - want.price).abs() < 1e-12 * want.price.abs(),
+                            "{tool:?} {handle:?}: {got:?}, expected {want:?}"
+                        );
+                    }
+                } else {
+                    assert_eq!(drawing.chart_points, expected, "{tool:?} {handle:?}");
+                }
             }
         }
     }
