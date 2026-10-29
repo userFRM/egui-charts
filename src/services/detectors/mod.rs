@@ -29,8 +29,10 @@ const TRADE_IDS: usize = 100_000;
 /// that feed time, never the wall clock, so replayed data gives the signals live data gave.
 ///
 /// *Trades.* A trade with an id already seen is dropped, so the trade an order execution carries
-/// counts once even when the feed also sends it as a trade. Trades that are not finite numbers or
-/// have a negative size are ignored. [`push_history`](Self::push_history) runs loaded trades
+/// counts once even when the feed also sends it as a trade. Fills group by the aggressor id on
+/// their first copy; later copies cannot identify it retroactively. A feed that prints the tape
+/// first must carry that id on the print or push the order execution before its tape copy.
+/// Trades that are not finite numbers or have a negative size are ignored. [`push_history`](Self::push_history) runs loaded trades
 /// through the same detection.
 ///
 /// *Book.* Depth snapshots and deltas, and order snapshots and events, keep the symbol's book
