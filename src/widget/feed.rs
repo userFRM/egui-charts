@@ -1180,6 +1180,7 @@ impl Chart {
                 self.symbol
             );
         }
+        let oldest = self.bars(SeriesId::MAIN).first().map(|bar| bar.time);
         let empty = page.bars.is_empty();
         let continuation = page.continue_before.filter(|_| empty);
         if let Some(error) = non_progressing(asked.before, continuation) {
@@ -1192,7 +1193,18 @@ impl Chart {
             && !self.bar_limit_reached();
         let incoming = page.bars.into_iter().map(|bar| (bar, Origin::History));
         self.apply_by(&link.clock, incoming.collect());
+        let older = self.bars(SeriesId::MAIN).first().map(|bar| bar.time) < oldest;
+        // A nonempty page with no valid bar older than the oldest held would be requested
+        // again on every frame.
+        let stale = scroll_back && !empty && !older && !self.bar_limit_reached();
+        if stale {
+            log::warn!(
+                "the feed of {} sent no valid bar older than the oldest one held; scroll-back ended",
+                self.symbol
+            );
+        }
         self.feed.loading_history = false;
+        self.feed.history_complete |= stale;
         self.data_loaded(SeriesId::MAIN);
     }
 
@@ -3002,6 +3014,42 @@ mod tests {
             WARNINGS.take().unwrap(),
             ["the feed of A sent bars at or after the requested before; those bars were dropped"],
             "d: the warning names the feed"
+        );
+
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        frames.run(&mut chart);
+        let held = bars(1000)[500..].to_vec();
+        feed.page().send(page(held.clone(), false));
+        frames.run(&mut chart);
+        chart.set_start_idx(0);
+        for _ in 0..5 {
+            frames.run(&mut chart);
+        }
+        assert_eq!(
+            feed.calls().last(),
+            Some(&history("A", Timeframe::Min1, Some(held[0].time))),
+            "d: invalid page request"
+        );
+        let mut invalid = bars(500);
+        for bar in &mut invalid {
+            bar.high = bar.low - 1.0;
+        }
+        WARNINGS.set(Some(Vec::new()));
+        feed.page().send(page(invalid, false));
+        for _ in 0..5 {
+            frames.run(&mut chart);
+        }
+        assert_eq!(chart.bars(main), held, "d: invalid older bars are dropped");
+        assert_eq!(feed.calls(), [], "d: invalid older bars end scroll-back");
+        assert!(chart.feed_state(main).unwrap().history_complete, "d");
+        assert_eq!(
+            WARNINGS.take().unwrap(),
+            [
+                "dropped 500 invalid bars",
+                "the feed of A sent no valid bar older than the oldest one held; scroll-back ended",
+            ],
+            "d: the invalid page warning names the feed"
         );
 
         let feed = Arc::new(Script::default());
