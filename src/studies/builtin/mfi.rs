@@ -9,9 +9,10 @@
 //! - Divergence between MFI and price can signal trend changes
 //!
 //! # Calculation
-//! Raw Money Flow = Typical Price * Volume
-//! Money Flow Ratio = Positive Money Flow / Negative Money Flow
-//! MFI = 100 - (100 / (1 + Money Flow Ratio))
+//! Raw Money Flow = |Typical Price| * Volume, assigned to positive or negative flow by
+//! the change in typical price; an unchanged typical price contributes to neither.
+//! MFI = 100 * Positive Money Flow / (Positive Money Flow + Negative Money Flow).
+//! A window with no flow gives 50, only positive flow gives 100 and only negative flow gives 0.
 //!
 //! # Example
 //! ```
@@ -82,7 +83,7 @@ impl MoneyFlowIndex {
         let raw_money_flows: Vec<f64> = data
             .iter()
             .zip(typical_prices.iter())
-            .map(|(bar, tp)| tp * bar.volume)
+            .map(|(bar, tp)| tp.abs() * bar.volume)
             .collect();
 
         // Determine positive/negative money flow
@@ -111,14 +112,7 @@ impl MoneyFlowIndex {
                 let pos_sum: f64 = positive_flows[start..=i].iter().sum();
                 let neg_sum: f64 = negative_flows[start..=i].iter().sum();
 
-                let mfi = if neg_sum.abs() < 1e-10 {
-                    100.0 // All positive flow
-                } else if pos_sum.abs() < 1e-10 {
-                    0.0 // All negative flow
-                } else {
-                    let ratio = pos_sum / neg_sum;
-                    100.0 - (100.0 / (1.0 + ratio))
-                };
+                let mfi = super::rsi::from_averages(pos_sum, neg_sum);
 
                 values.push(IndicatorValue::Single(mfi.clamp(0.0, 100.0)));
             }
@@ -209,5 +203,44 @@ impl Indicator for MoneyFlowIndex {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("MFI({})", self.period)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endpoints_and_scale_invariance() {
+        // Period 2 sums the flows of the last two changes. With unit volume,
+        // [1, 2, 1, 3] gives 100 * 2/3 then 100 * 3/4.
+        for (closes, volume, expected) in [
+            ([1.0, 2.0, 3.0, 4.0], 0.0, [50.0, 50.0]),
+            ([5.0; 4], 700.0, [50.0, 50.0]),
+            ([1.0, 2.0, 3.0, 4.0], 1.0, [100.0, 100.0]),
+            ([4.0, 3.0, 2.0, 1.0], 1.0, [0.0, 0.0]),
+            ([1.0, 2.0, 1.0, 3.0], 1.0, [200.0 / 3.0, 75.0]),
+            ([-4.0, -2.0, -3.0, -1.0], 1.0, [40.0, 25.0]),
+        ] {
+            for scale in [1.0, 1e-17, 1e12] {
+                let bars: Vec<_> = closes
+                    .iter()
+                    .map(|p| {
+                        let p = p * scale;
+                        Bar::new(chrono::DateTime::UNIX_EPOCH, p, p, p, p, volume)
+                    })
+                    .collect();
+                let mut study = MoneyFlowIndex::new(2);
+                study.calculate(&bars);
+                assert_eq!(study.values().value(0, 1), None);
+                for (bar, want) in expected.into_iter().enumerate() {
+                    let got = study.values().value(0, bar + 2).unwrap();
+                    assert!(
+                        (got - want).abs() < 1e-9,
+                        "{closes:?}, {volume}, {scale}: {got}"
+                    );
+                }
+            }
+        }
     }
 }

@@ -88,13 +88,16 @@ impl CCI {
                 // Calculate SMA of typical price
                 let start = i + 1 - self.period;
                 let sma: f64 = tp[start..=i].iter().sum::<f64>() / self.period as f64;
+                // Correct the sum's rounding so equal typical prices have no deviation.
+                let sma =
+                    sma + tp[start..=i].iter().map(|p| p - sma).sum::<f64>() / self.period as f64;
 
                 // Calculate mean deviation
                 let mean_dev: f64 =
                     tp[start..=i].iter().map(|p| (p - sma).abs()).sum::<f64>() / self.period as f64;
 
                 // Calculate CCI
-                if mean_dev.abs() < 1e-10 {
+                if mean_dev == 0.0 {
                     values.push(IndicatorValue::Single(0.0));
                 } else {
                     // Lambert's constant 0.015 ensures ~70-80% of values fall between -100 and +100
@@ -190,7 +193,7 @@ mod tests {
     fn test_cci_flat_prices() {
         // A zero mean deviation is reported as 0 rather than dividing by zero.
         let start = Utc::now();
-        let bars: Vec<Bar> = (0..30)
+        let mut bars: Vec<Bar> = (0..30)
             .map(|i| Bar {
                 time: start + Duration::minutes(i * 5),
                 open: 100.0,
@@ -203,14 +206,21 @@ mod tests {
             })
             .collect();
 
-        let mut cci = CCI::new(20);
-        cci.calculate(&bars);
-
-        for value in cci.values().to_rows().iter().skip(19) {
-            assert!(
-                matches!(value, IndicatorValue::Single(v) if *v == 0.0),
-                "a window without deviation reads 0, got {value:?}"
-            );
+        for price in [100.0, 0.1, 1e-17] {
+            for bar in &mut bars {
+                bar.open = price;
+                bar.high = price;
+                bar.low = price;
+                bar.close = price;
+            }
+            let mut cci = CCI::new(20);
+            cci.calculate(&bars);
+            for value in cci.values().to_rows().iter().skip(19) {
+                assert!(
+                    matches!(value, IndicatorValue::Single(v) if *v == 0.0),
+                    "a window without deviation reads 0, got {value:?} at {price}"
+                );
+            }
         }
     }
 }
