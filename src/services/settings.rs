@@ -1,7 +1,7 @@
 //! The user's settings, kept in one document of the host's storage.
 
 use super::document::{Received, StoredDocument};
-use super::{Storage, StoreKind};
+use super::{ConflictChoice, Storage, StoreKind};
 use crate::config::DrawingToolType;
 use crate::model::{ReplaySession, Timeframe, Watchlist};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -27,10 +27,17 @@ pub struct UserSettings {
     /// does not know is left out when reading.
     #[serde(deserialize_with = "known_tools")]
     pub drawing_favorites: Vec<DrawingToolType>,
+    /// Whether the user hid the favourites strip with its close or toggle button.
+    pub drawing_favorites_hidden: bool,
+    /// The top-left corner of the favourites strip, in logical points, where the user left it;
+    /// `None` until it has been shown, when it starts beside the drawing toolbar.
+    pub drawing_favorites_pos: Option<(f32, f32)>,
     /// The layout open last, to open again on start.
     pub layout: Option<String>,
     /// Whether the open layout is saved after each change.
     pub layout_autosave: bool,
+    /// The names of the starred layouts.
+    pub layout_favorites: Vec<String>,
     /// Factory names of the starred studies of the indicator dialog, in order.
     pub indicator_favorites: Vec<String>,
     /// The intervals starred in the interval menu, in order.
@@ -41,8 +48,25 @@ pub struct UserSettings {
     pub drawing_defaults: BTreeMap<String, serde_json::Value>,
     /// The watchlists, in order.
     pub watchlists: Vec<Watchlist>,
+    /// The market heatmap's universe, size metric and colour metric.
+    pub market_heatmap: MarketHeatmapSelection,
     /// The replay position to resume, with the interval its history was fetched at.
     pub replay_session: Option<(ReplaySession, Timeframe)>,
+}
+
+/// What the market heatmap shows, by the identifiers the host gave its universes and metrics.
+/// `None` is the panel's default. An identifier the host no longer offers stays chosen, so the
+/// choice returns when the host offers it again.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct MarketHeatmapSelection {
+    /// The universe shown.
+    pub universe: Option<String>,
+    /// The metric that sizes the tiles.
+    pub size: Option<String>,
+    /// The metric that colours the tiles.
+    pub colour: Option<String>,
 }
 
 fn known_tools<'de, D: Deserializer<'de>>(
@@ -92,7 +116,9 @@ impl UserSettings {
 /// Keeps [`UserSettings`] in the host's [`Storage`]: reads them once, then writes them a second
 /// after they last changed. A failed write keeps the settings in memory and is reported once by
 /// [`take_error`](Self::take_error); a later poll or explicit flush retries it. Settings that
-/// could not be read are never written over.
+/// could not be read are never written over. If the host keeps revisions of documents (see
+/// [`Storage`]), a change by another client is read while nothing is unsaved, and a write over a
+/// newer version is refused and left to [`resolve_conflict`](Self::resolve_conflict).
 pub struct SettingsStore {
     storage: Arc<dyn Storage>,
     document: StoredDocument,
@@ -109,8 +135,10 @@ impl SettingsStore {
 
     /// Starts reading the settings from `storage`.
     pub fn new(storage: Arc<dyn Storage>) -> Self {
+        let mut document = StoredDocument::open(&*storage, StoreKind::Settings, "settings");
+        document.follow_changes(&*storage);
         Self {
-            document: StoredDocument::open(&*storage, StoreKind::Settings, "settings"),
+            document,
             storage,
             written: None,
             changed: None,
@@ -193,6 +221,20 @@ impl SettingsStore {
                 }
             }
         }
+    }
+
+    /// Whether the host refused to write the settings because another client changed them. The
+    /// settings stay in memory and nothing is written until
+    /// [`resolve_conflict`](Self::resolve_conflict) settles it.
+    pub fn conflict(&self) -> bool {
+        self.document.conflicted()
+    }
+
+    /// Settles a refused write with the user's choice. Reloading the stored settings returns them
+    /// from the next [`poll`](Self::poll), like the first read; keeping a local copy saves the
+    /// unsaved settings as the document `settings (local copy)` first.
+    pub fn resolve_conflict(&mut self, choice: ConflictChoice) {
+        self.document.resolve(&*self.storage, choice);
     }
 
     /// The error of a failed read or write since the last call, to show to the user.
@@ -310,6 +352,8 @@ mod tests {
         assert_eq!(poll(&mut store, 0.0, &settings), None);
         settings.symbol = Some("AAPL".into());
         settings.drawing_favorites = vec![DrawingToolType::TrendLine];
+        settings.market_heatmap.size = Some("cap".into());
+        settings.drawing_favorites_pos = Some((12.0, 34.0));
         for time in [0.5, 1.0, 1.4] {
             assert_eq!(poll(&mut store, time, &settings), None);
         }
@@ -317,6 +361,13 @@ mod tests {
         poll(&mut store, 1.5, &settings);
         let written = host.0.lock().unwrap().clone().unwrap();
         assert!(written.contains("\"TrendLine\""));
+        assert_eq!(
+            UserSettings::from_json(&written)
+                .unwrap()
+                .market_heatmap
+                .size,
+            Some("cap".into())
+        );
 
         // Exit can follow an inline save before another frame polls its acknowledgement.
         settings.symbol = Some("MSFT".into());

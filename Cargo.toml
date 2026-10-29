@@ -66,11 +66,6 @@ path = "examples/bare_chart.rs"
 required-features = ["widget"]
 
 [[example]]
-name = "terminal"
-path = "examples/terminal.rs"
-required-features = ["ui"]
-
-[[example]]
 name = "volatility_smile"
 path = "examples/volatility_smile.rs"
 required-features = ["widget"]
@@ -130,6 +125,12 @@ required-features = ["widget", "studies"]
 [[bench]]
 name = "order_flow"
 path = "benches/order_flow.rs"
+harness = false
+required-features = ["widget"]
+
+[[bench]]
+name = "heatmap"
+path = "benches/heatmap.rs"
 harness = false
 required-features = ["widget"]
 

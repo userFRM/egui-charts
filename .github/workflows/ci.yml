@@ -235,6 +235,15 @@ jobs:
           if grep -q 'pub enum TradeSide' performance-base/src/model/quote.rs; then
             sed -i 's/\bOrderSide\b/TradeSide/g' performance-base/benches/frame_time.rs
           fi
+          if ! grep -rq 'pub enum BubbleGrouping' performance-base/src/chart/overlays; then
+            sed -i -e 's/{BubbleGrouping, VolumeBubblesConfig}/VolumeBubblesConfig/' \
+              -e 's/grouping: BubbleGrouping::PriceStep(step),/price_step: Some(step),/' \
+              performance-base/benches/frame_time.rs
+          fi
+          if ! grep -q 'impl HistoryPage' performance-base/src/data/mod.rs; then
+            sed -i 's/HistoryPage::new(self\.0\.clone(), true)/HistoryPage { bars: self.0.clone(), end_of_history: true }/' \
+              performance-base/benches/frame_time.rs
+          fi
           cargo build --release --locked --bench frame_time --message-format=json-render-diagnostics > performance-head.json
           cargo build --release --locked --manifest-path performance-base/Cargo.toml --bench frame_time --message-format=json-render-diagnostics > performance-base.json
       - name: Reject instruction growth over five percent
@@ -272,6 +281,24 @@ jobs:
           WGPU_BACKEND: vulkan
         run: xvfb-run -a examples/demo/smoke-native.sh examples/demo/target/debug/egui-charts-demo
 
+  terminal:
+    if: github.event.pull_request.draft != true
+    name: Terminal package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: terminal
+      - name: Clippy
+        run: cargo clippy --locked --manifest-path terminal/Cargo.toml --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked --manifest-path terminal/Cargo.toml
+
   fmt:
     if: github.event.pull_request.draft != true
     name: Format
@@ -284,7 +311,7 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
       - name: Check the crates outside the workspace
-        run: for m in examples/demo docs/capture fuzz; do cargo fmt --manifest-path $m/Cargo.toml -- --check || exit 1; done
+        run: for m in examples/demo terminal docs/capture fuzz; do cargo fmt --manifest-path $m/Cargo.toml -- --check || exit 1; done
 
   doc:
     if: github.event.pull_request.draft != true

@@ -76,8 +76,8 @@ use super::{
     state::{MagnetType, ToolbarState},
     submenu_builder::{flyout_id, section_header, show_flyout},
     utilities::{
-        HideMenu, LockButton, MagnetButton, MeasureButton, RemoveMenu, StayInDrawingButton,
-        TemplatesButton, ZoomInButton, ZoomOutButton,
+        FavoritesButton, HideMenu, LockButton, MagnetButton, MeasureButton, RemoveMenu,
+        StayInDrawingButton, TemplatesButton, ZoomInButton, ZoomOutButton,
     },
 };
 
@@ -95,6 +95,8 @@ pub struct DrawingToolbar {
     expanded_category_rect: Option<Rect>,
     /// Controls the host hid.
     hidden: HashSet<Control>,
+    /// The egui pass the favourites strip was last drawn in.
+    strip_pass: Option<u64>,
 }
 
 impl DrawingToolbar {
@@ -284,6 +286,11 @@ impl DrawingToolbar {
             && let Some(tool_action) = self.draw_submenu(ui, category)
         {
             action = tool_action;
+        }
+
+        // === FAVOURITE TOOLS STRIP ===
+        if let Some(tool) = self.show_floating(ui, sidebar_rect.right_top() + Vec2::splat(8.0)) {
+            action = DrawingToolbarAction::SelectTool(tool);
         }
 
         ui.allocate_rect(sidebar_rect, Sense::hover());
@@ -555,6 +562,12 @@ impl DrawingToolbar {
         let response = HideMenu::show(ui);
         self.menu_button(ui, "Hide", &response);
 
+        // Favourite tools strip
+        let strip_shown = self.state.floating_visible && !self.state.favorites.is_empty();
+        if FavoritesButton::show(ui, strip_shown) {
+            self.state.floating_visible = !strip_shown;
+        }
+
         // Separator
         draw_separator_styled(ui, width);
 
@@ -602,6 +615,7 @@ impl DrawingToolbar {
         let trading = !self.hidden.contains(&Control::Trading);
         let templates = !self.hidden.contains(&Control::Templates);
         let sel_tool = self.state.sel_tool;
+        let starred = self.state.favorites.len();
         let state = &mut self.state;
         let registry = &self.registry;
         let action = show_flyout(ui, category, anchor, |ui| match category {
@@ -639,6 +653,10 @@ impl DrawingToolbar {
             }
         })
         .flatten();
+        // Starring a tool shows the strip it joins.
+        if self.state.favorites.len() > starred {
+            self.state.floating_visible = true;
+        }
 
         // Escape and a click outside close the flyout through egui's popup state.
         if !Popup::is_id_open(&ctx, flyout_id(category)) {
@@ -940,22 +958,39 @@ impl DrawingToolbar {
         ]
     }
 
-    /// Render the floating strip of favourite drawing tools, which the user can drag.
+    /// Render the floating strip of favourite drawing tools.
+    ///
+    /// [`Self::show`] and [`Self::show_with_action`] already draw it beside the toolbar and return
+    /// a tool picked on it; call this only to place the strip elsewhere, before them, as a
+    /// second call in the same pass draws nothing.
     ///
     /// The strip lists [`ToolbarState::favorites`], so starring or unstarring a tool changes it
-    /// at once. `position` places it until it has been moved; afterwards
-    /// [`ToolbarState::floating_pos`] holds its position. Its close button clears
-    /// [`ToolbarState::floating_visible`], which hides it until the host sets it again.
+    /// at once, and it is hidden while there are none. `position` places it until it has been
+    /// moved; afterwards [`ToolbarState::floating_pos`] holds its position. Its grip drags it, kept
+    /// on screen, and its close button clears [`ToolbarState::floating_visible`], as the
+    /// favourites button of the toolbar does.
     pub fn show_floating(&mut self, ui: &mut Ui, position: Pos2) -> Option<DrawingToolType> {
-        let mut new_selection = None;
-        if !self.state.floating_visible || self.state.favorites.is_empty() {
+        let pass = ui.ctx().cumulative_pass_nr();
+        if self.strip_pass == Some(pass) {
             return None;
         }
+        let tools: Vec<_> = self
+            .state
+            .favorites
+            .iter()
+            .copied()
+            .filter(|tool| self.registry.availability(*tool).visible)
+            .collect();
+        if !self.state.floating_visible || tools.is_empty() {
+            return None;
+        }
+        self.strip_pass = Some(pass);
 
-        let area = egui::Area::new(egui::Id::NULL.with("floating_drawing_toolbar"))
+        let mut new_selection = None;
+        let mut moved = Vec2::ZERO;
+        let area = egui::Area::new(Id::NULL.with("floating_drawing_toolbar"))
             .enabled(ui.is_enabled())
-            .movable(true)
-            .default_pos(self.state.floating_pos.unwrap_or(position))
+            .current_pos(self.state.floating_pos.unwrap_or(position))
             .show(ui.ctx(), |ui| {
                 egui::Frame::new()
                     .fill(ui.visuals().panel_fill)
@@ -963,8 +998,10 @@ impl DrawingToolbar {
                     .corner_radius(ui.active_theme().radius.md)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            for tool in self.state.favorites.clone() {
+                            moved = Self::strip_grip(ui);
+                            for tool in tools {
                                 let is_sel = self.state.sel_tool == Some(tool);
+                                let enabled = self.registry.availability(tool).enabled;
                                 let (rect, response) = ui.allocate_exact_size(
                                     Vec2::splat(DESIGN_TOKENS.sizing.button_md),
                                     Sense::click(),
@@ -973,7 +1010,7 @@ impl DrawingToolbar {
                                 response.widget_info(|| {
                                     egui::WidgetInfo::selected(
                                         egui::Role::Button,
-                                        response.enabled(),
+                                        enabled,
                                         is_sel,
                                         &translated_label,
                                     )
@@ -998,90 +1035,20 @@ impl DrawingToolbar {
                                     rect.center(),
                                     Vec2::splat(icon_sizes::MD),
                                 );
-                                let svg_icon = icons::get_icon(tool);
                                 render_svg_at_rect_themed(
                                     ui,
-                                    svg_icon,
+                                    icons::get_icon(tool),
                                     icon_rect,
                                     response.hovered(),
                                     is_sel,
                                 );
 
-                                if response
-                                    .on_hover_text(l10n::text(ui.ctx(), tool.as_str()))
-                                    .clicked()
-                                {
+                                if response.on_hover_text(translated_label).clicked() && enabled {
                                     new_selection = Some(tool);
                                 }
                             }
 
                             ui.separator();
-
-                            // Magnet toggle
-                            let (rect, response) = ui.allocate_exact_size(
-                                Vec2::splat(DESIGN_TOKENS.sizing.button_md),
-                                Sense::click(),
-                            );
-                            let translated_label = l10n::text(ui.ctx(), "Magnet Mode");
-                            response.widget_info(|| {
-                                egui::WidgetInfo::selected(
-                                    egui::Role::Button,
-                                    response.enabled(),
-                                    self.state.magnet_mode,
-                                    &translated_label,
-                                )
-                            });
-                            crate::styles::focus::draw_focus_ring(
-                                ui,
-                                &response,
-                                ui.active_theme().radius.sm,
-                            );
-                            let bg = if self.state.magnet_mode {
-                                ui.active_theme().ui.accent
-                            } else if response.hovered() {
-                                ui.visuals().widgets.hovered.bg_fill
-                            } else {
-                                Color32::TRANSPARENT
-                            };
-                            ui.painter()
-                                .rect_filled(rect, ui.active_theme().radius.sm, bg);
-
-                            let icon_rect =
-                                Rect::from_center_size(rect.center(), Vec2::splat(icon_sizes::MD));
-                            render_svg_at_rect_themed(
-                                ui,
-                                &embedded_icons::MAGNET,
-                                icon_rect,
-                                response.hovered(),
-                                self.state.magnet_mode,
-                            );
-
-                            if response
-                                .on_hover_text(l10n::text(ui.ctx(), "Magnet Mode"))
-                                .clicked()
-                            {
-                                self.state.magnet_mode = !self.state.magnet_mode;
-                            }
-
-                            ui.separator();
-
-                            ui.menu_button(" ", |ui| {
-                                for category in DrawingToolType::categories() {
-                                    ui.menu_button(l10n::text(ui.ctx(), *category), |ui| {
-                                        for tool in DrawingToolType::by_category(category) {
-                                            if ui
-                                                .button(l10n::text(ui.ctx(), tool.as_str()))
-                                                .clicked()
-                                            {
-                                                new_selection = Some(tool);
-                                                ui.close();
-                                            }
-                                        }
-                                    });
-                                }
-                            })
-                            .response
-                            .accessible_name(l10n::text(ui.ctx(), "More drawing tools"));
 
                             if crate::ui_kit::buttons::Button::icon(&embedded_icons::CLOSE)
                                 .ghost()
@@ -1094,13 +1061,41 @@ impl DrawingToolbar {
                         });
                     });
             });
-        self.state.floating_pos = Some(area.response.rect.min);
+        self.state.floating_pos = Some(area.response.rect.min + moved);
+        if moved != Vec2::ZERO {
+            ui.ctx().request_repaint();
+        }
 
         if let Some(tool) = new_selection {
             self.select_tool(tool);
         }
 
         new_selection
+    }
+
+    /// The dotted grip at the strip's leading edge. Returns how far the user dragged it.
+    fn strip_grip(ui: &mut Ui) -> Vec2 {
+        let size = Vec2::new(icon_sizes::SM, DESIGN_TOKENS.sizing.button_md);
+        let (rect, response) = ui.allocate_exact_size(size, Sense::drag());
+        let label = l10n::text(ui.ctx(), "Move favorite tools");
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+        let response = response.on_hover_cursor(if ui.input(|i| i.pointer.any_down()) {
+            egui::CursorIcon::Grabbing
+        } else {
+            egui::CursorIcon::Grab
+        });
+        let color = if response.hovered() || response.dragged() {
+            ui.visuals().text_color()
+        } else {
+            ui.visuals().weak_text_color()
+        };
+        for col in [-2.0, 2.0] {
+            for row in [-5.0, 0.0, 5.0] {
+                ui.painter()
+                    .circle_filled(rect.center() + Vec2::new(col, row), 1.0, color);
+            }
+        }
+        response.drag_delta()
     }
 }
 
@@ -1116,6 +1111,11 @@ mod tests {
         let ctx = Context::default();
         let id = Id::NULL.with("floating_drawing_toolbar");
         let mut toolbar = DrawingToolbar::new();
+        toolbar.state.favorites = vec![
+            DrawingToolType::TrendLine,
+            DrawingToolType::HorizontalLine,
+            DrawingToolType::FibonacciRetracement,
+        ];
         let frame = |toolbar: &mut DrawingToolbar, at: Pos2| {
             ctx.run_ui(RawInput::default(), |ui| {
                 toolbar.show_floating(ui, at);
@@ -1459,10 +1459,10 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                assert_eq!(icons.len(), 15);
+                assert_eq!(icons.len(), 16);
                 for (i, y) in [
                     23.0, 61.0, 99.0, 137.0, 175.0, 213.0, 251.0, 289.0, 344.0, 382.0, 437.0,
-                    475.0, 513.0, 551.0, 606.0,
+                    475.0, 513.0, 551.0, 589.0, 644.0,
                 ]
                 .into_iter()
                 .enumerate()

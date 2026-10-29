@@ -274,6 +274,7 @@ impl IndicatorFactory {
                 MajorityRule,
                 AccumulationSwingIndex,
                 Seasonality,
+                LunarPhases,
                 Performance,
             ],
             "Price" => [
@@ -310,6 +311,22 @@ impl IndicatorFactory {
                 volume: false,
                 seconds: 60,
                 instant: 3,
+            },
+            OrderFlowKind::AggressorRate {
+                seconds: 60,
+                instant: 3,
+            },
+            OrderFlowKind::LevelsExecuted {
+                seconds: 0,
+                reversal: false,
+            },
+            OrderFlowKind::SizeDelta {
+                ranges: [[0.0, 9.0], [10.0, 99.0], [100.0, f64::MAX]],
+            },
+            OrderFlowKind::FlowSum { bars: 10 },
+            OrderFlowKind::FilteredCvd {
+                min: 100.0,
+                max: f64::MAX,
             },
             OrderFlowKind::LevelsTradedThrough { seconds: 0 },
         ] {
@@ -1206,6 +1223,22 @@ mod tests {
                 seconds: l(0),
                 instant: l(1),
             })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::AggressorRate {
+                seconds: l(0),
+                instant: l(1),
+            })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsExecuted {
+                seconds: l(0),
+                reversal: true,
+            })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::SizeDelta {
+                ranges: [[x(0.0), x(9.0)], [x(10.0), x(99.0)], [x(100.0), f64::MAX]],
+            })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::FlowSum { bars: l(0) })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
+                min: x(100.0),
+                max: f64::MAX,
+            })),
             Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsTradedThrough {
                 seconds: l(0),
             })),
@@ -1248,6 +1281,7 @@ mod tests {
             Box::new(IntradayPivotPoints::new(l(0))),
             Box::new(ProjectedPivotPoints::new().with_pivots_back(l(1))),
             Box::new(WilliamsFractals::new(l(0))),
+            Box::new(LunarPhases::new()),
             Box::new(Gaps::new(l(0), x(30.0)).with_trail_limit(Some(l(1)))),
             Box::new(Gaps::new(l(0), x(30.0)).with_partial_closing(true)),
             Box::new(RsiDivergence::new(l(0), l(1), l(2), l(3), 60)),

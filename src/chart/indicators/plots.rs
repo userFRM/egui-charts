@@ -156,6 +156,7 @@ pub(crate) fn paint_drawings(
         bar_to_x: &bar_to_x,
         price_to_y: &price_to_y,
         time_axis: false,
+        executions: None,
     };
     for drawing in mapped_drawings(study, coords, price_to_y) {
         drawing.render(
