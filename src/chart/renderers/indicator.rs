@@ -737,7 +737,11 @@ mod tests {
             }
         }
         // Periods 10 and 20 give 10 and 5 dashes; dots include centres on the clip edge.
-        assert_eq!(counts, [10, 5, 26, 13], "shape counts must follow the visible length");
+        assert_eq!(
+            counts,
+            [10, 5, 26, 13],
+            "shape counts must follow the visible length"
+        );
     }
 
     #[test]
