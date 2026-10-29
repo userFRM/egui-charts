@@ -100,7 +100,7 @@ Chart,Chart settings and themes,Canvas tab,done,library,src/ui/top_toolbar/compo
 Chart,Chart settings and themes,Chart settings dialog,done,library,src/ui/top_toolbar/components/settings_menu/dialog/mod.rs;src/widget/settings/apply.rs
 Chart,Chart settings and themes,Crosshair appearance,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/crosshair.rs
 Chart,Chart settings and themes,Events tab,done,host,src/model/time_scale_event.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs
-Chart,Chart settings and themes,Grid lines,done,library,src/widget/frame.rs;src/chart/rendering/grid.rs;src/widget/settings/apply.rs
+Chart,Chart settings and themes,Grid lines,done,library,src/widget/frame.rs;src/chart/rendering/grid.rs;src/widget/indicator_pane.rs;src/widget/settings/apply.rs
 Chart,Chart settings and themes,Light and dark themes,done,library,src/widget/mod.rs;src/widget/palette.rs;src/widget/frame.rs
 Chart,Chart settings and themes,Navigation and pane buttons,done,library,src/widget/navigation.rs;src/widget/frame.rs;src/widget/pane_layout.rs;src/widget/settings/data.rs
 Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs

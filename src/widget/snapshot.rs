@@ -492,6 +492,17 @@ fn check(
     {
         return Err("Crosshair width must be above zero".into());
     }
+    // A frame below this spacing shows a hundred bars per point; 0 sets no limit.
+    if let Some(options) = &snapshot.options
+        && [
+            options.time_scale.min_bar_spacing,
+            options.time_scale.max_bar_spacing,
+        ]
+        .into_iter()
+        .any(|spacing| spacing != 0.0 && !(spacing >= 0.01))
+    {
+        return Err("Bar spacing limits must be 0 or at least 0.01".into());
+    }
     let drawings = match &snapshot.drawings {
         Some(drawings) => {
             let json = drawings.to_string();
@@ -906,6 +917,7 @@ mod tests {
             ("/options/tooltip/magnifier_size", -1e300),
             ("/options/crosshair/horz_line_width", 0.0),
             ("/options/crosshair/vert_line_width", -1.0),
+            ("/options/time_scale/max_bar_spacing", 1e-9),
         ] {
             let mut invalid = document.clone();
             *invalid.pointer_mut(pointer).unwrap() = value.into();
