@@ -9,7 +9,7 @@ use crate::data::{
 };
 use crate::model::{Bar, BarClock, Instrument, Timeframe};
 use crate::studies::{StudyData, StudyDataRequest};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -24,7 +24,7 @@ struct Series {
     clock: BarClock,
     error: Option<FeedError>,
     stream: Option<Stream>,
-    from_ticks: BTreeSet<chrono::DateTime<chrono::Utc>>,
+    from_ticks: BTreeMap<chrono::DateTime<chrono::Utc>, Origin>,
 }
 
 struct Stream {
@@ -235,7 +235,7 @@ impl Chart {
             clock,
             error: None,
             stream: None,
-            from_ticks: BTreeSet::new(),
+            from_ticks: BTreeMap::new(),
         });
         self.invalidate_study_data();
     }
@@ -309,7 +309,7 @@ impl Chart {
                     instrument: None,
                     clock: clock(request, None, self.extended_hours()),
                     error: None,
-                    from_ticks: BTreeSet::new(),
+                    from_ticks: BTreeMap::new(),
                     stream: Some(Stream {
                         feed: Arc::clone(feed),
                         inbox,
@@ -398,8 +398,12 @@ impl Chart {
                             .unwrap_or(Err(FeedError::NotSupported))
                     };
                     match result {
-                        Ok(page) => {
+                        Ok(mut page) => {
                             let previous = stream.history.take().and_then(|request| request.before);
+                            page.bars.retain(|bar| {
+                                previous
+                                    .is_none_or(|before| series.clock.bar_open(bar.time) < before)
+                            });
                             series.error = None;
                             stream.failures = 0;
                             let empty = page.bars.is_empty();
@@ -763,7 +767,10 @@ mod tests {
                 assert_eq!(feed.pending(metric), 0);
                 pump(&mut chart, now + 0.5 + delay);
                 assert_eq!(feed.pending(metric), 1);
-                let retried = feed.answer(metric, Ok(HistoryPage::new(bars(&[12.0], 60), true)));
+                let retried = feed.answer(
+                    metric,
+                    Ok(HistoryPage::new(bars(&[12.0, 55.0, 99.0, 100.0], 60), true)),
+                );
                 assert_eq!(
                     retried, failed,
                     "retry must keep its boundary and count after a live prepend"
@@ -921,7 +928,7 @@ mod tests {
             assert!(
                 series
                     .from_ticks
-                    .iter()
+                    .keys()
                     .all(|time| *time == DateTime::UNIX_EPOCH)
             );
             if replacement {

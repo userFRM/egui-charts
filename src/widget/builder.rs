@@ -50,7 +50,7 @@ use crate::theme::Theme;
 
 use super::Chart;
 use super::state::{BoxZoomState, KineticScrollState};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 impl Chart {
@@ -112,7 +112,7 @@ impl Chart {
                 rejected_bars,
                 ..FeedState::default()
             },
-            from_ticks: BTreeSet::new(),
+            from_ticks: BTreeMap::new(),
             bar_limits: Default::default(),
             studies: IndicatorRegistry::new(),
             study_data: Default::default(),

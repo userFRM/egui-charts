@@ -48,7 +48,7 @@ use crate::studies::ChartState;
 use crate::scales::{PriceMap, PriceScale};
 use crate::studies::IndicatorRegistry;
 use chrono::{DateTime, Utc};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 mod indicator_pane;
 pub use crate::chart::renderers::{
     Legend, LegendStatus, QuoteSide, StudyAction, StudyValue, Watermark, WatermarkLine,
@@ -255,8 +255,8 @@ pub struct Chart {
     pub(crate) mouse_in_chart: bool,
     /// Feed state of the main series; see [`Chart::feed_state`].
     pub(crate) feed: FeedState,
-    /// Times of main bars built from ticks, which a history bar of the same slot replaces.
-    pub(crate) from_ticks: BTreeSet<DateTime<Utc>>,
+    /// Origins of main bars built from ticks, distinguishing trades from empty heartbeats.
+    pub(crate) from_ticks: BTreeMap<DateTime<Utc>, crate::data::merge::Origin>,
     /// Optional oldest-bar eviction limits, unlimited when absent.
     bar_limits: std::collections::HashMap<SeriesId, std::num::NonZeroUsize>,
     /// The chart's studies, in the order they were added.
