@@ -182,20 +182,7 @@ impl Indicator for RainbowOscillator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-
-    fn make_bar(close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: close,
-            high: close,
-            low: close,
-            close,
-            volume: 1000.0,
-            colors: None,
-            payload: None,
-        }
-    }
+    use crate::studies::test_support::make_bar;
 
     /// Reference values from Mel Widner's published definition ("Rainbow Charts", Technical
     /// Analysis of Stocks & Commodities, July 1997), computed independently in double precision:
