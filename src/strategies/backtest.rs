@@ -693,6 +693,41 @@ mod tests {
                 _ => {}
             }
         }
+        fn low_first_stop(bar: usize, context: &mut StrategyContext<'_>) {
+            match bar {
+                0 => context.entry("L", Buy, 1.0, OrderType::Market),
+                1 => context.exit("B", None, Some(104.0), Some(98.0)),
+                _ => {}
+            }
+        }
+        fn short_stop(bar: usize, context: &mut StrategyContext<'_>) {
+            match bar {
+                0 => context.entry("S", Sell, 1.0, OrderType::Market),
+                1 => context.exit("B", None, Some(97.0), Some(101.0)),
+                _ => {}
+            }
+        }
+        fn stop_limit_gap(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry(
+                    "G",
+                    Buy,
+                    1.0,
+                    OrderType::StopLimit {
+                        stop: 102.0,
+                        limit: 103.0,
+                    },
+                );
+            }
+        }
+        fn replaced_first(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("A", Buy, 1.0, OrderType::Market);
+                context.entry("B", Buy, 1.0, OrderType::Market);
+                context.exit("X", Some(1.0), None, None);
+                context.entry("A", Buy, 2.0, OrderType::Market);
+            }
+        }
         // Decimal lots close at their entry price: two breakevens, flat equity and no open lot.
         // Thirds realise 3 * 0.1 * (102 - 100) = 0.6, all winners. B keeps 0.5 at 104,
         // so its mark at 102 is -1 and final equity is 9999.6. No fourth closed trade.
@@ -770,6 +805,93 @@ mod tests {
                 vec![10_000.0; 4],
                 1,
                 0,
+                0,
+                0.0,
+            ),
+            // Low first: the long's raised stop wins before its target. Profit = 98 - 90 = 8.
+            (
+                low_first_stop,
+                vec![(90.0, 90.0, 90.0, 90.0); 2]
+                    .into_iter()
+                    .chain([(100.0, 105.0, 97.0, 100.0)])
+                    .collect(),
+                vec![trade(Buy, 1.0, 1, 90.0, Some((2, 98.0, 8.0)), "L / B")],
+                vec![10_000.0, 10_000.0, 10_000.0, 10_008.0],
+                1,
+                0,
+                1,
+                8.0,
+            ),
+            // High first: the short's lowered stop wins before its target. Profit = 110 - 101 = 9.
+            (
+                short_stop,
+                vec![(110.0, 110.0, 110.0, 110.0); 2]
+                    .into_iter()
+                    .chain([(100.0, 102.0, 96.0, 100.0)])
+                    .collect(),
+                vec![trade(Sell, 1.0, 1, 110.0, Some((2, 101.0, 9.0)), "S / B")],
+                vec![10_000.0, 10_000.0, 10_000.0, 10_009.0],
+                1,
+                0,
+                1,
+                9.0,
+            ),
+            // Empty and one-bar runs cannot fill next-bar orders.
+            (decimals, vec![], vec![], vec![], 0, 0, 0, 0.0),
+            (
+                decimals,
+                vec![(100.0, 100.0, 100.0, 100.0)],
+                vec![],
+                vec![10_000.0; 2],
+                0,
+                0,
+                0,
+                0.0,
+            ),
+            // A NaN bar keeps the limit pending, just like an invalid range.
+            (
+                invalid_range,
+                vec![
+                    (100.0, 101.0, 99.0, 100.0),
+                    (100.0, f64::NAN, 99.0, 100.0),
+                    (103.0, 104.0, 102.0, 103.0),
+                ],
+                vec![trade(Buy, 1.0, 2, 103.0, None, "L")],
+                vec![10_000.0, 10_000.0, f64::NAN, 10_000.0],
+                0,
+                1,
+                0,
+                0.0,
+            ),
+            // A gap triggers the stop but cannot fill above the limit. The next bar fills
+            // at 103 and marks at 104: one open lot, equity +1 and no realised profit.
+            (
+                stop_limit_gap,
+                vec![
+                    (100.0, 100.0, 100.0, 100.0),
+                    (105.0, 106.0, 104.0, 105.0),
+                    (104.0, 105.0, 102.0, 104.0),
+                ],
+                vec![trade(Buy, 1.0, 2, 103.0, None, "G")],
+                vec![10_000.0, 10_000.0, 10_000.0, 10_001.0],
+                0,
+                1,
+                0,
+                0.0,
+            ),
+            // Replaced A still precedes B and X. X closes 1 of A on the entry bar;
+            // the other 1 of A and 1 of B remain, with flat equity and a breakeven close.
+            (
+                replaced_first,
+                vec![(100.0, 100.0, 100.0, 100.0); 2],
+                vec![
+                    trade(Buy, 1.0, 1, 100.0, Some((1, 100.0, 0.0)), "A / X"),
+                    trade(Buy, 1.0, 1, 100.0, None, "A"),
+                    trade(Buy, 1.0, 1, 100.0, None, "B"),
+                ],
+                vec![10_000.0; 3],
+                1,
+                2,
                 0,
                 0.0,
             ),
