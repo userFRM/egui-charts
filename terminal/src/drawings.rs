@@ -3,24 +3,24 @@
 use super::core::{Direction, SidePanel};
 use super::layout::{Region, panel_frame};
 use super::{Action, Terminal};
-use crate::config::{CrosshairMode, CrosshairStyle};
-use crate::drawings::{DrawingTemplate, DrawingToolType};
-use crate::services::UserSettings;
-use crate::ui::Control;
-use crate::ui::context_menu::{ChartContextAction, ContextMenuAction};
-use crate::ui::dialogs::{
+use egui_charts::config::{CrosshairMode, CrosshairStyle};
+use egui_charts::drawings::{DrawingTemplate, DrawingToolType};
+use egui_charts::services::UserSettings;
+use egui_charts::ui::Control;
+use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
+use egui_charts::ui::dialogs::{
     DrawingContextMenuAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
     StudyContextMenuAction,
 };
-use crate::ui::drawing_toolbar::categories::cursors::CursorType;
-use crate::ui::drawing_toolbar::{
+use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
+use egui_charts::ui::drawing_toolbar::{
     DrawingToolbar, DrawingToolbarAction, DrawingToolbarDomainState, MagnetType,
 };
-use crate::ui::widget_bar::panels::object_tree::{
+use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem, show_data_window,
 };
-use crate::ui::widget_bar::{RightBarIcon, WidgetBarAction};
-use crate::widget::{ChartEvent, ChartPointer, SeriesId, ShortcutRequest};
+use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBarAction};
+use egui_charts::widget::{ChartEvent, ChartPointer, SeriesId, ShortcutRequest};
 
 /// Object tree id of the main series.
 const MAIN_SERIES_ID: usize = usize::MAX;
@@ -586,11 +586,11 @@ impl Terminal {
 mod tests {
     use super::super::test_support::{SIZE, TestFeed, frame};
     use super::*;
-    use crate::drawings::{ChartPoint, Drawing};
-    use crate::model::ChartType;
-    use crate::studies::{CustomIndicator, IndicatorValue, SMA};
-    use crate::ui::top_toolbar::TopToolbarAction;
     use egui::{Event, pos2};
+    use egui_charts::drawings::{ChartPoint, Drawing};
+    use egui_charts::model::ChartType;
+    use egui_charts::studies::{CustomIndicator, IndicatorValue, SMA};
+    use egui_charts::ui::top_toolbar::TopToolbarAction;
     use std::sync::Arc;
 
     /// A terminal whose chart has loaded its history.
@@ -912,8 +912,8 @@ mod tests {
 
     #[test]
     fn menus_the_rail_and_the_clipboard_act_on_the_chart_and_nothing_returns_to_the_host() {
-        use crate::ui::context_menu::ChartContextAction as Menu;
-        use crate::ui::dialogs::DrawingContextMenuAction as Draw;
+        use egui_charts::ui::context_menu::ChartContextAction as Menu;
+        use egui_charts::ui::dialogs::DrawingContextMenuAction as Draw;
         let mut terminal = ready();
         terminal
             .chart_mut()
@@ -956,7 +956,10 @@ mod tests {
         assert!(
             terminal
                 .run(Action::ChartMenu(Menu::Drawing(Draw::AddAlert(Box::new(
-                    crate::model::Alert::new("AAPL", crate::model::AlertCondition::Crossing(1.0))
+                    egui_charts::model::Alert::new(
+                        "AAPL",
+                        egui_charts::model::AlertCondition::Crossing(1.0)
+                    )
                 )))))
                 .is_some()
         );

@@ -250,6 +250,7 @@ impl Ladder {
             .collect();
         let position = (market.positions.iter()).find(|position| position.symbol == symbol);
         let quantity_decimals = decimals(market.rules.quantity_step);
+        let numbers = market.numbers();
         let wanted = *quantity;
         let order = |side, order_type| -> Result<OrderRequest, String> {
             if !market.rules_ready {
@@ -617,7 +618,7 @@ impl Ladder {
                 }
                 None => theme.ui.text,
             };
-            let label = grouped(price(tick_index), market.decimals, false);
+            let label = numbers.price(price(tick_index));
             text(
                 ui,
                 cell.center(),
@@ -837,7 +838,7 @@ impl Ladder {
                     }
                 });
             }
-            let tag_response = tag_response.on_hover_text(l10n::format_text(ui.ctx(), "{0} {1} @ {2} {label} · {3}. Drag to move, right-click to cancel. {4} order(s) here; click to choose", &[("0", side.label().to_string()), ("1", grouped(working.request.quantity - working.filled, quantity_decimals, false).to_string()), ("2", grouped(at, market.decimals, false).to_string()), ("label", label.to_string()), ("3", working.id.0.to_string()), ("4", format!("{}", group.len()))]));
+            let tag_response = tag_response.on_hover_text(l10n::format_text(ui.ctx(), "{0} {1} @ {2} {label} · {3}. Drag to move, right-click to cancel. {4} order(s) here; click to choose", &[("0", side.label().to_string()), ("1", numbers.quantity(working.request.quantity - working.filled, quantity_decimals)), ("2", numbers.price(at)), ("label", label.to_string()), ("3", working.id.0.to_string()), ("4", format!("{}", group.len()))]));
             if tag_response.secondary_clicked() {
                 action = Some(Action::Confirm(TradingLineAction::Cancel(working.clone())));
             }
@@ -995,8 +996,8 @@ impl Ladder {
                     ),
                     format!(
                         "{} @ {}",
-                        grouped(position.quantity, quantity_decimals, false),
-                        grouped(position.average_price, market.decimals, false)
+                        numbers.quantity(position.quantity, quantity_decimals),
+                        numbers.price(position.average_price)
                     ),
                 ),
                 None => (theme.ui.text_muted, "Flat".to_owned()),
@@ -1252,6 +1253,9 @@ mod tests {
                             }],
                         };
                         let market = Market {
+                            symbol: "ES",
+                            formatter: None,
+                            pip_value: None,
                             last: Some(if gesture == "place-quote" {
                                 100.0
                             } else {
@@ -1421,6 +1425,9 @@ mod tests {
                 asks: vec![],
             });
             let market = Market {
+                symbol: "ES",
+                formatter: None,
+                pip_value: None,
                 last: Some(100.0),
                 bid: None,
                 ask: None,
