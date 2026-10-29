@@ -46,7 +46,7 @@ Builder API,Datafeed API,Live bar stream lifecycle,done,host,src/widget/feed.rs;
 Builder API,Datafeed API,Paginated symbol search,done,host,src/services/search.rs;src/ui/top_toolbar/components/symbol_search/service.rs;src/ui/top_toolbar/components/symbol_search/mod.rs
 Builder API,Datafeed API,Per-symbol resolution capabilities,done,host,src/model/instrument.rs;src/widget/feed.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs
 Builder API,Datafeed API,Price precision from symbol metadata,done,host,src/model/instrument.rs;src/scales/price_formatter.rs;src/widget/feed.rs;src/widget/frame.rs;src/ui/trading/mod.rs
-Builder API,Datafeed API,Quotes for watchlist and details,done,host,src/services/quotes.rs;src/ui/widget_bar/panels/watchlist.rs;src/ui/trading/mod.rs
+Builder API,Datafeed API,Quotes for watchlist and details,done,host,src/services/quotes.rs;src/ui/widget_bar/panels/watchlist/mod.rs;src/ui/trading/mod.rs
 Builder API,Datafeed API,Realtime bar updates,done,host,src/data/inbox/mod.rs;src/widget/feed.rs;src/data/merge.rs;src/widget/series.rs;src/data/inbox/sink.rs
 Builder API,Datafeed API,Resolve symbol to symbol metadata,done,host,src/data/mod.rs;src/model/instrument.rs;src/widget/feed.rs
 Builder API,Datafeed API,Server time,done,host,src/data/inbox/mod.rs;src/widget/feed.rs;src/widget/mod.rs;src/widget/frame.rs;src/data/inbox/sink.rs
@@ -890,21 +890,21 @@ Terminal,Trading panel,"Show/hide positions, orders and executions",done,library
 Terminal,Trading panel,Time in force and order presets,done,library,src/ui/trading/ticket.rs
 Terminal,Trading panel,Trade button and broker / paper account picker,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/broker_picker.rs
 Terminal,Trading panel,Trading notifications,done,host,src/ui/trading/mod.rs
-Terminal,Watchlists and screeners,Add to watchlist from the chart context menu,done,library,src/ui/context_menu/mod.rs;src/ui/widget_bar/panels/watchlist.rs
-Terminal,Watchlists and screeners,Advanced watchlist view,done,library,src/ui/widget_bar/panels/watchlist.rs;src/ui/widget_bar/panels/market_details.rs;src/ui/widget_bar/panels/symbol_details.rs
-Terminal,Watchlists and screeners,Colour flags and the flagged list,done,library,src/ui/widget_bar/panels/watchlist.rs;src/model/watchlist.rs
+Terminal,Watchlists and screeners,Add to watchlist from the chart context menu,done,library,src/ui/context_menu/mod.rs;src/ui/widget_bar/panels/watchlist/mod.rs
+Terminal,Watchlists and screeners,Advanced watchlist view,done,library,src/ui/widget_bar/panels/watchlist/mod.rs;src/ui/widget_bar/panels/market_details.rs;src/ui/widget_bar/panels/symbol_details.rs
+Terminal,Watchlists and screeners,Colour flags and the flagged list,done,library,src/ui/widget_bar/panels/watchlist/mod.rs;src/model/watchlist.rs
 Terminal,Watchlists and screeners,"ETF, bond, crypto coin, CEX pair and DEX pair screeners",done,host,src/ui/widget_bar/panels/screener.rs;src/data/market.rs;src/services/storage.rs;src/ui/dialogs/templates/store.rs
-Terminal,Watchlists and screeners,Flip through list symbols on the chart,done,library,src/ui/widget_bar/panels/watchlist.rs
+Terminal,Watchlists and screeners,Flip through list symbols on the chart,done,library,src/ui/widget_bar/panels/watchlist/mod.rs
 Terminal,Watchlists and screeners,Hotlists,done,host,src/ui/widget_bar/panels/hotlists.rs
-Terminal,Watchlists and screeners,Import and export a list as a .txt file,done,library,src/ui/widget_bar/panels/watchlist.rs
+Terminal,Watchlists and screeners,Import and export a list as a .txt file,done,library,src/ui/widget_bar/panels/watchlist/mod.rs
 Terminal,Watchlists and screeners,Market heatmaps,done,host,src/ui/widget_bar/panels/market_heatmap.rs;src/services/settings.rs
-Terminal,Watchlists and screeners,Multiple named lists,done,library,src/ui/widget_bar/panels/watchlist.rs;src/model/watchlist.rs
+Terminal,Watchlists and screeners,Multiple named lists,done,library,src/ui/widget_bar/panels/watchlist/mod.rs;src/model/watchlist.rs
 Terminal,Watchlists and screeners,Natural-language screener,done,host,src/ui/widget_bar/panels/screener.rs;src/data/market.rs;src/data/mod.rs
-Terminal,Watchlists and screeners,Quote and order-book data contract for lists and panels,done,host,src/services/quotes.rs;src/ui/widget_bar/panels/watchlist.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed.rs
-Terminal,Watchlists and screeners,Quote columns with live updates,done,host,src/ui/widget_bar/panels/watchlist.rs;src/model/quote.rs
-Terminal,Watchlists and screeners,Sections inside a list,done,library,src/ui/widget_bar/panels/watchlist.rs
-Terminal,Watchlists and screeners,Share a list by link,done,host,src/services/sharing.rs;src/ui/share_controls.rs;src/ui/widget_bar/panels/watchlist.rs
-Terminal,Watchlists and screeners,Sort by column and drag to reorder,done,library,src/ui/widget_bar/panels/watchlist.rs
+Terminal,Watchlists and screeners,Quote and order-book data contract for lists and panels,done,host,src/services/quotes.rs;src/ui/widget_bar/panels/watchlist/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed.rs
+Terminal,Watchlists and screeners,Quote columns with live updates,done,host,src/ui/widget_bar/panels/watchlist/mod.rs;src/model/quote.rs
+Terminal,Watchlists and screeners,Sections inside a list,done,library,src/ui/widget_bar/panels/watchlist/mod.rs
+Terminal,Watchlists and screeners,Share a list by link,done,host,src/services/sharing.rs;src/ui/share_controls.rs;src/ui/widget_bar/panels/watchlist/mod.rs
+Terminal,Watchlists and screeners,Sort by column and drag to reorder,done,library,src/ui/widget_bar/panels/watchlist/mod.rs
 Terminal,Watchlists and screeners,Stock screener,done,host,src/ui/widget_bar/panels/screener.rs;src/data/market.rs;src/services/storage.rs;src/ui/dialogs/templates/store.rs
 Terminal,Watchlists and screeners,Symbol details panel,done,host,src/ui/widget_bar/panels/symbol_details.rs;src/data/mod.rs;src/ui/widget_bar/panels/market_details.rs
-Terminal,Watchlists and screeners,Watchlist panel in the right toolbar,done,host,src/ui/widget_bar/toolbar.rs;src/ui/widget_bar/panels/watchlist.rs
+Terminal,Watchlists and screeners,Watchlist panel in the right toolbar,done,host,src/ui/widget_bar/toolbar.rs;src/ui/widget_bar/panels/watchlist/mod.rs
