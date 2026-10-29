@@ -60,7 +60,7 @@ pub use alert::{
 pub(crate) use bar::SpanCache;
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
-pub(crate) use bar::{index_at, time_at};
+pub(crate) use bar::{index_at, index_at_with_timeframe, time_at, time_at_with_timeframe};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub use chart_style::{
@@ -116,6 +116,7 @@ pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLetter, TPOProfile,
     derive_tick_size, to_tpo_profiles,
 };
+pub(crate) use trading::rounding_tolerance;
 pub use trading::{
     Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderPreview,
     OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce,

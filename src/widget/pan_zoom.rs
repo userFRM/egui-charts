@@ -549,7 +549,8 @@ impl Chart {
     /// Zoom programmatically to a screen rectangle from `start` to `end`, filling the
     /// viewport with the selected time and price ranges. [`Self::zoom_back`] undoes it.
     ///
-    /// Returns `false` if either dimension of the selection is 20 points or less.
+    /// Returns `false` if either dimension of the selection is 20 points or less, or if a
+    /// corner or the width is non-finite.
     pub fn execute_box_zoom(
         &mut self,
         start: Pos2,
@@ -557,6 +558,9 @@ impl Chart {
         chart_rect: Rect,
         chart_width: f32,
     ) -> bool {
+        if !(start.is_finite() && end.is_finite() && chart_width.is_finite()) {
+            return false;
+        }
         let min_x = start.x.min(end.x);
         let max_x = start.x.max(end.x);
         let min_y = start.y.min(end.y);
@@ -1483,6 +1487,28 @@ mod tests {
         let (start, end) = (Pos2::new(x, y), Pos2::new(x + 25.0, y + 100.0));
         assert!(one_bar.execute_box_zoom(start, end, rect, rect.width()));
         assert_eq!(one_bar.state.time_scale().bar_spacing(), rect.width());
+
+        // Invalid corners or width must leave both scales and zoom history unchanged.
+        let view = one_bar.get_time_scale_state();
+        let range = one_bar.state.price_scale().range();
+        one_bar.state.clear_zoom_history();
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for (start, end, width) in [
+                (
+                    Pos2::new(invalid, invalid),
+                    Pos2::new(invalid, invalid),
+                    rect.width(),
+                ),
+                (Pos2::new(invalid, y), end, rect.width()),
+                (start, Pos2::new(x + 25.0, invalid), rect.width()),
+                (start, end, invalid),
+            ] {
+                assert!(!one_bar.execute_box_zoom(start, end, rect, width));
+                assert_eq!(one_bar.get_time_scale_state(), view);
+                assert_eq!(one_bar.state.price_scale().range(), range);
+                assert!(!one_bar.state.has_zoom_history());
+            }
+        }
 
         // A box over a range narrower than the zoom floor widens to it: a millionth of the
         // visible data's highest price, 110.

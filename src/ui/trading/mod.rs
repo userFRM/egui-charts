@@ -832,7 +832,7 @@ impl Trading {
         ctx: &egui::Context,
         options: &crate::widget::ImageExportOptions,
     ) -> Result<crate::widget::ChartImage, String> {
-        chart.export_image_with(ctx, options, |ui, chart| self.draw_export(ui, chart))
+        chart.export_layout_image(ctx, options, |ui, chart| self.draw_export(ui, chart))
     }
 
     /// Encodes [`Self::export_image`] as PNG bytes for host file, clipboard or sharing delivery.
@@ -842,7 +842,7 @@ impl Trading {
         ctx: &egui::Context,
         options: &crate::widget::ImageExportOptions,
     ) -> Result<Vec<u8>, String> {
-        chart.export_png_with(ctx, options, |ui, chart| self.draw_export(ui, chart))
+        chart.export_layout_png(ctx, options, |ui, chart| self.draw_export(ui, chart))
     }
 
     /// Writes [`Self::export_image`] as SVG, as [`Chart::export_svg`] does.
@@ -852,10 +852,11 @@ impl Trading {
         ctx: &egui::Context,
         options: &crate::widget::ImageExportOptions,
     ) -> Result<String, String> {
-        chart.export_svg_with(ctx, options, |ui, chart| self.draw_export(ui, chart))
+        chart.export_layout_svg(ctx, options, |ui, chart| self.draw_export(ui, chart))
     }
 
     fn draw_export(&self, ui: &mut egui::Ui, chart: &mut Chart) {
+        chart.show(ui);
         if self.display.include_in_image {
             chart.trading_bid_ask = self.display.bid_ask_labels;
             let lines = self.draw_overlays(ui, chart);
