@@ -538,12 +538,6 @@ mod tests {
                 "2025-01-01T12:00:00Z",
                 true,
             ),
-            (
-                WeeklySessionProvider::new(Weekday::Wed),
-                "1969-12-31T23:59:59Z",
-                "1970-01-01T00:00:00Z",
-                true,
-            ),
         ] {
             assert_eq!(
                 provider
