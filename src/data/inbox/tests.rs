@@ -423,6 +423,14 @@ fn clock_boundaries_and_empty_intervals() {
             updates.bars[&boundary].0,
             Bar::new(boundary, 103.0, 103.0, 103.0, 103.0, 0.0)
         );
+        let mut bars = Vec::new();
+        let mut from_ticks = std::collections::BTreeSet::new();
+        super::super::merge::merge(
+            &mut bars,
+            &mut from_ticks,
+            &clock,
+            updates.bars.into_values().collect(),
+        );
         sink.push_tick(tick(boundary, 99.0, 4.0));
         sink.push_tick(tick(boundary + TimeDelta::milliseconds(1), 101.0, 5.0));
         let (_, updates) = inbox.drain().updates.pop().unwrap();
@@ -430,9 +438,16 @@ fn clock_boundaries_and_empty_intervals() {
             updates.bars[&boundary],
             (
                 Bar::new(boundary, 99.0, 101.0, 99.0, 101.0, 9.0),
-                Origin::Live
+                Origin::Ticks(2)
             )
         );
+        super::super::merge::merge(
+            &mut bars,
+            &mut from_ticks,
+            &clock,
+            updates.bars.into_values().collect(),
+        );
+        assert_eq!(bars, [Bar::new(boundary, 99.0, 101.0, 99.0, 101.0, 9.0)]);
     }
 }
 

@@ -91,6 +91,11 @@ pub(crate) fn merge(
         }
         let old = stored.next_if(|old| slot(old) == at);
         let new = match (old, origin) {
+            (Some(old), Origin::Ticks(_))
+                if old.volume == 0.0 && from_ticks.contains(&old.time) =>
+            {
+                bar
+            }
             (Some(old), Origin::Ticks(trades)) => {
                 // Trades filling a whitespace bar extend its eventual history bar.
                 if old.is_whitespace() {
@@ -216,8 +221,22 @@ mod tests {
         let mut invalid = vec![bar(1, 5.0), bar(2, f64::NAN), bar(3, 5.0)];
         invalid[0].high = 4.0;
         invalid[2].volume = -1.0;
+        let heartbeat_trade = {
+            let inbox = std::sync::Arc::new(crate::data::inbox::Inbox::default());
+            let sink = inbox.subscribe("ES".into(), Timeframe::Min1.into(), 100, None);
+            sink.push_tick(crate::model::Tick::new(at(0, 0), 10.0, 1.0, None));
+            inbox.drain();
+            sink.advance_time(at(1, 0));
+            sink.push_tick(crate::model::Tick::new(at(1, 10), 14.0, 2.0, None));
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            let (bar, origin) = updates.bars.into_values().next().unwrap();
+            (origin, vec![bar])
+        };
         #[rustfmt::skip]
         let cases = [
+            ("a trade after a pending heartbeat extends the page in its slot",
+                vec![(History, vec![ohlcv(1, [12.0, 13.0, 11.5, 12.5, 6.0])]), heartbeat_trade],
+                vec![ohlcv(1, [12.0, 14.0, 11.5, 14.0, 8.0])], (Some(0), 0, 0)),
             ("a page replaces a zero-volume heartbeat candle",
                 vec![(Ticks(0), vec![ohlcv(1, [10.0, 10.0, 10.0, 10.0, 0.0])]),
                     (History, vec![ohlcv(1, [12.0, 13.0, 11.5, 12.5, 6.0])])],

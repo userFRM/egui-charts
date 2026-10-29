@@ -547,7 +547,7 @@ impl Live {
             let replace_empty = live.empty && live.forming == Some(open);
             match updates.bars.entry(open) {
                 Entry::Occupied(mut pending) if replace_empty => {
-                    pending.insert((ticks, Origin::Live));
+                    pending.insert((ticks, Origin::Ticks(1)));
                 }
                 Entry::Occupied(mut pending) => {
                     let (bar, origin) = pending.get_mut();
@@ -561,14 +561,7 @@ impl Live {
                     }
                 }
                 Entry::Vacant(slot) => {
-                    slot.insert((
-                        ticks,
-                        if replace_empty {
-                            Origin::Live
-                        } else {
-                            Origin::Ticks(1)
-                        },
-                    ));
+                    slot.insert((ticks, Origin::Ticks(1)));
                 }
             }
             live.last_trade = Some(tick.ts);
