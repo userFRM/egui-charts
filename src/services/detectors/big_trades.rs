@@ -5,7 +5,6 @@ use std::collections::VecDeque;
 use chrono::{DateTime, Utc};
 
 use super::Threshold;
-use crate::data::combine_trades;
 use crate::model::{BarClock, Direction, OrderSide, Signal, SignalId, SignalShape, Tick};
 use crate::scales::{PriceFormatter, VolumeFormatter};
 use crate::services::SignalEvent;
@@ -65,8 +64,8 @@ pub(super) struct BigTrades {
     tick: f64,
     /// Writes the size labels.
     sizes_label: VolumeFormatter,
-    /// Fills of the open trade: one explicit aggressor's so far, or one fill without an id.
-    fills: Vec<Tick>,
+    /// Running aggregate of the open trade's fills.
+    fills: Option<Trade>,
     /// Number of the open trade's detection, once it is large.
     large: Option<u64>,
     /// Number of the next detection.
@@ -83,6 +82,16 @@ pub(super) struct BigTrades {
     clock: Option<BarClock>,
     /// The forming bar.
     bar: Option<Bar>,
+}
+
+struct Trade {
+    aggressor_order_id: Option<u64>,
+    first_time: DateTime<Utc>,
+    side: Option<OrderSide>,
+    size: f64,
+    price: f64,
+    low: f64,
+    high: f64,
 }
 
 struct Zone {
@@ -145,12 +154,12 @@ impl BigTrades {
         }
 
         let extends = fill.aggressor_order_id.is_some()
-            && self.fills.first().map(|f| f.aggressor_order_id) == Some(fill.aggressor_order_id);
+            && self.fills.as_ref().map(|trade| trade.aggressor_order_id)
+                == Some(fill.aggressor_order_id);
         if !extends {
-            if let Some(trade) = combine_trades(&self.fills).pop() {
+            if let Some(trade) = self.fills.take() {
                 self.calibrate(trade.size);
             }
-            self.fills.clear();
             self.large = None;
         }
 
@@ -172,18 +181,32 @@ impl BigTrades {
         self.zones
             .retain(|zone| zone.to.is_none() || !zone.classified);
 
-        self.fills.push(fill.clone());
+        let trade = self.fills.get_or_insert_with(|| Trade {
+            aggressor_order_id: fill.aggressor_order_id,
+            first_time: fill.ts,
+            side: fill.side,
+            size: 0.0,
+            price: fill.price,
+            low: fill.price,
+            high: fill.price,
+        });
+        let scale = trade.size.max(fill.size);
+        if scale > 0.0 {
+            let weight = (fill.size / scale) / (trade.size / scale + fill.size / scale);
+            trade.price += (fill.price - trade.price) * weight;
+        }
+        trade.size = (trade.size + fill.size).min(f64::MAX);
+        if trade.side != fill.side {
+            trade.side = None;
+        }
+        trade.low = trade.low.min(fill.price);
+        trade.high = trade.high.max(fill.price);
         let threshold = match rule.threshold {
             Threshold::Fixed(size) => Some(size),
             Threshold::Auto => self.threshold,
         };
-        if let Some(trade) = combine_trades(&self.fills).pop()
-            && enabled
-            && threshold.is_some_and(|threshold| trade.size >= threshold)
-        {
-            let (low, high) = self.fills.iter().fold((f64::MAX, f64::MIN), |(l, h), f| {
-                (l.min(f.price), h.max(f.price))
-            });
+        if enabled && threshold.is_some_and(|threshold| trade.size >= threshold) {
+            let (low, high) = (trade.low, trade.high);
             let tick = self.tick;
             let (low, high) = if high - low < tick {
                 let middle = (low + high) / 2.0;
@@ -310,4 +333,52 @@ impl Zone {
 
 fn zone_id(number: u64) -> SignalId {
     SignalId(format!("big-trade-zone-{number}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_repeating_aggressor_keeps_one_aggregate() {
+        let mut detector = BigTrades::new(0.25, Some(0));
+        let rule = BigTradeRule {
+            threshold: Threshold::Fixed(10.0),
+            ..BigTradeRule::default()
+        };
+        let fill = Tick::new(
+            DateTime::from_timestamp(1, 0).unwrap(),
+            100.0,
+            1.0,
+            Some(OrderSide::Buy),
+        )
+        .with_aggressor_order_id(0);
+        let mut out = Vec::new();
+        for _ in 0..4000 {
+            out.clear();
+            detector.trade(&fill, &rule, true, &mut out);
+        }
+        assert_eq!(
+            detector.fills.iter().count(),
+            1,
+            "retained open trade aggregates"
+        );
+        let SignalEvent::Upsert(marker) = &out[0] else {
+            panic!("missing marker")
+        };
+        assert_eq!(marker.label.as_deref(), Some("4K"));
+        assert_eq!(
+            marker.shape,
+            SignalShape::Marker {
+                time: fill.ts,
+                price: Some(100.0),
+                direction: Direction::Up,
+            }
+        );
+        assert_eq!(detector.zones.len(), 1);
+        assert_eq!(
+            (detector.zones[0].low, detector.zones[0].high),
+            (99.875, 100.125)
+        );
+    }
 }
