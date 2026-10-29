@@ -2,6 +2,10 @@
 //! import and export. The host's quote service supplies the quotes, and the host persists the
 //! lists.
 
+mod list;
+
+pub use list::{Watchlist, WatchlistFlag, WatchlistItem};
+
 use crate::localization as l10n;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -15,7 +19,7 @@ use egui::{
 
 use super::market_details::WatchlistDetails;
 use super::symbol_details::detail_section;
-use super::{HEADER_HEIGHT, ROW_HEIGHT, grouped, price_decimals, signed, weighted};
+use super::{HEADER_HEIGHT, grouped, price_decimals, signed, weighted};
 use crate::data::inbox::Inbox;
 use crate::data::{CalendarEvent, NewsStory};
 use crate::icons::icons;
@@ -30,8 +34,6 @@ use crate::ui_kit::{EmptyState, IconButton};
 const LIST_ROW_HEIGHT: f32 = 30.0;
 /// Diameter of a symbol's mark.
 const MARK_SIZE: f32 = 18.0;
-
-pub use crate::model::{Watchlist, WatchlistFlag, WatchlistItem};
 
 /// A sortable watchlist column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1284,42 +1286,11 @@ fn display_order(
 mod tests {
     use super::*;
 
-    fn symbol(symbol: &str) -> WatchlistItem {
+    pub(super) fn symbol(symbol: &str) -> WatchlistItem {
         WatchlistItem::Symbol {
             symbol: symbol.into(),
             flag: None,
         }
-    }
-
-    #[test]
-    fn text_keeps_sections_and_skips_blank_and_repeated_entries() {
-        let list =
-            Watchlist::from_text("Mine", " AAPL ,\n###Tech, MSFT\r\n,AAPL,,###Crypto,BTCUSD");
-        assert_eq!(
-            list.items,
-            [
-                symbol("AAPL"),
-                WatchlistItem::Section("Tech".into()),
-                symbol("MSFT"),
-                WatchlistItem::Section("Crypto".into()),
-                symbol("BTCUSD"),
-            ]
-        );
-        assert_eq!(list.to_text(), "AAPL,###Tech,MSFT,###Crypto,BTCUSD");
-        let mut list = list;
-        for invalid in ["", " ", "AAPL", "A,B", "A\nB", "A\rB", "###Section"] {
-            assert!(!list.add_symbol(invalid), "{invalid:?}");
-        }
-        assert!(list.add_symbol(" EURUSD "));
-        assert_eq!(Watchlist::from_text("Mine", &list.to_text()), list);
-        let mut titled = Watchlist::new("Titles");
-        titled
-            .items
-            .push(WatchlistItem::Section("Rates, FX\nand more".into()));
-        assert_eq!(
-            Watchlist::from_text("Again", &titled.to_text()).items,
-            [WatchlistItem::Section("Rates  FX and more".into())]
-        );
     }
 
     /// Sorting stays inside each section, puts symbols without a value last in both directions
