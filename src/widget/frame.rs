@@ -942,10 +942,15 @@ impl Chart {
                     self.drawings
                         .selected_ids()
                         .any(|id| self.drawings.hit_test_handle_by_id(origin, id).is_some())
-                        || self
-                            .drawings
-                            .hit_test(origin)
-                            .is_some_and(|id| self.drawings.is_selected(id))
+                        || self.drawings.hit_test(origin).is_some_and(|id| {
+                            self.drawings.is_selected(id)
+                                || (ui.input(|i| i.modifiers.ctrl || i.modifiers.command)
+                                    && self
+                                        .drawings
+                                        .drawings
+                                        .iter()
+                                        .any(|d| d.id == id && !d.locked))
+                        })
                 });
         let pending_price_zoom = self.handle_mouse_wheel(
             ui,

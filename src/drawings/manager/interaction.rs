@@ -75,10 +75,12 @@ impl DrawingManager {
     }
 
     pub(crate) fn copy_dragged_drawings(&mut self) {
+        let Some((_, handle)) = self.dragging_handle else {
+            return;
+        };
         let Some(old) = self.drag_old_state.take() else {
             return;
         };
-        let handle = self.dragging_handle.unwrap().1;
         let mut copies = std::mem::take(&mut self.drag_group);
         copies.push(old);
         for copy in &mut copies {
@@ -705,6 +707,21 @@ impl DrawingManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copy_drag_ignores_non_pointer_edits() {
+        let mut manager = DrawingManager::new();
+        manager
+            .drawings
+            .push(Drawing::new(7, DrawingToolType::TrendLine));
+        manager.drag_edit_drawing(7, |drawing| drawing.text = Some("Draft".into()));
+        manager.copy_dragged_drawings();
+        assert_eq!(manager.drawings.len(), 1);
+        manager.end_drag_handle();
+        assert!(manager.undo());
+        assert_eq!(manager.drawings[0].text, None);
+        assert!(!manager.undo());
+    }
 
     #[test]
     fn time_cycles_share_a_baseline_during_placement() {

@@ -327,6 +327,71 @@ mod tests {
         }
     }
 
+    #[test]
+    fn modifier_copy_drag_does_not_pan_the_chart() {
+        use crate::widget::test_frames::{chart, frame};
+        use egui::{Modifiers, vec2};
+        for selected in [false, true] {
+            for modifiers in [Modifiers::CTRL, Modifiers::COMMAND] {
+                let ctx = Context::default();
+                let mut chart = chart(&[10.0], &[20.0]);
+                let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+                drawing.completed = true;
+                drawing.chart_points =
+                    vec![ChartPoint::new(30.0, 14.0), ChartPoint::new(70.0, 17.0)];
+                let before = drawing.chart_points.clone();
+                chart.drawings_mut().drawings.push(drawing);
+                if selected {
+                    chart.drawings_mut().select(7);
+                }
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let points = &chart.drawings().drawings[0].points;
+                let from = points[0].lerp(points[1], 0.25);
+                let to = from + vec2(40.0, 20.0);
+                let view = chart.get_time_scale_state();
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers,
+                };
+                for (i, events) in [
+                    vec![Event::PointerMoved(from)],
+                    vec![button(from, true)],
+                    vec![Event::PointerMoved(from + vec2(12.0, 6.0))],
+                    vec![Event::PointerMoved(to)],
+                    vec![button(to, false)],
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    frame(
+                        &ctx,
+                        &mut chart,
+                        0.1 + i as f64 * 0.1,
+                        std::iter::once(Event::ModifiersChanged(modifiers))
+                            .chain(events)
+                            .collect(),
+                    );
+                }
+                assert_eq!(
+                    chart.get_time_scale_state(),
+                    view,
+                    "selected {selected}, {modifiers:?}"
+                );
+                assert_eq!(chart.drawings().drawings.len(), 2);
+                assert_eq!(chart.drawings().drawings[0].chart_points, before);
+                assert_ne!(chart.drawings().drawings[1].chart_points, before);
+                assert!(chart.undo());
+                assert_eq!(chart.drawings().drawings.len(), 1);
+                assert_eq!(chart.drawings().drawings[0].chart_points, before);
+                assert!(!chart.can_undo());
+                assert!(chart.redo());
+                assert_eq!(chart.drawings().drawings.len(), 2);
+            }
+        }
+    }
+
     /// Edge handles and bodies follow an outward drag from its first frame, just as inward drags do.
     #[test]
     fn edge_drags_start_from_the_press_origin_and_clamp_every_update() {
