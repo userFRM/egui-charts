@@ -907,7 +907,7 @@ impl Chart {
             &item.options.name,
             transform.label(
                 transform.to_scale(value),
-                map.price_precision().unwrap_or(2),
+                crate::chart::rendering::axes::tag_decimals(map, map.price_to_y(value)),
                 self.series_label_formatter(item.id, transform.mode)
                     .as_deref(),
             ),

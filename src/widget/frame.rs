@@ -2242,9 +2242,7 @@ impl Chart {
             for ((_, value, colors, outlined), y) in shown.into_iter().zip(ys) {
                 let label = price_map.transform().label(
                     price_map.transform().to_scale(value),
-                    price_map.price_precision().unwrap_or_else(|| {
-                        renderers::tick_decimals(&price_map, price_map.price_to_y(value)).max(2)
-                    }),
+                    rendering::axes::tag_decimals(&price_map, price_map.price_to_y(value)),
                     price_formatter.as_deref(),
                 );
                 let tag = rendering::axes::render_axis_value(
@@ -2467,9 +2465,7 @@ impl Chart {
                 {
                     let price = price_map.transform().label(
                         price_map.transform().to_scale(value),
-                        price_map.price_precision().unwrap_or_else(|| {
-                            renderers::tick_decimals(&price_map, price_map.price_to_y(value)).max(2)
-                        }),
+                        rendering::axes::tag_decimals(&price_map, price_map.price_to_y(value)),
                         price_formatter.as_deref(),
                     );
                     let quote = name == "Bid" || name == "Ask";
@@ -3053,9 +3049,7 @@ impl Chart {
             .map(|bar| {
                 price_map.transform().label(
                     price_map.transform().to_scale(bar.close),
-                    price_map.price_precision().unwrap_or_else(|| {
-                        renderers::tick_decimals(&price_map, price_map.price_to_y(bar.close)).max(2)
-                    }),
+                    rendering::axes::tag_decimals(&price_map, price_map.price_to_y(bar.close)),
                     price_formatter.as_deref(),
                 )
             });
@@ -3605,6 +3599,23 @@ mod tests {
             })
             .with_overlay(true),
         ));
+        let series = chart.add_series(crate::widget::SeriesOptions::default());
+        chart.set_data(
+            series,
+            (0..100)
+                .map(|i| {
+                    let close = 1.08632;
+                    Bar::new(
+                        start + chrono::Duration::hours(i),
+                        close,
+                        close,
+                        close,
+                        close,
+                        1.0,
+                    )
+                })
+                .collect(),
+        );
         let ctx = egui::Context::default();
         shapes(&ctx, &mut chart, 0.0, vec![]);
         let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
@@ -3628,6 +3639,7 @@ mod tests {
             "Low 1.084600",
             "1.086520",
             "1.087020",
+            "1.086320",
         ] {
             assert!(labels.contains(&expected), "missing {expected}: {labels:?}");
         }

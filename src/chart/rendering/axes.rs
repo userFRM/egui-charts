@@ -206,10 +206,9 @@ pub(crate) fn render_study_tags(
         let label = if study.value_format() == crate::scales::StudyFormat::Price {
             transform.label(
                 transform.to_scale(value),
-                study.precision().unwrap_or_else(|| {
-                    map.price_precision()
-                        .unwrap_or_else(|| tick_decimals(map, map.price_to_y(value)).max(2))
-                }),
+                study
+                    .precision()
+                    .unwrap_or_else(|| tag_decimals(map, map.price_to_y(value))),
                 formatter,
             )
         } else {
@@ -291,9 +290,7 @@ pub fn render_price_line(
     }
     let label = transform.label(
         transform.to_scale(line.price),
-        price_map
-            .price_precision()
-            .unwrap_or_else(|| tick_decimals(price_map, y).max(2)),
+        tag_decimals(price_map, y),
         None,
     );
     let (text_color, fill) = axis_label_colors(line);
@@ -311,6 +308,13 @@ pub(crate) fn axis_label_colors(line: &PriceLine) -> (Color32, Color32) {
             .unwrap_or_else(|| tag_text_color(fill)),
         fill,
     )
+}
+
+/// The decimals of an automatic price tag at `y`: the scale's precision, else the nearest tick
+/// label's, with at least two.
+pub(crate) fn tag_decimals(map: &PriceMap, y: f32) -> usize {
+    map.price_precision()
+        .unwrap_or_else(|| tick_decimals(map, y).max(2))
 }
 
 // Keep white text on financial colours; pale custom fills still need dark text.
@@ -468,9 +472,7 @@ pub(crate) fn render_quote_tags_with_countdown(
                     close_name,
                     transform.label(
                         transform.to_scale(close.price),
-                        price_map
-                            .price_precision()
-                            .unwrap_or_else(|| tick_decimals(price_map, close_y).max(2)),
+                        tag_decimals(price_map, close_y),
                         formatter,
                     ),
                 );
@@ -505,9 +507,7 @@ pub(crate) fn render_quote_tags_with_countdown(
         }
         let label = transform.label(
             transform.to_scale(quote.price),
-            price_map.price_precision().unwrap_or_else(|| {
-                tick_decimals(price_map, price_map.price_to_y(quote.price)).max(2)
-            }),
+            tag_decimals(price_map, price_map.price_to_y(quote.price)),
             formatter,
         );
         rows.push((1, y, format!("{} {label}", quote.qualifier), color));
