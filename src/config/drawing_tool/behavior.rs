@@ -37,6 +37,7 @@ impl DrawingToolType {
                 | Self::CrossLine
                 | Self::RegressionTrend
                 | Self::CyclicLines
+                | Self::SineLine
                 | Self::FibonacciRetracement
                 | Self::FibonacciExtension
                 | Self::TrendBasedFibTime
