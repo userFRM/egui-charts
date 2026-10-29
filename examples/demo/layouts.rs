@@ -627,9 +627,14 @@ impl DemoApp {
                     self.switch_timeframe(interval);
                 }
             }
+            // The demo restores its comparisons and spreads itself, with their feeds.
+            let snapshot = egui_charts::widget::ChartSnapshot {
+                series: None,
+                ..snapshot.clone()
+            };
             let restored = self
                 .chart_in_slot(slot)
-                .map(|chart| chart.restore(snapshot));
+                .map(|chart| chart.restore(&snapshot));
             match restored {
                 Some(Err(error)) => self
                     .toasts
