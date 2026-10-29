@@ -370,6 +370,13 @@ pub struct CustomPriceFormatter {
     formatter: Arc<dyn Fn(f64) -> String + Send + Sync>,
 }
 
+impl std::fmt::Debug for CustomPriceFormatter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomPriceFormatter")
+            .finish_non_exhaustive()
+    }
+}
+
 impl CustomPriceFormatter {
     /// Create a new custom formatter from a closure
     pub fn new<F>(formatter: F) -> Self
@@ -395,6 +402,7 @@ impl PriceFormatter for CustomPriceFormatter {
 }
 
 /// Builder for creating price formatters
+#[derive(Debug)]
 pub struct PriceFormatterBuilder {
     precision: usize,
     currency: Option<String>,

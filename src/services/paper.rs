@@ -52,6 +52,17 @@ pub struct PaperAccount {
     state: Mutex<State>,
 }
 
+impl std::fmt::Debug for PaperAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PaperAccount")
+            .field("currency", &self.currency)
+            .field("initial", &self.initial)
+            .field("leverage", &self.leverage)
+            .field("commission", &self.commission)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Default)]
 struct State {
     events: Option<Events<AccountEvent>>,

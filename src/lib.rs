@@ -115,6 +115,7 @@
 //! default trait methods instead.
 
 // ─── Crate-level lint configuration ──────────────────────────────────────────
+#![warn(missing_debug_implementations)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::module_inception)]
 #![allow(clippy::needless_range_loop)]
@@ -183,10 +184,14 @@ pub mod guide {}
 
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
+// Debug for these types remains follow-up work from #1315.
+#[allow(missing_debug_implementations)]
 pub mod ui_kit;
 
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
+// Debug for these types remains follow-up work from #1315.
+#[allow(missing_debug_implementations)]
 pub mod ui;
 
 // ─── Convenience re-exports ──────────────────────────────────────────────────

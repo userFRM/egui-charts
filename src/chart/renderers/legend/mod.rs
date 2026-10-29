@@ -10,6 +10,7 @@ use egui::{Color32, FontId, ImageSource, Pos2, Rect, Response, Sense, Stroke, Ui
 use std::sync::Arc;
 
 /// A host-supplied status mark. Its text and colours carry no built-in market meaning.
+#[derive(Debug)]
 pub struct LegendStatus<'a> {
     /// Short text shown beside the instrument title.
     pub text: &'a str,
@@ -117,6 +118,16 @@ pub struct Legend<'a> {
     /// The order quantity shown in a box under the quote buttons' spread, which the user clicks
     /// to change it.
     pub(crate) quantity: Option<f64>,
+}
+
+impl std::fmt::Debug for Legend<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Legend")
+            .field("symbol", &self.symbol)
+            .field("timeframe", &self.timeframe)
+            .field("bar", &self.bar)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> Legend<'a> {

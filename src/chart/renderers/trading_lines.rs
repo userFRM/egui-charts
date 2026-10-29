@@ -85,6 +85,7 @@ impl TradingLabelAlignment {
 }
 
 /// What [`render_trading_lines`] drew, and what the user asked for.
+#[derive(Debug)]
 pub struct TradingLines {
     /// What the user asked for on a line in this frame.
     pub action: Option<TradingLineAction>,
@@ -99,7 +100,7 @@ pub struct TradingLines {
 }
 
 /// What [`render_trading_lines`] draws and offers.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TradingLineOptions<'a> {
     /// Draw orders and their brackets. Hidden orders still identify existing position exits.
     pub show_orders: bool,

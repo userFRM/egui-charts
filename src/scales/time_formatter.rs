@@ -318,6 +318,13 @@ pub struct CustomTimeFormatter {
     formatter: Arc<dyn Fn(DateTime<Utc>, TickMarkType) -> String + Send + Sync>,
 }
 
+impl std::fmt::Debug for CustomTimeFormatter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomTimeFormatter")
+            .finish_non_exhaustive()
+    }
+}
+
 impl CustomTimeFormatter {
     /// Create a new custom formatter from a closure
     pub fn new<F>(formatter: F) -> Self
@@ -530,6 +537,19 @@ pub struct TimeFormatterBuilder {
     formatter: Option<Box<dyn TimeFormatter>>,
     timezone: Option<TimezoneMode>,
     time_visible: bool,
+}
+
+impl std::fmt::Debug for TimeFormatterBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TimeFormatterBuilder")
+            .field("use_24_hour", &self.use_24_hour)
+            .field("show_seconds", &self.show_seconds)
+            .field("locale", &self.locale)
+            .field("date_format", &self.date_format)
+            .field("timezone", &self.timezone)
+            .field("time_visible", &self.time_visible)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TimeFormatterBuilder {

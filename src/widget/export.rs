@@ -45,6 +45,7 @@ impl Default for ImageExportOptions {
 /// This uses its own texture namespace; render with a dedicated egui renderer. Hosts must also
 /// bind any user textures referenced by their image sources before drawing.
 #[must_use = "Render the frame and apply its texture deltas, or clear them before dropping"]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct ChartImage {
     /// Exact output dimensions in pixels.

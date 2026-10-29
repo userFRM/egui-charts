@@ -321,6 +321,14 @@ impl SessionProvider for CompositeSessionProvider {
     }
 }
 
+impl std::fmt::Debug for CompositeSessionProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompositeSessionProvider")
+            .field("providers", &self.providers.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Scan a bar slice for session breaks.
 ///
 /// Returns a `Vec` of `(bar_index, SessionBreak)` pairs indicating

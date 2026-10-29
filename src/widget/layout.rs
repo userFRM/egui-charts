@@ -200,7 +200,7 @@ impl Default for ChartSyncOptions {
 /// layout.show(ui, &mut [&mut a, &mut b]);
 /// # }
 /// ```
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ChartLayout {
     /// The selected grid or tab preset.
     pub mode: ChartLayoutMode,

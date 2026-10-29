@@ -159,7 +159,7 @@ pub struct StudySettings {
 
 /// An owned settings and input snapshot without calculated study data.
 /// Used by chart history; restoring it requires recalculation on the current bars.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct StudySettingsSnapshot {
     inputs: Vec<(String, InputValue)>,
     settings: StudySettings,
@@ -273,6 +273,15 @@ pub struct ConfiguredStudy {
     clock: crate::model::BarClock,
     aligned: Option<IndicatorValues>,
     aligned_bars: Vec<Option<usize>>,
+}
+
+impl std::fmt::Debug for ConfiguredStudy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfiguredStudy")
+            .field("settings", &self.settings)
+            .field("timeframe", &self.timeframe)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ConfiguredStudy {

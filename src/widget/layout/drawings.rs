@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 type Key = (usize, usize);
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct Snapshot {
     style: String,
     points: Vec<ChartPoint>,
@@ -15,7 +15,7 @@ struct Snapshot {
     symbol: String,
 }
 
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct DrawingLinks {
     previous: HashMap<Key, Snapshot>,
     origins: HashMap<Key, Key>,

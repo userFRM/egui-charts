@@ -85,6 +85,12 @@ pub struct AlertEngine {
     deliver: Option<Box<dyn Deliver>>,
 }
 
+impl std::fmt::Debug for AlertEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlertEngine").finish_non_exhaustive()
+    }
+}
+
 /// The host's callback for triggers.
 trait Deliver: MaybeSend {
     fn deliver(&self, alert: &Alert, event: &AlertEvent);

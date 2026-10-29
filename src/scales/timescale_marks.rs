@@ -169,6 +169,15 @@ pub struct TickMarkGenerator {
     uniform_distribution: bool,
 }
 
+impl std::fmt::Debug for TickMarkGenerator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TickMarkGenerator")
+            .field("config", &self.config)
+            .field("uniform_distribution", &self.uniform_distribution)
+            .finish_non_exhaustive()
+    }
+}
+
 impl TickMarkGenerator {
     /// Create a new tick mark generator with default config
     pub fn new() -> Self {
