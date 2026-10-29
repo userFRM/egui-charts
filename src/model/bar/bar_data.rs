@@ -309,22 +309,8 @@ mod tests {
         let data = create_test_bars();
         let ha = data.to_heikin_ashi();
 
-        assert_eq!(ha.len(), data.len());
-        // HA bars should have smoothed values
-        assert!(ha.bars[1].open != data.bars[1].open);
-    }
-
-    #[test]
-    fn test_iteration() {
-        let data = create_test_bars();
-        let count = data.iter().count();
-        assert_eq!(count, 3);
-    }
-
-    #[test]
-    fn test_indexing() {
-        let data = create_test_bars();
-        assert_eq!(data[0].open, 100.0);
-        assert_eq!(data[2].close, 115.0);
+        // Closes average each OHLC row; opens average the preceding transformed open and close.
+        let actual: Vec<_> = ha.iter().map(|bar| (bar.open, bar.close)).collect();
+        assert_eq!(actual, [(102.5, 102.5), (102.5, 107.5), (105.0, 112.5)]);
     }
 }

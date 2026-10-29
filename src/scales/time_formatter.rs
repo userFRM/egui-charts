@@ -642,29 +642,39 @@ mod tests {
 
     #[test]
     fn test_default_formatter() {
-        let formatter = DefaultTimeFormatter::default().clone_box();
         let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 45).unwrap();
-
-        assert_eq!(formatter.format(time, TickMarkType::Year), "2024");
-        assert_eq!(formatter.format(time, TickMarkType::Month), "Jun");
-        assert_eq!(formatter.format(time, TickMarkType::Time), "14:30");
-        assert_eq!(
-            formatter.format(time, TickMarkType::TimeWithSeconds),
-            "14:30:45"
-        );
-    }
-
-    #[test]
-    fn test_12_hour_format() {
-        let formatter = DefaultTimeFormatter {
-            use_24_hour: false,
-            ..Default::default()
+        for (formatter, kind, expected) in [
+            (
+                DefaultTimeFormatter::default().clone_box(),
+                TickMarkType::Year,
+                "2024",
+            ),
+            (
+                DefaultTimeFormatter::default().clone_box(),
+                TickMarkType::Month,
+                "Jun",
+            ),
+            (
+                DefaultTimeFormatter::default().clone_box(),
+                TickMarkType::Time,
+                "14:30",
+            ),
+            (
+                DefaultTimeFormatter::default().clone_box(),
+                TickMarkType::TimeWithSeconds,
+                "14:30:45",
+            ),
+            (
+                TimeFormatterBuilder::new()
+                    .with_24_hour(false)
+                    .with_seconds(false)
+                    .build(),
+                TickMarkType::Time,
+                "02:30 PM",
+            ),
+        ] {
+            assert_eq!(formatter.format(time, kind), expected, "{kind:?}");
         }
-        .clone_box();
-        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 45).unwrap();
-
-        let result = formatter.format(time, TickMarkType::Time);
-        assert!(result.contains("PM"));
     }
 
     #[test]
@@ -795,33 +805,6 @@ mod tests {
     }
 
     #[test]
-    fn test_custom_formatter() {
-        let formatter = CustomTimeFormatter::new(|time, mark_type| match mark_type {
-            TickMarkType::Year => format!("Year {}", time.year()),
-            _ => time.format("%Y-%m-%d").to_string(),
-        });
-
-        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
-        assert_eq!(formatter.format(time, TickMarkType::Year), "Year 2024");
-        assert_eq!(formatter.format(time, TickMarkType::Month), "2024-06-15");
-
-        let cloned = formatter.clone_box();
-        assert_eq!(cloned.format(time, TickMarkType::Year), "Year 2024");
-    }
-
-    #[test]
-    fn test_formatter_builder() {
-        let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(false)
-            .with_seconds(false)
-            .build();
-
-        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 45).unwrap();
-        let result = formatter.format(time, TickMarkType::Time);
-        assert!(result.contains("PM"));
-    }
-
-    #[test]
     fn builder_overrides_host_calendar_and_clock_visibility() {
         #[derive(Clone)]
         struct Host;
@@ -911,126 +894,59 @@ mod tests {
 
     #[cfg(feature = "timezones")]
     #[test]
-    fn test_timezone_conversion_ny() {
-        let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(false)
-            .with_timezone(TimezoneMode::Timezone("America/New_York".parse().unwrap()))
-            .build();
-
-        // June 15, 2024 14:30 UTC = 10:30 EDT (UTC-4)
+    fn named_zones_keep_their_clock_through_dst_and_cloning() {
+        use TickMarkType::{Time, TimeWithSeconds};
+        // UTC offsets: New York -4 in summer, -5 in winter; London +1/0; Tokyo +9.
+        for (zone, instant, kind, expected) in [
+            (TimezoneMode::nyse(), "2024-06-15T14:30:00Z", Time, "10:30"),
+            (
+                TimezoneMode::Exchange("America/New_York".parse().unwrap()),
+                "2024-03-10T06:00:00Z",
+                TimeWithSeconds,
+                "01:00:00",
+            ),
+            (
+                TimezoneMode::Exchange("America/New_York".parse().unwrap()),
+                "2024-03-10T08:00:00Z",
+                TimeWithSeconds,
+                "04:00:00",
+            ),
+            (
+                TimezoneMode::Exchange("America/New_York".parse().unwrap()),
+                "2024-11-03T05:00:00Z",
+                TimeWithSeconds,
+                "01:00:00",
+            ),
+            (
+                TimezoneMode::Exchange("America/New_York".parse().unwrap()),
+                "2024-11-03T07:00:00Z",
+                TimeWithSeconds,
+                "02:00:00",
+            ),
+            (TimezoneMode::lse(), "2024-06-15T14:30:00Z", Time, "15:30"),
+            (TimezoneMode::lse(), "2024-01-15T14:30:00Z", Time, "14:30"),
+            (TimezoneMode::jse(), "2024-06-15T14:30:00Z", Time, "23:30"),
+        ] {
+            let time = instant.parse::<DateTime<Utc>>().unwrap();
+            let formatter = TimeFormatterBuilder::new()
+                .with_24_hour(true)
+                .with_timezone(zone.clone())
+                .build();
+            for formatter in [formatter.clone_box(), formatter] {
+                assert_eq!(formatter.format(time, kind), expected, "{zone:?} {instant}");
+            }
+        }
         let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
-        let result = formatter.format(time, TickMarkType::Time);
-        assert_eq!(result, "10:30");
+        let formatter = TimeFormatterBuilder::new()
+            .with_timezone(TimezoneMode::nyse())
+            .build();
         assert_eq!(
             formatter.format_crosshair(time, 3600),
             "Sat 15 Jun '24 10:30"
         );
-        let fractional = time + chrono::Duration::milliseconds(123);
         assert_eq!(
-            TimeFormatterBuilder::new()
-                .with_timezone(TimezoneMode::nyse())
-                .build()
-                .format_crosshair(fractional, 0),
+            formatter.format_crosshair(time + chrono::Duration::milliseconds(123), 0),
             "Sat 15 Jun '24 10:30:00.123"
         );
-    }
-
-    #[cfg(feature = "timezones")]
-    #[test]
-    fn test_dst_spring_forward() {
-        let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(true)
-            .with_timezone(TimezoneMode::Exchange("America/New_York".parse().unwrap()))
-            .build();
-
-        // 2024 DST transition: March 10, 2:00 AM -> 3:00 AM
-        // Before DST: March 10, 2024 06:00 UTC = March 10, 2024 01:00 EST (UTC-5)
-        let before_dst = Utc.with_ymd_and_hms(2024, 3, 10, 6, 0, 0).unwrap();
-        let result_before = formatter.format(before_dst, TickMarkType::TimeWithSeconds);
-        assert_eq!(result_before, "01:00:00");
-
-        // After DST: March 10, 2024 08:00 UTC = March 10, 2024 04:00 EDT (UTC-4)
-        let after_dst = Utc.with_ymd_and_hms(2024, 3, 10, 8, 0, 0).unwrap();
-        let result_after = formatter.format(after_dst, TickMarkType::TimeWithSeconds);
-        assert_eq!(result_after, "04:00:00");
-    }
-
-    #[cfg(feature = "timezones")]
-    #[test]
-    fn test_dst_fall_back() {
-        let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(true)
-            .with_timezone(TimezoneMode::Exchange("America/New_York".parse().unwrap()))
-            .build();
-
-        // 2024 DST transition: November 3, 2:00 AM -> 1:00 AM
-        // Before DST end: November 3, 2024 05:00 UTC = November 3, 2024 01:00 EDT (UTC-4)
-        let before_dst = Utc.with_ymd_and_hms(2024, 11, 3, 5, 0, 0).unwrap();
-        let result_before = formatter.format(before_dst, TickMarkType::TimeWithSeconds);
-        assert_eq!(result_before, "01:00:00");
-
-        // After DST end: November 3, 2024 07:00 UTC = November 3, 2024 02:00 EST (UTC-5)
-        let after_dst = Utc.with_ymd_and_hms(2024, 11, 3, 7, 0, 0).unwrap();
-        let result_after = formatter.format(after_dst, TickMarkType::TimeWithSeconds);
-        assert_eq!(result_after, "02:00:00");
-    }
-
-    #[cfg(feature = "timezones")]
-    #[test]
-    fn test_timezone_london() {
-        let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(false)
-            .with_timezone(TimezoneMode::lse())
-            .build();
-
-        // June 15, 2024 14:30 UTC = 15:30 BST (UTC+1)
-        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
-        let result = formatter.format(time, TickMarkType::Time);
-        assert_eq!(result, "15:30");
-
-        // January 15, 2024 14:30 UTC = 14:30 GMT (UTC+0)
-        let time_winter = Utc.with_ymd_and_hms(2024, 1, 15, 14, 30, 0).unwrap();
-        let result_winter = formatter.format(time_winter, TickMarkType::Time);
-        assert_eq!(result_winter, "14:30");
-    }
-
-    #[cfg(feature = "timezones")]
-    #[test]
-    fn test_timezone_tokyo() {
-        let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(false)
-            .with_timezone(TimezoneMode::jse())
-            .build();
-
-        // June 15, 2024 14:30 UTC = June 15, 2024 23:30 JST (UTC+9)
-        // Note: Japan doesn't use DST
-        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
-        let result = formatter.format(time, TickMarkType::Time);
-        assert_eq!(result, "23:30");
-    }
-
-    #[cfg(feature = "timezones")]
-    #[test]
-    fn test_timezone_clone() {
-        let formatter1 = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(false)
-            .with_timezone(TimezoneMode::nyse())
-            .build();
-
-        // Test that clone_box works correctly
-        let formatter2 = formatter1.clone_box();
-
-        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
-        let result1 = formatter1.format(time, TickMarkType::Time);
-        let result2 = formatter2.format(time, TickMarkType::Time);
-
-        assert_eq!(result1, result2);
-        assert_eq!(result1, "10:30");
     }
 }

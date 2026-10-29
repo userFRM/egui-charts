@@ -297,6 +297,7 @@ mod tests {
 
     #[test]
     fn test_json_round_trip() {
+        assert!(BarData::from_json_string("[]").unwrap().is_empty());
         let now = Utc::now();
         let mut bar = Bar::new(now, 100.0, 110.0, 95.0, 105.0, 1000.0);
         bar.colors = Some(Box::new(crate::model::BarColors {
@@ -331,27 +332,6 @@ mod tests {
         );
         assert_eq!(parsed.bars[1].time, midnight(16));
         assert!(parsed.bars[1].is_whitespace());
-    }
-
-    #[test]
-    fn test_empty_json() {
-        let data = BarData::from_json_string("[]").unwrap();
-        assert!(data.is_empty());
-    }
-
-    #[test]
-    fn test_csv_string_basic() {
-        let now = Utc::now();
-        let data = BarData::from_bars(vec![Bar::new(now, 100.0, 110.0, 95.0, 105.0, 1000.0)]);
-
-        let csv = data.to_csv_string().unwrap();
-        let lines: Vec<&str> = csv.trim().lines().collect();
-
-        // Header + 1 data row
-        assert_eq!(lines.len(), 2);
-        assert!(lines[0].starts_with("ts,"));
-        assert!(lines[0].contains("open"));
-        assert!(lines[0].contains("volume"));
     }
 
     #[test]

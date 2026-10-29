@@ -929,13 +929,25 @@ mod tests {
     #[test]
     fn bracket_exits_only_reduce_the_remaining_position_and_cancel_their_pair() {
         for closed in [0.0, 1.0, 2.0, 4.0] {
-            for close_brackets in [false, true] {
+            for (attached, close_brackets) in [(true, false), (true, true), (false, false)] {
                 let paper = PaperAccount::new("USD", 10_000.0);
                 paper.set_price("SYM", 100.0);
                 let mut entry = OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market);
-                entry.take_profit = Some(105.0);
-                entry.stop_loss = Some(95.0);
+                if attached {
+                    entry.take_profit = Some(105.0);
+                    entry.stop_loss = Some(95.0);
+                }
                 place(&paper, entry).unwrap();
+                if !attached {
+                    for (kind, role) in [
+                        (OrderType::Limit(105.0), PositionBracket::TakeProfit),
+                        (OrderType::Stop(95.0), PositionBracket::StopLoss),
+                    ] {
+                        let mut exit = OrderRequest::new("SYM", OrderSide::Sell, 2.0, kind);
+                        exit.position_bracket = Some(role);
+                        place(&paper, exit).unwrap();
+                    }
+                }
                 if closed > 0.0 {
                     let mut close =
                         OrderRequest::new("SYM", OrderSide::Sell, closed, OrderType::Market);
@@ -1324,74 +1336,77 @@ mod tests {
     }
 
     #[test]
-    fn bracket_exits_only_reduce_the_remaining_position() {
-        let terms = PaperAccount::new("USD", 0.0);
+    fn take_profit_only_exits_reduce_the_position_and_fill_at_the_better_price() {
         for attached in [false, true] {
-            for stop_loss in [None, Some(95.0)] {
-                for closed in [1.0, 2.0, 4.0] {
-                    let mut state = State::default();
-                    let mut entry =
-                        OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market);
-                    if attached {
-                        entry.take_profit = Some(105.0);
-                        entry.stop_loss = stop_loss;
-                    }
-                    state.fill(
-                        &terms,
-                        Order::new(OrderId::new("entry"), entry, OrderStatus::Working),
-                        100.0,
-                    );
-                    if !attached {
-                        for (price, role) in [
-                            (Some(105.0), PositionBracket::TakeProfit),
-                            (stop_loss, PositionBracket::StopLoss),
-                        ] {
-                            if let Some(price) = price {
-                                let kind = match role {
-                                    PositionBracket::TakeProfit => OrderType::Limit(price),
-                                    PositionBracket::StopLoss => OrderType::Stop(price),
-                                };
-                                let mut exit = OrderRequest::new("SYM", OrderSide::Sell, 2.0, kind);
-                                exit.position_bracket = Some(role);
-                                let id = state.id();
-                                state
-                                    .working
-                                    .push(Order::new(id, exit, OrderStatus::Working));
-                            }
+            for closed in [1.0, 2.0, 4.0] {
+                let paper = PaperAccount::new("USD", 10_000.0);
+                paper.set_price("SYM", 100.0);
+                let mut entry = OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market);
+                if attached {
+                    entry.take_profit = Some(105.0);
+                }
+                place(&paper, entry).unwrap();
+                if !attached {
+                    let mut exit =
+                        OrderRequest::new("SYM", OrderSide::Sell, 2.0, OrderType::Limit(105.0));
+                    exit.position_bracket = Some(PositionBracket::TakeProfit);
+                    place(&paper, exit).unwrap();
+                }
+                place(
+                    &paper,
+                    OrderRequest::new("SYM", OrderSide::Sell, closed, OrderType::Market),
+                )
+                .unwrap();
+                let events = snapshot(&paper);
+                let quantities: Vec<_> = events
+                    .iter()
+                    .filter_map(|event| match event {
+                        AccountEvent::Order(order) if order.status == OrderStatus::Working => {
+                            Some(order.request.quantity)
                         }
-                    }
-                    state.fill(
-                        &terms,
-                        Order::new(
-                            OrderId::new("close"),
-                            OrderRequest::new("SYM", OrderSide::Sell, closed, OrderType::Market),
-                            OrderStatus::Working,
-                        ),
-                        100.0,
-                    );
-                    if closed == 1.0 {
-                        assert!(!state.working.is_empty());
-                        assert!(
-                            state
-                                .working
-                                .iter()
-                                .all(|order| order.request.quantity == 1.0)
-                        );
-                    } else {
-                        assert!(state.working.is_empty());
-                    }
-                    state.reach(&terms, "SYM", 106.0);
-                    state.reach(&terms, "SYM", 94.0);
-                    assert_eq!(
-                        state.positions.get("SYM").map_or(0.0, |p| p.quantity),
-                        if closed == 4.0 { -2.0 } else { 0.0 }
-                    );
-                    if closed == 1.0 {
-                        assert_eq!(
-                            state.balance, 6.0,
-                            "a marketable limit fills at the better price"
-                        );
-                    }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    quantities,
+                    if closed == 1.0 { vec![1.0] } else { vec![] },
+                    "attached {attached}, closed {closed}"
+                );
+                paper.set_price("SYM", 106.0);
+                paper.set_price("SYM", 94.0);
+                let events = snapshot(&paper);
+                let position = events
+                    .iter()
+                    .find_map(|event| match event {
+                        AccountEvent::Position(position) => Some(position.quantity),
+                        _ => None,
+                    })
+                    .unwrap_or(0.0);
+                assert_eq!(position, if closed == 4.0 { -2.0 } else { 0.0 });
+                assert!(!events.iter().any(|event| matches!(event, AccountEvent::Order(order) if order.status == OrderStatus::Working)));
+                if closed == 1.0 {
+                    // One unit bought at 100 and sold at the reaching price 106 earns 6, not 5.
+                    let account = events
+                        .iter()
+                        .find_map(|event| match event {
+                            AccountEvent::Account(account) => Some(account),
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_eq!(account.balance, 10_006.0);
+                    let fill = events
+                        .iter()
+                        .find_map(|event| match event {
+                            AccountEvent::Order(order)
+                                if order.request.order_type == OrderType::Limit(105.0) =>
+                            {
+                                Some(order)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_eq!(fill.fill_price, Some(106.0));
+                    assert_eq!(fill.filled, 1.0);
                 }
             }
         }

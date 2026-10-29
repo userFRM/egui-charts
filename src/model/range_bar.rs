@@ -399,31 +399,6 @@ fn calculate_atr(data: &[Bar], period: usize) -> f64 {
 mod tests {
     use super::*;
 
-    fn create_test_bars() -> Vec<Bar> {
-        let now = Utc::now();
-        (0..20)
-            .map(|i| {
-                let base = 100.0 + (i as f64 % 10.0);
-                Bar {
-                    time: now,
-                    open: base,
-                    high: base + 3.0,
-                    low: base - 2.0,
-                    close: base + 1.0,
-                    volume: 1000.0,
-                    colors: None,
-                    payload: None,
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn test_config_creation() {
-        let config = RangeBarConfig::new(5.0);
-        assert!((config.range_size - 5.0).abs() < 0.01);
-    }
-
     #[test]
     fn range_bars_from_ticks_follow_every_tick() {
         // (range, tick prices, (open, high, low, close) of each bar)
@@ -473,11 +448,36 @@ mod tests {
 
     #[test]
     fn test_range_bars_from_ohlc() {
-        let data = create_test_bars();
-        let config = RangeBarConfig::new(5.0);
-        let bars = to_range_bars_from_ohlc(&data, &config);
-
-        assert!(!bars.is_empty());
+        let first = DateTime::UNIX_EPOCH;
+        let next = first + chrono::Duration::minutes(1);
+        let data = [
+            Bar::new(first, 100.0, 100.0, 100.0, 100.0, 10.0),
+            Bar::new(next, 112.0, 112.0, 112.0, 112.0, 20.0),
+        ];
+        // A 12-point advance closes two five-point ranges and leaves a two-point tail.
+        let bars = to_range_bars_from_ohlc(&data, &RangeBarConfig::new(5.0));
+        let actual: Vec<_> = bars
+            .iter()
+            .map(|b| {
+                (
+                    b.open,
+                    b.high,
+                    b.low,
+                    b.close,
+                    b.volume,
+                    b.start_time,
+                    b.end_time,
+                )
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                (100.0, 105.0, 100.0, 105.0, 10.0, first, next),
+                (105.0, 110.0, 105.0, 110.0, 0.0, next, next),
+                (110.0, 112.0, 110.0, 112.0, 20.0, next, next),
+            ]
+        );
     }
 
     /// Guards the volume scale: an infinite first volume, or two valid volumes near `f64::MAX`,

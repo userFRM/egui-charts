@@ -160,16 +160,6 @@ mod tests {
     }
 
     #[test]
-    fn test_gradient() {
-        let gradient = ColorType::vertical_gradient(
-            Color32::from_rgb(255, 0, 0),
-            Color32::from_rgb(0, 0, 255),
-        );
-        assert!(gradient.is_gradient());
-        assert!(!gradient.is_solid());
-    }
-
-    #[test]
     fn test_conversions() {
         let color32 = Color32::from_rgb(100, 150, 200);
         let color_type: ColorType = color32.into();

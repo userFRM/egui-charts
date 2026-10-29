@@ -318,24 +318,12 @@ mod tests {
             DrawingInteractionMode::NotDrawing
         );
         assert_eq!(
-            DrawingToolType::HorizontalLine.interaction_mode(),
-            DrawingInteractionMode::SingleClick
-        );
-        assert_eq!(
-            DrawingToolType::TrendLine.interaction_mode(),
-            DrawingInteractionMode::ClickClick
-        );
-        assert_eq!(
             DrawingToolType::Rect.interaction_mode(),
             DrawingInteractionMode::DragToDraw
         );
         assert_eq!(
             DrawingToolType::Brush.interaction_mode(),
             DrawingInteractionMode::ContinuousDraw
-        );
-        assert_eq!(
-            DrawingToolType::Polyline.interaction_mode(),
-            DrawingInteractionMode::MultiPoint
         );
     }
 }

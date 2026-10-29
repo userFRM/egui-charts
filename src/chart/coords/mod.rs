@@ -232,6 +232,9 @@ mod tests {
             200.0,
         );
 
+        // x = 100 + 800 - (100 + 5 - 75 + 0.5) * 10 - 1 = 594.
+        assert_eq!(mapping.idx_to_x(75), 594.0);
+        assert_eq!(mapping.x_to_idx(594.0), 75);
         // Test roundtrip for several indices
         for idx in [50, 75, 100, 105] {
             let x = mapping.idx_to_x(idx);
@@ -292,32 +295,6 @@ mod tests {
     }
 
     #[test]
-    fn test_local_idx_at_x_resolves_bar_under_cursor() {
-        // 6 visible bars [50..=55], anchored so the data fills the rect.
-        let mapping = mapping(
-            Rect::from_min_size(Pos2::new(100.0, 50.0), egui::Vec2::new(800.0, 400.0)),
-            10.0, // bar_spacing
-            50,   // start_idx
-            55,   // base_idx (last visible bar)
-            0.0,  // right_offset
-            100.0,
-            200.0,
-        );
-        let visible_len = 6;
-
-        // Hovering the exact x of each bar resolves to that local index.
-        for local in 0..visible_len {
-            let global = mapping.start_idx + local;
-            let x = mapping.idx_to_x(global);
-            assert_eq!(
-                mapping.local_idx_at_x(x, visible_len),
-                Some(local),
-                "x {x} for global {global} should map to local {local}"
-            );
-        }
-    }
-
-    #[test]
     fn test_local_idx_at_x_edges_and_empty() {
         let mapping = mapping(
             Rect::from_min_size(Pos2::new(100.0, 50.0), egui::Vec2::new(800.0, 400.0)),
@@ -345,30 +322,20 @@ mod tests {
             None
         );
 
-        // The first and last bars resolve to clamped endpoints, never out of range.
-        let first_x = mapping.idx_to_x(mapping.start_idx);
-        let last_x = mapping.idx_to_x(mapping.start_idx + visible_len - 1);
-        assert_eq!(mapping.local_idx_at_x(first_x, visible_len), Some(0));
-        assert_eq!(
-            mapping.local_idx_at_x(last_x, visible_len),
-            Some(visible_len - 1)
-        );
-    }
-
-    #[test]
-    fn test_local_idx_at_x_degenerate_spacing() {
-        // Zero bar spacing has no inverse; resolution declines rather than dividing
-        // by zero.
-        let mapping = mapping(
-            Rect::from_min_size(Pos2::new(0.0, 0.0), egui::Vec2::new(800.0, 400.0)),
-            0.0,
-            0,
-            5,
-            0.0,
-            100.0,
-            200.0,
-        );
-        assert_eq!(mapping.local_idx_at_x(400.0, 6), None);
+        for local in 0..visible_len {
+            let x = mapping.idx_to_x(mapping.start_idx + local);
+            assert_eq!(
+                mapping.local_idx_at_x(x, visible_len),
+                Some(local),
+                "local {local}"
+            );
+        }
+        // Zero spacing has no inverse.
+        let degenerate = ChartMapping {
+            bar_spacing: 0.0,
+            ..mapping
+        };
+        assert_eq!(degenerate.local_idx_at_x(400.0, visible_len), None);
     }
 
     #[test]
@@ -383,6 +350,9 @@ mod tests {
             200.0,
         );
 
+        // 175 is three quarters of the way up a 400-point axis: 450 - 300 = 150.
+        assert_eq!(mapping.price_to_y(175.0), 150.0);
+        assert_eq!(mapping.y_to_price(150.0), 175.0);
         // Test roundtrip for several prices
         for price in [100.0, 125.0, 150.0, 175.0, 200.0] {
             let y = mapping.price_to_y(price);

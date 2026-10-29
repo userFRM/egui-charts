@@ -304,28 +304,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_heatmap_cell_creation() {
-        let cell = HeatmapCell::new(0, 100.0, 500.0);
-        assert!(cell.is_buying());
-        assert!(!cell.is_selling());
-
-        let cell = HeatmapCell::new(1, -50.0, 300.0);
-        assert!(!cell.is_buying());
-        assert!(cell.is_selling());
-    }
-
-    #[test]
-    fn test_intensity_normalization() {
-        let cell = HeatmapCell::new(0, 100.0, 500.0).with_normalized_intensity(200.0);
-        // 100/200 = 0.5, then (0.5 + 1) / 2 = 0.75
-        assert!((cell.intensity - 0.75).abs() < 0.01);
-
-        let cell = HeatmapCell::new(0, -100.0, 500.0).with_normalized_intensity(200.0);
-        // -100/200 = -0.5, then (-0.5 + 1) / 2 = 0.25
-        assert!((cell.intensity - 0.25).abs() < 0.01);
-    }
-
-    #[test]
     fn test_strip_data_setting() {
         let mut strip = HeatmapStrip::new();
         strip.set_data(vec![(0, 100.0, 500.0), (1, -50.0, 300.0), (2, 75.0, 400.0)]);
@@ -336,6 +314,9 @@ mod tests {
         strip.add_cell(3, -200.0, 600.0);
         assert_eq!(strip.cells().nth(3).unwrap().intensity, 0.0);
         assert_eq!(strip.cells().next().unwrap().intensity, 0.75);
+
+        strip.add_cell(4, -100.0, 500.0);
+        assert_eq!(strip.cells().nth(4).unwrap().intensity, 0.25);
 
         let data = [
             (0, 0.0, 5.0),
