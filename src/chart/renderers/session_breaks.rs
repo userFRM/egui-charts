@@ -54,6 +54,7 @@ pub(crate) fn exchange_session(
         let mut hours = Session::new([SessionWindow::new(days.clone(), open, close)]);
         if let Some(session) = &session {
             hours.holidays.clone_from(&session.holidays);
+            hours.overrides.clone_from(&session.overrides);
         }
         if config.show_premarket
             && let Some(start) = config

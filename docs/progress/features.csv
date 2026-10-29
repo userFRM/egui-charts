@@ -54,7 +54,7 @@ Builder API,Datafeed API,Session breaks on intraday charts,done,library,src/widg
 Builder API,Datafeed API,Symbol search,done,host,src/services/search.rs;src/ui/top_toolbar/components/symbol_search.rs;src/ui/top_toolbar/components/symbol_search/service.rs
 Builder API,Datafeed API,Timescale marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs;src/widget/mod.rs
 Builder API,Datafeed API,Trade tick input,done,host,src/data/inbox.rs;src/widget/feed.rs;src/ui/widget_bar/panels/time_and_sales.rs
-Builder API,Datafeed API,Trading session definition from the feed,partial,host,src/model/instrument.rs;src/model/session/mod.rs;src/widget/feed.rs
+Builder API,Datafeed API,Trading session definition from the feed,done,host,src/model/instrument.rs;src/model/session/mod.rs;src/widget/feed.rs
 Builder API,Datafeed API,Update cost and coalescing of fast streams,done,library,src/data/inbox.rs;src/widget/feed.rs;src/widget/series.rs;src/widget/studies.rs
 Builder API,Datafeed API,Validation of incoming bars,done,library,src/widget/builder.rs;src/widget/series.rs;src/data/merge.rs;src/data/inbox.rs
 Builder API,Datafeed API,Volume precision,done,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/tooltip.rs;src/widget/frame.rs
@@ -786,9 +786,9 @@ Terminal,Alerts,Alert levels drawn on the chart,done,library,src/chart/renderers
 Terminal,Alerts,Alert log,done,library,src/ui/widget_bar/panels/alerts_panel.rs
 Terminal,Alerts,Alert manager panel,done,library,src/ui/widget_bar/panels/alerts_panel.rs
 Terminal,Alerts,"Alert name, custom message and placeholders",partial,library,src/ui/dialogs/alert_dialog/dialog.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/model/alert.rs
-Terminal,Alerts,Alert presets and per-alert notification schedule,partial,library,src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs
+Terminal,Alerts,Alert presets and per-alert notification schedule,done,library,src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs
 Terminal,Alerts,Alerts tab in series settings,done,library,src/model/series_style.rs;src/chart/series/settings.rs;src/ui/dialogs/series_settings/tabs/scales.rs;src/widget/mod.rs;src/widget/snapshot.rs;src/widget/history.rs
-Terminal,Alerts,"Channel operators: entering, exiting, inside, outside a channel",partial,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs
+Terminal,Alerts,"Channel operators: entering, exiting, inside, outside a channel",done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs
 Terminal,Alerts,Create a price alert from the toolbar bell,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/dialogs/alert_dialog/dialog.rs
 Terminal,Alerts,Demo alert sound playback,done,host,examples/demo/controller.rs;examples/demo/audio.rs
 Terminal,Alerts,Drawing alerts,partial,library,src/ui/dialogs/drawing_context_menu.rs;src/drawings/domain/drawing.rs
@@ -803,7 +803,7 @@ Terminal,Alerts,Notification: webhook,missing,host,
 Terminal,Alerts,"Price operators: crossing, crossing up, crossing down, greater than, less than",done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs
 Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,partial,library,src/ui/context_menu.rs;src/chart/renderers/crosshair.rs;src/widget/frame.rs
 Terminal,Alerts,Server-side evaluation,done,host,src/services/alerts.rs;src/ui/widget_bar/panels/alerts_panel.rs
-Terminal,Alerts,Trigger frequency,partial,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs
+Terminal,Alerts,Trigger frequency,done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs
 Terminal,Alerts,Watchlist alerts,done,host,src/ui/dialogs/alert_dialog/dialog.rs
 Terminal,"News, calendar and social",Dividend and IPO calendars,done,host,src/ui/widget_bar/panels/calendar.rs
 Terminal,"News, calendar and social",Earnings calendar,done,host,src/ui/widget_bar/panels/calendar.rs
