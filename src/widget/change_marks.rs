@@ -117,8 +117,9 @@ impl Chart {
     /// chevron above it for a rise and below it for a fall. Updates that leave the close
     /// unchanged, new bars and history mark nothing. `None` removes the markers.
     ///
-    /// Bar series accept change markers; unknown ids and study ids are ignored with a warning.
-    pub fn set_change_markers(&mut self, series: SeriesId, options: Option<ChangeMarkers>) {
+    /// Returns `false` when `series` holds no bars, such as an unknown or removed series or a
+    /// study, and logs a warning.
+    pub fn set_change_markers(&mut self, series: SeriesId, options: Option<ChangeMarkers>) -> bool {
         let marks = options.map(|options| ChangeMarks {
             options,
             marks: Vec::new(),
@@ -129,6 +130,9 @@ impl Chart {
             && super::series::holds_bars(series, "set_change_markers")
         {
             self.change_marks = marks;
+        } else {
+            return false;
         }
+        true
     }
 }
