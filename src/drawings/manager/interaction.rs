@@ -383,6 +383,7 @@ impl DrawingManager {
                 drawing.chart_points.pop();
             }
             drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
+            drawing.level_time_cycles();
             if let Some(tool) = drawing
                 .custom_tool
                 .as_deref()
@@ -416,6 +417,7 @@ impl DrawingManager {
                 drawing.completed = false;
                 self.preview_point = true;
             }
+            drawing.level_time_cycles();
         }
     }
 
@@ -532,6 +534,48 @@ impl DrawingManager {
             self.hit_test_handle(drawing, point)
         } else {
             None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn time_cycles_share_a_baseline_during_placement() {
+        for (preview, drag) in [(false, false), (true, false), (true, true)] {
+            let mut manager = DrawingManager::new();
+            let x_to_bar = |x: f32| x / 10.0;
+            let y_to_price = |y: f32| 1000.0 - f64::from(y);
+            manager.start_drawing_with_coords(
+                DrawingToolType::TimeCycles,
+                Pos2::new(100.0, 200.0),
+                x_to_bar,
+                y_to_price,
+            );
+            if preview {
+                for point in [Pos2::new(150.0, 100.0), Pos2::new(300.0, 250.0)] {
+                    manager.update_last_point_with_coords(point, x_to_bar, y_to_price);
+                    let drawing = manager.curr_drawing.as_ref().unwrap();
+                    assert_eq!(drawing.points[1], Pos2::new(point.x, 200.0));
+                    assert_eq!(drawing.chart_points[1].price, 800.0);
+                }
+            }
+            if drag {
+                manager.complete_drag_drawing();
+            } else {
+                manager.add_point_with_coords(Pos2::new(300.0, 250.0), x_to_bar, y_to_price);
+            }
+            assert_eq!(manager.drawings.len(), 1);
+            assert_eq!(
+                manager.drawings[0].points,
+                vec![Pos2::new(100.0, 200.0), Pos2::new(300.0, 200.0)]
+            );
+            assert_eq!(
+                manager.drawings[0].chart_points,
+                vec![ChartPoint::new(10.0, 800.0), ChartPoint::new(30.0, 800.0)]
+            );
         }
     }
 }
