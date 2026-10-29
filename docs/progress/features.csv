@@ -142,7 +142,7 @@ Chart,Compare and overlay,Percent scale when comparing,done,library,src/widget/p
 Chart,Crosshair and interaction,Auto-scroll to realtime and jump-to-latest button,done,library,src/widget/series.rs;src/widget/frame.rs;src/widget/time_scale.rs
 Chart,Crosshair and interaction,"Chart, series and drawing context menus",partial,library,src/ui/context_menu.rs;src/ui/dialogs/series_context_menu.rs;src/ui/dialogs/drawing_context_menu.rs;terminal/src/drawings.rs;terminal/src/studies.rs
 Chart,Crosshair and interaction,Crosshair across all panes,done,library,src/widget/panes.rs;src/widget/indicator_pane.rs;src/widget/frame.rs
-Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame.rs
+Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/scales/time_formatter.rs
 Chart,Crosshair and interaction,Cursor types,done,library,src/widget/frame.rs;src/chart/cursor_modes/mod.rs;src/chart/cursor_modes/eraser.rs;src/widget/tool_interaction/selection.rs
 Chart,Crosshair and interaction,Double-click on axes to reset,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs;src/widget/pane_layout.rs
 Chart,Crosshair and interaction,Drag on the time axis to zoom,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
@@ -230,8 +230,8 @@ Chart,Scales and axes,Right offset,done,library,src/model/timescale.rs;src/widge
 Chart,Scales and axes,Right price scale,done,library,src/widget/mod.rs;src/widget/frame.rs;src/chart/renderers/labels.rs
 Chart,Scales and axes,Scale margins,done,library,src/widget/settings/apply.rs;src/scales/pricescale.rs;src/widget/frame.rs
 Chart,Scales and axes,Session breaks,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/ui/axis_context_menu.rs
-Chart,Scales and axes,Symbol name label on the scale,done,library,src/config/chart.rs;src/chart/rendering/axes.rs;src/widget/frame.rs;src/widget/price_series.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
-Chart,Scales and axes,Time axis labels,done,library,src/widget/frame.rs;src/chart/renderers/labels.rs
+Chart,Scales and axes,Symbol name label on the scale,done,library,;src/config/chart.rs;src/chart/rendering/axes.rs;src/widget/frame.rs;src/widget/price_series.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
+Chart,Scales and axes,Time axis labels,done,library,src/scales/timescale_marks.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/chart/renderers/labels.rs;src/widget/frame.rs
 Chart,Scales and axes,Time zone selection,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/scales/time_formatter.rs
 Drawings,Drawing management,Alerts on drawings,done,library,src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_context_menu.rs
 Drawings,Drawing management,Copy and paste drawings,done,library,src/widget/clipboard.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
