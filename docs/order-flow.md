@@ -96,6 +96,7 @@ Core i7-10700KF (16 threads, release build, 60 s of market time):
 Depth deltas sort their changes and merge only the touched suffix of each side, reusing buffers.
 Small updates near the touch do not copy the whole book and allocate nothing once those buffers
 reach their working size. Empty sides of a delta leave the corresponding book side untouched.
+A change buffer with capacity beyond 10,000 entries is released after the delta.
 
 The sink time is the aggregation of a delta into the live book and, once per period, the book
 into a depth column. A frame includes layout, painting, applying the update and tessellation;

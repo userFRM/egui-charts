@@ -125,6 +125,9 @@ impl Book {
             &mut self.changes,
             &mut self.merged[1],
         );
+        if self.changes.capacity() > MAX_LEVELS {
+            self.changes = Vec::new();
+        }
         let (Some(bids), Some(asks)) = (bids, asks) else {
             return Err(self.lose(true));
         };
@@ -346,7 +349,7 @@ mod tests {
                     &[(99.0, 5.0), (99.000000001, 0.0), (97.0, 0.0), (97.0, 4.0)],
                     &[(100.0, 0.0), (99.999999999, 7.0), (101.0, 4.0), (101.0, 0.0)]))],
                 vec![Ok(()), Ok(())], Some(book(&[(98.0, 2.0), (97.0, 4.0)], &[(99.999999999, 7.0)]))),
-            (None, "a delta larger than the limit can finish below it",
+            (None, "a delta larger than the limit can finish below it without retaining its buffer",
                 vec![Snapshot(1, deep(MAX_LEVELS)), Delta(2, book(
                     &Vec::from_iter((0..MAX_LEVELS).map(|i| (i as f64, 2.0))
                         .chain((0..MAX_LEVELS).map(|i| (i as f64, 0.0)))
@@ -379,7 +382,7 @@ mod tests {
                 vec![Snapshot(10, deep(MAX_LEVELS + 1))],
                 vec![lost(true, true)], None),
             (None, "a delta that makes a side deeper than the limit loses the book",
-                vec![Snapshot(10, deep(MAX_LEVELS)), Delta(11, book(&[(-1.0, 1.0)], &[]))],
+                vec![Snapshot(10, deep(MAX_LEVELS)), Delta(11, book(&[(MAX_LEVELS as f64, 1.0)], &[]))],
                 vec![Ok(()), lost(true, true)], Some(book(&[], &[]))),
             (None, "deltas pushed while waiting apply after an older snapshot",
                 vec![initial(), Delta(12, book(&[(99.0, 5.0)], &[])),
@@ -405,7 +408,18 @@ mod tests {
                 .into_iter()
                 .map(|push| match push {
                     Snapshot(sequence, book) => depth.snapshot(sequence, book),
-                    Delta(sequence, changes) => depth.delta(sequence, &changes),
+                    Delta(sequence, changes) => {
+                        let capacity = depth.changes.capacity();
+                        let result = depth.delta(sequence, &changes);
+                        assert!(
+                            depth.changes.capacity() <= MAX_LEVELS,
+                            "{name}: change buffer"
+                        );
+                        if changes.bids.len().max(changes.asks.len()) <= capacity {
+                            assert_eq!(depth.changes.capacity(), capacity, "{name}: reused buffer");
+                        }
+                        result
+                    }
                 })
                 .collect();
             assert_eq!(got, outcomes, "{name}");
