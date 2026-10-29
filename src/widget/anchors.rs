@@ -299,6 +299,16 @@ mod tests {
                 date(2024, 12, 1) + Duration::hours(5),
                 date(2024, 12, 1) + Duration::hours(5),
             ),
+            // Months keyed at UTC midnight stay at UTC midnight across the clock change.
+            #[cfg(feature = "timezones")]
+            (
+                vec![date(2024, 1, 1), date(2024, 2, 1), date(2024, 3, 1)],
+                Some(Timeframe::Month1),
+                "America/New_York",
+                date(2023, 12, 1),
+                date(2024, 4, 1),
+                date(2024, 4, 1),
+            ),
             // The half-hour opening bar as the last bar keeps the slots on the hourly grid.
             (
                 hourly[..8].to_vec(),

@@ -116,7 +116,8 @@ impl Chart {
     /// spacing among the outermost 16 bars (shorter spacing breaks ties, one second if none).
     /// A step that divides an hour keeps the slots on the grid of the regular bars nearest the
     /// edge, so a partial edge bar does not shift them. Known month and year timeframes step by
-    /// calendar months in the display time zone.
+    /// calendar months in the display time zone when the edge bars fall at its midnight, and in
+    /// UTC otherwise.
     pub fn index_to_time(&self, index: f64) -> Option<DateTime<Utc>> {
         crate::model::time_at_with_timeframe(
             self.state.shown(),

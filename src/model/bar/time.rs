@@ -2,7 +2,7 @@
 
 use super::Bar;
 use crate::model::{Timeframe, TimezoneId, local_instant, local_time};
-use chrono::{DateTime, Datelike, Duration, Months, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, Duration, Months, NaiveDateTime, NaiveTime, Utc};
 
 // Use differences relative to an actual bar, preserving sub-millisecond execution times.
 fn seconds(duration: Duration) -> f64 {
@@ -22,13 +22,17 @@ fn segment(bars: &[Bar], index: usize) -> (usize, usize) {
 }
 
 // Sample the loaded edge, never the viewport: a session closure is not a bar interval.
-// Returns the seconds from the edge bar to the next slot out, and between later slots.
-fn edge_step(bars: &[Bar], at: usize, timeframe: Option<Timeframe>) -> (f64, f64) {
-    let sample = if at == 0 {
+fn edge_sample(bars: &[Bar], at: usize) -> &[Bar] {
+    if at == 0 {
         &bars[..bars.len().min(16)]
     } else {
         &bars[bars.len().saturating_sub(16)..]
-    };
+    }
+}
+
+// Returns the seconds from the edge bar to the next slot out, and between later slots.
+fn edge_step(bars: &[Bar], at: usize, timeframe: Option<Timeframe>) -> (f64, f64) {
+    let sample = edge_sample(bars, at);
     let step = if let Some(duration) = timeframe
         .map(|tf| tf.duration())
         .filter(|d| *d > Duration::zero())
@@ -82,6 +86,20 @@ fn calendar_months(timeframe: Option<Timeframe>) -> Option<u32> {
         Timeframe::Months(count) => Some(count.get()),
         _ => None,
     }
+}
+
+// Months keyed at midnight in the display zone follow its calendar; other keys, such as
+// UTC midnight under a New York display zone, step in UTC.
+fn calendar_zone<'a>(
+    bars: &[Bar],
+    at: usize,
+    timezone: Option<&'a TimezoneId>,
+    utc: &'a TimezoneId,
+) -> Option<&'a TimezoneId> {
+    let midnight = edge_sample(bars, at)
+        .iter()
+        .all(|bar| calendar_time(bar.time, timezone).time() == NaiveTime::MIN);
+    if midnight { timezone } else { Some(utc) }
 }
 
 fn calendar_time(time: DateTime<Utc>, timezone: Option<&TimezoneId>) -> NaiveDateTime {
@@ -146,6 +164,8 @@ pub(crate) fn time_at_with_timeframe(
     let offset = index - at as f64;
     if index < 0.0 || index > (bars.len() - 1) as f64 {
         if let Some(months) = calendar_months(timeframe) {
+            let utc = TimezoneId::utc();
+            let timezone = calendar_zone(bars, at, timezone, &utc);
             let whole = offset.floor();
             let count = whole * f64::from(months);
             if count.abs() > u32::MAX as f64 {
@@ -196,6 +216,8 @@ pub(crate) fn index_at_with_timeframe(
     if time < first.time || time > bars[at].time {
         let origin = bars[at].time;
         if let Some(months) = calendar_months(timeframe) {
+            let utc = TimezoneId::utc();
+            let timezone = calendar_zone(bars, at, timezone, &utc);
             let local = calendar_time(time, timezone);
             let origin_local = calendar_time(origin, timezone);
             let distance = i64::from(local.year() - origin_local.year()) * 12
