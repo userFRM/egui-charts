@@ -23,11 +23,11 @@ pub struct StudyTable {
 #[cfg(feature = "widget")]
 fn rating_color(rating: &str) -> egui::Color32 {
     match rating {
-        "Strong Buy" => egui::Color32::from_rgb(41, 98, 255),
+        "Strong Buy" => super::palette::BLUE,
         "Buy" => egui::Color32::from_rgb(91, 156, 246),
-        "Strong Sell" => egui::Color32::from_rgb(244, 67, 54),
+        "Strong Sell" => super::palette::BRIGHT_RED,
         "Sell" => egui::Color32::from_rgb(239, 154, 154),
-        _ => egui::Color32::from_rgb(168, 173, 188),
+        _ => super::palette::DISABLED,
     }
 }
 
@@ -152,14 +152,20 @@ pub(crate) fn paint(
                                 Some(StudyCell::Text(text)) => text.as_str(),
                                 _ => "Neutral",
                             };
-                            painter.rect_filled(cell_rect, 0.0, rating_color(rating));
+                            let fill = rating_color(rating);
+                            painter.rect_filled(cell_rect, 0.0, fill);
                             painter.rect_stroke(
                                 cell_rect,
                                 0.0,
                                 Stroke::new(1.0, egui::Color32::WHITE),
                                 StrokeKind::Inside,
                             );
-                            egui::Color32::WHITE
+                            crate::theme::readable_color(
+                                egui::Color32::WHITE,
+                                egui::Color32::BLACK,
+                                &[fill],
+                                4.5,
+                            )
                         }
                         StudyCell::Percent(Some(value)) if value.is_finite() => {
                             let color = if *value >= 0.0 {
@@ -179,7 +185,12 @@ pub(crate) fn paint(
                                 0.0,
                                 tint,
                             );
-                            color
+                            crate::theme::readable_color(
+                                color,
+                                theme.ui.text,
+                                &[theme.ui.panel_bg_floating.blend(tint)],
+                                4.5,
+                            )
                         }
                         _ if matches!(table.title.as_str(), "Performance" | "Seasonality") => {
                             let alpha = if matches!(cell, StudyCell::Percent(None)) {
