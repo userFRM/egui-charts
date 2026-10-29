@@ -1168,12 +1168,18 @@ impl Chart {
         mut page: HistoryPage,
         scroll_back: bool,
     ) {
+        let received = page.bars.len();
         page.bars.retain(|bar| {
             asked
                 .before
                 .is_none_or(|before| link.clock.bar_open(bar.time) < before)
         });
-        let oldest = self.bars(SeriesId::MAIN).first().map(|bar| bar.time);
+        if scroll_back && page.bars.len() < received {
+            log::warn!(
+                "the feed of {} sent bars at or after the requested before; those bars were dropped",
+                self.symbol
+            );
+        }
         let empty = page.bars.is_empty();
         let continuation = page.continue_before.filter(|_| empty);
         if let Some(error) = non_progressing(asked.before, continuation) {
@@ -1186,18 +1192,7 @@ impl Chart {
             && !self.bar_limit_reached();
         let incoming = page.bars.into_iter().map(|bar| (bar, Origin::History));
         self.apply_by(&link.clock, incoming.collect());
-        let older = self.bars(SeriesId::MAIN).first().map(|bar| bar.time) < oldest;
-        // A feed that ignores `before` answers the newest bars again, and would be asked again
-        // on every frame.
-        let stale = scroll_back && !empty && !older && !self.bar_limit_reached();
-        if stale {
-            log::warn!(
-                "the feed of {} sent no bar older than the oldest one held; scroll-back ended",
-                self.symbol
-            );
-        }
         self.feed.loading_history = false;
-        self.feed.history_complete |= stale;
         self.data_loaded(SeriesId::MAIN);
     }
 
@@ -2960,7 +2955,31 @@ mod tests {
         assert_eq!(first_visible(&chart), shown, "h: forming bar");
 
         // d. Near the oldest bar the chart asks once for the page before it; a page with nothing
-        // older ends scroll-back.
+        // older ends scroll-back and names the feed in a warning.
+        struct Warnings;
+        thread_local! {
+            static WARNINGS: std::cell::RefCell<Option<Vec<String>>> = const {
+                std::cell::RefCell::new(None)
+            };
+        }
+        impl log::Log for Warnings {
+            fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+                metadata.level() == log::Level::Warn
+            }
+            fn log(&self, record: &log::Record<'_>) {
+                if self.enabled(record.metadata()) {
+                    WARNINGS.with_borrow_mut(|warnings| {
+                        if let Some(warnings) = warnings {
+                            warnings.push(record.args().to_string());
+                        }
+                    });
+                }
+            }
+            fn flush(&self) {}
+        }
+        log::set_logger(&Warnings).unwrap();
+        log::set_max_level(log::LevelFilter::Warn);
+        WARNINGS.set(Some(Vec::new()));
         chart.set_start_idx(0);
         for _ in 0..5 {
             frames.run(&mut chart);
@@ -2979,6 +2998,11 @@ mod tests {
         );
         assert_eq!(feed.calls(), [], "d: a repeated page ends scroll-back");
         assert!(chart.feed_state(main).unwrap().history_complete, "d");
+        assert_eq!(
+            WARNINGS.take().unwrap(),
+            ["the feed of A sent bars at or after the requested before; those bars were dropped"],
+            "d: the warning names the feed"
+        );
 
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));

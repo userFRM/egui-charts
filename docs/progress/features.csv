@@ -38,7 +38,7 @@ Builder API,Datafeed API,End of history and gap signalling,done,host,src/data/mo
 Builder API,Datafeed API,Error and retry signalling,done,host,src/data/inbox.rs;src/widget/feed.rs;src/widget/series.rs
 Builder API,Datafeed API,Extended hours,done,host,src/model/instrument.rs;src/data/mod.rs;src/widget/feed.rs;src/widget/frame.rs
 Builder API,Datafeed API,HTTP history and streaming adapter,missing,host,
-Builder API,Datafeed API,History paging when scrolling back,done,host,src/widget/frame.rs;src/widget/feed.rs;src/widget/studies_data.rs;src/data/merge.rs
+Builder API,Datafeed API,History paging and scroll-back boundary diagnostics,done,host,src/widget/frame.rs;src/widget/feed.rs;src/widget/studies_data.rs;src/data/merge.rs
 Builder API,Datafeed API,History request parameters,done,host,src/data/mod.rs;src/widget/feed.rs
 Builder API,Datafeed API,Host data feed contract,done,host,src/data/mod.rs;src/data/inbox/sink.rs;src/data/merge.rs;src/widget/builder.rs;src/widget/feed.rs
 Builder API,Datafeed API,Interval resampling,done,library,src/data/mod.rs;src/data/resample.rs
