@@ -2183,8 +2183,16 @@ impl Chart {
                     .as_ref()
                     .filter(|_| show_price_axis && self.config.show_extended_session_price)
                     .map(|quote| (quote, self.config.extended_session_price_color)),
-                (show_volume && show_price_axis && !cfg!(feature = "studies"))
-                    .then_some((last.volume, egui::Color32::from_rgb(233, 30, 99))),
+                (show_volume && show_price_axis && !cfg!(feature = "studies")).then_some((
+                    last.volume,
+                    // The tag takes the colour of the bar's direction in the applied theme, as
+                    // its volume bar does.
+                    if last.is_bullish() {
+                        ui.active_theme().chart.candle_up
+                    } else {
+                        ui.active_theme().chart.candle_down
+                    },
+                )),
                 axis_edge,
                 countdown.as_deref(),
                 self.instrument()

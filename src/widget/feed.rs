@@ -11,8 +11,9 @@ use crate::data::inbox::{Answer, Inbox};
 use crate::data::merge::Origin;
 use crate::data::trades::Trades;
 use crate::data::{
-    Datafeed, DepthHistory, DepthPage, DepthRequest, FeedError, FeedState, Footprint, HistoryPage,
-    HistoryRequest, Reply, Subscription, SubscriptionId, TradePage, TradeRequest,
+    Datafeed, DepthHistory, DepthPage, DepthRequest, FeedCapabilities, FeedError, FeedState,
+    Footprint, HistoryPage, HistoryRequest, Reply, Subscription, SubscriptionId, TradePage,
+    TradeRequest,
 };
 use crate::model::{BarClock, ChartType, Instrument, OrderBook, Tick, Timeframe};
 use egui::ViewportId;
@@ -51,6 +52,8 @@ pub(crate) struct FeedLink {
     retries: Vec<(f64, Request, u32)>,
     subscription: Option<SubscriptionId>,
     instrument: Option<Instrument>,
+    /// What the feed offers as a whole, once it has answered.
+    capabilities: Option<FeedCapabilities>,
     pub(super) trades: Trades,
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
@@ -62,6 +65,12 @@ pub(crate) struct FeedLink {
     /// The order book over time, when the host turned it on.
     depth_history: Option<DepthHistory>,
     depth_complete: bool,
+    /// Where older history continues after an empty page, by source: bars, trades, depth.
+    bar_cursor: Option<chrono::DateTime<chrono::Utc>>,
+    trade_cursor: Option<chrono::DateTime<chrono::Utc>>,
+    depth_cursor: Option<chrono::DateTime<chrono::Utc>>,
+    /// No older trades remain to be loaded.
+    trades_complete: bool,
     heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
     /// How the live book is shown by the heatmap's profile and the depth ladder.
     book_view: crate::chart::overlays::OrderBookView,
@@ -73,12 +82,13 @@ pub(crate) struct FeedLink {
 
 #[derive(Clone)]
 enum Request {
+    Capabilities,
     Resolve,
     History {
         request: HistoryRequest,
         scroll_back: bool,
     },
-    Trades,
+    Trades(TradeRequest),
     Depth(DepthRequest),
 }
 
@@ -120,6 +130,7 @@ impl FeedLink {
             retries: Vec::new(),
             subscription: None,
             instrument: self.instrument.clone(),
+            capabilities: self.capabilities.clone(),
             trades: Trades::new(TRADE_CAPACITY),
             bubbles: self
                 .bubbles
@@ -130,6 +141,10 @@ impl FeedLink {
             order_queue: self.order_queue.clone(),
             depth_history: self.depth_history.clone(),
             depth_complete: self.depth_complete,
+            bar_cursor: None,
+            trade_cursor: None,
+            depth_cursor: None,
+            trades_complete: false,
             heatmap: self.heatmap.is_some().then(Default::default),
             book_view: self.book_view.clone(),
             study_inputs: Vec::new(),
@@ -187,6 +202,7 @@ impl Chart {
             retries: Vec::new(),
             subscription: None,
             instrument: None,
+            capabilities: None,
             trades: Trades::new(TRADE_CAPACITY),
             bubbles: None,
             footprint: None,
@@ -194,12 +210,23 @@ impl Chart {
             order_queue: None,
             depth_history: None,
             depth_complete: false,
+            bar_cursor: None,
+            trade_cursor: None,
+            depth_cursor: None,
+            trades_complete: false,
             heatmap: None,
             book_view: Default::default(),
             study_inputs: Vec::new(),
             time: None,
             paging_stopped: false,
         });
+    }
+
+    /// What the feed offers as a whole, once it has answered [`Datafeed::capabilities`]. Pass it
+    /// to the interval and symbol selectors before a symbol resolves. `None` without a feed or
+    /// before the answer.
+    pub fn feed_capabilities(&self) -> Option<&FeedCapabilities> {
+        self.feed_link.as_ref()?.capabilities.as_ref()
     }
 
     /// Suspends feed requests and unsubscribes while the host supplies replay bars by hand.
@@ -403,6 +430,31 @@ impl Chart {
         }
     }
 
+    /// Asks the feed for data in a currency or unit the host chose, such as `"EUR"` or `"oz"`,
+    /// or in the instrument's own with `None`. The library converts nothing: the feed does, and
+    /// labels the resolved instrument's currency and unit, which the legend and scale headers
+    /// show. A changed choice drops the bars, trades and depth held, ignores the replies to the
+    /// previous choice and reloads, resolving through [`Datafeed::resolve_converted`] and
+    /// carrying the choice in every history, trade and depth request and subscription,
+    /// including those of studies on other symbols. A feed that cannot convert answers
+    /// [`FeedError::NotSupported`] and the chart shows no data. A feed attached later uses it.
+    pub fn set_conversion(&mut self, conversion: Option<String>) {
+        if self.conversion != conversion {
+            self.conversion = conversion;
+            self.study_data.clear_feed();
+            if let Some(link) = &mut self.feed_link {
+                link.reload_pending = true;
+                // The headers must not keep the previous choice's currency while loading.
+                link.instrument = None;
+            }
+        }
+    }
+
+    /// The currency or unit chosen with [`set_conversion`](Self::set_conversion).
+    pub fn conversion(&self) -> Option<&str> {
+        self.conversion.as_deref()
+    }
+
     /// Reloads the current feed key on the next frame, retaining drawings and chart history.
     /// Use after changing host-side feed settings or to retry a permanent request failure.
     pub fn reload_feed(&mut self) {
@@ -518,6 +570,7 @@ impl Chart {
             }
             link.depth_history = history;
             link.depth_complete = false;
+            link.depth_cursor = None;
             link.pending
                 .retain(|(_, r, _)| !matches!(r, Request::Depth(_)));
             link.retries
@@ -726,12 +779,30 @@ impl Chart {
             };
             let (_, request, failures) = link.pending.swap_remove(at);
             match request.clone() {
-                Request::Resolve => match result::<Instrument>(answer) {
-                    Ok(instrument) => self.subscribe(&mut link, instrument),
+                Request::Capabilities => match result::<FeedCapabilities>(answer) {
+                    Ok(capabilities) => link.capabilities = Some(capabilities),
+                    // The default restricts nothing, as a feed that reports none does.
+                    Err(error) if !error.is_recoverable() => {
+                        link.capabilities = Some(FeedCapabilities::default());
+                    }
                     Err(error) => self.request_failed(&mut link, request, failures, error, now),
                 },
-                Request::History { scroll_back, .. } => match result::<HistoryPage>(answer) {
-                    Ok(page) => self.apply_page(&link, page, scroll_back),
+                Request::Resolve => match result::<Instrument>(answer) {
+                    Ok(instrument) => self.subscribe(&mut link, instrument),
+                    Err(error) => {
+                        // History asked in the meantime is in the choice's currency or unit,
+                        // which the failed instrument cannot label.
+                        if self.conversion.is_some() && !error.is_recoverable() {
+                            self.rule_out(&mut link);
+                        }
+                        self.request_failed(&mut link, request, failures, error, now);
+                    }
+                },
+                Request::History {
+                    request: asked,
+                    scroll_back,
+                } => match result::<HistoryPage>(answer) {
+                    Ok(page) => self.apply_page(&mut link, &asked, page, scroll_back),
                     Err(error) => self.request_failed(&mut link, request, failures, error, now),
                 },
                 Request::Depth(request) => match result::<DepthPage>(answer) {
@@ -742,15 +813,26 @@ impl Chart {
                         if page.columns.len() > request.count {
                             page.columns.drain(..page.columns.len() - request.count);
                         }
-                        link.depth_complete |= page.end_of_history || page.columns.is_empty();
-                        if let Some(history) = &mut link.depth_history {
-                            if let Err(error) = history.merge_page(page.columns) {
-                                link.depth_complete = true;
-                                self.feed.last_error = Some(error);
+                        let empty = page.columns.is_empty();
+                        let continuation = page.continue_before.filter(|_| empty);
+                        if let Some(error) = non_progressing(request.before, continuation) {
+                            link.depth_complete = true;
+                            self.feed.last_error = Some(error);
+                        } else {
+                            link.depth_cursor = continuation;
+                            link.depth_complete |=
+                                page.end_of_history || (empty && page.continue_before.is_none());
+                            if let Some(history) = &mut link.depth_history {
+                                if let Err(error) = history.merge_page(page.columns) {
+                                    link.depth_complete = true;
+                                    self.feed.last_error = Some(error);
+                                }
+                                // A page that reached no column before the boundary cannot move it.
+                                link.depth_complete |= continuation.is_none()
+                                    && request.before.is_some_and(|before| {
+                                        history.columns().next().is_none_or(|c| c.time >= before)
+                                    });
                             }
-                            link.depth_complete |= request.before.is_some_and(|before| {
-                                history.columns().next().is_none_or(|c| c.time >= before)
-                            });
                         }
                     }
                     Err(error) => self.request_failed(
@@ -761,25 +843,15 @@ impl Chart {
                         now,
                     ),
                 },
-                Request::Trades => match result::<TradePage>(answer) {
-                    Ok(page) => {
-                        let bubbles = &mut link.bubbles;
-                        let mut changed = false;
-                        let fold = &mut |trade: &Tick, added| {
-                            changed |= added;
-                            bubbles.iter_mut().for_each(|b| b.fold(trade, added));
-                        };
-                        self.feed.rejected_bars += link.trades.prepend(page.trades, fold);
-                        if changed {
-                            for (input, _) in &link.study_inputs {
-                                input.replace_trades(&link.clock, link.trades.iter());
-                            }
-                            if link.footprint.is_some() {
-                                link.footprint = link.footprint();
-                            }
-                        }
+                Request::Trades(asked) => match result::<TradePage>(answer) {
+                    Ok(page) => self.apply_trades(&mut link, &asked, page),
+                    Err(error) if error.is_recoverable() => {
+                        self.request_failed(&mut link, request, failures, error, now);
                     }
-                    Err(error) => log::debug!("no trade history for {}: {error}", self.symbol),
+                    Err(error) => {
+                        log::debug!("no trade history for {}: {error}", self.symbol);
+                        link.trades_complete = true;
+                    }
                 },
             }
         }
@@ -881,10 +953,15 @@ impl Chart {
             let (_, request, failures) = link.retries.swap_remove(at);
             let feed = Arc::clone(&link.feed);
             match request.clone() {
+                Request::Capabilities => {
+                    let reply = link.reply(request);
+                    link.pending.last_mut().unwrap().2 = failures;
+                    feed.capabilities(reply);
+                }
                 Request::Resolve => {
                     let reply = link.reply(request);
                     link.pending.last_mut().unwrap().2 = failures;
-                    feed.resolve(&self.symbol, reply);
+                    resolve(&*feed, &self.symbol, self.conversion.as_deref(), reply);
                 }
                 Request::History {
                     request: history, ..
@@ -899,7 +976,11 @@ impl Chart {
                     link.pending.last_mut().unwrap().2 = failures;
                     feed.depth_history(depth, reply);
                 }
-                Request::Trades => unreachable!(),
+                Request::Trades(trades) => {
+                    let reply = link.reply(request);
+                    link.pending.last_mut().unwrap().2 = failures;
+                    feed.trades(trades, reply);
+                }
             }
         }
         if let Some(deadline) = link.retries.iter().map(|r| r.0).min_by(f64::total_cmp) {
@@ -930,7 +1011,10 @@ impl Chart {
             }
         }
         self.scroll_back(&mut link);
+        self.scroll_trades(&mut link);
         self.scroll_depth(&mut link);
+        self.feed.trade_history_complete = link.trades_complete;
+        self.feed.depth_history_complete = link.depth_complete || link.depth_history.is_none();
         self.feed_link = Some(link);
     }
 
@@ -941,8 +1025,10 @@ impl Chart {
             link.inbox.unsubscribe(id);
             link.feed.unsubscribe(id);
         }
-        link.pending.clear();
-        link.retries.clear();
+        // The feed-wide answer does not depend on the symbol or interval.
+        let feed_wide = |request: &Request| matches!(request, Request::Capabilities);
+        link.pending.retain(|(_, request, _)| feed_wide(request));
+        link.retries.retain(|(_, request, _)| feed_wide(request));
         self.legend_instrument = link
             .instrument
             .take()
@@ -960,6 +1046,8 @@ impl Chart {
         link.order_queue = None;
         link.depth_history.iter_mut().for_each(DepthHistory::clear);
         link.depth_complete = false;
+        (link.bar_cursor, link.trade_cursor, link.depth_cursor) = (None, None, None);
+        link.trades_complete = false;
         self.set_quote(None);
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
@@ -968,11 +1056,15 @@ impl Chart {
         // Timestamp anchors survive the empty interval between history requests.
         self.replace_main_data(Vec::new());
         self.feed = FeedState::default();
+        if link.capabilities.is_none() && link.pending.is_empty() && link.retries.is_empty() {
+            let reply = link.reply(Request::Capabilities);
+            link.feed.capabilities(reply);
+        }
         if self.symbol.is_empty() {
             return;
         }
         let reply = link.reply(Request::Resolve);
-        link.feed.resolve(&self.symbol, reply);
+        resolve(&*link.feed, &self.symbol, self.conversion.as_deref(), reply);
         if supports(self.legend_instrument.as_ref(), timeframe) {
             self.request_latest(link);
         } else {
@@ -988,8 +1080,10 @@ impl Chart {
             timeframe: self.timeframe.unwrap_or_default(),
             clock: link.clock.clone(),
             before: None,
+            since: None,
             count: link.initial_bars,
             extended_hours: self.extended_hours,
+            conversion: self.conversion.clone(),
         };
         let reply = link.reply(Request::History {
             request: request.clone(),
@@ -1050,23 +1144,41 @@ impl Chart {
             timeframe,
             clock: link.clock.clone(),
             extended_hours: self.extended_hours,
+            conversion: self.conversion.clone(),
             sink,
         };
         link.feed.subscribe(subscription);
         let request = TradeRequest {
             symbol: self.symbol.clone(),
             before: None,
+            since: None,
             count: TRADE_CAPACITY,
+            conversion: self.conversion.clone(),
         };
-        let reply = link.reply(Request::Trades);
+        let reply = link.reply(Request::Trades(request.clone()));
         link.feed.trades(request, reply);
     }
 
-    /// Merges a page of history and ends scroll-back when the feed has nothing older.
-    fn apply_page(&mut self, link: &FeedLink, page: HistoryPage, scroll_back: bool) {
+    /// Merges a page of history and ends scroll-back when the feed has nothing older. An empty
+    /// page that names where older bars continue moves the boundary there instead.
+    fn apply_page(
+        &mut self,
+        link: &mut FeedLink,
+        asked: &HistoryRequest,
+        page: HistoryPage,
+        scroll_back: bool,
+    ) {
         let oldest = self.bars(SeriesId::MAIN).first().map(|bar| bar.time);
         let empty = page.bars.is_empty();
-        self.feed.history_complete |= (page.end_of_history || empty) && !self.bar_limit_reached();
+        let continuation = page.continue_before.filter(|_| empty);
+        if let Some(error) = non_progressing(asked.before, continuation) {
+            link.paging_stopped = true;
+            self.feed.last_error = Some(error);
+        }
+        link.bar_cursor = continuation.filter(|_| !link.paging_stopped);
+        self.feed.history_complete |= (page.end_of_history
+            || (empty && page.continue_before.is_none()))
+            && !self.bar_limit_reached();
         let incoming = page.bars.into_iter().map(|bar| (bar, Origin::History));
         self.apply_by(&link.clock, incoming.collect());
         let older = self.bars(SeriesId::MAIN).first().map(|bar| bar.time) < oldest;
@@ -1122,6 +1234,88 @@ impl Chart {
         self.feed.last_error = Some(error);
     }
 
+    /// Puts a page of older trades in front of the held ones. A page that ends history, names a
+    /// continuation, or adds nothing new cannot move the boundary, so the same request is never
+    /// repeated.
+    fn apply_trades(&mut self, link: &mut FeedLink, asked: &TradeRequest, page: TradePage) {
+        let empty = page.trades.is_empty();
+        let continuation = page.continue_before.filter(|_| empty);
+        if let Some(error) = non_progressing(asked.before, continuation) {
+            link.trades_complete = true;
+            self.feed.last_error = Some(error);
+            return;
+        }
+        let end = page.end_of_history || (empty && page.continue_before.is_none());
+        let bubbles = &mut link.bubbles;
+        let mut changed = false;
+        let fold = &mut |trade: &Tick, added| {
+            changed |= added;
+            bubbles.iter_mut().for_each(|b| b.fold(trade, added));
+        };
+        self.feed.rejected_bars += link.trades.prepend(page.trades, fold);
+        if changed {
+            for (input, _) in &link.study_inputs {
+                input.replace_trades(&link.clock, link.trades.iter());
+            }
+            if link.footprint.is_some() {
+                link.footprint = link.footprint();
+            }
+        }
+        link.trade_cursor = continuation;
+        link.trades_complete |=
+            end || (continuation.is_none() && !changed) || link.trades.room() == 0;
+    }
+
+    /// The start of the range to ask for below `before`: the time `scroll_to_time` is heading
+    /// for, while it lies before `before`.
+    fn range_start(
+        &self,
+        before: chrono::DateTime<chrono::Utc>,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.pending_scroll_time.filter(|time| *time < before)
+    }
+
+    /// Asks for trades older than the oldest held once the view reaches it, for the order flow
+    /// that consumes them: bubbles, a footprint or a study.
+    fn scroll_trades(&mut self, link: &mut FeedLink) {
+        let consumed =
+            link.bubbles.is_some() || link.footprint.is_some() || !link.study_inputs.is_empty();
+        let asking = |r: &Request| matches!(r, Request::Trades(_));
+        if !consumed
+            || link.trades_complete
+            || link.subscription.is_none()
+            || link.pending.iter().any(|(_, r, _)| asking(r))
+            || link.retries.iter().any(|(_, r, _)| asking(r))
+        {
+            return;
+        }
+        let Some(before) = [link.trades.oldest(), link.trade_cursor]
+            .into_iter()
+            .flatten()
+            .min()
+        else {
+            return;
+        };
+        if !self.older_bars_drawn
+            || self
+                .state
+                .shown()
+                .get(self.state.visible_range().0)
+                .is_none_or(|bar| bar.time > before)
+        {
+            return;
+        }
+        let request = TradeRequest {
+            symbol: self.symbol.clone(),
+            before: Some(before),
+            since: self.range_start(before),
+            count: link.trades.room().min(TRADE_CAPACITY),
+            conversion: self.conversion.clone(),
+        };
+        let reply = link.reply(Request::Trades(request.clone()));
+        link.feed.trades(request, reply);
+    }
+
     /// Depth pages have their own boundary and completion state, independent of bar history.
     fn scroll_depth(&mut self, link: &mut FeedLink) {
         if link.depth_complete
@@ -1148,7 +1342,13 @@ impl Chart {
         else {
             return;
         };
-        let before = history.columns().next().map(|c| c.time);
+        let before = history
+            .columns()
+            .next()
+            .map(|c| c.time)
+            .into_iter()
+            .chain(link.depth_cursor)
+            .min();
         if let Some(before) = before
             && (!self.older_bars_drawn
                 || self
@@ -1166,6 +1366,8 @@ impl Chart {
             tick,
         );
         request.before = before;
+        request.since = before.and_then(|before| self.range_start(before));
+        request.conversion = self.conversion.clone();
         let reply = link.reply(Request::Depth(request.clone()));
         link.feed.depth_history(request, reply);
     }
@@ -1190,21 +1392,23 @@ impl Chart {
         {
             return;
         }
-        let Some(oldest) = self.bars(SeriesId::MAIN).first() else {
+        // Stored bars keep the feed's stamp, any instant inside the slot.
+        let oldest = (self.bars(SeriesId::MAIN).first()).map(|bar| link.clock.bar_open(bar.time));
+        let Some(before) = [oldest, link.bar_cursor].into_iter().flatten().min() else {
             return;
         };
         if self.symbol.is_empty() || self.state.visible_range().0 >= SCROLL_BACK_MARGIN {
             return;
         }
-        // Stored bars keep the feed's stamp, any instant inside the slot.
-        let before = link.clock.bar_open(oldest.time);
         let request = HistoryRequest {
             symbol: self.symbol.clone(),
             timeframe: self.timeframe.unwrap_or_default(),
             clock: link.clock.clone(),
             before: Some(before),
+            since: self.range_start(before),
             count: link.initial_bars.max(MIN_SCROLL_BACK_PAGE),
             extended_hours: self.extended_hours,
+            conversion: self.conversion.clone(),
         };
         self.feed.loading_history = true;
         let reply = link.reply(Request::History {
@@ -1212,6 +1416,33 @@ impl Chart {
             scroll_back: true,
         });
         link.feed.history(request, reply);
+    }
+}
+
+/// The error for a continuation `at` that does not lie before the `before` it was asked for,
+/// which would repeat the request.
+fn non_progressing(
+    before: Option<chrono::DateTime<chrono::Utc>>,
+    at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<FeedError> {
+    let (before, at) = (before?, at?);
+    (at >= before).then(|| {
+        FeedError::InvalidData(format!(
+            "continuation {at} does not lie before the requested {before}"
+        ))
+    })
+}
+
+/// Describes `symbol` as the feed does for `conversion`, or as it is without one.
+pub(super) fn resolve(
+    feed: &dyn Datafeed,
+    symbol: &str,
+    conversion: Option<&str>,
+    reply: Reply<Instrument>,
+) {
+    match conversion {
+        Some(conversion) => feed.resolve_converted(symbol, conversion, reply),
+        None => feed.resolve(symbol, reply),
     }
 }
 
@@ -1267,6 +1498,7 @@ mod tests {
         sinks: Mutex<Vec<Sink>>,
         /// `unsubscribe` drops the replies it keeps.
         drop_replies: AtomicBool,
+        capabilities: Mutex<Vec<Reply<FeedCapabilities>>>,
     }
 
     impl Script {
@@ -1285,11 +1517,19 @@ mod tests {
     }
 
     impl Datafeed for Script {
+        fn capabilities(&self, reply: Reply<FeedCapabilities>) {
+            self.capabilities.lock().unwrap().push(reply);
+        }
         fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
             self.calls
                 .lock()
                 .unwrap()
                 .push(Call::Resolve(symbol.into()));
+            self.resolves.lock().unwrap().push(reply);
+        }
+        fn resolve_converted(&self, symbol: &str, conversion: &str, reply: Reply<Instrument>) {
+            let call = Call::Resolve(format!("{symbol} in {conversion}"));
+            self.calls.lock().unwrap().push(call);
             self.resolves.lock().unwrap().push(reply);
         }
         fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
@@ -1328,6 +1568,192 @@ mod tests {
         fn request_depth_snapshot(&self, id: SubscriptionId) {
             self.calls.lock().unwrap().push(Call::Snapshot(id));
         }
+    }
+
+    /// The feed-wide capabilities are known before a symbol resolves, asked once however often
+    /// the symbol or interval changes, also while the answer is outstanding, and an empty list
+    /// stays distinct from an unreported one.
+    #[test]
+    fn capabilities_arrive_before_the_symbol_resolves() {
+        let feed = Arc::new(Script::default());
+        let reported = FeedCapabilities::new()
+            .with_timeframes([])
+            .with_exchanges(["NYSE".to_owned()]);
+        let mut chart = fed(&feed, Some("A"));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        chart.set_symbol("B");
+        frames.run(&mut chart);
+        assert_eq!(chart.feed_capabilities(), None);
+        feed.capabilities
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(reported.clone()));
+        frames.run(&mut chart);
+        assert_eq!(chart.feed_capabilities(), Some(&reported));
+        assert_eq!(chart.feed_capabilities().unwrap().symbol_types, None);
+        assert_eq!(chart.feed_capabilities().unwrap().timeframes, Some(vec![]));
+        assert!(feed.resolves.lock().unwrap().len() == 2, "still resolving");
+        chart.set_symbol("C");
+        chart.set_timeframe(Timeframe::Min5);
+        frames.run(&mut chart);
+        assert!(feed.capabilities.lock().unwrap().is_empty(), "asked again");
+    }
+
+    /// An empty window names where older bars continue, and the next request starts there
+    /// instead of repeating itself; a continuation that does not lie before the request stops
+    /// paging with an error; without one the empty page ends history.
+    #[test]
+    fn empty_bar_windows_continue_at_the_named_boundary() {
+        let all = bars(2000);
+        let oldest = all[1900].time;
+        for (name, continuation, next, complete, stopped) in [
+            (
+                "continues",
+                Some(oldest - TimeDelta::days(3)),
+                true,
+                false,
+                false,
+            ),
+            ("ends", None, false, true, false),
+            ("repeats", Some(oldest), false, false, true),
+        ] {
+            let feed = Arc::new(Script::default());
+            let mut chart = fed(&feed, Some("A"));
+            let mut frames = Frames::new();
+            frames.run(&mut chart);
+            feed.page().send(page(all[1900..].to_vec(), false));
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+            feed.calls();
+            let mut window = HistoryPage::new(Vec::new(), false);
+            window.continue_before = continuation;
+            feed.page().send(Ok(window));
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+            let calls = feed.calls();
+            let expected: Vec<_> = continuation
+                .filter(|_| next)
+                .map(|at| history("A", Timeframe::Min1, Some(at)))
+                .into_iter()
+                .collect();
+            assert_eq!(calls, expected, "{name}");
+            let state = chart.feed_state(SeriesId::MAIN).unwrap();
+            assert_eq!(state.history_complete, complete, "{name}");
+            assert_eq!(
+                matches!(state.last_error, Some(FeedError::InvalidData(_))),
+                stopped,
+                "{name}"
+            );
+        }
+    }
+
+    /// Older trades follow the view once something consumes them; an empty window continues at
+    /// its named boundary, and a continuation that does not advance ends the paging.
+    #[test]
+    fn older_trades_follow_the_view_without_repeating_a_cursor() {
+        let all = bars(1000);
+        let oldest = all[999].time;
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_volume_bubbles(Some(VolumeBubblesConfig::default()));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.page().send(page(all.clone(), false));
+        feed.resolve().send(Ok(Instrument::new("A")));
+        frames.run(&mut chart);
+        let asked = |feed: &Script| {
+            feed.calls()
+                .into_iter()
+                .filter_map(|call| match call {
+                    Call::Trades(request) => Some(request),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(asked(&feed)[0].before, None);
+        let trades = (0..5)
+            .map(|i| {
+                let mut trade = Tick::new(oldest + TimeDelta::seconds(i), 100.0, 1.0, None);
+                trade.id = Some(i as u64);
+                trade
+            })
+            .collect();
+        feed.trades
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(TradePage::new(trades, false)));
+        frames.run(&mut chart);
+        let requests = asked(&feed);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].before, Some(oldest));
+        assert!(
+            !chart
+                .feed_state(SeriesId::MAIN)
+                .unwrap()
+                .trade_history_complete
+        );
+
+        // Inside the view, which reaches back further, so the boundary is asked for at once.
+        let cursor = oldest - TimeDelta::minutes(30);
+        let window = TradePage::new(Vec::new(), false).with_continue_before(cursor);
+        feed.trades.lock().unwrap().remove(0).send(Ok(window));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        let requests = asked(&feed);
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        assert_eq!(requests[0].before, Some(cursor));
+
+        let stuck = TradePage::new(Vec::new(), false).with_continue_before(cursor);
+        feed.trades.lock().unwrap().remove(0).send(Ok(stuck));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert!(asked(&feed).is_empty(), "no repeated cursor");
+        let state = chart.feed_state(SeriesId::MAIN).unwrap();
+        assert!(state.trade_history_complete);
+        assert!(matches!(state.last_error, Some(FeedError::InvalidData(_))));
+    }
+
+    /// A changed conversion resolves and loads the symbol again with the choice in every request,
+    /// and a reply to the previous choice, however late, is not shown.
+    #[test]
+    fn conversion_reloads_and_ignores_replies_to_the_previous_choice() {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        let (stale, stale_resolve) = (feed.page(), feed.resolve());
+        feed.calls();
+        chart.set_conversion(Some("EUR".into()));
+        frames.run(&mut chart);
+        let calls = feed.calls();
+        assert_eq!(calls[0], Call::Resolve("A in EUR".into()));
+        let Call::History(request) = &calls[1] else {
+            panic!("{calls:?}");
+        };
+        assert_eq!(request.conversion.as_deref(), Some("EUR"));
+
+        stale.send(page(bars(5), false));
+        stale_resolve.send(Ok(Instrument::new("A").with_currency("USD")));
+        frames.run(&mut chart);
+        assert!(chart.bars(SeriesId::MAIN).is_empty(), "previous choice");
+        assert_eq!(chart.instrument(), None, "previous choice");
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_currency("EUR")));
+        feed.page().send(page(bars(3), false));
+        frames.run(&mut chart);
+        assert_eq!(chart.bars(SeriesId::MAIN).len(), 3);
+        assert_eq!(
+            chart.instrument().and_then(|i| i.currency.as_deref()),
+            Some("EUR")
+        );
+        let calls = feed.calls();
+        let Some(Call::Trades(trades)) = calls.iter().find(|c| matches!(c, Call::Trades(_))) else {
+            panic!("{calls:?}");
+        };
+        assert_eq!(trades.conversion.as_deref(), Some("EUR"));
     }
 
     /// Scanners retain no empty managers; marked symbols survive revisits until forgotten.
@@ -1370,10 +1796,7 @@ mod tests {
     }
 
     fn page(bars: Vec<Bar>, end_of_history: bool) -> Result<HistoryPage, FeedError> {
-        Ok(HistoryPage {
-            bars,
-            end_of_history,
-        })
+        Ok(HistoryPage::new(bars, end_of_history))
     }
 
     fn history(symbol: &str, timeframe: Timeframe, before: Option<DateTime<Utc>>) -> Call {
@@ -1382,8 +1805,10 @@ mod tests {
             timeframe,
             clock: BarClock::new(timeframe),
             before,
+            since: None,
             count: 1000,
             extended_hours: false,
+            conversion: None,
         })
     }
 
@@ -1895,13 +2320,16 @@ mod tests {
         assert!(chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
     }
 
+    /// Depth pages follow the visible time and stop without older columns, unless an empty
+    /// window names where they continue.
     #[test]
     fn depth_pages_follow_visible_time_and_stop_without_older_columns() {
-        for (name, offset, span, end, expected) in [
-            ("overlapping page", Some(899), 120, false, vec![900]),
-            ("final page", Some(899), 60, true, vec![899, 900]),
-            ("empty page", None, 60, false, vec![900]),
-            ("repeated page", Some(900), 60, false, vec![900]),
+        for (name, offset, span, end, continuation, expected) in [
+            ("overlapping page", Some(899), 120, false, None, vec![900]),
+            ("final page", Some(899), 60, true, None, vec![899, 900]),
+            ("empty page", None, 60, false, None, vec![900]),
+            ("repeated page", Some(900), 60, false, None, vec![900]),
+            ("empty window", None, 60, false, Some(880), vec![900]),
         ] {
             let feed = Arc::new(Script::default());
             let mut chart = fed(&feed, Some("A"));
@@ -1943,14 +2371,21 @@ mod tests {
                 matches!(&calls[0], Call::Depth(r) if r.before == Some(bars[900].time)),
                 "{name}: {calls:?}"
             );
-            feed.depth.lock().unwrap().remove(0).send(Ok(DepthPage::new(
-                offset.map(|i| column(i, span)).into_iter().collect(),
-                end,
-            )));
+            let mut answer =
+                DepthPage::new(offset.map(|i| column(i, span)).into_iter().collect(), end);
+            answer.continue_before = continuation.map(|i| bars[i].time);
+            feed.depth.lock().unwrap().remove(0).send(Ok(answer));
             for _ in 0..3 {
                 frames.run(&mut chart);
             }
-            assert!(feed.calls().is_empty(), "{name}: paging did not stop");
+            let calls = feed.calls();
+            match continuation {
+                Some(i) => assert!(
+                    matches!(&calls[..], [Call::Depth(r)] if r.before == Some(bars[i].time)),
+                    "{name}: {calls:?}"
+                ),
+                None => assert!(calls.is_empty(), "{name}: paging did not stop"),
+            }
             let held: Vec<_> = chart
                 .depth_history(SeriesId::MAIN)
                 .unwrap()
@@ -2143,17 +2578,19 @@ mod tests {
             feed.page().send(page(all[2000..].to_vec(), false));
             frames.run(&mut chart);
             frames.run(&mut chart);
-            assert_eq!(
-                feed.calls(),
-                [history("A", Timeframe::Min1, Some(all[2000].time))]
-            );
+            // Scrolling to an unloaded time bounds each page by it.
+            let ranged = |before: DateTime<Utc>| {
+                let Call::History(mut request) = history("A", Timeframe::Min1, Some(before)) else {
+                    unreachable!()
+                };
+                request.since = Some(target);
+                Call::History(request)
+            };
+            assert_eq!(feed.calls(), [ranged(all[2000].time)]);
             feed.page().send(page(all[1000..2000].to_vec(), false));
             frames.run(&mut chart);
             frames.run(&mut chart);
-            assert_eq!(
-                feed.calls(),
-                [history("A", Timeframe::Min1, Some(all[1000].time))]
-            );
+            assert_eq!(feed.calls(), [ranged(all[1000].time)]);
             feed.page().send(page(all[..1000].to_vec(), exhaust));
             frames.run(&mut chart);
             frames.run(&mut chart);
@@ -2374,7 +2811,9 @@ mod tests {
         let trades = Call::Trades(TradeRequest {
             symbol: "A".into(),
             before: None,
+            since: None,
             count: TRADE_CAPACITY,
+            conversion: None,
         });
         let subscribe = Call::Subscribe(id, "A".into(), Timeframe::Min1, false);
         assert_eq!(feed.calls(), [subscribe, trades], "c");

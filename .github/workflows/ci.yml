@@ -240,6 +240,10 @@ jobs:
               -e 's/grouping: BubbleGrouping::PriceStep(step),/price_step: Some(step),/' \
               performance-base/benches/frame_time.rs
           fi
+          if ! grep -q 'impl HistoryPage' performance-base/src/data/mod.rs; then
+            sed -i 's/HistoryPage::new(self\.0\.clone(), true)/HistoryPage { bars: self.0.clone(), end_of_history: true }/' \
+              performance-base/benches/frame_time.rs
+          fi
           cargo build --release --locked --bench frame_time --message-format=json-render-diagnostics > performance-head.json
           cargo build --release --locked --manifest-path performance-base/Cargo.toml --bench frame_time --message-format=json-render-diagnostics > performance-base.json
       - name: Reject instruction growth over five percent

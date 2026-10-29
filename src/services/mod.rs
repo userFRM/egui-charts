@@ -31,6 +31,7 @@ mod search;
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 mod settings;
+mod sharing;
 mod signals;
 mod storage;
 
@@ -53,5 +54,6 @@ pub use search::{ExpressionError, SymbolExpression, SymbolQuery, SymbolSearch};
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub use settings::{MarketHeatmapSelection, SettingsStore, UserSettings};
+pub use sharing::{ShareKind, ShareLink, ShareOffer, Sharing};
 pub use signals::{SignalEvent, Signals};
 pub use storage::{Storage, StoreKind};

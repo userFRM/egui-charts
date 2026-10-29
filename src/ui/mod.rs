@@ -40,6 +40,7 @@ pub mod floating_replay_control;
 pub mod ideas;
 pub mod multi_chart;
 pub mod replay_status;
+mod share_controls;
 pub mod strategy_report;
 pub mod study_editor;
 pub mod symbol_header;
