@@ -61,6 +61,8 @@ pub use values::IndicatorValues;
 #[cfg(all(test, feature = "studies"))]
 mod reference;
 mod stepper;
+#[cfg(all(test, feature = "studies"))]
+mod test_support;
 pub use stepper::Stepper;
 
 #[cfg(feature = "studies")]

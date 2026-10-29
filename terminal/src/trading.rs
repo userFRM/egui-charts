@@ -3,7 +3,7 @@
 use super::core::Direction;
 use super::layout::Region;
 use super::{Action, Terminal};
-use crate::services::UserSettings;
+use egui_charts::services::UserSettings;
 
 #[derive(Default)]
 pub(super) struct State {}

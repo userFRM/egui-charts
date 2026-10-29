@@ -1,10 +1,10 @@
 //! A chart's state as a serializable snapshot, and named layouts of charts as versioned
 //! documents.
 
-use super::{Chart, ChartLayoutMode, PaneId};
+use super::{Chart, ChartLayoutMode, PaneId, SeriesOptions};
 use crate::drawings::persistence::{DrawingStorage, SaveError, SkippedDrawing};
-use crate::model::{ChartType, ChartTypeParams, Timeframe};
-use crate::studies::StudyTemplate;
+use crate::model::{ChartType, ChartTypeParams, Marker, MarkerOptions, PriceLine, Timeframe};
+use crate::studies::{IndicatorFactory, StudyTemplate};
 use crate::widget::settings::ChartSettingsState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -24,6 +24,35 @@ pub struct SavedStudy {
     pub pane: usize,
 }
 
+/// The markers and price lines of one bar series of a [`ChartSnapshot`].
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SavedAnnotations {
+    /// The markers from [`Chart::set_markers`], with their colours.
+    pub markers: Vec<Marker>,
+    /// Their fit and layer.
+    pub options: MarkerOptions,
+    /// The price lines in drawing order. [`Chart::restore`] hands out new `PriceLineId`s.
+    pub price_lines: Vec<PriceLine>,
+}
+
+/// One bar series added with [`Chart::add_series`] to a [`ChartSnapshot`], without its bars.
+/// [`Chart::restore`] adds it again with a new id: supply its bars through
+/// [`Chart::set_data`] on [`Chart::restored_series_id`] of [`id`](Self::id).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SavedSeries {
+    /// The series' id when saved, which [`SavedPane::members`] and drawings in its pane use.
+    pub id: usize,
+    /// Its name, chart type, colours and scale assignment. A style's autoscale function is not
+    /// saved.
+    pub options: SeriesOptions,
+    /// Whether it is shown.
+    pub visible: bool,
+    /// The position of its pane in [`ChartSnapshot::panes`].
+    pub pane: usize,
+    /// Its markers and price lines.
+    pub annotations: SavedAnnotations,
+}
+
 /// One pane of a [`ChartSnapshot`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedPane {
@@ -37,7 +66,7 @@ pub struct SavedPane {
     /// Keep the pane when its last study leaves.
     #[serde(default)]
     pub preserve: bool,
-    /// Saved study ids in legend order; empty in version 1 layouts.
+    /// Saved study and series ids in legend order; empty in version 1 layouts.
     #[serde(default)]
     pub members: Vec<usize>,
     /// The pane's price scale, including its manual range.
@@ -47,8 +76,8 @@ pub struct SavedPane {
 
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
 /// the host's feed. Take one with [`Chart::snapshot`] and apply it with [`Chart::restore`].
-/// Host series, markers, price lines and the trading and alert settings of the settings dialog
-/// belong to the host and are not part of it.
+/// The trading and alert settings of the settings dialog belong to the host and are not part
+/// of it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChartSnapshot {
     /// The symbol shown.
@@ -63,6 +92,9 @@ pub struct ChartSnapshot {
     pub chart_type_params: ChartTypeParams,
     /// Whether the main series is drawn.
     pub main_series_visible: bool,
+    /// Visibility and style of the main series' alert levels; absent in older layouts.
+    #[serde(default)]
+    pub main_series_alerts: crate::model::SeriesAlerts,
     /// The display settings of the settings dialog, the price scale's mode and margins included.
     pub settings: ChartSettingsState,
     /// Complete appearance settings; absent in version 1 layouts.
@@ -83,6 +115,13 @@ pub struct ChartSnapshot {
     pub maximized: Option<usize>,
     /// The studies in the order they were added, including the volume study.
     pub studies: Vec<SavedStudy>,
+    /// The bar series added to the chart in draw order, `None` in layouts saved before version
+    /// 3, which leave the chart's added series in place.
+    #[serde(default)]
+    pub series: Option<Vec<SavedSeries>>,
+    /// The markers and price lines of the main series, `None` in layouts saved before version 3.
+    #[serde(default)]
+    pub main_annotations: Option<SavedAnnotations>,
     /// The panes from top to bottom, including preserved empty panes.
     pub panes: Vec<SavedPane>,
     /// The space between bars in points.
@@ -99,6 +138,12 @@ impl Chart {
     /// study or when a drawing cannot be saved; see
     /// [`save_drawings`](Self::save_drawings).
     pub fn snapshot(&self) -> Result<ChartSnapshot, SaveError> {
+        self.snapshot_with(&IndicatorFactory::new())
+    }
+
+    /// Captures the chart's state like [`snapshot`](Self::snapshot), checking through `factory`
+    /// that each study can be built again, so that custom studies it registers are accepted.
+    pub fn snapshot_with(&self, factory: &IndicatorFactory) -> Result<ChartSnapshot, SaveError> {
         if self
             .drawing_store
             .as_ref()
@@ -111,6 +156,11 @@ impl Chart {
         let drawings =
             Some(serde_json::to_value(self.save_drawings()?).expect("drawings were validated"));
         let panes = self.panes();
+        let pane_of = |id| {
+            self.series_pane(id)
+                .and_then(|pane| panes.iter().position(|p| *p == pane))
+                .unwrap_or(0)
+        };
         let studies: Vec<_> = self
             .indicators()
             .enumerate()
@@ -119,18 +169,30 @@ impl Chart {
                 study: StudyTemplate::from_study(study),
                 caption: self.indicator_inputs(id).unwrap_or_default().to_owned(),
                 autoscale: self.study_autoscale[index],
-                pane: self
-                    .series_pane(id)
-                    .and_then(|pane| panes.iter().position(|p| *p == pane))
-                    .unwrap_or(0),
+                pane: pane_of(id),
             })
             .collect();
         for saved in &studies {
             saved
                 .study
-                .create()
+                .create_with(factory)
                 .map_err(|error| SaveError::Json(serde::ser::Error::custom(error)))?;
         }
+        let series = self
+            .price_series
+            .iter()
+            .map(|item| SavedSeries {
+                id: item.id.0,
+                options: item.options.clone(),
+                visible: item.visible,
+                pane: pane_of(item.id),
+                annotations: SavedAnnotations {
+                    markers: item.markers.clone(),
+                    options: item.marker_options,
+                    price_lines: item.lines.iter().map(|(_, line)| line.clone()).collect(),
+                },
+            })
+            .collect();
         let (bar_spacing, right_offset) = self.get_time_scale_state();
         Ok(ChartSnapshot {
             symbol: self.symbol.clone(),
@@ -139,6 +201,7 @@ impl Chart {
             chart_type: self.chart_type,
             chart_type_params: self.chart_type_params.clone(),
             main_series_visible: self.main_series_visible,
+            main_series_alerts: self.main_series_style.alerts,
             settings: ChartSettingsState::from_chart(self),
             config: Some(self.config.clone()),
             palette: Some(self.followed_palette()),
@@ -149,6 +212,16 @@ impl Chart {
                 .maximized
                 .and_then(|id| panes.iter().position(|pane| *pane == id)),
             studies,
+            series: Some(series),
+            main_annotations: Some(SavedAnnotations {
+                markers: self.marks.clone(),
+                options: self.marker_options,
+                price_lines: self
+                    .price_lines
+                    .iter()
+                    .map(|(_, line)| line.clone())
+                    .collect(),
+            }),
             panes: panes
                 .iter()
                 .map(|id| {
@@ -175,16 +248,34 @@ impl Chart {
     }
 
     /// Shows what `snapshot` captured: its symbol, interval, chart type, settings, studies,
-    /// panes and view, and its drawings. Studies are
-    /// built through [`StudyTemplate::create`]. Clears undo history and returns the drawings
-    /// that could not be read. Fails without changing the chart for an unknown study, invalid
+    /// added series, panes and view, and its drawings. Studies are built through
+    /// [`StudyTemplate::create`]. Clears undo history and returns the drawings that could not
+    /// be read. Fails without changing the chart for an unknown study, a study source that
+    /// names no study, no plot of it or itself, a series or study id used twice, invalid
     /// settings or an unreadable drawings document.
+    ///
+    /// The added series of the chart are replaced by those of the snapshot, which come back
+    /// without bars and under new ids: look each up with
+    /// [`restored_series_id`](Self::restored_series_id) and supply its bars with
+    /// [`set_data`](Self::set_data), as for the chart's own feed.
     pub fn restore(&mut self, snapshot: &ChartSnapshot) -> Result<Vec<SkippedDrawing>, String> {
+        self.restore_with(snapshot, &IndicatorFactory::new())
+    }
+
+    /// Shows what `snapshot` captured like [`restore`](Self::restore), building the studies
+    /// through `factory`, so that studies it registers are restored with their inputs, styles
+    /// and source links.
+    pub fn restore_with(
+        &mut self,
+        snapshot: &ChartSnapshot,
+        factory: &IndicatorFactory,
+    ) -> Result<Vec<SkippedDrawing>, String> {
         let studies = snapshot
             .studies
             .iter()
-            .map(|saved| saved.study.create())
+            .map(|saved| saved.study.create_with(factory))
             .collect::<Result<Vec<_>, _>>()?;
+        check_source_links(&snapshot.studies, &studies)?;
         snapshot.settings.validate()?;
         let valid_scale = |scale: &crate::scales::PriceScale| {
             let range = scale.range();
@@ -209,9 +300,15 @@ impl Chart {
                 .studies
                 .iter()
                 .map(|study| study.id)
+                .chain(snapshot.series.iter().flatten().map(|series| series.id))
                 .collect::<std::collections::HashSet<_>>()
                 .len()
-                != snapshot.studies.len()
+                != snapshot.studies.len() + snapshot.series.iter().flatten().count()
+            || snapshot
+                .series
+                .iter()
+                .flatten()
+                .any(|series| series.pane >= snapshot.panes.len())
             || snapshot
                 .panes
                 .iter()
@@ -256,6 +353,7 @@ impl Chart {
         self.set_chart_type(snapshot.chart_type);
         self.set_chart_type_params(snapshot.chart_type_params.clone());
         self.set_main_series_visible(snapshot.main_series_visible);
+        self.main_series_style.alerts = snapshot.main_series_alerts;
         snapshot.settings.apply_to_chart(self)?;
         if let Some(config) = &snapshot.config {
             self.config = config.clone();
@@ -267,7 +365,10 @@ impl Chart {
         if let Some(scale) = &snapshot.price_scale {
             *self.state.price_scale_mut() = scale.clone();
         }
-        let replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
+        let mut replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
+        if snapshot.series.is_some() {
+            replaced.extend(self.series().map(|(id, _)| id));
+        }
         let show_volume = self.config.show_volume;
         for id in replaced {
             self.remove_series(id);
@@ -295,6 +396,16 @@ impl Chart {
             self.restored_studies.insert(saved.id, id.0);
             self.move_series_to_pane(id, panes[&saved.pane]);
         }
+        for saved in snapshot.series.iter().flatten() {
+            let id = self.add_series(saved.options.clone());
+            self.set_series_visible(id, saved.visible);
+            self.restore_annotations(id, &saved.annotations);
+            self.restored_studies.insert(saved.id, id.0);
+            self.move_series_to_pane(id, panes[&saved.pane]);
+        }
+        if let Some(main) = &snapshot.main_annotations {
+            self.restore_annotations(super::SeriesId::MAIN, main);
+        }
         for saved in &snapshot.studies {
             let id = super::SeriesId(self.restored_studies[&saved.id]);
             for (input, value) in &saved.study.inputs {
@@ -304,11 +415,7 @@ impl Chart {
                 }) = value
                 {
                     let source = crate::studies::StudySource::Study {
-                        id: self
-                            .restored_studies
-                            .get(parent)
-                            .copied()
-                            .unwrap_or(usize::MAX),
+                        id: self.restored_studies[parent],
                         plot: *plot,
                     };
                     self.indicator_mut(id)
@@ -361,6 +468,60 @@ impl Chart {
     }
 }
 
+impl Chart {
+    fn restore_annotations(&mut self, series: super::SeriesId, saved: &SavedAnnotations) {
+        self.set_markers(series, saved.markers.clone());
+        self.set_marker_options(series, saved.options);
+        self.set_price_lines(series, saved.price_lines.clone());
+    }
+
+    /// The id a series or study of a restored snapshot has now, given its [`SavedSeries::id`] or
+    /// [`SavedStudy::id`], or `None` for an id the last [`restore`](Self::restore) did not add.
+    pub fn restored_series_id(&self, saved: usize) -> Option<super::SeriesId> {
+        self.restored_studies
+            .get(&saved)
+            .copied()
+            .map(super::SeriesId)
+    }
+}
+
+/// Checks the study outputs the saved `studies` read: each names a saved study and a plot it
+/// has, and no study reads its own output, directly or through others. `built` holds the
+/// studies reconstructed from `studies`, in the same order.
+fn check_source_links(
+    studies: &[SavedStudy],
+    built: &[Box<dyn crate::studies::Indicator>],
+) -> Result<(), String> {
+    let mut parents = vec![Vec::new(); studies.len()];
+    for (at, saved) in studies.iter().enumerate() {
+        for (_, value) in &saved.study.inputs {
+            if let crate::studies::InputValue::Source(crate::studies::StudySource::Study {
+                id,
+                plot,
+            }) = value
+            {
+                let parent = studies
+                    .iter()
+                    .position(|other| other.id == *id)
+                    .filter(|parent| *plot < built[*parent].line_count())
+                    .ok_or("A study source names no study or plot of the layout")?;
+                parents[at].push(parent);
+            }
+        }
+    }
+    // Studies that read only resolved studies resolve in turn; any left over form a cycle.
+    let mut resolved = vec![false; studies.len()];
+    while let Some(at) = (0..studies.len())
+        .find(|at| !resolved[*at] && parents[*at].iter().all(|parent| resolved[*parent]))
+    {
+        resolved[at] = true;
+    }
+    if resolved.contains(&false) {
+        return Err("Study sources form a cycle".into());
+    }
+    Ok(())
+}
+
 /// A named arrangement of charts: the [`ChartLayoutMode`] and a [`ChartSnapshot`] of each chart,
 /// as kept in [`StoreKind::Layouts`](crate::services::StoreKind::Layouts) documents.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -380,7 +541,7 @@ struct Document<T> {
 
 impl SavedLayout {
     /// The version of the document [`to_json`](Self::to_json) writes.
-    pub const VERSION: u32 = 2;
+    pub const VERSION: u32 = 3;
 
     /// The layout as a versioned JSON document.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
@@ -395,7 +556,7 @@ impl SavedLayout {
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let document: Document<serde_json::Value> = serde_json::from_str(json)?;
         match document.version {
-            1 | Self::VERSION => serde_json::from_value(document.layout),
+            1..=Self::VERSION => serde_json::from_value(document.layout),
             version => Err(serde::de::Error::custom(format!(
                 "unsupported layout version {version}, expected {}",
                 Self::VERSION
@@ -408,9 +569,120 @@ impl SavedLayout {
 mod tests {
     use super::*;
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
-    use crate::model::{Bar, BarData};
+    use crate::model::{Bar, BarData, Marker, PriceLine};
     use crate::studies::{MACD, RSI, SMA};
     use chrono::{TimeZone, Utc};
+
+    /// A custom study, the study reading its output and an added series with its markers and
+    /// price lines come back through the public API; a document that cannot be rebuilt leaves
+    /// the current chart as it was.
+    #[test]
+    fn restore_rebuilds_custom_studies_source_links_and_added_series() {
+        use crate::studies::{CustomIndicator, IndicatorFactory, IndicatorValue, StudySource};
+        let bars: Vec<_> = (0..30)
+            .map(|i| {
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    10.0,
+                    11.0,
+                    9.0,
+                    10.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut factory = IndicatorFactory::new();
+        factory.register("Bar range", || {
+            Box::new(CustomIndicator::new("Bar range", |bars| {
+                bars.iter()
+                    .map(|bar| IndicatorValue::Single(bar.high - bar.low))
+                    .collect()
+            }))
+        });
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        chart.set_symbol("A");
+        let spread = chart.add_indicator(factory.create("Bar range").unwrap());
+        let rsi = chart.add_indicator(Box::new(RSI::new(5)));
+        chart
+            .set_indicator_source(
+                rsi,
+                StudySource::Study {
+                    id: spread.0,
+                    plot: 0,
+                },
+            )
+            .unwrap();
+        let extra = chart.add_series(SeriesOptions {
+            name: "Peer".into(),
+            color: egui::Color32::GOLD,
+            ..Default::default()
+        });
+        chart.set_markers(
+            extra,
+            vec![Marker::new(Utc.timestamp_opt(60, 0).unwrap()).with_color(egui::Color32::RED)],
+        );
+        chart.set_price_lines(extra, vec![PriceLine::new(12.5, egui::Color32::BLUE)]);
+        chart.move_series_to_pane(extra, chart.series_pane(rsi).unwrap());
+        assert!(
+            chart.snapshot().is_err(),
+            "the built-in factory cannot rebuild Bar range"
+        );
+        let json = SavedLayout {
+            mode: ChartLayoutMode::Single,
+            charts: vec![chart.snapshot_with(&factory).unwrap()],
+        }
+        .to_json()
+        .unwrap();
+        let snapshot = SavedLayout::from_json(&json).unwrap().charts.remove(0);
+
+        let mut restored = Chart::new(BarData::from_bars(bars));
+        restored.set_symbol("B");
+        assert!(restored.restore(&snapshot).is_err());
+        assert_eq!(restored.symbol(), "B");
+        let mut dangling = snapshot.clone();
+        dangling.studies[1]
+            .study
+            .inputs
+            .iter_mut()
+            .for_each(|(_, value)| {
+                if let crate::studies::InputValue::Source(StudySource::Study { id, .. }) = value {
+                    *id = 999;
+                }
+            });
+        assert!(restored.restore_with(&dangling, &factory).is_err());
+        assert_eq!(restored.symbol(), "B");
+
+        restored.restore_with(&snapshot, &factory).unwrap();
+        assert_eq!(restored.symbol(), "A");
+        let names: Vec<_> = restored
+            .indicators()
+            .map(|(_, study)| study.name().to_owned())
+            .collect();
+        assert_eq!(names, ["Bar range", "RSI"]);
+        let new_spread = restored.restored_series_id(spread.0).unwrap();
+        let new_rsi = restored.restored_series_id(rsi.0).unwrap();
+        assert_eq!(
+            restored.indicator_mut(new_rsi).unwrap().source(),
+            Some(StudySource::Study {
+                id: new_spread.0,
+                plot: 0
+            })
+        );
+        let new_extra = restored.restored_series_id(extra.0).unwrap();
+        let (_, options) = restored.series().next().unwrap();
+        assert_eq!(
+            (options.name.as_str(), options.color),
+            ("Peer", egui::Color32::GOLD)
+        );
+        assert_eq!(restored.markers(new_extra)[0].color, egui::Color32::RED);
+        assert_eq!(
+            restored.series_pane(new_extra),
+            restored.series_pane(new_rsi)
+        );
+        let lines = &restored.price_series[0].lines;
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].1.price, 12.5);
+    }
 
     #[test]
     fn layouts_restore_interval_type_studies_panes_view_and_pane_drawings() {
@@ -594,7 +866,7 @@ mod tests {
         restored.restore(&migrated.charts[0]).unwrap();
         assert_eq!(restored.chart_type(), ChartType::Line);
 
-        let newer = json.replacen("\"version\":2", "\"version\":99", 1);
+        let newer = json.replacen("\"version\":3", "\"version\":99", 1);
         assert!(SavedLayout::from_json(&newer).is_err());
     }
 }

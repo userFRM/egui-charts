@@ -5,6 +5,13 @@ use crate::model::{BarClock, OrderSide, Tick};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::ops::Bound;
+
+/// Inclusive thresholds allow a relative error of 1e-9, which covers the rounding of sizes
+/// summed trade by trade, and is far below one lot at any realistic volume.
+pub(crate) fn meets_threshold(value: f64, threshold: f64) -> bool {
+    value >= threshold * (1.0 - 1e-9)
+}
 
 /// Executed volume at one grouped price, with sells on the bid and buys on the ask.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -131,7 +138,8 @@ impl FootprintBar {
     }
 
     /// Contiguous value area grown from the POC toward the larger adjacent volume.
-    /// Ties add both sides. `share` is clamped to 0..=1, NaN to zero. Gaps hold zero volume.
+    /// Ties add one row on each side. `share` is clamped to 0..=1, NaN to zero.
+    /// Gaps hold zero volume.
     /// Returns inclusive lower and upper level keys; a zero-volume bar has no area.
     pub fn value_area(&self, share: f64) -> Option<(i64, i64)> {
         if self.volume() <= 0.0 {
@@ -208,7 +216,7 @@ impl FootprintBar {
         if !ratio.is_finite() || ratio < 1.0 {
             return (false, false);
         }
-        let dominant = |a: f64, b: f64| a > b && a / ratio >= b;
+        let dominant = |a: f64, b: f64| a > b && meets_threshold(a / ratio, b);
         if !diagonal {
             return (dominant(row.bid, row.ask), dominant(row.ask, row.bid));
         }
@@ -237,9 +245,15 @@ pub struct Footprint {
     tick_size: f64,
     ticks_per_row: u32,
     bars: BTreeMap<DateTime<Utc>, FootprintBar>,
+    /// Price rows held across all bars.
+    rows: usize,
     last: Option<DateTime<Utc>>,
     min_size: f64,
     max_size: f64,
+    max_bars: usize,
+    max_rows: usize,
+    /// Bars opening up to this time lack executions that were dropped.
+    incomplete_through: Option<DateTime<Utc>>,
 }
 
 impl Footprint {
@@ -259,10 +273,85 @@ impl Footprint {
             tick_size,
             ticks_per_row,
             bars: BTreeMap::new(),
+            rows: 0,
             last: None,
             min_size: 0.0,
             max_size: f64::MAX,
+            max_bars: usize::MAX,
+            max_rows: usize::MAX,
+            incomplete_through: None,
         })
+    }
+
+    /// Keeps at most `bars` bars and `rows` price rows in all, dropping the oldest bars first.
+    /// The newest bar is always kept, whole. Dropped bars are counted as incomplete.
+    #[cfg_attr(
+        all(not(feature = "widget"), not(test)),
+        expect(dead_code, reason = "only the chart widget bounds its footprint")
+    )]
+    pub(crate) fn set_budget(&mut self, bars: usize, rows: usize) {
+        self.max_bars = bars;
+        self.max_rows = rows;
+        self.enforce_budget();
+    }
+
+    /// Open of the oldest bar whose executions are all held: earlier bars were cut by the
+    /// budget or by trades dropped from the host's store, and must not be shown as complete.
+    pub fn complete_from(&self) -> Option<DateTime<Utc>> {
+        let after = self
+            .incomplete_through
+            .map_or(Bound::Unbounded, Bound::Excluded);
+        self.bars
+            .range((after, Bound::Unbounded))
+            .next()
+            .map(|(time, _)| *time)
+    }
+
+    /// Takes out the executions dropped from the host's store, the newest at `through`, and
+    /// rebuilds the bar containing it from `held`, the executions still held in order. Earlier
+    /// bars go. Delta extrema cannot be recovered by subtraction, so the bar is summed again.
+    #[cfg_attr(
+        all(not(feature = "widget"), not(test)),
+        expect(dead_code, reason = "only the chart widget evicts from its footprint")
+    )]
+    pub(crate) fn drop_through<'a>(
+        &mut self,
+        through: DateTime<Utc>,
+        held: impl IntoIterator<Item = &'a Tick>,
+    ) {
+        let open = self.clock.bar_open(through);
+        self.incomplete_through = self.incomplete_through.max(Some(open));
+        self.bars = self.bars.split_off(&open);
+        if self.bars.contains_key(&open) {
+            let mut part = Self {
+                clock: self.clock.clone(),
+                bars: BTreeMap::new(),
+                rows: 0,
+                last: None,
+                ..*self
+            };
+            for trade in held
+                .into_iter()
+                .take_while(|trade| self.clock.bar_open(trade.ts) <= open)
+            {
+                let _ = part.push(trade);
+            }
+            match part.bars.remove(&open) {
+                Some(bar) => self.bars.insert(open, bar),
+                None => self.bars.remove(&open),
+            };
+        }
+        self.rows = self.bars.values().map(|bar| bar.levels.len()).sum();
+    }
+
+    fn enforce_budget(&mut self) {
+        while self.bars.len() > 1 && (self.bars.len() > self.max_bars || self.rows > self.max_rows)
+        {
+            if let Some((time, bar)) = self.bars.pop_first() {
+                self.rows -= bar.levels.len();
+                self.incomplete_through = self.incomplete_through.max(Some(time));
+            }
+        }
     }
 
     /// Restricts executions to this inclusive size range, before aggregation.
@@ -276,6 +365,11 @@ impl Footprint {
         self.min_size = min;
         self.max_size = max;
         Ok(())
+    }
+
+    /// Instrument tick size before price-row grouping.
+    pub fn tick_size(&self) -> f64 {
+        self.tick_size
     }
 
     /// Height of one grouped price row.
@@ -347,9 +441,12 @@ impl Footprint {
             min_delta: 0.0,
             max_delta: 0.0,
         });
-        let row = bar.levels.entry(level).or_insert_with(|| FootprintLevel {
-            level,
-            ..Default::default()
+        let row = bar.levels.entry(level).or_insert_with(|| {
+            self.rows += 1;
+            FootprintLevel {
+                level,
+                ..Default::default()
+            }
         });
         match trade.side {
             Some(OrderSide::Buy) => {
@@ -368,6 +465,7 @@ impl Footprint {
         bar.min_delta = bar.min_delta.min(bar.delta());
         bar.max_delta = bar.max_delta.max(bar.delta());
         self.last = Some(trade.ts);
+        self.enforce_budget();
         Ok(true)
     }
 }
@@ -439,5 +537,50 @@ mod tests {
             sparse.push(&Tick::new(start, price, size, None)).unwrap();
         }
         assert_eq!(sparse.bars()[&start].value_area(0.6), Some((99, 100)));
+    }
+
+    /// Dropped executions leave the bar summed again from those held, extrema included, and
+    /// the budget drops whole old bars; both leave earlier bars incomplete.
+    #[test]
+    fn dropped_executions_match_the_held_ones_summed_again() {
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let sells = [
+            Some(OrderSide::Sell),
+            Some(OrderSide::Buy),
+            Some(OrderSide::Buy),
+        ];
+        // Running delta of the whole bar: 0, -1, 0, 1, 0, 1, 2; without the first two trades, it
+        // starts at zero again: 0, 1, 0, 1, 2.
+        let trades: Vec<_> = (0..7)
+            .map(|i| {
+                Tick::new(
+                    start + TimeDelta::seconds(i),
+                    100.0 + i as f64,
+                    1.0,
+                    sells[i as usize % 3],
+                )
+            })
+            .collect();
+        let new = || Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        let mut flow = new();
+        trades.iter().for_each(|t| _ = flow.push(t));
+        flow.drop_through(trades[1].ts, &trades[2..]);
+        let mut held = new();
+        trades[2..].iter().for_each(|t| _ = held.push(t));
+        assert_eq!(flow.bars(), held.bars());
+        assert_eq!(
+            (flow.bars()[&start].min_delta, flow.bars()[&start].max_delta),
+            (0.0, 2.0)
+        );
+        assert_eq!(flow.complete_from(), None);
+
+        let mut budget = new();
+        budget.set_budget(2, usize::MAX);
+        for minute in 0..3 {
+            let at = start + TimeDelta::minutes(minute);
+            budget.push(&Tick::new(at, 100.0, 1.0, None)).unwrap();
+        }
+        assert_eq!(budget.bars().len(), 2);
+        assert_eq!(budget.complete_from(), Some(start + TimeDelta::minutes(1)));
     }
 }

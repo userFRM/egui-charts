@@ -56,7 +56,7 @@ pub use crate::chart::renderers::{
 pub use crate::chart::selection::{ChartElementId, SeriesId};
 pub use builder::ChartBuilder;
 use egui::{Pos2, Rect, Vec2};
-pub use export::{ChartImage, ImageExportOptions};
+pub use export::{ChartImage, DataTable, ImageExportOptions};
 pub use indicator_pane::{
     IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction,
 };
@@ -112,6 +112,7 @@ mod snapshot;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod stored_drawings;
 mod studies;
+mod svg;
 
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
@@ -125,7 +126,9 @@ pub use price_series::SeriesOptions;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId};
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
-pub use snapshot::{ChartSnapshot, SavedLayout, SavedPane, SavedStudy};
+pub use snapshot::{
+    ChartSnapshot, SavedAnnotations, SavedLayout, SavedPane, SavedSeries, SavedStudy,
+};
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 pub(crate) mod sync;
@@ -330,6 +333,7 @@ pub struct Chart {
     series_formatters:
         std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
+    conversion: Option<String>,
     pub(crate) measured_axis_width: f32,
     /// Last usable widget width and its first frame, including discarded sizing passes.
     last_layout: Option<(f32, u64)>,
@@ -808,6 +812,7 @@ impl Chart {
         self.config.price_source = settings.price_source;
         self.config.show_price_line = settings.show_price_line;
         self.config.show_prev_close_line = settings.show_prev_close_line;
+        self.main_series_style.alerts = settings.alerts;
         self.set_chart_type_params(settings.chart_type_params.clone());
         if self.state.price_scale().options().mode != settings.price_scale_mode {
             self.state.price_scale_mut().reset();
@@ -834,6 +839,7 @@ impl Chart {
             price_source: self.config.price_source,
             show_price_line: self.config.show_price_line,
             show_prev_close_line: self.config.show_prev_close_line,
+            alerts: self.main_series_style.alerts,
             price_scale_mode: self.state.price_scale().options().mode,
             invert_scale: self.state.price_scale().options().invert_scale,
             ..Default::default()

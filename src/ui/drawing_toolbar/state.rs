@@ -28,11 +28,12 @@ pub struct ToolbarState {
     pub expanded: bool,
     /// Currently expanded category (for nested menus)
     pub expanded_category: Option<String>,
-    /// Favorite tools
+    /// Favorite tools, in the order they were starred
     pub favorites: Vec<DrawingToolType>,
-    /// Whether the floating strip of favorite tools is shown
+    /// Whether the floating strip of favorite tools is shown while there are favorites
     pub floating_visible: bool,
-    /// Where the user left the floating strip; `None` until it has been shown
+    /// Top-left corner of the floating strip, which the user can drag; `None` until it has been
+    /// shown, when it starts beside the toolbar
     pub floating_pos: Option<egui::Pos2>,
     /// Recently used tools (max 5)
     pub recent: VecDeque<DrawingToolType>,
@@ -102,11 +103,7 @@ impl Default for ToolbarState {
             sel_tool: None,
             expanded: true,
             expanded_category: None,
-            favorites: vec![
-                DrawingToolType::TrendLine,
-                DrawingToolType::HorizontalLine,
-                DrawingToolType::FibonacciRetracement,
-            ],
+            favorites: Vec::new(),
             floating_visible: true,
             floating_pos: None,
             recent: VecDeque::with_capacity(5),
