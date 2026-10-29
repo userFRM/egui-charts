@@ -6,6 +6,8 @@
 //! A second table prints first, steady, tick and new-bar frame times for candles and the five
 //! price-based chart types on 1,000,000 one-minute bars; `-- price-based` runs it alone.
 //! A third prints the frame of volume bubbles from 100,000 trades; `-- bubbles` runs it alone.
+//! A fourth prints the frame of a zoomed-out daily TPO chart at 400 and at 1,600 sessions;
+//! `-- tpo` runs it alone.
 //! `--regression <scenario>` runs a compact workload for `benches/check-regressions.sh`.
 
 use egui::{Rect, UiBuilder, pos2, vec2};
@@ -122,7 +124,12 @@ fn main() {
         std::env::var("FRAME_TIME_FRAMES").map_or(300, |v| v.parse().expect("a frame count"));
     let args: Vec<_> = std::env::args().collect();
     if let Some(at) = args.iter().position(|arg| arg == "--regression") {
-        regression::run(args.get(at + 1).expect("a regression scenario"), frames);
+        let name = args.get(at + 1).expect("a regression scenario");
+        if matches!(name.as_str(), "tpo-400" | "tpo-1600") {
+            tpo(std::slice::from_ref(name), frames);
+        } else {
+            regression::run(name, frames);
+        }
         return;
     }
     // `cargo bench` passes `--bench`; anything else selects scenarios.
@@ -177,6 +184,51 @@ fn main() {
     price_based(&filters, frames);
     println!();
     bubbles(&filters, frames);
+    println!();
+    tpo(&filters, frames);
+}
+
+/// Daily TPO sessions, all in view, including the workload used by the regression check.
+fn tpo(filters: &[String], frames: usize) {
+    println!("| daily TPO | shapes | frame ms (median) | us per session |");
+    println!("|---|---:|---:|---:|");
+    for (name, sessions) in [("tpo-400", 400), ("tpo-1600", 1_600)] {
+        if !filters.is_empty() && !filters.iter().any(|f| name.contains(f)) {
+            continue;
+        }
+        let bars = (0..sessions)
+            .map(|i| {
+                let mut bar = example::sample_bar(i, 0);
+                bar.time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i as i64);
+                bar
+            })
+            .collect();
+        let mut options = egui_charts::config::ChartOptions::default();
+        options.time_scale.min_bar_spacing = 0.0001;
+        let mut chart = Chart::new(BarData::from_bars(bars)).with_chart_options(options);
+        chart.set_chart_type(ChartType::TimePriceOpportunity);
+        chart.set_visible_bars(sessions);
+        let mut fit = true;
+        let samples = frame::run(vec2(800.0, 600.0), pos2(400.0, 300.0), frames, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                chart.show(ui);
+            });
+            if fit {
+                chart.fit_content();
+                fit = false;
+            }
+        });
+        let mut times: Vec<_> = samples.iter().map(|s| s.frame).collect();
+        times.sort();
+        let ms = times
+            .get(times.len() / 2)
+            .map_or(0.0, |d| d.as_secs_f64() * 1e3);
+        println!(
+            "| {name} | {} | {ms:.3} | {:.3} |",
+            samples.last().map_or(0, |s| s.shapes),
+            ms * 1e3 / sessions as f64,
+        );
+    }
 }
 
 fn chart(scenario: &Scenario) -> Chart {
