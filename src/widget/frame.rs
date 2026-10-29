@@ -1820,6 +1820,7 @@ impl Chart {
                                 bars,
                                 &profiles,
                                 flow.price_step(),
+                                flow.tick_size(),
                                 &config,
                             );
                         }
