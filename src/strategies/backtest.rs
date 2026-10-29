@@ -56,11 +56,11 @@ pub trait Strategy {
     fn on_bar(&mut self, context: &mut StrategyContext<'_>);
 }
 
-/// What a [`Strategy`] sees and does on a closed bar: the bars up to it, the open position and
-/// the working orders.
+/// What a [`Strategy`] sees on a closed bar: the bars up to it and the open position. It places
+/// and cancels working orders by id.
 ///
-/// Orders are named; an order placed with the id of a working order replaces it, and working
-/// orders stay until they fill or are cancelled. A quantity must be positive and finite and a
+/// An order placed with the id of a working order replaces it, keeping its original place
+/// among orders reached at the same point. Working orders stay until they fill or are cancelled. A quantity must be positive and finite and a
 /// price finite; an order with any other is ignored.
 pub struct StrategyContext<'a> {
     bars: &'a [Bar],
@@ -168,11 +168,11 @@ struct Lot {
 ///
 /// The strategy decides on each bar once it closes. Its orders fill no earlier than the next
 /// bar, along that bar's price path: from the open to the extreme nearer the open (the high when
-/// both are as near), then to the other extreme, then to the close. A market order fills at the
+/// both are as near within a few ulps), then to the other extreme, then to the close. A market order fills at the
 /// open. A limit, stop or stop-limit order fills where the path reaches it, at its limit or stop
 /// price, or at the open when the bar opened beyond it; a triggered stop-limit order works on as
 /// a limit order from its stop. Orders the path reaches at the same point fill in the order they
-/// were placed. An exit with a take profit and a stop loss fills whichever the path reaches
+/// were first placed. An exit with a take profit and a stop loss fills whichever the path reaches
 /// first. With [`fill_on_close`](Self::fill_on_close), market orders fill at the close of the
 /// bar they were placed on instead.
 ///
@@ -369,7 +369,7 @@ impl Run {
         }
     }
 
-    /// Fills the market orders, in the order they were placed, at `price`.
+    /// Fills the market orders, in the order they were first placed, at `price`.
     fn fill_markets(&mut self, price: f64, time: DateTime<Utc>) {
         let mut index = 0;
         while index < self.orders.len() {

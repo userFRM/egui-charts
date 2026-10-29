@@ -740,7 +740,7 @@ Studies,Indicators,Williams Alligator,done,library,src/studies/builtin/williams_
 Studies,Indicators,Williams Fractal,done,library,src/studies/builtin/williams_fractals.rs;src/studies/factory.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Woodies CCI,partial,library,src/studies/builtin/woodies_cci.rs
 Studies,Indicators,Zig Zag,done,library,src/studies/builtin/zigzag.rs;src/studies/factory.rs;src/chart/renderers/indicator.rs
-Studies,Strategy tester,Backtest engine,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs;src/services/paper.rs
+Studies,Strategy tester,Backtest engine,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs;src/services/paper.rs;docs/strategy-report.md
 Studies,Strategy tester,Built-in Bollinger Bands strategy,missing,library,
 Studies,Strategy tester,Built-in Bollinger Bands strategy Directed,missing,library,
 Studies,Strategy tester,Built-in Consecutive Up/Down strategy,missing,library,
