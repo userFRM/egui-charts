@@ -38,7 +38,7 @@ Builder API,Datafeed API,End of history and gap signalling,done,host,src/data/mo
 Builder API,Datafeed API,Error and retry signalling,done,host,src/data/inbox.rs;src/widget/feed.rs;src/widget/series.rs
 Builder API,Datafeed API,Extended hours,done,host,src/model/instrument.rs;src/data/mod.rs;src/widget/feed.rs;src/widget/frame.rs
 Builder API,Datafeed API,HTTP history and streaming adapter,missing,host,
-Builder API,Datafeed API,History paging and scroll-back boundary and progress diagnostics,done,host,src/widget/frame.rs;src/widget/feed.rs;src/widget/studies_data.rs;src/data/merge.rs
+Builder API,Datafeed API,History paging when scrolling back,done,host,src/widget/frame.rs;src/widget/feed.rs;src/widget/studies_data.rs;src/data/merge.rs
 Builder API,Datafeed API,History request parameters,done,host,src/data/mod.rs;src/widget/feed.rs
 Builder API,Datafeed API,Host data feed contract,done,host,src/data/mod.rs;src/data/inbox/sink.rs;src/data/merge.rs;src/widget/builder.rs;src/widget/feed.rs
 Builder API,Datafeed API,Interval resampling,done,library,src/data/mod.rs;src/data/resample.rs
@@ -47,7 +47,7 @@ Builder API,Datafeed API,Paginated symbol search,done,host,src/services/search.r
 Builder API,Datafeed API,Per-symbol resolution capabilities,done,host,src/model/instrument.rs;src/widget/feed.rs;src/ui/top_toolbar/components/timeframe_selector.rs
 Builder API,Datafeed API,Price precision from symbol metadata,done,host,src/model/instrument.rs;src/scales/price_formatter.rs;src/widget/feed.rs;src/widget/frame.rs;src/ui/trading/mod.rs
 Builder API,Datafeed API,Quotes for watchlist and details,done,host,src/services/quotes.rs;src/ui/widget_bar/panels/watchlist.rs;src/ui/trading/mod.rs
-Builder API,Datafeed API,Realtime bar updates preserve stored bars on heartbeats,done,host,src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed.rs;src/data/merge.rs;src/widget/series.rs
+Builder API,Datafeed API,Realtime bar updates,done,host,src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed.rs;src/data/merge.rs;src/widget/series.rs
 Builder API,Datafeed API,Resolve symbol to symbol metadata,done,host,src/data/mod.rs;src/model/instrument.rs;src/widget/feed.rs
 Builder API,Datafeed API,Server time,done,host,src/data/inbox.rs;src/widget/feed.rs;src/widget/mod.rs;src/widget/frame.rs
 Builder API,Datafeed API,Session breaks on intraday charts,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/model/session/mod.rs
@@ -458,14 +458,14 @@ Order flow,Order flow,Volume bubble colour modes,done,library,src/chart/overlays
 Order flow,Order flow,Volume bubble size scaling and outlier handling,done,library,src/chart/overlays/volume_bubbles.rs;src/widget/frame.rs
 Order flow,Order flow data model,Aggregation of trades into per-bar price levels,done,library,src/data/footprint.rs;src/widget/feed.rs;src/data/mod.rs
 Order flow,Order flow data model,Backpressure and per-frame coalescing for high-rate feeds,done,library,src/data/inbox.rs;src/widget/feed.rs
-Order flow,Order flow data model,Building bars from trades including zero-size trades and merging history,done,library,src/data/inbox/sink.rs;src/data/inbox/tests.rs;src/data/merge.rs;src/data/mod.rs;src/widget/studies_data.rs;src/widget/feed.rs
+Order flow,Order flow data model,Building bars from trades,done,library,src/data/inbox/sink.rs;src/data/inbox/tests.rs;src/data/merge.rs;src/data/mod.rs;src/widget/studies_data.rs;src/widget/feed.rs
 Order flow,Order flow data model,Depth history store,done,library,src/data/depth_history.rs;src/widget/feed.rs
 Order flow,Order flow data model,Grouping fills into parent market orders,done,library,src/model/quote.rs;src/data/trades.rs;src/widget/feed.rs;src/data/mod.rs
 Order flow,Order flow data model,Historical trades and depth request for a time range,done,library,src/data/mod.rs;src/widget/feed.rs;src/data/trades.rs
 Order flow,Order flow data model,Incremental depth updates with sequence numbers and snapshot resync,done,library,src/data/depth.rs;src/data/inbox/sink.rs;src/widget/feed.rs;benches/regression/mod.rs
 Order flow,Order flow data model,Level 2 order book snapshots,done,library,src/model/quote.rs;src/data/inbox.rs;src/data/depth.rs;src/widget/feed.rs
 Order flow,Order flow data model,Market-by-order events,done,library,src/data/orders.rs;src/data/inbox.rs;src/widget/feed.rs
-Order flow,Order flow data model,Memory bounds for trades and depth,done,library,src/data/depth.rs;src/data/trades.rs;src/data/depth_history.rs;src/chart/overlays/volume_bubbles.rs;src/widget/feed.rs;src/data/footprint.rs
+Order flow,Order flow data model,Memory bounds for trade and depth history,done,library,src/data/depth.rs;src/data/trades.rs;src/data/depth_history.rs;src/chart/overlays/volume_bubbles.rs;src/widget/feed.rs;src/data/footprint.rs
 Order flow,Order flow data model,Order book reconstruction from updates,done,library,src/data/depth.rs;src/data/inbox/sink.rs;src/model/quote.rs;src/widget/feed.rs
 Order flow,Order flow data model,Order-flow inputs to studies,partial,library,src/studies/indicator_trait.rs;src/data/order_flow.rs;src/widget/feed.rs;src/studies/builtin/trade_delta.rs
 Order flow,Order flow data model,Recording ticks and depth to disk for later sessions and replay,done,library,src/data/recording.rs;src/data/mod.rs
