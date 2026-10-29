@@ -225,8 +225,9 @@ impl Sink {
     /// streamed trades from the page's last slot, or answer the page before streaming trades it
     /// does not count. A feed that cannot tell pushes bars instead. Trades older than the last
     /// accepted execution or forming bar are dropped, and so is a trade whose id is among those
-    /// of the last trades the subscription folded, as many as its trade store holds. A trade stamped
-    /// too far ahead of the feed's current time is rejected, as [`Sink::set_server_time`] describes.
+    /// of the last trades the subscription folded, as many as its trade store holds. A trade
+    /// stamped too far ahead of the feed's current time is rejected, as [`Sink::set_server_time`]
+    /// describes.
     /// Repeated ids can complete missing aggressor and resting order ids without adding volume.
     ///
     /// Trade-based intervals start at the first accepted execution of the subscription. Replay the
@@ -301,12 +302,12 @@ impl Sink {
     /// size of 0 removes the level. The `symbol` of `changes` is ignored. Taken by reference, so a
     /// feed can clear and refill one `OrderBook` for every delta instead of allocating its levels
     /// per message. Changes are sorted by price and merged in one pass, with the last entry for
-    /// each price winning. A delta numbered at or below the last one applied is ignored. After a gap, before the first snapshot, or when a
-    /// side would exceed 10,000 levels, the book is cleared and the chart calls
-    /// [`Datafeed::request_depth_snapshot`] once; a snapshot pushed before the chart sees the loss
-    /// cancels the call. Keep pushing deltas while the snapshot is fetched: those pushed while the
-    /// book waits are held, the oldest dropped beyond 10,000 levels in all, and the snapshot
-    /// applies the ones numbered above its own sequence.
+    /// each price winning. A delta numbered at or below the last one applied is ignored. After a
+    /// gap, before the first snapshot, or when a side would exceed 10,000 levels, the book is
+    /// cleared and the chart calls [`Datafeed::request_depth_snapshot`] once; a snapshot pushed
+    /// before the chart sees the loss cancels the call. Keep pushing deltas while the snapshot is
+    /// fetched: those pushed while the book waits are held, the oldest dropped beyond 10,000
+    /// levels in all, and the snapshot applies the ones numbered above its own sequence.
     ///
     /// [`Datafeed::request_depth_snapshot`]: crate::data::Datafeed::request_depth_snapshot
     pub fn push_depth_delta(&self, sequence: u64, changes: &OrderBook) {
@@ -753,60 +754,6 @@ impl Live {
                             .filter(|_| !lost);
                         input.push_book(&self.clock, ts, book.as_ref());
                     }
-                }
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::data::merge::merge;
-    use crate::model::Timeframe;
-    use std::collections::BTreeSet;
-
-    /// Whitespace preserves the real close across drains, and cannot seed a heartbeat itself.
-    #[test]
-    fn heartbeats_after_whitespace_keep_the_last_real_close() {
-        for seeded in [true, false] {
-            let clock = BarClock::new(Timeframe::Min1);
-            let inbox = Arc::new(Inbox::default());
-            let sink = inbox.subscribe("ES".into(), clock.clone(), 10, None);
-            let start: DateTime<Utc> = "2024-03-15T10:00:00Z".parse().unwrap();
-            let mut bars = Vec::new();
-            let mut from_ticks = BTreeSet::new();
-            if seeded {
-                sink.push_bar(Bar::new(start, 109.0, 109.0, 109.0, 109.0, 1.0));
-            }
-            sink.push_bar(Bar::whitespace(start + TimeDelta::minutes(1)));
-            for minute in 2..=4 {
-                sink.advance_time(start + TimeDelta::minutes(minute) + TimeDelta::seconds(1));
-                let (_, updates) = inbox.drain().updates.pop().unwrap();
-                assert_eq!(updates.rejected, 0);
-                let merged = merge(
-                    &mut bars,
-                    &mut from_ticks,
-                    &clock,
-                    updates.bars.into_values().collect(),
-                );
-                assert_eq!(merged.rejected, 0);
-            }
-            assert_eq!(bars.len(), if seeded { 5 } else { 1 });
-            assert!(bars[usize::from(seeded)].is_whitespace());
-            if seeded {
-                for (minute, bar) in (2..=4).zip(&bars[2..]) {
-                    assert_eq!(
-                        *bar,
-                        Bar::new(
-                            start + TimeDelta::minutes(minute),
-                            109.0,
-                            109.0,
-                            109.0,
-                            109.0,
-                            0.0
-                        )
-                    );
                 }
             }
         }

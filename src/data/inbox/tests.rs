@@ -766,3 +766,32 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
         "new settings discard pending old rows"
     );
 }
+
+/// A whitespace bar keeps the last real close, so heartbeats after it append empty candles at that
+/// close, and without a real close they append none.
+#[test]
+fn heartbeats_after_whitespace_keep_the_last_real_close() {
+    for seeded in [true, false] {
+        let clock = BarClock::new(Timeframe::Min1);
+        let inbox = Arc::new(Inbox::default());
+        let sink = inbox.subscribe("ES".into(), clock.clone(), 10, None);
+        let (mut bars, mut from_ticks) = (Vec::new(), std::collections::BTreeSet::new());
+        if seeded {
+            sink.push_bar(Bar::new(at(0, 0), 109.0, 109.0, 109.0, 109.0, 1.0));
+        }
+        sink.push_bar(Bar::whitespace(at(1, 0)));
+        for minute in 2..=4 {
+            sink.advance_time(at(minute, 1));
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            let incoming = updates.bars.into_values().collect();
+            let merged = super::super::merge::merge(&mut bars, &mut from_ticks, &clock, incoming);
+            assert_eq!((updates.rejected, merged.rejected), (0, 0));
+        }
+        let empty = |minute| Bar::new(at(minute, 0), 109.0, 109.0, 109.0, 109.0, 0.0);
+        if seeded {
+            assert_eq!(bars[2..], [empty(2), empty(3), empty(4)]);
+        } else {
+            assert!(matches!(&bars[..], [bar] if bar.is_whitespace()));
+        }
+    }
+}

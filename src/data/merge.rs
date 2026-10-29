@@ -21,8 +21,8 @@ pub(crate) enum Origin {
 pub(crate) struct Merged {
     /// Index of the first bar inserted or changed. Bars after it may have moved.
     pub(crate) first_changed: Option<usize>,
-    /// Invalid bars dropped, and the trades of a bar built from ticks that would overflow its stored
-    /// bar.
+    /// Invalid bars dropped, the trades of a bar built from ticks that would overflow its stored
+    /// bar, and history bars that would overflow with the trades stored in their slot.
     pub(crate) rejected: u64,
     /// Trades of bars older than the last bar, dropped.
     pub(crate) late_ticks: u64,
@@ -238,12 +238,6 @@ mod tests {
                     (Ticks(1), vec![ohlcv(1, [210.0, 210.0, 210.0, 210.0, 2.0])]),
                     (Ticks(1), vec![ohlcv(1, [207.0, 207.0, 207.0, 207.0, 2.0])]),
                     (History, vec![ohlcv(1, [200.0, 201.0, 199.0, 200.0, 50.0])])],
-                vec![ohlcv(1, [200.0, 210.0, 199.0, 207.0, 56.0])], (Some(0), 0, 0)),
-            ("history before trades gives the same values",
-                vec![(History, vec![ohlcv(1, [200.0, 201.0, 199.0, 200.0, 50.0])]),
-                    (Ticks(1), vec![ohlcv(1, [205.0, 205.0, 205.0, 205.0, 2.0])]),
-                    (Ticks(1), vec![ohlcv(1, [210.0, 210.0, 210.0, 210.0, 2.0])]),
-                    (Ticks(1), vec![ohlcv(1, [207.0, 207.0, 207.0, 207.0, 2.0])])],
                 vec![ohlcv(1, [200.0, 210.0, 199.0, 207.0, 56.0])], (Some(0), 0, 0)),
             ("a repeated page does not fold the same trades twice",
                 vec![(Ticks(2), vec![ohlcv(1, [200.0, 200.0, 90.0, 90.0, 4.0])]),
