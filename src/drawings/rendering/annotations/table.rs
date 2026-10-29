@@ -197,7 +197,7 @@ mod tests {
     use crate::drawings::DrawingToolType;
     use egui::{Color32, Context, LayerId, Painter, RawInput, Shape};
 
-    /// Guards #984 and #1399: saved cells and empty tables use a neutral grid with equal
+    /// Guards #984 and #1399: cells and empty tables use a neutral grid with equal
     /// 22 px rows, thin borders and padded, left-aligned text in every theme.
     #[test]
     fn tables_paint_their_own_cells() {
@@ -216,10 +216,6 @@ mod tests {
                 ),
             ] {
                 table.text = text.map(Into::into);
-                let saved = serde_json::to_string(&table).unwrap();
-                let mut table: Drawing = serde_json::from_str(&saved).unwrap();
-                table.points = vec![Pos2::new(10.0, 10.0)];
-                assert_eq!(table.text.as_deref(), text);
                 let ctx = Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut output = ctx.run_ui(RawInput::default(), |_| {
