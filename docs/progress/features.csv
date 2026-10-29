@@ -140,7 +140,7 @@ Chart,Compare and overlay,Compare symbol,done,host,src/widget/price_series.rs
 Chart,Compare and overlay,Overlay a symbol on the same price scale,done,host,src/widget/price_series.rs;src/widget/series.rs
 Chart,Compare and overlay,Percent scale when comparing,done,library,src/widget/price_series.rs;src/scales/pricescale.rs
 Chart,Crosshair and interaction,Auto-scroll to realtime and jump-to-latest button,done,library,src/widget/series.rs;src/widget/frame.rs;src/widget/time_scale.rs
-Chart,Crosshair and interaction,"Chart, series and drawing context menus",partial,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/dialogs/series_context_menu.rs;src/ui/dialogs/drawing_context_menu.rs;terminal/src/drawings.rs;terminal/src/studies.rs
+Chart,Crosshair and interaction,"Chart, series and drawing context menus",partial,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;terminal/src/studies.rs
 Chart,Crosshair and interaction,Crosshair across all panes,done,library,src/widget/panes.rs;src/widget/indicator_pane.rs;src/widget/frame.rs
 Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/scales/time_formatter.rs
 Chart,Crosshair and interaction,Cursor types,done,library,src/widget/frame.rs;src/chart/cursor_modes/mod.rs;src/chart/cursor_modes/eraser.rs;src/widget/tool_interaction/selection.rs
@@ -155,7 +155,7 @@ Chart,Crosshair and interaction,Kinetic scroll,done,library,src/widget/pan_zoom.
 Chart,Crosshair and interaction,Magnet crosshair,done,library,src/widget/crosshair.rs;src/widget/price_series.rs
 Chart,Crosshair and interaction,Mouse wheel zoom anchored at the cursor,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs;src/model/timescale.rs
 Chart,Crosshair and interaction,Pinch zoom and two-finger pan,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
-Chart,Crosshair and interaction,Price scale and time scale context menus,done,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/axis_context_menu.rs
+Chart,Crosshair and interaction,Price scale and time scale context menus,done,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/axis.rs
 Chart,Crosshair and interaction,Table view of chart data,done,library,src/widget/export.rs;src/ui/dialogs/data_table.rs;src/ui/context_menu/mod.rs
 Chart,Crosshair and interaction,Undo and redo,partial,library,src/widget/history.rs
 Chart,Crosshair and interaction,Zoom-to-rectangle tool,done,library,src/widget/pan_zoom.rs;src/chart/rendering/overlays/box_zoom.rs
@@ -218,9 +218,9 @@ Chart,Scales and axes,Indexed to 100 scale,done,library,src/scales/pricescale.rs
 Chart,Scales and axes,Indicator labels and last values on the scale,done,library,src/widget/frame.rs;src/chart/rendering/axes.rs;src/widget/settings/apply.rs;src/chart/renderers/study_scale.rs
 Chart,Scales and axes,Invert scale,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/scales/pricescale.rs;src/widget/frame.rs
 Chart,Scales and axes,Last price line and label,done,library,src/widget/frame.rs;src/chart/rendering/axes.rs;src/widget/settings/apply.rs
-Chart,Scales and axes,Left price scale and moving the scale,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/widget/frame.rs;src/widget/price_series.rs;src/ui/axis_context_menu.rs
-Chart,Scales and axes,Lock price to bar ratio,done,library,src/ui/axis_context_menu.rs;src/widget/frame.rs;src/scales/pricescale.rs
-Chart,Scales and axes,Logarithmic scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/frame.rs;src/ui/axis_context_menu.rs;src/scales/pricescale_marks.rs
+Chart,Scales and axes,Left price scale and moving the scale,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/widget/frame.rs;src/widget/price_series.rs;src/ui/context_menu/axis.rs
+Chart,Scales and axes,Lock price to bar ratio,done,library,src/ui/context_menu/axis.rs;src/widget/frame.rs;src/scales/pricescale.rs
+Chart,Scales and axes,Logarithmic scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/frame.rs;src/ui/context_menu/axis.rs;src/scales/pricescale_marks.rs
 Chart,Scales and axes,Maturity horizontal scale,done,library,src/scales/horizontal.rs;src/widget/time_scale.rs
 Chart,Scales and axes,Multiple price scales and pin to scale,done,library,src/model/series_scale.rs;src/widget/price_series.rs
 Chart,Scales and axes,Percent scale,done,library,src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/studies/chart_state.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/scales/price_formatter.rs
@@ -230,11 +230,11 @@ Chart,Scales and axes,Regular price scale,done,library,src/scales/pricescale.rs;
 Chart,Scales and axes,Right offset,done,library,src/model/timescale.rs;src/widget/mod.rs;src/widget/builder.rs;src/widget/time_scale.rs;src/widget/pan_zoom.rs;src/widget/sync.rs
 Chart,Scales and axes,Right price scale,done,library,src/widget/mod.rs;src/widget/frame.rs;src/chart/renderers/labels.rs
 Chart,Scales and axes,Scale margins,done,library,src/widget/settings/apply.rs;src/scales/pricescale.rs;src/widget/frame.rs
-Chart,Scales and axes,Session breaks,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/ui/axis_context_menu.rs;src/config/chart.rs;src/widget/palette.rs
+Chart,Scales and axes,Session breaks,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/ui/context_menu/axis.rs;src/config/chart.rs;src/widget/palette.rs
 Chart,Scales and axes,Symbol name label on the scale,done,library,;src/config/chart.rs;src/chart/rendering/axes.rs;src/widget/frame.rs;src/widget/price_series.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
 Chart,Scales and axes,Time axis labels,done,library,src/scales/timescale_marks.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/chart/renderers/labels.rs;src/widget/frame.rs;src/model/bar/time.rs;src/widget/time_scale.rs
 Chart,Scales and axes,Time zone selection,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/widget/time_scale.rs;src/model/bar/time.rs
-Drawings,Drawing management,Alerts on drawings,done,library,src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_context_menu.rs
+Drawings,Drawing management,Alerts on drawings,done,library,src/drawings/domain/drawing.rs;src/ui/context_menu/drawing.rs
 Drawings,Drawing management,Copy and paste drawings,done,library,src/widget/clipboard.rs;src/drawings/manager/mod.rs;src/model/bar/time.rs;src/drawings/manager/edit.rs;src/widget/pane_layout.rs
 Drawings,Drawing management,Creation state machine,done,library,src/config/drawing_tool/behavior.rs;src/widget/tool_interaction/interaction.rs;src/drawings/domain/drawing.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Drawings,Drawing management,Default style per tool,done,library,src/ui/dialogs/drawing_properties/actions.rs;src/drawings/domain/template.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
@@ -422,7 +422,7 @@ Order flow,Order flow,Large resting order highlight on heatmap and DOM levels,pa
 Order flow,Order flow,Liquidity heatmap: resting limit-order size per price level plotted over time,done,library,src/data/depth_history.rs;src/chart/overlays/liquidity_heatmap.rs;src/widget/feed/mod.rs;src/widget/frame.rs
 Order flow,Order flow,Liquidity tracker,missing,host,
 Order flow,Order flow,Market structure meters,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs
-Order flow,Order flow,Merge and split adjacent profiles,done,library,src/studies/builtin/trade_profile.rs;src/ui/trade_profile_menu.rs
+Order flow,Order flow,Merge and split adjacent profiles,done,library,src/studies/builtin/trade_profile.rs;src/ui/context_menu/trade_profile.rs
 Order flow,Order flow,Multi-column footprint,done,library,src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,"On-chart order lines with drag to move entry, stop and target",done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs
 Order flow,Order flow,Options gamma exposure suite,missing,host,
@@ -794,7 +794,7 @@ Terminal,Alerts,Alerts tab in series settings,done,library,src/model/series_styl
 Terminal,Alerts,"Channel operators: entering, exiting, inside, outside a channel",done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs
 Terminal,Alerts,Create a price alert from the toolbar bell,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/dialogs/alert_dialog/dialog.rs
 Terminal,Alerts,Demo alert sound playback,done,host,examples/demo/controller.rs;examples/demo/audio.rs
-Terminal,Alerts,Drawing alerts,done,library,src/ui/dialogs/drawing_context_menu.rs;src/drawings/domain/drawing.rs
+Terminal,Alerts,Drawing alerts,done,library,src/ui/context_menu/drawing.rs;src/drawings/domain/drawing.rs
 Terminal,Alerts,Indicator alerts on study plots,done,library,src/ui/dialogs/alert_dialog/dialog.rs
 Terminal,Alerts,Inline alert creation forms in the alerts panel,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs;src/services/alerts.rs
 Terminal,Alerts,Moving up / moving down operators,done,library,src/ui/dialogs/alert_dialog/dialog.rs

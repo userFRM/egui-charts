@@ -1,6 +1,6 @@
 //! Merge and split the displayed TPO chart profiles through their existing composite ranges.
 
-use super::context_menu::{ContextMenuAction, MenuEntry, MenuItem};
+use super::{ContextMenuAction, MenuEntry, MenuItem};
 use crate::model::{BarClock, ChartType, ChartTypeParams};
 use crate::widget::{Chart, SeriesId};
 use chrono::{DateTime, Utc};

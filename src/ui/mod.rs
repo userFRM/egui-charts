@@ -31,7 +31,6 @@ pub mod dialogs;
 pub mod icons;
 
 // Standalone components
-mod axis_context_menu;
 pub mod connection_status;
 pub mod context_menu;
 pub mod export;
@@ -45,10 +44,8 @@ mod share_controls;
 pub mod strategy_report;
 pub mod study_editor;
 pub mod symbol_header;
-mod tpo_context_menu;
 pub mod trading;
 
-mod trade_profile_menu;
-pub use trade_profile_menu::trade_profile_menu;
+pub use context_menu::trade_profile::trade_profile_menu;
 #[cfg(test)]
 mod accessibility_tests;
