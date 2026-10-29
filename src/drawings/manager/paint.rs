@@ -6,6 +6,7 @@ use crate::drawings::rendering::ChartView;
 use crate::drawings::services::{DrawingInteraction, HandleService, in_z_order};
 use egui::epaint::{ClippedShape, Mesh, TessellationOptions, Tessellator, emath::TSTransform};
 use egui::{Pos2, Rect, Shape};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 /// Shapes tessellated at a scale and with options, as what to paint in place of each shape: a
@@ -83,6 +84,21 @@ fn is_plain(shape: &Shape) -> bool {
 }
 
 impl DrawingManager {
+    /// Uses the fitted endpoints kept with the last paint for data-driven handles.
+    pub(super) fn handle_drawing<'a>(&self, drawing: &'a Drawing) -> Cow<'a, Drawing> {
+        if drawing.tool_type != DrawingToolType::RegressionTrend || drawing.custom_tool.is_some() {
+            return Cow::Borrowed(drawing);
+        }
+        let painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
+        let ends = painted
+            .iter()
+            .find(|p| p.id == drawing.id && p.points == drawing.points)
+            .and_then(|p| p.regression_ends);
+        let mut projected = drawing.clone();
+        projected.points = ends.map(Vec::from).unwrap_or_default();
+        Cow::Owned(projected)
+    }
+
     /// Renders selection handles for a drawing, highlighting the currently
     /// dragged handle (if any).
     pub fn render_handles(&self, painter: &egui::Painter, drawing: &Drawing) {
@@ -90,7 +106,12 @@ impl DrawingManager {
             .dragging_handle
             .filter(|(id, _)| *id == drawing.id)
             .map(|(_, h)| h);
-        HandleService::render_handles(painter, drawing, &self.options.handle_config, dragging);
+        HandleService::render_handles(
+            painter,
+            &self.handle_drawing(drawing),
+            &self.options.handle_config,
+            dragging,
+        );
     }
 
     // === Hit testing ===
@@ -132,9 +153,10 @@ impl DrawingManager {
                     return false;
                 }
                 paint.is_some_and(|p| DrawingInteraction::hit_test_painted(point, &p.shapes))
-                    || DrawingInteraction::new()
-                        .hit_test(point, std::slice::from_ref(*drawing), &self.curr_timeframe)
-                        .is_some()
+                    || (drawing.tool_type != DrawingToolType::RegressionTrend
+                        && DrawingInteraction::new()
+                            .hit_test(point, std::slice::from_ref(*drawing), &self.curr_timeframe)
+                            .is_some())
             })
             .map(|d| d.id)
     }
@@ -234,11 +256,16 @@ impl DrawingManager {
                 painted.push(PaintedDrawing {
                     id: drawing.id,
                     points: drawing.points.clone(),
+                    regression_ends: (drawing.tool_type == DrawingToolType::RegressionTrend)
+                        .then(|| drawing.regression_ends(view))
+                        .flatten(),
                     shapes,
                     tessellated,
                 });
             }
         }
+
+        drop(painted);
 
         // Render current drawing being created
         if let Some(ref drawing) = self.curr_drawing
@@ -270,6 +297,137 @@ impl DrawingManager {
 mod tests {
     use super::*;
     use crate::drawings::domain::ChartPoint;
+
+    /// Handles follow y = 11 + x for closes 10, 14, 12, regardless of clicked prices,
+    /// anchor order or extension. Moving the range to closes 14, 12 gives y = 14 - 2x.
+    #[test]
+    fn regression_handles_follow_the_fit_and_refit_after_dragging() {
+        use crate::drawings::{
+            HandlePos,
+            persistence::{drawing_to_stored, stored_to_drawing},
+        };
+        use crate::model::Bar;
+        let bars: Vec<_> = [10.0, 14.0, 12.0]
+            .into_iter()
+            .map(|close| Bar::from_value(chrono::DateTime::UNIX_EPOCH, close))
+            .collect();
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 500.0));
+        let ctx = egui::Context::default();
+        for (start, reverse) in [(0.0, false), (0.0, true), (-1.0, false), (0.4, true)] {
+            let mut manager = DrawingManager::new();
+            let mut drawing = Drawing::new(7, DrawingToolType::RegressionTrend);
+            drawing.chart_points = vec![ChartPoint::new(start, 30.0), ChartPoint::new(2.0, 5.0)];
+            if reverse {
+                drawing.chart_points.reverse();
+            }
+            let saved = drawing_to_stored(&drawing, |b| 1_700_000_000_000 + (b * 60_000.0) as i64);
+            let mut drawing =
+                stored_to_drawing(&saved, |p| (p - 1_700_000_000_000) as f32 / 60_000.0, 7);
+            assert_eq!(
+                drawing
+                    .chart_points
+                    .iter()
+                    .map(|p| p.bar_idx)
+                    .collect::<Vec<_>>(),
+                if reverse {
+                    vec![2.0, start]
+                } else {
+                    vec![start, 2.0]
+                }
+            );
+            drawing.extend_right = true;
+            manager.drawings.push(drawing);
+            manager.select(7);
+            let render = |manager: &mut DrawingManager, bars: &[Bar]| {
+                manager
+                    .update_all_screen_coords(|b| 100.0 + b * 100.0, |p| 500.0 - p as f32 * 10.0);
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(pane),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        manager.render_all(
+                            ui.painter(),
+                            pane,
+                            &ChartView {
+                                instrument: None,
+                                bars,
+                                revision: 0,
+                                bar_to_x: &|b| 100.0 + b * 100.0,
+                                price_to_y: &|p| 500.0 - p as f32 * 10.0,
+                                time_axis: true,
+                                executions: None,
+                            },
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            render(&mut manager, &bars);
+            let (first, last) = if reverse { (1, 0) } else { (0, 1) };
+            let handles = manager.get_handles(&manager.drawings[0]);
+            assert_eq!(handles.len(), 2);
+            for point in &manager.drawings[0].points {
+                assert_eq!(manager.hit_test_handle(&manager.drawings[0], *point), None);
+                assert_eq!(manager.hit_test(*point), None);
+            }
+            for (index, point) in [
+                (first, Pos2::new(100.0, 390.0)),
+                (last, Pos2::new(300.0, 370.0)),
+            ] {
+                assert!(handles.contains(&(HandlePos::Point(index), point)));
+                assert_eq!(
+                    manager.hit_test_handle(&manager.drawings[0], point),
+                    Some(HandlePos::Point(index))
+                );
+            }
+            let before = manager.drawings[0].chart_points.clone();
+            manager.start_drag_handle(7, HandlePos::Point(first));
+            manager.update_drag_handle(
+                Pos2::new(100.0, 50.0),
+                |x| (x - 100.0) / 100.0,
+                |y| f64::from(500.0 - y) / 10.0,
+                |p, from, to| p - f64::from(to - from) / 10.0,
+            );
+            assert_eq!(
+                manager.drawings[0].chart_points, before,
+                "vertical drag is a no-op"
+            );
+            manager.update_drag_handle(
+                Pos2::new(200.0, 50.0),
+                |x| (x - 100.0) / 100.0,
+                |y| f64::from(500.0 - y) / 10.0,
+                |p, from, to| p - f64::from(to - from) / 10.0,
+            );
+            manager.end_drag_handle();
+            render(&mut manager, &bars);
+            let handles = manager.get_handles(&manager.drawings[0]);
+            assert!(handles.contains(&(HandlePos::Point(first), Pos2::new(200.0, 360.0))));
+            assert!(handles.contains(&(HandlePos::Point(last), Pos2::new(300.0, 380.0))));
+            assert!(
+                manager.drawings[0]
+                    .chart_points
+                    .iter()
+                    .zip(before)
+                    .all(|(p, old)| p.price == old.price)
+            );
+            assert!(manager.undo());
+            render(&mut manager, &bars);
+            assert_eq!(manager.get_handles(&manager.drawings[0]).len(), 2);
+            let mut live = bars.clone();
+            live[2].close = 18.0;
+            render(&mut manager, &live);
+            // Perfect line 10, 14, 18 after a tick: slope 4, intercept 10.
+            assert!(
+                manager
+                    .get_handles(&manager.drawings[0])
+                    .contains(&(HandlePos::Point(last), Pos2::new(300.0, 320.0)))
+            );
+            render(&mut manager, &[]);
+            assert!(manager.get_handles(&manager.drawings[0]).is_empty());
+        }
+    }
 
     /// Text extents, position zones, Fibonacci rings and repeating cycle lines are
     /// selectable away from every anchor, using their actual paint geometry.

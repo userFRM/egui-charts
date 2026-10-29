@@ -129,14 +129,16 @@ impl Drawing {
                 && !custom_fork
                 && !matches!(
                     self.tool_type,
-                    DrawingToolType::LongPos | DrawingToolType::ShortPos
+                    DrawingToolType::LongPos
+                        | DrawingToolType::ShortPos
+                        | DrawingToolType::RegressionTrend
                 )
                 && let Some(configured) = self.fill_color32()
             {
                 *color = configured;
             }
         };
-        let dash = if custom_fork {
+        let dash = if custom_fork || self.tool_type == DrawingToolType::RegressionTrend {
             None
         } else {
             self.line_style.dash_pattern()

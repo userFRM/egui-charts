@@ -728,6 +728,10 @@ mod tests {
                 .iter()
                 .map(|p| crate::drawings::ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
                 .collect();
+            if tool == DrawingToolType::RegressionTrend {
+                drawing.chart_points[0].bar_idx = 0.0;
+                drawing.chart_points[1].bar_idx = 6.0;
+            }
             let mut filled = drawing.clone();
             filled.fill_color = Some([12, 34, 56, 80]);
             let fill = filled.fill_color32().unwrap();
@@ -1080,10 +1084,15 @@ mod tests {
 
     fn paint(drawing: &Drawing) -> Vec<Shape> {
         let ctx = Context::default();
+        let bars = sample_bars();
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
                 instrument: None,
-                bars: &[],
+                bars: if drawing.tool_type == DrawingToolType::RegressionTrend {
+                    &bars
+                } else {
+                    &[]
+                },
                 revision: 0,
                 bar_to_x: &|b| b * 10.0,
                 price_to_y: &|p| 500.0 - p as f32,
