@@ -7,6 +7,7 @@
 
 use super::context::{ChartMapping, RenderContext, StyleColors};
 use crate::config::{TooltipMode, TooltipOptions};
+use crate::drawings::validation::font_size;
 use crate::model::{Bar, Instrument, percent_change};
 use crate::scales::price_decimals;
 use crate::scales::{
@@ -229,7 +230,7 @@ pub fn render_floating_tooltip(
     }
 
     let theme = painter.ctx().active_theme();
-    let font_id = FontId::proportional(options.font_size);
+    let font_id = FontId::proportional(font_size(options.font_size));
     let rows: Vec<_> = rows
         .into_iter()
         .map(|(label, value, color)| {
@@ -435,7 +436,7 @@ pub fn render_tracking_tooltip(
             |formatter| format!("({})", formatter.format(change_pct)),
         );
 
-        let font_id = FontId::proportional(options.font_size);
+        let font_id = FontId::proportional(font_size(options.font_size));
         let text_y = bar_rect.center().y;
 
         // Draw main text
@@ -461,7 +462,7 @@ pub fn render_tracking_tooltip(
 
     // If no change display, just show combined text
     let text = parts.join("   ");
-    let font_id = FontId::proportional(options.font_size);
+    let font_id = FontId::proportional(font_size(options.font_size));
 
     painter.text(
         Pos2::new(bar_rect.min.x + 10.0, bar_rect.center().y),

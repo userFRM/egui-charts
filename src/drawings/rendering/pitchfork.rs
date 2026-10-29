@@ -3,6 +3,7 @@
 //! Includes: standard pitchfork, modified Schiff, inside pitchfork, and pitchfan.
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
+use crate::drawings::validation::MAX_PITCHFORK_LEVEL;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -123,7 +124,7 @@ impl Drawing {
         for level in config
             .levels
             .iter()
-            .filter(|l| l.visible && l.value.is_finite() && l.value >= 0.0)
+            .filter(|l| l.visible && (0.0..=MAX_PITCHFORK_LEVEL).contains(&l.value))
         {
             lines.extend(level_lines(&base, level.value, rect));
         }
@@ -142,7 +143,7 @@ impl Drawing {
         }
         config
             .levels
-            .retain(|l| l.value.is_finite() && l.value >= 0.0);
+            .retain(|l| (0.0..=MAX_PITCHFORK_LEVEL).contains(&l.value));
         config.levels.sort_by(|a, b| a.value.total_cmp(&b.value));
         let mut bands = Vec::new();
         for pair in config
@@ -178,7 +179,7 @@ impl Drawing {
         for level in config
             .levels
             .iter()
-            .filter(|l| l.visible && l.value.is_finite() && l.value >= 0.0)
+            .filter(|l| l.visible && (0.0..=MAX_PITCHFORK_LEVEL).contains(&l.value))
         {
             let rgba = if self.pitchfork.is_none() {
                 self.color

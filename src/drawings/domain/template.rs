@@ -39,10 +39,10 @@ impl DrawingTemplate {
         {
             return Err("Select a drawing of the template's type");
         }
-        if !self.settings.stroke_width.is_finite()
-            || self.settings.stroke_width <= 0.0
-            || !self.settings.font_size.is_finite()
-            || self.settings.font_size <= 0.0
+        // The checks a saved drawing passes on load, as defaults come from saved settings.
+        if crate::drawings::persistence::drawing_to_stored(&self.settings, |_| 0)
+            .invalid_field()
+            .is_some()
         {
             return Err("Invalid drawing template dimensions");
         }

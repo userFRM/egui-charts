@@ -503,6 +503,18 @@ fn check(
     {
         return Err("Bar spacing limits must be 0 or at least 0.01".into());
     }
+    let font_sizes = &crate::drawings::validation::FONT_SIZES;
+    if snapshot
+        .options
+        .iter()
+        .map(|options| options.tooltip.font_size)
+        .chain(snapshot.config.iter().flat_map(|config| {
+            std::iter::once(config.watermark_font_size).chain(config.axis_font_size)
+        }))
+        .any(|size| !font_sizes.contains(&size))
+    {
+        return Err("Font sizes must be between 1 and 256".into());
+    }
     let drawings = match &snapshot.drawings {
         Some(drawings) => {
             let json = drawings.to_string();
@@ -918,6 +930,9 @@ mod tests {
             ("/options/crosshair/horz_line_width", 0.0),
             ("/options/crosshair/vert_line_width", -1.0),
             ("/options/time_scale/max_bar_spacing", 1e-9),
+            ("/options/tooltip/font_size", 1e5),
+            ("/config/watermark_font_size", 1e5),
+            ("/config/axis_font_size", 0.0),
         ] {
             let mut invalid = document.clone();
             *invalid.pointer_mut(pointer).unwrap() = value.into();
