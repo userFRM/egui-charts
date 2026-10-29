@@ -53,7 +53,6 @@ fn edge_step(bars: &[Bar], at: usize, timeframe: Option<Timeframe>) -> f64 {
             // Prefer the shorter spacing when session gaps tie with regular intervals.
             count(*a).cmp(&count(*b)).then_with(|| b.total_cmp(a))
         })
-        .or(distinct)
         .unwrap_or(1.0)
 }
 
