@@ -182,11 +182,13 @@ impl DepthHistory {
         Ok(count)
     }
 
+    #[cfg(feature = "widget")]
     pub(crate) fn clear(&mut self) {
         self.tiers.iter_mut().for_each(VecDeque::clear);
     }
 
     /// Live columns supersede overlapping history, including a page answered in the same drain.
+    #[cfg(any(feature = "widget", test))]
     pub(crate) fn push(&mut self, column: impl Into<Arc<DepthColumn>>) {
         let column = column.into();
         if self
