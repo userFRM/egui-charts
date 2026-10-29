@@ -377,7 +377,7 @@ impl PriceScale {
 
     /// Fits `min..max` (scale units) plus margins unless the user scaled by hand.
     ///
-    /// Non-finite bounds (no drawable data) keep the current range.
+    /// Non-finite bounds (no drawable data) and a fit that overflows keep the current range.
     pub fn autoscale(&mut self, min: f64, max: f64) {
         if !min.is_finite() || !max.is_finite() {
             return;
@@ -400,7 +400,10 @@ impl PriceScale {
         };
         // The data fills the rest of the pane, so the whole range is that share's inverse.
         let total = span / (1.0 - top - bottom);
-        self.range = PriceRange::new(min - total * bottom, max + total * top);
+        let range = PriceRange::new(min - total * bottom, max + total * top);
+        if range.min.is_finite() && range.max.is_finite() {
+            self.range = range;
+        }
     }
 
     /// Shows `min..max` and switches to manual.

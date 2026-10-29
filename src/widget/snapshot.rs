@@ -135,8 +135,8 @@ pub struct ChartSnapshot {
 
 impl Chart {
     /// Captures the chart's state. Fails while stored drawings are loading, for an unregistered
-    /// study or when a drawing cannot be saved; see
-    /// [`save_drawings`](Self::save_drawings).
+    /// study, when a drawing cannot be saved (see [`save_drawings`](Self::save_drawings)) or
+    /// when [`restore`](Self::restore) would refuse the result.
     pub fn snapshot(&self) -> Result<ChartSnapshot, SaveError> {
         self.snapshot_with(&IndicatorFactory::new())
     }
@@ -172,12 +172,6 @@ impl Chart {
                 pane: pane_of(id),
             })
             .collect();
-        for saved in &studies {
-            saved
-                .study
-                .create_with(factory)
-                .map_err(|error| SaveError::Json(serde::ser::Error::custom(error)))?;
-        }
         let series = self
             .price_series
             .iter()
@@ -194,7 +188,7 @@ impl Chart {
             })
             .collect();
         let (bar_spacing, right_offset) = self.get_time_scale_state();
-        Ok(ChartSnapshot {
+        let snapshot = ChartSnapshot {
             symbol: self.symbol.clone(),
             interval: self.timeframe,
             extended_hours: self.extended_hours,
@@ -244,7 +238,11 @@ impl Chart {
             bar_spacing,
             right_offset,
             drawings,
-        })
+        };
+        // A layout that restore would refuse is an error now rather than at the next load.
+        check(&snapshot, factory)
+            .map_err(|error| SaveError::Json(serde::ser::Error::custom(error)))?;
+        Ok(snapshot)
     }
 
     /// Shows what `snapshot` captured: its symbol, interval, chart type, settings, studies,
@@ -252,7 +250,7 @@ impl Chart {
     /// [`StudyTemplate::create`]. Clears undo history and returns the drawings that could not
     /// be read. Fails without changing the chart for an unknown study, a study source that
     /// names no study, no plot of it or itself, a series or study id used twice, invalid
-    /// settings or an unreadable drawings document.
+    /// settings or options, a number that is not finite or an unreadable drawings document.
     ///
     /// The added series of the chart are replaced by those of the snapshot, which come back
     /// without bars and under new ids: look each up with
@@ -270,78 +268,7 @@ impl Chart {
         snapshot: &ChartSnapshot,
         factory: &IndicatorFactory,
     ) -> Result<Vec<SkippedDrawing>, String> {
-        let studies = snapshot
-            .studies
-            .iter()
-            .map(|saved| saved.study.create_with(factory))
-            .collect::<Result<Vec<_>, _>>()?;
-        check_source_links(&snapshot.studies, &studies)?;
-        snapshot.settings.validate()?;
-        let valid_scale = |scale: &crate::scales::PriceScale| {
-            let range = scale.range();
-            let margins = scale.options().scale_margins;
-            range.min.is_finite()
-                && range.max.is_finite()
-                && range.min < range.max
-                && margins.top.is_finite()
-                && margins.bottom.is_finite()
-                && margins.top >= 0.0
-                && margins.bottom >= 0.0
-                && margins.top + margins.bottom < 1.0
-                && scale.options().tick_marks.max_marks
-                    <= crate::scales::PriceMarkGeneratorConfig::MAX_MARKS
-        };
-        if snapshot
-            .price_scale
-            .as_ref()
-            .is_some_and(|scale| !valid_scale(scale))
-            || snapshot.panes.iter().filter(|pane| pane.main).count() != 1
-            || snapshot
-                .studies
-                .iter()
-                .map(|study| study.id)
-                .chain(snapshot.series.iter().flatten().map(|series| series.id))
-                .collect::<std::collections::HashSet<_>>()
-                .len()
-                != snapshot.studies.len() + snapshot.series.iter().flatten().count()
-            || snapshot
-                .series
-                .iter()
-                .flatten()
-                .any(|series| series.pane >= snapshot.panes.len())
-            || snapshot
-                .panes
-                .iter()
-                .filter_map(|pane| pane.scale.as_ref())
-                .any(|scale| !valid_scale(scale))
-            || snapshot
-                .studies
-                .iter()
-                .any(|study| study.pane >= snapshot.panes.len())
-            || snapshot
-                .panes
-                .iter()
-                .any(|pane| !pane.stretch.is_finite() || pane.stretch <= 0.0)
-            || !snapshot.bar_spacing.is_finite()
-            || snapshot.bar_spacing <= 0.0
-            || !snapshot.right_offset.is_finite()
-            || snapshot
-                .maximized
-                .is_some_and(|pane| pane >= snapshot.panes.len())
-        {
-            return Err("Invalid layout geometry".into());
-        }
-        let drawings = match &snapshot.drawings {
-            Some(drawings) => {
-                let json = drawings.to_string();
-                let (storage, _) = DrawingStorage::from_json(&json).map_err(|e| e.to_string())?;
-                if storage.symbol != snapshot.symbol {
-                    return Err("The drawings belong to another symbol".into());
-                }
-                Some(json)
-            }
-            _ => None,
-        };
+        let (studies, drawings) = check(snapshot, factory)?;
         self.set_symbol(snapshot.symbol.clone());
         if let Some(interval) = snapshot.interval {
             self.set_timeframe(interval);
@@ -483,6 +410,100 @@ impl Chart {
             .copied()
             .map(super::SeriesId)
     }
+}
+
+/// Checks `snapshot` as [`Chart::restore_with`] does before changing the chart: returns its
+/// studies built through `factory`, in order, and its drawings document.
+fn check(
+    snapshot: &ChartSnapshot,
+    factory: &IndicatorFactory,
+) -> Result<(Vec<Box<dyn crate::studies::Indicator>>, Option<String>), String> {
+    let studies = snapshot
+        .studies
+        .iter()
+        .map(|saved| saved.study.create_with(factory))
+        .collect::<Result<Vec<_>, _>>()?;
+    check_source_links(&snapshot.studies, &studies)?;
+    snapshot.settings.validate()?;
+    let valid_scale = |scale: &crate::scales::PriceScale| {
+        let range = scale.range();
+        let margins = scale.options().scale_margins;
+        range.min.is_finite()
+            && range.max.is_finite()
+            && range.min < range.max
+            && margins.top.is_finite()
+            && margins.bottom.is_finite()
+            && margins.top >= 0.0
+            && margins.bottom >= 0.0
+            && margins.top + margins.bottom < 1.0
+            && scale.options().tick_marks.max_marks
+                <= crate::scales::PriceMarkGeneratorConfig::MAX_MARKS
+    };
+    if snapshot
+        .price_scale
+        .as_ref()
+        .is_some_and(|scale| !valid_scale(scale))
+        || snapshot.panes.iter().filter(|pane| pane.main).count() != 1
+        || snapshot
+            .studies
+            .iter()
+            .map(|study| study.id)
+            .chain(snapshot.series.iter().flatten().map(|series| series.id))
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != snapshot.studies.len() + snapshot.series.iter().flatten().count()
+        || snapshot
+            .series
+            .iter()
+            .flatten()
+            .any(|series| series.pane >= snapshot.panes.len())
+        || snapshot
+            .panes
+            .iter()
+            .filter_map(|pane| pane.scale.as_ref())
+            .any(|scale| !valid_scale(scale))
+        || snapshot
+            .studies
+            .iter()
+            .any(|study| study.pane >= snapshot.panes.len())
+        || snapshot
+            .panes
+            .iter()
+            .any(|pane| !pane.stretch.is_finite() || pane.stretch <= 0.0)
+        || !snapshot.bar_spacing.is_finite()
+        || snapshot.bar_spacing <= 0.0
+        || !snapshot.right_offset.is_finite()
+        || snapshot
+            .maximized
+            .is_some_and(|pane| pane >= snapshot.panes.len())
+    {
+        return Err("Invalid layout geometry".into());
+    }
+    // JSON has no NaN or infinity: serde writes them as null, which a number field then
+    // refuses, so the next save of such a value could not be loaded.
+    if serde_json::to_value(snapshot)
+        .and_then(serde_json::from_value::<ChartSnapshot>)
+        .is_err()
+    {
+        return Err("Layout values must be finite".into());
+    }
+    if let Some(options) = &snapshot.options
+        && !(options.crosshair.vert_line_width > 0.0 && options.crosshair.horz_line_width > 0.0)
+    {
+        return Err("Crosshair width must be above zero".into());
+    }
+    let drawings = match &snapshot.drawings {
+        Some(drawings) => {
+            let json = drawings.to_string();
+            let (storage, _) = DrawingStorage::from_json(&json).map_err(|e| e.to_string())?;
+            if storage.symbol != snapshot.symbol {
+                return Err("The drawings belong to another symbol".into());
+            }
+            Some(json)
+        }
+        _ => None,
+    };
+    Ok((studies, drawings))
 }
 
 /// Checks the study outputs the saved `studies` read: each names a saved study and a plot it
@@ -868,5 +889,43 @@ mod tests {
 
         let newer = json.replacen("\"version\":3", "\"version\":99", 1);
         assert!(SavedLayout::from_json(&newer).is_err());
+    }
+
+    /// A document that restore accepts saves a layout that loads again: values the next save
+    /// cannot store or the next restore refuses are refused before the chart changes, and a
+    /// study whose range overflows the price scale still saves.
+    #[test]
+    fn every_restored_layout_saves_a_layout_that_loads() {
+        use crate::widget::test_frames::{chart, frame};
+        let mut original = chart(&[10.0], &[10.0, 11.0]);
+        original.set_symbol("A");
+        original.add_indicator(Box::new(RSI::new(9)));
+        let document = serde_json::to_value(original.snapshot().unwrap()).unwrap();
+        for (pointer, value) in [
+            ("/config/candle_width", 1e39),
+            ("/options/tooltip/magnifier_size", -1e300),
+            ("/options/crosshair/horz_line_width", 0.0),
+            ("/options/crosshair/vert_line_width", -1.0),
+        ] {
+            let mut invalid = document.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value.into();
+            let snapshot: ChartSnapshot = serde_json::from_value(invalid).unwrap();
+            let mut restored = chart(&[10.0], &[11.0]);
+            restored.set_symbol("B");
+            assert!(restored.restore(&snapshot).is_err(), "{pointer} {value}");
+            assert_eq!(restored.symbol(), "B", "{pointer} {value}");
+        }
+
+        // Bands half of f64::MAX from the closes overflow the autoscaled range with its margins.
+        original.add_indicator(Box::new(crate::studies::BollingerBands::new(2, f64::MAX)));
+        frame(&egui::Context::default(), &mut original, 0.0, Vec::new());
+        let json = SavedLayout {
+            mode: ChartLayoutMode::Single,
+            charts: vec![original.snapshot().unwrap()],
+        }
+        .to_json()
+        .unwrap();
+        let layout = SavedLayout::from_json(&json).unwrap();
+        chart(&[10.0], &[11.0]).restore(&layout.charts[0]).unwrap();
     }
 }
