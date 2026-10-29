@@ -27,7 +27,9 @@ pub fn render_trade_profiles(
     render_profiles(painter, mapping, bars, profiles, step, tick, config, false);
 }
 
-/// The standalone chart keeps session framing and its quiet defaults out of overlays.
+/// Draws the session volume profile chart: each session fills its bar span inside a faint box,
+/// with up volume stacked before down volume, a POC across the session, and the value area shown
+/// by row opacity alone (no guides, node labels or developing POC).
 pub(crate) fn render_session_volume_profiles(
     painter: &Painter,
     mapping: &ChartMapping,
