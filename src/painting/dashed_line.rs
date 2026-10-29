@@ -50,6 +50,52 @@ pub(crate) fn draw_dashed_polyline(
     }
 }
 
+/// Draw equally spaced round dots, clipping before placement and carrying the phase across vertices.
+pub(crate) fn draw_dotted_polyline(
+    painter: &egui::Painter,
+    points: &[Pos2],
+    color: egui::Color32,
+    spacing: f32,
+    radius: f32,
+) {
+    let Some(clip) = finite_clip(painter) else {
+        return;
+    };
+    if !spacing.is_finite() || spacing <= 0.0 || !radius.is_finite() || radius < 0.0 {
+        return;
+    }
+    // A dot whose centre is outside the pane can still overlap its edge.
+    let clip = clip.expand(radius);
+    let spacing = f64::from(spacing);
+    let mut phase = 0.0;
+    for pair in points.windows(2) {
+        let (start, end) = (pair[0], pair[1]);
+        let (x0, y0) = (f64::from(start.x), f64::from(start.y));
+        let (dx, dy) = (f64::from(end.x) - x0, f64::from(end.y) - y0);
+        let length = dx.hypot(dy);
+        if !length.is_finite() || length == 0.0 {
+            continue;
+        }
+        if let Some((t0, t1)) = clip_segment(start, end, clip) {
+            let first = ((t0 * length + phase) / spacing).ceil() as i64;
+            let last = ((t1 * length + phase) / spacing).floor() as i64;
+            for k in first..=last {
+                let distance = k as f64 * spacing - phase;
+                // The next segment owns a dot exactly on its first vertex.
+                if distance < length {
+                    let t = distance / length;
+                    painter.circle_filled(
+                        Pos2::new((x0 + dx * t) as f32, (y0 + dy * t) as f32),
+                        radius,
+                        color,
+                    );
+                }
+            }
+        }
+        phase = (phase + length).rem_euclid(spacing);
+    }
+}
+
 pub(crate) fn draw_dashed_segment(
     painter: &egui::Painter,
     start: Pos2,
@@ -199,28 +245,9 @@ fn visible_dashes(
         return;
     }
 
-    // Liang-Barsky: narrow [t0, t1] to the part of the segment inside `clip`.
-    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
-    for (p, q) in [
-        (-dx, x0 - f64::from(clip.min.x)),
-        (dx, f64::from(clip.max.x) - x0),
-        (-dy, y0 - f64::from(clip.min.y)),
-        (dy, f64::from(clip.max.y) - y0),
-    ] {
-        if p == 0.0 {
-            if q < 0.0 {
-                return;
-            }
-        } else if p < 0.0 {
-            t0 = t0.max(q / p);
-        } else {
-            t1 = t1.min(q / p);
-        }
-    }
-    if t0 >= t1 {
+    let Some((t0, t1)) = clip_segment(start, end, clip) else {
         return;
-    }
-
+    };
     let (from, to) = (t0 * total_len, t1 * total_len);
     let at = |d: f64| {
         let t = d / total_len;
@@ -236,6 +263,30 @@ fn visible_dashes(
             dash(at(dash_start), at(dash_end));
         }
     }
+}
+
+/// Liang-Barsky: the parameter interval of the segment inside `clip`.
+fn clip_segment(start: Pos2, end: Pos2, clip: Rect) -> Option<(f64, f64)> {
+    let (x0, y0) = (f64::from(start.x), f64::from(start.y));
+    let (dx, dy) = (f64::from(end.x) - x0, f64::from(end.y) - y0);
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for (p, q) in [
+        (-dx, x0 - f64::from(clip.min.x)),
+        (dx, f64::from(clip.max.x) - x0),
+        (-dy, y0 - f64::from(clip.min.y)),
+        (dy, f64::from(clip.max.y) - y0),
+    ] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else if p < 0.0 {
+            t0 = t0.max(q / p);
+        } else {
+            t1 = t1.min(q / p);
+        }
+    }
+    (t0 <= t1).then_some((t0, t1))
 }
 
 #[cfg(test)]
