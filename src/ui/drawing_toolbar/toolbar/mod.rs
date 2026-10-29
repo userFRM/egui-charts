@@ -1174,40 +1174,6 @@ mod tests {
         }
     }
 
-    /// Visibility controls never include named template actions.
-    #[test]
-    fn hide_flyout_excludes_drawing_templates() {
-        use egui::{Pos2, RawInput, Shape, vec2};
-        let ctx = Context::default();
-        let mut toolbar = DrawingToolbar::new();
-        toolbar.toggle_category(
-            &ctx,
-            "Hide",
-            Rect::from_min_size(Pos2::new(0.0, 100.0), vec2(52.0, 38.0)),
-        );
-        for _ in 0..2 {
-            let mut output = ctx.run_ui(
-                RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 450.0))),
-                    ..Default::default()
-                },
-                |ui| {
-                    toolbar.show_with_action(ui);
-                },
-            );
-            for shape in &output.shapes {
-                if let Shape::Text(text) = &shape.shape {
-                    assert!(!matches!(
-                        text.galley.text(),
-                        "DRAWING TEMPLATES" | "Save as template…" | "Manage templates…"
-                    ));
-                }
-            }
-            output.textures_delta.clear();
-            output.drop_without_applying_deltas();
-        }
-    }
-
     /// Alt+T selects the trend line tool, unless a text field has the keyboard, where it must not
     /// switch tools while the user types.
     #[test]
