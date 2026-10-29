@@ -1,6 +1,23 @@
+// Without the widget these items are not built; point their links at the feature table.
+#![cfg_attr(
+    not(feature = "widget"),
+    doc = "
+[`Chart`]: crate#feature-flags
+[`Chart::show`]: crate#feature-flags
+[`ChartBuilder::with_feed`]: crate#feature-flags
+[`guide`]: crate#feature-flags
+[`widget`]: crate#feature-flags
+[`config`]: crate#feature-flags
+[`theme`]: crate#feature-flags
+[`styles`]: crate#feature-flags
+[`localization`]: crate#feature-flags
+[`theme::apply_to_egui`]: crate#feature-flags
+[`localization::set_translator`]: crate#feature-flags
+"
+)]
 //! Interactive financial charts for [egui](https://docs.rs/egui), using your historical and streaming data.
 //!
-//! `Chart` provides price and volume panes, pan and zoom, crosshairs and live bar
+//! [`Chart`] provides price and volume panes, pan and zoom, crosshairs and live bar
 //! updates on native and WebAssembly targets. Optional features add built-in studies,
 //! drawing tools, order flow visualizations and application UI such as toolbars,
 //! replay controls, trading panels and dialogs. The host supplies market data,
@@ -15,7 +32,7 @@
 //! ```
 //!
 //! Create the chart once with bars ordered from oldest to newest, then call
-//! `Chart::show` in your egui UI callback each frame:
+//! [`Chart::show`] in your egui UI callback each frame:
 //!
 //! ```
 //! # #[cfg(feature = "widget")] {
@@ -37,28 +54,28 @@
 //!
 //! For live data, merge bars with `Chart::update(widget::SeriesId::MAIN, bar)`.
 //! [`data::Datafeed`] supports paged history and streaming bars, trades and depth;
-//! attach a feed with `ChartBuilder::with_feed`. Feed methods return promptly,
+//! attach a feed with [`ChartBuilder::with_feed`]. Feed methods return promptly,
 //! answer requests through [`data::Reply`] and push updates through [`data::Sink`].
 //! A symbol identifies the host's instrument; setting it does not fetch data without
-//! a feed. See the `guide` module (requires `widget`) for complete integration examples.
+//! a feed. See the [`guide`] for complete integration examples.
 //!
 //! # API map
 //!
 //! | Module | Use it for |
 //! |---|---|
-//! | `widget` | `Chart`, `ChartBuilder`, events, panes, chart layouts, replay and export |
+//! | [`widget`] | `Chart`, `ChartBuilder`, events, panes, chart layouts, replay and export |
 //! | [`model`] | Bars, instruments, intervals, chart types, price transforms and host data records |
 //! | [`data`] | Historical and streaming data contracts, aggregation and order flow data |
 //! | [`studies`] | The `Indicator` extension point, calculation helpers and built-in studies |
 //! | `drawings` | Drawing tools, selection, undo and timestamp-based persistence |
 //! | [`scales`] | Price ranges, coordinate mapping, axis ticks and label formatting |
-//! | `config` | Chart appearance and interaction options |
+//! | [`config`] | Chart appearance and interaction options |
 //! | [`services`] | Host storage, symbol search, quotes, alerts, signals and broker contracts |
 //! | `strategies` | Strategies that trade on closed bars and the backtest engine that runs them |
-//! | `theme`, [`tokens`], `styles` | Theme presets, design tokens and UI styling helpers |
+//! | [`theme`], [`tokens`], [`styles`] | Theme presets, design tokens and UI styling helpers |
 //! | `ui`, `ui_kit` | Chart controls and reusable UI components placed in the host's layout |
 //! | `icons` | Embedded SVG icons |
-//! | `localization` | Host translations scoped to an egui context |
+//! | [`localization`] | Host translations scoped to an egui context |
 //! | [`prelude`] | Common types and traits for chart integration |
 //!
 //! # Feature flags
@@ -87,14 +104,13 @@
 //! Application UI components return actions for the host to apply. The crate does
 //! not connect to a market data provider on its own.
 //!
-//! Apply `theme::apply_to_egui` at startup and after changing the theme. It installs
+//! Apply [`theme::apply_to_egui`] at startup and after changing the theme. It installs
 //! the bundled font and applies UI colors and spacing. Use
-//! `localization::set_translator` for UI text; the host owns translation resources
+//! [`localization::set_translator`] for UI text; the host owns translation resources
 //! and additional fonts. Chart date and number labels use the chart's formatters.
 //!
-//! The `guide` module (requires `widget`) covers historical and streaming data,
-//! custom studies, drawing persistence, synchronized charts and host strategy and
-//! script results.
+//! The [`guide`] covers historical and streaming data, custom studies, drawing
+//! persistence, synchronized charts and host strategy and script results.
 //!
 //! # API compatibility
 //!
