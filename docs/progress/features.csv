@@ -363,7 +363,7 @@ Drawings,Drawings,Sine line,done,library,src/drawings/rendering/cycles.rs
 Drawings,Drawings,Single-point drawing creation,done,library,src/widget/drawing_api.rs;src/drawings/manager/mod.rs;src/drawings/domain/drawing.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Social posts,done,host,src/drawings/rendering/media.rs;src/widget/tool_interaction/text.rs;src/drawings/categories.rs
 Drawings,Drawings,Stickers,done,library,src/drawings/glyphs.rs;src/ui/drawing_toolbar/glyph_picker.rs;src/drawings/rendering/media.rs
-Drawings,Drawings,Table,done,library,src/drawings/rendering/annotations/table.rs;src/widget/tool_interaction/text.rs
+Drawings,Drawings,Table,done,library,src/drawings/rendering/annotations/table.rs;src/widget/tool_interaction/text.rs;src/theme/mod.rs
 Drawings,Drawings,Text,done,library,src/drawings/rendering/annotations/text.rs;src/drawings/rendering/style.rs;src/widget/tool_interaction/text.rs
 Drawings,Drawings,Three drives pattern,done,library,src/drawings/rendering/patterns.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Time cycles,done,library,src/drawings/rendering/cycles.rs

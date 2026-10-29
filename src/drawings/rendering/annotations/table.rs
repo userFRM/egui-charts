@@ -1,16 +1,16 @@
 //! Table rendering and cell editing
 //!
 //! A table keeps its cells in the drawing's text: one row per line and one cell per
-//! tab-separated field, the first row being the header.
+//! tab-separated field.
 
 use crate::drawings::domain::Drawing;
 use crate::localization as l10n;
 use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
+use egui::{Pos2, Rect, Stroke, epaint::StrokeKind};
 
-/// Rows, header included, and columns of a table placed without text.
+/// Rows and columns of a table placed without text.
 const NEW_TABLE: (usize, usize) = (4, 3);
 
 /// Cells of table text, short rows padded to the widest one.
@@ -105,38 +105,25 @@ impl Drawing {
         first.expect("a table has at least one cell")
     }
 
-    /// Renders the table's cells, its first row as the header, each column as wide as its
-    /// widest text.
+    /// Renders a plain grid with left-aligned cells, each column as wide as its widest text.
     pub(crate) fn render_table(&self, painter: &egui::Painter) {
         if self.points.is_empty() {
             return;
         }
         let pos = self.points[0];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
         let font = self.annotation_font();
         let theme = painter.ctx().active_theme();
         let cell_text_color = theme.ui.text;
         let rows: Vec<Vec<_>> = cells(&self.table_text())
             .into_iter()
-            .enumerate()
-            .map(|(r, row)| {
-                let text = if r == 0 {
-                    Color32::WHITE
-                } else {
-                    cell_text_color
-                };
+            .map(|row| {
                 row.into_iter()
-                    .map(|cell| painter.layout_no_wrap(cell, font.clone(), text))
+                    .map(|cell| painter.layout_no_wrap(cell, font.clone(), cell_text_color))
                     .collect()
             })
             .collect();
         let line_height = painter
-            .layout_no_wrap("Ag".into(), font.clone(), color)
+            .layout_no_wrap("Ag".into(), font.clone(), cell_text_color)
             .size()
             .y;
         let cell_height = DESIGN_TOKENS
@@ -144,11 +131,6 @@ impl Drawing {
             .annotation
             .table_cell_height
             .max(line_height + 2.0 * DESIGN_TOKENS.spacing.xs);
-        let header_height = DESIGN_TOKENS
-            .sizing
-            .annotation
-            .table_header_height
-            .max(cell_height);
         let widths: Vec<f32> = (0..rows[0].len())
             .map(|c| {
                 rows.iter()
@@ -162,14 +144,7 @@ impl Drawing {
                 Some(*x)
             }))
             .collect();
-        let row_top = |r: usize| {
-            pos.y
-                + if r == 0 {
-                    0.0
-                } else {
-                    header_height + (r - 1) as f32 * cell_height
-                }
-        };
+        let row_top = |r: usize| pos.y + r as f32 * cell_height;
 
         let table_width = widths.iter().sum::<f32>();
         let table_height = row_top(rows.len()) - pos.y;
@@ -178,34 +153,16 @@ impl Drawing {
         // Background
         painter.rect_filled(table_rect, DESIGN_TOKENS.rounding.md, theme.ui.panel_bg);
 
-        // Header row background
-        let header_rect = Rect::from_min_size(pos, egui::vec2(table_width, header_height));
-        painter.rect_filled(header_rect, DESIGN_TOKENS.rounding.md, color);
-
-        // Alternating row background
-        for r in (2..rows.len()).step_by(2) {
-            painter.rect_filled(
-                Rect::from_min_size(
-                    Pos2::new(pos.x, row_top(r)),
-                    egui::vec2(table_width, cell_height),
-                ),
-                0.0,
-                theme.ui.btn_bg_hover,
-            );
-        }
-
         // Grid lines
-        let grid_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 80);
-        let grid_stroke = Stroke::new(stroke::HAIRLINE, grid_color);
-        for r in 0..=rows.len() {
+        let grid_stroke = Stroke::new(stroke::HAIRLINE, theme.ui.border);
+        for r in 1..rows.len() {
             painter.hline(
                 egui::Rangef::new(pos.x, pos.x + table_width),
                 row_top(r),
                 grid_stroke,
             );
         }
-        for &x in &lefts {
+        for &x in &lefts[1..lefts.len() - 1] {
             painter.vline(
                 x,
                 egui::Rangef::new(pos.y, pos.y + table_height),
@@ -213,12 +170,14 @@ impl Drawing {
             );
         }
 
-        // Cell text, centred in each cell
+        // Cell text, left-aligned and vertically centred
         for (r, row) in rows.into_iter().enumerate() {
-            let height = if r == 0 { header_height } else { cell_height };
             for (c, galley) in row.into_iter().enumerate() {
-                let center = Pos2::new(lefts[c] + widths[c] / 2.0, row_top(r) + height / 2.0);
-                painter.galley(center - galley.size() / 2.0, galley, color);
+                let origin = Pos2::new(
+                    lefts[c] + DESIGN_TOKENS.spacing.sm,
+                    row_top(r) + (cell_height - galley.size().y) / 2.0,
+                );
+                painter.galley(origin, galley, cell_text_color);
             }
         }
 
@@ -226,8 +185,8 @@ impl Drawing {
         painter.rect_stroke(
             table_rect,
             DESIGN_TOKENS.rounding.md,
-            Stroke::new(stroke::MEDIUM, color),
-            StrokeKind::Outside,
+            grid_stroke,
+            StrokeKind::Middle,
         );
     }
 }
@@ -236,28 +195,31 @@ impl Drawing {
 mod tests {
     use super::*;
     use crate::drawings::DrawingToolType;
-    use egui::{Context, LayerId, Painter, RawInput, Shape};
+    use egui::{Color32, Context, LayerId, Painter, RawInput, Shape};
 
-    /// Guards #984: a table paints its own cells, header row first and short rows padded, and
-    /// an empty grid of the default size until it has text, its frame as tall as its rows: a
-    /// 26 px header and 22 px rows.
+    /// Guards #984 and #1399: saved cells and empty tables use a neutral grid with equal
+    /// 22 px rows, thin borders and padded, left-aligned text in every theme.
     #[test]
     fn tables_paint_their_own_cells() {
         let mut table = Drawing::new(1, DrawingToolType::Table);
         table.points = vec![Pos2::new(10.0, 10.0)];
         for (_, theme) in crate::theme::presets() {
             for (text, rows, height, cells) in [
-                (None, 4, 92.0, vec![]),
+                (None, 4, 88.0, vec![]),
                 (
                     Some("Symbol\tLast\tChange\nAAPL\t189.50\nMSFT\t402.10\t+1.2%"),
                     3,
-                    70.0,
+                    66.0,
                     vec![
                         "Symbol", "Last", "Change", "AAPL", "189.50", "MSFT", "402.10", "+1.2%",
                     ],
                 ),
             ] {
                 table.text = text.map(Into::into);
+                let saved = serde_json::to_string(&table).unwrap();
+                let mut table: Drawing = serde_json::from_str(&saved).unwrap();
+                table.points = vec![Pos2::new(10.0, 10.0)];
+                assert_eq!(table.text.as_deref(), text);
                 let ctx = Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut output = ctx.run_ui(RawInput::default(), |_| {
@@ -289,22 +251,53 @@ mod tests {
                     )),
                     "the table surface follows the theme"
                 );
+                let mut fills = 0;
+                let mut borders = 0;
+                let mut cell = 0;
                 for shape in &shapes {
-                    if let Shape::Text(text) = &shape.shape
-                        && text.galley.text() == "AAPL"
-                    {
-                        assert!(
-                            text.galley
-                                .job
-                                .sections
-                                .iter()
-                                .all(|section| section.format.color == theme.ui.text)
-                        );
+                    match &shape.shape {
+                        Shape::Rect(rect) => {
+                            if rect.fill != Color32::TRANSPARENT {
+                                fills += 1;
+                                assert_eq!(rect.fill, theme.ui.panel_bg);
+                            }
+                            if !rect.stroke.is_empty() {
+                                borders += 1;
+                                assert_eq!(rect.stroke, Stroke::new(1.0, theme.ui.border));
+                            }
+                        }
+                        Shape::LineSegment { stroke, .. } => {
+                            assert_eq!(*stroke, Stroke::new(1.0, theme.ui.border));
+                        }
+                        Shape::Text(text) if !text.galley.text().is_empty() => {
+                            assert!(
+                                text.galley
+                                    .job
+                                    .sections
+                                    .iter()
+                                    .all(|section| section.format.color == theme.ui.text)
+                            );
+                            let (x, y) = [
+                                (14.0, 21.0),
+                                (84.0, 21.0),
+                                (154.0, 21.0),
+                                (14.0, 43.0),
+                                (84.0, 43.0),
+                                (14.0, 65.0),
+                                (84.0, 65.0),
+                                (154.0, 65.0),
+                            ][cell];
+                            assert_eq!(text.pos.x, x);
+                            assert_eq!(text.pos.y + text.galley.size().y / 2.0, y);
+                            cell += 1;
+                        }
+                        _ => {}
                     }
                 }
+                assert_eq!((fills, borders), (1, 1), "one plain surface and border");
                 assert_eq!(texts, cells);
-                assert_eq!(row_rules, rows + 1);
-                assert_eq!(column_rules, [height; 4], "column rules span the table");
+                assert_eq!(row_rules, rows - 1);
+                assert_eq!(column_rules, [height; 2], "column rules span the table");
             }
         }
     }
