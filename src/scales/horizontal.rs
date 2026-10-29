@@ -185,9 +185,16 @@ impl Default for MaturityScale {
 impl MaturityScale {
     /// Whitespace bars every `base_resolution` months from `start` up to `last`, the longest
     /// maturity on the chart, or up to `minimum_range` when that is later.
+    /// Non-finite `last` values fall back to `minimum_range`; finite values are capped at
+    /// 12,000 months (1,000 years) before comparison, without limiting `minimum_range`.
     pub fn whitespace(&self, last: f64) -> Vec<Bar> {
         let step = f64::from(self.base_resolution.max(1));
-        let end = f64::from(self.minimum_range).max(last);
+        let minimum = f64::from(self.minimum_range);
+        let end = if last.is_finite() {
+            minimum.max(last.min(12_000.0))
+        } else {
+            minimum
+        };
         (0..)
             .map(|slot| f64::from(self.start) + f64::from(slot) * step)
             .take_while(|months| *months <= end)
@@ -367,12 +374,24 @@ mod tests {
             assert_eq!(maturity.format_crosshair(at(months), 0), label);
         }
 
-        let quarterly = MaturityScale {
+        let mut quarterly = MaturityScale {
             base_resolution: 3,
             minimum_range: 12,
             start: 0,
         };
-        for (last, slots) in [(7.0, 12.0), (20.0, 18.0)] {
+        // Inclusive quarterly slots: 0 through 12,000 has 4,001 bars; 24,000 has 8,001.
+        for (minimum, last, slots) in [
+            (12, 7.0, 12.0),
+            (12, 20.0, 18.0),
+            (12, 12_003.0, 12_000.0),
+            (12, 1e12, 12_000.0),
+            (12, f64::INFINITY, 12.0),
+            (12, f64::NEG_INFINITY, 12.0),
+            (12, f64::NAN, 12.0),
+            (24_000, 1e12, 24_000.0),
+            (24_000, f64::INFINITY, 24_000.0),
+        ] {
+            quarterly.minimum_range = minimum;
             let expected: Vec<_> = (0..=(slots as u32 / 3))
                 .map(|slot| at(f64::from(slot * 3)))
                 .collect();
@@ -381,6 +400,7 @@ mod tests {
                 .iter()
                 .map(|bar| bar.time)
                 .collect();
+            assert_eq!(times.len(), expected.len(), "whitespace to {last}");
             assert_eq!(times, expected, "whitespace to {last}");
         }
     }

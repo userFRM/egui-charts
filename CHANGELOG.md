@@ -454,6 +454,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `MaturityScale::whitespace` treats a non-finite last maturity as the configured minimum range and caps a finite last maturity at 12,000 months before comparing it with that minimum. A larger explicit minimum range is preserved, while an invalid or extreme data-derived maturity no longer requests unbounded whitespace. ([#1307](https://github.com/userFRM/egui-charts/issues/1307))
+
 - `TimeScale` ignores non-finite widths, bar spacing, right offsets and scroll or zoom inputs, including options applied by chart construction, settings, synchronization and undo or redo. Invalid configured offsets retain the previous live-edge values, so returning to realtime remains safe. ([#1306](https://github.com/userFRM/egui-charts/issues/1306))
 
 - The layout menu's Autosave toggle, the trading lines' order types, take profit and stop loss labels, tick results, tooltips and Buy and Sell button, and the legend's series and study controls, quote boxes, delayed and end-of-day marks and hints and copied values go through the context's translator, so one that changes every key reaches them without recreating the chart. The volume tag on the price scale takes the applied theme's rising or falling candle colour for the last bar instead of a fixed pink, marker outlines take the theme's crosshair label text colour, and event break lines its info colour, so a custom palette reaches them; a marker's own colour is unchanged. ([#1059](https://github.com/userFRM/egui-charts/issues/1059))
