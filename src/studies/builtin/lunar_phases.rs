@@ -234,8 +234,8 @@ impl LunarPhases {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            new_color: palette::BLUE,
-            full_color: palette::GOLD,
+            new_color: palette::BLUE.gamma_multiply_u8(128),
+            full_color: palette::WHITE.gamma_multiply_u8(128),
             visible: true,
         }
     }
@@ -309,11 +309,7 @@ impl Indicator for LunarPhases {
             },
             width: 2.0,
             pattern: crate::model::LineStyle::Solid,
-            plot_type: if line == 0 {
-                crate::studies::PlotType::TriangleUp
-            } else {
-                crate::studies::PlotType::TriangleDown
-            },
+            plot_type: crate::studies::PlotType::Circles,
             visible: true,
         }
     }

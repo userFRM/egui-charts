@@ -13,6 +13,7 @@ use crate::scales::{
     DefaultPriceFormatter, HorizontalScale, PriceFormatter, PriceMap, VolumeFormatter,
     instrument_price_precision,
 };
+use crate::styles::typography::font_size;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{FontId, Painter, Pos2, Rect, Stroke, Vec2, epaint::StrokeKind};
@@ -236,7 +237,7 @@ pub fn render_floating_tooltip(
     }
 
     let theme = painter.ctx().active_theme();
-    let font_id = FontId::proportional(options.font_size);
+    let font_id = FontId::proportional(font_size(options.font_size));
     let rows: Vec<_> = rows
         .into_iter()
         .map(|(label, value, color)| {
@@ -446,7 +447,7 @@ pub fn render_tracking_tooltip(
             |formatter| format!("({})", formatter.format(change_pct)),
         );
 
-        let font_id = FontId::proportional(options.font_size);
+        let font_id = FontId::proportional(font_size(options.font_size));
         let text_y = bar_rect.center().y;
 
         // Draw main text
@@ -482,7 +483,7 @@ pub fn render_tracking_tooltip(
     if text.is_empty() {
         return;
     }
-    let font_id = FontId::proportional(options.font_size);
+    let font_id = FontId::proportional(font_size(options.font_size));
 
     painter.text(
         Pos2::new(bar_rect.min.x + 10.0, bar_rect.center().y),

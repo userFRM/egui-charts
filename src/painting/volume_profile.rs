@@ -1,7 +1,6 @@
 //! Price-row profile painting shared by studies and drawing tools.
 
 use crate::data::{ProfileDisplay, VolumeProfile, VolumeProfileConfig};
-use crate::painting::dashed_line::draw_dashed_line;
 use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -60,13 +59,20 @@ pub(crate) fn paint_profile(
             );
         };
         let rgba = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+        let [up, down] = if (va_low..=va_high).contains(&row) {
+            config
+                .value_area_colors
+                .unwrap_or([config.up_color, config.down_color])
+        } else {
+            [config.up_color, config.down_color]
+        };
         match config.display {
             ProfileDisplay::Total => paint(left, width, bar_color),
             ProfileDisplay::UpDown => {
                 let up_width = (profile.up[row] / max_volume) as f32 * max_width;
                 let down_width = (profile.down[row] / max_volume) as f32 * max_width;
-                paint(left, up_width, rgba(config.up_color));
-                paint(left + up_width, down_width, rgba(config.down_color));
+                paint(left, up_width, rgba(up));
+                paint(left + up_width, down_width, rgba(down));
                 // Volume of unknown side, which only executions can leave over.
                 let unknown = width - up_width - down_width;
                 if unknown > 0.01 {
@@ -79,11 +85,7 @@ pub(crate) fn paint_profile(
             }
             ProfileDisplay::Delta => {
                 let delta = profile.up[row] - profile.down[row];
-                let color = if delta >= 0.0 {
-                    config.up_color
-                } else {
-                    config.down_color
-                };
+                let color = if delta >= 0.0 { up } else { down };
                 paint(
                     left,
                     (delta.abs() / max_volume) as f32 * max_width,
@@ -105,6 +107,7 @@ pub(crate) fn paint_profile(
         poc_y,
         y_at_row(va_high + 1),
         y_at_row(va_low),
+        config.show_value_area_lines,
     );
     painter.rect_stroke(
         rect,
@@ -123,22 +126,19 @@ fn draw_volume_profile_lines(
     poc_y: f32,
     vah_y: f32,
     val_y: f32,
+    show_value_area_lines: bool,
 ) {
-    let font = egui::FontId::proportional(painter.ctx().active_theme().text.tiny);
+    let theme = painter.ctx().active_theme();
+    let font = egui::FontId::proportional(theme.text.tiny);
 
-    // Draw POC line (dashed, extends across range)
-    let poc_color = DESIGN_TOKENS.semantic.extended.favorite_gold;
-    draw_dashed_line(
-        painter,
-        Pos2::new(rect.min.x, poc_y),
-        Pos2::new(rect.max.x, poc_y),
+    let poc_color = theme.ui.text;
+    painter.add(egui::Shape::line(
+        vec![Pos2::new(rect.min.x, poc_y), Pos2::new(rect.max.x, poc_y)],
         Stroke::new(stroke::HAIRLINE, poc_color),
-        8.0,
-        4.0,
-    );
+    ));
 
     let va_color = Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 200);
-    for y in [vah_y, val_y] {
+    for y in [vah_y, val_y].into_iter().filter(|_| show_value_area_lines) {
         painter.hline(
             rect.min.x..=rect.max.x,
             y,
@@ -157,8 +157,12 @@ fn draw_volume_profile_lines(
         egui::Align2::CENTER_CENTER,
         "POC",
         font.clone(),
-        Color32::BLACK,
+        theme.chart.bg,
     );
+
+    if !show_value_area_lines {
+        return;
+    }
 
     // Each label sits outside the value area, away from the other line;
     // the VAH line is the lower one on an inverted scale.
@@ -182,11 +186,11 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use egui::{Context, Pos2, RawInput, Rect, Shape};
 
-    /// Guards the frame cost of the POC line: an anchored volume profile restored from saved
-    /// drawings with its anchor 200,000 bars before the view dashes its POC line only inside the
-    /// view, rather than with one shape per dash from the anchor.
+    /// Guards the frame cost of an anchored volume profile restored from saved drawings with its
+    /// anchor 200,000 bars before the view: it paints a bounded number of shapes, not one per
+    /// bar or dash from the anchor.
     #[test]
-    fn far_anchored_profile_dashes_its_poc_line_only_in_view() {
+    fn far_anchored_profile_paints_a_bounded_number_of_shapes() {
         fn leaves(shape: &Shape) -> usize {
             match shape {
                 Shape::Vec(shapes) => shapes.iter().map(leaves).sum(),

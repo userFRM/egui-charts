@@ -44,7 +44,7 @@ impl ConnorsRSI {
             rank_period: 100,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::PINK, // Pink
+            color: palette::BLUE,
             visible: true,
         }
     }

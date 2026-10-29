@@ -5,6 +5,7 @@
 //! from the bar's shape; see [`CVDMode`].
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -44,7 +45,7 @@ impl CVD {
         Self {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: Color32::from_rgb(76, 175, 80), // Green for volume/delta
+            color: palette::TEAL, // Volume/delta
             visible: true,
             mode: CVDMode::default(),
         }

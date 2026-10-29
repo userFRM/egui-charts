@@ -45,8 +45,8 @@ impl KlingerOscillator {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::BLUE,   // Blue - Klinger
-                palette::ORANGE, // Orange - Signal
+                palette::BLUE,       // Klinger
+                palette::DARK_GREEN, // Signal
             ],
             visible: true,
         }

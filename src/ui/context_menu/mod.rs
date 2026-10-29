@@ -3,8 +3,15 @@
 //! Right-click context menu for the chart area. Provides trading actions,
 //! clipboard operations, chart management, and navigation options.
 
+mod axis;
 mod chart_menus;
 mod menu;
+mod tpo;
+
+pub mod drawing;
+pub mod series;
+pub mod study;
+pub(super) mod trade_profile;
 
 pub use chart_menus::{ChartContextAction, ChartMenus, HostMenuContext, HostMenuEntry};
 pub use menu::MenuItem;

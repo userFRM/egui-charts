@@ -25,7 +25,6 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::palette;
 use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -54,7 +53,7 @@ impl UltimateOscillator {
             period2: period2.max(1),
             period3: period3.max(1),
             values: IndicatorValues::new(),
-            color: palette::PURPLE,
+            color: crate::studies::palette::BRIGHT_RED,
             visible: true,
         }
     }

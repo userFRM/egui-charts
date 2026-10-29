@@ -58,11 +58,14 @@ pub(super) fn range(
         .filter(|(_, plot)| plot.visible)
         .map(
             |(line, plot)| match groups.filter(|groups| groups.factor() > 1) {
-                Some(groups) if plot.plot_type == PlotType::Histogram => groups.groups
-                    [groups.covering(visible.clone())]
-                .iter()
-                .filter_map(|group| values.value(line, group.peak))
-                .fold(0.0, f64::max),
+                Some(groups)
+                    if matches!(plot.plot_type, PlotType::Histogram | PlotType::Columns) =>
+                {
+                    groups.groups[groups.covering(visible.clone())]
+                        .iter()
+                        .filter_map(|group| values.value(line, group.peak))
+                        .fold(0.0, f64::max)
+                }
                 _ => visible
                     .clone()
                     .filter_map(|bar| values.value(line, bar))
@@ -96,7 +99,7 @@ pub(super) fn paint(
         if !plot.visible {
             continue;
         }
-        let histogram = plot.plot_type == PlotType::Histogram;
+        let histogram = matches!(plot.plot_type, PlotType::Histogram | PlotType::Columns);
         if histogram {
             plot.width = coords.bar_spacing * factor as f32 * 0.8;
         }

@@ -76,7 +76,7 @@ pub(crate) fn paint_candles(
             painter.rect(
                 body,
                 0.0,
-                style.color.gamma_multiply(0.12),
+                style.color.gamma_multiply_u8(77),
                 stroke,
                 egui::StrokeKind::Inside,
             );

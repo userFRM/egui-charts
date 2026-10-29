@@ -74,7 +74,7 @@ impl KAMA {
             slow_period: 30,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::CYAN, // Cyan
+            color: palette::BLUE,
             visible: true,
         }
     }

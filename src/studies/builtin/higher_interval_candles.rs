@@ -1,7 +1,6 @@
 //! Higher-interval candle bodies and wicks built from the chart's own bars.
 
 use crate::model::{Bar, BarClock, Instrument, Timeframe};
-use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues, InputKind, InputValue, StudyCandle, StudyInput};
 use egui::Color32;
 
@@ -37,7 +36,10 @@ impl HigherIntervalCandles {
             extended_hours: true,
             candles: Vec::new(),
             values: IndicatorValues::new(),
-            colors: [palette::UP, palette::DOWN],
+            colors: [
+                crate::studies::palette::DEEP_TEAL,
+                crate::studies::palette::BRIGHT_RED,
+            ],
             visible: true,
         }
     }

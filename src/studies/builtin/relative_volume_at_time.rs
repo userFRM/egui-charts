@@ -138,7 +138,10 @@ impl RelativeVolumeAtTime {
             stepper: Stepper::default(),
             periods: std::collections::VecDeque::new(),
             undo: Undo::default(),
-            colors: [palette::UP, palette::DOWN],
+            colors: [
+                palette::GREEN.gamma_multiply_u8(77),
+                palette::DOWN.gamma_multiply_u8(77),
+            ],
             visible: true,
         }
     }
@@ -189,12 +192,12 @@ impl Indicator for RelativeVolumeAtTime {
 
     fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
         let value = self.values.value(0, bar)?;
-        Some(self.colors[usize::from(value < 1.0)])
+        Some(self.colors[usize::from(value <= 1.0)])
     }
 
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
-            levels: vec![(1.0, Color32::from_gray(128), "Equality")],
+            levels: vec![(1.0, palette::GRAY.gamma_multiply_u8(128), "Equality")],
             ..Default::default()
         }
     }

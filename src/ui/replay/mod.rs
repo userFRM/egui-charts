@@ -36,9 +36,12 @@
 mod actions;
 mod config;
 mod controls;
+pub mod floating;
+pub(super) mod model;
 mod session;
 mod start;
 mod state;
+pub mod status;
 mod toolbar;
 
 pub use crate::model::ReplaySession;

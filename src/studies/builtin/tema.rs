@@ -46,7 +46,7 @@ impl TEMA {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::PINK, // Pink
+            color: palette::BLUE,
             visible: true,
         }
     }

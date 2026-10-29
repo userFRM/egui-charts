@@ -32,6 +32,7 @@ impl Hours {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExchangeSessionProvider {
     time_zone: TimezoneId,
+    calendar_zone: Option<TimezoneId>,
     session: Option<Session>,
     timeframe: Timeframe,
     local_zone: bool,
@@ -41,6 +42,7 @@ impl ExchangeSessionProvider {
     /// Days of `session`, or calendar days without one, in `time_zone`.
     pub fn new(time_zone: TimezoneId, session: Option<Session>) -> Self {
         Self {
+            calendar_zone: Some(time_zone.clone()),
             time_zone,
             session,
             timeframe: Timeframe::Min1,
@@ -52,8 +54,15 @@ impl ExchangeSessionProvider {
     pub fn local(session: Option<Session>) -> Self {
         Self {
             local_zone: true,
+            calendar_zone: None,
             ..Self::new(TimezoneId::utc(), session)
         }
+    }
+
+    /// The calendar that aligned daily and longer bars; `None` uses the system's local zone.
+    pub(crate) fn with_calendar_zone(mut self, zone: Option<TimezoneId>) -> Self {
+        self.calendar_zone = zone;
+        self
     }
 
     fn wall_time(&self, time: DateTime<Utc>) -> NaiveDateTime {
@@ -87,18 +96,52 @@ impl ExchangeSessionProvider {
         latest.or_else(|| self.instant(time))
     }
 
-    /// Draw week boundaries on daily bars and month boundaries on longer bars.
+    /// Draw week boundaries on daily bars, month boundaries on multi-day and weekly bars,
+    /// and year boundaries on monthly bars shorter than a year. Yearly and longer bars have no dividers.
     pub fn with_timeframe(mut self, timeframe: Timeframe) -> Self {
         self.timeframe = timeframe;
         self
     }
 
-    /// The trading date containing `time`, using the earliest window of that date.
+    /// The trading date containing `time`, using the earliest window of that date for intraday
+    /// bars. Daily and longer bars carry their trading date in UTC, or in their clock's calendar
+    /// or session zone when they open at its first instant of the date or at session midnight.
     pub fn trading_date(&self, time: DateTime<Utc>) -> NaiveDate {
         if self.timeframe.duration_ms() >= Timeframe::Day1.duration_ms() {
-            self.wall_time(time).date()
+            self.bar_date(time)
         } else {
             self.trading_date_in(&self.opens([time]), time)
+        }
+    }
+
+    /// The date of a daily or longer bar, recognizing skipped and repeated session midnights.
+    fn bar_date(&self, open: DateTime<Utc>) -> NaiveDate {
+        let (date, first) = match &self.calendar_zone {
+            Some(zone) => {
+                let date = local_time(zone.clone(), open).date();
+                (
+                    date,
+                    local_instant(zone.clone(), date.and_time(NaiveTime::MIN)),
+                )
+            }
+            None => {
+                let date = local_time(chrono::Local, open).date();
+                (
+                    date,
+                    local_instant(chrono::Local, date.and_time(NaiveTime::MIN)),
+                )
+            }
+        };
+        if first == Some(open) {
+            return date;
+        }
+        let wall = self.wall_time(open);
+        if wall.time() == NaiveTime::MIN
+            || self.instant(wall.date().and_time(NaiveTime::MIN)) == Some(open)
+        {
+            wall.date()
+        } else {
+            open.date_naive()
         }
     }
 
@@ -141,7 +184,8 @@ impl ExchangeSessionProvider {
     }
 
     /// Close of the last trading window in a daily, weekly or monthly bar. Daily and longer
-    /// bars carry their trading date in UTC; intraday bars use their active exchange window.
+    /// bars are dated as [`trading_date`](Self::trading_date) dates them; intraday bars use their
+    /// active exchange window.
     pub fn bar_session_close(
         &self,
         open: DateTime<Utc>,
@@ -158,9 +202,9 @@ impl ExchangeSessionProvider {
         {
             return None;
         }
-        let date = open.date_naive();
+        let date = self.bar_date(open);
         let end = match timeframe {
-            Timeframe::Day1 => date.succ_opt()?,
+            _ if timeframe.duration_ms() == Timeframe::Day1.duration_ms() => date.succ_opt()?,
             Timeframe::Week1 => date.checked_add_days(chrono::Days::new(7))?,
             Timeframe::Month1 => date
                 .with_day(1)?
@@ -297,10 +341,14 @@ impl ExchangeSessionProvider {
     }
 
     fn period(&self, date: NaiveDate) -> (i32, u32) {
-        if self.timeframe.duration_ms() < Timeframe::Day1.duration_ms() {
+        if self.timeframe.duration_ms() >= 12 * Timeframe::Month1.duration_ms() {
+            (0, 0)
+        } else if self.timeframe.duration_ms() < Timeframe::Day1.duration_ms() {
             (date.year(), date.ordinal())
-        } else if self.timeframe == Timeframe::Day1 {
+        } else if self.timeframe.duration_ms() == Timeframe::Day1.duration_ms() {
             (date.iso_week().year(), date.iso_week().week())
+        } else if matches!(self.timeframe, Timeframe::Month1 | Timeframe::Months(_)) {
+            (date.year(), 0)
         } else {
             (date.year(), date.month())
         }
@@ -311,7 +359,8 @@ impl ExchangeSessionProvider {
     /// of a time to 2 days after it (the local date is within a day of the UTC one, a weekly schedule opens
     /// at least once a week, and a window open since the evening closes the next day), or local
     /// midnights without trading hours. The range extends back through closures to a valid
-    /// trading date. Days
+    /// trading date. For times on one UTC day, older opens are omitted once the containing
+    /// session and any overlapping trading date have been visited. Days
     /// far from every time are skipped, so the work follows the times, not the span between
     /// them. An open that falls in a repeated hour is its first instant, and one that falls in
     /// a skipped hour is the instant the clocks jump.
@@ -321,16 +370,17 @@ impl ExchangeSessionProvider {
     ) -> Vec<(DateTime<Utc>, NaiveDate)> {
         // UTC days since the epoch: whole numbers, cheaper per bar than calendar dates.
         let mut days: Vec<i64> = Vec::new();
-        for day in times
-            .into_iter()
-            .map(|time| time.timestamp().div_euclid(86_400))
-        {
+        let mut earliest = DateTime::<Utc>::MAX_UTC;
+        for time in times {
+            earliest = earliest.min(time);
+            let day = time.timestamp().div_euclid(86_400);
             if days.last() != Some(&day) {
                 days.push(day);
             }
         }
         days.sort_unstable();
         days.dedup();
+        let cutoff = (days.len() == 1).then_some(earliest);
         let dates = days
             .into_iter()
             .filter_map(|day| DateTime::from_timestamp(day * 86_400, 0))
@@ -360,31 +410,46 @@ impl ExchangeSessionProvider {
                 _ => ranges.push((first, last)),
             }
         }
-        let days = ranges
-            .into_iter()
-            .flat_map(|(first, last)| first.iter_days().take_while(move |date| *date <= last));
+        let days = ranges.into_iter().flat_map(|(first, last)| {
+            (0..=(last - first).num_days()).map(move |offset| last - Days::new(offset as u64))
+        });
         let midnight = |date: NaiveDate| Some((self.instant(date.and_time(NaiveTime::MIN))?, date));
-        let mut opens: Vec<_> = match &self.session {
-            None => days.filter_map(midnight).collect(),
-            Some(session) => days
-                .filter_map(|date| {
-                    if self.continuous_on(date) {
-                        return if session.holidays.contains(&date) {
-                            None
-                        } else {
-                            midnight(date)
-                        };
-                    }
-                    // All windows of one trading date share its earliest open, including split sessions.
-                    let open = self
-                        .hours_on(date)
-                        .iter()
-                        .filter_map(|hours| self.window_open(date, hours))
-                        .min()?;
-                    Some((open, date))
-                })
-                .collect(),
+        let opening = |date| match &self.session {
+            None => midnight(date),
+            Some(session) => {
+                if self.continuous_on(date) {
+                    return if session.holidays.contains(&date) {
+                        None
+                    } else {
+                        midnight(date)
+                    };
+                }
+                // All windows of one trading date share its earliest open, including split sessions.
+                let open = self
+                    .hours_on(date)
+                    .iter()
+                    .filter_map(|hours| self.window_open(date, hours))
+                    .min()?;
+                Some((open, date))
+            }
         };
+        let mut opens: Vec<_> = days
+            .scan(None, |stop, date| {
+                if stop.is_some_and(|stop| date < stop) {
+                    return None;
+                }
+                let entry = opening(date);
+                if stop.is_none()
+                    && let Some((open, _)) = entry
+                    && cutoff.is_some_and(|time| open <= time)
+                {
+                    // An overnight window may open before the preceding date's daytime window.
+                    *stop = Some(self.wall_time(open).date());
+                }
+                Some(entry)
+            })
+            .flatten()
+            .collect();
         opens.sort_by_key(|(open, _)| *open);
         opens
     }
@@ -407,8 +472,10 @@ impl ExchangeSessionProvider {
             ts,
             break_type: if self.timeframe.duration_ms() < Timeframe::Day1.duration_ms() {
                 SessionBreakType::Daily
-            } else if self.timeframe == Timeframe::Day1 {
+            } else if self.timeframe.duration_ms() == Timeframe::Day1.duration_ms() {
                 SessionBreakType::Weekly
+            } else if matches!(self.timeframe, Timeframe::Month1 | Timeframe::Months(_)) {
+                SessionBreakType::Yearly
             } else {
                 SessionBreakType::Monthly
             },
@@ -424,8 +491,8 @@ impl SessionProvider for ExchangeSessionProvider {
         to: &DateTime<Utc>,
     ) -> Option<SessionBreak> {
         if self.timeframe.duration_ms() >= Timeframe::Day1.duration_ms() {
-            let date = self.wall_time(*to).date();
-            return (self.period(self.wall_time(*from).date()) != self.period(date))
+            let date = self.trading_date(*to);
+            return (self.period(self.trading_date(*from)) != self.period(date))
                 .then(|| self.session_break(date, *to));
         }
         let opens = self.opens([*from, *to]);
@@ -437,9 +504,7 @@ impl SessionProvider for ExchangeSessionProvider {
     /// Finds the session opens around the bars' days once and places each bar among them.
     fn session_breaks(&self, bars: &[Bar]) -> Vec<(usize, SessionBreak)> {
         let dates: Vec<_> = if self.timeframe.duration_ms() >= Timeframe::Day1.duration_ms() {
-            bars.iter()
-                .map(|bar| self.wall_time(bar.time).date())
-                .collect()
+            bars.iter().map(|bar| self.trading_date(bar.time)).collect()
         } else {
             let opens = self.opens(bars.iter().map(|bar| bar.time));
             bars.iter()
@@ -462,6 +527,206 @@ mod tests {
     use super::*;
     use crate::model::session::find_session_breaks;
     use chrono::{Duration, Weekday};
+
+    #[test]
+    fn calendar_dividers_follow_bar_dates_and_coarser_periods() {
+        for (timeframe, dates, expected, break_type) in [
+            (
+                "12month".parse().unwrap(),
+                &[
+                    (2015, 1, 1),
+                    (2016, 1, 1),
+                    (2017, 1, 1),
+                    (2018, 1, 1),
+                    (2019, 1, 1),
+                    (2020, 1, 1),
+                    (2021, 1, 1),
+                    (2022, 1, 1),
+                    (2023, 1, 1),
+                    (2024, 1, 1),
+                ][..],
+                &[][..],
+                SessionBreakType::Yearly,
+            ),
+            (
+                Timeframe::Day1,
+                &[
+                    (2024, 3, 7),
+                    (2024, 3, 8),
+                    (2024, 3, 11),
+                    (2024, 3, 12),
+                    (2024, 3, 13),
+                ][..],
+                &[(2, "2024-03-11")][..],
+                SessionBreakType::Weekly,
+            ),
+            // Monday July 8 starts week 28, after the Thursday and Friday bars.
+            (
+                Timeframe::Day1,
+                &[
+                    (2024, 7, 4),
+                    (2024, 7, 5),
+                    (2024, 7, 8),
+                    (2024, 7, 9),
+                    (2024, 7, 10),
+                ][..],
+                &[(2, "2024-07-08")][..],
+                SessionBreakType::Weekly,
+            ),
+            // The second Monday bar opens July, even east of UTC.
+            (
+                Timeframe::Week1,
+                &[(2024, 6, 24), (2024, 7, 1), (2024, 7, 8)][..],
+                &[(1, "2024-07-01")][..],
+                SessionBreakType::Monthly,
+            ),
+            // Amman repeats midnight on October 29; all three dates are in week 43.
+            (
+                Timeframe::Day1,
+                &[(2021, 10, 28), (2021, 10, 29), (2021, 10, 30)][..],
+                &[][..],
+                SessionBreakType::Weekly,
+            ),
+            // Tehran starts Monday at 01:00 after skipping midnight on March 22.
+            (
+                Timeframe::Day1,
+                &[
+                    (2021, 3, 19),
+                    (2021, 3, 20),
+                    (2021, 3, 21),
+                    (2021, 3, 22),
+                    (2021, 3, 23),
+                ][..],
+                &[(3, "2021-03-22")][..],
+                SessionBreakType::Weekly,
+            ),
+            (
+                Timeframe::Week1,
+                &[(2024, 1, 22), (2024, 1, 29), (2024, 2, 5)][..],
+                &[(2, "2024-02-05")][..],
+                SessionBreakType::Monthly,
+            ),
+            (
+                "2d".parse().unwrap(),
+                &[(2024, 1, 30), (2024, 2, 1), (2024, 2, 3)][..],
+                &[(1, "2024-02-01")][..],
+                SessionBreakType::Monthly,
+            ),
+            (
+                Timeframe::Month1,
+                &[(2024, 1, 1), (2024, 2, 1), (2024, 12, 1), (2025, 1, 1)][..],
+                &[(3, "2025-01-01")][..],
+                SessionBreakType::Yearly,
+            ),
+            (
+                "3month".parse().unwrap(),
+                &[
+                    (2024, 1, 1),
+                    (2024, 4, 1),
+                    (2024, 7, 1),
+                    (2024, 10, 1),
+                    (2025, 1, 1),
+                ][..],
+                &[(4, "2025-01-01")][..],
+                SessionBreakType::Yearly,
+            ),
+            (
+                "24h".parse().unwrap(),
+                &[(2024, 3, 14), (2024, 3, 18)][..],
+                &[(1, "2024-03-18")][..],
+                SessionBreakType::Weekly,
+            ),
+        ] {
+            for (display, exchange) in [
+                ("UTC", "UTC"),
+                ("America/New_York", "America/New_York"),
+                ("Pacific/Chatham", "Pacific/Chatham"),
+                ("Europe/London", "Europe/Berlin"),
+                ("Europe/Berlin", "Asia/Tokyo"),
+                ("Asia/Kolkata", "Asia/Tokyo"),
+                ("Asia/Tokyo", "Australia/Sydney"),
+                ("Asia/Tehran", "Asia/Tehran"),
+                ("UTC", "Asia/Amman"),
+                ("Asia/Amman", "Asia/Amman"),
+            ] {
+                // Bars stamped at UTC, display or exchange midnight.
+                let zone = TimezoneId::named(display).unwrap();
+                let exchange_zone = TimezoneId::named(exchange).unwrap();
+                let instrument = crate::model::Instrument::new("CALENDAR")
+                    .with_time_zone(exchange_zone.clone())
+                    .with_session(Session::new([]));
+                let clock = crate::model::BarClock::new(timeframe)
+                    .with_timezone(zone.clone())
+                    .with_session(
+                        instrument.time_zone.clone().unwrap(),
+                        instrument.session.clone().unwrap(),
+                        false,
+                    );
+                let providers = [
+                    clock.sessions(),
+                    #[cfg(feature = "widget")]
+                    crate::chart::renderers::exchange_session(
+                        Some(&instrument),
+                        None,
+                        &crate::scales::TimezoneMode::Timezone(zone),
+                        timeframe,
+                    ),
+                ];
+                for provider in providers {
+                    let dates: Vec<_> = dates
+                        .iter()
+                        .map(|&(year, month, day)| {
+                            NaiveDate::from_ymd_opt(year, month, day).unwrap()
+                        })
+                        .collect();
+                    for stamp in ["utc", "display", "exchange"] {
+                        let bars: Vec<_> = dates
+                            .iter()
+                            .map(|&date| {
+                                let midnight = date.and_time(NaiveTime::MIN);
+                                let open = match stamp {
+                                    "utc" => midnight.and_utc(),
+                                    "display" => clock.open_on_date(date).unwrap(),
+                                    // Include the second midnight when the exchange repeats it.
+                                    _ => exchange_zone
+                                        .from_local_datetime(&midnight)
+                                        .latest()
+                                        .map(|time| time.to_utc())
+                                        .or_else(|| local_instant(exchange_zone.clone(), midnight))
+                                        .unwrap(),
+                                };
+                                Bar::new(open, 1.0, 1.0, 1.0, 1.0, 1.0)
+                            })
+                            .collect();
+                        let breaks = find_session_breaks(&bars, &provider);
+                        assert!(breaks.iter().all(|(_, item)| item.break_type == break_type));
+                        assert_eq!(
+                            breaks
+                                .iter()
+                                .map(|(i, item)| (*i, item.label.as_deref().unwrap()))
+                                .collect::<Vec<_>>(),
+                            expected,
+                            "{timeframe} {display}/{exchange} {stamp}"
+                        );
+                        for (pair, date) in bars.windows(2).zip(&dates[1..]) {
+                            assert_eq!(
+                                provider.trading_date(pair[1].time),
+                                *date,
+                                "{timeframe} {display}/{exchange} {stamp} {}",
+                                pair[1].time
+                            );
+                            let item = provider.session_break_between(&pair[0].time, &pair[1].time);
+                            let batch = breaks.iter().find(|(_, item)| item.ts == pair[1].time);
+                            assert_eq!(
+                                item.as_ref().map(|item| (&item.label, item.break_type)),
+                                batch.map(|(_, item)| (&item.label, item.break_type))
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn exchange_dates_follow_dst_windows_and_holidays() {
@@ -682,6 +947,11 @@ mod tests {
             )])),
         );
         for (open, timeframe, expected) in [
+            (
+                "2024-03-11T00:00:00Z",
+                "24h".parse().unwrap(),
+                Some("2024-03-11T20:00:00Z"),
+            ),
             (
                 "2024-03-08T00:00:00Z",
                 Timeframe::Day1,

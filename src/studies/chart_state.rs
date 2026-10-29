@@ -196,110 +196,21 @@ impl ChartState {
         }
     }
 
-    /// Visible source bars, or one OHLC bar per element on a price-based chart type.
+    /// The bars of [`visible_range`](Self::visible_range): source bars, or one OHLC bar per
+    /// element on a price-based chart type.
     pub fn visible_data(&self) -> &[crate::model::Bar] {
-        if self.shown().is_empty() {
-            return &[];
-        }
-
-        let logical_range = self.time_scale.visible_logical_range();
-        log::debug!(
-            "[visible_data] logical_range: left={}, right={}",
-            logical_range.left,
-            logical_range.right
-        );
-
-        let (mut start, mut end) = logical_range.to_strict_range();
-        log::debug!("[visible_data] BEFORE clamping: start={start}, end={end}");
-
-        // Clamp to valid data range
-        let data_len = self.shown().len();
-        end = end.min(data_len);
-        start = start.min(end);
-
-        log::debug!("[visible_data] AFTER clamping: start={start}, end={end}, data_len={data_len}");
-
-        // Calculate how many bars should be visible
-        let expected_visible = self.time_scale.visible_candles();
-
-        // If we have too few bars visible (scrolled past beginning), extend the range
-        let actual_visible = end.saturating_sub(start);
-        log::debug!(
-            "[visible_data] actual_visible={actual_visible}, expected_visible={expected_visible}"
-        );
-
-        if actual_visible < expected_visible && start == 0 && data_len > 1 {
-            // We're at the beginning but don't have enough bars visible
-            // Extend end to show the expected number of bars
-            // Note: Only extend if we have more than 1 bar to avoid log spam during startup
-            let old_end = end;
-            end = expected_visible.min(data_len);
-            if end > old_end {
-                log::debug!(
-                    "[visible_data] EXTENDING RANGE: old_end={}, new_end={} (gained {} bars)",
-                    old_end,
-                    end,
-                    end - old_end
-                );
-            }
-        }
-
-        log::debug!(
-            "[visible_data] FINAL RESULT: returning bars[{}..{}] ({} bars)",
-            start,
-            end,
-            end - start
-        );
-
+        let (start, end) = self.visible_range();
         &self.shown()[start..end]
     }
 
-    /// Visible range indices, counting elements on price-based chart types and bars otherwise.
+    /// Indices of the bars in view, end exclusive, counting elements on price-based chart
+    /// types and bars otherwise. A bar the plot's edge cuts is in view. With no bar in view
+    /// the range is empty: it starts at 0 before the first bar and at the number of bars
+    /// after the last.
     pub fn visible_range(&self) -> (usize, usize) {
-        if self.shown().is_empty() {
-            return (0, 0);
-        }
-
-        let logical_range = self.time_scale.visible_logical_range();
-        let (mut start, mut end) = logical_range.to_strict_range();
-
-        log::debug!("[visible_range] BEFORE clamping: start={start}, end={end}");
-
-        // Clamp to valid data range
-        let data_len = self.shown().len();
-        end = end.min(data_len);
-        start = start.min(end);
-
-        // Calculate how many bars should be visible
-        let expected_visible = self.time_scale.visible_candles();
-
-        // If we have too few bars visible (scrolled past beginning), extend the range
-        let actual_visible = end.saturating_sub(start);
-
-        if actual_visible < expected_visible && start == 0 && data_len > 1 {
-            // We're at the beginning but don't have enough bars visible
-            // Extend end to show the expected number of bars
-            // Note: Only extend if we have more than 1 bar to avoid log spam during startup
-            let old_end = end;
-            end = expected_visible.min(data_len);
-            if end > old_end {
-                log::debug!(
-                    "[visible_range] EXTENDING RANGE: old_end={}, new_end={} (gained {} bars)",
-                    old_end,
-                    end,
-                    end - old_end
-                );
-            }
-        }
-
-        log::debug!(
-            "[visible_range] FINAL RESULT: ({}, {}) - {} bars",
-            start,
-            end,
-            end - start
-        );
-
-        (start, end)
+        let (start, end) = self.time_scale.visible_logical_range().to_strict_range();
+        let end = end.min(self.shown().len());
+        (start.min(end), end)
     }
 
     /// Returns the main series' price scale.
@@ -356,6 +267,7 @@ impl ChartState {
             .or_else(|| crate::model::last_with_value(&self.shown()[..at]))
             .map_or(f64::NAN, |bar| bar.close);
         let transform = PriceTransform::new(mode, base);
+        // Unclamped, so that displaced values and projections past the last bar are fitted.
         let (study_start, study_end) = self.time_scale.visible_logical_range().to_strict_range();
         let study_values = indicators
             .into_iter()
@@ -368,10 +280,8 @@ impl ChartState {
                 #[cfg(not(feature = "drawings"))]
                 let drawing_prices = std::iter::empty();
                 #[cfg(feature = "drawings")]
-                let drawing_prices = crate::studies::plots::drawing_prices(
-                    study,
-                    study_start.max(start)..study_end.max(end),
-                );
+                let drawing_prices =
+                    crate::studies::plots::drawing_prices(study, study_start..study_end);
                 (0..study.line_count())
                     .filter(|&index| {
                         let plot = study.plot_style(index);
@@ -388,7 +298,7 @@ impl ChartState {
                             .len()
                             .checked_add_signed(study.plot_offset(index))
                             .unwrap_or(0);
-                        (study_start.max(start)..study_end.max(end).min(available_end))
+                        (study_start..study_end.min(available_end))
                             .filter_map(move |bar| study.plot_value(index, bar))
                             .chain(std::iter::once(0.0).filter(move |_| {
                                 matches!(
@@ -404,8 +314,8 @@ impl ChartState {
                             .candles()
                             .iter()
                             .filter(|candle| {
-                                candle.bars.end > study_start.max(start)
-                                    && candle.bars.start < study_end.max(end)
+                                candle.bars.end > study_start
+                                    && candle.bars.start < study_end
                                     && study.plot_style(candle.plot).visible
                             })
                             .flat_map(|candle| [candle.bar.low, candle.bar.high]),
@@ -415,8 +325,8 @@ impl ChartState {
                             .zones()
                             .iter()
                             .filter(|zone| {
-                                zone.bars.end > study_start.max(start)
-                                    && zone.bars.start < study_end.max(end)
+                                zone.bars.end > study_start
+                                    && zone.bars.start < study_end
                                     && study.plot_style(zone.plot).visible
                             })
                             .flat_map(|zone| [zone.bottom, zone.top]),
@@ -426,15 +336,15 @@ impl ChartState {
                             .projections()
                             .iter()
                             .filter(|projection| {
-                                projection.bars.end > study_start.max(start) as f64
-                                    && projection.bars.start < study_end.max(end) as f64
+                                projection.bars.end > study_start as f64
+                                    && projection.bars.start < study_end as f64
                                     && study.plot_style(projection.plot).visible
                             })
                             .flat_map(|projection| [projection.bottom, projection.top]),
                     )
                     .chain(
                         study
-                            .volume_profiles(study_start.max(start)..study_end.max(end))
+                            .volume_profiles(study_start..study_end)
                             .into_iter()
                             .flat_map(|plot| [plot.profile.low(), plot.profile.high()]),
                     )
@@ -665,6 +575,28 @@ mod tests {
             assert!(
                 (restored - y).abs() < 0.5,
                 "{mode:?} restored: {restored}, was {y}"
+            );
+        }
+    }
+
+    /// 800 points at 8 a bar span 100 slots, so with the right edge on bar `right` the slots of
+    /// bars `right - 99` to `right` are in view: bars 0 to 30 for bar 30, and no bar for bar -50,
+    /// before the first bar, or bar 450, after the last.
+    #[test]
+    fn visible_range_holds_the_bars_on_screen_past_either_end() {
+        let bars: Vec<_> = (0..300)
+            .map(|i| Bar::from_value(Utc.timestamp_opt(1_700_000_000 + i * 60, 0).unwrap(), 1.0))
+            .collect();
+        let mut state = ChartState::new(BarData::from_bars(bars.clone()));
+        state.time_scale_mut().set_width(800.0);
+        state.time_scale_mut().set_bar_spacing(8.0);
+        for (right, start, end) in [(30.0, 0, 31), (-50.0, 0, 0), (450.0, 300, 300)] {
+            state.time_scale_mut().set_right_offset(right - 299.0);
+            assert_eq!(state.visible_range(), (start, end), "right edge on {right}");
+            assert_eq!(
+                state.visible_data(),
+                &bars[start..end],
+                "right edge on {right}"
             );
         }
     }

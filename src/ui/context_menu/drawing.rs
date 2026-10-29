@@ -20,7 +20,7 @@ pub(crate) const DRAWING_MENU_OFFSET: f32 = 6.0;
 /// stable ids and titles.
 pub(crate) fn move_targets(chart: &Chart, drawing_id: usize) -> Vec<(PaneId, String)> {
     let current = chart.drawing_pane(drawing_id);
-    let mut panes = crate::ui::dialogs::study_context_menu::other_panes(chart, current);
+    let mut panes = super::study::other_panes(chart, current);
     if current.is_some_and(|pane| pane != PaneId::MAIN) {
         panes.push((PaneId::MAIN, "Main pane".into()));
     }

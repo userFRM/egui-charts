@@ -128,7 +128,7 @@ impl Default for TPOConfig {
             show_poc: true,
             show_value_area: true,
             show_initial_balance: true,
-            show_single_prints: true,
+            show_single_prints: false,
             show_opening_range: true,
             split_sessions: false,
             custom_letters: None,

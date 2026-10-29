@@ -69,7 +69,7 @@ impl PringsSpecialK {
         Self {
             signal_lengths: [signal_length_1.max(1), signal_length_2.max(1)],
             values: IndicatorValues::new(),
-            colors: vec![palette::BLUE, palette::RED],
+            colors: vec![palette::BLUE, palette::ORANGE],
             visible: true,
         }
     }

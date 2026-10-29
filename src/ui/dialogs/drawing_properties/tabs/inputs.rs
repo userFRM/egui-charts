@@ -467,7 +467,7 @@ fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
                     ));
                 ui.add(
                     egui::DragValue::new(&mut level.value)
-                        .range(0.0..=f32::MAX)
+                        .range(0.0..=crate::drawings::validation::MAX_PITCHFORK_LEVEL)
                         .speed(0.01),
                 )
                 .accessible_name(l10n::format_text(

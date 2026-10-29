@@ -8,13 +8,15 @@ use crate::theme::ThemeExt;
 use crate::widget::settings::ChartSettingsState;
 mod tabs;
 
-use super::{actions::SettingsAction, config::SettingsDialogConfig, types::SettingsTab};
 use crate::icons::icons as embedded_icons;
 use crate::services::StoreKind;
 use crate::theme::Theme;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
 use crate::ui::dialogs::templates::TemplateStore;
+use crate::ui::top_toolbar::components::settings_menu::{
+    actions::SettingsAction, config::SettingsDialogConfig, types::SettingsTab,
+};
 use crate::ui_kit::ColorPickerState;
 use crate::ui_kit::dialog::DialogFooter;
 use crate::ui_kit::modal::Modal;

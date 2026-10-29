@@ -423,7 +423,7 @@ impl Indicator for MACombination {
 
 // Preserve the existing public preset types and their constructors while sharing all calculation.
 macro_rules! impl_ma_preset {
-    ($ty:ident, $name:literal, $description:literal) => {
+    ($ty:ident, $name:literal, $description:literal $(, $marker:expr)?) => {
         impl crate::studies::Indicator for $ty {
             fn inputs(&self) -> Vec<crate::studies::StudyInput> {
                 self.inner.inputs()
@@ -469,6 +469,13 @@ macro_rules! impl_ma_preset {
                 }
                 names
             }
+            $(fn marker_style(&self) -> Option<crate::studies::PlotStyle> {
+                Some(crate::studies::PlotStyle {
+                    color: $marker, width: 4.0,
+                    pattern: crate::model::LineStyle::Solid,
+                    plot_type: crate::studies::PlotType::Crosses, visible: true,
+                })
+            })?
             fn markers(&self) -> &[crate::studies::IndicatorMarker] {
                 self.inner.markers()
             }

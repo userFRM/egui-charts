@@ -5,10 +5,10 @@ use crate::model::Capabilities;
 use crate::theme::ThemeExt;
 use crate::ui::Control;
 use crate::ui::app_state::set_control_visible;
-use crate::ui::dialogs::drawing_context_menu::DRAWING_MENU_OFFSET;
-use crate::ui::dialogs::study_context_menu::{self, StudyContextMenu};
+use crate::ui::context_menu::drawing::DRAWING_MENU_OFFSET;
+use crate::ui::context_menu::study::{self as study_context_menu, StudyContextMenu};
+use crate::ui::context_menu::tpo::TpoMenu;
 use crate::ui::dialogs::{DrawingContextMenu, SeriesContextMenu};
-use crate::ui::tpo_context_menu::TpoMenu;
 use crate::widget::{Chart, RightClickTarget};
 use egui::{Context, Id};
 
@@ -114,7 +114,7 @@ pub struct ChartMenus {
     series: SeriesContextMenu,
     study: StudyContextMenu,
     drawing: DrawingContextMenu,
-    axes: crate::ui::axis_context_menu::AxisMenus,
+    axes: crate::ui::context_menu::axis::AxisMenus,
     tpo: Option<TpoMenu>,
     /// Host rows in display order. Empty by default.
     pub host_entries: Vec<HostMenuEntry>,

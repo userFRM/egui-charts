@@ -415,7 +415,10 @@ pub fn render_chart_type(
 
         // === Advanced Types ===
         ChartType::TimePriceOpportunity => {
-            let tpo_config = params.type_params.tpo_config(ctx.tick_size);
+            let tpo_config = crate::model::TPOConfig {
+                display_mode: crate::model::TPODisplayMode::Blocks,
+                ..params.type_params.tpo_config(ctx.tick_size)
+            };
             tpo::render_live_tpo(
                 painter,
                 price_rect,
@@ -429,6 +432,24 @@ pub fn render_chart_type(
                 params.chart_rect_min_x(),
                 params.bullish_color(),
                 params.bearish_color(),
+            );
+            line::render_line(
+                painter,
+                ctx.volume_ctx,
+                ctx.visible_data,
+                ctx.start_idx,
+                false,
+                params.max_volume(),
+                ctx.colors,
+                ctx.price_scale,
+                params.chart_rect_min_x(),
+                &idx_to_coord,
+                &crate::model::LinePlotStyle {
+                    color: painter.ctx().active_theme().ui.accent,
+                    width: crate::tokens::DESIGN_TOKENS.stroke.hairline,
+                    ..Default::default()
+                },
+                crate::model::PriceSource::Close,
             );
         }
     }

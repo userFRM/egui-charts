@@ -182,14 +182,14 @@ impl Default for ChartColors {
 }
 
 impl ChartColors {
-    /// Rising volume bars: #26a69a at `volume_alpha`.
+    /// Rising volume bars: teal at `volume_alpha`.
     pub fn volume_up(&self) -> Color32 {
-        Color32::from_rgba_unmultiplied(38, 166, 154, self.volume_alpha)
+        Color32::from_rgb(38, 166, 154).gamma_multiply_u8(self.volume_alpha)
     }
 
-    /// Falling volume bars: #ef5350 at `volume_alpha`.
+    /// Falling volume bars: red at `volume_alpha`.
     pub fn volume_down(&self) -> Color32 {
-        Color32::from_rgba_unmultiplied(239, 83, 80, self.volume_alpha)
+        Color32::from_rgb(239, 83, 80).gamma_multiply_u8(self.volume_alpha)
     }
 }
 

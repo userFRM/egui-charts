@@ -1,6 +1,7 @@
 //! Volume columns with an optional moving average on an independent scale.
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues, PlotStyle, PlotType};
 use egui::Color32;
@@ -66,9 +67,9 @@ impl Volume {
             color_rule: VolumeColorRule::Open,
             overlay: true,
             colors: [
-                Color32::from_rgba_unmultiplied(38, 166, 154, 153),
-                Color32::from_rgba_unmultiplied(239, 83, 80, 153),
-                Color32::from_rgb(233, 30, 99),
+                palette::HISTOGRAM_TEAL.gamma_multiply_u8(128),
+                Color32::from_rgba_unmultiplied(239, 83, 80, 128),
+                palette::LIGHT_BLUE,
             ],
             visible: true,
             values: IndicatorValues::new(),
@@ -177,7 +178,7 @@ impl Indicator for Volume {
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
             plot_type: if line < 2 {
-                PlotType::Histogram
+                PlotType::Columns
             } else {
                 PlotType::Line
             },
@@ -286,9 +287,9 @@ mod tests {
                     assert_eq!(
                         study.colors()[line],
                         if *is_up {
-                            Color32::from_rgba_unmultiplied(38, 166, 154, 153)
+                            Color32::from_rgba_unmultiplied(38, 166, 154, 128)
                         } else {
-                            Color32::from_rgba_unmultiplied(239, 83, 80, 153)
+                            Color32::from_rgba_unmultiplied(239, 83, 80, 128)
                         }
                     );
                     match expected[i] {

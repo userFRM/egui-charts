@@ -73,6 +73,7 @@
 //! | `drawings` | via `ui` | Drawing tools, interaction, undo and persistence; enables `widget` |
 //! | `studies` | via `ui` | Built-in studies, `IndicatorFactory` and study templates; usable without egui |
 //! | `alert-engine` | off | `services::AlertEngine`, an `Alerts` service that evaluates alerts on the bars the host feeds it; needs no egui |
+//! | `detectors` | off | `services::OrderFlowDetectors`, a `Signals` service that finds order-flow events in the trades and depth the host feeds it; needs no egui |
 //! | `strategies` | off | `strategies::Backtest`, which runs a `Strategy` over bars and returns a `StrategyReport`; needs no egui |
 //! | `icons` | via `ui` | Embedded SVG icons and their image loaders; enables `widget` |
 //! | `ui` | on | Toolbars, panels, dialogs and `ui_kit`; enables `icons`, `studies` and `drawings` |
@@ -105,6 +106,7 @@
 //! public fields. Include a fallback arm when matching a `#[non_exhaustive]` enum.
 
 // ─── Crate-level lint configuration ──────────────────────────────────────────
+#![warn(unnameable_types)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::module_inception)]
 #![allow(clippy::needless_range_loop)]

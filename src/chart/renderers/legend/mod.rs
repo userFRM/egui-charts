@@ -146,7 +146,7 @@ impl<'a> Legend<'a> {
             show_indicator_inputs: true,
             show_indicator_values: true,
             day_change: None,
-            study_backdrop: 1.0,
+            study_backdrop: 0.6,
             quantity: None,
         }
     }
@@ -654,7 +654,9 @@ impl<'a> Legend<'a> {
                         layout.text(text, theme.text.ohlc, color, bounds.width());
                     }
                 }
-                let controls = layout.reserve(Vec2::new(80.0, 20.0)).intersect(bounds);
+                let controls = layout
+                    .reserve_space(Vec2::new(80.0, 20.0))
+                    .intersect(bounds);
                 let row_right = if layout.pos.y > row_start.y {
                     bounds.right()
                 } else {
@@ -826,6 +828,8 @@ pub(crate) fn study_controls(
         && ui.rect_contains_pointer(row);
     let revealed = selected || focused || hovered;
     if revealed {
+        ui.painter()
+            .rect_filled(controls, theme.radius.sm, theme.chart.bg);
         ui.painter().rect_stroke(
             row,
             theme.radius.sm,
@@ -927,7 +931,7 @@ impl<'a> Layout<'a> {
         self.background = self.painter.add(egui::Shape::Noop);
     }
 
-    fn reserve(&mut self, size: Vec2) -> Rect {
+    fn reserve_space(&mut self, size: Vec2) -> Rect {
         if self.pos.x > self.bounds.left() && self.pos.x + size.x > self.bounds.right() {
             self.new_row();
         }
@@ -936,6 +940,12 @@ impl<'a> Layout<'a> {
             Pos2::new(self.pos.x, self.pos.y + (self.height - size.y) / 2.0),
             size,
         );
+        self.pos.x += size.x + 8.0;
+        rect
+    }
+
+    fn reserve(&mut self, size: Vec2) -> Rect {
+        let rect = self.reserve_space(size);
         self.painter.set(
             self.background,
             egui::Shape::rect_filled(
@@ -948,7 +958,6 @@ impl<'a> Layout<'a> {
                 self.backdrop,
             ),
         );
-        self.pos.x += size.x + 8.0;
         rect
     }
 
@@ -1269,6 +1278,13 @@ mod tests {
                     Shape::Rect(r) => r.rect == row,
                     _ => false,
                 });
+                let buttons_filled = output.shapes.iter().any(|s| {
+                    matches!(&s.shape, Shape::Rect(r) if r.rect == controls && r.fill == theme.chart.bg)
+                });
+                assert_eq!(
+                    buttons_filled, painted,
+                    "only revealed controls mask the chart"
+                );
                 let focused_label = output.platform_output.events.iter().find_map(|event| {
                     if let egui::output::OutputEvent::FocusGained(info) = event {
                         info.label.clone()
