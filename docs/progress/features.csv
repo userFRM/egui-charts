@@ -492,7 +492,7 @@ Studies,Indicator infrastructure,Indicator templates,done,library,src/studies/te
 Studies,Indicator infrastructure,Indicators on indicators,done,library,src/studies/settings.rs;src/widget/studies.rs;src/ui/top_toolbar/components/indicator_dialog/settings.rs
 Studies,Indicator infrastructure,Input validation,done,library,src/studies/inputs.rs;src/studies/builtin/kama.rs;src/studies/builtin/mod.rs;src/studies/factory/mod.rs
 Studies,Indicator infrastructure,Maximum studies per chart,done,library,src/widget/series.rs;src/widget/clipboard.rs;src/ui/top_toolbar/components/indicator_dialog/dialog.rs;terminal/src/studies.rs
-Studies,Indicator infrastructure,Multi-output studies draw all their lines,done,library,src/studies/indicator_trait.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs;src/widget/indicator_pane.rs
+Studies,Indicator infrastructure,Multi-output studies draw all their lines,done,library,src/studies/builtin/adx.rs;src/studies/builtin/stochastic.rs;src/studies/builtin/stochastic_rsi.rs;src/studies/indicator_trait.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs;src/widget/indicator_pane.rs
 Studies,Indicator infrastructure,Multi-timeframe inputs,partial,library,src/studies/settings.rs;src/studies/data.rs;src/widget/studies_data.rs
 Studies,Indicator infrastructure,Other-symbol inputs,partial,library,src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/studies_data.rs;src/services/search/expression.rs;src/studies/factory/mod.rs
 Studies,Indicator infrastructure,Overlay versus separate pane,done,library,src/widget/series.rs;src/studies/settings.rs;src/widget/pane_layout.rs;src/widget/panes.rs
@@ -618,12 +618,13 @@ Studies,Indicators,Crypto on-chain and ETF metrics,done,host,src/data/metrics.rs
 Studies,Indicators,Cumulative Volume Delta,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs
 Studies,Indicators,Cumulative Volume Index,done,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs
 Studies,Indicators,Detrended Price Oscillator,done,library,src/studies/builtin/dpo.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Directional Movement,done,library,src/studies/builtin/directional_movement.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Directional Movement,done,library,src/studies/builtin/directional_movement.rs;src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Dividend Yield,done,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/top_toolbar/components/indicator_dialog/dialog.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Donchian Channels,done,library,src/studies/builtin/donchian.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Double Exponential Moving Average,done,library,src/studies/builtin/dema.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,EMA Cross,done,library,src/studies/builtin/ma_combination.rs;src/studies/builtin/ma_presets.rs;src/studies/builtin/ma_multiple.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Ease of Movement,done,library,src/studies/builtin/ease_of_movement.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Elder Impulse System,done,library,src/studies/builtin/elder_impulse.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Elder's Force Index,done,library,src/studies/builtin/force_index.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Envelope,done,library,src/studies/builtin/envelopes.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Exponential Moving Average,done,library,src/studies/builtin/ema.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
@@ -650,7 +651,7 @@ Studies,Indicators,McGinley Dynamic,done,library,src/studies/builtin/mcginley_dy
 Studies,Indicators,Median,done,library,src/studies/builtin/median.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Median Price,done,library,src/studies/builtin/typical_price.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Momentum,done,library,src/studies/builtin/momentum.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Money Flow,done,library,src/studies/builtin/mfi.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Money Flow,done,library,src/studies/builtin/mfi.rs;src/studies/builtin/rsi.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Moon Phases,done,library,src/studies/builtin/lunar_phases.rs;src/studies/factory/mod.rs
 Studies,Indicators,Moving Average Adaptive,done,library,src/studies/builtin/kama.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Moving Average Channel,done,library,src/studies/builtin/ma_channel.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
@@ -688,7 +689,7 @@ Studies,Indicators,Relative Strength Index,partial,library,src/studies/builtin/r
 Studies,Indicators,Relative Vigor Index,done,library,src/studies/builtin/relative_vigor.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Relative Volatility Index,done,library,src/studies/builtin/relative_volatility_index.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Relative Volume at Time,done,library,src/studies/builtin/relative_volume_at_time.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Rob Booker - ADX Breakout,missing,library,
+Studies,Indicators,Rob Booker - ADX Breakout,done,library,src/studies/builtin/adx_breakout.rs;src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Rob Booker - Knoxville Divergence,missing,library,
 Studies,Indicators,Rob Booker Intraday Pivot Points,missing,library,
 Studies,Indicators,Rob Booker Missed Pivot Points,missing,library,
@@ -708,10 +709,10 @@ Studies,Indicators,Standard Error,done,library,src/studies/builtin/standard_erro
 Studies,Indicators,Standard Error Bands,done,library,src/studies/builtin/standard_error_bands.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Stochastic,done,library,src/studies/builtin/stochastic.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Stochastic Momentum Index,done,library,src/studies/builtin/smi.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Stochastic RSI,done,library,src/studies/builtin/stochastic_rsi.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Stochastic RSI,done,library,src/studies/builtin/stochastic_rsi.rs;src/studies/builtin/rsi.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Supertrend,done,library,src/studies/builtin/supertrend.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,TRIX,done,library,src/studies/builtin/trix.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Technical Ratings,missing,library,
+Studies,Indicators,Technical Ratings,partial,library,src/studies/builtin/technical_ratings.rs;src/studies/builtin/stochastic.rs;src/studies/builtin/cci.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Time Price Opportunity,done,library,src/studies/builtin/time_price_opportunity.rs;src/model/tpo.rs;src/widget/frame.rs;src/chart/rendering/candles/tpo.rs
 Studies,Indicators,Time Weighted Average Price,done,library,src/studies/builtin/twap.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Trading Sessions,done,library,src/studies/builtin/trading_sessions.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
