@@ -38,6 +38,16 @@ impl Indicator for NetVolume {
         ))
     }
 
+    fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.colors[0],
+            width: 1.0,
+            pattern: crate::model::LineStyle::Solid,
+            plot_type: crate::studies::PlotType::Columns,
+            visible: true,
+        }
+    }
+
     fn value_format(&self) -> crate::scales::StudyFormat {
         crate::scales::StudyFormat::Volume
     }

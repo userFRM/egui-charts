@@ -152,20 +152,7 @@ impl Indicator for FisherTransform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-
-    fn make_bar(high: f64, low: f64, close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: (high + low) / 2.0,
-            high,
-            low,
-            close,
-            volume: 1000.0,
-            colors: None,
-            payload: None,
-        }
-    }
+    use crate::studies::test_support::make_range_bar as make_bar;
 
     /// (high, low, expected (fisher, trigger)) for length 5, from Ehlers'
     /// published construction computed independently. The series rises long

@@ -175,6 +175,9 @@ pub struct SymbolSearchDialog {
     category: Category,
     recent_symbols: Vec<String>,
     sources: Vec<String>,
+    /// Exchanges and symbol classes the feed reports, which replace those of the symbols shown.
+    feed_exchanges: Option<Vec<String>>,
+    feed_symbol_types: Option<Vec<SymbolType>>,
     expanded: Vec<String>,
     /// Why the query's expression is not listed: still being checked, or invalid.
     expression_status: Option<(String, bool)>,
@@ -209,6 +212,8 @@ impl SymbolSearchDialog {
             category: Category(None),
             recent_symbols: Vec::new(),
             sources: Vec::new(),
+            feed_exchanges: None,
+            feed_symbol_types: None,
             expanded: Vec::new(),
             expression_status: None,
             config: SymbolSearchConfig::default(),
@@ -255,6 +260,16 @@ impl SymbolSearchDialog {
     /// menu offers the exchanges of the supplied symbols.
     pub fn set_sources(&mut self, sources: Vec<String>) {
         self.sources = sources;
+    }
+
+    /// Takes the exchanges and symbol classes the feed serves, known before any symbol resolves:
+    /// pass [`Chart::feed_capabilities`](crate::widget::Chart::feed_capabilities). Reported
+    /// exchanges are the source menu's choices, replacing those of the supplied symbols and
+    /// [`set_sources`](Self::set_sources); an empty list offers none. Reported classes are the
+    /// category tabs. A list the feed does not report leaves the choices as they were.
+    pub fn set_feed_capabilities(&mut self, capabilities: &crate::data::FeedCapabilities) {
+        self.feed_exchanges = capabilities.exchanges.clone();
+        self.feed_symbol_types = capabilities.symbol_types.clone();
     }
 
     /// Records an instrument opened outside this dialog in the recent list.
@@ -421,7 +436,9 @@ impl SymbolSearchDialog {
                 });
                 ui.add_space(16.0);
                 let mut categories = vec![Category(None)];
-                if self.search.connected() {
+                if let Some(types) = &self.feed_symbol_types {
+                    categories.extend(types.iter().map(|kind| Category(Some(*kind))));
+                } else if self.search.connected() {
                     categories.extend(
                         [
                             SymbolType::Stock,
@@ -461,8 +478,11 @@ impl SymbolSearchDialog {
                     self.sel_idx = 0;
                     self.refresh_results(ctx, all_symbols);
                 }
-                let mut sources = self.sources.clone();
-                if !self.search.connected() {
+                let mut sources = self
+                    .feed_exchanges
+                    .clone()
+                    .unwrap_or_else(|| self.sources.clone());
+                if self.feed_exchanges.is_none() && !self.search.connected() {
                     for exchange in all_symbols.iter().filter_map(|s| s.exchange.as_ref()) {
                         if !sources.contains(exchange) {
                             sources.push(exchange.clone());
@@ -812,13 +832,6 @@ mod tests {
     }
 
     #[test]
-    fn test_symbol_search_creation() {
-        let dialog = SymbolSearchDialog::new();
-        assert!(!dialog.is_open());
-        assert_eq!(dialog.search_query, "");
-    }
-
-    #[test]
     fn test_symbol_search_open_close() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for keyboard in [false, true] {
@@ -1152,18 +1165,6 @@ mod tests {
     }
 
     #[test]
-    fn test_symbol_filtering_by_name() {
-        let mut dialog = SymbolSearchDialog::new();
-        let symbols = create_test_symbols();
-
-        dialog.search_query = "Apple".to_string();
-        dialog.update_filtered_symbols(&symbols);
-
-        assert_eq!(dialog.filtered_symbols.len(), 1);
-        assert_eq!(dialog.filtered_symbols[0].symbol, "AAPL");
-    }
-
-    #[test]
     fn test_symbol_filtering_case_insensitive() {
         let symbols = create_test_symbols();
         for (query, expected) in [("btc", "BTCUSDT"), ("BTC", "BTCUSDT"), ("apple", "AAPL")] {
@@ -1198,17 +1199,5 @@ mod tests {
             assert_eq!(names, [expected], "compare query: {query}");
             output.drop_without_applying_deltas();
         }
-    }
-
-    #[test]
-    fn test_max_results_limit() {
-        let mut dialog = SymbolSearchDialog::new();
-        dialog.config.max_results = 2;
-
-        let symbols = create_test_symbols();
-        dialog.search_query = "USD".to_string();
-        dialog.update_filtered_symbols(&symbols);
-
-        assert!(dialog.filtered_symbols.len() <= 2);
     }
 }

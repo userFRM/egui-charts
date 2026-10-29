@@ -28,7 +28,7 @@ use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// SuperTrend indicator
@@ -95,15 +95,6 @@ impl SuperTrend {
         self.bearish_color = bearish;
         self
     }
-
-    /// Calculate True Range
-    #[inline]
-    fn true_range(bar: &Bar, prev_close: f64) -> f64 {
-        let hl = bar.high - bar.low;
-        let hc = (bar.high - prev_close).abs();
-        let lc = (bar.low - prev_close).abs();
-        hl.max(hc).max(lc)
-    }
 }
 
 /// Construct with the conventional default parameters.
@@ -150,7 +141,7 @@ impl Indicator for SuperTrend {
                 let tr = if state.usable == 0 {
                     bar.high - bar.low
                 } else {
-                    Self::true_range(bar, state.previous)
+                    ATR::true_range(bar, state.previous)
                 };
                 let previous = state.previous;
                 state.previous = bar.close;

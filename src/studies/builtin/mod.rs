@@ -58,7 +58,7 @@
 //!
 //! ## Statistics
 //! [`LinearRegression`], [`TrendStrengthIndex`], [`StandardError`],
-//! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`], [`Ratio`],
+//! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`], [`Ratio`], [`LunarPhases`],
 //! [`Spread`], [`Correlation`]
 //!
 //! ## Time
@@ -66,7 +66,10 @@
 
 use crate::model::Bar;
 mod footprint_studies;
-pub use footprint_studies::{FootprintStudy, FootprintStudyKind, footprint_studies};
+pub use footprint_studies::{
+    FootprintStudy, FootprintStudyConfig, FootprintStudyKind, FootprintStudyState,
+    footprint_studies,
+};
 mod options_volume_profile;
 pub use options_volume_profile::OptionsVolumeProfile;
 mod trade_delta;
@@ -165,6 +168,7 @@ mod gaps;
 mod intraday_pivot_points;
 mod key_levels;
 mod knoxville_divergence;
+mod lunar_phases;
 mod missed_pivots;
 mod pivot_points;
 mod pivot_points_high_low;
@@ -382,6 +386,7 @@ pub use gaps::Gaps;
 pub use intraday_pivot_points::IntradayPivotPoints;
 pub use key_levels::KeyLevels;
 pub use knoxville_divergence::KnoxvilleDivergence;
+pub use lunar_phases::{LunarPhase, LunarPhases, MoonPhase, lunar_phases};
 pub use missed_pivots::MissedPivots;
 pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
 pub use pivot_points_high_low::PivotPointsHighLow;

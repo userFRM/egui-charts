@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 export const areas = ['Chart', 'Drawings', 'Studies', 'Order flow', 'Terminal', 'Builder API'] as const;
 export const statuses = ['done', 'partial', 'missing'] as const;
@@ -44,6 +44,11 @@ function parseFeatures(csv: string): Feature[] {
         !feature.group || !feature.feature || identities.has(identity) ||
         (feature.status === 'missing' && feature.source)) {
       throw new Error(`Invalid or duplicate feature: ${identity}`);
+    }
+    for (const source of feature.source ? feature.source.split(';') : []) {
+      if (!existsSync(`${root}/${source}`)) {
+        throw new Error(`Missing source path for feature: ${identity}: ${source}`);
+      }
     }
     identities.add(identity);
     return feature;

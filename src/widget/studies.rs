@@ -13,7 +13,12 @@ impl Chart {
             .iter()
             .flat_map(|study| study.data_requests())
             .collect();
-        let sources = self.study_data.data(requests, &self.symbol, self.timeframe);
+        let sources = self.study_data.data(
+            requests,
+            &self.symbol,
+            self.timeframe,
+            self.replay.as_ref().map(|replay| replay.time),
+        );
         calculate(
             self.studies.indicators_mut(),
             &self.study_ids,
@@ -210,6 +215,16 @@ pub(super) fn refresh_values(
             }
         }
         let started = Instant::now();
+        // A parent can repaint earlier bars even when only its input tail changed.
+        let mut previous: Vec<(usize, Vec<f64>)> = Vec::new();
+        for study in studies.iter() {
+            if let Some(StudySource::Study { id, plot }) = study.source()
+                && id == ids[at].0
+                && !previous.iter().any(|(line, _)| *line == plot)
+            {
+                previous.push((plot, studies[at].values().line(plot).to_vec()));
+            }
+        }
         super::studies::update(studies, ids, at, bars, from, sources);
         pending_from[at] = None;
         if !incremental {
@@ -217,10 +232,22 @@ pub(super) fn refresh_values(
             let cost = started.elapsed().as_secs_f64();
             next_refresh[at] = now + cost + REFRESH_INTERVAL.max(4.0 * cost);
         }
-        for child in 0..studies.len() {
-            if matches!(studies[child].source(), Some(crate::studies::StudySource::Study { id, .. }) if id == ids[at].0)
-            {
-                pending_from[child] = Some(pending_from[child].map_or(from, |old| old.min(from)));
+        for (plot, previous) in previous {
+            let values = studies[at].values().line(plot);
+            let from = previous
+                .iter()
+                .zip(values)
+                .position(|(old, new)| old.to_bits() != new.to_bits())
+                .or_else(|| {
+                    (previous.len() != values.len()).then_some(previous.len().min(values.len()))
+                })
+                .map_or(from, |changed| from.min(changed));
+            for (child, study) in studies.iter().enumerate() {
+                if matches!(study.source(), Some(StudySource::Study { id, plot: source_plot }) if id == ids[at].0 && source_plot == plot)
+                {
+                    pending_from[child] =
+                        Some(pending_from[child].map_or(from, |old| old.min(from)));
+                }
             }
         }
     }
@@ -252,6 +279,64 @@ mod tests {
     use crate::studies::{InputValue, RSI, SMA, StudySource};
     use crate::widget::{Chart, SeriesId, test_frames::shapes};
     use chrono::{Duration, Utc};
+
+    /// SMA(1)(x) = x, including gaps and past values repainted as new swings arrive.
+    #[test]
+    fn study_sources_follow_repainting_output_during_appends() {
+        let bars: Vec<_> = (0..800)
+            .map(|i| {
+                let close = 100.0 + 10.0 * (i as f64 / 12.0).sin();
+                Bar::new(
+                    chrono::DateTime::<Utc>::UNIX_EPOCH + Duration::minutes(i),
+                    close,
+                    close + 1.0,
+                    close - 1.0,
+                    close,
+                    100.0,
+                )
+            })
+            .collect();
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars[..500].to_vec()));
+        let parent = chart.add_indicator(Box::new(crate::studies::ZigZag::default()));
+        let child = chart.add_indicator(Box::new(SMA::new(1)));
+        chart
+            .set_indicator_source(
+                child,
+                StudySource::Study {
+                    id: parent.0,
+                    plot: 0,
+                },
+            )
+            .unwrap();
+        for frame in 0..6 {
+            shapes(&ctx, &mut chart, frame as f64, Vec::new());
+        }
+        for (at, bar) in bars[500..].iter().enumerate() {
+            chart.update(SeriesId::MAIN, bar.clone());
+            shapes(&ctx, &mut chart, 6.0 + at as f64, Vec::new());
+        }
+        for frame in 306..312 {
+            shapes(&ctx, &mut chart, frame as f64, Vec::new());
+        }
+        let output = |id| {
+            chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap()
+                .1
+                .values()
+        };
+        assert_eq!(output(parent).len(), bars.len());
+        assert_eq!(output(child).len(), bars.len());
+        for at in 0..bars.len() {
+            assert_eq!(
+                output(child).value(0, at).map(f64::to_bits),
+                output(parent).value(0, at).map(f64::to_bits),
+                "bar {at}: SMA(1) must equal its source"
+            );
+        }
+    }
 
     /// One-bar means follow a continuous stream in dependency order, within one full refresh per pass.
     #[test]

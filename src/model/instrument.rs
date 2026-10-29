@@ -276,12 +276,16 @@ pub enum DataStatus {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Session {
-    /// Regular windows. With no regular or extended windows, the session is always open.
+    /// Regular windows. With no regular or extended windows, the session is always open, apart
+    /// from its holidays and the dates in [`overrides`](Self::overrides).
     pub windows: Vec<SessionWindow>,
     /// Pre-market and post-market windows in the exchange zone.
     pub extended_windows: Vec<SessionWindow>,
     /// Trading dates on which every window is closed, including overnight windows.
     pub holidays: Vec<NaiveDate>,
+    /// Date-specific hours, such as early closes and exceptional openings. An override replaces
+    /// the weekly windows and any holiday of its date.
+    pub overrides: Vec<SessionOverride>,
 }
 
 impl Session {
@@ -291,6 +295,7 @@ impl Session {
             windows: windows.into_iter().collect(),
             extended_windows: Vec::new(),
             holidays: Vec::new(),
+            overrides: Vec::new(),
         }
     }
 
@@ -307,6 +312,78 @@ impl Session {
     pub fn with_holidays(mut self, holidays: impl IntoIterator<Item = NaiveDate>) -> Self {
         self.holidays = holidays.into_iter().collect();
         self
+    }
+
+    /// Replaces the hours of the dates in `overrides`. For a date listed twice the first applies.
+    pub fn with_overrides(mut self, overrides: impl IntoIterator<Item = SessionOverride>) -> Self {
+        self.overrides = overrides.into_iter().collect();
+        self
+    }
+
+    /// Drops the pre-market and post-market windows, weekly and date-specific.
+    pub(crate) fn clear_extended_windows(&mut self) {
+        self.extended_windows.clear();
+        for date in &mut self.overrides {
+            date.extended_windows.clear();
+        }
+    }
+}
+
+/// The hours of one trading date, in place of its weekly windows and holiday.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SessionOverride {
+    /// The trading date, named by the day on which the windows close, as in
+    /// [`SessionWindow::days`].
+    pub date: NaiveDate,
+    /// Regular windows of the date; an early close is one window ending early.
+    pub windows: Vec<OverrideWindow>,
+    /// Pre-market and post-market windows of the date.
+    pub extended_windows: Vec<OverrideWindow>,
+}
+
+impl SessionOverride {
+    /// A closure: every window of `date` is closed. Add hours with
+    /// [`with_windows`](Self::with_windows) and
+    /// [`with_extended_windows`](Self::with_extended_windows).
+    pub fn new(date: NaiveDate) -> Self {
+        Self {
+            date,
+            windows: Vec::new(),
+            extended_windows: Vec::new(),
+        }
+    }
+
+    /// Sets the regular windows of the date.
+    pub fn with_windows(mut self, windows: impl IntoIterator<Item = OverrideWindow>) -> Self {
+        self.windows = windows.into_iter().collect();
+        self
+    }
+
+    /// Sets the extended windows of the date.
+    pub fn with_extended_windows(
+        mut self,
+        windows: impl IntoIterator<Item = OverrideWindow>,
+    ) -> Self {
+        self.extended_windows = windows.into_iter().collect();
+        self
+    }
+}
+
+/// One window of a [`SessionOverride`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OverrideWindow {
+    /// Exchange time.
+    pub open: NaiveTime,
+    /// Exchange time. At or before `open`, the window spans midnight.
+    pub close: NaiveTime,
+}
+
+impl OverrideWindow {
+    /// `open` to `close`.
+    pub fn new(open: NaiveTime, close: NaiveTime) -> Self {
+        Self { open, close }
     }
 }
 

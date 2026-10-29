@@ -9,9 +9,10 @@ use egui::{Color32, RichText, Ui};
 
 use crate::data::{FeedError, inbox::Inbox};
 use crate::icons::icons;
-use crate::model::{Alert, AlertId, AlertStatus};
+use crate::model::{Alert, AlertCondition, AlertId, AlertSource, AlertStatus};
 use crate::services::{AlertEvent, Alerts, Listener};
 use crate::theme::ThemeExt;
+use crate::ui::dialogs::alert_dialog::rule_form;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::notifications::{Toast, Toasts};
 use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
@@ -40,8 +41,25 @@ pub enum AlertPanelAction {
     CreateAlert,
     /// Edit this host-owned alert in the shared dialog.
     EditAlert(Box<Alert>),
+    /// Stage this copy of an alert, without an identifier and active, in the shared dialog
+    /// with [`AlertDialog::edit`](crate::ui::dialogs::alert_dialog::AlertDialog::edit).
+    DuplicateAlert(Box<Alert>),
     /// Save this CSV text to a file chosen by the host.
     ExportLog(String),
+}
+
+/// The property the alert list is ordered by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum AlertSortKey {
+    /// Arrival order, as the host pushed the alerts.
+    #[default]
+    Arrival,
+    /// The alert name, ignoring case.
+    Name,
+    /// The symbol, ignoring case.
+    Symbol,
+    /// Active, triggered, disabled, then expired.
+    Status,
 }
 
 /// One trigger the host reported, retained even after the alert is removed.
@@ -58,6 +76,9 @@ pub struct AlertTrigger {
     /// The alert's message with its placeholders filled in, empty if there is none.
     pub message: String,
 }
+
+/// Reply key of the inline draft's save, apart from the stream generations and other replies.
+const DRAFT_REPLY: u64 = u64::MAX;
 
 /// An alert panel connected to the host's [`Alerts`] service.
 ///
@@ -76,6 +97,13 @@ pub struct AlertsPanel {
     error: Option<FeedError>,
     show_log: bool,
     notification_seconds: f32,
+    sort: AlertSortKey,
+    descending: bool,
+    sources: Vec<(AlertSource, String)>,
+    symbol: String,
+    draft: Alert,
+    draft_saving: bool,
+    pending: usize,
     sound_choice: Option<String>,
     sound: Option<String>,
 }
@@ -100,9 +128,31 @@ impl AlertsPanel {
             error: None,
             show_log: false,
             notification_seconds: 5.0,
+            sort: AlertSortKey::default(),
+            descending: false,
+            sources: Vec::new(),
+            symbol: String::new(),
+            draft: Alert::new("", AlertCondition::Crossing(0.0)),
+            draft_saving: false,
+            pending: 0,
             sound_choice: None,
             sound: None,
         }
+    }
+
+    /// Start the Quick alert form on `symbol`, such as the chart's. Call it every frame: the form
+    /// follows a change of `symbol` and keeps what the user typed otherwise.
+    pub fn set_symbol(&mut self, symbol: &str) {
+        if self.symbol != symbol {
+            self.symbol = symbol.to_owned();
+            self.draft.symbol = symbol.to_owned();
+        }
+    }
+
+    /// Offer these study outputs and drawings, as stable identifiers and display names, to the
+    /// inline alert form.
+    pub fn set_sources(&mut self, sources: Vec<(AlertSource, String)>) {
+        self.sources = sources;
     }
 
     /// Keep each trigger notification on screen for this many seconds, five by default.
@@ -135,6 +185,8 @@ impl AlertsPanel {
         self.alerts.clear();
         self.log.clear();
         self.error = None;
+        self.pending = 0;
+        self.draft_saving = false;
         self.inbox = Arc::default();
         self.watch();
     }
@@ -166,11 +218,43 @@ impl AlertsPanel {
             ));
             return;
         }
-        if let Some(service) = &self.service {
-            service.save(alert, self.inbox.reply(0));
-        } else {
+        self.save_with(alert, 0);
+    }
+
+    /// Send `alert` and say whether a service took it; its reply arrives under `key`.
+    fn save_with(&mut self, alert: Alert, key: u64) -> bool {
+        let Some(service) = &self.service else {
             self.error = Some(FeedError::NotSupported);
-        }
+            return false;
+        };
+        self.pending += 1;
+        service.save(alert, self.inbox.reply(key));
+        true
+    }
+
+    /// Alerts ordered by `key`, reversed when `descending`; equal values keep arrival order.
+    fn sorted(&self) -> Vec<&Alert> {
+        let mut alerts: Vec<&Alert> = self.alerts.iter().filter(|a| a.id.is_some()).collect();
+        let rank = |a: &Alert| match a.status {
+            AlertStatus::Active => 0,
+            AlertStatus::Triggered => 1,
+            AlertStatus::Disabled => 2,
+            AlertStatus::Expired => 3,
+        };
+        alerts.sort_by(|a, b| {
+            let order = match self.sort {
+                AlertSortKey::Arrival => return std::cmp::Ordering::Equal,
+                AlertSortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                AlertSortKey::Symbol => a.symbol.to_lowercase().cmp(&b.symbol.to_lowercase()),
+                AlertSortKey::Status => rank(a).cmp(&rank(b)),
+            };
+            if self.descending {
+                order.reverse()
+            } else {
+                order
+            }
+        });
+        alerts
     }
 
     /// Drain service pushes and replies, recover a lagged stream, and append trigger notifications.
@@ -188,11 +272,19 @@ impl AlertsPanel {
                 if let Ok(event) = answer.downcast::<AlertEvent>() {
                     self.apply_event(*event, toasts);
                 }
-            } else if key == 0
+            } else if (key == 0 || key == DRAFT_REPLY)
                 && let Ok(result) = answer.downcast::<Result<(), FeedError>>()
             {
+                self.pending = self.pending.saturating_sub(1);
+                self.draft_saving &= key != DRAFT_REPLY;
                 match *result {
-                    Ok(()) => self.error = None,
+                    Ok(()) => {
+                        self.error = None;
+                        if key == DRAFT_REPLY {
+                            self.draft =
+                                Alert::new(self.symbol.clone(), AlertCondition::Crossing(0.0));
+                        }
+                    }
                     Err(error) => self.error = Some(error),
                 }
             }
@@ -297,6 +389,73 @@ impl AlertsPanel {
         }
     }
 
+    fn sort_controls(&mut self, ui: &mut Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(l10n::text(ui.ctx(), "Sort by"));
+            egui::ComboBox::from_id_salt("alert_sort")
+                .selected_text(l10n::text(
+                    ui.ctx(),
+                    match self.sort {
+                        AlertSortKey::Name => "Name",
+                        AlertSortKey::Symbol => "Symbol",
+                        AlertSortKey::Status => "Status",
+                        AlertSortKey::Arrival => "Arrival",
+                    },
+                ))
+                .show_ui(ui, |ui| {
+                    for (key, label) in [
+                        (AlertSortKey::Arrival, "Arrival"),
+                        (AlertSortKey::Name, "Name"),
+                        (AlertSortKey::Symbol, "Symbol"),
+                        (AlertSortKey::Status, "Status"),
+                    ] {
+                        ui.selectable_value(&mut self.sort, key, l10n::text(ui.ctx(), label));
+                    }
+                })
+                .response
+                .accessible_name(l10n::text(ui.ctx(), "Sort by"));
+            ui.add_enabled(
+                self.sort != AlertSortKey::Arrival,
+                egui::Checkbox::new(&mut self.descending, l10n::text(ui.ctx(), "Descending")),
+            );
+        });
+    }
+
+    /// The inline form for a price, study-output or volume alert; the shared validation and the
+    /// connected service decide whether it saves.
+    fn draft_form(&mut self, ui: &mut Ui) {
+        egui::CollapsingHeader::new(l10n::text(ui.ctx(), "Quick alert"))
+            .id_salt("alert_draft")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(l10n::text(ui.ctx(), "Symbol"));
+                    ui.text_edit_singleline(&mut self.draft.symbol)
+                        .accessible_name(l10n::text(ui.ctx(), "Symbol"));
+                });
+                rule_form(
+                    ui,
+                    &mut self.draft.source,
+                    &mut self.draft.condition,
+                    &self.sources,
+                );
+                if self.draft_saving {
+                    ui.label(l10n::text(ui.ctx(), "Saving…"));
+                }
+                if ui
+                    .add_enabled(
+                        self.draft.is_valid() && !self.draft_saving,
+                        egui::Button::new(l10n::text(ui.ctx(), "Create alert")),
+                    )
+                    .clicked()
+                {
+                    self.draft_saving = self.save_with(self.draft.clone(), DRAFT_REPLY);
+                }
+            });
+        if self.pending > 0 {
+            ui.label(l10n::text(ui.ctx(), "Waiting for the alerts service…"));
+        }
+    }
+
     /// Render the host's alerts or trigger log after `poll`, returning creation or export intents.
     pub fn show(&mut self, ui: &mut Ui) -> AlertPanelAction {
         let mut action = AlertPanelAction::None;
@@ -352,6 +511,7 @@ impl AlertsPanel {
                     .show(ui);
             }
         } else if self.alerts.is_empty() {
+            self.draft_form(ui);
             if EmptyState::new("No alerts yet")
                 .icon(&icons::ALERTS)
                 .description("Create an alert with the + button or the chart menu.")
@@ -362,12 +522,15 @@ impl AlertsPanel {
                 action = AlertPanelAction::CreateAlert;
             }
         } else {
+            self.draft_form(ui);
+            self.sort_controls(ui);
             let mut remove = None;
             let mut toggle = None;
+            let mut duplicate = None;
             egui::ScrollArea::vertical()
                 .max_height(self.config.max_height)
                 .show(ui, |ui| {
-                    for alert in &self.alerts {
+                    for alert in self.sorted() {
                         let Some(id) = &alert.id else { continue };
                         ui.push_id(&id.0, |ui| {
                             let subject = alert.watchlist.as_ref().map_or_else(
@@ -419,6 +582,12 @@ impl AlertsPanel {
                                     };
                                     toggle = Some(changed);
                                 }
+                                if Button::new("Duplicate").show(ui).clicked() {
+                                    let mut copy = alert.clone();
+                                    copy.id = None;
+                                    copy.status = AlertStatus::Active;
+                                    duplicate = Some(copy);
+                                }
                                 if IconButton::new(&icons::TRASH)
                                     .tooltip("Remove alert")
                                     .show(ui)
@@ -437,7 +606,11 @@ impl AlertsPanel {
             if let Some(id) = remove
                 && let Some(service) = &self.service
             {
+                self.pending += 1;
                 service.remove(id, self.inbox.reply(0));
+            }
+            if let Some(alert) = duplicate {
+                action = AlertPanelAction::DuplicateAlert(Box::new(alert));
             }
         }
         action
@@ -573,6 +746,78 @@ mod tests {
         assert_eq!(panel.take_sound(), None);
         drop(panel);
         assert!(!renewed.is_active());
+    }
+
+    #[test]
+    fn sorting_orders_by_key_in_either_direction_and_keeps_arrival_order_for_equal_values() {
+        let mut panel = AlertsPanel::default();
+        for (id, name, symbol, status) in [
+            ("1", "beta", "MSFT", AlertStatus::Disabled),
+            ("2", "Alpha", "aapl", AlertStatus::Active),
+            ("3", "beta", "AAPL", AlertStatus::Active),
+            ("4", "", "TSLA", AlertStatus::Expired),
+        ] {
+            let mut alert = Alert::new(symbol, AlertCondition::Above(1.0));
+            alert.id = Some(AlertId(id.into()));
+            alert.name = name.into();
+            alert.status = status;
+            panel.alerts.push(alert);
+        }
+        let ids = |panel: &AlertsPanel| {
+            panel
+                .sorted()
+                .iter()
+                .map(|a| a.id.as_ref().unwrap().0.as_str())
+                .collect::<String>()
+        };
+        for (key, descending, expected) in [
+            (AlertSortKey::Arrival, true, "1234"),
+            (AlertSortKey::Name, false, "4213"),
+            (AlertSortKey::Name, true, "1324"),
+            (AlertSortKey::Symbol, false, "2314"),
+            (AlertSortKey::Symbol, true, "4123"),
+            (AlertSortKey::Status, false, "2314"),
+            (AlertSortKey::Status, true, "4123"),
+        ] {
+            (panel.sort, panel.descending) = (key, descending);
+            assert_eq!(ids(&panel), expected, "{key:?} descending={descending}");
+        }
+    }
+
+    #[test]
+    fn inline_draft_stays_pending_until_the_service_answers_and_survives_a_failure() {
+        let host = Arc::new(Host::default());
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        let ctx = egui::Context::default();
+        let mut toasts = Toasts::new();
+        let mut frame = |panel: &mut AlertsPanel| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                panel.poll(ui.ctx(), &mut toasts)
+            })
+            .drop_without_applying_deltas();
+        };
+        panel.set_symbol("SIM");
+        panel.draft.condition = AlertCondition::CrossingUp(10.0);
+        panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY);
+        assert_eq!((panel.pending, panel.draft_saving), (1, true));
+        host.reply
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap()
+            .send(Err(FeedError::NotSupported));
+        frame(&mut panel);
+        assert_eq!((panel.pending, panel.draft_saving), (0, false));
+        assert_eq!(panel.error, Some(FeedError::NotSupported));
+        assert_eq!(panel.draft.symbol, "SIM");
+        panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY);
+        host.reply.lock().unwrap().take().unwrap().send(Ok(()));
+        frame(&mut panel);
+        assert_eq!(panel.error, None);
+        assert_eq!(panel.draft.symbol, "SIM");
+        assert_eq!(panel.draft.condition, AlertCondition::Crossing(0.0));
+        assert!(panel.alerts().is_empty());
     }
 
     #[test]

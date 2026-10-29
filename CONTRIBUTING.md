@@ -24,7 +24,7 @@ The engine is designed so that each kind of creative addition has one clear home
 
 Built-in indicators live in [`src/studies/builtin/`](src/studies/builtin), one file per indicator (for example `ema.rs`, `rsi.rs`, `bollinger_bands.rs`). Each implements the `Indicator` trait defined in [`src/studies/indicator_trait.rs`](src/studies/indicator_trait.rs).
 
-To add one: create a new file in `src/studies/builtin/`, implement `Indicator` (the core methods are `name`, `calculate`, `values`, `colors`, `set_colors`, `set_visible`, and `clone_box`), give it a `Default` impl with conventional parameters, declare the module, and register the type in `register_builtins!` in [`src/studies/factory.rs`](src/studies/factory.rs) so it is reachable by name through `IndicatorFactory`. For runtime, closure-based indicators without a new struct, see `CustomIndicator` in [`src/studies/custom.rs`](src/studies/custom.rs).
+To add one: create a new file in `src/studies/builtin/`, implement `Indicator` (the core methods are `name`, `calculate`, `values`, `colors`, `set_colors`, `set_visible`, and `clone_box`), give it a `Default` impl with conventional parameters, declare the module, and register the type in `register_builtins!` in [`src/studies/factory/mod.rs`](src/studies/factory/mod.rs) so it is reachable by name through `IndicatorFactory`. For runtime, closure-based indicators without a new struct, see `CustomIndicator` in [`src/studies/custom.rs`](src/studies/custom.rs).
 
 ### A new drawing tool
 
@@ -94,6 +94,8 @@ A second table prints the first frame and the median and 95th percentile of stea
 `benches/stream.rs` feeds one chart 10,000 trades a second from a thread, with 10 or 30 studies on 100,000 and 1,000,000 bars and frames paced at 60 Hz on the wall clock. It prints frame p50, p99 and max, and full recomputes per second for a fallback study: `cargo bench --bench stream`. `FRAME_TIME_FRAMES` and name filters work as above; warm-up waits for every study to have one value per bar, then runs 60 more frames.
 
 `benches/order_flow.rs` pushes the order flow of a busy instrument, 18,000 trades, depth deltas and quotes a second from the demo's synthetic book, into one chart with a depth history and draws a frame per 1/60 s of market time. It prints the messages pushed per second, the frame time, the heap allocations per message and the heap the chart holds: `cargo bench --bench order_flow`. `ORDER_FLOW_SECONDS` sets the market time simulated (default 300).
+
+`benches/heatmap.rs` feeds one chart 400 depth deltas a second into a book of 1,000 levels a side and draws the liquidity heatmap in a 1440 by 900 window. It prints the sampling cadence, the time the sink takes per delta, the frame time, the texture data uploaded, and the textures and heap held, for the default history of 100 levels at one second, for 1,000 levels at 50 ms, and for the latter with its history filled to every resolution: `cargo bench --bench heatmap`. `HEATMAP_SECONDS` sets the market time simulated (default 60). `docs/order-flow.md` quotes its results.
 
 To compare two commits, build the bench on each and run the two binaries in turn, so that changes in machine load and clock speed affect both alike. `cargo bench --no-run` prints the path of the binary it builds:
 

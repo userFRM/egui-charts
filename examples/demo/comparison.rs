@@ -82,6 +82,8 @@ struct SavedStyle {
     #[serde(skip)]
     autoscale: Option<egui_charts::model::AutoscaleProvider>,
     hit_tolerance: f32,
+    #[serde(default)]
+    alerts: egui_charts::model::SeriesAlerts,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
