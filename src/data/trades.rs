@@ -329,40 +329,6 @@ mod tests {
     use super::*;
     use chrono::TimeDelta;
 
-    /// Reconnects and overlapping pages must annotate retained fills without a scan per id.
-    #[test]
-    fn replay_with_order_ids_has_bounded_cost() {
-        let count = 100_000;
-        let fill = |id: usize| trade(id as i64, 100.0).with_id(id as u64);
-        for path in ["push", "append", "prepend"] {
-            let mut store = Trades::new(count);
-            for id in 0..count {
-                store.push(fill(id));
-            }
-            let page: Vec<_> = (0..count)
-                .map(|id| fill(id).with_aggressor_order_id(id as u64 + 1))
-                .collect();
-            let started = std::time::Instant::now();
-            match path {
-                "push" => page.into_iter().for_each(|t| store.push(t)),
-                "append" => {
-                    let mut pending = store.empty();
-                    page.into_iter().for_each(|t| pending.push(t));
-                    store.append(pending, &mut |_, _| panic!("repeated fill"));
-                }
-                _ => {
-                    store.prepend(page, &mut |_, _| panic!("repeated fill"));
-                }
-            }
-            let elapsed = started.elapsed();
-            assert!(elapsed.as_secs_f64() < 2.0, "{path}: {elapsed:?}");
-            assert_eq!(store.iter().count(), count, "{path}");
-            for (id, held) in store.iter().enumerate() {
-                assert_eq!(held.aggressor_order_id, Some(id as u64 + 1), "{path}");
-            }
-        }
-    }
-
     /// A trade `second` seconds after 10:00, told apart by its price.
     fn trade(second: i64, price: f64) -> Tick {
         let ts = "2024-03-15T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
@@ -596,6 +562,40 @@ mod tests {
             for trade in store.iter().filter(|t| t.id.is_some()) {
                 assert_eq!(trade.aggressor_order_id, trade.id, "{name}");
                 assert_eq!(trade.resting_order_id, trade.id, "{name}");
+            }
+        }
+    }
+
+    /// Reconnects and overlapping pages must annotate retained fills without a scan per id.
+    #[test]
+    fn replay_with_order_ids_has_bounded_cost() {
+        let count = 100_000;
+        let fill = |id: usize| trade(id as i64, 100.0).with_id(id as u64);
+        for path in ["push", "append", "prepend"] {
+            let mut store = Trades::new(count);
+            for id in 0..count {
+                store.push(fill(id));
+            }
+            let page: Vec<_> = (0..count)
+                .map(|id| fill(id).with_aggressor_order_id(id as u64 + 1))
+                .collect();
+            let started = std::time::Instant::now();
+            match path {
+                "push" => page.into_iter().for_each(|t| store.push(t)),
+                "append" => {
+                    let mut pending = store.empty();
+                    page.into_iter().for_each(|t| pending.push(t));
+                    store.append(pending, &mut |_, _| panic!("repeated fill"));
+                }
+                _ => {
+                    store.prepend(page, &mut |_, _| panic!("repeated fill"));
+                }
+            }
+            let elapsed = started.elapsed();
+            assert!(elapsed.as_secs_f64() < 2.0, "{path}: {elapsed:?}");
+            assert_eq!(store.iter().count(), count, "{path}");
+            for (id, held) in store.iter().enumerate() {
+                assert_eq!(held.aggressor_order_id, Some(id as u64 + 1), "{path}");
             }
         }
     }
