@@ -20,6 +20,83 @@ impl DrawingToolType {
         )
     }
 
+    /// Whether the renderer paints a filled area that takes the drawing's fill colour.
+    pub fn supports_fill(&self) -> bool {
+        !matches!(
+            self,
+            Self::CrossCursor
+                | Self::DotCursor
+                | Self::ArrowCursor
+                | Self::Eraser
+                | Self::TrendLine
+                | Self::Ray
+                | Self::ExtendedLine
+                | Self::HorizontalLine
+                | Self::HorizontalRay
+                | Self::VerticalLine
+                | Self::CrossLine
+                | Self::RegressionTrend
+                | Self::FibonacciRetracement
+                | Self::FibonacciExtension
+                | Self::TrendBasedFibTime
+                | Self::FibonacciCircles
+                | Self::FibonacciSpiral
+                | Self::FibonacciSpeedResistanceArcs
+                | Self::FibonacciWedge
+                | Self::Pitchfan
+                | Self::LongPos
+                | Self::ShortPos
+                | Self::AnchoredVWAP
+                | Self::FixedRangeVolumeProfile
+                | Self::AnchoredVolumeProfile
+                | Self::PriceRange
+                | Self::Brush
+                | Self::Highlighter
+                | Self::ArrowMarker
+                | Self::Arrow
+                | Self::Path
+                | Self::Polyline
+                | Self::Arc
+                | Self::Curve
+                | Self::DoubleCurve
+                | Self::AnchoredNote
+                | Self::FontIcon
+                | Self::Sticker
+        )
+    }
+
+    /// Whether the drawing's left and right extension flags change its geometry.
+    pub fn supports_extend(&self) -> bool {
+        matches!(
+            self,
+            Self::TrendLine
+                | Self::InfoLine
+                | Self::TrendAngle
+                | Self::Arrow
+                | Self::ArrowMarker
+                | Self::ParallelChannel
+        )
+    }
+
+    /// Whether the renderer displays the drawing's editable text.
+    pub fn supports_text(&self) -> bool {
+        matches!(
+            self,
+            Self::TextLabel
+                | Self::AnchoredText
+                | Self::Note
+                | Self::AnchoredNote
+                | Self::Callout
+                | Self::Comment
+                | Self::PriceNote
+                | Self::FlagNote
+                | Self::Signpost
+                | Self::Table
+                | Self::Tweet
+                | Self::Idea
+        )
+    }
+
     /// Returns the [`DrawingInteractionMode`] that governs how mouse input is
     /// captured when creating a drawing of this type.
     ///

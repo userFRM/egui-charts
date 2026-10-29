@@ -75,7 +75,7 @@ use super::{
     components::{draw_separator_styled, draw_tool_button},
     data, icons,
     state::{MagnetType, ToolbarState},
-    submenu_builder::{flyout_id, section_header, show_flyout},
+    submenu_builder::{flyout_id, show_flyout},
     utilities::{
         FavoritesButton, HideMenu, LockButton, MagnetButton, MeasureButton, RemoveMenu,
         StayInDrawingButton, TemplatesButton, ZoomInButton, ZoomOutButton,
@@ -113,7 +113,7 @@ impl DrawingToolbar {
     }
 
     /// Shows or hides `control`: Trading (the hide positions and orders rows) and Templates
-    /// (the template rows in the Hide flyout and their dialog). The toolbar ignores the other controls.
+    /// (the standalone template name dialog). The toolbar ignores the other controls.
     pub fn set_control_visible(&mut self, control: Control, visible: bool) {
         crate::ui::app_state::set_control_visible(&mut self.hidden, control, visible);
         if control == Control::Templates && !visible {
@@ -614,7 +614,6 @@ impl DrawingToolbar {
         });
 
         let trading = !self.hidden.contains(&Control::Trading);
-        let templates = !self.hidden.contains(&Control::Templates);
         let sel_tool = self.state.sel_tool;
         let starred = self.state.favorites.len();
         let state = &mut self.state;
@@ -626,15 +625,7 @@ impl DrawingToolbar {
                 state.magnet_type,
                 state.snap_to_indicators,
             ),
-            "Hide" => {
-                let mut action = HideMenu::show_submenu(ui, trading, state);
-                if templates {
-                    ui.separator();
-                    section_header(ui, "DRAWING TEMPLATES", ui.min_rect().width());
-                    action = action.or(TemplatesButton::show_submenu(ui, &state.templates));
-                }
-                action
-            }
+            "Hide" => HideMenu::show_submenu(ui, trading, state),
             "Remove" => RemoveMenu::show_submenu(ui),
             "Icons/Emojis" => state.glyph_picker.show(ui, registry),
             _ => {
@@ -1179,104 +1170,6 @@ mod tests {
                     Shape::Rect(r) if r.fill == separator
                         && r.rect == Rect::from_min_size(origin + vec2(8.0, 316.0), vec2(36.0, 1.0))
                 )));
-            }
-        }
-    }
-
-    /// The visibility flyout saves and loads templates unless the host hides them. An empty
-    /// save dialog stays open until cancelled.
-    #[test]
-    fn the_visibility_flyout_keeps_template_actions() {
-        use crate::ui::drawing_toolbar::DrawingTemplate;
-        use egui::{PointerButton, Pos2, Rect, Shape, vec2};
-
-        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for (visible, label) in [
-                (true, "Save as template…"),
-                (true, "Saved line"),
-                (true, "Manage templates…"),
-                (false, "Manage templates…"),
-                (false, "Saved line"),
-            ] {
-                let ctx = Context::default();
-                crate::theme::apply_to_egui(&ctx, &theme);
-                let mut toolbar = DrawingToolbar::new();
-                toolbar.state.templates.push(DrawingTemplate {
-                    id: "line".into(),
-                    name: "Saved line".into(),
-                    drawing_type: "TrendLine".into(),
-                    is_default: false,
-                });
-                toolbar.set_control_visible(Control::Templates, visible);
-                toolbar.toggle_category(
-                    &ctx,
-                    "Hide",
-                    Rect::from_min_size(Pos2::new(0.0, 100.0), vec2(52.0, 38.0)),
-                );
-                let frame = |toolbar: &mut DrawingToolbar, events| {
-                    let mut action = DrawingToolbarAction::None;
-                    let mut output = ctx.run_ui(
-                        RawInput {
-                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 450.0))),
-                            events,
-                            ..Default::default()
-                        },
-                        |ui| action = toolbar.show_with_action(ui),
-                    );
-                    let shapes = std::mem::take(&mut output.shapes);
-                    output.drop_without_applying_deltas();
-                    (action, shapes)
-                };
-                frame(&mut toolbar, vec![]);
-                let (_, shapes) = frame(&mut toolbar, vec![]);
-                let row = shapes.iter().find_map(|s| match &s.shape {
-                    Shape::Text(t) if t.galley.text() == label => {
-                        Some(t.pos + t.galley.size() / 2.0)
-                    }
-                    _ => None,
-                });
-                assert_eq!(row.is_some(), visible);
-                if let Some(pos) = row {
-                    frame(&mut toolbar, vec![Event::PointerMoved(pos)]);
-                    for pressed in [true, false] {
-                        let (action, _) = frame(
-                            &mut toolbar,
-                            vec![Event::PointerButton {
-                                pos,
-                                button: PointerButton::Primary,
-                                pressed,
-                                modifiers: Modifiers::NONE,
-                            }],
-                        );
-                        if !pressed && label == "Manage templates…" {
-                            assert_eq!(action, DrawingToolbarAction::ManageTemplates);
-                        }
-                        if !pressed && label == "Saved line" {
-                            assert_eq!(
-                                action,
-                                DrawingToolbarAction::LoadTemplate {
-                                    template_id: "line".into(),
-                                }
-                            );
-                        }
-                    }
-                    let saving = label == "Save as template…";
-                    assert_eq!(toolbar.state.show_template_name_input, saving);
-                    assert!(toolbar.state.expanded_category.is_none());
-                    frame(&mut toolbar, vec![]);
-                    assert_eq!(toolbar.state.show_template_name_input, saving);
-                    frame(
-                        &mut toolbar,
-                        vec![Event::Key {
-                            key: Key::Escape,
-                            physical_key: None,
-                            pressed: true,
-                            repeat: false,
-                            modifiers: Modifiers::NONE,
-                        }],
-                    );
-                    assert!(!toolbar.state.show_template_name_input);
-                }
             }
         }
     }

@@ -700,6 +700,59 @@ mod tests {
         }
     }
 
+    /// The settings the properties dialog offers for a tool are the ones its renderer uses: a
+    /// fill colour reaches a filled area, extension moves geometry and the text is painted.
+    /// Icons keep their glyph in the text field, which the glyph picker edits.
+    #[test]
+    fn tool_capabilities_match_their_renderers() {
+        fn found(shapes: &[Shape], hit: &impl Fn(&Shape) -> bool) -> bool {
+            shapes.iter().any(|s| match s {
+                Shape::Vec(v) => found(v, hit),
+                s => hit(s),
+            })
+        }
+        for &tool in DrawingToolType::all() {
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = [
+                (100., 100.),
+                (300., 300.),
+                (200., 250.),
+                (350., 150.),
+                (400., 200.),
+            ]
+            .map(|(x, y)| Pos2::new(x, y))
+            .to_vec();
+            drawing.chart_points = drawing
+                .points
+                .iter()
+                .map(|p| crate::drawings::ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
+                .collect();
+            let mut filled = drawing.clone();
+            filled.fill_color = Some([12, 34, 56, 80]);
+            let fill = filled.fill_color32().unwrap();
+            let fill = found(&paint(&filled), &|s| match s {
+                Shape::Path(p) => p.fill == fill,
+                Shape::Rect(r) => r.fill == fill,
+                Shape::Circle(c) => c.fill == fill,
+                Shape::Mesh(m) => m.vertices.iter().any(|v| v.color == fill),
+                _ => false,
+            });
+            assert_eq!(tool.supports_fill(), fill, "{tool:?} fill");
+            let mut extended = drawing.clone();
+            (extended.extend_left, extended.extend_right) = (true, true);
+            let extend = format!("{:?}", paint(&extended)) != format!("{:?}", paint(&drawing));
+            assert_eq!(tool.supports_extend(), extend, "{tool:?} extend");
+            let mut labelled = drawing.clone();
+            labelled.text = Some("Edited text".into());
+            let text = found(
+                &paint(&labelled),
+                &|s| matches!(s, Shape::Text(t) if t.galley.text().contains("Edited text")),
+            );
+            let icon = matches!(tool, DrawingToolType::FontIcon | DrawingToolType::Sticker);
+            assert_eq!(tool.supports_text(), text && !icon, "{tool:?} text");
+        }
+    }
+
     /// Guards culling: a drawing with paint bounds paints nothing outside them, for spread,
     /// near-vertical and tiny anchors, so skipping it when the bounds miss the pane hides nothing
     /// in view. A tool added to the bounded list whose paint reaches further, such as a line to a

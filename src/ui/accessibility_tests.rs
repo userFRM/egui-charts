@@ -353,7 +353,13 @@ fn dialogs_expose_titles_and_label_their_fields() {
             "Drawing Properties",
             |ctx| {
                 let mut dialog = DrawingPropertiesDialog::new();
-                dialog.open(DrawingId(1), "Trend Line".into(), DrawingProps::default());
+                dialog.open(DrawingId(1), "Text".into(), DrawingProps::default());
+                dialog.props.tool_settings = Some(Box::new(
+                    crate::drawings::DrawingTemplate::from_drawing(&crate::drawings::Drawing::new(
+                        1,
+                        crate::drawings::DrawingToolType::TextLabel,
+                    )),
+                ));
                 dialog.active_tab = PropertiesTab::Text;
                 dialog.show(ctx);
             },
