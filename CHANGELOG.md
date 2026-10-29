@@ -429,6 +429,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Order-flow detector settings reject fixed thresholds that are not positive and finite before changing the active settings.
+
 - Evicting detector zones no longer allocates an id for every followed zone.
 
 - Combined trades keep an equal fill price exactly as their volume-weighted price. Big-trade body-edge zones stay in the body, `Chart::combined_trades` returns the exact price, and time-and-sales order breakdowns keep their sizes and prices.

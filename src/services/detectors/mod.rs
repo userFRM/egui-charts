@@ -124,7 +124,7 @@ impl<R: Default> Default for Detector<R> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Threshold {
-    /// This value.
+    /// This positive and finite value, validated by [`OrderFlowDetectors::set_settings`].
     Fixed(f64),
     /// Calibrated on the symbol's own recent flow, as the detector's rule documents.
     Auto,
@@ -221,8 +221,14 @@ impl OrderFlowDetectors {
     }
 
     /// Replaces the settings of every detector from the next event on. Detections already made
-    /// stay.
+    /// stay. Panics if a fixed threshold is not positive and finite.
     pub fn set_settings(&self, settings: DetectorSettings) {
+        if let Threshold::Fixed(size) = settings.big_trades.rule.threshold {
+            assert!(
+                size.is_finite() && size > 0.0,
+                "fixed threshold must be positive and finite"
+            );
+        }
         self.lock().settings = settings;
     }
 
@@ -673,6 +679,26 @@ mod tests {
             .len(),
             2500
         );
+    }
+
+    #[test]
+    fn fixed_thresholds_must_be_positive_and_finite() {
+        let detectors = OrderFlowDetectors::new();
+        for size in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+            let mut settings = detectors.settings();
+            settings.big_trades.rule.threshold = Threshold::Fixed(size);
+            assert!(
+                std::panic::catch_unwind(|| detectors.set_settings(settings)).is_err(),
+                "accepted {size}"
+            );
+            assert_eq!(detectors.settings(), DetectorSettings::default());
+        }
+        for size in [f64::MIN_POSITIVE, 10.0, f64::MAX] {
+            let mut settings = detectors.settings();
+            settings.big_trades.rule.threshold = Threshold::Fixed(size);
+            detectors.set_settings(settings.clone());
+            assert_eq!(detectors.settings(), settings);
+        }
     }
 
     #[test]
