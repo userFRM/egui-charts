@@ -412,10 +412,9 @@ impl HistoryService {
 // list index, clamped, and the drawings taken out keep theirs for the inverse command.
 fn restore_snapshot(
     live: &mut Vec<Drawing>,
-    before: Vec<(usize, Drawing)>,
+    mut before: Vec<(usize, Drawing)>,
     ids: &[usize],
 ) -> Vec<(usize, Drawing)> {
-    let mut before: Vec<_> = before.into_iter().map(Some).collect();
     let mut current = Vec::new();
     let mut restored = Vec::new();
     for (index, drawing) in live.drain(..).enumerate() {
@@ -423,17 +422,12 @@ fn restore_snapshot(
             restored.push(drawing);
             continue;
         }
-        let id = drawing.id;
-        current.push((index, drawing));
-        if let Some(old) = before
-            .iter_mut()
-            .find(|old| old.as_ref().is_some_and(|(_, old)| old.id == id))
-            .and_then(Option::take)
-        {
-            restored.push(old.1);
+        if let Some(at) = before.iter().position(|(_, old)| old.id == drawing.id) {
+            restored.push(before.remove(at).1);
         }
+        current.push((index, drawing));
     }
-    for (index, drawing) in before.into_iter().flatten() {
+    for (index, drawing) in before {
         restored.insert(index.min(restored.len()), drawing);
     }
     *live = restored;
