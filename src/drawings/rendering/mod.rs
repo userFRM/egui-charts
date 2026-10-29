@@ -704,7 +704,8 @@ mod tests {
     }
 
     /// The settings the properties dialog offers for a tool are the ones its renderer uses: a
-    /// fill colour reaches a filled area, extension moves geometry and the text is painted.
+    /// fill colour reaches a filled area, extension moves geometry (each flag flipped from the
+    /// tool's default, since an extended line starts extended) and the text is painted.
     /// Icons keep their glyph in the text field, which the glyph picker edits.
     #[test]
     fn tool_capabilities_match_their_renderers() {
@@ -742,7 +743,8 @@ mod tests {
             });
             assert_eq!(tool.supports_fill(), fill, "{tool:?} fill");
             let mut extended = drawing.clone();
-            (extended.extend_left, extended.extend_right) = (true, true);
+            (extended.extend_left, extended.extend_right) =
+                (!drawing.extend_left, !drawing.extend_right);
             let extend = format!("{:?}", paint(&extended)) != format!("{:?}", paint(&drawing));
             assert_eq!(tool.supports_extend(), extend, "{tool:?} extend");
             let mut labelled = drawing.clone();

@@ -73,6 +73,7 @@ impl DrawingToolType {
             self,
             Self::TrendLine
                 | Self::Ray
+                | Self::ExtendedLine
                 | Self::Rect
                 | Self::InfoLine
                 | Self::TrendAngle
