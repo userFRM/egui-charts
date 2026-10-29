@@ -1,5 +1,6 @@
 //! Price and time axis rendering
 
+use crate::chart::renderers::tick_decimals;
 use crate::model::PriceLine;
 use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::PriceMap;
@@ -205,9 +206,10 @@ pub(crate) fn render_study_tags(
         let label = if study.value_format() == crate::scales::StudyFormat::Price {
             transform.label(
                 transform.to_scale(value),
-                study
-                    .precision()
-                    .unwrap_or_else(|| map.price_precision().unwrap_or(2)),
+                study.precision().unwrap_or_else(|| {
+                    map.price_precision()
+                        .unwrap_or_else(|| tick_decimals(map, map.price_to_y(value)))
+                }),
                 formatter,
             )
         } else {
@@ -293,7 +295,9 @@ pub fn render_price_line(
     }
     let label = transform.label(
         transform.to_scale(line.price),
-        price_map.price_precision().unwrap_or(2),
+        price_map
+            .price_precision()
+            .unwrap_or_else(|| tick_decimals(price_map, y)),
         None,
     );
     let (text_color, fill) = axis_label_colors(line);
@@ -439,7 +443,6 @@ pub(crate) fn render_quote_tags_with_countdown(
     use crate::scales::{PriceFormatter, VolumeFormatter};
     let mut tags = [None; 3];
     let transform = price_map.transform();
-    let decimals = price_map.price_precision().unwrap_or(2);
     let height = painter
         .layout_no_wrap("0".into(), axis_font(painter.ctx()), Color32::WHITE)
         .size()
@@ -467,7 +470,13 @@ pub(crate) fn render_quote_tags_with_countdown(
                 let price = named_label(
                     true,
                     close_name,
-                    transform.label(transform.to_scale(close.price), decimals, formatter),
+                    transform.label(
+                        transform.to_scale(close.price),
+                        price_map
+                            .price_precision()
+                            .unwrap_or_else(|| tick_decimals(price_map, close_y)),
+                        formatter,
+                    ),
                 );
                 countdown.map_or_else(|| price.clone(), |time| format!("{price}\n{time}"))
             },
@@ -498,7 +507,13 @@ pub(crate) fn render_quote_tags_with_countdown(
         if !allow_overlap && !rows.is_empty() && (y - close_y).abs() < separation {
             y = close_y - separation;
         }
-        let label = transform.label(transform.to_scale(quote.price), decimals, formatter);
+        let label = transform.label(
+            transform.to_scale(quote.price),
+            price_map
+                .price_precision()
+                .unwrap_or_else(|| tick_decimals(price_map, price_map.price_to_y(quote.price))),
+            formatter,
+        );
         rows.push((1, y, format!("{} {label}", quote.qualifier), color));
     }
     if let Some((value, color)) = volume.filter(|(value, _)| value.is_finite() && *value >= 0.0) {
@@ -652,7 +667,7 @@ mod tests {
                 (-50.0, 50.0),
                 125.0,
                 true,
-                Some((25.0, Some("+25.00%"))),
+                Some((25.0, Some("+25%"))),
             ),
             (
                 "off the scale",

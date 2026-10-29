@@ -2242,7 +2242,9 @@ impl Chart {
             for ((_, value, colors, outlined), y) in shown.into_iter().zip(ys) {
                 let label = price_map.transform().label(
                     price_map.transform().to_scale(value),
-                    price_map.price_precision().unwrap_or(2),
+                    price_map.price_precision().unwrap_or_else(|| {
+                        renderers::tick_decimals(&price_map, price_map.price_to_y(value))
+                    }),
                     price_formatter.as_deref(),
                 );
                 let tag = rendering::axes::render_axis_value(
@@ -2465,7 +2467,9 @@ impl Chart {
                 {
                     let price = price_map.transform().label(
                         price_map.transform().to_scale(value),
-                        price_map.price_precision().unwrap_or(2),
+                        price_map.price_precision().unwrap_or_else(|| {
+                            renderers::tick_decimals(&price_map, price_map.price_to_y(value))
+                        }),
                         price_formatter.as_deref(),
                     );
                     let quote = name == "Bid" || name == "Ask";
@@ -3052,7 +3056,9 @@ impl Chart {
             .map(|bar| {
                 price_map.transform().label(
                     price_map.transform().to_scale(bar.close),
-                    price_map.price_precision().unwrap_or(2),
+                    price_map.price_precision().unwrap_or_else(|| {
+                        renderers::tick_decimals(&price_map, price_map.price_to_y(bar.close))
+                    }),
                     price_formatter.as_deref(),
                 )
             });
@@ -3549,6 +3555,84 @@ mod tests {
                 hidden != 10 && hidden != 11,
                 "legend visibility and histogram visibility are independent"
             );
+        }
+    }
+
+    #[test]
+    fn automatic_price_precision_reaches_every_axis_tag() {
+        use crate::model::{Bar, BarData, Level1Quote, PriceLine, Timeframe};
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        let start = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .to_utc();
+        let bars = (0..100)
+            .map(|i| {
+                let base = 1.0850 + 0.0002 * (i % 10) as f64;
+                Bar::new(
+                    start + chrono::Duration::hours(i),
+                    base,
+                    base + 0.0004,
+                    base - 0.0004,
+                    base + 0.00012,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        chart.set_timeframe(Timeframe::Hour1);
+        chart.config.show_volume = false;
+        chart.config.show_high_low = true;
+        chart.config.show_bid_ask = true;
+        chart.config.show_symbol_prev_close = true;
+        chart.config.show_extended_session_price = true;
+        chart.config.price_axis.allow_label_overlap = true;
+        chart.config.price_axis.show_study_names = true;
+        chart.config.show_quote_boxes = false;
+        chart.price_scale_mut().set_range(1.0845, 1.0873);
+        chart.set_quote(Some(Level1Quote {
+            symbol: "TEST".into(),
+            ts: start + chrono::Duration::hours(99),
+            bid: 1.08652,
+            ask: 1.08702,
+            bid_size: 1.0,
+            ask_size: 1.0,
+        }));
+        chart.set_session_quote(Some(crate::model::quote::SessionQuote::new(1.08512, "EXT")));
+        chart.add_price_line(
+            crate::widget::SeriesId::MAIN,
+            PriceLine::new(1.08532, egui::Color32::GOLD),
+        );
+        chart.add_indicator(Box::new(
+            CustomIndicator::new("Study", |bars| {
+                vec![IndicatorValue::Single(1.08572); bars.len()]
+            })
+            .with_overlay(true),
+        ));
+        let ctx = egui::Context::default();
+        shapes(&ctx, &mut chart, 0.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let labels: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) if text.pos.x >= chart.last_rendered_price_rect.right() => {
+                    Some(text.galley.text())
+                }
+                _ => None,
+            })
+            .collect();
+        // A 0.00025 tick step uses six decimals. These literal prices come from the bars above.
+        for expected in [
+            "1.086920\n01:00:00",
+            "EXT 1.085120",
+            "1.085320",
+            "Study 1.085720",
+            "1.086120",
+            "High 1.087200",
+            "Low 1.084600",
+            "1.086520",
+            "1.087020",
+        ] {
+            assert!(labels.contains(&expected), "missing {expected}: {labels:?}");
         }
     }
 
