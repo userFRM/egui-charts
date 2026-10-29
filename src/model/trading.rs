@@ -8,8 +8,8 @@ use chrono::{DateTime, Utc};
 
 /// A relative bound at `scale` for floating-point comparisons.
 /// Partial closes accumulate rounding, so quantities use a `1e-9` relative bound at the original
-/// quantity's scale, or the held and filled quantities without that history. Price-distance ties
-/// use four ulps for a single step.
+/// quantity's scale, or the larger of the held and filled quantities without that history.
+/// Price-distance ties use four ulps for a single step.
 pub(crate) fn rounding_tolerance(scale: f64, relative: f64) -> f64 {
     relative * scale.abs()
 }

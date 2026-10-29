@@ -692,11 +692,12 @@ mod tests {
         fn pyramided_scale_out(bar: usize, context: &mut StrategyContext<'_>) {
             match bar {
                 0 => {
-                    context.entry("A", Buy, 3.2, OrderType::Market);
+                    context.entry("A", Buy, 1.4, OrderType::Market);
                     context.entry("B", Buy, 3.2, OrderType::Market);
                 }
-                1..=128 => context.exit("X", Some(0.05), None, None),
-                129 => assert_eq!(context.position(), 0.0),
+                1..=14 => context.exit("X", Some(0.1), None, None),
+                15..=78 => context.exit("X", Some(0.05), None, None),
+                79 => assert_eq!(context.position(), 0.0),
                 _ => {}
             }
         }
@@ -807,17 +808,21 @@ mod tests {
                 0.0,
             ),
             (
-                // 2 * 3.2 - 128 * 0.05 = 0: 128 breakevens, flat equity and no open lot.
+                // 1.4 - 14 * 0.1 = 0, 3.2 - 64 * 0.05 = 0: 78 breakevens and flat equity.
                 pyramided_scale_out,
-                vec![(100.0, 100.0, 100.0, 100.0); 130],
-                (2..=129)
+                vec![(100.0, 100.0, 100.0, 100.0); 80],
+                (2..=79)
                     .map(|exit| {
-                        let label = if exit <= 65 { "A / X" } else { "B / X" };
-                        trade(Buy, 0.05, 1, 100.0, Some((exit, 100.0, 0.0)), label)
+                        let (quantity, label) = if exit <= 15 {
+                            (0.1, "A / X")
+                        } else {
+                            (0.05, "B / X")
+                        };
+                        trade(Buy, quantity, 1, 100.0, Some((exit, 100.0, 0.0)), label)
                     })
                     .collect(),
-                vec![10_000.0; 131],
-                128,
+                vec![10_000.0; 81],
+                78,
                 0,
                 0,
                 0.0,
