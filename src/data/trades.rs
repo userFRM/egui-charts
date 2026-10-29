@@ -72,7 +72,7 @@ pub fn combine_trades<'a>(trades: impl IntoIterator<Item = &'a Tick>) -> Vec<Com
             let scale = trade.size.max(fill.size);
             if scale > 0.0 {
                 let weight = (fill.size / scale) / (trade.size / scale + fill.size / scale);
-                trade.price = trade.price * (1.0 - weight) + fill.price * weight;
+                trade.price += (fill.price - trade.price) * weight;
             }
             trade.size = (trade.size + fill.size).min(f64::MAX);
             trade.last_time = fill.ts;
@@ -353,6 +353,14 @@ mod tests {
         };
         #[rustfmt::skip]
         let cases = [
+            ("empty input", 10, vec![], vec![]),
+            ("zero total size keeps the first price", 10,
+                vec![Live(vec![fill(1, 100.0, 0.0, Some(7)), fill(2, 101.0, 0.0, Some(7))])],
+                vec![(0.0, 100.0, 101.0, 100.0, 2)]),
+            ("invalid fills do not combine", 10,
+                vec![Live(vec![fill(1, f64::NAN, 1.0, Some(7)), fill(2, 100.0, f64::NAN, Some(7)),
+                    fill(3, 100.0, -1.0, Some(7)), fill(4, 100.0, 1.0, Some(7))])],
+                vec![(1.0, 100.0, 100.0, 100.0, 1)]),
             ("three prices", 10, vec![Live(vec![fill(1, 100.0, 2.0, Some(7)),
                 fill(2, 101.0, 3.0, Some(7)), fill(3, 102.0, 5.0, Some(7))])],
                 vec![(10.0, 100.0, 102.0, 101.3, 3)]),
@@ -405,6 +413,13 @@ mod tests {
                 assert!((actual.3 - expected.3).abs() < 1e-10, "{name}: VWAP");
             }
         }
+        // All fills at one price have exactly that VWAP, including a bar's body edge.
+        let fills = [
+            fill(1, 99.99, 1.0, Some(7)),
+            fill(2, 99.99, 2.0, Some(7)),
+            fill(3, 99.99, 3.0, Some(7)),
+        ];
+        assert_eq!(combine_trades(&fills)[0].price, 99.99);
     }
 
     /// The breakdown lists the resting orders the retained fills consumed and adds up to the

@@ -79,6 +79,9 @@ jobs:
       - name: Clippy (alert engine only)
         if: matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features alert-engine --all-targets -- -D warnings
+      - name: Clippy (order-flow detectors only)
+        if: matrix.rust == 'stable'
+        run: cargo clippy --no-default-features --features detectors --all-targets -- -D warnings
       - name: Clippy (strategies only)
         if: matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features strategies --all-targets -- -D warnings
