@@ -155,8 +155,8 @@ impl Drawing {
         }
         let &second = p.get(1)?;
         match self.tool_type {
-            T::TrendLine => {
-                let (left, right) = self.trend_line_ends(rect.min.x, rect.max.x)?;
+            T::TrendLine | T::Ray | T::ExtendedLine => {
+                let (left, right) = self.trend_line_ends(rect)?;
                 outline.lines = vec![[left, right]];
             }
             T::TrendAngle
@@ -223,8 +223,7 @@ impl Drawing {
                     outline.areas.push(corners.to_vec());
                 }
             }
-            T::Ray => outline.lines = vec![[first, lines::ray_end(first, second, rect)]],
-            T::ExtendedLine => outline.lines = vec![lines::extended_line(first, second, rect)],
+            T::Rect => boxed(&mut outline, self.rectangle_bounds(rect)?),
             T::PriceRange => {
                 let mid_x = (first.x + second.x) / 2.0;
                 outline.lines = vec![
@@ -363,7 +362,7 @@ impl Drawing {
             DrawingToolType::InfoLine => self.render_info_line(painter, view),
 
             // Shapes (8 tools)
-            DrawingToolType::Rect => self.render_rect(painter, color, stroke),
+            DrawingToolType::Rect => self.render_rect(painter, rect, color, stroke),
             DrawingToolType::RotatedRect => self.render_rotated_rect(painter),
             DrawingToolType::Circle => self.render_circle(painter, color, stroke),
             DrawingToolType::Ellipse => self.render_ellipse(painter, color, stroke),
@@ -489,6 +488,9 @@ impl Drawing {
             | DrawingToolType::Eraser => {}
         }
         self.finish_style(painter, start, rect);
+        if self.tool_type == DrawingToolType::Rect {
+            self.render_rect_middle_line(painter, rect);
+        }
     }
 
     /// Render this drawing using the modular render system
