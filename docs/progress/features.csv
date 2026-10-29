@@ -815,7 +815,7 @@ Terminal,"News, calendar and social",Ideas and community feed,done,host,src/ui/i
 Terminal,"News, calendar and social",News alerts,missing,host,
 Terminal,"News, calendar and social",News headlines marked on the chart time scale,done,host,src/model/time_scale_event.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs
 Terminal,"News, calendar and social",Private chats,done,host,src/services/chats.rs;src/ui/widget_bar/panels/chats.rs
-Terminal,"News, calendar and social","Profiles, following and social notifications",partial,host,src/services/notifications.rs;src/ui/widget_bar/panels/notifications.rs
+Terminal,"News, calendar and social","Profiles, following and social notifications",done,host,src/services/profiles.rs;src/services/profile_directory.rs;src/services/notifications.rs;src/ui/profile/mod.rs;src/ui/widget_bar/panels/notifications.rs
 Terminal,"News, calendar and social",Publish an idea from the chart,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/ideas.rs;src/widget/export.rs
 Terminal,"News, calendar and social",Symbol news in the right panel,done,host,src/ui/widget_bar/panels/news.rs
 Terminal,Replay,Bar replay button and replay mode on/off,done,library,src/ui/top_toolbar/toolbar.rs
