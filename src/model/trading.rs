@@ -6,9 +6,11 @@
 
 use chrono::{DateTime, Utc};
 
-/// A few ulps at `scale`, for comparisons affected by floating-point rounding.
-pub(crate) fn rounding_tolerance(scale: f64) -> f64 {
-    4.0 * f64::EPSILON * scale.abs()
+/// A relative bound at `scale` for floating-point comparisons.
+/// Partial closes accumulate rounding, so callers retain the original quantity or, without
+/// that history, use a wider bound. Price-distance ties use a few ulps for a single step.
+pub(crate) fn rounding_tolerance(scale: f64, relative: f64) -> f64 {
+    relative * scale.abs()
 }
 
 /// Identifies an order. The broker chooses it.

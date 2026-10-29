@@ -60,8 +60,8 @@ pub trait Strategy {
 /// and cancels working orders by id.
 ///
 /// An order placed with the id of a working order replaces it, keeping its original place
-/// among orders reached at the same point. Working orders stay until they fill or are cancelled. A quantity must be positive and finite and a
-/// price finite; an order with any other is ignored.
+/// among orders reached at the same point. Working orders stay until they fill or are cancelled. A
+/// quantity must be positive and finite and a price finite; an order with any other is ignored.
 pub struct StrategyContext<'a> {
     bars: &'a [Bar],
     position: f64,
@@ -160,6 +160,7 @@ struct Lot {
     entry: String,
     side: OrderSide,
     quantity: f64,
+    entry_quantity: f64,
     time: DateTime<Utc>,
     price: f64,
 }
@@ -168,13 +169,13 @@ struct Lot {
 ///
 /// The strategy decides on each bar once it closes. Its orders fill no earlier than the next
 /// bar, along that bar's price path: from the open to the extreme nearer the open (the high when
-/// both are as near within a few ulps), then to the other extreme, then to the close. A market order fills at the
-/// open. A limit, stop or stop-limit order fills where the path reaches it, at its limit or stop
-/// price, or at the open when the bar opened beyond it; a triggered stop-limit order works on as
-/// a limit order from its stop. Orders the path reaches at the same point fill in the order they
-/// were first placed. An exit with a take profit and a stop loss fills whichever the path reaches
-/// first. With [`fill_on_close`](Self::fill_on_close), market orders fill at the close of the
-/// bar they were placed on instead.
+/// both are as near within a few ulps), then to the other extreme, then to the close. A market
+/// order fills at the open. A limit, stop or stop-limit order fills where the path reaches it, at
+/// its limit or stop price, or at the open when the bar opened beyond it; a triggered stop-limit
+/// order works on as a limit order from its stop. Orders the path reaches at the same point fill
+/// in the order they were first placed. An exit with a take profit and a stop loss fills whichever
+/// the path reaches first. With [`fill_on_close`](Self::fill_on_close), market orders fill at the
+/// close of the bar they were placed on instead.
 ///
 /// Each entry is a trade, closed by exits and opposite entries first in first out; each partial
 /// exit is its own trade with its share of the entry. A trade's label names its entry and exit
@@ -249,7 +250,9 @@ impl Backtest {
             if valid {
                 let up = bar.high - bar.open;
                 let down = bar.open - bar.low;
-                let near = if up - down <= rounding_tolerance(bar.high.abs().max(bar.low.abs())) {
+                let near = if up - down
+                    <= rounding_tolerance(bar.high.abs().max(bar.low.abs()), 4.0 * f64::EPSILON)
+                {
                     bar.high
                 } else {
                     bar.low
@@ -394,10 +397,12 @@ impl Run {
                 if self.lots.first().is_some_and(|lot| lot.side != side) {
                     self.close(f64::INFINITY, &order.id, price, time);
                 }
+                let quantity = order.quantity.unwrap_or_default();
                 self.lots.push(Lot {
                     entry: order.id,
                     side,
-                    quantity: order.quantity.unwrap_or_default(),
+                    quantity,
+                    entry_quantity: quantity,
                     time,
                     price,
                 });
@@ -423,6 +428,7 @@ impl Run {
 
     /// Closes up to `quantity` of the open lots, oldest first, as trades exited by `exit`.
     fn close(&mut self, mut quantity: f64, exit: &str, price: f64, time: DateTime<Utc>) {
+        let exit_quantity = quantity;
         while quantity > 0.0
             && let Some(lot) = self.lots.first_mut()
         {
@@ -435,10 +441,12 @@ impl Run {
             self.realized += profit;
             quantity -= closed;
             lot.quantity -= closed;
-            if quantity <= rounding_tolerance(closed) {
+            if quantity.is_finite()
+                && quantity <= rounding_tolerance(exit_quantity, 4.0 * f64::EPSILON)
+            {
                 quantity = 0.0;
             }
-            if lot.quantity <= rounding_tolerance(closed) {
+            if lot.quantity <= rounding_tolerance(lot.entry_quantity, 4.0 * f64::EPSILON) {
                 self.lots.remove(0);
             }
         }
@@ -675,6 +683,14 @@ mod tests {
                 _ => {}
             }
         }
+        fn tenths(bar: usize, context: &mut StrategyContext<'_>) {
+            match bar {
+                0 => context.entry("A", Buy, 1.0, OrderType::Market),
+                1..=10 => context.exit("X", Some(0.1), None, None),
+                11 => assert_eq!(context.position(), 0.0),
+                _ => {}
+            }
+        }
         fn decimal_tie(bar: usize, context: &mut StrategyContext<'_>) {
             if bar == 0 {
                 context.entry("L", Buy, 1.0, OrderType::Market);
@@ -767,6 +783,19 @@ mod tests {
                 1,
                 3,
                 0.6,
+            ),
+            (
+                // 1 - 10 * 0.1 = 0: ten breakevens, flat equity and no open lot.
+                tenths,
+                vec![(100.0, 100.0, 100.0, 100.0); 12],
+                (2..=11)
+                    .map(|exit| trade(Buy, 0.1, 1, 100.0, Some((exit, 100.0, 0.0)), "A / X"))
+                    .collect(),
+                vec![10_000.0; 13],
+                10,
+                0,
+                0,
+                0.0,
             ),
             (
                 decimal_tie,
