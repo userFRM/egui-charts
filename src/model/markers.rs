@@ -107,7 +107,8 @@ pub struct Marker {
     pub position: MarkerPos,
     /// Shape of the marker
     pub shape: MarkerShape,
-    /// Color of the marker; `PLACEHOLDER` (the default of [`Marker::new`]) uses the theme's text colour.
+    /// Color of the marker; `PLACEHOLDER`, the default of [`Marker::new`], uses the theme's text
+    /// colour.
     #[serde(default)]
     pub color: Color32,
     /// Optional text label
