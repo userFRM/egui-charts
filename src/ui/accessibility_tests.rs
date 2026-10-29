@@ -60,9 +60,11 @@ fn custom_controls_report_names_roles_and_states() {
                 },
             );
         }),
-        (Role::Button, "Magnet Mode", |ui, selected| {
+        (Role::Button, "Horizontal Line", |ui, selected| {
             let mut toolbar = super::drawing_toolbar::DrawingToolbar::new();
-            toolbar.state.magnet_mode = selected;
+            toolbar.state.favorites = vec![crate::drawings::DrawingToolType::HorizontalLine];
+            toolbar.state.sel_tool =
+                selected.then_some(crate::drawings::DrawingToolType::HorizontalLine);
             toolbar.show_floating(ui, egui::pos2(20.0, 20.0));
         }),
         (Role::ComboBox, "Theme", |ui, _| {
@@ -263,7 +265,7 @@ fn custom_controls_report_names_roles_and_states() {
                     if [
                         "Trend line",
                         "Magnet",
-                        "Magnet Mode",
+                        "Horizontal Line",
                         "1M",
                         "Stay in drawing mode",
                         "Favorite",

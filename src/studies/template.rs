@@ -35,7 +35,13 @@ impl StudyTemplate {
     /// Reconstruct a built-in study. Unknown names or invalid inputs leave the host chart intact.
     /// Hosts reconstruct the entire set successfully before replacing their current studies.
     pub fn create(&self) -> Result<Box<dyn Indicator>, String> {
-        let study = IndicatorFactory::new()
+        self.create_with(&IndicatorFactory::new())
+    }
+
+    /// Reconstruct a study through `factory`, which resolves [`name`](Self::name) to a built-in
+    /// or host-registered study. Fails like [`create`](Self::create).
+    pub fn create_with(&self, factory: &IndicatorFactory) -> Result<Box<dyn Indicator>, String> {
+        let study = factory
             .create(&self.name)
             .ok_or_else(|| format!("Unknown study: {}", self.name))?;
         let mut study = ConfiguredStudy::new(study);

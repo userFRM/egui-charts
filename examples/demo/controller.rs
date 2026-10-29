@@ -262,6 +262,7 @@ fn product(id: &str, icon: egui_charts::icons::Icon, title: &str, description: &
 /// Export formats the demo can perform, with browser downloads on the web.
 const EXPORT_FORMATS: &[ExportFormat] = &[
     ExportFormat::Png,
+    ExportFormat::Svg,
     ExportFormat::Csv,
     ExportFormat::Clipboard,
 ];
@@ -349,6 +350,7 @@ pub struct DemoApp {
     alert_dialog: AlertDialog,
     drawing_props: DrawingPropertiesDialog,
     keyboard_shortcuts: KeyboardShortcutsDialog,
+    data_table: egui_charts::ui::dialogs::DataTableDialog,
     interval_entry: Option<String>,
     interval_focus: bool,
     /// The saved-layout chooser of the Open layout shortcut is open.
@@ -391,6 +393,8 @@ pub struct DemoApp {
     quotes: Arc<live::DemoQuotes>,
     // Text pasted for a watchlist import, while its window is open.
     watchlist_import: Option<String>,
+    /// Whether the wide watchlist window is open.
+    watchlist_wide: bool,
     // Symbol search is open for the watchlist's add button: the pick joins the list.
     watchlist_search: bool,
     time_and_sales: TimeAndSalesPanel,
@@ -608,6 +612,7 @@ impl DemoApp {
             alert_dialog: AlertDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
+            data_table: egui_charts::ui::dialogs::DataTableDialog::new(),
             interval_entry: None,
             interval_focus: false,
             open_layout: false,
@@ -661,6 +666,7 @@ impl DemoApp {
             ),
             quotes,
             watchlist_import: None,
+            watchlist_wide: false,
             watchlist_search: false,
             time_and_sales: TimeAndSalesPanel::default(),
             symbol_details: SymbolDetailsPanel::new(),
@@ -671,7 +677,9 @@ impl DemoApp {
             screener: ScreenerPanel::new(feeds::screener_sets()),
             hotlists: HotlistsPanel::new(feeds::HOTLISTS.map(String::from).to_vec()),
             market_heatmap: egui_charts::ui::widget_bar::MarketHeatmapPanel {
-                entries: feeds::heatmap(),
+                universes: feeds::heatmap_universes(),
+                metrics: feeds::heatmap_metrics(),
+                ..Default::default()
             },
             notifications: NotificationsPanel::new(),
             notification_host,
@@ -935,6 +943,7 @@ impl DemoApp {
     /// Offers the studies' outputs and every level of the drawings as alert sources.
     fn list_alert_sources(&mut self) {
         self.alert_dialog.sources = self.chart.alert_sources();
+        self.alerts.set_sources(self.alert_dialog.sources.clone());
         self.alert_dialog.watchlists = self
             .watchlist
             .lists()
@@ -1070,6 +1079,12 @@ impl DemoApp {
         self.show_interval_entry(ctx);
         self.show_open_layout(ctx);
 
+        if let egui_charts::ui::dialogs::DataTableAction::Export(csv) =
+            self.data_table.show(ctx, &self.chart)
+        {
+            self.save_text("chart_data.csv", &csv);
+        }
+
         // Export dialog (screenshot / CSV).
         match self.export_dialog.show(ctx) {
             ExportResponse::Export { config, save_path } => self.run_export(ctx, config, save_path),
@@ -1161,25 +1176,43 @@ impl DemoApp {
             ExportFormat::Png => ScreenshotTarget::File(save_path),
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
             ExportFormat::Csv => return self.export_csv(save_path),
+            ExportFormat::Svg => return self.export_svg(ctx, &config.image, save_path),
         };
         self.screenshot_requested = Some((target, config.image));
         ctx.request_repaint();
     }
 
     fn export_csv(&mut self, save_path: Option<std::path::PathBuf>) {
-        let from_dialog = save_path.is_some();
         let out = match self.chart.export_csv() {
             Ok(csv) => csv,
-            Err(error) => {
-                if from_dialog {
-                    self.export_dialog.mark_error(error.to_string());
-                }
-                self.notify(format!("Export failed: {error}"));
-                return;
-            }
+            Err(error) => return self.export_failed(save_path.is_some(), error.to_string()),
         };
+        self.write_export(save_path, "csv", out.as_bytes());
+    }
+
+    fn export_svg(
+        &mut self,
+        ctx: &egui::Context,
+        image: &egui_charts::widget::ImageExportOptions,
+        save_path: Option<std::path::PathBuf>,
+    ) {
+        match self.chart.export_svg(ctx, image) {
+            Ok(svg) => self.write_export(save_path, "svg", svg.as_bytes()),
+            Err(error) => self.export_failed(save_path.is_some(), error),
+        }
+    }
+
+    fn export_failed(&mut self, from_dialog: bool, error: String) {
+        if from_dialog {
+            self.export_dialog.mark_error(error.clone());
+        }
+        self.notify(format!("Export failed: {error}"));
+    }
+
+    fn write_export(&mut self, save_path: Option<std::path::PathBuf>, extension: &str, out: &[u8]) {
+        let from_dialog = save_path.is_some();
         let path = save_path.unwrap_or_else(|| {
-            let filename = format!("{}_export.csv", self.state.symbol);
+            let filename = format!("{}_export.{extension}", self.state.symbol);
             #[cfg(not(target_arch = "wasm32"))]
             return std::env::temp_dir().join(filename);
             #[cfg(target_arch = "wasm32")]
@@ -1188,7 +1221,7 @@ impl DemoApp {
         #[cfg(not(target_arch = "wasm32"))]
         let result = std::fs::write(&path, out).map_err(|e| e.to_string());
         #[cfg(target_arch = "wasm32")]
-        let result = browser_download(out.as_bytes(), &path);
+        let result = browser_download(out, &path);
         match result {
             Ok(()) => {
                 if from_dialog {
@@ -1196,12 +1229,7 @@ impl DemoApp {
                 }
                 self.notify(format!("Export successful: {}", path.display()));
             }
-            Err(error) => {
-                if from_dialog {
-                    self.export_dialog.mark_error(error.clone());
-                }
-                self.notify(format!("Export failed: {error}"));
-            }
+            Err(error) => self.export_failed(from_dialog, error),
         }
     }
 }
@@ -1359,6 +1387,7 @@ impl eframe::App for DemoApp {
         self.show_replay_start(&ctx);
         self.show_dialogs(&ctx);
         self.show_watchlist_import(&ctx);
+        self.show_wide_watchlist(&ctx);
 
         // Transient status notice.
         self.show_notice(ui);
@@ -2101,9 +2130,16 @@ impl DemoApp {
         // The simulation clock rather than the wall clock, which the pause freezes: a paused
         // demo must be able to go idle instead of repainting for a market that stands still.
         let now = self.live.now();
-        for entry in &mut self.market_heatmap.entries {
+        for entry in self
+            .market_heatmap
+            .universes
+            .iter_mut()
+            .flat_map(|universe| &mut universe.entries)
+        {
             if let Some(quote) = live::watchlist_quote(&entry.symbol, now) {
-                entry.change_percent = (quote.last - quote.prev_close) / quote.prev_close * 100.0;
+                let change = (quote.last - quote.prev_close) / quote.prev_close * 100.0;
+                entry.values.insert("change".into(), change);
+                entry.values.insert("price".into(), quote.last);
             }
         }
         let chart_symbol = self.chart.symbol().to_owned();
@@ -2136,6 +2172,19 @@ impl DemoApp {
         }
         self.symbol_details
             .set_average_volume(self.live.daily_volume().1);
+        for request in self.symbol_details.take_market_requests() {
+            use egui_charts::ui::widget_bar::{MarketDetail, MarketDetailRequest};
+            let bars = self.chart.bars(SeriesId::MAIN);
+            match request {
+                MarketDetailRequest::PeriodReturns(symbol) => self
+                    .symbol_details
+                    .set_period_returns(&symbol, MarketDetail::Ready(feeds::period_returns(bars))),
+                MarketDetailRequest::Seasonality(symbol) => self
+                    .symbol_details
+                    .set_seasonality(&symbol, MarketDetail::Ready(feeds::seasonality(bars))),
+                _ => {}
+            }
+        }
         // Open financials follow the chart's symbol.
         if self.symbol_details.take_financials_request()
             || (self.financials.as_ref()).is_some_and(|(symbol, _)| *symbol != chart_symbol)
@@ -2217,14 +2266,70 @@ impl DemoApp {
                 self.watchlist_search = true;
                 self.symbol_search.open();
             }
-            WatchlistAction::AdvancedView => {
-                self.notify("The advanced watchlist view is not part of this demo")
-            }
+            WatchlistAction::AdvancedView => self.watchlist_wide = true,
             WatchlistAction::Import => self.watchlist_import = Some(String::new()),
             WatchlistAction::Export { text, .. } => self.save_text("watchlist.txt", &text),
             WatchlistAction::None => {}
             _ => {}
         }
+    }
+
+    /// The wide watchlist in a window, with the synthetic earnings, dividends and news of its
+    /// symbols. It shares the compact panel's selection and sorting.
+    fn show_wide_watchlist(&mut self, ctx: &egui::Context) {
+        use egui_charts::data::{CalendarEvent, CalendarKind, NewsStory};
+        use egui_charts::ui::widget_bar::{MarketDetail, WatchlistDetails};
+        if !self.watchlist_wide {
+            return;
+        }
+        let now = chrono::Utc::now();
+        let mut details = WatchlistDetails::default();
+        let (mut earnings, mut dividends, mut news) = (Vec::new(), Vec::new(), Vec::new());
+        for (n, symbol) in self.watchlist.symbols().enumerate() {
+            let days = chrono::Duration::days(n as i64 % 20 + 1);
+            let event = |kind, time, title: String| {
+                let mut event = CalendarEvent::new(format!("{symbol}-{kind:?}"), kind, time, title);
+                event.symbol = Some(symbol.to_owned());
+                event
+            };
+            let mut report = event(
+                CalendarKind::Earnings,
+                now + days,
+                format!("{symbol} quarterly results"),
+            );
+            (report.forecast, report.prior) = (Some("1.24".into()), Some("1.17".into()));
+            earnings.push(report);
+            let mut payout = event(
+                CalendarKind::Dividends,
+                now + days * 2,
+                format!("{symbol} dividend"),
+            );
+            payout.forecast = Some("0.42".into());
+            dividends.push(payout);
+            let mut story = NewsStory::new(
+                format!("{symbol}-story"),
+                now - chrono::Duration::hours(n as i64 + 1),
+                format!("{symbol} extends its range as volume rises"),
+            );
+            story.source = "Demo wire".into();
+            story.symbols = vec![symbol.to_owned()];
+            news.push(story);
+        }
+        details.earnings = MarketDetail::Ready(earnings);
+        details.dividends = MarketDetail::Ready(dividends);
+        details.news = MarketDetail::Ready(news);
+        let mut open = true;
+        let mut action = WatchlistAction::None;
+        egui::Window::new("Watchlist")
+            .open(&mut open)
+            .default_size([900.0, 520.0])
+            .show(ctx, |ui| action = self.watchlist.show_wide(ui, &details));
+        match action {
+            WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+            WatchlistAction::CompactView => open = false,
+            _ => {}
+        }
+        self.watchlist_wide = open;
     }
 
     /// The demo has no file picker for imports: the user pastes the exported text instead.
@@ -2251,9 +2356,15 @@ impl DemoApp {
     }
 
     fn show_alerts_panel(&mut self, ui: &mut egui::Ui) {
+        self.list_alert_sources();
+        self.alerts.set_symbol(&self.state.symbol);
         match self.alerts.show(ui) {
             AlertPanelAction::CreateAlert => self.open_alert(None),
             AlertPanelAction::EditAlert(alert) => {
+                self.open_alert(None);
+                self.alert_dialog.edit(*alert);
+            }
+            AlertPanelAction::DuplicateAlert(alert) => {
                 self.open_alert(None);
                 self.alert_dialog.edit(*alert);
             }
@@ -2586,6 +2697,8 @@ impl DemoApp {
         self.drain_chart_events(ui.ctx());
         self.menus
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
+        self.menus
+            .set_watchlists(self.watchlist.lists().iter().map(|list| list.name.as_str()));
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
             self.handle_context_action(ui.ctx(), action);
         }
@@ -2756,7 +2869,13 @@ impl DemoApp {
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
+            ContextMenuAction::AddToWatchlist { list, symbol } => {
+                if !self.watchlist.add_symbol_to(list, &symbol) {
+                    self.notify(format!("{symbol} is already in that watchlist"));
+                }
+            }
             ContextMenuAction::ResetChart => self.chart.reset_chart_view(),
+            ContextMenuAction::OpenDataTable => self.data_table.open(),
             ContextMenuAction::ExportCsv => self.export_csv(None),
             ContextMenuAction::Order(request) => self.trading.open_ticket(request),
             _ => {}
@@ -2864,6 +2983,7 @@ impl DemoApp {
 
     fn keyboard_dialog_open(&self) -> bool {
         self.keyboard_shortcuts.is_open
+            || self.data_table.is_open
             || self.quick_search.is_open()
             || self.symbol_search.is_open()
             || self.compare_dialog.is_open
@@ -3338,6 +3458,55 @@ mod tests {
                 "replay fills must be marked on their historical bars"
             );
         }
+    }
+
+    /// A starred tool shows on the strip over the chart, and a click on it arms the tool.
+    #[test]
+    fn starred_tool_shows_on_the_favorites_strip_and_arms_on_click() {
+        use eframe::App;
+        use egui_charts::drawings::DrawingToolType;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.drawing_toolbar
+            .toggle_favorite(DrawingToolType::TrendLine);
+        let frame = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+            .drop_without_applying_deltas();
+        };
+        frame(&mut app, vec![]);
+        frame(&mut app, vec![]);
+        let strip = ctx
+            .memory(|memory| memory.area_rect(egui::Id::NULL.with("floating_drawing_toolbar")))
+            .expect("a starred tool shows the strip");
+        // Past the grip, inside the first tool button.
+        let pos = egui::pos2(strip.left() + 28.0, strip.center().y);
+        frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        assert_eq!(
+            app.chart.drawings().active_tool,
+            Some(DrawingToolType::TrendLine)
+        );
     }
 
     #[test]

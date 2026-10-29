@@ -445,7 +445,7 @@ mod tests {
                         "{kind:?}"
                     );
                 }
-                let info = crate::tokens::DESIGN_TOKENS.semantic.extended.info;
+                let info = crate::theme::ThemeExt::active_theme(&ctx).ui.info;
                 assert_eq!(
                     shapes
                         .iter()

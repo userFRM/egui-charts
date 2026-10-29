@@ -45,7 +45,9 @@ pub fn render_alert_levels<'a>(
             }
             let levels = match condition {
                 AlertCondition::EnteringChannel { lower, upper }
-                | AlertCondition::ExitingChannel { lower, upper } => vec![*lower, *upper],
+                | AlertCondition::ExitingChannel { lower, upper }
+                | AlertCondition::InsideChannel { lower, upper }
+                | AlertCondition::OutsideChannel { lower, upper } => vec![*lower, *upper],
                 _ => condition.level().into_iter().collect(),
             };
             for (edge, level) in levels
@@ -96,7 +98,9 @@ pub fn render_alert_levels<'a>(
                             | AlertCondition::Above(v)
                             | AlertCondition::Below(v) => *v = value,
                             AlertCondition::EnteringChannel { lower, upper }
-                            | AlertCondition::ExitingChannel { lower, upper } => {
+                            | AlertCondition::ExitingChannel { lower, upper }
+                            | AlertCondition::InsideChannel { lower, upper }
+                            | AlertCondition::OutsideChannel { lower, upper } => {
                                 if edge == 0 {
                                     *lower = value;
                                 } else {

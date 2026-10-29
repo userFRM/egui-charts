@@ -150,7 +150,7 @@ pub(crate) fn render_event_breaks(
     coords: &ChartMapping,
 ) {
     let painter = ui.painter().with_clip_rect(coords.rect);
-    let stroke = Stroke::new(1.0, DESIGN_TOKENS.semantic.extended.info);
+    let stroke = Stroke::new(1.0, ui.ctx().active_theme().ui.info);
     for &time in times {
         let Some(at) = crate::model::index_at(visible_data, time) else {
             continue;
@@ -240,6 +240,7 @@ fn render_marker_shape(
     size: f32,
 ) {
     let base_size = 8.0 * size;
+    let outline = painter.ctx().active_theme().chart.crosshair_label_text;
 
     match shape {
         MarkerShape::Circle => {
@@ -247,10 +248,7 @@ fn render_marker_shape(
             painter.circle_stroke(
                 pos,
                 base_size,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
             );
         }
         MarkerShape::Square => {
@@ -262,10 +260,7 @@ fn render_marker_shape(
             painter.rect_stroke(
                 Rect::from_center_size(pos, Vec2::splat(base_size * 2.0)),
                 0.0,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
                 StrokeKind::Outside,
             );
         }
@@ -279,10 +274,7 @@ fn render_marker_shape(
             painter.add(Shape::convex_polygon(
                 points,
                 color,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
             ));
         }
         MarkerShape::ArrowDown => {
@@ -295,10 +287,7 @@ fn render_marker_shape(
             painter.add(Shape::convex_polygon(
                 points,
                 color,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
             ));
         }
         MarkerShape::TriangleUp => {
@@ -338,10 +327,7 @@ fn render_marker_shape(
             painter.add(Shape::convex_polygon(
                 points,
                 color,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
             ));
         }
         MarkerShape::Star => {
@@ -361,10 +347,7 @@ fn render_marker_shape(
             painter.add(Shape::convex_polygon(
                 points,
                 color,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
             ));
         }
         MarkerShape::Cross => {
@@ -393,10 +376,7 @@ fn render_marker_shape(
             painter.add(Shape::convex_polygon(
                 points,
                 color,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-                ),
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
             ));
         }
     }
