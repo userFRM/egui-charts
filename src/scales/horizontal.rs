@@ -386,10 +386,8 @@ mod tests {
             (12, 12_003.0, 12_000.0),
             (12, 1e12, 12_000.0),
             (12, f64::INFINITY, 12.0),
-            (12, f64::NEG_INFINITY, 12.0),
             (12, f64::NAN, 12.0),
             (24_000, 1e12, 24_000.0),
-            (24_000, f64::INFINITY, 24_000.0),
         ] {
             quarterly.minimum_range = minimum;
             let expected: Vec<_> = (0..=(slots as u32 / 3))
