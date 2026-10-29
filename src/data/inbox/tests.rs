@@ -438,7 +438,7 @@ fn clock_boundaries_and_empty_intervals() {
             updates.bars[&boundary],
             (
                 Bar::new(boundary, 99.0, 101.0, 99.0, 101.0, 9.0),
-                Origin::Ticks(2)
+                Origin::TicksAfterHeartbeat(2)
             )
         );
         super::super::merge::merge(

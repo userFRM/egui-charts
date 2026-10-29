@@ -545,9 +545,14 @@ impl Live {
             updates.late_ticks += 1;
         } else {
             let replace_empty = live.empty && live.forming == Some(open);
+            let origin = if replace_empty {
+                Origin::TicksAfterHeartbeat(1)
+            } else {
+                Origin::Ticks(1)
+            };
             match updates.bars.entry(open) {
                 Entry::Occupied(mut pending) if replace_empty => {
-                    pending.insert((ticks, Origin::Ticks(1)));
+                    pending.insert((ticks, origin));
                 }
                 Entry::Occupied(mut pending) => {
                     let (bar, origin) = pending.get_mut();
@@ -556,12 +561,12 @@ impl Live {
                         return;
                     };
                     *bar = folded;
-                    if let Origin::Ticks(trades) = origin {
+                    if let Origin::Ticks(trades) | Origin::TicksAfterHeartbeat(trades) = origin {
                         *trades += 1;
                     }
                 }
                 Entry::Vacant(slot) => {
-                    slot.insert((ticks, Origin::Ticks(1)));
+                    slot.insert((ticks, origin));
                 }
             }
             live.last_trade = Some(tick.ts);

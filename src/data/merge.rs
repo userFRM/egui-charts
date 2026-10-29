@@ -14,6 +14,8 @@ pub(crate) enum Origin {
     /// This many trades folded into a bar: extends the last bar or appends a newer one; older
     /// ones are late.
     Ticks(u64),
+    /// Trades whose first execution replaces a heartbeat, or extends a page already in its slot.
+    TicksAfterHeartbeat(u64),
 }
 
 /// What one merge changed.
@@ -80,7 +82,7 @@ pub(crate) fn merge(
     let mut window = Vec::with_capacity(hi - lo + incoming.len());
     for (bar, origin) in incoming {
         let at = slot(&bar);
-        if let Origin::Ticks(trades) = origin
+        if let Origin::Ticks(trades) | Origin::TicksAfterHeartbeat(trades) = origin
             && last.is_some_and(|last| at < last)
         {
             merged.late_ticks += trades;
@@ -91,12 +93,8 @@ pub(crate) fn merge(
         }
         let old = stored.next_if(|old| slot(old) == at);
         let new = match (old, origin) {
-            (Some(old), Origin::Ticks(_))
-                if old.volume == 0.0 && from_ticks.contains(&old.time) =>
-            {
-                bar
-            }
-            (Some(old), Origin::Ticks(trades)) => {
+            (Some(old), Origin::TicksAfterHeartbeat(_)) if from_ticks.contains(&old.time) => bar,
+            (Some(old), Origin::Ticks(trades) | Origin::TicksAfterHeartbeat(trades)) => {
                 // Trades filling a whitespace bar extend its eventual history bar.
                 if old.is_whitespace() {
                     from_ticks.insert(old.time);
@@ -125,7 +123,7 @@ pub(crate) fn merge(
                 from_ticks.remove(&old.time);
                 bar
             }
-            (None, Origin::Ticks(_)) => {
+            (None, Origin::Ticks(_) | Origin::TicksAfterHeartbeat(_)) => {
                 from_ticks.insert(bar.time);
                 bar
             }
@@ -221,6 +219,21 @@ mod tests {
         let mut invalid = vec![bar(1, 5.0), bar(2, f64::NAN), bar(3, 5.0)];
         invalid[0].high = 4.0;
         invalid[2].volume = -1.0;
+        let zero_size_trades = {
+            let inbox = std::sync::Arc::new(crate::data::inbox::Inbox::default());
+            let sink = inbox.subscribe("ES".into(), Timeframe::Min1.into(), 100, None);
+            [vec![(0, 10.0)], vec![(10, 12.0), (20, 11.0)]]
+                .into_iter()
+                .map(|trades| {
+                    for (second, price) in trades {
+                        sink.push_tick(crate::model::Tick::new(at(0, second), price, 0.0, None));
+                    }
+                    let (_, updates) = inbox.drain().updates.pop().unwrap();
+                    let (bar, origin) = updates.bars.into_values().next().unwrap();
+                    (origin, vec![bar])
+                })
+                .collect()
+        };
         let heartbeat_trade = {
             let inbox = std::sync::Arc::new(crate::data::inbox::Inbox::default());
             let sink = inbox.subscribe("ES".into(), Timeframe::Min1.into(), 100, None);
@@ -234,6 +247,9 @@ mod tests {
         };
         #[rustfmt::skip]
         let cases = [
+            ("zero-size trades keep the forming candle across drains",
+                zero_size_trades,
+                vec![ohlcv(0, [10.0, 12.0, 10.0, 11.0, 0.0])], (Some(0), 0, 0)),
             ("a trade after a pending heartbeat extends the page in its slot",
                 vec![(History, vec![ohlcv(1, [12.0, 13.0, 11.5, 12.5, 6.0])]), heartbeat_trade],
                 vec![ohlcv(1, [12.0, 14.0, 11.5, 14.0, 8.0])], (Some(0), 0, 0)),

@@ -458,7 +458,7 @@ Order flow,Order flow,Volume bubble colour modes,done,library,src/chart/overlays
 Order flow,Order flow,Volume bubble size scaling and outlier handling,done,library,src/chart/overlays/volume_bubbles.rs;src/widget/frame.rs
 Order flow,Order flow data model,Aggregation of trades into per-bar price levels,done,library,src/data/footprint.rs;src/widget/feed.rs;src/data/mod.rs
 Order flow,Order flow data model,Backpressure and per-frame coalescing for high-rate feeds,done,library,src/data/inbox.rs;src/widget/feed.rs
-Order flow,Order flow data model,Building bars from trades and merging history,done,library,src/data/inbox/sink.rs;src/data/merge.rs;src/data/mod.rs;src/widget/studies_data.rs;src/widget/feed.rs
+Order flow,Order flow data model,Building bars from trades and merging history,done,library,src/data/inbox/sink.rs;src/data/inbox/tests.rs;src/data/merge.rs;src/data/mod.rs;src/widget/studies_data.rs;src/widget/feed.rs
 Order flow,Order flow data model,Depth history store,done,library,src/data/depth_history.rs;src/widget/feed.rs
 Order flow,Order flow data model,Grouping fills into parent market orders,done,library,src/model/quote.rs;src/data/trades.rs;src/widget/feed.rs;src/data/mod.rs
 Order flow,Order flow data model,Historical trades and depth request for a time range,done,library,src/data/mod.rs;src/widget/feed.rs;src/data/trades.rs
