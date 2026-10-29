@@ -636,7 +636,7 @@ mod tests {
             let mut dialog = DrawingPropertiesDialog::new();
             for (tool, fill, extend, text) in [
                 (Tool::HorizontalLine, false, false, false),
-                (Tool::Rect, true, false, false),
+                (Tool::Rect, true, true, false),
                 (Tool::Brush, false, false, false),
                 (Tool::TrendLine, false, true, false),
                 (Tool::TextLabel, true, false, true),

@@ -393,15 +393,58 @@ mod tests {
             DrawingToolType::FixedRangeVolumeProfile,
             DrawingToolType::RegressionTrend,
             DrawingToolType::ParallelChannel,
+            DrawingToolType::Rect,
+            DrawingToolType::TrendLine,
+            DrawingToolType::Ray,
+            DrawingToolType::ExtendedLine,
+            DrawingToolType::InfoLine,
+            DrawingToolType::TrendAngle,
+            DrawingToolType::Arrow,
+            DrawingToolType::Path,
+            DrawingToolType::Polyline,
         ] {
             chart.drawings_mut().drawings.clear();
             chart.drawings_mut().drawings.push(Drawing::new(7, tool));
-            let mut peer = Drawing::new(8, DrawingToolType::TrendLine);
+            let mut peer = Drawing::new(8, DrawingToolType::TextLabel);
             peer.chart_points
                 .push(crate::drawings::ChartPoint::new(5.0, 75.0));
             chart.drawings_mut().drawings.push(peer);
             chart.drawings_mut().select_drawings([7, 8]);
             let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+            let output = egui::Context::default().run_ui(Default::default(), |ui| {
+                let mut pickers = [
+                    crate::ui_kit::ColorPickerState::new(props.color),
+                    crate::ui_kit::ColorPickerState::new(props.color),
+                ];
+                super::super::tabs::StyleTab::show(ui, &mut props, &mut pickers);
+            });
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            let line = matches!(
+                tool,
+                DrawingToolType::TrendLine
+                    | DrawingToolType::Ray
+                    | DrawingToolType::ExtendedLine
+                    | DrawingToolType::InfoLine
+                    | DrawingToolType::TrendAngle
+                    | DrawingToolType::Arrow
+                    | DrawingToolType::Path
+                    | DrawingToolType::Polyline
+            );
+            assert_eq!(labels.contains(&"Line start"), line, "{tool:?}");
+            assert_eq!(labels.contains(&"Line end"), line, "{tool:?}");
+            assert_eq!(
+                labels.contains(&"Middle line"),
+                tool == DrawingToolType::Rect,
+                "{tool:?}"
+            );
+            output.drop_without_applying_deltas();
             let settings = &mut props.tool_settings.as_mut().unwrap().settings;
             settings.fib_config = Some(FibonacciConfig {
                 reverse: true,
@@ -430,6 +473,8 @@ mod tests {
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
+            settings.arrow_start_style = crate::drawings::ArrowStyle::Arrow;
+            settings.arrow_end_style = crate::drawings::ArrowStyle::None;
             let expected = format!("{:?}", settings.fib_config);
             props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
             let saved = &chart.drawings().drawings[0];
@@ -444,6 +489,8 @@ mod tests {
             assert_eq!(saved.position_sizing, sizing);
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
+            assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);
+            assert_eq!(saved.arrow_end_style, crate::drawings::ArrowStyle::None);
             assert!(chart.drawings().drawings[1].fib_config.is_none());
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());

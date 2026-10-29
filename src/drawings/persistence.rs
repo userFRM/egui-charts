@@ -34,7 +34,7 @@
 //!
 //! Drawings are grouped by symbol into a `DrawingStorage` container that
 //! includes a format version, metadata, and an optional timeframe filter.
-//! Loading migrates version 1 files, rejects versions it does not know and
+//! Loading migrates versions 1 and 2, rejects versions it does not know and
 //! skips any drawing it cannot read
 //! (see [`from_json`](crate::drawings::persistence::DrawingStorage::from_json)).
 
@@ -307,8 +307,9 @@ impl Default for StorageMetadata {
 }
 
 impl DrawingStorage {
-    /// Current storage format version
-    pub const CURRENT_VERSION: u32 = 2;
+    /// Current storage format version. Version 3 preserves editable ray and extended-line
+    /// extensions; versions 1 and 2 migrate to their former rendered reach when loaded.
+    pub const CURRENT_VERSION: u32 = 3;
 
     /// Create new storage for a symbol
     pub fn new(symbol: impl Into<String>) -> Self {
@@ -418,7 +419,7 @@ impl DrawingStorage {
         serde_json::to_string_pretty(self).map_err(SaveError::Json)
     }
 
-    /// Deserialize from JSON, migrating version 1 to the current format.
+    /// Deserialize from JSON, migrating versions 1 and 2 to the current format.
     ///
     /// Fails as a whole on invalid JSON, on a version this release does not
     /// know and on a missing or invalid symbol, timeframe or metadata. A
@@ -445,29 +446,29 @@ impl DrawingStorage {
             drawings: Vec<serde_json::Value>,
             metadata: StorageMetadata,
         }
-        let load: fn(serde_json::Value) -> Result<StoredDrawing, serde_json::Error> =
-            match serde_json::from_str::<Version>(json)?.version {
-                1 => v1::load,
-                Self::CURRENT_VERSION => |value| {
-                    // Checked here, not in `Drawing`'s serde, which other formats share:
-                    // serde's own error lists every variant.
-                    if let Some(name) = value.pointer("/drawing/tool_type").and_then(|t| t.as_str())
-                    {
-                        DrawingToolType::deserialize(name.into_deserializer()).map_err(
-                            |_: serde::de::value::Error| {
-                                serde::de::Error::custom(ParseToolTypeError { input: name.into() })
-                            },
-                        )?;
-                    }
-                    serde_json::from_value(value)
-                },
-                version => {
-                    return Err(serde::de::Error::custom(format!(
-                        "unsupported drawing storage version {version}, expected 1 to {}",
-                        Self::CURRENT_VERSION
-                    )));
+        let version = serde_json::from_str::<Version>(json)?.version;
+        let load: fn(serde_json::Value) -> Result<StoredDrawing, serde_json::Error> = match version
+        {
+            1 => v1::load,
+            2 | Self::CURRENT_VERSION => |value| {
+                // Checked here, not in `Drawing`'s serde, which other formats share:
+                // serde's own error lists every variant.
+                if let Some(name) = value.pointer("/drawing/tool_type").and_then(|t| t.as_str()) {
+                    DrawingToolType::deserialize(name.into_deserializer()).map_err(
+                        |_: serde::de::value::Error| {
+                            serde::de::Error::custom(ParseToolTypeError { input: name.into() })
+                        },
+                    )?;
                 }
-            };
+                serde_json::from_value(value)
+            },
+            version => {
+                return Err(serde::de::Error::custom(format!(
+                    "unsupported drawing storage version {version}, expected 1 to {}",
+                    Self::CURRENT_VERSION
+                )));
+            }
+        };
         let container: Container = serde_json::from_str(json)?;
         let mut skipped = Vec::new();
         let mut ids = HashSet::new();
@@ -481,6 +482,23 @@ impl DrawingStorage {
                     .and_then(|mut drawing| {
                         // Before the id check, so that a skipped drawing does not claim its id.
                         let tool = drawing.drawing.tool_type;
+                        if version < 3 {
+                            // Earlier renderers ignored these flags for rays and extended lines.
+                            match tool {
+                                DrawingToolType::Ray => {
+                                    let reversed = drawing.points.get(..2).is_some_and(|p| {
+                                        (p[0].ts_ms, p[0].subms_ns) > (p[1].ts_ms, p[1].subms_ns)
+                                    });
+                                    drawing.drawing.extend_left = reversed;
+                                    drawing.drawing.extend_right = !reversed;
+                                }
+                                DrawingToolType::ExtendedLine => {
+                                    drawing.drawing.extend_left = true;
+                                    drawing.drawing.extend_right = true;
+                                }
+                                _ => {}
+                            }
+                        }
                         if tool.is_cursor() {
                             return Err(serde::de::Error::custom(format!(
                                 "{tool} is a cursor, not a drawing"
@@ -856,8 +874,8 @@ mod tests {
         d.visible = false;
         d.font_size = 18.0;
         d.font_weight = FontWeight::Bold;
-        d.extend_left = true;
-        d.extend_right = true;
+        d.extend_left = !d.extend_left;
+        d.extend_right = !d.extend_right;
         d.arrow_start_style = ArrowStyle::Diamond;
         d.arrow_end_style = ArrowStyle::Circle;
         d.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
@@ -1090,6 +1108,64 @@ mod tests {
             );
         }
 
+        // Earlier rays and extended lines ignored the saved Extend flags. Adopt their old
+        // reach once, then retain explicit changes on the next save and load.
+        for (tool, name) in [
+            (DrawingToolType::Ray, "Ray"),
+            (DrawingToolType::ExtendedLine, "Extended Line"),
+        ] {
+            for (fixture, tool_path, tool_name) in [
+                (
+                    include_str!("fixtures/storage_v1.json"),
+                    "/tool_type",
+                    name.to_owned(),
+                ),
+                (
+                    include_str!("fixtures/storage_v2.json"),
+                    "/drawing/tool_type",
+                    serde_json::to_value(tool)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                ),
+            ] {
+                for reversed in [false, true] {
+                    let mut saved: serde_json::Value = serde_json::from_str(fixture).unwrap();
+                    let records = saved["drawings"].as_array_mut().unwrap();
+                    records.truncate(1);
+                    *records[0].pointer_mut(tool_path).unwrap() = tool_name.clone().into();
+                    records[0]["points"].as_array_mut().unwrap().truncate(2);
+                    if reversed {
+                        records[0]["points"].as_array_mut().unwrap().reverse();
+                    }
+                    if let Some(settings) = records[0].get_mut("drawing") {
+                        settings["extend_left"] = true.into();
+                        settings["extend_right"] = false.into();
+                    }
+                    let (mut loaded, skipped) =
+                        DrawingStorage::from_json(&saved.to_string()).unwrap();
+                    assert!(skipped.is_empty(), "{skipped:?}");
+                    let drawing = &mut loaded.drawings[0].drawing;
+                    assert_eq!(
+                        drawing.extend_left,
+                        reversed || tool == DrawingToolType::ExtendedLine
+                    );
+                    assert_eq!(
+                        drawing.extend_right,
+                        !reversed || tool == DrawingToolType::ExtendedLine
+                    );
+                    drawing.extend_left = false;
+                    drawing.extend_right = false;
+                    let (again, skipped) =
+                        DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
+                    assert!(skipped.is_empty());
+                    assert!(!again.drawings[0].drawing.extend_left);
+                    assert!(!again.drawings[0].drawing.extend_right);
+                }
+            }
+        }
+
         // Settings from a file saved before the new fields and placement counts.
         for (tool, count, origins) in [
             (DrawingToolType::PriceNote, 1, &[0, 0][..]),
@@ -1273,11 +1349,11 @@ mod tests {
                 .show_on_all
         );
 
-        let got = DrawingStorage::from_json(&current.replace("\"version\": 2", "\"version\": 3"))
+        let got = DrawingStorage::from_json(&current.replace("\"version\": 3", "\"version\": 4"))
             .unwrap_err()
             .to_string();
         assert!(
-            got.contains("unsupported drawing storage version 3"),
+            got.contains("unsupported drawing storage version 4"),
             "{got}"
         );
     }
