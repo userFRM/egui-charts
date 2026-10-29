@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use egui::{Align, Align2, Label, Layout, RichText, Sense, Stroke, TextStyle, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
-use super::object_tree::format_price;
+use super::format_price;
 use crate::data::combine_trades;
 use crate::icons::icons;
 use crate::model::{OrderSide, Tick, TimezoneId};

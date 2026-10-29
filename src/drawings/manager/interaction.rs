@@ -170,12 +170,10 @@ impl DrawingManager {
                 let snapshot = self
                     .drawings
                     .iter()
-                    .map(|drawing| {
-                        before
-                            .iter()
-                            .find(|old| old.id == drawing.id)
-                            .unwrap_or(drawing)
-                            .clone()
+                    .enumerate()
+                    .filter_map(|(index, drawing)| {
+                        let old = before.iter().find(|old| old.id == drawing.id)?;
+                        Some((index, old.clone()))
                     })
                     .collect();
                 self.history.push_snapshot(snapshot);

@@ -54,6 +54,7 @@
 //! | [`scales`] | Price ranges, coordinate mapping, axis ticks and label formatting |
 //! | [`config`] | Chart appearance and interaction options |
 //! | [`services`] | Host storage, symbol search, quotes, alerts, signals and broker contracts |
+//! | `strategies` | Strategies that trade on closed bars and the backtest engine that runs them |
 //! | [`theme`], [`tokens`], [`styles`] | Theme presets, design tokens and UI styling helpers |
 //! | `ui`, `ui_kit` | Chart controls and reusable UI components placed in the host's layout |
 //! | `icons` | Embedded SVG icons |
@@ -73,6 +74,7 @@
 //! | `studies` | via `ui` | Built-in studies, `IndicatorFactory` and study templates; usable without egui |
 //! | `alert-engine` | off | `services::AlertEngine`, an `Alerts` service that evaluates alerts on the bars the host feeds it; needs no egui |
 //! | `detectors` | off | `services::OrderFlowDetectors`, a `Signals` service that finds order-flow events in the trades and depth the host feeds it; needs no egui |
+//! | `strategies` | off | `strategies::Backtest`, which runs a `Strategy` over bars and returns a `StrategyReport`; needs no egui |
 //! | `icons` | via `ui` | Embedded SVG icons and their image loaders; enables `widget` |
 //! | `ui` | on | Toolbars, panels, dialogs and `ui_kit`; enables `icons`, `studies` and `drawings` |
 //! | `locales` | on | Localized month and weekday names and AM/PM markers through chrono; otherwise English |
@@ -138,6 +140,10 @@ pub mod studies;
 pub mod config;
 pub mod data;
 pub mod services;
+#[cfg(feature = "strategies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "strategies")))]
+#[warn(missing_docs)]
+pub mod strategies;
 
 // ─── Theme & design system ───────────────────────────────────────────────────
 

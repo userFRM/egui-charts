@@ -18,7 +18,10 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::market::Market;
-use crate::sampledata::{DemoSymbol, sample_session, session_bars};
+use crate::sampledata::{
+    DemoSymbol, dividend_date, dividend_factor, latest_open_end, session_bars, us_equity_hours,
+    us_equity_session, us_equity_zone,
+};
 use egui_charts::ui::timeframe_toolbar::SessionType;
 
 const RETAINED_TRADES: usize = 100_000;
@@ -45,6 +48,8 @@ struct Simulation {
     paused: bool,
     continuous: bool,
     adjusted: bool,
+    /// The ex-date and price factor stay fixed for the life of the feed.
+    dividend: Option<(DateTime<Utc>, f64)>,
     subscription: Option<Subscription>,
     signals: Vec<Events<SignalEvent>>,
     options: Vec<(OptionsVolumeQuery, OptionsVolumeSink)>,
@@ -77,6 +82,8 @@ impl LiveFeed {
             paused: false,
             continuous: true,
             adjusted: false,
+            dividend: DemoSymbol::has_hours(symbol)
+                .then(|| (dividend_date(symbol, now), dividend_factor(symbol))),
             subscription: None,
             signals: Vec::new(),
             options: Vec::new(),
@@ -112,6 +119,7 @@ impl LiveFeed {
             paused: sim.paused,
             continuous: sim.continuous,
             adjusted: sim.adjusted,
+            dividend: sim.dividend,
             subscription: None,
             signals: Vec::new(),
             options: Vec::new(),
@@ -210,10 +218,10 @@ impl LiveFeed {
             .with_price_decimals(if sim.tick_size < 0.01 { 4 } else { 2 })
             .with_tick_size(sim.tick_size)
             .with_native_timeframes([Timeframe::Min1]);
-        if sim.symbol == "SAMPLE" && !sim.continuous {
+        if DemoSymbol::has_hours(&sim.symbol) && !sim.continuous {
             instrument = instrument
-                .with_time_zone(egui_charts::model::TimezoneId::utc())
-                .with_session(sample_session());
+                .with_time_zone(us_equity_zone())
+                .with_session(us_equity_session());
         }
         // Index quotes are commonly licensed delayed; the legend marks them.
         if sim.symbol == "SPX" {
@@ -246,84 +254,58 @@ impl LiveFeed {
     pub(super) fn day_change(&self) -> Option<(f64, f64)> {
         let sim = self.state();
         let extended = sim.subscription.as_ref()?.extended_hours;
-        let (time, last) = sim
-            .trades
-            .iter()
-            .rev()
-            .find_map(|trade| sim.shown_trade(trade, extended))
-            .map(|trade| (trade.ts, trade.price))
-            .or_else(|| {
-                sim.shown_history(extended)
-                    .last()
-                    .map(|bar| (bar.time, bar.close))
-            })?;
+        let latest =
+            sim.trades.back().map_or(sim.now, |trade| trade.ts) + TimeDelta::nanoseconds(1);
+        let (time, last) = sim.newest_shown(latest, extended)?;
         let midnight = time.date_naive().and_hms_opt(0, 0, 0)?.and_utc();
-        let prev_close = match sim
-            .trades
-            .iter()
-            .rev()
-            .filter(|trade| trade.ts < midnight)
-            .find_map(|trade| sim.shown_trade(trade, extended))
-        {
-            Some(trade) => trade.price,
-            None => {
-                sim.shown_history(extended)
-                    .iter()
-                    .rev()
-                    .find(|bar| bar.time < midnight)?
-                    .close
-            }
-        };
+        let (_, prev_close) = sim.newest_shown(midnight, extended)?;
         Some((last, prev_close))
     }
 
-    /// SAMPLE's last regular-hours price with its time and the regular close of the day before,
-    /// and a later trade outside regular hours: pre-market in its extended window, post-market
-    /// otherwise. `None` for the other symbols, which have no trading hours.
+    /// The last regular-hours price with its time and the regular close of the day before, and a
+    /// later trade in an extended window: pre-market before the open, post-market after the close.
+    /// `None` for symbols without trading hours.
     pub(super) fn regular_quote(
         &self,
     ) -> Option<(DateTime<Utc>, f64, f64, Option<ExtendedHoursQuote>)> {
         let sim = self.state();
-        if sim.symbol != "SAMPLE" {
+        if !DemoSymbol::has_hours(&sim.symbol) {
             return None;
         }
-        let hours = egui_charts::model::ExchangeSessionProvider::new(
-            egui_charts::model::TimezoneId::utc(),
-            Some(sample_session()),
-        );
-        let newest_first = sim
-            .trades
-            .iter()
-            .rev()
-            .map(|trade| (trade.ts, trade.price))
-            .chain(sim.history.iter().rev().map(|bar| (bar.time, bar.close)));
-        let (time, last) = newest_first
-            .clone()
-            .find(|&(time, _)| hours.is_open(time, false))?;
+        let latest =
+            sim.trades.back().map_or(sim.now, |trade| trade.ts) + TimeDelta::nanoseconds(1);
+        let newest = |before, extended| {
+            sim.newest(
+                before,
+                if extended {
+                    SessionType::ETH
+                } else {
+                    SessionType::RTH
+                },
+            )
+        };
+        let (time, last) = newest(latest, false)?;
         let midnight = time.date_naive().and_hms_opt(0, 0, 0)?.and_utc();
-        let (_, prev_close) = newest_first
-            .clone()
-            .find(|&(t, _)| t < midnight && hours.is_open(t, false))?;
-        let extended =
-            newest_first
-                .clone()
-                .next()
-                .filter(|&(t, _)| t > time)
-                .map(|(time, last)| ExtendedHoursQuote {
-                    session: if hours.is_open(time, true) {
-                        ExtendedSession::PreMarket
-                    } else {
-                        ExtendedSession::PostMarket
-                    },
-                    last,
-                    time,
-                });
+        let (_, prev_close) = newest(midnight, false)?;
+        let extended = newest(latest, true)
+            .filter(|&(t, _)| t > time)
+            .map(|(time, last)| ExtendedHoursQuote {
+                session: if time.with_timezone(&us_equity_zone()).time()
+                    < us_equity_session().windows[0].open
+                {
+                    ExtendedSession::PreMarket
+                } else {
+                    ExtendedSession::PostMarket
+                },
+                last,
+                time,
+            });
         Some((time, last, prev_close, extended))
     }
 
     /// The quote of the chart's symbol: the last displayed trade and the previous session close,
-    /// or for SAMPLE its regular-hours price and the extended-hours trade after it, with the
-    /// session volume and the book's best bid and ask.
+    /// or for a symbol with trading hours its regular-hours price and the extended-hours trade
+    /// after it, with the session volume and the book's best bid and ask.
     pub(super) fn quote(&self, now: DateTime<Utc>) -> Option<Quote> {
         let mut quote = watchlist_quote(&self.state().symbol, now)?;
         if let Some((last, prev_close)) = self.day_change() {
@@ -561,38 +543,80 @@ impl Simulation {
     }
 
     fn shown_history(&self, extended_hours: bool) -> Vec<Bar> {
+        let Some((dividend, _)) = self.dividend else {
+            return self.history.clone();
+        };
         session_bars(
             &self.symbol,
             &self.history,
             self.session(extended_hours),
             self.adjusted,
+            dividend,
         )
     }
 
-    fn shown_trade(&self, trade: &Tick, extended_hours: bool) -> Option<Tick> {
-        if self.symbol != "SAMPLE" || (self.continuous && !self.adjusted) {
-            return Some(trade.clone());
+    /// The price at `time` on the chart's session and price basis, `None` outside the session.
+    fn shown_price(&self, time: DateTime<Utc>, price: f64, extended_hours: bool) -> Option<f64> {
+        let Some((dividend, factor)) = self.dividend else {
+            return Some(price);
+        };
+        if !self.continuous && !us_equity_hours().is_open(time, extended_hours) {
+            return None;
         }
-        let bar = Bar::new(
-            trade.ts,
-            trade.price,
-            trade.price,
-            trade.price,
-            trade.price,
-            trade.size,
-        );
-        session_bars(
-            &self.symbol,
-            &[bar],
-            self.session(extended_hours),
-            self.adjusted,
-        )
-        .first()
-        .map(|bar| {
-            let mut trade = trade.clone();
-            trade.price = bar.close;
-            trade
+        Some(if self.adjusted && time < dividend {
+            price * factor
+        } else {
+            price
         })
+    }
+
+    fn shown_trade(&self, trade: &Tick, extended_hours: bool) -> Option<Tick> {
+        let price = self.shown_price(trade.ts, trade.price, extended_hours)?;
+        let mut trade = trade.clone();
+        trade.price = price;
+        Some(trade)
+    }
+
+    /// The newest trade or history close before `before` in `session`. Each closed candidate
+    /// moves the bound to the preceding session, including when the stream has gaps.
+    fn newest(
+        &self,
+        mut before: DateTime<Utc>,
+        session: SessionType,
+    ) -> Option<(DateTime<Utc>, f64)> {
+        loop {
+            let extended = session == SessionType::ETH;
+            if session != SessionType::Full24x7 {
+                before = latest_open_end(before, extended);
+            }
+            let trades = self.trades.partition_point(|trade| trade.ts < before);
+            let bars = self.history.partition_point(|bar| bar.time < before);
+            let (time, price) = self
+                .trades
+                .range(..trades)
+                .next_back()
+                .map(|trade| (trade.ts, trade.price))
+                .or_else(|| self.history[..bars].last().map(|bar| (bar.time, bar.close)))?;
+            if session == SessionType::Full24x7 || us_equity_hours().is_open(time, extended) {
+                return Some((time, price));
+            }
+            before = time;
+        }
+    }
+
+    /// The newest price on the chart's session and dividend basis.
+    fn newest_shown(
+        &self,
+        before: DateTime<Utc>,
+        extended_hours: bool,
+    ) -> Option<(DateTime<Utc>, f64)> {
+        let session = if self.dividend.is_some() {
+            self.session(extended_hours)
+        } else {
+            SessionType::Full24x7
+        };
+        let (time, price) = self.newest(before, session)?;
+        Some((time, self.shown_price(time, price, extended_hours)?))
     }
 
     fn random(&mut self) -> u64 {
@@ -1009,6 +1033,213 @@ mod tests {
         }
     }
 
+    /// A trade after the regular close, at 17:30 New York time, is on the tape only with extended
+    /// hours: the window closes at 20:00, not at the regular close.
+    #[test]
+    fn a_post_market_trade_is_shown_only_with_extended_hours() {
+        let now = "2026-10-23T22:00:00Z".parse().unwrap();
+        let feed = LiveFeed::new("SAMPLE", now);
+        feed.set_view(SessionType::RTH, false);
+        let trade = Tick::new("2026-10-23T21:30:00Z".parse().unwrap(), 100.0, 1.0, None);
+        assert!(feed.state().shown_trade(&trade, true).is_some());
+        assert!(feed.state().shown_trade(&trade, false).is_none());
+    }
+
+    /// Adjustment changes older OHLC prices in the live history, while later bars, timestamps
+    /// and volumes keep their raw values in either session.
+    #[test]
+    fn the_dividend_adjustment_shows_in_the_live_history() {
+        for now in [
+            "2026-10-24T15:00:00Z",
+            "2026-10-27T03:00:00Z",
+            "2026-03-09T14:00:00Z",
+            "2026-11-02T15:00:00Z",
+        ] {
+            let now = now.parse().unwrap();
+            for symbol in ["AAPL", "MSFT", "NVDA", "TSLA", "SAMPLE"] {
+                let feed = LiveFeed::new(symbol, now);
+                for (session, extended) in [
+                    (SessionType::RTH, false),
+                    (SessionType::ETH, true),
+                    (SessionType::Full24x7, false),
+                ] {
+                    let bars = |adjusted| {
+                        feed.set_view(session, adjusted);
+                        feed.snapshot(Timeframe::Min1, BarClock::new(Timeframe::Min1), extended)
+                    };
+                    let (raw, adjusted) = (bars(false), bars(true));
+                    let split = raw
+                        .iter()
+                        .zip(&adjusted)
+                        .take_while(|(raw, adjusted)| raw.close != adjusted.close)
+                        .count();
+                    assert_eq!(raw.len(), adjusted.len(), "{symbol} at {now}");
+                    assert!(0 < split && split < raw.len(), "{symbol} at {now}: {split}");
+                    assert_eq!(&raw[split..], &adjusted[split..]);
+                    let factor = 1.0 - 0.01 * (1 + DemoSymbol::find(symbol).seed % 3) as f64;
+                    for (raw, adjusted) in raw[..split].iter().zip(&adjusted) {
+                        assert_eq!((raw.time, raw.volume), (adjusted.time, adjusted.volume));
+                        for (raw, adjusted) in [raw.open, raw.high, raw.low, raw.close]
+                            .into_iter()
+                            .zip([adjusted.open, adjusted.high, adjusted.low, adjusted.close])
+                        {
+                            assert!((raw * factor - adjusted).abs() < 1e-9);
+                        }
+                    }
+                    assert_eq!(bars(false), raw);
+                }
+            }
+        }
+    }
+
+    /// Closed nights and weekends keep the newest extended-session price and its own time.
+    #[test]
+    fn the_extended_quote_is_the_newest_trade_inside_an_extended_window() {
+        for (now, end, session) in [
+            (
+                "2026-10-24T15:00:00Z",
+                "2026-10-24T00:00:00Z",
+                ExtendedSession::PostMarket,
+            ),
+            (
+                "2026-10-27T03:00:00Z",
+                "2026-10-27T00:00:00Z",
+                ExtendedSession::PostMarket,
+            ),
+            (
+                "2026-10-26T12:00:00Z",
+                "2026-10-26T12:00:00Z",
+                ExtendedSession::PreMarket,
+            ),
+            (
+                "2026-03-06T22:00:00Z",
+                "2026-03-06T22:00:00Z",
+                ExtendedSession::PostMarket,
+            ),
+            (
+                "2026-03-08T15:00:00Z",
+                "2026-03-07T01:00:00Z",
+                ExtendedSession::PostMarket,
+            ),
+            (
+                "2026-03-09T12:00:00Z",
+                "2026-03-09T12:00:00Z",
+                ExtendedSession::PreMarket,
+            ),
+            (
+                "2026-10-30T21:00:00Z",
+                "2026-10-30T21:00:00Z",
+                ExtendedSession::PostMarket,
+            ),
+            (
+                "2026-11-01T15:00:00Z",
+                "2026-10-31T00:00:00Z",
+                ExtendedSession::PostMarket,
+            ),
+            (
+                "2026-11-02T13:00:00Z",
+                "2026-11-02T13:00:00Z",
+                ExtendedSession::PreMarket,
+            ),
+        ] {
+            let end = end.parse::<DateTime<Utc>>().unwrap();
+            for symbol in ["AAPL", "SAMPLE"] {
+                let feed = LiveFeed::new(symbol, now.parse().unwrap());
+                for view in [SessionType::RTH, SessionType::ETH, SessionType::Full24x7] {
+                    for adjusted in [false, true] {
+                        feed.set_view(view, adjusted);
+                        let (time, _, _, extended) = feed.regular_quote().unwrap();
+                        let extended = extended.unwrap();
+                        assert!(us_equity_hours().is_open(time, false));
+                        assert_eq!(extended.session, session, "{symbol} at {now}");
+                        assert!(
+                            (end - TimeDelta::minutes(1)..end).contains(&extended.time),
+                            "{symbol} at {now}: {}",
+                            extended.time
+                        );
+                        assert!(extended.time > time);
+                        assert!(us_equity_hours().is_open(extended.time, true));
+                        assert!(!us_equity_hours().is_open(extended.time, false));
+                    }
+                }
+            }
+        }
+        for symbol in ["AAPL", "SAMPLE", "SPX", "BTCUSD", "ETHUSD"] {
+            let feed = LiveFeed::new(symbol, "2026-10-26T15:00:00Z".parse().unwrap());
+            if matches!(symbol, "AAPL" | "SAMPLE") {
+                assert!(feed.regular_quote().unwrap().3.is_none());
+            } else {
+                assert!(feed.regular_quote().is_none());
+            }
+        }
+    }
+
+    /// A bounded lookup must return the same price as walking the whole raw stream, including
+    /// the history fallback when the retained trades are all outside the selected session.
+    #[test]
+    fn bounded_quote_lookups_keep_the_last_displayed_prices() {
+        for now in [
+            "2026-10-24T15:00:00Z",
+            "2026-10-27T03:00:00Z",
+            "2026-03-06T14:30:00Z",
+            "2026-03-09T08:00:00Z",
+            "2026-10-30T20:00:00Z",
+            "2026-11-02T14:30:00Z",
+        ] {
+            for symbol in ["AAPL", "SAMPLE", "SPX", "BTCUSD", "ETHUSD"] {
+                let feed = LiveFeed::new(symbol, now.parse().unwrap());
+                for session in [SessionType::RTH, SessionType::ETH, SessionType::Full24x7] {
+                    for adjusted in [false, true] {
+                        feed.set_view(session, adjusted);
+                        let sim = feed.state();
+                        let extended = session == SessionType::ETH;
+                        if let Some((dividend, factor)) = sim.dividend {
+                            for (time, price) in [
+                                (
+                                    dividend - TimeDelta::minutes(1),
+                                    if adjusted { 100.0 * factor } else { 100.0 },
+                                ),
+                                (dividend, 100.0),
+                            ] {
+                                let trade =
+                                    Tick::new(time, 100.0, 7.0, Some(OrderSide::Buy)).with_id(42);
+                                let mut expected = trade.clone();
+                                expected.price = price;
+                                assert_eq!(sim.shown_trade(&trade, extended), Some(expected));
+                            }
+                        }
+                        let latest = sim.trades.back().unwrap().ts + TimeDelta::nanoseconds(1);
+                        for before in [
+                            latest,
+                            latest.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc(),
+                            latest + TimeDelta::days(7),
+                        ] {
+                            let expected = sim
+                                .trades
+                                .iter()
+                                .rev()
+                                .filter(|trade| trade.ts < before)
+                                .find_map(|trade| sim.shown_trade(trade, extended))
+                                .map(|trade| (trade.ts, trade.price))
+                                .or_else(|| {
+                                    sim.shown_history(extended)
+                                        .iter()
+                                        .rev()
+                                        .find(|bar| bar.time < before)
+                                        .map(|bar| (bar.time, bar.close))
+                                });
+                            assert_eq!(
+                                sim.newest_shown(before, extended),
+                                expected,
+                                "{symbol} at {now}, {session:?}, adjusted {adjusted}, before {before}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Minute volume must reflect clustered arrivals and the daily activity profile.
     #[test]
     fn minute_volume_varies_across_a_full_generated_day() {
@@ -1047,7 +1278,7 @@ mod tests {
 
     #[test]
     fn a_subscription_before_the_session_gets_depth_when_trading_starts() {
-        let now = "2026-10-23T14:29:59Z".parse().unwrap();
+        let now = "2026-10-23T13:29:59Z".parse().unwrap();
         let feed = Arc::new(LiveFeed::new("SAMPLE", now));
         feed.set_view(SessionType::RTH, false);
         let mut chart = ChartBuilder::new()
@@ -1168,10 +1399,7 @@ mod tests {
                 .find(|bar| bar.time.date_naive() < last.time.date_naive())
                 .unwrap();
             assert_eq!(feed.day_change(), Some((last.close, previous.close)));
-            let hours = egui_charts::model::ExchangeSessionProvider::new(
-                egui_charts::model::TimezoneId::utc(),
-                Some(sample_session()),
-            );
+            let hours = us_equity_hours();
             assert!(expected.iter().all(|bar| hours.is_open(bar.time, extended)));
         }
         let bars = chart.bars(SeriesId::MAIN).to_vec();
@@ -1348,11 +1576,12 @@ mod tests {
             assert_eq!(frame(&mut panel, after), Duration::MAX);
         }
 
-        // Other live symbols stamp every frame, though details only displays hours and minutes.
-        live.set_symbol("AAPL");
+        // Symbols without trading hours stamp every frame, though details only displays hours and
+        // minutes.
+        live.set_symbol("SPX");
         panel = WatchlistPanel::new(vec![Watchlist::new("Watchlist")]);
         panel.set_service(quotes.clone());
-        panel.set_selected("AAPL");
+        panel.set_selected("SPX");
         frame(&mut panel, after);
         frame(&mut panel, after);
         assert_eq!(frame(&mut panel, after), Duration::MAX);
@@ -1362,6 +1591,6 @@ mod tests {
         );
         let next_minute = after + TimeDelta::minutes(1);
         assert!(frame(&mut panel, next_minute) < Duration::MAX);
-        assert_eq!(panel.quote("AAPL"), live.quote(next_minute).as_ref());
+        assert_eq!(panel.quote("SPX"), live.quote(next_minute).as_ref());
     }
 }

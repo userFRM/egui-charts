@@ -150,6 +150,7 @@ The default build includes the chart widget, the icons, the built-in studies and
 - `studies` (**default on**): the built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. Required by `ui`.
 - `alert-engine` (off): `services::AlertEngine`, an `Alerts` service that evaluates alerts on the bars the host feeds it. Needs no egui.
 - `detectors` (off): `services::OrderFlowDetectors`, a `Signals` service that finds order-flow events in the trades and depth the host feeds it. Needs no egui.
+- `strategies` (off): `strategies::Backtest`, which runs a `strategies::Strategy` over bars and returns a `StrategyReport`. Needs no egui.
 - `icons` (**default on**): compile-time embedded SVG icons. Required by `ui`.
 - `ui` (**default on**): application-level UI (toolbars, panels, sidebars, dialogs), the `ui_kit` widget library it is built on, and the `ui_kit::ext` helpers. Enables `icons`, `studies` and `drawings`.
 - `serde` (off): `Serialize` and `Deserialize` for `theme::Theme`.
