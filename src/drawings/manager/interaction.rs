@@ -383,13 +383,7 @@ impl DrawingManager {
                 drawing.chart_points.pop();
             }
             drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
-            if drawing.tool_type == DrawingToolType::TimeCycles
-                && drawing.points.len() == 2
-                && drawing.chart_points.len() == 2
-            {
-                drawing.points[1].y = drawing.points[0].y;
-                drawing.chart_points[1].price = drawing.chart_points[0].price;
-            }
+            drawing.level_time_cycles();
             if let Some(tool) = drawing
                 .custom_tool
                 .as_deref()
@@ -423,13 +417,7 @@ impl DrawingManager {
                 drawing.completed = false;
                 self.preview_point = true;
             }
-            if drawing.tool_type == DrawingToolType::TimeCycles
-                && drawing.points.len() == 2
-                && drawing.chart_points.len() == 2
-            {
-                drawing.points[1].y = drawing.points[0].y;
-                drawing.chart_points[1].price = drawing.chart_points[0].price;
-            }
+            drawing.level_time_cycles();
         }
     }
 

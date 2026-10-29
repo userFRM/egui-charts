@@ -366,7 +366,7 @@ Drawings,Drawings,Stickers,done,library,src/drawings/glyphs.rs;src/ui/drawing_to
 Drawings,Drawings,Table,done,library,src/drawings/rendering/annotations/table.rs;src/widget/tool_interaction/text.rs
 Drawings,Drawings,Text,done,library,src/drawings/rendering/annotations/text.rs;src/drawings/rendering/style.rs;src/widget/tool_interaction/text.rs
 Drawings,Drawings,Three drives pattern,done,library,src/drawings/rendering/patterns.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Time cycles,done,library,src/drawings/rendering/cycles.rs;src/drawings/services/handle.rs;src/drawings/manager/interaction.rs;src/drawings/rendering/style.rs
+Drawings,Drawings,Time cycles,done,library,src/drawings/rendering/cycles.rs;src/drawings/services/handle.rs;src/drawings/manager/interaction.rs;src/drawings/domain/drawing.rs;src/drawings/rendering/style.rs
 Drawings,Drawings,Trend angle,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/measurements.rs
 Drawings,Drawings,Trend line,done,library,src/drawings/rendering/lines.rs;src/drawings/manager/mod.rs;src/drawings/rendering/style.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Trend-based fib extension,done,library,src/drawings/rendering/fibonacci.rs;src/drawings/domain/options.rs;src/config/drawing_tool/behavior.rs

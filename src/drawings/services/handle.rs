@@ -243,8 +243,7 @@ impl HandleService {
                     }
                     _ => return,
                 }
-                drawing.points[1].y = drawing.points[0].y;
-                drawing.chart_points[1].price = drawing.chart_points[0].price;
+                drawing.level_time_cycles();
             }
             // The target and the stop move in price only; the width handle moves the right
             // edge, where the target and the stop anchors sit, never left of the entry.
