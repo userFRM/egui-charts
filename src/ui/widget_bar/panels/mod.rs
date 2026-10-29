@@ -3,6 +3,10 @@
 //! Individual panels for alerts, object tree, watchlists, symbol details, time and sales, news,
 //! the event calendars, the screener, hotlists, notifications, chats and the products launcher.
 
+use crate::scales::{CurrencyFormatter, PriceFormatter};
+use egui::text::TextFormat;
+use egui::{Color32, FontId};
+
 pub mod alerts_panel;
 pub mod calendar;
 pub mod chats;
@@ -33,6 +37,59 @@ pub use screener::*;
 pub use symbol_details::*;
 pub use time_and_sales::*;
 pub use watchlist::*;
+
+/// Height shared by market data rows.
+pub(super) const ROW_HEIGHT: f32 = 26.0;
+
+/// Height of a panel header row, which fits its title and action buttons.
+pub(super) const HEADER_HEIGHT: f32 = 40.0;
+
+/// Text in the bundled face at `weight`, such as 700 for bold.
+pub(super) fn weighted(size: f32, weight: f32, color: Color32) -> TextFormat {
+    let mut format = TextFormat::simple(FontId::proportional(size), color);
+    format.coords.push("wght", weight);
+    format
+}
+
+/// `value` with an explicit sign, unsigned when it rounds to zero, or a dash when not finite.
+pub(super) fn signed(value: f64, decimals: usize) -> String {
+    let text = grouped(value, decimals);
+    if value > 0.0 && text.bytes().any(|b| matches!(b, b'1'..=b'9')) {
+        format!("+{text}")
+    } else {
+        text
+    }
+}
+
+/// A price with thousands separators and `decimals` decimals, or a dash when not finite.
+pub(super) fn grouped(value: f64, decimals: usize) -> String {
+    if !value.is_finite() {
+        return "-".to_owned();
+    }
+    CurrencyFormatter::new("", decimals).format(value)
+}
+
+/// Format price with decimals chosen by its magnitude, so a negative price
+/// keeps the decimals of the positive price of the same size
+pub(crate) fn format_price(price: f64, decimals: Option<u8>) -> String {
+    if !price.is_finite() {
+        return "\u{2014}".to_owned();
+    }
+    let decimals = decimals.unwrap_or_else(|| price_decimals(price));
+    format!("{:.*}", usize::from(decimals), price)
+}
+
+/// Decimals of a price label without instrument precision, chosen by the price's magnitude
+pub(crate) fn price_decimals(price: f64) -> u8 {
+    match price.abs() {
+        m if m >= 10000.0 => 0,
+        m if m >= 1000.0 => 1,
+        m if m >= 10.0 => 2,
+        m if m >= 1.0 => 4,
+        m if m >= 0.001 => 6,
+        _ => 8,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -264,6 +321,45 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn panel_numbers_group_digits_and_omit_signs_at_rounded_zero() {
+        for (value, decimals, price, change) in [
+            (43237.45, 2, "43,237.45", "+43,237.45"),
+            (-1234567.0, 0, "-1,234,567", "-1,234,567"),
+            (863.83, 2, "863.83", "+863.83"),
+            (100000.5, 1, "100,000.5", "+100,000.5"),
+            (0.000123, 6, "0.000123", "+0.000123"),
+            (-0.0, 2, "0.00", "0.00"),
+            (-0.001, 2, "0.00", "0.00"),
+            (0.001, 2, "0.00", "0.00"),
+            (f64::INFINITY, 2, "-", "-"),
+            (f64::NAN, 2, "-", "-"),
+        ] {
+            assert_eq!(grouped(value, decimals), price);
+            assert_eq!(signed(value, decimals), change);
+        }
+    }
+
+    #[test]
+    fn test_format_price() {
+        assert_eq!(format_price(0.0, None), "0.00000000");
+        assert_eq!(format_price(f64::NAN, Some(2)), "\u{2014}");
+        assert_eq!(format_price(50000.0, None), "50000");
+        assert_eq!(format_price(1234.5, None), "1234.5");
+        assert_eq!(format_price(99.99, None), "99.99");
+        assert_eq!(format_price(1.2345, None), "1.2345");
+        assert_eq!(format_price(0.001234, None), "0.001234");
+        assert_eq!(format_price(-37.63, None), "-37.63");
+        for (price, decimals, expected) in [
+            (50000.25, 2, "50000.25"),
+            (-37.625, 3, "-37.625"),
+            (0.0, 2, "0.00"),
+            (1.2345, 4, "1.2345"),
+        ] {
+            assert_eq!(format_price(price, Some(decimals)), expected);
         }
     }
 }
