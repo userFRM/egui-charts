@@ -59,6 +59,8 @@ impl DrawingToolType {
                 | Self::Arc
                 | Self::Curve
                 | Self::DoubleCurve
+                | Self::CyclicLines
+                | Self::SineLine
                 | Self::AnchoredNote
                 | Self::FontIcon
                 | Self::Sticker
