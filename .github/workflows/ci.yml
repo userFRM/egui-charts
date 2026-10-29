@@ -125,6 +125,9 @@ jobs:
         run: cargo test --doc --all-features
       - name: Run doc tests (no default features)
         run: cargo test --doc --no-default-features
+      - name: Run doc tests (widget only)
+        if: matrix.full
+        run: cargo test --doc --no-default-features --features widget
 
   wasm-test:
     if: github.event.pull_request.draft != true
@@ -330,6 +333,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check docs build
         run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+      - name: Check docs build (no default features)
+        run: cargo doc --no-deps --no-default-features
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+      - name: Check docs build (widget only)
+        run: cargo doc --no-deps --no-default-features --features widget
         env:
           RUSTDOCFLAGS: -Dwarnings
 

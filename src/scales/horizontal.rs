@@ -32,7 +32,7 @@ pub struct TickMarkLayout {
 /// crosshair label reads.
 ///
 /// A key is the [`time`](crate::model::Bar::time) of a bar. The time-based chart uses its
-/// [`TimeFormatter`]; [`Chart::set_horizontal_scale`](crate::widget::Chart::set_horizontal_scale)
+/// [`TimeFormatter`]; `Chart::set_horizontal_scale` (requires `widget`)
 /// replaces it.
 pub trait HorizontalScale: Send + Sync {
     /// The marks to label among `points`, the key and logical index of each bar in view in

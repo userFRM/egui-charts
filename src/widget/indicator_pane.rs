@@ -17,14 +17,14 @@
 //!
 //! # fn example(
 //! #     ui: &mut egui::Ui,
-//! #     rsi_indicator: &egui_charts::studies::RSI,
+//! #     indicator: &egui_charts::studies::CustomIndicator,
 //! #     bars: &[egui_charts::model::Bar],
 //! #     visible_range: std::ops::Range<usize>,
 //! #     coords: IndicatorCoordParams,
 //! # ) {
-//! let config = IndicatorPaneConfig::rsi();
+//! let config = IndicatorPaneConfig::default();
 //! let mut pane = IndicatorPane::with_config(config);
-//! pane.show_aligned(ui, rsi_indicator, bars, visible_range, coords);
+//! pane.show_aligned(ui, indicator, bars, visible_range, coords);
 //! # }
 //! ```
 //!
