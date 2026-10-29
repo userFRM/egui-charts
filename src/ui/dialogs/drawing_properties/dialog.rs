@@ -13,6 +13,7 @@ use crate::services::StoreKind;
 use crate::ui::dialogs::templates::TemplateStore;
 use crate::ui::drawing_toolbar::{DrawingToolbarAction, utilities::TemplatesButton};
 use crate::ui_kit::ColorPickerState;
+use crate::ui_kit::buttons::Button;
 use crate::ui_kit::dialog::{DialogFooter, DialogFrame, dialog_header};
 use crate::ui_kit::tab_bar::TabBar;
 
@@ -89,23 +90,14 @@ impl DrawingPropertiesDialog {
         let Some(drawing) = chart.drawings().drawings.iter().find(|d| d.id == id.0) else {
             return false;
         };
-        let default_template = chart
-            .drawings()
-            .tool_defaults
-            .get(&drawing.tool_type)
-            .cloned()
-            .or_else(|| {
-                Some(DrawingTemplate::from_drawing(&Drawing::new(
-                    0,
-                    drawing.tool_type,
-                )))
-            });
         self.open(
             id,
             drawing.tool_type.as_str().into(),
             DrawingProps::from_drawing(drawing, chart),
         );
-        self.default_template = default_template;
+        if let Some(defaults) = chart.drawings().tool_defaults.get(&drawing.tool_type) {
+            self.default_template = Some(defaults.clone());
+        }
         true
     }
 
@@ -350,7 +342,8 @@ impl DrawingPropertiesDialog {
 
     fn template_menu(&mut self, ui: &mut Ui) {
         let mut load = None;
-        ui.menu_button(l10n::text(ui.ctx(), "Template"), |ui| {
+        let menu = Button::new("Template").ghost().show(ui);
+        egui::Popup::menu(&menu).show(|ui| {
             if ui
                 .button(l10n::text(ui.ctx(), "Save as template…"))
                 .clicked()
@@ -369,24 +362,38 @@ impl DrawingPropertiesDialog {
                 .button(l10n::text(ui.ctx(), "Reset to defaults"))
                 .clicked()
             {
-                load = self.default_template.clone().or_else(|| {
-                    self.props.tool_settings.as_ref().map(|t| {
-                        DrawingTemplate::from_drawing(&Drawing::new(0, t.settings.tool_type))
-                    })
-                });
+                load = self.default_template.clone();
                 ui.close();
             }
             ui.separator();
+            let mut delete = None;
             if let Some(current) = &self.props.tool_settings {
                 for (name, template) in self.templates.entries() {
-                    if template.settings.tool_type == current.settings.tool_type
-                        && template.settings.custom_tool == current.settings.custom_tool
-                        && ui.button(name).clicked()
+                    if template.settings.tool_type != current.settings.tool_type
+                        || template.settings.custom_tool != current.settings.custom_tool
                     {
+                        continue;
+                    }
+                    if ui.button(name).clicked() {
                         load = Some(template.clone());
                         ui.close();
                     }
+                    if ui
+                        .button(l10n::format_text(
+                            ui.ctx(),
+                            "Delete {name}",
+                            &[("name", name.clone())],
+                        ))
+                        .clicked()
+                    {
+                        delete = Some(name.clone());
+                    }
                 }
+            }
+            if let Some(name) = delete
+                && let Err(error) = self.templates.delete(&name)
+            {
+                self.templates.error = Some(error);
             }
         });
         if let Some(template) = load {
@@ -757,7 +764,8 @@ mod tests {
         }
     }
 
-    /// Templates act on this tool's style, and remain usable after cancelling a preview.
+    /// Templates act on this tool's style, remain usable after cancelling a preview and can be
+    /// deleted from the menu.
     #[test]
     fn footer_templates_apply_save_defaults_and_reset() {
         let ctx = Context::default();
@@ -819,5 +827,12 @@ mod tests {
         click(&mut dialog, &mut chart, &ctx, "Template");
         let labels = frame(&mut dialog, &mut chart, &ctx, vec![]);
         assert!(!labels.iter().any(|(text, _)| text == "Thick line"));
+        dialog.close();
+        frame(&mut dialog, &mut chart, &ctx, vec![]);
+        chart.drawings_mut().drawings[0].tool_type = Tool::TrendLine;
+        dialog.open_for_chart(&chart, DrawingId(7));
+        click(&mut dialog, &mut chart, &ctx, "Template");
+        click(&mut dialog, &mut chart, &ctx, "Delete Thick line");
+        assert!(dialog.templates.entries().is_empty());
     }
 }
