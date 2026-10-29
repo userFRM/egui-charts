@@ -6,6 +6,7 @@ use crate::drawings::domain::DrawingToolType;
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
 use crate::localization as l10n;
 use crate::model::{Bar, SpanCache};
+use crate::painting::volume_profile::ProfileStyle;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Shape, Stroke};
@@ -167,8 +168,8 @@ impl Drawing {
     }
 
     /// Draws the profile of `bars`, the span that starts at bar `first`, as
-    /// rows growing right from `left`, boxed from `left` to `right` across the
-    /// bars' price range.
+    /// rows beside the first anchor, or at the pane's right edge when anchored,
+    /// with a tint over the measured bars' price and time range.
     fn draw_volume_profile(
         &self,
         painter: &egui::Painter,
@@ -189,7 +190,9 @@ impl Drawing {
             config,
             self.color,
             left..right,
-            false,
+            ProfileStyle::Drawing {
+                anchored: self.tool_type == DrawingToolType::AnchoredVolumeProfile,
+            },
             view.price_to_y,
         );
         let note = match profile.source() {
@@ -432,125 +435,159 @@ mod tests {
         }
     }
 
-    /// The 24 default rows of the sample bars (9 to 15) are 0.25 apart, 12.5 px
-    /// at 50 px per unit, so each row is drawn 11.5 px tall with its 1 px gap,
-    /// inside a box 300 px tall, whichever way up the scale is. The VAH and VAL
-    /// labels sit 8 px outside the value area: beyond the VAH line on the side
-    /// away from the VAL line, and the other way round. At 1,000 rows the 0.3 px
-    /// rows retain a 0.15 px body instead of disappearing under a fixed 1 px gap.
+    /// Rows retain their gaps on either scale, leave two thirds of the span clear,
+    /// and anchored rows grow left from the pane edge independently of the range tint.
     #[test]
     fn volume_profile_rows_are_drawn_on_either_scale_orientation() {
+        use crate::data::{ProfileDisplay, VolumeProfileConfig};
         let bars = sample_bars();
-        let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
         let upright = |price: f64| (16.0 - price) as f32 * 50.0;
         let inverted = |price: f64| (price - 8.0) as f32 * 50.0;
-        for (name, price_to_y, width, row_count, row_height) in [
-            ("upright", &upright as &dyn Fn(f64) -> f32, 400.0, 24, 11.5),
-            ("inverted", &inverted, 400.0, 24, 11.5),
-            ("narrow upright", &upright, 24.0, 24, 11.5),
-            ("narrow inverted", &inverted, 24.0, 24, 11.5),
-            ("dense upright", &upright, 400.0, 1000, 0.15),
-            ("dense inverted", &inverted, 400.0, 1000, 0.15),
+        let clip = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
+        for tool in [
+            DrawingToolType::FixedRangeVolumeProfile,
+            DrawingToolType::AnchoredVolumeProfile,
         ] {
-            drawing.volume_profile =
-                crate::data::VolumeProfileConfig::new(row_count, 0.7).map(|mut config| {
-                    config.show_value_area_lines = true;
-                    config
-                });
-            let view = ChartView {
-                instrument: None,
-                bars: &bars,
-                revision: 0,
-                bar_to_x: &|x| x,
-                price_to_y,
-                time_axis: true,
-                executions: None,
-            };
-            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
-                let painter = egui::Painter::new(
-                    ui.ctx().clone(),
-                    egui::LayerId::background(),
-                    Rect::EVERYTHING,
-                );
-                drawing.draw_volume_profile(&painter, &view, 0, &bars, 100.0, 100.0 + width);
-            });
-            let rects: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|c| match &c.shape {
-                    egui::Shape::Rect(r) if r.rect.min.x == 100.0 => Some((r.rect, r.fill)),
-                    _ => None,
-                })
-                .collect();
-            // The two full-width lines are the value area edges.
-            let mut edges: Vec<f32> = output
-                .shapes
-                .iter()
-                .filter_map(|c| match &c.shape {
-                    egui::Shape::LineSegment { points, .. }
-                        if points[0].x == 100.0 && points[1].x == 100.0 + width =>
-                    {
-                        Some(points[0].y)
+            for price_to_y in [&upright as &dyn Fn(f64) -> f32, &inverted] {
+                for (width, row_count, row_height, display, va_lines) in [
+                    (400.0, 24, 11.5, ProfileDisplay::Total, false),
+                    (24.0, 24, 11.5, ProfileDisplay::Total, false),
+                    (1200.0, 24, 11.5, ProfileDisplay::Total, false),
+                    (400.0, 1000, 0.15, ProfileDisplay::Total, false),
+                    (400.0, 4, 74.0, ProfileDisplay::UpDown, false),
+                    (400.0, 4, 74.0, ProfileDisplay::UpDown, true),
+                ] {
+                    let mut drawing = Drawing::new(1, tool);
+                    let mut config = VolumeProfileConfig::new(row_count, 0.7).unwrap();
+                    config.display = display;
+                    config.show_value_area_lines = va_lines;
+                    drawing.volume_profile = Some(config);
+                    let view = ChartView {
+                        instrument: None,
+                        bars: &bars,
+                        revision: 0,
+                        bar_to_x: &|x| x,
+                        price_to_y,
+                        time_axis: true,
+                        executions: None,
+                    };
+                    let mut output =
+                        egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                            let painter = egui::Painter::new(
+                                ui.ctx().clone(),
+                                egui::LayerId::background(),
+                                clip,
+                            );
+                            drawing.draw_volume_profile(
+                                &painter,
+                                &view,
+                                0,
+                                &bars,
+                                100.0,
+                                100.0 + width,
+                            );
+                        });
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    let rects: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|c| match &c.shape {
+                            egui::Shape::Rect(r) => Some(r),
+                            _ => None,
+                        })
+                        .collect();
+                    let tint = rects[0];
+                    assert_eq!(
+                        tint.rect,
+                        Rect::from_min_max(Pos2::new(100.0, 50.0), Pos2::new(100.0 + width, 350.0))
+                    );
+                    assert!(tint.stroke.is_empty(), "range has no outline");
+                    assert!(
+                        tint.fill.a() > 0 && tint.fill.a() < 40,
+                        "range has a faint tint"
+                    );
+                    let rows = &rects[1..];
+                    let split = display == ProfileDisplay::UpDown;
+                    assert_eq!(rows.len(), row_count * if split { 2 } else { 1 });
+                    let anchored = tool == DrawingToolType::AnchoredVolumeProfile;
+                    let edge = if anchored { 800.0 } else { 100.0 };
+                    let mut widest = 0.0_f32;
+                    for row in rows.chunks(if split { 2 } else { 1 }) {
+                        let mut row_width = 0.0;
+                        for segment in row {
+                            assert!(segment.stroke.is_empty());
+                            assert!((segment.rect.height() - row_height).abs() < 1e-3);
+                            row_width += segment.rect.width();
+                        }
+                        assert!(
+                            ((if anchored {
+                                row[0].rect.right()
+                            } else {
+                                row[0].rect.left()
+                            }) - edge)
+                                .abs()
+                                < 1e-4
+                        );
+                        widest = widest.max(row_width);
                     }
-                    _ => None,
-                })
-                .collect();
-            let label_y = |label: &str| {
-                output.shapes.iter().find_map(|c| match &c.shape {
-                    egui::Shape::Text(t) if t.galley.job.text == label => {
-                        Some(t.pos.y + t.galley.size().y / 2.0)
+                    let span_width = if anchored {
+                        width.min(clip.width())
+                    } else {
+                        width
+                    };
+                    assert!(
+                        (widest - span_width / 3.0).abs() < 1e-3,
+                        "widest row {widest}"
+                    );
+                    if split {
+                        // Four 1.5-price rows have totals 83 1/3, 350, 619 1/6, 397.5.
+                        // 70% of 1450 needs rows 0..=2; row 3 is outside the value area.
+                        for side in 0..2 {
+                            for row in 0..3 {
+                                assert!(rows[row * 2 + side].fill.a() > rows[6 + side].fill.a());
+                            }
+                        }
                     }
-                    _ => None,
-                })
-            };
-            let (vah_label, val_label) = (label_y("VAH"), label_y("VAL"));
-            let poc_label = label_y("POC");
-            output.drop_without_applying_deltas();
-            if width < 50.0 {
-                assert!(poc_label.is_none(), "{name}: POC exceeds span");
-                assert!(
-                    vah_label.is_none() && val_label.is_none(),
-                    "{name}: labels exceed span"
-                );
-            } else {
-                assert!(
-                    poc_label.is_some() && vah_label.is_some() && val_label.is_some(),
-                    "{name}: missing labels"
-                );
+                    let mut lines = Vec::new();
+                    for shape in &shapes {
+                        match &shape.shape {
+                            egui::Shape::LineSegment { points, .. } => lines.push(points.to_vec()),
+                            egui::Shape::Path(path) => {
+                                assert_eq!(path.stroke.width, 2.0, "POC remains clear");
+                                lines.push(path.points.clone());
+                            }
+                            egui::Shape::Text(text) => {
+                                let label = text.galley.job.text.as_str();
+                                assert_ne!(label, "POC");
+                                if ["VAH", "VAL"].contains(&label) {
+                                    assert!(va_lines);
+                                    let away = if price_to_y(15.0) < price_to_y(9.0) {
+                                        8.0
+                                    } else {
+                                        -8.0
+                                    };
+                                    let want = if label == "VAH" {
+                                        price_to_y(13.5) - away
+                                    } else {
+                                        price_to_y(9.0) + away
+                                    };
+                                    assert!(
+                                        (text.pos.y + text.galley.size().y / 2.0 - want).abs()
+                                            < 1.0
+                                    );
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    assert_eq!(lines.len(), if va_lines { 3 } else { 1 });
+                    assert!(
+                        lines
+                            .iter()
+                            .all(|points| points.len() == 2 && points[0].y == points[1].y)
+                    );
+                }
             }
-            edges.sort_by(f32::total_cmp);
-            let [top, bottom] = edges[..] else {
-                panic!("{name}: value area edges {edges:?}")
-            };
-            // The higher price, VAH, is the top edge upright and the bottom one inverted.
-            let (want_vah, want_val) = if name.ends_with("upright") {
-                (top - 8.0, bottom + 8.0)
-            } else {
-                (bottom + 8.0, top - 8.0)
-            };
-            if let (Some(vah_label), Some(val_label)) = (vah_label, val_label) {
-                assert!(
-                    (vah_label - want_vah).abs() < 1.0,
-                    "{name}: VAH {vah_label}, want {want_vah}"
-                );
-                assert!(
-                    (val_label - want_val).abs() < 1.0,
-                    "{name}: VAL {val_label}, want {want_val}"
-                );
-            }
-            let (boxes, rows): (Vec<_>, Vec<_>) = rects
-                .into_iter()
-                .partition(|&(_, fill)| fill == Color32::TRANSPARENT);
-            assert_eq!(rows.len(), row_count, "{name}");
-            for (row, _) in rows {
-                assert!((row.height() - row_height).abs() < 1e-3, "{name}: {row:?}");
-            }
-            assert_eq!(boxes.len(), 1, "{name}");
-            let outline = boxes[0].0;
-            assert!(
-                (outline.height() - 300.0).abs() < 1e-3,
-                "{name}: {outline:?}"
-            );
         }
     }
 

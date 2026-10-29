@@ -269,7 +269,7 @@ Drawings,Drawings,API: drawing templates through the save/load adapter,done,libr
 Drawings,Drawings,"API: per-drawing selection, saving, user-edit and object-tree flags",done,library,src/drawings/domain/drawing.rs;src/drawings/manager/mod.rs;src/widget/anchors.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Anchored VWAP,done,library,src/drawings/rendering/trading/volume_profile.rs
 Drawings,Drawings,Anchored text,done,library,src/drawings/domain/drawing.rs;src/drawings/rendering/annotations/text.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
-Drawings,Drawings,Anchored volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs
+Drawings,Drawings,Anchored volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/drawings/rendering/mod.rs
 Drawings,Drawings,Arc,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Arrow,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/style.rs;src/drawings/domain/drawing.rs
 Drawings,Drawings,Arrow mark down,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
@@ -317,7 +317,7 @@ Drawings,Drawings,Fib speed resistance fan,done,library,src/drawings/rendering/f
 Drawings,Drawings,Fib spiral,done,library,src/drawings/rendering/fibonacci.rs
 Drawings,Drawings,Fib time zone,done,library,src/drawings/rendering/fibonacci.rs
 Drawings,Drawings,Fib wedge,done,library,src/drawings/rendering/fibonacci.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Fixed range volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs
+Drawings,Drawings,Fixed range volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/drawings/rendering/mod.rs
 Drawings,Drawings,Flag mark,done,library,src/drawings/rendering/annotations/notes.rs;src/widget/tool_interaction/text.rs
 Drawings,Drawings,Flat top/bottom,done,library,src/drawings/rendering/channels.rs;src/drawings/rendering/measurements.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Gann box,done,library,src/drawings/rendering/gann.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
@@ -390,7 +390,7 @@ Order flow,Order flow,"Chart tabs, detached groups and shared crosshair",done,li
 Order flow,Order flow,Connectors for futures data feeds with aggregated and order-level depth,partial,host,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Order flow,Order flow,Cumulative aggressor volume delta with resets,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs
 Order flow,Order flow,Cumulative iceberg and stop counts over time with alerts,missing,host,
-Order flow,Order flow,Custom range profile drawn on the chart by selection,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/studies/builtin/trade_profile.rs;src/painting/volume_profile.rs
+Order flow,Order flow,Custom range profile drawn on the chart by selection,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/studies/builtin/trade_profile.rs;src/painting/volume_profile.rs;src/drawings/rendering/mod.rs
 Order flow,Order flow,DOM levels panel beside the heatmap,partial,library,src/data/orders.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Delta % and bid/ask ratio highlight markers on bars,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/studies/builtin/footprint_studies.rs
 Order flow,Order flow,Delta POC per bar,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs

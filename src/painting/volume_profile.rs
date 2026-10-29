@@ -7,13 +7,24 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 use std::ops::Range;
 
+/// Studies retain their boxed presentation; drawings leave the measured candles visible.
+pub(crate) enum ProfileStyle {
+    Study {
+        right_aligned: bool,
+    },
+    #[cfg(feature = "drawings")]
+    Drawing {
+        anchored: bool,
+    },
+}
+
 pub(crate) fn paint_profile(
     painter: &egui::Painter,
     profile: &VolumeProfile,
     config: VolumeProfileConfig,
     color: [u8; 4],
     span: Range<f32>,
-    right_aligned: bool,
+    style: ProfileStyle,
     price_to_y: &dyn Fn(f64) -> f32,
 ) {
     let (left, right) = (span.start, span.end);
@@ -24,7 +35,30 @@ pub(crate) fn paint_profile(
         return;
     };
     let y_at_row = |row: usize| (price_to_y)(profile.low + row as f64 * profile.row_height);
-    let max_width = (right - left) * 0.9;
+    let (drawing, right_aligned) = match style {
+        ProfileStyle::Study { right_aligned } => (false, right_aligned),
+        #[cfg(feature = "drawings")]
+        ProfileStyle::Drawing { anchored } => (true, anchored),
+    };
+    let rect = Rect::from_two_pos(
+        Pos2::new(left, y_at_row(profile.volume.len())),
+        Pos2::new(right, y_at_row(0)),
+    );
+    let mut row_right = right;
+    let mut width = right - left;
+    if drawing {
+        painter.rect_filled(
+            rect,
+            0.0,
+            Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 15),
+        );
+        if right_aligned {
+            row_right = painter.clip_rect().right();
+            // A distant anchor must not let the rows cover the entire pane.
+            width = width.min(painter.clip_rect().width());
+        }
+    }
+    let max_width = width * if drawing { 1.0 / 3.0 } else { 0.9 };
     let max_volume = profile.volume[poc];
 
     for (row, &volume) in profile.volume.iter().enumerate() {
@@ -45,7 +79,7 @@ pub(crate) fn paint_profile(
 
         let paint = |start, width, color| {
             let start = if right_aligned {
-                right - (start - left) - width
+                row_right - (start - left) - width
             } else {
                 start
             };
@@ -58,8 +92,16 @@ pub(crate) fn paint_profile(
                 color,
             );
         };
-        let rgba = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
-        let [up, down] = if (va_low..=va_high).contains(&row) {
+        let in_value_area = (va_low..=va_high).contains(&row);
+        let rgba = |c: [u8; 4]| {
+            let alpha = if drawing && !in_value_area {
+                c[3] / 2
+            } else {
+                c[3]
+            };
+            Color32::from_rgba_unmultiplied(c[0], c[1], c[2], alpha)
+        };
+        let [up, down] = if in_value_area {
             config
                 .value_area_colors
                 .unwrap_or([config.up_color, config.down_color])
@@ -79,7 +121,11 @@ pub(crate) fn paint_profile(
                     paint(
                         left + up_width + down_width,
                         unknown,
-                        Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 80),
+                        if drawing {
+                            rgba([color[0], color[1], color[2], 180])
+                        } else {
+                            Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 80)
+                        },
                     );
                 }
             }
@@ -95,20 +141,20 @@ pub(crate) fn paint_profile(
         }
     }
 
-    let rect = Rect::from_two_pos(
-        Pos2::new(left, y_at_row(profile.volume.len())),
-        Pos2::new(right, y_at_row(0)),
-    );
     let poc_y = (y_at_row(poc) + y_at_row(poc + 1)) / 2.0;
+    let line_rect = Rect::from_min_max(rect.min, Pos2::new(row_right, rect.max.y));
     draw_volume_profile_lines(
         painter,
-        &rect,
+        &line_rect,
         color,
         poc_y,
-        y_at_row(va_high + 1),
-        y_at_row(va_low),
+        [y_at_row(va_high + 1), y_at_row(va_low)],
         config.show_value_area_lines,
+        drawing,
     );
+    if drawing {
+        return;
+    }
     painter.rect_stroke(
         rect,
         0.0,
@@ -124,9 +170,9 @@ fn draw_volume_profile_lines(
     rect: &Rect,
     color: [u8; 4],
     poc_y: f32,
-    vah_y: f32,
-    val_y: f32,
+    [vah_y, val_y]: [f32; 2],
     show_value_area_lines: bool,
+    drawing: bool,
 ) {
     let theme = painter.ctx().active_theme();
     let font = egui::FontId::proportional(theme.text.tiny);
@@ -134,7 +180,14 @@ fn draw_volume_profile_lines(
     let poc_color = theme.ui.text;
     painter.add(egui::Shape::line(
         vec![Pos2::new(rect.min.x, poc_y), Pos2::new(rect.max.x, poc_y)],
-        Stroke::new(stroke::HAIRLINE, poc_color),
+        Stroke::new(
+            if drawing {
+                stroke::THICK
+            } else {
+                stroke::HAIRLINE
+            },
+            poc_color,
+        ),
     ));
 
     let va_color = Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 200);
@@ -149,16 +202,18 @@ fn draw_volume_profile_lines(
         return;
     }
 
-    let poc_bg =
-        Rect::from_center_size(Pos2::new(rect.max.x - 25.0, poc_y), egui::vec2(40.0, 14.0));
-    painter.rect_filled(poc_bg, DESIGN_TOKENS.rounding.sm, poc_color);
-    painter.text(
-        poc_bg.center(),
-        egui::Align2::CENTER_CENTER,
-        "POC",
-        font.clone(),
-        theme.chart.bg,
-    );
+    if !drawing {
+        let poc_bg =
+            Rect::from_center_size(Pos2::new(rect.max.x - 25.0, poc_y), egui::vec2(40.0, 14.0));
+        painter.rect_filled(poc_bg, DESIGN_TOKENS.rounding.sm, poc_color);
+        painter.text(
+            poc_bg.center(),
+            egui::Align2::CENTER_CENTER,
+            "POC",
+            font.clone(),
+            theme.chart.bg,
+        );
+    }
 
     if !show_value_area_lines {
         return;
