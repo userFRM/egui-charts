@@ -62,14 +62,18 @@ impl Chart {
                     ));
                 }
             }
-            copies.push(stored_to_drawing_with(
+            let mut copy = stored_to_drawing_with(
                 stored,
                 |point| {
                     self.time_to_index(point.time().expect("validated timestamp"))
                         .expect("validated time mapping") as f32
                 },
                 0,
-            ));
+            );
+            if let Some(pane) = &stored.pane {
+                copy.pane = self.stored_pane_owner(pane);
+            }
+            copies.push(copy);
         }
         self.user_action(|chart| chart.drawings.paste_drawings(&copies));
         Ok(())
@@ -208,5 +212,80 @@ mod tests {
             target.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
             before
         );
+    }
+
+    /// A drawing copied or saved in a study pane lands in the pane of the same study on a chart
+    /// whose studies were added in another order, and in the price pane on a chart without it,
+    /// although study ids are local to each chart.
+    #[test]
+    fn drawings_in_study_panes_follow_their_study_across_charts() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::model::Bar;
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use crate::widget::PaneId;
+        let study = |name: &'static str| {
+            let value = if name == "Gamma" { 40.0 } else { 3.0 };
+            Box::new(
+                CustomIndicator::new(name, move |bars: &[Bar]| {
+                    vec![IndicatorValue::Single(value); bars.len()]
+                })
+                .with_overlay(false),
+            )
+        };
+        let mut source = test_frames::chart(&[10.0], &[20.0]);
+        let gamma = source.add_indicator(study("Gamma"));
+        source.add_indicator(study("Delta"));
+        let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+        line.chart_points = vec![ChartPoint::new(50.0, 40.0)];
+        line.pane = Some(gamma.0);
+        let id = source.drawings_mut().add_drawing(line).unwrap();
+        source.drawings_mut().select(id);
+        let copied = source.copy_selected_drawings().unwrap().unwrap();
+        let saved = source.save_drawings().unwrap().to_json().unwrap();
+        let ctx = egui::Context::default();
+        for (studies, paste) in [
+            (&["Delta", "Gamma"][..], true),
+            (&["Delta", "Gamma"], false),
+            (&["Delta"], true),
+            (&["Delta"], false),
+        ] {
+            let mut target = test_frames::chart(&[10.0], &[20.0]);
+            let ids: Vec<_> = studies
+                .iter()
+                .map(|name| target.add_indicator(study(name)))
+                .collect();
+            if paste {
+                target.paste_drawings(&copied).unwrap();
+            } else {
+                target.load_drawings(&saved).unwrap();
+            }
+            test_frames::frame(&ctx, &mut target, 0.0, Vec::new());
+            let drawing = &target.drawings().drawings[0];
+            let case = format!("{studies:?}, paste {paste}");
+            match studies.iter().position(|name| *name == "Gamma") {
+                Some(at) => {
+                    assert_eq!(
+                        target.drawing_pane(drawing.id),
+                        target.series_pane(ids[at]),
+                        "{case}"
+                    );
+                    let x = target.get_rendered_price_rect().center().x;
+                    let on_line = egui::pos2(x, drawing.points[0].y);
+                    assert_eq!(
+                        target.drawings().hit_test(on_line),
+                        Some(drawing.id),
+                        "{case}"
+                    );
+                }
+                None => {
+                    assert_eq!(drawing.pane, None, "{case}");
+                    assert_eq!(
+                        target.drawing_pane(drawing.id),
+                        Some(PaneId::MAIN),
+                        "{case}"
+                    );
+                }
+            }
+        }
     }
 }
