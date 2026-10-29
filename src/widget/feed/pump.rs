@@ -3,6 +3,7 @@
 
 use super::{
     FeedLink, MIN_SCROLL_BACK_PAGE, Request, SCROLL_BACK_MARGIN, TRADE_CAPACITY, lock, resolve,
+    retry_delay,
 };
 use crate::data::inbox::Answer;
 use crate::data::merge::Origin;
@@ -541,14 +542,7 @@ impl Chart {
             self.feed.loading_history = false;
         }
         if error.is_recoverable() {
-            let backoff = std::time::Duration::from_secs(1 << failures.min(6))
-                .min(std::time::Duration::from_secs(60));
-            let delay = match &error {
-                FeedError::RateLimited {
-                    retry_after: Some(after),
-                } => backoff.max(*after),
-                _ => backoff,
-            };
+            let delay = retry_delay(failures, &error);
             link.retries.push((
                 now + delay.as_secs_f64(),
                 request,

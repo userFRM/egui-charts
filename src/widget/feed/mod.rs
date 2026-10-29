@@ -12,12 +12,13 @@ use crate::chart::overlays::{VolumeBubbles, VolumeBubblesConfig};
 use crate::data::inbox::Inbox;
 use crate::data::trades::Trades;
 use crate::data::{
-    Datafeed, DepthHistory, DepthRequest, FeedCapabilities, Footprint, HistoryRequest, Reply,
-    SubscriptionId, TradeRequest,
+    Datafeed, DepthHistory, DepthRequest, FeedCapabilities, FeedError, Footprint, HistoryRequest,
+    Reply, SubscriptionId, TradeRequest,
 };
 use crate::model::{BarClock, Instrument, OrderBook, Tick, Timeframe};
 use egui::ViewportId;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 /// Trades kept per series for order flow.
 pub(crate) const TRADE_CAPACITY: usize = 100_000;
@@ -696,6 +697,18 @@ pub(super) fn resolve(
     match conversion {
         Some(conversion) => feed.resolve_converted(symbol, conversion, reply),
         None => feed.resolve(symbol, reply),
+    }
+}
+
+/// How long to wait before retrying a request that has failed `failures` times: doubling from a
+/// second up to a minute, and no sooner than the feed asked.
+pub(super) fn retry_delay(failures: u32, error: &FeedError) -> Duration {
+    let backoff = Duration::from_secs(1 << failures.min(6)).min(Duration::from_secs(60));
+    match error {
+        FeedError::RateLimited {
+            retry_after: Some(after),
+        } => backoff.max(*after),
+        _ => backoff,
     }
 }
 
