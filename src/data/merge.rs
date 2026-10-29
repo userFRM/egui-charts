@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 /// Where an incoming bar comes from, which decides what happens to a stored bar of the same slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Origin {
-    /// A history page: extends the page bar with stored ticks; other stored bars win.
+    /// A history page: extends its newest bar with stored ticks, replaces completed tick bars.
     History,
     /// A live bar: replaces the stored bar.
     Live,
@@ -31,7 +31,7 @@ pub(crate) struct Merged {
 /// Merges `incoming`, in any order, into `bars` by the rules of each bar's origin. `bars` are the
 /// bars of one series: valid, in time order, at most one per slot of `clock`, which must be the
 /// same for every merge into the series. `from_ticks` holds the times of the series' bars built
-/// from ticks, which extend a history bar of the same slot once; keep it with the bars.
+/// from ticks, which extend the newest history bar of the same slot once; keep it with the bars.
 pub(crate) fn merge(
     bars: &mut Vec<Bar>,
     from_ticks: &mut BTreeSet<DateTime<Utc>>,
@@ -67,6 +67,11 @@ pub(crate) fn merge(
         return merged;
     };
     let slot = |bar: &Bar| clock.bar_open(bar.time);
+    let page_end = incoming
+        .iter()
+        .rev()
+        .find(|(_, origin)| *origin == Origin::History)
+        .map(|(bar, _)| slot(bar));
     let (first, newest) = (slot(first), slot(newest));
     let last = bars.last().map(slot);
     let lo = bars.partition_point(|bar| slot(bar) < first);
@@ -97,6 +102,10 @@ pub(crate) fn merge(
                 })
             }
             (Some(old), Origin::History) if !from_ticks.contains(&old.time) => old.clone(),
+            (Some(old), Origin::History) if Some(at) != page_end || old.volume == 0.0 => {
+                from_ticks.remove(&old.time);
+                bar
+            }
             (Some(old), Origin::History) => match fold(&bar, old) {
                 Some(folded) => {
                     from_ticks.remove(&old.time);
@@ -209,6 +218,15 @@ mod tests {
         invalid[2].volume = -1.0;
         #[rustfmt::skip]
         let cases = [
+            ("a page replaces a zero-volume heartbeat candle",
+                vec![(Ticks(0), vec![ohlcv(1, [10.0, 10.0, 10.0, 10.0, 0.0])]),
+                    (History, vec![ohlcv(1, [12.0, 13.0, 11.5, 12.5, 6.0])])],
+                vec![ohlcv(1, [12.0, 13.0, 11.5, 12.5, 6.0])], (Some(0), 0, 0)),
+            ("a retried page replaces completed streamed slots",
+                vec![(Ticks(1), vec![bar_at(1, 30, 10.0)]),
+                    (Ticks(1), vec![bar_at(2, 10, 11.0)]),
+                    (History, vec![ohlcv(1, [9.0, 10.0, 9.0, 10.0, 4.0]), bar(2, 11.0), bar(3, 12.0)])],
+                vec![ohlcv(1, [9.0, 10.0, 9.0, 10.0, 4.0]), bar(2, 11.0), bar(3, 12.0)], (Some(0), 0, 0)),
             ("a newer live bar is appended",
                 vec![(History, vec![bar(0, 1.0), bar(1, 2.0)]), (Live, vec![bar(2, 3.0)])],
                 vec![bar(0, 1.0), bar(1, 2.0), bar(2, 3.0)], (Some(2), 0, 0)),
@@ -230,10 +248,6 @@ mod tests {
                     (History, vec![bar(2, 99.0), bar(1, 2.0), bar(0, 1.0), bar(1, 5.0)])],
                 vec![bar(0, 1.0), bar(1, 5.0), bar(2, 7.0), bar(3, 8.0)], (Some(0), 0, 0)),
             ("a page bar folds in the trades already in its slot",
-                vec![(History, vec![bar(0, 1.0)]), (Ticks(1), vec![bar(1, 4.0)]),
-                    (History, vec![bar_at(1, 20, 6.0)])],
-                vec![bar(0, 1.0), Bar::new(at(1, 20), 6.0, 6.0, 4.0, 4.0, 2.0)], (Some(1), 0, 0)),
-            ("trades before history retain the page open and every execution",
                 vec![(Ticks(1), vec![ohlcv(1, [205.0, 205.0, 205.0, 205.0, 2.0])]),
                     (Ticks(1), vec![ohlcv(1, [210.0, 210.0, 210.0, 210.0, 2.0])]),
                     (Ticks(1), vec![ohlcv(1, [207.0, 207.0, 207.0, 207.0, 2.0])]),
@@ -243,7 +257,7 @@ mod tests {
                 vec![(Ticks(2), vec![ohlcv(1, [200.0, 200.0, 90.0, 90.0, 4.0])]),
                     (History, vec![bar(1, 105.0)]), (History, vec![bar(1, 105.0)])],
                 vec![ohlcv(1, [105.0, 200.0, 90.0, 90.0, 5.0])], (None, 0, 0)),
-            ("a page that would overflow is rejected and leaves trades for a retry",
+            ("a page that would overflow is rejected and leaves trades intact",
                 vec![(Ticks(3), vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1e308])]),
                     (History, vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1.5e308])])],
                 vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1e308])], (None, 1, 0)),

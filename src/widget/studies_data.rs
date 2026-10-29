@@ -405,8 +405,12 @@ impl Chart {
                             .unwrap_or(Err(FeedError::NotSupported))
                     };
                     match result {
-                        Ok(page) => {
+                        Ok(mut page) => {
                             let previous = stream.history.take().and_then(|request| request.before);
+                            page.bars.retain(|bar| {
+                                previous
+                                    .is_none_or(|before| series.clock.bar_open(bar.time) < before)
+                            });
                             series.error = None;
                             stream.failures = 0;
                             let empty = page.bars.is_empty();
@@ -770,7 +774,10 @@ mod tests {
                 assert_eq!(feed.pending(metric), 0);
                 pump(&mut chart, now + 0.5 + delay);
                 assert_eq!(feed.pending(metric), 1);
-                let retried = feed.answer(metric, Ok(HistoryPage::new(bars(&[12.0], 60), true)));
+                let retried = feed.answer(
+                    metric,
+                    Ok(HistoryPage::new(bars(&[12.0, 55.0, 99.0, 100.0], 60), true)),
+                );
                 assert_eq!(
                     retried, failed,
                     "retry must keep its boundary and count after a live prepend"

@@ -406,9 +406,9 @@ pub struct HistoryRequest {
 /// names where older bars continue with [`continue_before`](Self::continue_before), so a feed that
 /// pages by time window can answer an empty window such as a weekend.
 ///
-/// Trades streamed through [`Sink::push_tick`] extend a page bar even when they arrive first.
-/// To avoid counting trades twice, exclude already streamed trades from the page's last slot,
-/// or answer the page before streaming trades it does not count.
+/// Trades streamed through [`Sink::push_tick`] extend the page's newest bar even when they arrive
+/// first. That bar must count only trades the stream did not send, or the feed must hold those
+/// trades until the page is answered. Completed page bars replace bars built from ticks.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct HistoryPage {

@@ -1165,9 +1165,14 @@ impl Chart {
         &mut self,
         link: &mut FeedLink,
         asked: &HistoryRequest,
-        page: HistoryPage,
+        mut page: HistoryPage,
         scroll_back: bool,
     ) {
+        page.bars.retain(|bar| {
+            asked
+                .before
+                .is_none_or(|before| link.clock.bar_open(bar.time) < before)
+        });
         let oldest = self.bars(SeriesId::MAIN).first().map(|bar| bar.time);
         let empty = page.bars.is_empty();
         let continuation = page.continue_before.filter(|_| empty);
@@ -2963,10 +2968,15 @@ mod tests {
         let oldest = chart.bars(main)[0].time;
         let older = history("A", Timeframe::Min1, Some(oldest));
         assert_eq!(feed.calls(), [older], "d");
-        feed.page().send(page(bars(1000)[400..].to_vec(), false));
+        feed.page().send(page(bars(1005)[400..].to_vec(), false));
         for _ in 0..5 {
             frames.run(&mut chart);
         }
+        assert_eq!(
+            chart.bars(main).len(),
+            1004,
+            "d: bars beyond before are dropped"
+        );
         assert_eq!(feed.calls(), [], "d: a repeated page ends scroll-back");
         assert!(chart.feed_state(main).unwrap().history_complete, "d");
 

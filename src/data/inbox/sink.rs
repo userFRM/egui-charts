@@ -221,9 +221,10 @@ impl Sink {
 
     /// A trade, folded into the bar of its slot and kept for order flow, the oldest trades making
     /// room for new ones. Its size is added to that bar's volume, also when the bar came from a
-    /// history page, whichever arrives first. To avoid counting trades twice, exclude already
-    /// streamed trades from the page's last slot, or answer the page before streaming trades it
-    /// does not count. A feed that cannot tell pushes bars instead. Trades older than the last
+    /// history page. Trades that arrive before history extend only the page's newest bar, which
+    /// must count only trades the stream did not send, or the feed must hold those trades until
+    /// the page is answered. Completed page bars replace bars built from ticks. A feed that cannot
+    /// tell pushes bars instead. Trades older than the last
     /// accepted execution or forming bar are dropped, and so is a trade whose id is among those
     /// of the last trades the subscription folded, as many as its trade store holds. A trade
     /// stamped too far ahead of the feed's current time is rejected, as [`Sink::set_server_time`]
