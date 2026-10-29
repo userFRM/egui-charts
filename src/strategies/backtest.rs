@@ -245,7 +245,9 @@ impl Backtest {
                 .iter()
                 .all(|price| price.is_finite());
             if valid {
-                let near = if bar.high - bar.open <= bar.open - bar.low {
+                let up = bar.high - bar.open;
+                let down = bar.open - bar.low;
+                let near = if up - down <= rounding_tolerance(bar.high.abs().max(bar.low.abs())) {
                     bar.high
                 } else {
                     bar.low
@@ -669,13 +671,20 @@ mod tests {
                 _ => {}
             }
         }
+        fn decimal_tie(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("L", Buy, 1.0, OrderType::Market);
+                context.exit("B", None, Some(1.2), Some(1.1));
+            }
+        }
         // Decimal lots close at their entry price: two breakevens, flat equity and no open lot.
         // Thirds realise 3 * 0.1 * (102 - 100) = 0.6, all winners. B keeps 0.5 at 104,
         // so its mark at 102 is -1 and final equity is 9999.6. No fourth closed trade.
+        // Decimal tie: high first closes 1 long at 1.2 from 1.15, profit 0.05, one winner.
         for (script, prices, expected, equity, closed, open, wins, profit) in [
             (
                 decimals as fn(usize, &mut StrategyContext<'_>),
-                vec![100.0; 4],
+                vec![(100.0, 100.0, 100.0, 100.0); 4],
                 vec![
                     trade(Buy, 0.1, 1, 100.0, Some((2, 100.0, 0.0)), "A / X"),
                     trade(Buy, 0.2, 1, 100.0, Some((2, 100.0, 0.0)), "B / X"),
@@ -688,7 +697,10 @@ mod tests {
             ),
             (
                 thirds,
-                vec![100.0, 100.0, 104.0, 102.0, 102.0, 102.0],
+                [100.0, 100.0, 104.0, 102.0, 102.0, 102.0]
+                    .into_iter()
+                    .map(|p| (p, p, p, p))
+                    .collect(),
                 vec![
                     trade(Buy, 0.1, 1, 100.0, Some((3, 102.0, 0.2)), "A / X1"),
                     trade(Buy, 0.1, 1, 100.0, Some((4, 102.0, 0.2)), "A / X2"),
@@ -703,11 +715,27 @@ mod tests {
                 3,
                 0.6,
             ),
+            (
+                decimal_tie,
+                vec![
+                    (1.15, 1.16, 1.14, 1.15),
+                    (1.15, 1.16, 1.14, 1.15),
+                    (1.15, 1.2, 1.1, 1.15),
+                ],
+                vec![trade(Buy, 1.0, 1, 1.15, Some((2, 1.2, 0.05)), "L / B")],
+                vec![10_000.0, 10_000.0, 10_000.0, 10_000.05],
+                1,
+                0,
+                1,
+                0.05,
+            ),
         ] {
             let source: Vec<_> = prices
                 .into_iter()
                 .enumerate()
-                .map(|(i, price)| Bar::new(hour(i as i64), price, price, price, price, 0.0))
+                .map(|(i, (open, high, low, close))| {
+                    Bar::new(hour(i as i64), open, high, low, close, 0.0)
+                })
                 .collect();
             let report = backtest.run(&mut Script(script), &source);
             assert_eq!(report.trades.len(), expected.len());
