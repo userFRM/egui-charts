@@ -1,8 +1,30 @@
 //! Exchange session provider: trading hours, DST and holidays.
 
 use super::{SessionBreak, SessionBreakType, SessionProvider, local_instant, local_time};
-use crate::model::{Bar, Session, Timeframe, TimezoneId};
+use crate::model::{Bar, OverrideWindow, Session, Timeframe, TimezoneId};
 use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+
+/// A window that closes on one trading date.
+struct Hours {
+    open: NaiveTime,
+    close: NaiveTime,
+    extended: bool,
+}
+
+impl Hours {
+    fn new(open: NaiveTime, close: NaiveTime, extended: bool) -> Self {
+        Self {
+            open,
+            close,
+            extended,
+        }
+    }
+
+    /// Whether the window opens on the day before it closes.
+    fn overnight(&self) -> bool {
+        self.close <= self.open && self.open != NaiveTime::MIN
+    }
+}
 
 /// Daily session provider for an exchange: a day starts at each session open of its trading
 /// hours, in its time zone, so bars outside the hours stay with the session before them.
@@ -82,12 +104,9 @@ impl ExchangeSessionProvider {
 
     /// Whether `time` lies in extended hours and outside regular hours.
     pub fn is_extended(&self, time: DateTime<Utc>) -> bool {
-        let Some(session) = &self.session else {
-            return false;
-        };
-        let contains =
-            |window: &crate::model::SessionWindow| self.window_close(time, window).is_some();
-        session.extended_windows.iter().any(contains) && !session.windows.iter().any(contains)
+        let closes = self.window_closes(time, true);
+        closes.iter().any(|(extended, _)| *extended)
+            && !closes.iter().any(|(extended, _)| !extended)
     }
 
     /// Whether the exchange is open, optionally including extended windows.
@@ -95,14 +114,11 @@ impl ExchangeSessionProvider {
         let Some(session) = &self.session else {
             return true;
         };
-        if session.windows.is_empty() && session.extended_windows.is_empty() {
-            return !session.holidays.contains(&self.wall_time(time).date());
+        let date = self.wall_time(time).date();
+        if self.continuous_on(date) {
+            return !session.holidays.contains(&date);
         }
-        session
-            .windows
-            .iter()
-            .chain(session.extended_windows.iter().filter(|_| extended_hours))
-            .any(|window| self.window_close(time, window).is_some())
+        !self.window_closes(time, extended_hours).is_empty()
     }
 
     /// Closing instant of the active trading window. Outside trading hours, including holidays,
@@ -110,19 +126,17 @@ impl ExchangeSessionProvider {
     /// Extended windows participate only when requested.
     pub fn session_close(&self, time: DateTime<Utc>, extended: bool) -> Option<DateTime<Utc>> {
         let session = self.session.as_ref()?;
-        if session.windows.is_empty() && session.extended_windows.is_empty() {
-            let date = self.wall_time(time).date();
+        let date = self.wall_time(time).date();
+        if self.continuous_on(date) {
             return if session.holidays.contains(&date) {
                 None
             } else {
                 self.instant(date.succ_opt()?.and_time(NaiveTime::MIN))
             };
         }
-        session
-            .windows
-            .iter()
-            .chain(session.extended_windows.iter().filter(|_| extended))
-            .filter_map(|window| self.window_close(time, window))
+        self.window_closes(time, extended)
+            .into_iter()
+            .map(|(_, close)| close)
             .max()
     }
 
@@ -138,7 +152,10 @@ impl ExchangeSessionProvider {
             return self.session_close(open, extended);
         }
         let session = self.session.as_ref()?;
-        if session.windows.is_empty() && (!extended || session.extended_windows.is_empty()) {
+        if session.windows.is_empty()
+            && session.overrides.is_empty()
+            && (!extended || session.extended_windows.is_empty())
+        {
             return None;
         }
         let date = open.date_naive();
@@ -160,20 +177,13 @@ impl ExchangeSessionProvider {
         let mut date = end.pred_opt()?;
         // Only the final trading date is needed, even for long calendar intervals.
         while date >= start {
-            let mut close = None;
-            for window in session
-                .windows
+            let close = self
+                .hours_on(date)
                 .iter()
-                .chain(session.extended_windows.iter().filter(|_| extended))
-            {
-                let overnight = window.close <= window.open && window.open != NaiveTime::MIN;
-                let open_date = if overnight { date.pred_opt()? } else { date };
-                if let Some(start) = self.instant(open_date.and_time(window.open))
-                    && let Some(end) = self.window_close(start, window)
-                {
-                    close = Some(close.map_or(end, |previous: DateTime<Utc>| previous.max(end)));
-                }
-            }
+                .filter(|hours| extended || !hours.extended)
+                .filter_map(|hours| self.window_span(date, hours))
+                .map(|(_, close)| close)
+                .max();
             if close.is_some() {
                 return close;
             }
@@ -182,41 +192,108 @@ impl ExchangeSessionProvider {
         None
     }
 
-    fn window_close(
-        &self,
-        time: DateTime<Utc>,
-        window: &crate::model::SessionWindow,
-    ) -> Option<DateTime<Utc>> {
-        let session = self.session.as_ref()?;
-        let local = self.wall_time(time);
-        let overnight = window.close <= window.open && window.open != NaiveTime::MIN;
-        [
-            Some(local.date()),
-            local.date().succ_opt().filter(|_| overnight),
-        ]
-        .into_iter()
-        .flatten()
-        .find_map(|close_date| {
-            if session.holidays.contains(&close_date)
-                || !window.days.contains(&close_date.weekday())
-            {
-                return None;
+    /// The windows that close on `date`, tagged extended or regular: those of its override, else
+    /// none on a holiday, else the weekly windows of its weekday.
+    fn hours_on(&self, date: NaiveDate) -> Vec<Hours> {
+        let Some(session) = &self.session else {
+            return Vec::new();
+        };
+        if let Some(day) = session.overrides.iter().find(|day| day.date == date) {
+            let tag = |extended| move |w: &OverrideWindow| Hours::new(w.open, w.close, extended);
+            return day
+                .windows
+                .iter()
+                .map(tag(false))
+                .chain(day.extended_windows.iter().map(tag(true)))
+                .collect();
+        }
+        if session.holidays.contains(&date) {
+            return Vec::new();
+        }
+        let tag = |extended| {
+            move |w: &crate::model::SessionWindow| {
+                w.days
+                    .contains(&date.weekday())
+                    .then(|| Hours::new(w.open, w.close, extended))
             }
-            let open_date = if overnight {
-                close_date.pred_opt()?
-            } else {
-                close_date
-            };
-            let end_date = if window.open == window.close && !overnight {
-                close_date.succ_opt()?
-            } else {
-                close_date
-            };
-            let open = self.instant(open_date.and_time(window.open))?;
-            // The later close retains the full repeated hour in an overnight window.
-            let close = self.close_instant(end_date.and_time(window.close))?;
-            (time >= open && time < close).then_some(close)
+        };
+        session
+            .windows
+            .iter()
+            .filter_map(tag(false))
+            .chain(session.extended_windows.iter().filter_map(tag(true)))
+            .collect()
+    }
+
+    /// Whether `date` has no windows and is open all day unless it is a holiday: a session
+    /// without weekly windows and without an override for the date.
+    fn continuous_on(&self, date: NaiveDate) -> bool {
+        self.session.as_ref().is_some_and(|session| {
+            session.windows.is_empty()
+                && session.extended_windows.is_empty()
+                && !session.overrides.iter().any(|day| day.date == date)
         })
+    }
+
+    /// Whether anything trades on `date`.
+    fn trades_on(&self, date: NaiveDate) -> bool {
+        if self.continuous_on(date) {
+            self.session
+                .as_ref()
+                .is_some_and(|session| !session.holidays.contains(&date))
+        } else {
+            !self.hours_on(date).is_empty()
+        }
+    }
+
+    /// The opening instant of a window that closes on `close_date`.
+    fn window_open(&self, close_date: NaiveDate, hours: &Hours) -> Option<DateTime<Utc>> {
+        let open_date = if hours.overnight() {
+            close_date.pred_opt()?
+        } else {
+            close_date
+        };
+        self.instant(open_date.and_time(hours.open))
+    }
+
+    /// The opening and closing instants of a window that closes on `close_date`.
+    fn window_span(
+        &self,
+        close_date: NaiveDate,
+        hours: &Hours,
+    ) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        let end_date = if hours.open == hours.close && !hours.overnight() {
+            close_date.succ_opt()?
+        } else {
+            close_date
+        };
+        // The later close retains the full repeated hour in an overnight window.
+        let close = self.close_instant(end_date.and_time(hours.close))?;
+        Some((self.window_open(close_date, hours)?, close))
+    }
+
+    /// The closing instants of the windows containing `time`, each tagged extended or regular.
+    /// Extended windows are left out unless `extended`.
+    fn window_closes(&self, time: DateTime<Utc>, extended: bool) -> Vec<(bool, DateTime<Utc>)> {
+        let date = self.wall_time(time).date();
+        let mut closes = Vec::new();
+        for (close_date, next_day) in [(Some(date), false), (date.succ_opt(), true)] {
+            let Some(close_date) = close_date else {
+                continue;
+            };
+            for hours in self.hours_on(close_date) {
+                if (hours.extended && !extended) || (next_day && !hours.overnight()) {
+                    continue;
+                }
+                if let Some((open, close)) = self.window_span(close_date, &hours)
+                    && time >= open
+                    && time < close
+                {
+                    closes.push((hours.extended, close));
+                }
+            }
+        }
+        closes
     }
 
     fn period(&self, date: NaiveDate) -> (i32, u32) {
@@ -269,10 +346,7 @@ impl ExchangeSessionProvider {
                 let continuous = windows().next().is_none();
                 let scheduled = windows().any(|window| !window.days.is_empty());
                 if continuous || scheduled {
-                    while session.holidays.contains(&first)
-                        || (!continuous
-                            && !windows().any(|window| window.days.contains(&first.weekday())))
-                    {
+                    while !self.trades_on(first) {
                         let Some(previous) = first.pred_opt() else {
                             break;
                         };
@@ -289,37 +363,25 @@ impl ExchangeSessionProvider {
         let days = ranges
             .into_iter()
             .flat_map(|(first, last)| first.iter_days().take_while(move |date| *date <= last));
+        let midnight = |date: NaiveDate| Some((self.instant(date.and_time(NaiveTime::MIN))?, date));
         let mut opens: Vec<_> = match &self.session {
-            None => days
-                .filter_map(|date| Some((self.instant(date.and_time(NaiveTime::MIN))?, date)))
-                .collect(),
-            Some(session) if session.windows.is_empty() && session.extended_windows.is_empty() => {
-                days.filter(|date| !session.holidays.contains(date))
-                    .filter_map(|date| Some((self.instant(date.and_time(NaiveTime::MIN))?, date)))
-                    .collect()
-            }
+            None => days.filter_map(midnight).collect(),
             Some(session) => days
-                .filter_map(|close_date| {
-                    if session.holidays.contains(&close_date) {
-                        return None;
+                .filter_map(|date| {
+                    if self.continuous_on(date) {
+                        return if session.holidays.contains(&date) {
+                            None
+                        } else {
+                            midnight(date)
+                        };
                     }
                     // All windows of one trading date share its earliest open, including split sessions.
-                    let open = session
-                        .windows
+                    let open = self
+                        .hours_on(date)
                         .iter()
-                        .chain(&session.extended_windows)
-                        .filter(|window| window.days.contains(&close_date.weekday()))
-                        .filter_map(|window| {
-                            let open_date =
-                                if window.close <= window.open && window.open != NaiveTime::MIN {
-                                    close_date.pred_opt()?
-                                } else {
-                                    close_date
-                                };
-                            self.instant(open_date.and_time(window.open))
-                        })
+                        .filter_map(|hours| self.window_open(date, hours))
                         .min()?;
-                    Some((open, close_date))
+                    Some((open, date))
                 })
                 .collect(),
         };
@@ -669,5 +731,145 @@ mod tests {
                 let _ = provider.session_break_between(&time, &time);
             }
         }
+    }
+
+    #[test]
+    fn date_specific_hours_replace_weekly_hours_and_holidays_across_dst() {
+        use crate::model::{BarClock, OverrideWindow, SessionOverride, SessionWindow};
+        use Weekday::*;
+        let clock = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        let date = |text: &str| text.parse::<NaiveDate>().unwrap();
+        let at = |text: &str| text.parse::<DateTime<Utc>>().unwrap();
+        // Mon-Fri 09:30-16:00 New York time. Fri 1 Nov closes early at 13:00, with post-market
+        // hours until 17:00. Sun 3 Nov, when clocks go back, holds an exceptional session
+        // 10:00-12:00. Tue 5 Nov is a listed holiday with exceptional hours that win, and Wed 6
+        // Nov is closed by an override without windows.
+        let session = Session::new([SessionWindow::new(
+            [Mon, Tue, Wed, Thu, Fri],
+            clock(9, 30),
+            clock(16, 0),
+        )])
+        .with_holidays([date("2024-11-05")])
+        .with_overrides([
+            SessionOverride::new(date("2024-11-01"))
+                .with_windows([OverrideWindow::new(clock(9, 30), clock(13, 0))])
+                .with_extended_windows([OverrideWindow::new(clock(13, 0), clock(17, 0))]),
+            SessionOverride::new(date("2024-11-03"))
+                .with_windows([OverrideWindow::new(clock(10, 0), clock(12, 0))]),
+            SessionOverride::new(date("2024-11-05"))
+                .with_windows([OverrideWindow::new(clock(9, 30), clock(11, 0))]),
+            SessionOverride::new(date("2024-11-06")),
+        ]);
+        let provider = ExchangeSessionProvider::new(
+            TimezoneId::named("America/New_York").unwrap(),
+            Some(session),
+        );
+        // (instant, open regular, open with extended, extended shading, close with extended)
+        for (time, regular, extended, shaded, close) in [
+            // Fri 1 Nov, UTC-4: 12:59 is open, 13:00 closes the regular window.
+            (
+                "2024-11-01T16:59:00Z",
+                true,
+                true,
+                false,
+                "2024-11-01T17:00:00Z",
+            ),
+            (
+                "2024-11-01T17:00:00Z",
+                false,
+                true,
+                true,
+                "2024-11-01T21:00:00Z",
+            ),
+            ("2024-11-01T21:00:00Z", false, false, false, ""),
+            // Sun 3 Nov, UTC-5 from 06:00Z: 10:00 is 15:00Z and 12:00 is 17:00Z.
+            ("2024-11-03T14:59:00Z", false, false, false, ""),
+            (
+                "2024-11-03T15:00:00Z",
+                true,
+                true,
+                false,
+                "2024-11-03T17:00:00Z",
+            ),
+            ("2024-11-03T17:00:00Z", false, false, false, ""),
+            // Mon 4 Nov follows the weekly hours, now in UTC-5.
+            ("2024-11-04T21:00:00Z", false, false, false, ""),
+            (
+                "2024-11-04T20:59:00Z",
+                true,
+                true,
+                false,
+                "2024-11-04T21:00:00Z",
+            ),
+            // Tue 5 Nov is a holiday, yet its override opens 09:30-11:00.
+            (
+                "2024-11-05T14:30:00Z",
+                true,
+                true,
+                false,
+                "2024-11-05T16:00:00Z",
+            ),
+            ("2024-11-05T16:00:00Z", false, false, false, ""),
+            // Wed 6 Nov is closed although the weekly hours are open.
+            ("2024-11-06T15:00:00Z", false, false, false, ""),
+            (
+                "2024-11-07T15:00:00Z",
+                true,
+                true,
+                false,
+                "2024-11-07T21:00:00Z",
+            ),
+        ] {
+            let time = at(time);
+            assert_eq!(provider.is_open(time, false), regular, "{time}");
+            assert_eq!(provider.is_open(time, true), extended, "{time}");
+            assert_eq!(provider.is_extended(time), shaded, "{time}");
+            assert_eq!(
+                provider.session_close(time, true),
+                (!close.is_empty()).then(|| at(close)),
+                "{time}"
+            );
+        }
+        // History boundaries: each exceptional day starts a trading day of its own at its open,
+        // and a closed day has none, so its hours stay with the day before.
+        for (time, trading_date) in [
+            ("2024-11-03T15:30:00Z", "2024-11-03"),
+            ("2024-11-04T15:00:00Z", "2024-11-04"),
+            ("2024-11-05T15:00:00Z", "2024-11-05"),
+            ("2024-11-06T15:00:00Z", "2024-11-05"),
+            ("2024-11-07T15:00:00Z", "2024-11-07"),
+        ] {
+            assert_eq!(
+                provider.trading_date(at(time)),
+                date(trading_date),
+                "{time}"
+            );
+        }
+        // Daily bars take the close of their own trading date.
+        for (open, close) in [
+            ("2024-11-01T00:00:00Z", "2024-11-01T21:00:00Z"),
+            ("2024-11-03T00:00:00Z", "2024-11-03T17:00:00Z"),
+        ] {
+            assert_eq!(
+                provider.bar_session_close(at(open), Timeframe::Day1, true),
+                Some(at(close))
+            );
+        }
+        // Bar clock: hourly bars of the exceptional Sunday start at its open.
+        let bars = BarClock::new(Timeframe::Hour1).with_session(
+            TimezoneId::named("America/New_York").unwrap(),
+            Session::new([SessionWindow::new([Mon], clock(9, 30), clock(16, 0))])
+                .with_overrides([SessionOverride::new(date("2024-11-03"))
+                    .with_windows([OverrideWindow::new(clock(10, 0), clock(12, 0))])]),
+            false,
+        );
+        assert_eq!(
+            bars.bar_open(at("2024-11-03T16:30:00Z")),
+            at("2024-11-03T16:00:00Z")
+        );
+        assert_eq!(
+            bars.bar_open(at("2024-11-03T15:30:00Z")),
+            at("2024-11-03T15:00:00Z")
+        );
     }
 }

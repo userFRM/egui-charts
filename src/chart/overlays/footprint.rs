@@ -152,8 +152,10 @@ pub fn pullback_range(bar: &Bar, flow: &Footprint) -> Option<(i64, i64)> {
 /// legend and cursor. Standalone hosts supply their pane mapping and source bars. Use only
 /// time-based bars whose timestamps lie inside their aggregation slots. Text layout uses
 /// egui's galley cache; rows below the minimum height
-/// never request a layout. Fractional volumes below 100 retain up to three decimals;
-/// nonzero magnitudes below 0.001 use scientific notation. Only display grouping runs during painting.
+/// never request a layout. Row bands extend half an instrument tick below their first
+/// tick and above their last tick, including grouped rows. Fractional volumes below 100 retain
+/// up to three decimals; nonzero magnitudes below 0.001 use scientific notation. Only display
+/// grouping runs during painting.
 pub fn render_footprint(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -230,7 +232,8 @@ pub fn render_footprint(
             .map(|(low, high)| (low.div_euclid(group), high.div_euclid(group)));
         let [smallest, largest] = font_limits(config.font_size);
         for row in shown.levels.values() {
-            let price = row.level as f64 * flow.price_step() * group as f64;
+            let price =
+                row.level as f64 * flow.price_step() * group as f64 - flow.tick_size() * 0.5;
             let y1 = mapping.price_to_y(price);
             let y2 = mapping.price_to_y(price + flow.price_step() * group as f64);
             if !y1.is_finite() || !y2.is_finite() {
@@ -339,7 +342,8 @@ pub fn render_footprint(
                 let Some((&level, row)) = extreme else {
                     continue;
                 };
-                let edge = mapping.price_to_y((level + i64::from(high)) as f64 * step);
+                let edge = mapping
+                    .price_to_y((level + i64::from(high)) as f64 * step - flow.tick_size() * 0.5);
                 let text = row.ratio().map_or_else(
                     || "A/B n/a".to_owned(),
                     |ratio| {
@@ -589,8 +593,9 @@ pub fn render_footprint_studies(
             .unwrap_or(bars.len().saturating_sub(1));
         let left = mapping.idx_to_x(start) - mapping.bar_spacing * 0.46;
         let right = mapping.idx_to_x(end) + mapping.bar_spacing * 0.46;
-        let y1 = mapping.price_to_y(study.low as f64 * flow.price_step());
-        let y2 = mapping.price_to_y((study.high as f64 + 1.0) * flow.price_step());
+        let y1 = mapping.price_to_y(study.low as f64 * flow.price_step() - flow.tick_size() * 0.5);
+        let y2 = mapping
+            .price_to_y((study.high as f64 + 1.0) * flow.price_step() - flow.tick_size() * 0.5);
         if !y1.is_finite() || !y2.is_finite() {
             continue;
         }
@@ -688,6 +693,68 @@ mod tests {
     use super::*;
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
+
+    /// Rows cover the nearest-tick band, including manual and automatic grouping.
+    #[test]
+    fn rendered_rows_surround_their_instrument_ticks() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        // y(P) = (high - P) / (high - 99) * 160, calculated independently.
+        for (tick, ticks, auto, price, high, top, bottom) in [
+            (1.0, 1, None, 100.0, 102.0, 80.0, 133.33333),
+            (0.25, 1, None, 100.25, 102.0, 86.66667, 100.0),
+            (1.0, 4, None, 100.0, 106.0, 57.142857, 148.57143),
+            (1.0, 1, Some(75.0), 100.0, 106.0, 57.142857, 148.57143),
+        ] {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), tick, ticks).unwrap();
+            flow.push(&Tick::new(time, price, 3.0, Some(OrderSide::Buy)))
+                .unwrap();
+            let bars = [Bar::new(time, price, price, price, price, 3.0)];
+            let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 160.0));
+            let map = ChartMapping::new(
+                rect,
+                100.0,
+                0,
+                0,
+                0.0,
+                PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(99.0, high),
+                    0.0,
+                    160.0,
+                    false,
+                ),
+            );
+            let config = FootprintConfig {
+                auto_row_height: auto,
+                show_poc: false,
+                value_area: None,
+                ..Default::default()
+            };
+            let mut output = egui::Context::default().run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| render_footprint(ui.painter(), &map, &bars, &flow, &config),
+            );
+            output.textures_delta.clear();
+            let extent = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Mesh(mesh) => Some(mesh),
+                    _ => None,
+                })
+                .flat_map(|mesh| mesh.vertices.iter())
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| {
+                    (lo.min(v.pos.y), hi.max(v.pos.y))
+                });
+            assert!(
+                (extent.0 - top).abs() < 0.01 && (extent.1 - bottom).abs() < 0.01,
+                "tick {tick}, ticks {ticks}, auto {auto:?}: {extent:?}, expected {top}..{bottom}"
+            );
+        }
+    }
 
     /// A bar cut by dropped executions is left to its candle, not drawn as a complete bar.
     #[test]
@@ -1096,7 +1163,7 @@ mod tests {
             .collect();
         let dimmed = config.ask_color.gamma_multiply(0.45);
         assert_eq!(strokes, [config.ask_color, dimmed, dimmed]);
-        let top = map.price_to_y(100.25);
+        let top = map.price_to_y(100.125);
         let triangle = output.shapes.iter().find_map(|shape| match &shape.shape {
             Shape::Path(path) if path.fill == config.ask_color => Some(path.points.clone()),
             _ => None,

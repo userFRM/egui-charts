@@ -91,7 +91,9 @@ impl Chart {
             .instrument()
             .and_then(|instrument| instrument.session.as_ref())
             .is_some_and(|session| {
-                !session.windows.is_empty() || !session.extended_windows.is_empty()
+                !session.windows.is_empty()
+                    || !session.extended_windows.is_empty()
+                    || !session.overrides.is_empty()
             })
             || self.config.session_config.is_some();
         if self.bar_close_time.is_none() && session_close.is_none() && has_session {
@@ -1812,13 +1814,13 @@ impl Chart {
                             )
                         {
                             let profiles = crate::studies::trade_profiles(flow, &ranges);
-                            crate::chart::overlays::render_trade_profiles(
+                            crate::chart::overlays::render_session_volume_profiles(
                                 &clipped_painter,
                                 &mapping,
                                 bars,
                                 &profiles,
                                 flow.price_step(),
-                                &config,
+                                flow.tick_size(),
                             );
                         }
                     }

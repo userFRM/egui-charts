@@ -8,7 +8,7 @@ use egui::{RichText, Ui};
 
 use crate::data::inbox::Inbox;
 use crate::icons::icons;
-use crate::services::{Listener, Notification, Notifications};
+use crate::services::{Listener, Notification, NotificationTarget, Notifications, ProfileId};
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::{EmptyState, PanelHeader};
@@ -25,6 +25,10 @@ pub enum NotificationsAction {
     None,
     /// Show the symbol of an entry, such as on the chart.
     SelectSymbol(String),
+    /// Show the profile an entry is about.
+    OpenProfile(ProfileId),
+    /// Show the chat room an entry is about.
+    OpenRoom(String),
 }
 
 /// The log pushed by the host's [`Notifications`] service.
@@ -138,6 +142,25 @@ impl NotificationsPanel {
                                     && Button::new(symbol).small().show(ui).clicked()
                                 {
                                     action = NotificationsAction::SelectSymbol(symbol.clone());
+                                }
+                                if let Some(target) = &entry.target {
+                                    let (label, open) = match target {
+                                        NotificationTarget::Profile(id) => (
+                                            "Open profile",
+                                            NotificationsAction::OpenProfile(id.clone()),
+                                        ),
+                                        NotificationTarget::Room(room) => (
+                                            "Open room",
+                                            NotificationsAction::OpenRoom(room.clone()),
+                                        ),
+                                    };
+                                    if Button::new(l10n::text(ui.ctx(), label))
+                                        .small()
+                                        .show(ui)
+                                        .clicked()
+                                    {
+                                        action = open;
+                                    }
                                 }
                             });
                     });
