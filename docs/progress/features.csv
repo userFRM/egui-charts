@@ -299,7 +299,7 @@ Drawings,Drawings,Drawing persistence,done,library,src/widget/anchors.rs;src/dra
 Drawings,Drawings,Drawing property access,partial,library,src/drawings/manager/mod.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/drawings/rendering/fibonacci.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Drawing removal,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Drawing stacking order,done,library,src/drawings/manager/mod.rs;src/drawings/services/z_order.rs;src/drawings/manager/edit.rs
-Drawings,Drawings,Drawing tool availability,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/ui/drawing_toolbar/toolbar.rs;src/drawings/manager/interaction.rs
+Drawings,Drawings,Drawing tool availability,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/ui/drawing_toolbar/toolbar.rs;src/drawings/manager/interaction.rs;src/drawings/repositories.rs;src/drawings/categories.rs;src/config/drawing_tool/categories.rs
 Drawings,Drawings,Elliott correction wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Elliott double combo wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Elliott impulse wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs

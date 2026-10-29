@@ -1,7 +1,9 @@
-//! Static data definitions for drawing tools and categories.
+//! Toolbar groupings for drawing tools.
 //!
-//! This module contains all category definitions, tool groupings, and
-//! data lookup functions. Pure data with no UI coupling.
+//! [`CATEGORY_ORDER`] and [`get_category_sections`] define the toolbar's grouped
+//! menus. [`DrawingToolType::categories`] and [`DrawingToolType::by_category`]
+//! provide finer groups for command lists. They group the same tools differently,
+//! except [`DrawingToolType::Measure`], which is a standalone toolbar button.
 
 use crate::drawings::DrawingToolType;
 
@@ -20,19 +22,9 @@ pub const CATEGORY_ORDER: &[&str] = &[
 /// Get the category that a tool belongs to
 ///
 /// Returns the main category name, not the sub-section.
+/// [`DrawingToolType::Measure`] is a standalone toolbar button and returns `None`.
 pub fn get_tool_category(tool: DrawingToolType) -> Option<&'static str> {
-    let categories = vec![
-        "Cursors",
-        "Lines",
-        "Fibonacci",
-        "Patterns",
-        "Projection",
-        "Brushes/Shapes",
-        "Text/Annotations",
-        "Icons/Emojis",
-    ];
-
-    for category in categories {
+    for &category in CATEGORY_ORDER {
         let sections = get_category_sections(category);
         for (_, tools) in sections {
             if tools.contains(&tool) {
@@ -45,7 +37,8 @@ pub fn get_tool_category(tool: DrawingToolType) -> Option<&'static str> {
 
 /// Get sections and tools for a category
 ///
-/// Returns a vector of (section_name, tools) tuples for the given category.
+/// Returns a vector of (section_name, tools) tuples for the given category,
+/// or an empty vector for an unknown name. Names are case-sensitive.
 pub fn get_category_sections(category: &str) -> Vec<(&'static str, Vec<DrawingToolType>)> {
     match category {
         "Cursors" => vec![(
@@ -246,8 +239,10 @@ pub fn get_category_sections(category: &str) -> Vec<(&'static str, Vec<DrawingTo
 }
 
 /// Get the default tool for a category
-pub fn get_category_default_tool(category: &str) -> DrawingToolType {
-    match category {
+///
+/// Returns `None` for an unknown name. Names are case-sensitive.
+pub fn get_category_default_tool(category: &str) -> Option<DrawingToolType> {
+    Some(match category {
         "Cursors" => DrawingToolType::CrossCursor,
         "Lines" => DrawingToolType::TrendLine,
         "Fibonacci" => DrawingToolType::FibonacciRetracement,
@@ -256,8 +251,8 @@ pub fn get_category_default_tool(category: &str) -> DrawingToolType {
         "Brushes/Shapes" => DrawingToolType::Brush,
         "Text/Annotations" => DrawingToolType::TextLabel,
         "Icons/Emojis" => DrawingToolType::FontIcon,
-        _ => DrawingToolType::TrendLine,
-    }
+        _ => return None,
+    })
 }
 
 /// Get all tools in a flat list
