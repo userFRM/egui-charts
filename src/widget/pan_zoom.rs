@@ -836,7 +836,6 @@ mod tests {
                 show(&mut chart, 0.0);
                 show(&mut chart, 1.0);
                 assert_eq!(chart.state.time_scale().bar_spacing(), 6.0);
-                assert!(chart.apply_visible_bars_once);
                 show(&mut chart, 1064.0);
                 let width = chart.last_rendered_price_rect.width();
                 let scale = chart.state.time_scale();

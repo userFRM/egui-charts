@@ -12,7 +12,7 @@ Builder API,Broker API,Order and position lines on the chart,done,host,src/chart
 Builder API,Broker API,"Order placement, modification and cancellation",done,host,src/services/broker.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Order ticket and order or position dialogs,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket.rs;src/ui/trading/account_panel.rs
 Builder API,Broker API,"Order, position and execution queries",partial,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs
-Builder API,Broker API,Trading entry points in the UI,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs
+Builder API,Broker API,Trading entry points in the UI,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs/trading.rs
 Builder API,Builder integration,Custom drawing tools from a downstream crate,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Builder API,Builder integration,Custom indicator metadata,done,library,src/studies/indicator_trait.rs;src/studies/inputs.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs;src/chart/renderers/study_scale.rs
 Builder API,Builder integration,Custom indicators from a downstream crate,done,library,src/studies/factory/mod.rs;src/ui/top_toolbar/components/indicator_dialog/dialog.rs;src/widget/series.rs;src/studies/custom.rs
@@ -93,22 +93,22 @@ Builder API,Widget API and customization,Toolbar customisation,done,library,src/
 Builder API,Widget API and customization,UI component visibility,done,library,src/ui/app_state.rs;src/ui/top_toolbar/toolbar.rs;src/ui/context_menu.rs;src/config/interaction.rs
 Builder API,Widget API and customization,Visible range get and set,done,library,src/widget/sync.rs;src/widget/time_scale.rs;src/scales/pricescale.rs
 Builder API,Widget API and customization,Widget constructor options,partial,library,src/widget/builder.rs;src/widget/frame.rs;src/widget/stored_drawings.rs
-Chart,Chart settings and themes,Alerts tab,done,host,src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/widget/settings/data.rs
+Chart,Chart settings and themes,Alerts tab,done,host,src/ui/top_toolbar/components/settings_menu/dialog/tabs/trading.rs;src/widget/settings/data.rs
 Chart,Chart settings and themes,Background,done,library,src/widget/settings/apply.rs;src/widget/frame.rs
 Chart,Chart settings and themes,Candle colour customisation,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/rendering/candles/candlestick.rs;src/chart/renderers/candle.rs
-Chart,Chart settings and themes,Canvas tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
+Chart,Chart settings and themes,Canvas tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs/canvas.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
 Chart,Chart settings and themes,Chart settings dialog,done,library,src/ui/top_toolbar/components/settings_menu/dialog/mod.rs;src/widget/settings/apply.rs
 Chart,Chart settings and themes,Crosshair appearance,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/crosshair.rs
-Chart,Chart settings and themes,Events tab,done,host,src/model/time_scale_event.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs
+Chart,Chart settings and themes,Events tab,done,host,src/model/time_scale_event.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs/trading.rs
 Chart,Chart settings and themes,Grid lines,done,library,src/widget/frame.rs;src/chart/rendering/grid.rs;src/widget/settings/apply.rs
 Chart,Chart settings and themes,Light and dark themes,done,library,src/widget/mod.rs;src/widget/palette.rs;src/widget/frame.rs
 Chart,Chart settings and themes,Navigation and pane buttons,done,library,src/widget/navigation.rs;src/widget/frame.rs;src/widget/pane_layout.rs;src/widget/settings/data.rs
-Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
+Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs/scales.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
 Chart,Chart settings and themes,Scales text colour and size,done,library,src/widget/settings/data.rs;src/widget/settings/apply.rs;src/chart/rendering/axes.rs;src/chart/renderers/labels.rs
 Chart,Chart settings and themes,Session background shading,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs
-Chart,Chart settings and themes,Status line tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/widget/settings/apply.rs;src/widget/frame.rs
-Chart,Chart settings and themes,Symbol tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/widget/settings/apply.rs
-Chart,Chart settings and themes,Trading tab,done,host,src/widget/settings/data.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs.rs;src/ui/trading/mod.rs
+Chart,Chart settings and themes,Status line tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs/symbol.rs;src/widget/settings/apply.rs;src/widget/frame.rs
+Chart,Chart settings and themes,Symbol tab,done,library,src/ui/top_toolbar/components/settings_menu/dialog/tabs/symbol.rs;src/widget/settings/apply.rs
+Chart,Chart settings and themes,Trading tab,done,host,src/widget/settings/data.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs/trading.rs;src/ui/trading/mod.rs
 Chart,Chart settings and themes,Watermark,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/widget/mod.rs;src/chart/renderers/watermark.rs
 Chart,Chart types,Area,done,library,src/widget/frame.rs;src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs
 Chart,Chart types,Bars,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/candlestick.rs;src/chart/renderers/bar.rs
@@ -240,15 +240,15 @@ Drawings,Drawing management,Default style per tool,done,library,src/drawings/man
 Drawings,Drawing management,Drawing anchors across timeframe and symbol changes,done,library,src/widget/anchors.rs;src/widget/feed/mod.rs;src/widget/series.rs;src/model/bar/time.rs
 Drawings,Drawing management,Drawing on indicator panes,done,library,src/widget/tool_interaction/mod.rs;src/widget/panes.rs;src/drawings/domain/drawing.rs
 Drawings,Drawing management,Drawing templates,done,library,src/drawings/domain/template.rs;src/ui/dialogs/templates/store.rs;src/ui/dialogs/templates/dialog.rs
-Drawings,Drawing management,Drawing tool keyboard shortcuts,done,library,src/widget/keyboard.rs;src/ui/drawing_toolbar/toolbar.rs;src/ui/drawing_toolbar/shortcuts.rs
+Drawings,Drawing management,Drawing tool keyboard shortcuts,done,library,src/widget/keyboard.rs;src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/shortcuts.rs
 Drawings,Drawing management,Drawings on a logarithmic price scale,done,library,src/widget/tool_interaction/mod.rs;src/drawings/domain/drawing.rs;src/drawings/rendering/elliott.rs;src/drawings/manager/interaction.rs;src/drawings/services/handle.rs;src/widget/tool_interaction/selection.rs;src/scales/pricescale.rs
 Drawings,Drawing management,Duplicate drawing,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Edit anchors with handles and move a drawing,done,library,src/drawings/services/handle.rs;src/widget/tool_interaction/selection.rs;src/drawings/manager/interaction.rs;src/scales/pricescale.rs;src/drawings/manager/mod.rs
 Drawings,Drawing management,Hide and show drawings,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
-Drawings,Drawing management,Lock all drawings,done,library,src/ui/drawing_toolbar/toolbar.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
+Drawings,Drawing management,Lock all drawings,done,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Lock and unlock a drawing,done,library,src/widget/tool_interaction/selection.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Magnet modes,done,library,src/widget/tool_interaction/mod.rs;src/drawings/services/snap.rs;src/drawings/manager/mod.rs
-Drawings,Drawing management,Multi-select drawings,done,library,src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs;src/widget/tool_interaction/selection.rs
+Drawings,Drawing management,Multi-select drawings,done,library,src/widget/tool_interaction/selection.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Drawings,Drawing management,Object tree,done,library,src/ui/widget_bar/panels/object_tree/chart_actions.rs;src/ui/widget_bar/panels/object_tree/source_tree.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Per-tool settings dialog,done,library,src/ui/dialogs/drawing_properties/dialog.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
 Drawings,Drawing management,Persistence of drawings per symbol,done,library,src/widget/stored_drawings.rs;src/widget/frame.rs
@@ -256,7 +256,7 @@ Drawings,Drawing management,Remove all drawings,done,library,src/drawings/manage
 Drawings,Drawing management,Select a drawing by clicking its body,done,library,src/drawings/manager/mod.rs;src/drawings/services/interaction.rs;src/widget/tool_interaction/selection.rs;src/drawings/manager/paint.rs
 Drawings,Drawing management,Snap anchors to bars in time,done,library,src/widget/tool_interaction/mod.rs;src/widget/tool_interaction/interaction.rs
 Drawings,Drawing management,Stay in drawing mode,done,library,src/drawings/manager/mod.rs
-Drawings,Drawing management,Style settings honoured by renderers,partial,library,src/drawings/rendering/style.rs;src/drawings/rendering/fibonacci.rs
+Drawings,Drawing management,Style settings honoured by renderers,partial,library,src/drawings/rendering/style.rs;src/drawings/rendering/fibonacci.rs;src/painting/dashed_line.rs
 Drawings,Drawing management,Sync drawings across layouts,done,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Text entry for annotation tools,done,library,src/widget/tool_interaction/mod.rs;src/widget/tool_interaction/text.rs
 Drawings,Drawing management,Undo and redo of drawing edits,done,library,src/drawings/manager/mod.rs;src/widget/history.rs;src/widget/keyboard.rs;src/drawings/services/history.rs
@@ -267,8 +267,8 @@ Drawings,Drawings,API: default style overrides for new drawings,done,library,src
 Drawings,Drawings,API: drawing templates through the save/load adapter,done,library,src/services/storage.rs;src/ui/dialogs/templates/store.rs;src/drawings/domain/template.rs
 Drawings,Drawings,"API: per-drawing selection, saving, user-edit and object-tree flags",done,library,src/drawings/domain/drawing.rs;src/drawings/manager/mod.rs;src/widget/anchors.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Anchored VWAP,done,library,src/drawings/rendering/trading/volume_profile.rs
-Drawings,Drawings,Anchored text,done,library,src/drawings/domain/drawing.rs;src/drawings/manager/mod.rs;src/drawings/rendering/annotations/text.rs;src/drawings/manager/edit.rs
-Drawings,Drawings,Anchored volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs
+Drawings,Drawings,Anchored text,done,library,src/drawings/domain/drawing.rs;src/drawings/rendering/annotations/text.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
+Drawings,Drawings,Anchored volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs
 Drawings,Drawings,Arc,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Arrow,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/style.rs;src/drawings/domain/drawing.rs
 Drawings,Drawings,Arrow mark down,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
@@ -296,10 +296,10 @@ Drawings,Drawings,Drawing events,done,library,src/drawings/manager/mod.rs
 Drawings,Drawings,Drawing groups,done,library,src/drawings/domain/drawing.rs;src/drawings/manager/mod.rs;src/drawings/persistence.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Drawing listing and lookup,done,library,src/drawings/manager/mod.rs;src/widget/drawing_api.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Drawing persistence,done,library,src/widget/anchors.rs;src/drawings/persistence.rs
-Drawings,Drawings,Drawing property access,partial,library,src/drawings/manager/mod.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/drawings/rendering/fibonacci.rs;src/drawings/manager/edit.rs
+Drawings,Drawings,Drawing property access,partial,library,src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/drawings/rendering/fibonacci.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Drawing removal,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
-Drawings,Drawings,Drawing stacking order,done,library,src/drawings/manager/mod.rs;src/drawings/services/z_order.rs;src/drawings/manager/edit.rs
-Drawings,Drawings,Drawing tool availability,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/ui/drawing_toolbar/toolbar.rs;src/drawings/manager/interaction.rs
+Drawings,Drawings,Drawing stacking order,done,library,src/drawings/services/z_order.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
+Drawings,Drawings,Drawing tool availability,done,library,src/drawings/registry.rs;src/ui/drawing_toolbar/toolbar/mod.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Drawings,Drawings,Elliott correction wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Elliott double combo wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Elliott impulse wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs
@@ -316,7 +316,7 @@ Drawings,Drawings,Fib speed resistance fan,done,library,src/drawings/rendering/f
 Drawings,Drawings,Fib spiral,done,library,src/drawings/rendering/fibonacci.rs
 Drawings,Drawings,Fib time zone,done,library,src/drawings/rendering/fibonacci.rs
 Drawings,Drawings,Fib wedge,done,library,src/drawings/rendering/fibonacci.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Fixed range volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs
+Drawings,Drawings,Fixed range volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs
 Drawings,Drawings,Flag mark,done,library,src/drawings/rendering/annotations/notes.rs;src/widget/tool_interaction/text.rs
 Drawings,Drawings,Flat top/bottom,done,library,src/drawings/rendering/channels.rs;src/drawings/rendering/measurements.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Gann box,done,library,src/drawings/rendering/gann.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
@@ -389,8 +389,8 @@ Order flow,Order flow,"Chart tabs, detached groups and shared crosshair",done,li
 Order flow,Order flow,Connectors for futures data feeds with aggregated and order-level depth,partial,host,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Order flow,Order flow,Cumulative aggressor volume delta with resets,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs
 Order flow,Order flow,Cumulative iceberg and stop counts over time with alerts,missing,host,
-Order flow,Order flow,Custom range profile drawn on the chart by selection,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/studies/builtin/trade_profile.rs
-Order flow,Order flow,DOM levels panel beside the heatmap,partial,library,src/widget/feed/mod.rs;src/data/orders.rs
+Order flow,Order flow,Custom range profile drawn on the chart by selection,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/studies/builtin/trade_profile.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs
+Order flow,Order flow,DOM levels panel beside the heatmap,partial,library,src/data/orders.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Delta % and bid/ask ratio highlight markers on bars,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/studies/builtin/footprint_studies.rs
 Order flow,Order flow,Delta POC per bar,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs
 Order flow,Order flow,Delta split into trade-size ranges,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/data/order_flow.rs
@@ -492,7 +492,7 @@ Studies,Indicator infrastructure,Indicator templates,done,library,src/studies/te
 Studies,Indicator infrastructure,Indicators on indicators,done,library,src/studies/settings.rs;src/widget/studies.rs;src/ui/top_toolbar/components/indicator_dialog/settings.rs
 Studies,Indicator infrastructure,Input validation,done,library,src/studies/inputs.rs;src/studies/builtin/kama.rs;src/studies/builtin/mod.rs;src/studies/factory/mod.rs
 Studies,Indicator infrastructure,Maximum studies per chart,done,library,src/widget/series.rs;src/widget/clipboard.rs;src/ui/top_toolbar/components/indicator_dialog/dialog.rs;terminal/src/studies.rs
-Studies,Indicator infrastructure,Multi-output studies draw all their lines,done,library,src/studies/indicator_trait.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs;src/widget/indicator_pane.rs
+Studies,Indicator infrastructure,Multi-output studies draw all their lines,done,library,src/studies/builtin/adx.rs;src/studies/builtin/stochastic.rs;src/studies/builtin/stochastic_rsi.rs;src/studies/indicator_trait.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs;src/widget/indicator_pane.rs
 Studies,Indicator infrastructure,Multi-timeframe inputs,partial,library,src/studies/settings.rs;src/studies/data.rs;src/widget/studies_data.rs
 Studies,Indicator infrastructure,Other-symbol inputs,partial,library,src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/studies_data.rs;src/services/search/expression.rs;src/studies/factory/mod.rs
 Studies,Indicator infrastructure,Overlay versus separate pane,done,library,src/widget/series.rs;src/studies/settings.rs;src/widget/pane_layout.rs;src/widget/panes.rs
@@ -517,11 +517,11 @@ Studies,Indicators,Advance/Decline Ratio bars,done,library,src/studies/builtin/a
 Studies,Indicators,All Candlestick Patterns,partial,library,src/studies/builtin/candlestick_patterns/mod.rs
 Studies,Indicators,All Chart Patterns,missing,library,
 Studies,Indicators,Analyst price forecast,done,host,src/data/mod.rs;src/data/targets.rs;src/widget/targets.rs;src/widget/frame.rs
-Studies,Indicators,Anchored Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/painting/volume_profile.rs;src/chart/renderers/indicator.rs;src/studies/data.rs;src/widget/studies_data.rs
+Studies,Indicators,Anchored Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs;src/chart/renderers/volume_profile.rs;src/studies/data.rs;src/widget/studies_data.rs
 Studies,Indicators,Arnaud Legoux Moving Average,done,library,src/studies/builtin/alma.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Aroon Indicator,done,library,src/studies/builtin/aroon.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Aroon Oscillator,done,library,src/studies/builtin/aroon_oscillator.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Auto Anchored Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/painting/volume_profile.rs;src/chart/renderers/indicator.rs;src/studies/data.rs;src/widget/studies_data.rs
+Studies,Indicators,Auto Anchored Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs;src/chart/renderers/volume_profile.rs;src/studies/data.rs;src/widget/studies_data.rs
 Studies,Indicators,Auto Fib Retracement,done,library,src/studies/builtin/auto_drawing.rs;src/studies/builtin/zigzag.rs;src/chart/indicators/plots.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/fibonacci.rs;src/studies/factory/mod.rs
 Studies,Indicators,Auto Pitchfork,done,library,src/studies/builtin/auto_drawing.rs;src/studies/builtin/zigzag.rs;src/chart/indicators/plots.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/pitchfork.rs;src/studies/factory/mod.rs
 Studies,Indicators,Auto fib extension,done,library,src/studies/builtin/auto_drawing.rs;src/studies/builtin/zigzag.rs;src/chart/indicators/plots.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/fibonacci.rs;src/studies/factory/mod.rs
@@ -618,17 +618,18 @@ Studies,Indicators,Crypto on-chain and ETF metrics,done,host,src/data/metrics.rs
 Studies,Indicators,Cumulative Volume Delta,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs
 Studies,Indicators,Cumulative Volume Index,done,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs
 Studies,Indicators,Detrended Price Oscillator,done,library,src/studies/builtin/dpo.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Directional Movement,done,library,src/studies/builtin/directional_movement.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Directional Movement,done,library,src/studies/builtin/directional_movement.rs;src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Dividend Yield,done,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/top_toolbar/components/indicator_dialog/dialog.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Donchian Channels,done,library,src/studies/builtin/donchian.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Double Exponential Moving Average,done,library,src/studies/builtin/dema.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,EMA Cross,done,library,src/studies/builtin/ma_combination.rs;src/studies/builtin/ma_presets.rs;src/studies/builtin/ma_multiple.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Ease of Movement,done,library,src/studies/builtin/ease_of_movement.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Elder Impulse System,done,library,src/studies/builtin/elder_impulse.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Elder's Force Index,done,library,src/studies/builtin/force_index.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Envelope,done,library,src/studies/builtin/envelopes.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Exponential Moving Average,done,library,src/studies/builtin/ema.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Fisher Transform,done,library,src/studies/builtin/fisher_transform.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Fixed Range Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/painting/volume_profile.rs;src/chart/renderers/indicator.rs;src/studies/data.rs;src/widget/studies_data.rs
+Studies,Indicators,Fixed Range Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs;src/chart/renderers/volume_profile.rs;src/studies/data.rs;src/widget/studies_data.rs
 Studies,Indicators,Gaps,done,library,src/studies/builtin/gaps.rs;src/chart/indicators/plots.rs;src/studies/factory/mod.rs
 Studies,Indicators,Guppy Multiple Moving Average,done,library,src/studies/builtin/guppy_ma.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Historical Volatility,done,library,src/studies/builtin/historical_volatility.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
@@ -650,7 +651,7 @@ Studies,Indicators,McGinley Dynamic,done,library,src/studies/builtin/mcginley_dy
 Studies,Indicators,Median,done,library,src/studies/builtin/median.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Median Price,done,library,src/studies/builtin/typical_price.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Momentum,done,library,src/studies/builtin/momentum.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Money Flow,done,library,src/studies/builtin/mfi.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Money Flow,done,library,src/studies/builtin/mfi.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/builtin/rsi.rs;src/studies/factory/mod.rs
 Studies,Indicators,Moon Phases,done,library,src/studies/builtin/lunar_phases.rs;src/studies/factory/mod.rs
 Studies,Indicators,Moving Average Adaptive,done,library,src/studies/builtin/kama.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Moving Average Channel,done,library,src/studies/builtin/ma_channel.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
@@ -665,12 +666,12 @@ Studies,Indicators,Negative Volume Index,done,library,src/studies/builtin/volume
 Studies,Indicators,Net Volume,partial,library,src/studies/builtin/net_volume.rs;src/studies/indicator_trait.rs
 Studies,Indicators,On Balance Volume,done,library,src/studies/builtin/obv.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Open Interest,done,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/top_toolbar/components/indicator_dialog/dialog.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Options Volume Profile,done,host,src/studies/builtin/options_volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Parabolic SAR,done,library,src/studies/builtin/parabolic_sar.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Options Volume Profile,done,host,src/studies/builtin/options_volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs
+Studies,Indicators,Parabolic SAR,done,library,src/studies/builtin/parabolic_sar.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Percentage Price Oscillator,partial,library,src/studies/builtin/price_oscillator.rs;src/studies/indicator_trait.rs;src/studies/settings.rs
 Studies,Indicators,Percentage Volume Oscillator,partial,library,src/studies/builtin/percentage_volume_oscillator.rs;src/studies/indicator_trait.rs;src/studies/settings.rs
 Studies,Indicators,Performance,done,library,src/studies/builtin/performance.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Periodic Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/painting/volume_profile.rs;src/chart/renderers/indicator.rs;src/studies/data.rs;src/widget/studies_data.rs
+Studies,Indicators,Periodic Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs;src/chart/renderers/volume_profile.rs;src/studies/data.rs;src/widget/studies_data.rs
 Studies,Indicators,Pivot Points High Low,done,library,src/studies/builtin/pivot_points_high_low.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Pivot Points Standard,done,library,src/studies/builtin/pivot_points.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Positive Volume Index,done,library,src/studies/builtin/volume_price_trend.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
@@ -688,7 +689,7 @@ Studies,Indicators,Relative Strength Index,partial,library,src/studies/builtin/r
 Studies,Indicators,Relative Vigor Index,done,library,src/studies/builtin/relative_vigor.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Relative Volatility Index,done,library,src/studies/builtin/relative_volatility_index.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Relative Volume at Time,done,library,src/studies/builtin/relative_volume_at_time.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Rob Booker - ADX Breakout,missing,library,
+Studies,Indicators,Rob Booker - ADX Breakout,done,library,src/studies/builtin/adx_breakout.rs;src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Rob Booker - Knoxville Divergence,missing,library,
 Studies,Indicators,Rob Booker Intraday Pivot Points,missing,library,
 Studies,Indicators,Rob Booker Missed Pivot Points,missing,library,
@@ -698,8 +699,8 @@ Studies,Indicators,SMI Ergodic Indicator,done,library,src/studies/builtin/smi_er
 Studies,Indicators,SMI Ergodic Oscillator,done,library,src/studies/builtin/smi_ergodic.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Seasonality,done,library,src/studies/builtin/seasonality.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Session Time Price Opportunity,done,library,src/studies/builtin/time_price_opportunity.rs;src/model/tpo.rs;src/widget/frame.rs;src/chart/rendering/candles/tpo.rs
-Studies,Indicators,Session Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/painting/volume_profile.rs;src/chart/renderers/indicator.rs;src/studies/data.rs;src/widget/studies_data.rs
-Studies,Indicators,Session Volume Profile HD,partial,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/studies/data.rs;src/widget/studies_data.rs
+Studies,Indicators,Session Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs;src/chart/renderers/volume_profile.rs;src/studies/data.rs;src/widget/studies_data.rs
+Studies,Indicators,Session Volume Profile HD,partial,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs;src/studies/data.rs;src/widget/studies_data.rs
 Studies,Indicators,Simple Moving Average,done,library,src/studies/builtin/sma.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Smoothed Moving Average,done,library,src/studies/builtin/smoothed_ma.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Spread,partial,library,src/services/search/expression.rs
@@ -708,10 +709,10 @@ Studies,Indicators,Standard Error,done,library,src/studies/builtin/standard_erro
 Studies,Indicators,Standard Error Bands,done,library,src/studies/builtin/standard_error_bands.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Stochastic,done,library,src/studies/builtin/stochastic.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Stochastic Momentum Index,done,library,src/studies/builtin/smi.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Stochastic RSI,done,library,src/studies/builtin/stochastic_rsi.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Stochastic RSI,done,library,src/studies/builtin/stochastic_rsi.rs;src/studies/builtin/rsi.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Supertrend,done,library,src/studies/builtin/supertrend.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,TRIX,done,library,src/studies/builtin/trix.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Technical Ratings,missing,library,
+Studies,Indicators,Technical Ratings,partial,library,src/studies/builtin/technical_ratings.rs;src/studies/builtin/stochastic.rs;src/studies/builtin/cci.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Time Price Opportunity,done,library,src/studies/builtin/time_price_opportunity.rs;src/model/tpo.rs;src/widget/frame.rs;src/chart/rendering/candles/tpo.rs
 Studies,Indicators,Time Weighted Average Price,done,library,src/studies/builtin/twap.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Trading Sessions,done,library,src/studies/builtin/trading_sessions.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
@@ -724,7 +725,7 @@ Studies,Indicators,Ultimate Oscillator,done,library,src/studies/builtin/ultimate
 Studies,Indicators,Up/Down Volume,done,library,src/studies/builtin/up_down_volume.rs;src/widget/studies_data.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,VWAP Auto Anchored,done,library,src/studies/builtin/vwap_auto_anchored.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Visible Average Price,done,library,src/studies/builtin/visible_average_price.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Visible Range Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/painting/volume_profile.rs;src/chart/renderers/indicator.rs;src/studies/data.rs;src/widget/studies_data.rs
+Studies,Indicators,Visible Range Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs;src/chart/renderers/volume_profile.rs;src/studies/data.rs;src/widget/studies_data.rs
 Studies,Indicators,Volatility Close-to-Close,done,library,src/studies/builtin/historical_volatility.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Volatility Index,missing,library,
 Studies,Indicators,Volatility O-H-L-C,done,library,src/studies/builtin/ohlc_volatility.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
@@ -816,7 +817,7 @@ Terminal,"News, calendar and social",Ideas and community feed,done,host,src/ui/i
 Terminal,"News, calendar and social",News alerts,missing,host,
 Terminal,"News, calendar and social",News headlines marked on the chart time scale,done,host,src/model/time_scale_event.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs
 Terminal,"News, calendar and social",Private chats,done,host,src/services/chats.rs;src/ui/widget_bar/panels/chats.rs
-Terminal,"News, calendar and social","Profiles, following and social notifications",partial,host,src/services/notifications.rs;src/ui/widget_bar/panels/notifications.rs
+Terminal,"News, calendar and social","Profiles, following and social notifications",done,host,src/services/profiles.rs;src/services/profile_directory.rs;src/services/notifications.rs;src/ui/profile/mod.rs;src/ui/widget_bar/panels/notifications.rs
 Terminal,"News, calendar and social",Publish an idea from the chart,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/ideas.rs;src/widget/export.rs
 Terminal,"News, calendar and social",Symbol news in the right panel,done,host,src/ui/widget_bar/panels/news.rs
 Terminal,Replay,Bar replay button and replay mode on/off,done,library,src/ui/top_toolbar/toolbar.rs
@@ -859,13 +860,13 @@ Terminal,Toolbars and panels,Chart type menu,done,library,src/ui/top_toolbar/too
 Terminal,Toolbars and panels,Compare / add symbol dialog,done,library,src/ui/top_toolbar/components/symbol_search/mod.rs;src/ui/top_toolbar/components/symbol_search/service.rs
 Terminal,Toolbars and panels,Custom intervals,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Data window,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs
-Terminal,Toolbars and panels,Favourite drawing tools floating bar,partial,library,src/ui/drawing_toolbar/toolbar.rs;src/ui/drawing_toolbar/state.rs;src/ui/drawing_toolbar/utilities/favorites.rs;src/services/settings.rs;examples/demo/layouts.rs
-Terminal,Toolbars and panels,Favourite intervals pinned to the toolbar,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs
+Terminal,Toolbars and panels,Favourite drawing tools floating bar,partial,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/toolbar/floating.rs;src/ui/drawing_toolbar/state.rs;src/ui/drawing_toolbar/utilities/favorites.rs;src/services/settings.rs;examples/demo/layouts.rs
+Terminal,Toolbars and panels,Favourite intervals pinned to the toolbar,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs
 Terminal,Toolbars and panels,Fullscreen,done,library,src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Indicators button,done,library,src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Interval menu presets,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Keyboard shortcuts for application actions,done,library,src/widget/keyboard.rs
-Terminal,Toolbars and panels,Left drawing toolbar shell,done,library,src/ui/drawing_toolbar/toolbar.rs;terminal/src/drawings.rs
+Terminal,Toolbars and panels,Left drawing toolbar shell,done,library,src/ui/drawing_toolbar/toolbar/mod.rs;terminal/src/drawings.rs
 Terminal,Toolbars and panels,Notifications / toasts,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/trading/mod.rs
 Terminal,Toolbars and panels,Object tree panel,done,library,src/ui/widget_bar/panels/object_tree/chart_actions.rs;src/ui/widget_bar/panels/object_tree/panel.rs;terminal/src/drawings.rs
 Terminal,Toolbars and panels,Quick search / command palette,done,library,src/ui/top_toolbar/toolbar.rs
