@@ -675,8 +675,7 @@ mod tests {
                 .unwrap();
             }
             let executed =
-                VolumeProfile::from_executions(flow.bar_at(time).unwrap(), 1.0, 1.0, true)
-                    .unwrap();
+                VolumeProfile::from_executions(flow.bar_at(time).unwrap(), 1.0, 1.0, true).unwrap();
             assert_eq!(estimated.volume(), executed.volume());
             assert_eq!(
                 (executed.low(), executed.high()),
