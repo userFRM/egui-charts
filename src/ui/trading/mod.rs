@@ -1535,8 +1535,7 @@ mod tests {
         let mut changed = order.request.clone();
         changed.order_type = OrderType::Limit(96.0);
         let action = TradingLineAction::Modify(order, changed);
-        // The ladder hands confirmed changes to this queue through Action::Confirm.
-        trading.pending = Some(action.clone());
+        trading.perform(Some(Action::Confirm(action.clone())));
         let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
         chart.symbol = "SYM".into();
         ctx.run_ui(Default::default(), |ui| {

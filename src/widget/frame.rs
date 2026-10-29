@@ -1814,13 +1814,13 @@ impl Chart {
                             )
                         {
                             let profiles = crate::studies::trade_profiles(flow, &ranges);
-                            crate::chart::overlays::render_trade_profiles(
+                            crate::chart::overlays::render_session_volume_profiles(
                                 &clipped_painter,
                                 &mapping,
                                 bars,
                                 &profiles,
                                 flow.price_step(),
-                                &config,
+                                flow.tick_size(),
                             );
                         }
                     }

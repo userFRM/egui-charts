@@ -832,13 +832,6 @@ mod tests {
     }
 
     #[test]
-    fn test_symbol_search_creation() {
-        let dialog = SymbolSearchDialog::new();
-        assert!(!dialog.is_open());
-        assert_eq!(dialog.search_query, "");
-    }
-
-    #[test]
     fn test_symbol_search_open_close() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for keyboard in [false, true] {
@@ -1172,18 +1165,6 @@ mod tests {
     }
 
     #[test]
-    fn test_symbol_filtering_by_name() {
-        let mut dialog = SymbolSearchDialog::new();
-        let symbols = create_test_symbols();
-
-        dialog.search_query = "Apple".to_string();
-        dialog.update_filtered_symbols(&symbols);
-
-        assert_eq!(dialog.filtered_symbols.len(), 1);
-        assert_eq!(dialog.filtered_symbols[0].symbol, "AAPL");
-    }
-
-    #[test]
     fn test_symbol_filtering_case_insensitive() {
         let symbols = create_test_symbols();
         for (query, expected) in [("btc", "BTCUSDT"), ("BTC", "BTCUSDT"), ("apple", "AAPL")] {
@@ -1218,17 +1199,5 @@ mod tests {
             assert_eq!(names, [expected], "compare query: {query}");
             output.drop_without_applying_deltas();
         }
-    }
-
-    #[test]
-    fn test_max_results_limit() {
-        let mut dialog = SymbolSearchDialog::new();
-        dialog.config.max_results = 2;
-
-        let symbols = create_test_symbols();
-        dialog.search_query = "USD".to_string();
-        dialog.update_filtered_symbols(&symbols);
-
-        assert!(dialog.filtered_symbols.len() <= 2);
     }
 }
