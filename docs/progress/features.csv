@@ -57,7 +57,7 @@ Builder API,Datafeed API,Trade tick input,done,host,src/ui/widget_bar/panels/tim
 Builder API,Datafeed API,Trading session definition from the feed,done,host,src/model/instrument.rs;src/model/session/mod.rs;examples/demo/sampledata.rs;examples/demo/live.rs;src/widget/feed/mod.rs
 Builder API,Datafeed API,Update cost and coalescing of fast streams,done,library,src/widget/series.rs;src/widget/studies.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs
 Builder API,Datafeed API,Validation of incoming bars,done,library,src/widget/builder.rs;src/widget/series.rs;src/data/merge.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs
-Builder API,Datafeed API,Volume precision,done,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/tooltip.rs;src/widget/frame.rs
+Builder API,Datafeed API,Volume precision,done,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/tooltip.rs;src/widget/frame.rs;src/scales/price_formatter.rs
 Builder API,Datafeed API,Volume profile resolution hint,missing,host,
 Builder API,Save/load adapter,Auto-save trigger,done,library,src/widget/history.rs;src/widget/feed/mod.rs;src/ui/top_toolbar/components/layout_menu.rs
 Builder API,Save/load adapter,Chart templates,done,library,src/ui/top_toolbar/components/settings_menu/dialog/mod.rs;src/ui/dialogs/templates/store.rs
@@ -185,7 +185,7 @@ Chart,Legend and data window,Indicator entries in the legend,done,library,src/wi
 Chart,Legend and data window,Legend buttons,done,library,src/chart/renderers/legend/mod.rs;src/widget/crosshair.rs
 Chart,Legend and data window,Status line values follow the crosshair,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs
 Chart,Legend and data window,Symbol status line,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs
-Chart,Legend and data window,Volume in the status line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/legend/mod.rs
+Chart,Legend and data window,Volume in the status line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/scales/price_formatter.rs
 Chart,Multi-chart and sync,Grid layout presets,done,library,src/widget/layout.rs;src/ui/top_toolbar/toolbar.rs
 Chart,Multi-chart and sync,Multi-chart layout container,done,library,src/widget/layout.rs
 Chart,Multi-chart and sync,Symbol and interval sync groups,done,library,src/widget/layout.rs
@@ -214,7 +214,7 @@ Chart,Scales and axes,Countdown to bar close,done,library,src/widget/mod.rs;src/
 Chart,Scales and axes,Extended hours,done,host,src/widget/feed/mod.rs;src/widget/frame.rs;src/chart/renderers/session_breaks.rs
 Chart,Scales and axes,High and low price labels,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Chart,Scales and axes,Index-based time axis,done,library,src/model/timescale.rs;src/widget/frame.rs
-Chart,Scales and axes,Indexed to 100 scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/ui/dialogs/series_settings/tabs/scales.rs;src/widget/mod.rs
+Chart,Scales and axes,Indexed to 100 scale,done,library,src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/studies/chart_state.rs;src/ui/dialogs/series_settings/tabs/scales.rs;src/widget/mod.rs
 Chart,Scales and axes,Indicator labels and last values on the scale,done,library,src/widget/frame.rs;src/chart/rendering/axes.rs;src/widget/settings/apply.rs;src/chart/renderers/study_scale.rs
 Chart,Scales and axes,Invert scale,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/scales/pricescale.rs;src/widget/frame.rs
 Chart,Scales and axes,Last price line and label,done,library,src/widget/frame.rs;src/chart/rendering/axes.rs;src/widget/settings/apply.rs
@@ -223,10 +223,10 @@ Chart,Scales and axes,Lock price to bar ratio,done,library,src/ui/axis_context_m
 Chart,Scales and axes,Logarithmic scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/frame.rs;src/ui/axis_context_menu.rs;src/scales/pricescale_marks.rs
 Chart,Scales and axes,Maturity horizontal scale,done,library,src/scales/horizontal.rs;src/widget/time_scale.rs
 Chart,Scales and axes,Multiple price scales and pin to scale,done,library,src/model/series_scale.rs;src/widget/price_series.rs
-Chart,Scales and axes,Percent scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/settings/apply.rs;src/widget/frame.rs
+Chart,Scales and axes,Percent scale,done,library,src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/studies/chart_state.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/scales/price_formatter.rs
 Chart,Scales and axes,Previous close line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
-Chart,Scales and axes,Price label precision,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/chart/renderers/crosshair.rs;src/widget/price_series.rs;src/widget/frame.rs
-Chart,Scales and axes,Regular price scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/frame.rs
+Chart,Scales and axes,Price label precision,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/chart/renderers/crosshair.rs;src/widget/price_series.rs;src/widget/frame.rs;src/scales/pricescale.rs;src/scales/pricescale_marks.rs
+Chart,Scales and axes,Regular price scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/frame.rs;src/scales/pricescale_marks.rs
 Chart,Scales and axes,Right offset,done,library,src/model/timescale.rs;src/widget/mod.rs;src/widget/builder.rs;src/widget/time_scale.rs;src/widget/pan_zoom.rs;src/widget/sync.rs
 Chart,Scales and axes,Right price scale,done,library,src/widget/mod.rs;src/widget/frame.rs;src/chart/renderers/labels.rs
 Chart,Scales and axes,Scale margins,done,library,src/widget/settings/apply.rs;src/scales/pricescale.rs;src/widget/frame.rs
