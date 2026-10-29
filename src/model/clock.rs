@@ -273,7 +273,9 @@ impl BarClock {
             (None, Some(zone)) => super::ExchangeSessionProvider::new(zone.clone(), None),
             (None, None) => super::ExchangeSessionProvider::local(None),
         };
-        sessions.with_timeframe(self.timeframe.unwrap_or(Timeframe::Min1))
+        sessions
+            .with_calendar_zone(self.timezone.clone())
+            .with_timeframe(self.timeframe.unwrap_or(Timeframe::Min1))
     }
 
     /// Whether `a` and `b` fall in the same bar, so a feed may stamp a bar with any instant

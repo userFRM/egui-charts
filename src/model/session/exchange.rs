@@ -32,6 +32,7 @@ impl Hours {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExchangeSessionProvider {
     time_zone: TimezoneId,
+    calendar_zone: Option<TimezoneId>,
     session: Option<Session>,
     timeframe: Timeframe,
     local_zone: bool,
@@ -41,6 +42,7 @@ impl ExchangeSessionProvider {
     /// Days of `session`, or calendar days without one, in `time_zone`.
     pub fn new(time_zone: TimezoneId, session: Option<Session>) -> Self {
         Self {
+            calendar_zone: Some(time_zone.clone()),
             time_zone,
             session,
             timeframe: Timeframe::Min1,
@@ -52,8 +54,15 @@ impl ExchangeSessionProvider {
     pub fn local(session: Option<Session>) -> Self {
         Self {
             local_zone: true,
+            calendar_zone: None,
             ..Self::new(TimezoneId::utc(), session)
         }
+    }
+
+    /// The calendar that aligned daily and longer bars; `None` uses the system's local zone.
+    pub(crate) fn with_calendar_zone(mut self, zone: Option<TimezoneId>) -> Self {
+        self.calendar_zone = zone;
+        self
     }
 
     fn wall_time(&self, time: DateTime<Utc>) -> NaiveDateTime {
@@ -95,8 +104,8 @@ impl ExchangeSessionProvider {
     }
 
     /// The trading date containing `time`, using the earliest window of that date for intraday
-    /// bars. Daily and longer bars carry their trading date in UTC, or in this zone when they
-    /// open at its midnight.
+    /// bars. Daily and longer bars carry their trading date in UTC, or in their clock's calendar
+    /// or session zone when they open at its first instant of the date.
     pub fn trading_date(&self, time: DateTime<Utc>) -> NaiveDate {
         if self.timeframe.duration_ms() >= Timeframe::Day1.duration_ms() {
             self.bar_date(time)
@@ -105,10 +114,29 @@ impl ExchangeSessionProvider {
         }
     }
 
-    /// The date of a daily or longer bar: local when a clock aligned it to this zone's midnight.
+    /// The date of a daily or longer bar, recognizing the first instant even if midnight skips.
     fn bar_date(&self, open: DateTime<Utc>) -> NaiveDate {
+        let (date, first) = match &self.calendar_zone {
+            Some(zone) => {
+                let date = local_time(zone.clone(), open).date();
+                (
+                    date,
+                    local_instant(zone.clone(), date.and_time(NaiveTime::MIN)),
+                )
+            }
+            None => {
+                let date = local_time(chrono::Local, open).date();
+                (
+                    date,
+                    local_instant(chrono::Local, date.and_time(NaiveTime::MIN)),
+                )
+            }
+        };
+        if first == Some(open) {
+            return date;
+        }
         let wall = self.wall_time(open);
-        if wall.time() == NaiveTime::MIN {
+        if self.instant(wall.date().and_time(NaiveTime::MIN)) == Some(open) {
             wall.date()
         } else {
             open.date_naive()
@@ -494,6 +522,39 @@ mod tests {
                 &[(2, "2024-03-11")][..],
                 SessionBreakType::Weekly,
             ),
+            // Monday July 8 starts week 28, after the Thursday and Friday bars.
+            (
+                Timeframe::Day1,
+                &[
+                    (2024, 7, 4),
+                    (2024, 7, 5),
+                    (2024, 7, 8),
+                    (2024, 7, 9),
+                    (2024, 7, 10),
+                ][..],
+                &[(2, "2024-07-08")][..],
+                SessionBreakType::Weekly,
+            ),
+            // The second Monday bar opens July, even east of UTC.
+            (
+                Timeframe::Week1,
+                &[(2024, 6, 24), (2024, 7, 1), (2024, 7, 8)][..],
+                &[(1, "2024-07-01")][..],
+                SessionBreakType::Monthly,
+            ),
+            // Tehran starts Monday at 01:00 after skipping midnight on March 22.
+            (
+                Timeframe::Day1,
+                &[
+                    (2021, 3, 19),
+                    (2021, 3, 20),
+                    (2021, 3, 21),
+                    (2021, 3, 22),
+                    (2021, 3, 23),
+                ][..],
+                &[(3, "2021-03-22")][..],
+                SessionBreakType::Weekly,
+            ),
             (
                 Timeframe::Week1,
                 &[(2024, 1, 22), (2024, 1, 29), (2024, 2, 5)][..],
@@ -531,48 +592,76 @@ mod tests {
                 SessionBreakType::Weekly,
             ),
         ] {
-            for zone in [
-                TimezoneId::utc(),
-                TimezoneId::named("America/New_York").unwrap(),
-                TimezoneId::named("Pacific/Chatham").unwrap(),
+            for (display, exchange) in [
+                ("UTC", "UTC"),
+                ("America/New_York", "America/New_York"),
+                ("Pacific/Chatham", "Pacific/Chatham"),
+                ("Europe/London", "Europe/Berlin"),
+                ("Europe/Berlin", "Asia/Tokyo"),
+                ("Asia/Kolkata", "Asia/Tokyo"),
+                ("Asia/Tokyo", "Australia/Sydney"),
+                ("Asia/Tehran", "Asia/Tehran"),
             ] {
-                // Bars stamped at midnight UTC, and bars a clock aligned to the zone's midnight.
-                let clock = crate::model::BarClock::new(timeframe).with_timezone(zone.clone());
-                let provider = ExchangeSessionProvider::new(zone, None).with_timeframe(timeframe);
-                let dates: Vec<_> = dates
-                    .iter()
-                    .map(|&(year, month, day)| NaiveDate::from_ymd_opt(year, month, day).unwrap())
-                    .collect();
-                for aligned in [false, true] {
-                    let bars: Vec<_> = dates
+                // Bars stamped at midnight UTC, and bars aligned to the display calendar.
+                let zone = TimezoneId::named(display).unwrap();
+                let instrument = crate::model::Instrument::new("CALENDAR")
+                    .with_time_zone(TimezoneId::named(exchange).unwrap())
+                    .with_session(Session::new([]));
+                let clock = crate::model::BarClock::new(timeframe)
+                    .with_timezone(zone.clone())
+                    .with_session(
+                        instrument.time_zone.clone().unwrap(),
+                        instrument.session.clone().unwrap(),
+                        false,
+                    );
+                let providers = [
+                    clock.sessions(),
+                    #[cfg(feature = "widget")]
+                    crate::chart::renderers::exchange_session(
+                        Some(&instrument),
+                        None,
+                        &crate::scales::TimezoneMode::Timezone(zone),
+                        timeframe,
+                    ),
+                ];
+                for provider in providers {
+                    let dates: Vec<_> = dates
                         .iter()
-                        .map(|&date| {
-                            let open = if aligned {
-                                clock.open_on_date(date).unwrap()
-                            } else {
-                                date.and_time(NaiveTime::MIN).and_utc()
-                            };
-                            Bar::new(open, 1.0, 1.0, 1.0, 1.0, 1.0)
+                        .map(|&(year, month, day)| {
+                            NaiveDate::from_ymd_opt(year, month, day).unwrap()
                         })
                         .collect();
-                    let breaks = find_session_breaks(&bars, &provider);
-                    assert!(breaks.iter().all(|(_, item)| item.break_type == break_type));
-                    assert_eq!(
-                        breaks
+                    for aligned in [false, true] {
+                        let bars: Vec<_> = dates
                             .iter()
-                            .map(|(i, item)| (*i, item.label.as_deref().unwrap()))
-                            .collect::<Vec<_>>(),
-                        expected,
-                        "{timeframe} aligned {aligned}"
-                    );
-                    for (pair, date) in bars.windows(2).zip(&dates[1..]) {
-                        assert_eq!(provider.trading_date(pair[1].time), *date);
-                        let item = provider.session_break_between(&pair[0].time, &pair[1].time);
-                        let batch = breaks.iter().find(|(_, item)| item.ts == pair[1].time);
+                            .map(|&date| {
+                                let open = if aligned {
+                                    clock.open_on_date(date).unwrap()
+                                } else {
+                                    date.and_time(NaiveTime::MIN).and_utc()
+                                };
+                                Bar::new(open, 1.0, 1.0, 1.0, 1.0, 1.0)
+                            })
+                            .collect();
+                        let breaks = find_session_breaks(&bars, &provider);
+                        assert!(breaks.iter().all(|(_, item)| item.break_type == break_type));
                         assert_eq!(
-                            item.as_ref().map(|item| (&item.label, item.break_type)),
-                            batch.map(|(_, item)| (&item.label, item.break_type))
+                            breaks
+                                .iter()
+                                .map(|(i, item)| (*i, item.label.as_deref().unwrap()))
+                                .collect::<Vec<_>>(),
+                            expected,
+                            "{timeframe} {display}/{exchange} aligned {aligned}"
                         );
+                        for (pair, date) in bars.windows(2).zip(&dates[1..]) {
+                            assert_eq!(provider.trading_date(pair[1].time), *date);
+                            let item = provider.session_break_between(&pair[0].time, &pair[1].time);
+                            let batch = breaks.iter().find(|(_, item)| item.ts == pair[1].time);
+                            assert_eq!(
+                                item.as_ref().map(|item| (&item.label, item.break_type)),
+                                batch.map(|(_, item)| (&item.label, item.break_type))
+                            );
+                        }
                     }
                 }
             }

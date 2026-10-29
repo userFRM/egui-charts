@@ -29,7 +29,7 @@ Builder API,Datafeed API,Bar data model,done,library,src/model/bar/bar.rs;src/wi
 Builder API,Datafeed API,Bar marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/chart/renderers/markers.rs;src/widget/events.rs
 Builder API,Datafeed API,Bounded history size,done,library,src/widget/series.rs;src/widget/feed.rs
 Builder API,Datafeed API,Cache reset and full reload,done,host,src/widget/feed.rs;src/data/inbox/mod.rs;src/widget/anchors.rs;src/data/inbox/sink.rs
-Builder API,Datafeed API,Chart time zone,done,library,src/widget/frame.rs;src/widget/feed.rs;src/chart/renderers/session_breaks.rs;src/model/clock.rs
+Builder API,Datafeed API,Chart time zone,done,library,src/widget/frame.rs;src/widget/feed.rs;src/chart/renderers/session_breaks.rs;src/model/clock.rs;src/model/session/exchange.rs
 Builder API,Datafeed API,Connection status and symbol list notifications,done,host,src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed.rs;src/widget/series.rs
 Builder API,Datafeed API,"Data status, currency and unit metadata",done,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/axis_currency.rs;src/data/mod.rs;src/widget/feed.rs;src/widget/studies_data.rs
 Builder API,Datafeed API,Datafeed configuration handshake,done,host,src/data/mod.rs;src/model/instrument.rs;src/widget/feed.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/components/symbol_search/mod.rs
@@ -229,7 +229,7 @@ Chart,Scales and axes,Regular price scale,done,library,src/scales/pricescale.rs;
 Chart,Scales and axes,Right offset,done,library,src/model/timescale.rs;src/widget/mod.rs;src/widget/time_scale.rs;src/widget/pan_zoom.rs
 Chart,Scales and axes,Right price scale,done,library,src/widget/mod.rs;src/widget/frame.rs;src/chart/renderers/labels.rs
 Chart,Scales and axes,Scale margins,done,library,src/widget/settings/apply.rs;src/scales/pricescale.rs;src/widget/frame.rs
-Chart,Scales and axes,Session breaks,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/ui/axis_context_menu.rs;src/model/session/exchange.rs;src/model/session/mod.rs
+Chart,Scales and axes,Session breaks,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/ui/axis_context_menu.rs;src/model/session/exchange.rs;src/model/session/mod.rs;src/model/clock.rs
 Chart,Scales and axes,Symbol name label on the scale,done,library,src/config/chart.rs;src/chart/rendering/axes.rs;src/widget/frame.rs;src/widget/price_series.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
 Chart,Scales and axes,Time axis labels,done,library,src/widget/frame.rs;src/chart/renderers/labels.rs
 Chart,Scales and axes,Time zone selection,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/scales/time_formatter.rs

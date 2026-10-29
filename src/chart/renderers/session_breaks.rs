@@ -79,10 +79,15 @@ pub(crate) fn exchange_session(
         session = Some(hours);
     }
     if local_zone {
-        ExchangeSessionProvider::local(session).with_timeframe(timeframe)
+        ExchangeSessionProvider::local(session)
     } else {
-        ExchangeSessionProvider::new(zone, session).with_timeframe(timeframe)
+        ExchangeSessionProvider::new(zone, session)
     }
+    .with_calendar_zone(match timezone {
+        crate::scales::TimezoneMode::Local => None,
+        _ => Some(timezone.to_tz().unwrap_or_default()),
+    })
+    .with_timeframe(timeframe)
 }
 
 /// Shade complete bar slots only where the supplied session identifies extended hours.
