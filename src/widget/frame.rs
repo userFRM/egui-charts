@@ -1280,13 +1280,22 @@ impl Chart {
             host_scale.as_deref().unwrap_or(&time_scale);
         // The grid and the labels share one set of marks and the merged bars' mapping.
         let (time_marks, time_points) = if time_grid || self.config.show_time_labels {
+            // Resolved once: a fixed-offset zone allocates on every clone.
+            let calendar = self.calendar_timezone();
             renderers::time_axis_marks(
                 &RenderContext::new(&painter, chart_rect),
                 time_data,
                 &time_coords,
                 scale,
                 &self.chart_options.time_scale,
-                |index| self.index_to_time(index * factor as f64),
+                |index| {
+                    crate::model::time_at_with_timeframe(
+                        self.state.shown(),
+                        index * factor as f64,
+                        self.timeframe(),
+                        calendar.as_ref(),
+                    )
+                },
             )
         } else {
             Default::default()
