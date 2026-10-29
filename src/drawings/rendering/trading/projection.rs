@@ -243,6 +243,7 @@ mod tests {
                     Color32::BLUE,
                 );
             });
+            // egui panics when an output with unfreed textures is dropped.
             output.textures_delta.clear();
             let texts: Vec<_> = output
                 .shapes
