@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 
 use super::{AccountEvent, Broker, Events};
 use crate::data::{FeedError, Reply};
+use crate::model::rounding_tolerance;
 use crate::model::{
     Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderRequest,
     OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce, TradingRules,
@@ -369,7 +370,12 @@ impl State {
                 position.average_price = price;
             }
         }
-        position.quantity = held + signed;
+        let remaining = held + signed;
+        position.quantity = if remaining.abs() <= rounding_tolerance(held.abs().max(signed.abs())) {
+            0.0
+        } else {
+            remaining
+        };
         self.value(terms, &mut position);
         if position.quantity != 0.0 {
             self.positions
@@ -824,6 +830,29 @@ mod tests {
                 near(account.equity.unwrap(), balance + open);
                 near(account.available_funds.unwrap(), balance + open - margin);
             }
+            // Close the remaining unit, then 0.1 + 0.2 with 0.3 on either side.
+            for fill in [
+                direction,
+                0.1 * direction,
+                0.2 * direction,
+                -0.3 * direction,
+            ] {
+                place(
+                    &paper,
+                    OrderRequest::new(
+                        "SYM",
+                        if fill > 0.0 {
+                            OrderSide::Buy
+                        } else {
+                            OrderSide::Sell
+                        },
+                        fill.abs(),
+                        OrderType::Market,
+                    ),
+                )
+                .unwrap();
+            }
+            assert!(!paper.lock().positions.contains_key("SYM"));
             paper.set_price("SYM", 100.0);
             place(
                 &paper,
@@ -851,7 +880,7 @@ mod tests {
                     .iter()
                     .filter(|e| matches!(e, AccountEvent::Execution(_)))
                     .count(),
-                5
+                9
             );
             paper.reset();
             let events = snapshot(&paper);

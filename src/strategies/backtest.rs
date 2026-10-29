@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 
+use crate::model::rounding_tolerance;
 use crate::model::{
     Bar, OrderSide, OrderType, StrategyExit, StrategyReport, StrategyTrade, Timeframe,
 };
@@ -431,7 +432,10 @@ impl Run {
             self.realized += profit;
             quantity -= closed;
             lot.quantity -= closed;
-            if lot.quantity <= 0.0 {
+            if quantity <= rounding_tolerance(closed) {
+                quantity = 0.0;
+            }
+            if lot.quantity <= rounding_tolerance(closed) {
                 self.lots.remove(0);
             }
         }
@@ -644,5 +648,98 @@ mod tests {
                 "Long / Bracket"
             )
         );
+
+        fn decimals(bar: usize, context: &mut StrategyContext<'_>) {
+            match bar {
+                0 => {
+                    context.entry("A", Buy, 0.1, OrderType::Market);
+                    context.entry("B", Buy, 0.2, OrderType::Market);
+                }
+                1 => context.exit("X", Some(0.3), None, None),
+                _ => {}
+            }
+        }
+        fn thirds(bar: usize, context: &mut StrategyContext<'_>) {
+            match bar {
+                0 => context.entry("A", Buy, 0.3, OrderType::Market),
+                1 => context.entry("B", Buy, 0.5, OrderType::Market),
+                2 => context.exit("X1", Some(0.1), None, None),
+                3 => context.exit("X2", Some(0.1), None, None),
+                4 => context.exit("X3", Some(0.1), None, None),
+                _ => {}
+            }
+        }
+        // Decimal lots close at their entry price: two breakevens, flat equity and no open lot.
+        // Thirds realise 3 * 0.1 * (102 - 100) = 0.6, all winners. B keeps 0.5 at 104,
+        // so its mark at 102 is -1 and final equity is 9999.6. No fourth closed trade.
+        for (script, prices, expected, equity, closed, open, wins, profit) in [
+            (
+                decimals as fn(usize, &mut StrategyContext<'_>),
+                vec![100.0; 4],
+                vec![
+                    trade(Buy, 0.1, 1, 100.0, Some((2, 100.0, 0.0)), "A / X"),
+                    trade(Buy, 0.2, 1, 100.0, Some((2, 100.0, 0.0)), "B / X"),
+                ],
+                vec![10_000.0; 5],
+                2,
+                0,
+                0,
+                0.0,
+            ),
+            (
+                thirds,
+                vec![100.0, 100.0, 104.0, 102.0, 102.0, 102.0],
+                vec![
+                    trade(Buy, 0.1, 1, 100.0, Some((3, 102.0, 0.2)), "A / X1"),
+                    trade(Buy, 0.1, 1, 100.0, Some((4, 102.0, 0.2)), "A / X2"),
+                    trade(Buy, 0.1, 1, 100.0, Some((5, 102.0, 0.2)), "A / X3"),
+                    trade(Buy, 0.5, 2, 104.0, None, "B"),
+                ],
+                vec![
+                    10_000.0, 10_000.0, 10_000.0, 10_001.2, 9999.6, 9999.6, 9999.6,
+                ],
+                3,
+                1,
+                3,
+                0.6,
+            ),
+        ] {
+            let source: Vec<_> = prices
+                .into_iter()
+                .enumerate()
+                .map(|(i, price)| Bar::new(hour(i as i64), price, price, price, price, 0.0))
+                .collect();
+            let report = backtest.run(&mut Script(script), &source);
+            assert_eq!(report.trades.len(), expected.len());
+            for (mut actual, expected) in report.trades.iter().cloned().zip(expected) {
+                assert!((actual.quantity - expected.quantity).abs() < 1e-15);
+                actual.quantity = expected.quantity;
+                if let (Some(actual), Some(expected)) = (&mut actual.exit, &expected.exit) {
+                    assert!((actual.profit - expected.profit).abs() < 1e-15);
+                    actual.profit = expected.profit;
+                }
+                assert_eq!(actual, expected);
+            }
+            assert_eq!(
+                report.equity,
+                (-1..source.len() as i64)
+                    .map(hour)
+                    .zip(equity)
+                    .collect::<Vec<_>>()
+            );
+            let metrics = report.performance();
+            assert_eq!(
+                (
+                    metrics.closed_trades,
+                    metrics.open_trades,
+                    metrics.winning_trades,
+                    metrics.losing_trades
+                ),
+                (closed, open, wins, 0)
+            );
+            assert!((metrics.net_profit - profit).abs() < 1e-15);
+            assert_eq!(metrics.win_rate, Some(wins as f64 / closed as f64));
+            assert_eq!(metrics.profit_factor, None);
+        }
     }
 }

@@ -116,6 +116,7 @@ pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLetter, TPOProfile,
     derive_tick_size, to_tpo_profiles,
 };
+pub(crate) use trading::rounding_tolerance;
 pub use trading::{
     Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderPreview,
     OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce,

@@ -6,6 +6,11 @@
 
 use chrono::{DateTime, Utc};
 
+/// A few ulps at `scale`, for comparisons affected by floating-point rounding.
+pub(crate) fn rounding_tolerance(scale: f64) -> f64 {
+    4.0 * f64::EPSILON * scale.abs()
+}
+
 /// Identifies an order. The broker chooses it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OrderId(
