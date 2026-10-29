@@ -35,7 +35,6 @@ impl DrawingToolType {
                 | Self::HorizontalRay
                 | Self::VerticalLine
                 | Self::CrossLine
-                | Self::RegressionTrend
                 | Self::FibonacciRetracement
                 | Self::FibonacciExtension
                 | Self::TrendBasedFibTime
@@ -81,6 +80,7 @@ impl DrawingToolType {
                 | Self::Arrow
                 | Self::ArrowMarker
                 | Self::ParallelChannel
+                | Self::RegressionTrend
         )
     }
 

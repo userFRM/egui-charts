@@ -131,6 +131,11 @@ impl HandleService {
                     handles.push((HandlePos::Start, entry));
                 }
             }
+            DrawingToolType::RegressionTrend => {
+                for (i, &point) in drawing.points.iter().take(2).enumerate() {
+                    handles.push((HandlePos::Point(i), point));
+                }
+            }
             // Multi-point tools - show indexed handles
             _ => {
                 for (i, &point) in drawing.points.iter().enumerate() {
@@ -225,6 +230,20 @@ impl HandleService {
                 if !drawing.points.is_empty() && !drawing.chart_points.is_empty() {
                     drawing.points[0].x = new_pos.x;
                     drawing.chart_points[0].bar_idx = x_to_bar(new_pos.x);
+                }
+            }
+            DrawingToolType::RegressionTrend => {
+                let index = match handle {
+                    HandlePos::Start | HandlePos::Point(0) => 0,
+                    HandlePos::End | HandlePos::Point(1) => 1,
+                    _ => return,
+                };
+                if let (Some(point), Some(anchor)) = (
+                    drawing.points.get_mut(index),
+                    drawing.chart_points.get_mut(index),
+                ) {
+                    point.x = new_pos.x;
+                    anchor.bar_idx = x_to_bar(new_pos.x);
                 }
             }
             DrawingToolType::TimeCycles => {
