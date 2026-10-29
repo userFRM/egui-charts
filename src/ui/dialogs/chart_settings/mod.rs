@@ -8,7 +8,9 @@ use crate::theme::ThemeExt;
 use crate::widget::settings::ChartSettingsState;
 mod tabs;
 
-use super::{actions::SettingsAction, config::SettingsDialogConfig, types::SettingsTab};
+use crate::ui::top_toolbar::components::settings_menu::{
+    actions::SettingsAction, config::SettingsDialogConfig, types::SettingsTab,
+};
 use crate::icons::icons as embedded_icons;
 use crate::services::StoreKind;
 use crate::theme::Theme;

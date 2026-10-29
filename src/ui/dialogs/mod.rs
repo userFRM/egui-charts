@@ -2,6 +2,9 @@
 //!
 //! Provides modal dialog components:
 //! - Alert creation dialog
+//! - Chart settings dialog
+//! - Indicator dialog
+//! - Symbol search and compare dialogs
 //! - Chart data table
 //! - Drawing properties dialog
 //! - Drawing context menu
@@ -10,13 +13,16 @@
 //! - Study context menu
 
 pub mod alert_dialog;
+pub mod chart_settings;
 pub mod data_table;
 pub mod drawing_context_menu;
 pub mod drawing_properties;
+pub mod indicator_dialog;
 pub mod keyboard_shortcuts;
 pub mod series_context_menu;
 pub mod series_settings;
 pub mod study_context_menu;
+pub mod symbol_search;
 pub mod templates;
 
 pub use alert_dialog::{AlertDialog, AlertDialogAction, AlertDialogConfig};
