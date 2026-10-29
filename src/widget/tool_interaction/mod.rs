@@ -95,6 +95,7 @@ impl Chart {
                 .collect()
         };
         drawing_manager.set_pane(owner, members.clone(), price_rect);
+        drawing_manager.interaction_modifiers = ui.input(|i| i.modifiers);
         let rect_min_x = price_rect.min.x;
 
         let rect_width = price_rect.width();
@@ -118,7 +119,7 @@ impl Chart {
         let price_to_y = |price: f64| -> f32 { price_map.price_to_y(price) };
         // A strong snap keeps the actual OHLC even beyond a manual price range.
         let strong_magnet =
-            drawing_manager.options.magnet_mode && drawing_manager.options.strong_magnet;
+            drawing_manager.magnet_enabled() && drawing_manager.options.strong_magnet;
         let y_to_price = |y: f32| -> f64 {
             price_map.y_to_price(if strong_magnet {
                 y
@@ -139,7 +140,7 @@ impl Chart {
             } else {
                 None
             };
-        if drawing_manager.options.magnet_mode
+        if drawing_manager.magnet_enabled()
             && let Some(pointer) = press
                 .or_else(|| response.interact_pointer_pos())
                 .or_else(|| response.hover_pos())
@@ -215,7 +216,14 @@ impl Chart {
 
         // Handle drawing interaction
         // Select converter based on tool type: freeform tools (ContinuousDraw) use precise,
-        // all other tools snap to candle centers
+        // constrained tools retain their angles; other tools snap to candle centers
+        let x_to_bar_edit = |x| {
+            if ui.input(|i| i.modifiers.shift) {
+                x_to_bar_precise(x)
+            } else {
+                x_to_bar_snapped(x)
+            }
+        };
         let count_before = drawing_manager.drawings.len();
         let owns_gesture = drawing_manager
             .curr_drawing
@@ -232,8 +240,13 @@ impl Chart {
         } else if let Some(active_tool) = drawing_manager.active_tool {
             let uses_precise = active_tool.interaction_mode()
                 == DrawingInteractionMode::ContinuousDraw
-                || (active_tool == crate::drawings::DrawingToolType::Rect
-                    && ui.input(|i| i.modifiers.shift));
+                || (ui.input(|i| i.modifiers.shift)
+                    && (DrawingManager::constrains_angle(active_tool)
+                        || matches!(
+                            active_tool,
+                            crate::drawings::DrawingToolType::Rect
+                                | crate::drawings::DrawingToolType::Ellipse
+                        )));
             if uses_precise {
                 interaction::handle_active_tool(
                     ui,
@@ -262,7 +275,7 @@ impl Chart {
                 cursor_modes,
                 response,
                 price_rect,
-                &x_to_bar_snapped,
+                &x_to_bar_edit,
                 &y_to_price,
                 &translate_price,
             );
@@ -270,7 +283,9 @@ impl Chart {
 
         let edit_id = if drawing_manager.text_editor.is_some() {
             None
-        } else if drawing_manager.drawings.len() > count_before {
+        } else if drawing_manager.drawings.len() > count_before
+            && drawing_manager.dragging_handle.is_none()
+        {
             drawing_manager.drawings.last().map(|d| d.id)
         } else if response.double_clicked() || response.triple_clicked() {
             response

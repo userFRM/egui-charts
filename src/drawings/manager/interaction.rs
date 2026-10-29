@@ -74,6 +74,116 @@ impl DrawingManager {
         }
     }
 
+    pub(crate) fn copy_dragged_drawings(&mut self) {
+        let Some(old) = self.drag_old_state.take() else {
+            return;
+        };
+        let handle = self.dragging_handle.unwrap().1;
+        let mut copies = std::mem::take(&mut self.drag_group);
+        copies.push(old);
+        for copy in &mut copies {
+            copy.id = self.take_id();
+            copy.stored_id = None;
+            copy.created_at = None;
+            copy.z_order = self.top_z_order();
+            self.drawings.push(copy.clone());
+        }
+        let old = copies.pop().unwrap();
+        self.dragging_handle = Some((old.id, handle));
+        self.drag_old_state = Some(old.clone());
+        self.drag_group = copies;
+        self.select_drawings(
+            self.drag_group
+                .iter()
+                .map(|d| d.id)
+                .chain([old.id])
+                .collect::<Vec<_>>(),
+        );
+        self.drag_copy = true;
+    }
+
+    pub(crate) fn constrains_angle(tool: DrawingToolType) -> bool {
+        use DrawingToolType as T;
+        matches!(
+            tool,
+            T::TrendLine
+                | T::Ray
+                | T::ExtendedLine
+                | T::InfoLine
+                | T::TrendAngle
+                | T::Arrow
+                | T::ParallelChannel
+                | T::DisjointChannel
+                | T::FlatTopBottom
+                | T::RegressionTrend
+                | T::FibonacciChannel
+        )
+    }
+
+    // Project onto the nearest 45-degree direction. Integer directions keep diagonals exact.
+    fn constrain_angle(&self, drawing: &Drawing, index: usize, point: Pos2) -> Pos2 {
+        if !self.interaction_modifiers.shift
+            || drawing.custom_tool.is_some()
+            || !Self::constrains_angle(drawing.tool_type)
+        {
+            return point;
+        }
+        let anchor_index = if index == 0 { 1 } else { index - 1 };
+        let Some(&anchor) = drawing.points.get(anchor_index) else {
+            return point;
+        };
+        let delta = point - anchor;
+        let angle =
+            (delta.angle() / std::f32::consts::FRAC_PI_4).round() * std::f32::consts::FRAC_PI_4;
+        let direction = egui::vec2(angle.cos().round(), angle.sin().round());
+        let mut offset = direction * (delta.dot(direction) / direction.length_sq());
+        // Clip along the ray so an off-pane anchor keeps the same angle at the pane edge.
+        if self.pane_rect.is_positive() {
+            let mut first = 0.0_f32;
+            let mut last = f32::INFINITY;
+            for (start, step, min, max) in [
+                (
+                    anchor.x,
+                    direction.x,
+                    self.pane_rect.left(),
+                    self.pane_rect.right(),
+                ),
+                (
+                    anchor.y,
+                    direction.y,
+                    self.pane_rect.top(),
+                    self.pane_rect.bottom(),
+                ),
+            ] {
+                if step == 0.0 {
+                    if start < min || start > max {
+                        last = f32::NEG_INFINITY;
+                    }
+                } else {
+                    let a = (min - start) / step;
+                    let b = (max - start) / step;
+                    first = first.max(a.min(b));
+                    last = last.min(a.max(b));
+                }
+            }
+            if first <= last {
+                let distance = delta.dot(direction) / direction.length_sq();
+                offset = direction * distance.clamp(first, last);
+            }
+        }
+        anchor + offset
+    }
+
+    fn constrain_preview(&self, point: Pos2) -> Pos2 {
+        self.curr_drawing.as_ref().map_or(point, |drawing| {
+            let index = drawing
+                .points
+                .len()
+                .saturating_sub(usize::from(self.preview_point));
+            self.constrain_angle(drawing, index, point)
+        })
+    }
+
     /// Updates the position of the currently dragged handle to `new_pos`,
     /// applying snap behavior and coordinate conversion.
     /// `translate_price(price, from_y, to_y)` shifts whole-drawing prices in scale units;
@@ -91,7 +201,37 @@ impl DrawingManager {
     {
         if let Some((id, handle)) = self.dragging_handle {
             // Compute snapped position before mutable borrow
-            let snapped = self.snap_point(new_pos, &self.drawings);
+            let mut snapped = self.snap_point(new_pos, &self.drawings);
+            let mut constrained_price = None;
+            if self.interaction_modifiers.shift
+                && let Some(origin) = self.drag_origin
+            {
+                let delta = snapped - origin;
+                if delta.x.abs() >= delta.y.abs() {
+                    snapped.y = origin.y;
+                } else {
+                    snapped.x = origin.x;
+                }
+            } else if let Some(old) = &self.drag_old_state {
+                let index = match handle {
+                    HandlePos::Start => Some(0),
+                    HandlePos::End => Some(1),
+                    HandlePos::Point(index) => Some(index),
+                    _ => None,
+                };
+                if let Some(index) = index {
+                    snapped = self.constrain_angle(old, index, snapped);
+                    if self.interaction_modifiers.shift
+                        && Self::constrains_angle(old.tool_type)
+                        && old.custom_tool.is_none()
+                        && let Some((point, chart_point)) =
+                            old.points.get(index).zip(old.chart_points.get(index))
+                    {
+                        // A constrained ray can miss the pane; retain its price beyond pointer bounds.
+                        constrained_price = Some((chart_point.price, point.y));
+                    }
+                }
+            }
             if let Some(origin) = self.drag_origin {
                 let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
                 for old in &self.drag_group {
@@ -138,8 +278,13 @@ impl DrawingManager {
                         handle,
                         snapped,
                         x_to_bar,
-                        y_to_price,
-                        translate_price,
+                        |y| {
+                            constrained_price.map_or_else(
+                                || y_to_price(y),
+                                |(price, from)| translate_price(price, from, y),
+                            )
+                        },
+                        &translate_price,
                     );
                 }
                 if drawing.screen_anchor.is_some()
@@ -156,8 +301,27 @@ impl DrawingManager {
 
     /// Ends the current handle drag or [`Self::drag_edit_drawing`] gesture, pushing one modify
     /// command to the undo history and queuing one update for the whole gesture.
+    /// A copy drag records the additions instead, so undo removes every copy.
     pub fn end_drag_handle(&mut self) {
         if let Some(old_state) = self.drag_old_state.take() {
+            if std::mem::take(&mut self.drag_copy) {
+                let mut ids: Vec<_> = std::mem::take(&mut self.drag_group)
+                    .iter()
+                    .map(|d| d.id)
+                    .collect();
+                ids.push(old_state.id);
+                for &id in &ids {
+                    self.queue(DrawingSyncAction::SaveDrawing(id));
+                }
+                self.history
+                    .push_command(crate::drawings::services::DrawingCommand::Snapshot {
+                        drawings: Vec::new(),
+                        ids,
+                    });
+                self.dragging_handle = None;
+                self.drag_origin = None;
+                return;
+            }
             self.queue_edit(&old_state);
             if self.drag_group.is_empty() {
                 self.history.push_modify(old_state.id, old_state);
@@ -375,7 +539,7 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
-        let point = self.snap_point(point, &self.drawings);
+        let point = self.constrain_preview(self.snap_point(point, &self.drawings));
         if let Some(ref mut drawing) = self.curr_drawing {
             // The click takes the place of the pointer preview.
             if std::mem::take(&mut self.preview_point) {
@@ -405,7 +569,7 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
-        let point = self.snap_point(point, &self.drawings);
+        let point = self.constrain_preview(self.snap_point(point, &self.drawings));
         if let Some(ref mut drawing) = self.curr_drawing
             && !drawing.points.is_empty()
             && !drawing.completed

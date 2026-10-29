@@ -213,6 +213,10 @@ pub struct DrawingManager {
     drag_origin: Option<Pos2>,
     /// Other selected drawings before a body translation.
     drag_group: Vec<Drawing>,
+    /// The current drag creates copies instead of modifying the original selection.
+    drag_copy: bool,
+    /// Current chart input, separate from the toolbar magnet setting.
+    pub(crate) interaction_modifiers: egui::Modifiers,
 
     /// Whether to stay in drawing mode after completing a drawing.
     pub stay_in_drawing_mode: bool,
@@ -280,6 +284,8 @@ impl DrawingManager {
             drag_old_state: None,
             drag_origin: None,
             drag_group: Vec::new(),
+            drag_copy: false,
+            interaction_modifiers: egui::Modifiers::NONE,
             stay_in_drawing_mode: false,
             curr_timeframe: String::from("1D"),
             eraser_mode: false,
@@ -491,13 +497,18 @@ impl DrawingManager {
         });
     }
 
+    pub(crate) fn magnet_enabled(&self) -> bool {
+        self.options.magnet_mode
+            ^ (self.interaction_modifiers.ctrl || self.interaction_modifiers.command)
+    }
+
     /// Applies snap behavior to a screen point, returning the snapped position.
     ///
     /// With magnet mode on, snaps to nearby chart values and visible anchors of `drawings`.
     /// Targets keep their time and price paired. A dragged drawing cannot snap to itself.
     /// Drawing anchors are borrowed without flattening or cloning their geometry.
     pub fn snap_point(&self, point: Pos2, drawings: &[Drawing]) -> Pos2 {
-        if self.options.magnet_mode
+        if self.magnet_enabled()
             && self.options.strong_magnet
             && let Some(target) = self
                 .snap_targets
@@ -507,7 +518,9 @@ impl DrawingManager {
         {
             return *target;
         }
-        self.snap_service.snap_point_with_drawing_points(
+        let mut service = self.snap_service.clone();
+        service.set_magnet_mode(self.magnet_enabled());
+        service.snap_point_with_drawing_points(
             point,
             &[],
             &[],

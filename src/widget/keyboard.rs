@@ -246,7 +246,11 @@ impl super::Chart {
         {
             return;
         }
-        while let Some((action, event)) = self.keyboard.map.consume(ctx, true, |_, _| true) {
+        while let Some((action, event)) = {
+            #[cfg(feature = "drawings")]
+            while self.nudge_selected_drawing(ctx) {}
+            self.keyboard.map.consume(ctx, true, |_, _| true)
+        } {
             if action == KeyboardAction::PasteDrawing
                 && let Event::Paste(text) = event
             {
@@ -293,6 +297,99 @@ impl super::Chart {
                     ShortcutRequest::SymbolSearch(text)
                 });
         }
+    }
+
+    #[cfg(feature = "drawings")]
+    fn nudge_selected_drawing(&mut self, ctx: &Context) -> bool {
+        use egui::{Key, Modifiers};
+        if !self.drawings.selected_ids().any(|id| {
+            self.drawings
+                .drawings
+                .iter()
+                .any(|d| d.id == id && !d.locked)
+        }) {
+            return false;
+        }
+        let key = ctx.input_mut(|input| {
+            for (index, event) in input.events.iter().enumerate() {
+                match event {
+                    Event::Text(text) if starts_entry(text) => return None,
+                    Event::Copy | Event::Paste(_) => return None,
+                    Event::Key {
+                        key,
+                        modifiers,
+                        pressed: true,
+                        ..
+                    } => {
+                        if *modifiers == Modifiers::NONE
+                            && matches!(
+                                key,
+                                Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown
+                            )
+                        {
+                            let key = *key;
+                            input.events.remove(index);
+                            return Some(key);
+                        }
+                        if self.keyboard.map.bindings.iter().any(|(shortcut, _)| {
+                            shortcut.logical_key == *key
+                                && modifiers.matches_exact(shortcut.modifiers)
+                        }) {
+                            return None;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        });
+        let Some(key) = key else {
+            return false;
+        };
+        let step = self
+            .instrument()
+            .and_then(|i| i.tick_size.filter(|s| s.is_finite() && *s > 0.0))
+            .unwrap_or_else(|| {
+                let decimals = self
+                    .instrument()
+                    .and_then(crate::scales::instrument_price_precision)
+                    .unwrap_or(2);
+                10.0_f64.powi(-i32::from(decimals))
+            });
+        let (bars, price) = match key {
+            Key::ArrowLeft => (-1.0, 0.0),
+            Key::ArrowRight => (1.0, 0.0),
+            Key::ArrowUp => (0.0, step),
+            _ => (0.0, -step),
+        };
+        let main_map = self.get_chart_mapping();
+        let pane_maps: Vec<_> = self
+            .last_rendered_indicator_panes
+            .iter()
+            .filter_map(|pane| Some((self.study_ids.get(pane.indicator_idx)?.0, pane.mapping)))
+            .collect();
+        self.user_action(|chart| {
+            chart.drawings.edit_selected(|drawing| {
+                if let Some([x, y]) = drawing.screen_anchor
+                    && let Some(anchor) = drawing.chart_points.first()
+                {
+                    let map = pane_maps
+                        .iter()
+                        .find(|(id, _)| Some(*id) == drawing.pane)
+                        .map_or(&main_map, |(_, map)| map);
+                    drawing.screen_anchor = Some([
+                        x + bars * map.bar_spacing / map.rect.width(),
+                        y + (map.price_to_y(anchor.price + price) - map.price_to_y(anchor.price))
+                            / map.rect.height(),
+                    ]);
+                }
+                for point in &mut drawing.chart_points {
+                    point.bar_idx += bars;
+                    point.price += price;
+                }
+            });
+        });
+        true
     }
 
     fn apply_keyboard_action(&mut self, action: KeyboardAction, chart_rect: egui::Rect) {
@@ -437,6 +534,77 @@ mod tests {
     use crate::scales::PriceScaleMode;
     use crate::widget::test_frames::chart;
     use egui::{Key, Modifiers, RawInput};
+
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn modifier_arrows_nudge_selection_with_one_undo_per_press() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::widget::test_frames::frame;
+        for (locked, selected) in [(false, true), (true, true), (false, false)] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            chart.set_instrument(Some(
+                crate::model::Instrument::new("TEST").with_tick_size(0.25),
+            ));
+            let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+            drawing.chart_points = vec![ChartPoint::new(30.0, 14.0), ChartPoint::new(70.0, 17.0)];
+            drawing.completed = true;
+            drawing.locked = locked;
+            chart.drawings_mut().drawings.push(drawing);
+            if selected {
+                chart.drawings_mut().select(7);
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let view = chart.get_time_scale_state();
+            for (i, (key, bars, price)) in [
+                (Key::ArrowLeft, -1.0, 0.0),
+                (Key::ArrowRight, 1.0, 0.0),
+                (Key::ArrowUp, 0.0, 0.25),
+                (Key::ArrowDown, 0.0, -0.25),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let before = chart.drawings().drawings[0].chart_points.clone();
+                frame(
+                    &ctx,
+                    &mut chart,
+                    1.0 + i as f64,
+                    vec![Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::NONE,
+                    }],
+                );
+                for (old, point) in before
+                    .iter()
+                    .zip(&chart.drawings().drawings[0].chart_points)
+                {
+                    assert_eq!(
+                        point.bar_idx,
+                        old.bar_idx + if selected && !locked { bars } else { 0.0 }
+                    );
+                    assert_eq!(
+                        point.price,
+                        old.price + if selected && !locked { price } else { 0.0 }
+                    );
+                }
+                if selected && !locked {
+                    assert_eq!(chart.get_time_scale_state(), view);
+                    assert!(chart.undo());
+                    assert_eq!(chart.drawings().drawings[0].chart_points, before);
+                    assert!(!chart.can_undo());
+                    assert!(chart.redo());
+                    assert!(chart.undo());
+                } else if i < 2 {
+                    assert_ne!(chart.get_time_scale_state(), view);
+                    assert!(chart.undo());
+                }
+            }
+        }
+    }
 
     #[test]
     fn reset_chart_restores_time_and_every_price_scale() {
