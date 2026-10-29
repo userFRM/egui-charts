@@ -1,8 +1,9 @@
 # Strategy reports
 
-A host produces a `model::StrategyReport` from its own strategy execution or analytics.
-The model serializes without egui and works with `default-features = false`. The library
-computes the performance metrics; it never runs the strategy or fetches market data.
+A host produces a `model::StrategyReport` with `strategies::Backtest` (the `strategies`
+feature), or supplies one from its own strategy execution or analytics. The report serializes
+without egui and its performance metrics work with `default-features = false`. The host
+supplies the market data.
 `examples/backtesting.rs` demonstrates both a headless run and, with `ui`, a report window.
 
 With the `ui` feature, keep a `ui::strategy_report::StrategyReportPanel` in your host:
@@ -55,7 +56,8 @@ converting a fraction to a displayed percentage overflows.
 CSV exports only valid trades using `StrategyReport::trades_csv`, retaining its existing
 columns, quoting and UTC timestamps. Export summary CSV returns
 `StrategyReportAction::ExportSummaryCsv` with a suggested file name and the metrics and
-properties shown, as `StrategyReport::summary_csv` writes them.
+properties shown, as `StrategyReport::summary_csv` writes them: a dot as the decimal
+separator, no thousands separator, and an empty cell for an unavailable value.
 
 ## Metric definitions
 

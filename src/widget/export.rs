@@ -5,6 +5,8 @@ use crate::localization as l10n;
 use crate::scales::StudyFormat;
 use crate::theme::ThemeExt;
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Image options shared by the export dialog and offscreen rendering.
 #[derive(Debug, Clone)]
@@ -24,6 +26,12 @@ pub struct ImageExportOptions {
     /// Draw the crosshair where the pointer last placed it over the plots, or where
     /// [`Chart::set_crosshair_position`] or a synchronized chart placed it since.
     pub include_crosshair: bool,
+    /// Pixels of the textures the host binds itself, by the id its images use, so
+    /// [`Chart::export_png`] and [`Chart::export_svg`] can draw them. Without an entry, an image
+    /// of such a texture fails the export. Supplied textures use linear filtering and clamp to
+    /// their edges. Prefer [`egui::TextureId::User`]: ids that collide with the offscreen frame's
+    /// own textures return an error. [`ChartImage`] frames include the supplied pixels too.
+    pub textures: HashMap<egui::TextureId, Arc<egui::ColorImage>>,
 }
 
 impl Default for ImageExportOptions {
@@ -35,6 +43,7 @@ impl Default for ImageExportOptions {
             include_watermark: true,
             transparent_background: false,
             include_crosshair: false,
+            textures: HashMap::new(),
         }
     }
 }
@@ -43,13 +52,14 @@ impl Default for ImageExportOptions {
 /// Upload `textures_delta.set`, draw `primitives` over transparent black at `size`, then
 /// release the textures. The host owns GPU readback, PNG encoding and file/clipboard delivery.
 /// This uses its own texture namespace; render with a dedicated egui renderer. Hosts must also
-/// bind any user textures referenced by their image sources before drawing.
+/// bind any user textures referenced by their image sources whose pixels were not supplied in
+/// [`ImageExportOptions::textures`] before drawing.
 #[must_use = "Render the frame and apply its texture deltas, or clear them before dropping"]
 #[non_exhaustive]
 pub struct ChartImage {
     /// Exact output dimensions in pixels.
     pub size: [u32; 2],
-    /// Tessellated chart, header and study panes.
+    /// Tessellated chart, header, study panes and requested layout widgets.
     pub primitives: Vec<egui::ClippedPrimitive>,
     /// Textures referenced by the primitives.
     pub textures_delta: egui::TexturesDelta,
@@ -95,6 +105,39 @@ impl DataTable {
         );
         lines.join("\n")
     }
+}
+
+/// Sets the host's textures in `delta` beside the frame's own, for the encoders that draw them.
+fn add_host_textures(
+    delta: &mut egui::TexturesDelta,
+    options: &ImageExportOptions,
+) -> Result<(), String> {
+    for (&id, image) in &options.textures {
+        if delta.set.contains_key(&id) {
+            return Err(format!(
+                "Host texture {id:?} conflicts with an offscreen texture; use TextureId::User"
+            ));
+        }
+        let [width, height] = image.size;
+        if width == 0
+            || height == 0
+            || width > u32::MAX as usize
+            || height > u32::MAX as usize
+            || width.checked_mul(height) != Some(image.pixels.len())
+        {
+            return Err(format!(
+                "Host texture {id:?} has invalid dimensions or pixels"
+            ));
+        }
+        delta.push(
+            id,
+            egui::epaint::ImageDelta::full(
+                egui::ImageData::Color(Arc::clone(image)),
+                egui::TextureOptions::LINEAR,
+            ),
+        );
+    }
+    Ok(())
 }
 
 impl Chart {
@@ -229,16 +272,38 @@ impl Chart {
         ctx: &egui::Context,
         options: &ImageExportOptions,
     ) -> Result<ChartImage, String> {
-        self.export_image_with(ctx, options, |_, _| {})
+        self.export_layout_image(ctx, options, |ui, chart| {
+            chart.show(ui);
+        })
     }
 
-    pub(crate) fn export_image_with(
+    /// Like [`Self::export_image`] for a layout of library widgets: `layout` draws everything
+    /// inside the image, the toolbars, panels and trading overlays around the chart, and shows the
+    /// chart it is given, a frozen copy of this one, with [`Chart::show`] or
+    /// [`Chart::show_footprint`]. It runs once for each of several layout passes, on a context
+    /// of its own with no pointer, so its widgets show as at rest. The title and timestamp, if
+    /// requested, sit above it.
+    ///
+    /// ```no_run
+    /// # fn capture(chart: &egui_charts::Chart, ctx: &egui::Context) -> Result<(), String> {
+    /// let options = egui_charts::widget::ImageExportOptions::default();
+    /// let png = chart.export_layout_png(ctx, &options, |ui, snapshot| {
+    ///     ui.horizontal(|ui| {
+    ///         ui.label(snapshot.symbol());
+    ///         ui.label("1m");
+    ///     });
+    ///     snapshot.show(ui);
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn export_layout_image(
         &self,
         ctx: &egui::Context,
         options: &ImageExportOptions,
-        overlay: impl Fn(&mut egui::Ui, &mut Chart),
+        layout: impl FnMut(&mut egui::Ui, &mut Chart),
     ) -> Result<ChartImage, String> {
-        let (shapes, textures_delta, image_ctx) = self.export_shapes(ctx, options, overlay)?;
+        let (shapes, textures_delta, image_ctx) = self.export_shapes(ctx, options, layout)?;
         Ok(ChartImage {
             size: options.size,
             primitives: image_ctx.tessellate(shapes, 1.0),
@@ -252,7 +317,7 @@ impl Chart {
         &self,
         ctx: &egui::Context,
         options: &ImageExportOptions,
-        overlay: impl Fn(&mut egui::Ui, &mut Chart),
+        mut layout: impl FnMut(&mut egui::Ui, &mut Chart),
     ) -> Result<
         (
             Vec<egui::epaint::ClippedShape>,
@@ -337,35 +402,43 @@ impl Chart {
                             }
                         });
                     }
-                    chart.show(ui);
-                    overlay(ui, &mut chart);
+                    layout(ui, &mut chart);
                 },
             );
             textures_delta.append(output.textures_delta);
             shapes = output.shapes;
+        }
+        if let Err(error) = add_host_textures(&mut textures_delta, options) {
+            textures_delta.clear();
+            return Err(error);
         }
         Ok((shapes, textures_delta, image_ctx))
     }
 
     /// Renders the image of [`Self::export_image`] on the CPU and encodes it as PNG, so the host
     /// needs no renderer or GPU readback. Fails with the reason for content it cannot draw, host
-    /// paint callbacks and images whose textures the host binds itself, such as a legend badge
-    /// from a user texture, instead of leaving it out.
+    /// paint callbacks and images of textures the host binds itself, such as a legend badge from a
+    /// user texture, unless [`ImageExportOptions::textures`] holds their pixels, instead of
+    /// leaving it out.
     pub fn export_png(
         &self,
         ctx: &egui::Context,
         options: &ImageExportOptions,
     ) -> Result<Vec<u8>, String> {
-        self.export_png_with(ctx, options, |_, _| {})
+        self.export_layout_png(ctx, options, |ui, chart| {
+            chart.show(ui);
+        })
     }
 
-    pub(crate) fn export_png_with(
+    /// Like [`Self::export_png`] for a layout of library widgets, drawn by `layout` as
+    /// [`Self::export_layout_image`] describes.
+    pub fn export_layout_png(
         &self,
         ctx: &egui::Context,
         options: &ImageExportOptions,
-        overlay: impl Fn(&mut egui::Ui, &mut Chart),
+        layout: impl FnMut(&mut egui::Ui, &mut Chart),
     ) -> Result<Vec<u8>, String> {
-        let mut image = self.export_image_with(ctx, options, overlay)?;
+        let mut image = self.export_layout_image(ctx, options, layout)?;
         let pixels = super::raster::rasterize(image.size, &image.primitives, &image.textures_delta);
         image.textures_delta.clear();
         super::raster::png(image.size, &pixels?)
@@ -374,23 +447,28 @@ impl Chart {
     /// Renders the frame of [`Self::export_image`] as an SVG document of the options' size, with
     /// the same title, timestamp, watermark and background. Text stays text, in the font family
     /// class of the on-screen font, and the frame's textures, such as legend icons, are embedded
-    /// as PNG. Fails with the reason for content SVG cannot take over unchanged, such as host
-    /// paint callbacks and textures the host binds itself, instead of leaving it out.
+    /// as PNG, with the host's [`ImageExportOptions::textures`]. Fails with the reason for content
+    /// SVG cannot take over unchanged, such as host paint callbacks and textures the host binds
+    /// itself without supplying their pixels, instead of leaving it out.
     pub fn export_svg(
         &self,
         ctx: &egui::Context,
         options: &ImageExportOptions,
     ) -> Result<String, String> {
-        self.export_svg_with(ctx, options, |_, _| {})
+        self.export_layout_svg(ctx, options, |ui, chart| {
+            chart.show(ui);
+        })
     }
 
-    pub(crate) fn export_svg_with(
+    /// Like [`Self::export_svg`] for a layout of library widgets, drawn by `layout` as
+    /// [`Self::export_layout_image`] describes.
+    pub fn export_layout_svg(
         &self,
         ctx: &egui::Context,
         options: &ImageExportOptions,
-        overlay: impl Fn(&mut egui::Ui, &mut Chart),
+        layout: impl FnMut(&mut egui::Ui, &mut Chart),
     ) -> Result<String, String> {
-        let (shapes, mut textures_delta, _) = self.export_shapes(ctx, options, overlay)?;
+        let (shapes, mut textures_delta, _) = self.export_shapes(ctx, options, layout)?;
         let svg = super::svg::svg(options.size, &shapes, &textures_delta);
         textures_delta.clear();
         svg
@@ -756,6 +834,7 @@ mod tests {
             include_watermark: true,
             transparent_background: false,
             include_crosshair: false,
+            ..Default::default()
         };
         let mut opaque = chart.export_image(&ctx, &base).unwrap();
         let has_textures = !opaque.textures_delta.set.is_empty();
@@ -872,6 +951,7 @@ mod tests {
             include_watermark: true,
             transparent_background: false,
             include_crosshair: false,
+            ..Default::default()
         };
         let svg = |options: &ImageExportOptions| chart.export_svg(&ctx, options).unwrap();
         let opaque = svg(&base);
@@ -911,26 +991,154 @@ mod tests {
             );
         };
         for (error, reason) in [
-            (chart.export_svg_with(&ctx, &base, callback), "callbacks"),
+            (chart.export_layout_svg(&ctx, &base, callback), "callbacks"),
             (
                 chart
-                    .export_png_with(&ctx, &base, callback)
+                    .export_layout_png(&ctx, &base, callback)
                     .map(|_| String::new()),
                 "callbacks",
             ),
             (
-                chart.export_svg_with(&ctx, &base, host_texture),
+                chart.export_layout_svg(&ctx, &base, host_texture),
                 "host textures",
             ),
             (
                 chart
-                    .export_png_with(&ctx, &base, host_texture)
+                    .export_layout_png(&ctx, &base, host_texture)
                     .map(|_| String::new()),
                 "host textures",
             ),
         ] {
             let error = error.unwrap_err();
             assert!(error.contains(reason), "{error}");
+        }
+        let red = egui::Color32::from_rgb(200, 30, 30);
+        let green = egui::Color32::from_rgb(30, 200, 30);
+        let high_id = egui::TextureId::User(7 | 1 << 63);
+        let supplied = ImageExportOptions {
+            textures: HashMap::from([
+                (
+                    egui::TextureId::User(7),
+                    Arc::new(egui::ColorImage::new([2, 1], vec![red, green])),
+                ),
+                (high_id, Arc::new(egui::ColorImage::filled([1, 1], green))),
+            ]),
+            ..base.clone()
+        };
+        let additive = ImageExportOptions {
+            textures: HashMap::from([(
+                egui::TextureId::User(7),
+                Arc::new(egui::ColorImage::filled(
+                    [1, 1],
+                    egui::Color32::from_rgb_additive(200, 0, 0),
+                )),
+            )]),
+            ..base.clone()
+        };
+        let error = chart
+            .export_layout_svg(&ctx, &additive, host_texture)
+            .unwrap_err();
+        assert!(error.contains("Additive texture User(7)"), "{error}");
+        let layout = |ui: &mut egui::Ui, chart: &mut Chart| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(128.0, 32.0), egui::Sense::hover());
+            ui.painter().image(
+                egui::TextureId::User(7),
+                rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+            ui.label("LAYOUT TOOLBAR");
+            for (id, x) in [(high_id, 160.0), (egui::TextureId::User(7), 208.0)] {
+                ui.painter().image(
+                    id,
+                    egui::Rect::from_min_size(egui::pos2(x, 8.0), egui::vec2(32.0, 32.0)),
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                    egui::Color32::from_rgba_premultiplied(128, 64, 32, 128),
+                );
+            }
+            chart.show(ui);
+        };
+        let svg = chart.export_layout_svg(&ctx, &supplied, layout).unwrap();
+        assert!(svg.contains("LAYOUT TOOLBAR") && svg.contains("WATERMARK"));
+        assert!(svg.contains(r#"width="2" height="1""#));
+        for id in [7, 7 | 1u64 << 63] {
+            assert!(svg.contains(&format!(r#"id="tu{id}_"#)));
+        }
+        #[cfg(feature = "icons")]
+        {
+            let tree = resvg::usvg::Tree::from_str(&svg, &Default::default()).unwrap();
+            let mut groups = vec![tree.root()];
+            let mut colors = Vec::new();
+            while let Some(group) = groups.pop() {
+                for node in group.children() {
+                    match node {
+                        resvg::usvg::Node::Group(group) => groups.push(group),
+                        resvg::usvg::Node::Image(image) => {
+                            let resvg::usvg::ImageKind::PNG(data) = image.kind() else {
+                                panic!("expected an embedded PNG");
+                            };
+                            let mut reader =
+                                png::Decoder::new(data.as_slice()).read_info().unwrap();
+                            let mut pixels = vec![0; reader.output_buffer_size()];
+                            reader.next_frame(&mut pixels).unwrap();
+                            let [r, g, b, a] = pixels[..4].try_into().unwrap();
+                            colors
+                                .push(egui::Color32::from_rgba_unmultiplied(r, g, b, a).to_array());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // Rounded products of source and tint channels / 255, with alpha 255 * 128 / 255.
+            for expected in [[15, 50, 4, 128], [100, 8, 4, 128], red.to_array()] {
+                assert!(
+                    colors.contains(&expected),
+                    "missing {expected:?} in {colors:?}"
+                );
+            }
+        }
+        let png = chart.export_layout_png(&ctx, &supplied, layout).unwrap();
+        let mut reader = png::Decoder::new(png.as_slice()).read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size()];
+        reader.next_frame(&mut pixels).unwrap();
+        // Both samples lie in the edge-clamped halves of the two-texel image.
+        assert_eq!(pixels[(20 * 480 + 20) * 4..][..4], red.to_array());
+        assert_eq!(pixels[(20 * 480 + 120) * 4..][..4], green.to_array());
+        for (id, size, pixels, reason) in [
+            (
+                egui::TextureId::User(7),
+                [0, 1],
+                vec![],
+                "invalid dimensions",
+            ),
+            (
+                egui::TextureId::User(7),
+                [2, 1],
+                vec![red],
+                "invalid dimensions",
+            ),
+            (egui::TextureId::Managed(0), [1, 1], vec![red], "conflicts"),
+        ] {
+            let options = ImageExportOptions {
+                textures: HashMap::from([(
+                    id,
+                    Arc::new(egui::ColorImage {
+                        size,
+                        source_size: egui::vec2(size[0] as f32, size[1] as f32),
+                        pixels,
+                    }),
+                )]),
+                ..base.clone()
+            };
+            for error in [
+                chart.export_svg(&ctx, &options).unwrap_err(),
+                chart.export_png(&ctx, &options).unwrap_err(),
+            ] {
+                assert!(
+                    error.contains(reason) && error.contains(&format!("{id:?}")),
+                    "{error}"
+                );
+            }
         }
     }
 

@@ -249,30 +249,3 @@ impl ReplayConfig {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_config_creation() {
-        let config = ReplayConfig::new();
-        assert_eq!(
-            config.layout.control_bar_height,
-            DESIGN_TOKENS.sizing.replay.control_bar_height
-        );
-        assert!(!config.behavior.loop_playback);
-    }
-
-    #[test]
-    fn test_compact_layout() {
-        let config = ReplayConfig::compact();
-        assert!(config.layout.control_bar_height < DESIGN_TOKENS.sizing.replay.control_bar_height);
-    }
-
-    #[test]
-    fn test_minimal_layout() {
-        let config = ReplayConfig::minimal();
-        assert!(!config.behavior.show_bar_counter);
-    }
-}

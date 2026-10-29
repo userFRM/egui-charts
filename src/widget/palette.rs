@@ -62,7 +62,9 @@ fn follow_palette(config: &mut ChartConfig, old: &[ChartConfig], new: &ChartConf
         bullish_border_color,
         bearish_border_color,
         bullish_wick_color,
-        bearish_wick_color
+        bearish_wick_color,
+        session_break_color,
+        watermark_color
     );
 }
 
@@ -74,28 +76,63 @@ mod tests {
     #[cfg(feature = "ui")]
     #[test]
     fn restored_snapshots_follow_the_active_palette_and_keep_edited_colours() {
-        let ctx = egui::Context::default();
-        apply_to_egui(&ctx, &Theme::light());
-        let mut saved = chart(&[100.0], &[110.0]);
-        frame(&ctx, &mut saved, 0.0, vec![]);
-        saved.config_mut().bearish_color = egui::Color32::RED;
-        let snapshot = saved.snapshot().unwrap();
-        apply_to_egui(&ctx, &Theme::dark());
-        let dark = Theme::dark();
-        // Layouts saved before the palette was recorded behave the same.
-        for with_palette in [true, false] {
-            let mut snapshot = snapshot.clone();
-            if !with_palette {
-                snapshot.palette = None;
+        for (from, to) in [
+            (Theme::light(), Theme::dark()),
+            (Theme::dark(), Theme::light()),
+        ] {
+            for edited in [false, true] {
+                let ctx = egui::Context::default();
+                apply_to_egui(&ctx, &from);
+                let mut saved = chart(&[100.0], &[110.0]);
+                frame(&ctx, &mut saved, 0.0, vec![]);
+                saved.config_mut().bearish_color = egui::Color32::RED;
+                if edited {
+                    saved.config_mut().session_break_color = egui::Color32::BLUE;
+                    saved.config_mut().watermark_color = egui::Color32::RED;
+                }
+                let settings = crate::widget::settings::ChartSettingsState::from_chart(&saved);
+                assert_eq!(settings.watermark.color, saved.config().watermark_color);
+                settings.apply_to_chart(&mut saved).unwrap();
+                let watermark = if edited {
+                    egui::Color32::RED
+                } else {
+                    from.chart.grid_line
+                };
+                assert_eq!(saved.config().watermark_color, watermark);
+                let snapshot = saved.snapshot().unwrap();
+                apply_to_egui(&ctx, &to);
+                // Layouts saved before the palette was recorded behave the same.
+                for with_palette in [true, false] {
+                    let mut snapshot = snapshot.clone();
+                    if !with_palette {
+                        snapshot.palette = None;
+                    }
+                    let mut reopened = chart(&[100.0], &[110.0]);
+                    frame(&ctx, &mut reopened, 1.0, vec![]);
+                    reopened.restore(&snapshot).unwrap();
+                    frame(&ctx, &mut reopened, 2.0, vec![]);
+                    assert_eq!(reopened.config().background_color, to.chart.bg);
+                    assert_eq!(reopened.config().grid_color, to.chart.grid_line);
+                    assert_eq!(reopened.config().bullish_color, to.chart.candle_up);
+                    assert_eq!(
+                        reopened.config().session_break_color,
+                        if edited {
+                            egui::Color32::BLUE
+                        } else {
+                            to.chart.grid_line_major
+                        }
+                    );
+                    assert_eq!(
+                        reopened.config().watermark_color,
+                        if edited {
+                            egui::Color32::RED
+                        } else {
+                            to.chart.grid_line
+                        }
+                    );
+                    assert_eq!(reopened.config().bearish_color, egui::Color32::RED);
+                }
             }
-            let mut reopened = chart(&[100.0], &[110.0]);
-            frame(&ctx, &mut reopened, 1.0, vec![]);
-            reopened.restore(&snapshot).unwrap();
-            frame(&ctx, &mut reopened, 2.0, vec![]);
-            assert_eq!(reopened.config().background_color, dark.chart.bg);
-            assert_eq!(reopened.config().grid_color, dark.chart.grid_line);
-            assert_eq!(reopened.config().bullish_color, dark.chart.candle_up);
-            assert_eq!(reopened.config().bearish_color, egui::Color32::RED);
         }
     }
 
@@ -118,6 +155,11 @@ mod tests {
             assert_eq!(built.config().background_color, theme.chart.bg);
             assert_eq!(shared.config().background_color, theme.chart.bg);
             assert_eq!(shared.config().bullish_color, theme.chart.candle_up);
+            assert_eq!(
+                shared.config().session_break_color,
+                theme.chart.grid_line_major
+            );
+            assert_eq!(shared.config().watermark_color, theme.chart.grid_line);
             assert_eq!(shared.config().bearish_color, egui::Color32::RED);
             assert_eq!(
                 local.config().background_color,

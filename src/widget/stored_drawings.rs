@@ -205,12 +205,11 @@ impl Chart {
 
     /// Replaces the drawings with the stored ones in `json`.
     fn restore_stored_drawings(&mut self, json: &str) {
-        let refused = match self.load_drawings(json) {
+        let refused = match self.load_drawings_remapped(json, true) {
             Ok(skipped) if skipped.is_empty() => None,
             Ok(skipped) => Some(format!("{} drawings could not be read", skipped.len())),
             Err(error) => Some(error.to_string()),
         };
-        self.remap_drawing_panes();
         let store = self.drawing_store.as_mut().expect("drawing storage");
         if let Some(error) = refused {
             if let Some(document) = store.documents.get_mut(&self.symbol) {
@@ -275,19 +274,6 @@ impl Chart {
             store.loaded.remove(&self.symbol);
             if let Some((_, merge)) = store.pending.get_mut(&self.symbol) {
                 *merge = false;
-            }
-        }
-    }
-
-    /// Points drawings in study panes at the studies that took the place of the saved ones
-    /// when a snapshot was restored.
-    pub(super) fn remap_drawing_panes(&mut self) {
-        for drawing in &mut self.drawings.drawings {
-            if let Some(id) = drawing
-                .pane
-                .and_then(|pane| self.restored_studies.get(&pane))
-            {
-                drawing.pane = Some(*id);
             }
         }
     }

@@ -170,7 +170,7 @@ mod tests {
                             Shape::Rect(rect)
                                 if rect.rect == screen
                                     && rect.fill.a() > 0
-                                    && rect.fill.a() < 255 =>
+                                    && (alpha == 0 || rect.fill.a() < 255) =>
                             {
                                 Some(rect.fill)
                             }
