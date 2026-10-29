@@ -11,8 +11,8 @@ use egui::{Align, Color32, Label, Layout, RichText, Sense, Stroke, Ui, pos2, vec
 use serde::{Deserialize, Serialize};
 
 use super::market_details::{MarketDetail, MarketDetailRequest, PeriodReturn, Seasonality};
-use super::object_tree::price_decimals;
-use super::watchlist::{HEADER_HEIGHT, grouped, signed, weighted};
+use super::price_decimals;
+use super::{HEADER_HEIGHT, grouped, signed, weighted};
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, SymbolDetails};
 use crate::icons::icons;
