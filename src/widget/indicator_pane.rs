@@ -1123,11 +1123,11 @@ impl IndicatorPane {
         let bars_per_grid = (min_pixel_spacing / coords.bar_spacing).ceil().max(1.0) as usize;
 
         // Round to nice intervals: 1, 2, 5, 10, 20, 50, 100, etc.
-        let bars_per_grid = Self::nice_interval(bars_per_grid);
+        let bars_per_grid = crate::chart::rendering::grid::nice_interval(bars_per_grid);
 
         // Calculate visible bar range
         let chart_width = rect.width();
-        let visible_bars = (chart_width / coords.bar_spacing).ceil() as usize + 2;
+        let visible_bars = ((chart_width / coords.bar_spacing).ceil() as usize).saturating_add(2);
 
         // Use start_idx from coords
         let start_idx = coords.start_idx;
@@ -1141,7 +1141,7 @@ impl IndicatorPane {
 
         // Draw grid lines
         for i in 0..=(visible_bars / bars_per_grid + 2) {
-            let grid_idx = first_visible_idx + i * bars_per_grid;
+            let grid_idx = first_visible_idx.saturating_add(i.saturating_mul(bars_per_grid));
 
             // Convert bar index to x coord using ChartMapping
             let x = mapping.idx_to_x(grid_idx);
@@ -1156,39 +1156,6 @@ impl IndicatorPane {
                 Stroke::new(DESIGN_TOKENS.stroke.extra_thin, grid_color),
             );
         }
-    }
-
-    /// Round to a nice interval (1, 2, 5, 10, 20, 50, 100, etc.)
-    /// Uses the same fixed breakpoints as the main chart for consistent grid alignment
-    fn nice_interval(raw: usize) -> usize {
-        if raw <= 1 {
-            return 1;
-        }
-        if raw <= 2 {
-            return 2;
-        }
-        if raw <= 5 {
-            return 5;
-        }
-        if raw <= 10 {
-            return 10;
-        }
-        if raw <= 20 {
-            return 20;
-        }
-        if raw <= 50 {
-            return 50;
-        }
-        if raw <= 100 {
-            return 100;
-        }
-        if raw <= 200 {
-            return 200;
-        }
-        if raw <= 500 {
-            return 500;
-        }
-        1000
     }
 
     fn draw_indicator_lines(
@@ -1606,6 +1573,28 @@ mod tests {
         settings.plots[0].visible = false;
         study.apply_settings(&[], settings).unwrap();
         assert_eq!(pane.calculate_y_range(&study, &(0..3)), (0.0, 100.0));
+    }
+
+    /// The vertical grids of a time-independent main chart and of an indicator pane keep their
+    /// lines the minimum grid spacing apart when a tiny bar spacing shows millions of bars.
+    #[test]
+    fn vertical_grids_stay_bounded_at_any_bar_spacing() {
+        use crate::widget::test_frames::{chart, shapes};
+        let mut chart = chart(&[10.0], &[11.0]);
+        chart.set_chart_type(crate::model::ChartType::Renko);
+        chart.config_mut().grid_line_style = crate::model::LineStyle::Solid;
+        chart.add_indicator(Box::new(crate::studies::RSI::default()));
+        let mut options = chart.chart_options().clone();
+        options.time_scale.max_bar_spacing = 1e-6;
+        chart.set_chart_options(options);
+        let vertical = shapes(&egui::Context::default(), &mut chart, 0.0, Vec::new())
+            .iter()
+            .filter(|shape| {
+                matches!(shape, egui::Shape::LineSegment { points, .. } if points[0].x == points[1].x)
+            })
+            .count();
+        // An 800 point wide chart has room for ten lines 80 points apart in each grid.
+        assert!(vertical <= 30, "{vertical} vertical lines");
     }
 
     #[test]

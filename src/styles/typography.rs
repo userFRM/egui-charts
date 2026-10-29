@@ -2,6 +2,16 @@
 //!
 //! Consistent text sizing across the UI.
 
+/// The font sizes in points that text is drawn at. The glyph rasterizer fails on larger text, and
+/// its memory grows with the square of the size; the drawing properties editor offers 8 to 32
+/// and glyphs 8 to 128.
+pub(crate) const FONT_SIZES: std::ops::RangeInclusive<f32> = 1.0..=256.0;
+
+/// `size` within [`FONT_SIZES`], with NaN at the smallest size.
+pub(crate) fn font_size(size: f32) -> f32 {
+    size.max(*FONT_SIZES.start()).min(*FONT_SIZES.end())
+}
+
 // =============================================================================
 // Font Size Scale
 // =============================================================================

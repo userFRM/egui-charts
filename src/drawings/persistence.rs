@@ -156,11 +156,14 @@ impl StoredDrawing {
         (self.points.len() < needed).then_some((needed, self.points.len()))
     }
 
-    /// The first field holding NaN or an infinity, which JSON cannot store.
-    pub(super) fn non_finite_field(&self) -> Option<String> {
+    /// The first field holding NaN or an infinity, which JSON cannot store, or a size or
+    /// pitchfork level outside the range drawings are drawn at.
+    pub(super) fn invalid_field(&self) -> Option<String> {
+        use super::validation::{MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH};
+        use crate::styles::typography::FONT_SIZES;
         let d = &self.drawing;
         let bad = |value: f64| !value.is_finite();
-        if bad(d.stroke_width.into()) {
+        if !(d.stroke_width > 0.0 && d.stroke_width <= MAX_STROKE_WIDTH) {
             return Some("stroke_width".into());
         }
         if d.screen_anchor
@@ -168,7 +171,7 @@ impl StoredDrawing {
         {
             return Some("screen_anchor".into());
         }
-        if bad(d.font_size.into()) {
+        if !FONT_SIZES.contains(&d.font_size) {
             return Some("font_size".into());
         }
         if let Some(i) = self.points.iter().position(|p| bad(p.price)) {
@@ -246,7 +249,13 @@ impl StoredDrawing {
                     .collect(),
             ),
         ] {
-            if let Some(i) = values.iter().position(|v| !v.is_finite()) {
+            // Pitchfork tines are drawn at their multiple of the median's distance.
+            let limit = if name == "pitchfork.levels" {
+                MAX_PITCHFORK_LEVEL
+            } else {
+                f32::MAX
+            };
+            if let Some(i) = values.iter().position(|v| !(-limit..=limit).contains(v)) {
                 let suffix = if name.ends_with(".levels") {
                     ".value"
                 } else {
@@ -383,7 +392,7 @@ impl DrawingStorage {
                     id: stored.id.clone(),
                 });
             }
-            if let Some(field) = stored.non_finite_field() {
+            if let Some(field) = stored.invalid_field() {
                 return Err(SaveError::NonFinite {
                     id: stored.id.clone(),
                     field,
@@ -484,8 +493,10 @@ impl DrawingStorage {
                                 "anchor timestamp is outside the supported range",
                             ));
                         }
-                        if let Some(field) = drawing.non_finite_field() {
-                            return Err(serde::de::Error::custom(format!("non-finite {field}")));
+                        if let Some(field) = drawing.invalid_field() {
+                            return Err(serde::de::Error::custom(format!(
+                                "non-finite or out-of-range {field}"
+                            )));
                         }
                         // Earlier placements stored fewer anchors. Keep their endpoints and
                         // supply editable controls before checking the current construction.
@@ -556,7 +567,8 @@ impl DrawingStorage {
 /// Why [`DrawingStorage::to_json`] did not save.
 #[derive(Debug)]
 pub enum SaveError {
-    /// A drawing holds NaN or an infinity, which JSON cannot store.
+    /// A drawing holds NaN or an infinity, which JSON cannot store, or a size or pitchfork
+    /// level out of the range drawings are drawn at, and loading skips it.
     NonFinite {
         /// The id of the drawing.
         id: String,
@@ -599,7 +611,7 @@ impl fmt::Display for SaveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NonFinite { id, field } => {
-                write!(f, "drawing {id:?} has a non-finite {field}")
+                write!(f, "drawing {id:?} has a non-finite or out-of-range {field}")
             }
             Self::DuplicateId { id } => write!(f, "duplicate drawing id {id:?}"),
             Self::Cursor { id } => write!(f, "drawing {id:?} is a cursor, not a drawing"),
@@ -1180,7 +1192,19 @@ mod tests {
             ),
             (
                 current.replacen("\"stroke_width\": 2.0", "\"stroke_width\": 1e39", 1),
-                "non-finite stroke_width",
+                "out-of-range stroke_width",
+                &["2"],
+                0,
+            ),
+            (
+                current.replacen("\"stroke_width\": 2.0", "\"stroke_width\": -1.0", 1),
+                "out-of-range stroke_width",
+                &["2"],
+                0,
+            ),
+            (
+                current.replacen("\"font_size\": 12.0", "\"font_size\": 100000.0", 1),
+                "out-of-range font_size",
                 &["2"],
                 0,
             ),
@@ -1266,14 +1290,14 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 16] = [
+        let cases: [(Spoil, &str); 19] = [
             (
                 |s| first(s).drawing.position_sizing.leverage = f64::NAN,
-                "non-finite position_sizing",
+                "invalid position_sizing",
             ),
             (
                 |s| first(s).drawing.screen_anchor = Some([f32::NAN, 0.5]),
-                "non-finite screen_anchor",
+                "invalid screen_anchor",
             ),
             (
                 |s| first(s).points[0].ts_ms = i64::MAX,
@@ -1285,15 +1309,20 @@ mod tests {
             ),
             (
                 |s| first(s).drawing.stroke_width = f32::NAN,
-                "non-finite stroke_width",
+                "invalid stroke_width",
             ),
             (
                 |s| first(s).drawing.font_size = f32::INFINITY,
-                "non-finite font_size",
+                "invalid font_size",
             ),
             (
+                |s| first(s).drawing.stroke_width = 3e38,
+                "invalid stroke_width",
+            ),
+            (|s| first(s).drawing.font_size = 0.0, "invalid font_size"),
+            (
                 |s| first(s).points[1].price = f64::NAN,
-                "non-finite points[1].price",
+                "invalid points[1].price",
             ),
             (
                 |s| {
@@ -1302,11 +1331,11 @@ mod tests {
                         percent: f64::NEG_INFINITY,
                     })
                 },
-                "non-finite position_size",
+                "invalid position_size",
             ),
             (
                 |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].value = f32::NAN,
-                "non-finite fib_config.levels[0].value",
+                "invalid fib_config.levels[0].value",
             ),
             (
                 |s| {
@@ -1317,7 +1346,18 @@ mod tests {
                         .levels[0]
                         .value = f32::NAN
                 },
-                "non-finite pitchfork.levels[0].value",
+                "invalid pitchfork.levels[0].value",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .pitchfork
+                        .get_or_insert_with(Default::default)
+                        .levels[0]
+                        .value = 3e38
+                },
+                "invalid pitchfork.levels[0].value",
             ),
             (
                 |s| {
@@ -1327,7 +1367,7 @@ mod tests {
                         .get_or_insert_with(Default::default)
                         .price_levels[0] = f32::INFINITY
                 },
-                "non-finite gann.price_levels[0]",
+                "invalid gann.price_levels[0]",
             ),
             (
                 |s| {
@@ -1337,7 +1377,7 @@ mod tests {
                         .get_or_insert_with(Default::default)
                         .time_levels[0] = f32::NAN
                 },
-                "non-finite gann.time_levels[0]",
+                "invalid gann.time_levels[0]",
             ),
             (
                 |s| {
@@ -1347,7 +1387,7 @@ mod tests {
                         .get_or_insert_with(Default::default)
                         .spacing = f64::NAN
                 },
-                "non-finite ghost_feed",
+                "invalid ghost_feed",
             ),
             (|s| s.drawings.push(s.drawings[0].clone()), "duplicate id"),
             (|s| first(s).points.truncate(1), "Trend Line needs 2"),
@@ -1364,7 +1404,7 @@ mod tests {
             ));
             spoil(&mut storage);
             let got = match storage.to_json() {
-                Err(SaveError::NonFinite { id, field }) => format!("{id}: non-finite {field}"),
+                Err(SaveError::NonFinite { id, field }) => format!("{id}: invalid {field}"),
                 Err(SaveError::DuplicateId { id }) => format!("{id}: duplicate id"),
                 Err(SaveError::Cursor { id }) => format!("{id}: a cursor"),
                 Err(SaveError::UnmappedAnchor { id, point }) => {

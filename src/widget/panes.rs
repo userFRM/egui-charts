@@ -121,8 +121,9 @@ impl Chart {
                 if *id == PaneId::MAIN || *collapsed {
                     0.0
                 } else {
-                    let share = remaining * stretch(idx);
-                    (share / total).max(40.0).min(share / pane_total)
+                    // Fractions first, so that large stretch factors cannot overflow.
+                    let share = |total| remaining * (stretch(idx) / total);
+                    share(total).max(40.0).min(share(pane_total))
                 }
             })
             .collect();
@@ -1657,6 +1658,11 @@ mod tests {
             (top / (top + main) - share).abs() < 1e-4,
             "a resize keeps the shares"
         );
+        // A factor near f32::MAX gives the pane most of the height instead of overflowing.
+        assert!(chart.set_pane_stretch_factor(pane, 3e38));
+        show(&mut chart, 600.0);
+        let (top, main) = heights(&chart);
+        assert!(top.is_finite() && top > main, "{top} {main}");
         assert!(chart.set_preserve_empty_pane(pane, true));
         assert!(chart.move_series_to_pane(series, PaneId::MAIN));
         assert_eq!(chart.panes(), [pane, PaneId::MAIN]);
