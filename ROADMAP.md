@@ -120,7 +120,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [ ] Give PPO, PVO and Net Volume histogram outputs their histogram defaults; expose PPO/PVO average-type inputs.
 - [ ] Add selectable Bollinger basis averages and BandWidth expansion/contraction lookbacks.
 - [ ] Expose VWAP band multipliers and event dates in applied-study settings.
-- [ ] Request finer profile data and provide zoom-adaptive session profile detail.
+- [x] Request finer profile data, from a feed's suggestion or a chosen interval, and adapt session profile rows to the zoom.
 - [ ] Add dedicated two-symbol spread, ratio, Pearson correlation and log-return correlation studies.
 - [ ] Emit rolling price-to-bar-index correlation as a Trend Strength Index study.
 - [ ] Add automatic chart-pattern and key-level detection studies.

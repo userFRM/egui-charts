@@ -702,7 +702,7 @@ Studies,Indicators,SMI Ergodic Oscillator,done,library,src/studies/builtin/smi_e
 Studies,Indicators,Seasonality,done,library,src/studies/builtin/seasonality.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/table.rs;src/widget/indicator_pane.rs;src/chart/indicators/projection.rs
 Studies,Indicators,Session Time Price Opportunity,done,library,src/studies/builtin/time_price_opportunity.rs;src/model/tpo.rs;src/widget/frame.rs;src/chart/rendering/candles/tpo.rs;src/tokens/mod.rs;src/tokens/semantic.rs
 Studies,Indicators,Session Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/studies/data.rs;src/widget/studies_data.rs
-Studies,Indicators,Session Volume Profile HD,partial,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/studies/data.rs;src/widget/studies_data.rs
+Studies,Indicators,Session Volume Profile HD,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/studies/data.rs;src/widget/studies_data.rs
 Studies,Indicators,Simple Moving Average,done,library,src/studies/builtin/sma.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Smoothed Moving Average,done,library,src/studies/builtin/smoothed_ma.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Spread,partial,library,src/services/search/expression.rs

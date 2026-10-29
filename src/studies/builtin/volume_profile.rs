@@ -59,6 +59,8 @@ struct ProfileStudy {
     source: Option<Timeframe>,
     /// Read the interval the instrument suggests while `source` follows the chart.
     feed_source: bool,
+    adaptive: bool,
+    tick_size: Option<f64>,
     resolutions: Vec<ProfileResolution>,
     /// Chart bars in view, from `set_visible_range`.
     view: Range<usize>,
@@ -124,6 +126,8 @@ impl ProfileStudy {
             interval: Timeframe::Min1,
             source: None,
             feed_source: true,
+            adaptive: false,
+            tick_size: None,
             resolutions: Vec::new(),
             view: 0..0,
             days: ExchangeDays::default(),
@@ -220,6 +224,14 @@ impl ProfileStudy {
                 InputKind::Length(1, usize::MAX),
             ));
         }
+        if self.kind == Kind::Session {
+            inputs.push(StudyInput::new(
+                "adaptive_rows",
+                "Adapt rows to zoom",
+                InputValue::Toggle(self.adaptive),
+                InputKind::Toggle,
+            ));
+        }
         inputs
     }
 
@@ -238,6 +250,7 @@ impl ProfileStudy {
             ("display", InputValue::Choice(v)) => self.display = DISPLAYS[v],
             ("source_interval", InputValue::Timeframe(v)) => self.source = v,
             ("feed_source", InputValue::Toggle(v)) => self.feed_source = v,
+            ("adaptive_rows", InputValue::Toggle(v)) => self.adaptive = v,
             ("start_time", InputValue::Number(v)) => self.start_time = v,
             ("end_time", InputValue::Number(v)) => self.end_time = v,
             ("period", InputValue::Choice(v)) => self.period = PERIODS[v],
@@ -478,6 +491,28 @@ impl ProfileStudy {
         };
     }
 
+    /// One row height for the chart-bar envelope of every session in view, rounded up
+    /// to 1, 2 or 5 times a power of ten ticks, or of price without a tick size.
+    fn adaptive_height(&self, ranges: &[Range<usize>]) -> Option<f64> {
+        let (low, high) = ranges
+            .iter()
+            .filter_map(|range| self.data.get(range.clone()))
+            .flatten()
+            .filter(|bar| bar.low.is_finite() && bar.high.is_finite() && bar.high >= bar.low)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), bar| {
+                (low.min(bar.low), high.max(bar.high))
+            });
+        let raw = (high - low) / self.rows as f64;
+        if !(raw.is_finite() && raw > 0.0) {
+            return None;
+        }
+        let height = match self.tick_size {
+            Some(tick) => tick * nice_ceil((raw / tick).max(1.0))?,
+            None => nice_ceil(raw)?,
+        };
+        (height.is_finite() && height > 0.0).then_some(height)
+    }
+
     fn profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
         let visible = visible.start.min(self.data.len())..visible.end.min(self.data.len());
         if visible.is_empty() {
@@ -497,6 +532,11 @@ impl ProfileStudy {
         else {
             return Vec::new();
         };
+        if self.adaptive
+            && let Some(height) = self.adaptive_height(&ranges)
+        {
+            config = config.with_row_size(Some(height)).unwrap_or(config);
+        }
         config.display = self.display;
         config.up_color = self.colors[1].to_srgba_unmultiplied();
         config.down_color = self.colors[2].to_srgba_unmultiplied();
@@ -507,10 +547,9 @@ impl ProfileStudy {
         let mut cache = self.cache.borrow_mut();
         let mut profiles = Vec::new();
         for range in ranges {
-            if let Some(plot) = cache
-                .iter()
-                .find(|cached| cached.plot.bars == range && !cached.dirty)
-            {
+            if let Some(plot) = cache.iter().find(|cached| {
+                cached.plot.bars == range && cached.plot.config == config && !cached.dirty
+            }) {
                 profiles.push(plot.plot.clone());
             } else if self.finer().is_some() && !self.fine.is_empty() {
                 let (bars, coverage) = self.inputs_of(&range);
@@ -536,7 +575,9 @@ impl ProfileStudy {
                 let opening = cache
                     .iter()
                     .filter(|cached| {
-                        cached.plot.bars.start == range.start && cached.plot.bars.end <= range.end
+                        cached.plot.bars.start == range.start
+                            && cached.plot.bars.end <= range.end
+                            && cached.plot.config == config
                     })
                     .max_by_key(|cached| cached.plot.bars.end)
                     .and_then(|cached| {
@@ -579,6 +620,15 @@ impl ProfileStudy {
         cache.drain(..excess);
         profiles
     }
+}
+
+/// The least of 1, 2 and 5 times a power of ten that reaches a positive `value`.
+fn nice_ceil(value: f64) -> Option<f64> {
+    let power = 10_f64.powi(value.log10().floor() as i32);
+    [1.0, 2.0, 5.0, 10.0]
+        .into_iter()
+        .map(|step| step * power)
+        .find(|step| *step >= value * (1.0 - 1e-9))
 }
 
 macro_rules! profile_study {
@@ -646,6 +696,9 @@ macro_rules! profile_study {
                 if self.profile.resolutions != resolutions {
                     self.profile.resolutions = resolutions.to_vec();
                 }
+                self.profile.tick_size = instrument
+                    .and_then(|i| i.tick_size)
+                    .filter(|t| t.is_finite() && *t > 0.0);
                 self.profile.days.set(instrument)
             }
             fn set_visible_range(&mut self, range: Range<usize>) -> bool {
@@ -752,6 +805,93 @@ impl VolProfileAnchored {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Zoom changes the shared tick grid without reusing cached rows or adding volume.
+    #[test]
+    fn adaptive_session_rows_follow_the_sessions_in_view() {
+        let at = |time: &str| time.parse::<DateTime<Utc>>().unwrap();
+        let bars = [
+            Bar::new(
+                at("2026-03-02T09:00:00Z"),
+                100.0,
+                110.0,
+                100.0,
+                110.0,
+                100.0,
+            ),
+            Bar::new(at("2026-03-03T09:00:00Z"), 100.0, 101.0, 100.0, 101.0, 40.0),
+            Bar::new(at("2026-03-03T10:00:00Z"), 101.0, 102.0, 101.0, 102.0, 40.0),
+        ];
+        let mut study = VolProfileSession::new(4);
+        study
+            .set_input("adaptive_rows", InputValue::Toggle(true))
+            .unwrap();
+        study.set_instrument(Some(&Instrument::new("SYNTH").with_tick_size(0.25)));
+        study.calculate(&bars);
+        for (view, height, expected) in [
+            (
+                0..3,
+                2.5,
+                vec![vec![25.0, 25.0, 25.0, 25.0, 0.0], vec![80.0]],
+            ),
+            (1..3, 0.5, vec![vec![20.0, 20.0, 20.0, 20.0, 0.0]]),
+            (
+                0..3,
+                2.5,
+                vec![vec![25.0, 25.0, 25.0, 25.0, 0.0], vec![80.0]],
+            ),
+        ] {
+            let profiles = study.volume_profiles(view);
+            assert_eq!(profiles.len(), expected.len());
+            for (plot, volume) in profiles.iter().zip(expected) {
+                assert_eq!(plot.profile.row_height(), height);
+                assert_eq!(plot.profile.volume(), volume);
+            }
+        }
+        let mut live = bars.to_vec();
+        live.push(Bar::new(
+            at("2026-03-03T11:00:00Z"),
+            101.0,
+            102.0,
+            100.0,
+            102.0,
+            20.0,
+        ));
+        study.update(&live, 3);
+        let profiles = study.volume_profiles(1..4);
+        assert_eq!(profiles[0].profile.row_height(), 0.5);
+        assert_eq!(profiles[0].profile.volume(), [25.0, 25.0, 25.0, 25.0, 0.0]);
+        let mut fresh = study.clone_box();
+        fresh.calculate(&live);
+        assert_eq!(
+            format!("{profiles:?}"),
+            format!("{:?}", fresh.volume_profiles(1..4))
+        );
+
+        study.set_input("row_count", InputValue::Length(3)).unwrap();
+        for (instrument, height, volume) in [
+            (
+                Some(Instrument::new("SYNTH").with_tick_size(0.25)),
+                1.25,
+                vec![50.0, 30.0],
+            ),
+            (None, 1.0, vec![40.0, 40.0, 0.0]),
+        ] {
+            study.set_instrument(instrument.as_ref());
+            study.calculate(&bars);
+            let profiles = study.volume_profiles(1..3);
+            assert_eq!(profiles[0].profile.row_height(), height);
+            assert_eq!(profiles[0].profile.volume(), volume);
+        }
+        let mut flat = VolProfileSession::new(4);
+        flat.set_input("adaptive_rows", InputValue::Toggle(true))
+            .unwrap();
+        flat.calculate(&[Bar::new(bars[0].time, 105.0, 105.0, 105.0, 105.0, 10.0)]);
+        let profiles = flat.volume_profiles(0..1);
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].config.row_size(), None);
+        assert_eq!(profiles[0].profile.volume(), [10.0]);
+    }
 
     /// Suggestions serve an inclusive profile length; explicit choices and the opt-out win.
     #[test]
@@ -1129,11 +1269,12 @@ mod rendering_tests {
             study
         };
         let expected = [80.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 40.0];
-        for interval in [
-            Timeframe::Hour1,
-            Timeframe::Custom(std::num::NonZeroU64::MAX),
+        for (interval, hinted) in [
+            (Timeframe::Hour1, false),
+            (Timeframe::Hour1, true),
+            (Timeframe::Custom(std::num::NonZeroU64::MAX), false),
         ] {
-            let mut study = source(&fine, Timeframe::Min30);
+            let mut study = source(&fine, Timeframe::Min30, hinted);
             study.set_timeframe(interval);
             assert_eq!(study.data_requests()[0].timeframe, Some(Timeframe::Min30));
             let volume = study.volume_profiles(0..2)[0].profile.volume().to_vec();
