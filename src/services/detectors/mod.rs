@@ -39,7 +39,7 @@ const TRADE_IDS: usize = 100_000;
 ///
 /// *Signals.* Each [`DetectionKind`] has its own signal category, which the user can hide.
 /// [`subscribe`](Signals::subscribe) pushes the symbol's most recent 5,000 detections, then each
-/// new or changed one.
+/// new or changed one. Evicted detections are removed from existing subscriptions too.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -371,8 +371,9 @@ impl Tracked {
 fn deliver(
     tracked: Option<&mut Tracked>,
     subscription: Option<&mut Subscription>,
-    events: Vec<SignalEvent>,
+    mut events: Vec<SignalEvent>,
 ) {
+    let mut removed = Vec::new();
     if let Some(tracked) = tracked {
         for event in &events {
             let detections = &mut tracked.detections;
@@ -385,6 +386,7 @@ fn deliver(
                                 && let Some(old) = detections.pop_front()
                             {
                                 tracked.big_trades.forget(&old.id);
+                                removed.push(SignalEvent::Remove(old.id));
                             }
                             detections.push_back(signal.clone());
                         }
@@ -395,6 +397,7 @@ fn deliver(
             }
         }
     }
+    events.extend(removed);
     if let Some(subscription) = subscription {
         subscription.streams.retain(Events::is_active);
         for event in events {
@@ -591,6 +594,44 @@ mod tests {
         assert_eq!(
             removed,
             [SignalEvent::Remove(SignalId("big-trade-zone-3".into()))]
+        );
+    }
+
+    #[test]
+    fn detections_past_the_retained_5000_leave_the_live_chart_too() {
+        let mut host = Host::new(Some(10.0));
+        let buy = |price| fill(1, price, 10.0, OrderSide::Buy, None);
+        // A big buy at 50 and 2,499 at 100: a marker and a zone each, 5,000 detections.
+        let history: Vec<Tick> = std::iter::once(buy(50.0))
+            .chain(std::iter::repeat_n(buy(100.0), 2499))
+            .collect();
+        host.detectors.push_history("ES", &history);
+        host.events();
+        // The next one evicts the first marker and its zone, which is still open.
+        assert_eq!(
+            host.push(MarketEvent::Trade(buy(100.0))),
+            [
+                marker(2501, 1, 100.0, Direction::Up, "10"),
+                zone(2501, 1, None, 99.875, 100.125),
+                SignalEvent::Remove(SignalId("big-trade-1".into())),
+                SignalEvent::Remove(SignalId("big-trade-zone-1".into()))
+            ]
+        );
+        host.listeners.clear();
+        host.subscribe();
+        let replay = host.events();
+        assert_eq!(replay.len(), 5000);
+        assert!(!replay.contains(&zone(1, 1, None, 49.875, 50.125)));
+        assert_eq!(
+            host.push(MarketEvent::Trade(fill(
+                2,
+                49.0,
+                1.0,
+                OrderSide::Sell,
+                None
+            )))
+            .len(),
+            2500
         );
     }
 
