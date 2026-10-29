@@ -497,9 +497,21 @@ impl Chart {
         &mut self,
         link: &mut FeedLink,
         asked: &HistoryRequest,
-        page: HistoryPage,
+        mut page: HistoryPage,
         scroll_back: bool,
     ) {
+        let received = page.bars.len();
+        page.bars.retain(|bar| {
+            asked
+                .before
+                .is_none_or(|before| link.clock.bar_open(bar.time) < before)
+        });
+        if scroll_back && page.bars.len() < received {
+            log::warn!(
+                "the feed of {} sent bars at or after the requested before; those bars were dropped",
+                self.symbol
+            );
+        }
         let oldest = self.bars(SeriesId::MAIN).first().map(|bar| bar.time);
         let empty = page.bars.is_empty();
         let continuation = page.continue_before.filter(|_| empty);
@@ -514,12 +526,12 @@ impl Chart {
         let incoming = page.bars.into_iter().map(|bar| (bar, Origin::History));
         self.apply_by(&link.clock, incoming.collect());
         let older = self.bars(SeriesId::MAIN).first().map(|bar| bar.time) < oldest;
-        // A feed that ignores `before` answers the newest bars again, and would be asked again
-        // on every frame.
+        // A nonempty page with no valid bar older than the oldest held would be requested
+        // again on every frame.
         let stale = scroll_back && !empty && !older && !self.bar_limit_reached();
         if stale {
             log::warn!(
-                "the feed of {} sent no bar older than the oldest one held; scroll-back ended",
+                "the feed of {} sent no valid bar older than the oldest one held; scroll-back ended",
                 self.symbol
             );
         }

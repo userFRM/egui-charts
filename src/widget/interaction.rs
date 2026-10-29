@@ -16,7 +16,7 @@ impl Chart {
     /// It exits automatically based on the configured
     /// [`TrackingModeExitMode`](crate::config::TrackingModeExitMode): on mouse leave,
     /// on next tap, or on touch end. Any manual scroll/zoom/drag also deactivates it.
-    pub fn handle_tracking_mode(&mut self, ui: &Ui, response: &Response) {
+    pub(crate) fn handle_tracking_mode(&mut self, ui: &Ui, response: &Response) {
         // Track mouse entering/leaving chart area for tracking mode
         let was_in_chart = self.mouse_in_chart;
         self.mouse_in_chart = response.hovered();
@@ -67,7 +67,7 @@ impl Chart {
 
     /// Dispatch configured shortcuts, retaining arrow-key focus on the chart.
     /// Hosts call [`Self::dispatch_shortcuts`] before their toolbars and after dialogs.
-    pub fn handle_keyboard_shortcuts(
+    pub(crate) fn handle_keyboard_shortcuts(
         &mut self,
         ui: &Ui,
         response: &Response,
@@ -101,7 +101,7 @@ impl Chart {
     /// which reads as a spurious selection. Tab/keyboard navigation still routes
     /// focus here through egui's own focus machinery, so the focus ring remains a
     /// genuine keyboard affordance.
-    pub fn request_focus_if_needed(&self, response: &mut Response) {
+    pub(crate) fn request_focus_if_needed(&self, response: &mut Response) {
         if self.chart_options.keyboard.enabled
             && (response.clicked() || response.dragged() || response.is_pointer_button_down_on())
         {
@@ -110,7 +110,7 @@ impl Chart {
     }
 
     /// Display a grabbing cursor while the user is actively dragging (panning) the chart.
-    pub fn set_panning_cursor(&self, ui: &Ui, response: &Response) {
+    pub(crate) fn set_panning_cursor(&self, ui: &Ui, response: &Response) {
         if response.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
