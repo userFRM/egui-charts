@@ -638,10 +638,11 @@ mod tests {
                 ("Asia/Tokyo", "Australia/Sydney"),
                 ("Asia/Tehran", "Asia/Tehran"),
             ] {
-                // Bars stamped at midnight UTC, and bars aligned to the display calendar.
+                // Bars stamped at UTC, display or exchange midnight.
                 let zone = TimezoneId::named(display).unwrap();
+                let exchange_zone = TimezoneId::named(exchange).unwrap();
                 let instrument = crate::model::Instrument::new("CALENDAR")
-                    .with_time_zone(TimezoneId::named(exchange).unwrap())
+                    .with_time_zone(exchange_zone.clone())
                     .with_session(Session::new([]));
                 let clock = crate::model::BarClock::new(timeframe)
                     .with_timezone(zone.clone())
@@ -667,14 +668,21 @@ mod tests {
                             NaiveDate::from_ymd_opt(year, month, day).unwrap()
                         })
                         .collect();
-                    for aligned in [false, true] {
+                    for stamp in ["utc", "display", "exchange"] {
                         let bars: Vec<_> = dates
                             .iter()
                             .map(|&date| {
-                                let open = if aligned {
-                                    clock.open_on_date(date).unwrap()
-                                } else {
-                                    date.and_time(NaiveTime::MIN).and_utc()
+                                let midnight = date.and_time(NaiveTime::MIN);
+                                let open = match stamp {
+                                    "utc" => midnight.and_utc(),
+                                    "display" => clock.open_on_date(date).unwrap(),
+                                    // Include the second midnight when the exchange repeats it.
+                                    _ => exchange_zone
+                                        .from_local_datetime(&midnight)
+                                        .latest()
+                                        .map(|time| time.to_utc())
+                                        .or_else(|| local_instant(exchange_zone.clone(), midnight))
+                                        .unwrap(),
                                 };
                                 Bar::new(open, 1.0, 1.0, 1.0, 1.0, 1.0)
                             })
@@ -687,10 +695,15 @@ mod tests {
                                 .map(|(i, item)| (*i, item.label.as_deref().unwrap()))
                                 .collect::<Vec<_>>(),
                             expected,
-                            "{timeframe} {display}/{exchange} aligned {aligned}"
+                            "{timeframe} {display}/{exchange} {stamp}"
                         );
                         for (pair, date) in bars.windows(2).zip(&dates[1..]) {
-                            assert_eq!(provider.trading_date(pair[1].time), *date);
+                            assert_eq!(
+                                provider.trading_date(pair[1].time),
+                                *date,
+                                "{timeframe} {display}/{exchange} {stamp} {}",
+                                pair[1].time
+                            );
                             let item = provider.session_break_between(&pair[0].time, &pair[1].time);
                             let batch = breaks.iter().find(|(_, item)| item.ts == pair[1].time);
                             assert_eq!(
