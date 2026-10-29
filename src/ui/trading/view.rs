@@ -248,7 +248,7 @@ impl Trading {
     }
 
     /// Exports the chart with its visible trading overlays when
-    /// [`TradingSettings::include_in_image`] is enabled. Account data and display settings
+    /// [`TradingSettings::include_in_image`](crate::widget::settings::TradingSettings::include_in_image) is enabled. Account data and display settings
     /// stay unchanged; the host delivers the returned frame.
     pub fn export_image(
         &self,

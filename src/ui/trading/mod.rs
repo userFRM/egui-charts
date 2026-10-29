@@ -37,7 +37,7 @@ use ticket::{OrderTicket, order_quantity};
 /// the chart, so the order ticket takes its panel beside it, and [`show`](Self::show) after the
 /// chart. Open the order ticket with [`open_ticket`](Self::open_ticket), for example from the
 /// chart menu's [`Order`](crate::ui::context_menu::ContextMenuAction::Order) entries, and route
-/// the chart's Buy and Sell buttons ([`Chart::take_quote_action`]) to [`trade`](Self::trade).
+/// the chart's Buy and Sell buttons ([`Chart::take_quote_action`](crate::widget::Chart::take_quote_action)) to [`trade`](Self::trade).
 /// Orders reach the broker only from the ticket's submit button, or once the user confirms them
 /// in the depth ladder, or at once from Buy and Sell and the ladder when the user turned on
 /// [`TradingSettings::instant_orders`].

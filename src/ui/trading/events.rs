@@ -275,7 +275,7 @@ impl Trading {
     }
 
     /// The sound to play for the fills since the last call, when the user turned on
-    /// [`TradingSettings::play_execution_sound`]: the name the user chose, or empty for the
+    /// [`TradingSettings::play_execution_sound`](crate::widget::settings::TradingSettings::play_execution_sound): the name the user chose, or empty for the
     /// host's first sound. The host plays it; call this after [`poll`](Self::poll).
     pub fn take_execution_sound(&mut self) -> Option<String> {
         self.sound.take()
