@@ -2,8 +2,9 @@
 
 use crate::drawings::domain::Drawing;
 use crate::drawings::rendering::ChartView;
+use crate::drawings::rendering::measurements::boxed_label;
 use crate::drawings::rendering::utils::draw_dashed_line;
-use crate::styles::{stroke, typography};
+use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
@@ -160,8 +161,6 @@ impl Drawing {
         color: Color32,
         dashed_color: Color32,
     ) {
-        let font = egui::FontId::proportional(typography::XS);
-
         // Price/percentage labels
         let price_change = if !self.chart_points.is_empty() && self.chart_points.len() >= 2 {
             (self.chart_points[1].price - self.chart_points[0].price).abs()
@@ -183,25 +182,17 @@ impl Drawing {
         // Move label (at midpoint of AB)
         let mid_ab = Pos2::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
         let label_text = format!("{price_change:.2} ({pct_change:.1}%)");
-        let label_bg = Rect::from_center_size(
+        boxed_label(
+            painter,
+            egui::Align2::CENTER_CENTER,
             Pos2::new(mid_ab.x + 10.0, mid_ab.y - 10.0),
-            egui::vec2(90.0, 16.0),
-        );
-        painter.rect_filled(
-            label_bg,
-            DESIGN_TOKENS.rounding.sm,
+            label_text,
+            color,
             DESIGN_TOKENS
                 .semantic
                 .extended
                 .chart_axis_bg
                 .gamma_multiply(0.86),
-        );
-        painter.text(
-            label_bg.center(),
-            egui::Align2::CENTER_CENTER,
-            label_text,
-            font.clone(),
-            color,
         );
 
         // Projection target label
@@ -215,17 +206,13 @@ impl Drawing {
                 )
             },
         );
-        let target_bg = Rect::from_center_size(
-            Pos2::new(proj_end.x, proj_end.y - zone_height / 2.0 - 12.0),
-            egui::vec2(80.0, 16.0),
-        );
-        painter.rect_filled(target_bg, DESIGN_TOKENS.rounding.sm, dashed_color);
-        painter.text(
-            target_bg.center(),
+        boxed_label(
+            painter,
             egui::Align2::CENTER_CENTER,
+            Pos2::new(proj_end.x, proj_end.y - zone_height / 2.0 - 12.0),
             target_label,
-            font,
             Color32::WHITE,
+            dashed_color,
         );
     }
 }
@@ -234,6 +221,50 @@ impl Drawing {
 mod tests {
     use super::*;
     use crate::drawings::{ChartPoint, DrawingToolType};
+
+    #[test]
+    fn projection_label_boxes_contain_long_prices() {
+        for price in [100.0, 123_456_789.0, -123_456_789.0] {
+            let mut drawing = Drawing::new(1, DrawingToolType::ProjectionTool);
+            drawing.chart_points = vec![
+                ChartPoint::new(0.0, price),
+                ChartPoint::new(1.0, price * 2.0),
+                ChartPoint::new(2.0, price),
+            ];
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                drawing.draw_projection_labels(
+                    ui.painter(),
+                    Pos2::new(100.0, 300.0),
+                    Pos2::new(300.0, 200.0),
+                    Pos2::new(500.0, 100.0),
+                    -100.0,
+                    Color32::BLUE,
+                    Color32::BLUE,
+                );
+            });
+            output.textures_delta.clear();
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(texts.len(), 2);
+            for text in texts {
+                let bounds = Rect::from_min_size(text.pos, text.galley.size());
+                assert!(
+                    output.shapes.iter().any(|s| matches!(
+                        &s.shape, egui::Shape::Rect(r) if r.rect.contains_rect(bounds)
+                    )),
+                    "label box must contain {:?}",
+                    text.galley.job.text
+                );
+            }
+        }
+    }
 
     #[test]
     fn projection_adds_the_price_leg_on_a_logarithmic_chart() {
