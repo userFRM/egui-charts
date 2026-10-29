@@ -72,7 +72,8 @@ pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
 pub use instrument::{
-    DataStatus, Instrument, OverrideWindow, Session, SessionOverride, SessionWindow, SymbolType,
+    DataStatus, Instrument, OverrideWindow, ProfileResolution, Session, SessionOverride,
+    SessionWindow, SymbolType,
 };
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{

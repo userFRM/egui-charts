@@ -139,6 +139,7 @@ pub trait Datafeed: MaybeSend + 'static {
     }
 
     /// Describes `symbol`. The default reports [`Instrument::new`] of the symbol.
+    /// Fill [`Instrument::profile_resolutions`] to suggest the bars volume profile studies read.
     fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
         reply.send(Ok(Instrument::new(symbol)));
     }
