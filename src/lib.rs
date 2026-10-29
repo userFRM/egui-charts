@@ -106,6 +106,7 @@
 //! public fields. Include a fallback arm when matching a `#[non_exhaustive]` enum.
 
 // ─── Crate-level lint configuration ──────────────────────────────────────────
+#![warn(unnameable_types)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::module_inception)]
 #![allow(clippy::needless_range_loop)]

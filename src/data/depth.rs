@@ -9,10 +9,8 @@ use std::collections::VecDeque;
 /// deltas make room beyond it, so a feed cannot grow either count without limit.
 pub(crate) const MAX_LEVELS: usize = 10_000;
 
-/// One side of the book, ascending by key with the best level last, so that the frequent changes
-/// near the touch shift few levels and reuse the side's capacity instead of allocating. Bids are
-/// keyed by [`key`] of their price and asks by its complement, which orders them the other
-/// way.
+/// One side of the book, ascending by key with the best level last. Bids are keyed by [`key`]
+/// of their price and asks by its complement, which orders them the other way.
 type Side = Vec<(u64, OrderBookLevel)>;
 
 /// A book built from a snapshot and the deltas that follow it. Without a snapshot, or after a
@@ -34,6 +32,9 @@ pub(crate) struct Book {
     symbol: String,
     bids: Side,
     asks: Side,
+    /// Reused sorted change indices and merged suffixes, checked before either side is replaced.
+    changes: Vec<(u64, usize)>,
+    merged: [Side; 2],
     /// Deltas pushed while the book has no snapshot: one run of consecutive sequence numbers.
     held: VecDeque<(u64, OrderBook)>,
     /// Levels of the held deltas, an empty delta counting as one so a stream of them is bounded.
@@ -108,22 +109,34 @@ impl Book {
                 return Err(lost);
             }
         }
-        for (side, levels, order) in [
-            (&mut self.bids, &changes.bids, 0),
-            (&mut self.asks, &changes.asks, u64::MAX),
-        ] {
-            for level in levels {
-                let key = key(self.tick, level.price) ^ order;
-                match side.binary_search_by_key(&key, |(key, _)| *key) {
-                    Ok(at) if level.size > 0.0 => side[at].1 = level.clone(),
-                    Ok(at) => _ = side.remove(at),
-                    Err(at) if level.size > 0.0 => side.insert(at, (key, level.clone())),
-                    Err(_) => {}
-                }
-            }
+        let bids = merge_side(
+            &self.bids,
+            &changes.bids,
+            self.tick,
+            0,
+            &mut self.changes,
+            &mut self.merged[0],
+        );
+        let asks = merge_side(
+            &self.asks,
+            &changes.asks,
+            self.tick,
+            u64::MAX,
+            &mut self.changes,
+            &mut self.merged[1],
+        );
+        if self.changes.capacity() > MAX_LEVELS {
+            self.changes = Vec::new();
         }
-        if self.bids.len().max(self.asks.len()) > MAX_LEVELS {
+        let (Some(bids), Some(asks)) = (bids, asks) else {
             return Err(self.lose(true));
+        };
+        for ((side, at), merged) in [(&mut self.bids, bids), (&mut self.asks, asks)]
+            .into_iter()
+            .zip(&mut self.merged)
+        {
+            side.truncate(at);
+            side.append(merged);
         }
         (self.sequence, self.ts, self.changed) = (Some(sequence), changes.ts, true);
         Ok(())
@@ -208,6 +221,52 @@ impl Book {
     }
 }
 
+/// Sorts changes once and merges the touched suffix into a reused buffer. Returns its start,
+/// bounding the result before either side is replaced; an unchanged side has an empty suffix.
+fn merge_side(
+    side: &Side,
+    levels: &[OrderBookLevel],
+    tick: Option<f64>,
+    order: u64,
+    changes: &mut Vec<(u64, usize)>,
+    merged: &mut Side,
+) -> Option<usize> {
+    merged.clear();
+    if levels.is_empty() {
+        return Some(side.len());
+    }
+    changes.clear();
+    changes.extend(
+        levels
+            .iter()
+            .enumerate()
+            .map(|(at, level)| (key(tick, level.price) ^ order, at)),
+    );
+    // Index breaks ties so the last entry wins without an allocating stable sort.
+    changes.sort_unstable_by_key(|&(key, at)| (key, std::cmp::Reverse(at)));
+    changes.dedup_by_key(|(key, _)| *key);
+    let at = side.partition_point(|(key, _)| *key < changes[0].0);
+    let mut old = side[at..].iter().peekable();
+    for &(key, index) in changes.iter() {
+        while let Some(stored) = old.next_if(|(stored, _)| *stored < key) {
+            merged.push(stored.clone());
+        }
+        old.next_if(|(stored, _)| *stored == key);
+        let level = &levels[index];
+        if level.size > 0.0 {
+            merged.push((key, level.clone()));
+        }
+        if at + merged.len() > MAX_LEVELS {
+            return None;
+        }
+    }
+    if at + merged.len() + old.len() > MAX_LEVELS {
+        return None;
+    }
+    merged.extend(old.cloned());
+    Some(at)
+}
+
 /// Finite prices, finite and non-negative sizes.
 fn valid(book: &OrderBook) -> bool {
     (book.bids.iter().chain(&book.asks))
@@ -285,6 +344,17 @@ mod tests {
                 vec![Snapshot(1, book(&[(99.0, 5.0), (99.000000001, 0.0)],
                     &[(100.0, 5.0), (99.999999999, 0.0)]))],
                 vec![Ok(())], Some(book(&[], &[]))),
+            (Some(0.25), "delta duplicates keep the last update or removal on both sides",
+                vec![initial(), Delta(11, book(
+                    &[(99.0, 5.0), (99.000000001, 0.0), (97.0, 0.0), (97.0, 4.0)],
+                    &[(100.0, 0.0), (99.999999999, 7.0), (101.0, 4.0), (101.0, 0.0)]))],
+                vec![Ok(()), Ok(())], Some(book(&[(98.0, 2.0), (97.0, 4.0)], &[(99.999999999, 7.0)]))),
+            (None, "a delta larger than the limit can finish below it without retaining its buffer",
+                vec![Snapshot(1, deep(MAX_LEVELS)), Delta(2, book(
+                    &Vec::from_iter((0..MAX_LEVELS).map(|i| (i as f64, 2.0))
+                        .chain((0..MAX_LEVELS).map(|i| (i as f64, 0.0)))
+                        .chain([(42.0, 3.0)])), &[]))],
+                vec![Ok(()), Ok(())], Some(book(&[(42.0, 3.0)], &[]))),
             (None, "a gap clears the book and asks once",
                 vec![initial(), Delta(12, book(&[(99.0, 5.0)], &[])),
                     Delta(13, book(&[(99.0, 6.0)], &[]))],
@@ -312,7 +382,7 @@ mod tests {
                 vec![Snapshot(10, deep(MAX_LEVELS + 1))],
                 vec![lost(true, true)], None),
             (None, "a delta that makes a side deeper than the limit loses the book",
-                vec![Snapshot(10, deep(MAX_LEVELS)), Delta(11, book(&[(-1.0, 1.0)], &[]))],
+                vec![Snapshot(10, deep(MAX_LEVELS)), Delta(11, book(&[(MAX_LEVELS as f64, 1.0)], &[]))],
                 vec![Ok(()), lost(true, true)], Some(book(&[], &[]))),
             (None, "deltas pushed while waiting apply after an older snapshot",
                 vec![initial(), Delta(12, book(&[(99.0, 5.0)], &[])),
@@ -338,7 +408,14 @@ mod tests {
                 .into_iter()
                 .map(|push| match push {
                     Snapshot(sequence, book) => depth.snapshot(sequence, book),
-                    Delta(sequence, changes) => depth.delta(sequence, &changes),
+                    Delta(sequence, changes) => {
+                        let result = depth.delta(sequence, &changes);
+                        assert!(
+                            depth.changes.capacity() <= MAX_LEVELS,
+                            "{name}: change buffer"
+                        );
+                        result
+                    }
                 })
                 .collect();
             assert_eq!(got, outcomes, "{name}");
@@ -354,5 +431,24 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// Small deltas keep the warmed change buffer for the next update.
+    #[test]
+    fn small_deltas_keep_the_change_buffer() {
+        let mut depth = Book::new(None);
+        depth
+            .snapshot(10, book(&[(99.0, 1.0)], &[(100.0, 2.0)]))
+            .unwrap();
+        let changes = book(&[(99.0, 3.0)], &[(100.0, 4.0)]);
+        depth.delta(11, &changes).unwrap();
+        let capacity = depth.changes.capacity();
+        assert!(capacity > 0, "the first delta keeps its buffer");
+        depth.delta(12, &changes).unwrap();
+        assert_eq!(
+            depth.changes.capacity(),
+            capacity,
+            "the second delta reuses it"
+        );
     }
 }

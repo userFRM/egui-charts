@@ -25,16 +25,19 @@ instructions() {
 printf '| Scenario | Base instructions | Head instructions | Change | Tolerance |\n'
 printf '|---|---:|---:|---:|---:|\n'
 fail=0
-for scenario in frame-1000 frame-100000 frame-1000000 heikin tick tick-studies append append-studies studies drawings bubbles tpo-400 tpo-1600; do
+for scenario in frame-1000 frame-100000 frame-1000000 heikin tick tick-studies append append-studies studies drawings depth bubbles tpo-400 tpo-1600 trade-replay; do
+    # A replay already looks up 100,000 ids; one measured batch is enough.
+    samples=20
+    [[ $scenario != trade-replay ]] || samples=1
     base0=$(instructions "$base_bin" "$scenario" 0)
     head0=$(instructions "$head_bin" "$scenario" 0)
-    base20=$(instructions "$base_bin" "$scenario" 20)
-    head20=$(instructions "$head_bin" "$scenario" 20)
-    base=$(( base20 - base0 ))
-    head=$(( head20 - head0 ))
+    base_measured=$(instructions "$base_bin" "$scenario" "$samples")
+    head_measured=$(instructions "$head_bin" "$scenario" "$samples")
+    base=$(( base_measured - base0 ))
+    head=$(( head_measured - head0 ))
     (( base > 0 && head > 0 )) || { echo "::error::Invalid instruction delta for $scenario" >&2; exit 1; }
     change=$(awk -v b="$base" -v h="$head" 'BEGIN { printf "%+.2f%%", (h-b)*100/b }')
-    printf '| %s | %s | %s | %s | +5%% |\n' "$scenario" "$(( base / 20 ))" "$(( head / 20 ))" "$change"
+    printf '| %s | %s | %s | %s | +5%% |\n' "$scenario" "$(( base / samples ))" "$(( head / samples ))" "$change"
     # Compare unrounded counts so a value just above the threshold still fails.
     if (( head * 100 > base * 105 )); then
         echo "::error title=Performance regression::$scenario grew by $change (tolerance +5%)" >&2

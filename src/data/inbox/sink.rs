@@ -209,7 +209,9 @@ impl Sink {
                 live.last_trade = Some(slot);
             }
             if live.forming.is_none_or(|last| slot >= last) {
-                live.last_close = Some(bar.close);
+                if !bar.is_whitespace() {
+                    live.last_close = Some(bar.close);
+                }
                 live.empty = false;
             }
             live.forming = live.forming.max(Some(slot));
@@ -219,11 +221,14 @@ impl Sink {
 
     /// A trade, folded into the bar of its slot and kept for order flow, the oldest trades making
     /// room for new ones. Its size is added to that bar's volume, also when the bar came from a
-    /// history page. A feed must therefore not push trades that its history already counts; a feed
-    /// that cannot tell pushes bars instead. Trades older than the last accepted execution or
-    /// forming bar are dropped, and so is a trade whose id is among those of the last trades the
-    /// subscription folded, as many as its trade store holds. A trade stamped too far ahead of
-    /// the feed's current time is rejected, as [`Sink::set_server_time`] describes.
+    /// history page. Trades that arrive before history extend only the page's newest bar, which
+    /// must count only trades the stream did not send, or the feed must hold those trades until
+    /// the page is answered. Completed page bars replace bars built from ticks. A feed that cannot
+    /// tell pushes bars instead. Trades older than the last
+    /// accepted execution or forming bar are dropped, and so is a trade whose id is among those
+    /// of the last trades the subscription folded, as many as its trade store holds. A trade
+    /// stamped too far ahead of the feed's current time is rejected, as [`Sink::set_server_time`]
+    /// describes.
     /// Repeated ids can complete missing aggressor and resting order ids without adding volume.
     ///
     /// Trade-based intervals start at the first accepted execution of the subscription. Replay the
@@ -297,14 +302,13 @@ impl Sink {
     /// The levels that changed since the update numbered `sequence - 1`, each with its new size; a
     /// size of 0 removes the level. The `symbol` of `changes` is ignored. Taken by reference, so a
     /// feed can clear and refill one `OrderBook` for every delta instead of allocating its levels
-    /// per message: the book itself allocates nothing for a delta once its sides reached their
-    /// depth. A delta numbered at or
-    /// below the last one applied is ignored. After a gap, before the first snapshot, or when a
-    /// side would exceed 10,000 levels, the book is cleared and the chart calls
-    /// [`Datafeed::request_depth_snapshot`] once; a snapshot pushed before the chart sees the loss
-    /// cancels the call. Keep pushing deltas while the snapshot is fetched: those pushed while the
-    /// book waits are held, the oldest dropped beyond 10,000 levels in all, and the snapshot
-    /// applies the ones numbered above its own sequence.
+    /// per message. Changes are sorted by price and merged in one pass, with the last entry for
+    /// each price winning. A delta numbered at or below the last one applied is ignored. After a
+    /// gap, before the first snapshot, or when a side would exceed 10,000 levels, the book is
+    /// cleared and the chart calls [`Datafeed::request_depth_snapshot`] once; a snapshot pushed
+    /// before the chart sees the loss cancels the call. Keep pushing deltas while the snapshot is
+    /// fetched: those pushed while the book waits are held, the oldest dropped beyond 10,000
+    /// levels in all, and the snapshot applies the ones numbered above its own sequence.
     ///
     /// [`Datafeed::request_depth_snapshot`]: crate::data::Datafeed::request_depth_snapshot
     pub fn push_depth_delta(&self, sequence: u64, changes: &OrderBook) {
@@ -541,9 +545,14 @@ impl Live {
             updates.late_ticks += 1;
         } else {
             let replace_empty = live.empty && live.forming == Some(open);
+            let origin = if replace_empty {
+                Origin::TicksAfterHeartbeat(1)
+            } else {
+                Origin::Ticks(1)
+            };
             match updates.bars.entry(open) {
                 Entry::Occupied(mut pending) if replace_empty => {
-                    pending.insert((ticks, Origin::Live));
+                    pending.insert((ticks, origin));
                 }
                 Entry::Occupied(mut pending) => {
                     let (bar, origin) = pending.get_mut();
@@ -552,19 +561,12 @@ impl Live {
                         return;
                     };
                     *bar = folded;
-                    if let Origin::Ticks(trades) = origin {
+                    if let Origin::Ticks(trades) | Origin::TicksAfterHeartbeat(trades) = origin {
                         *trades += 1;
                     }
                 }
                 Entry::Vacant(slot) => {
-                    slot.insert((
-                        ticks,
-                        if replace_empty {
-                            Origin::Live
-                        } else {
-                            Origin::Ticks(1)
-                        },
-                    ));
+                    slot.insert((ticks, origin));
                 }
             }
             live.last_trade = Some(tick.ts);

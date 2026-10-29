@@ -274,7 +274,7 @@ fn count_bars_follow_accepted_trades_across_frames() {
         let sink = inbox.subscribe("ES".into(), clock.clone(), 10_000, None);
         let mut bars = BTreeMap::new();
         let mut merged = Vec::new();
-        let mut from_ticks = std::collections::BTreeSet::new();
+        let mut from_ticks = std::collections::BTreeMap::new();
         for i in 0..(count * 2 + 1) {
             let trade =
                 tick(at(0, 5), 100.0 + (i % 3) as f64, (i % 4 + 1) as f64).with_id(i as u64);
@@ -423,6 +423,14 @@ fn clock_boundaries_and_empty_intervals() {
             updates.bars[&boundary].0,
             Bar::new(boundary, 103.0, 103.0, 103.0, 103.0, 0.0)
         );
+        let mut bars = Vec::new();
+        let mut from_ticks = std::collections::BTreeMap::new();
+        super::super::merge::merge(
+            &mut bars,
+            &mut from_ticks,
+            &clock,
+            updates.bars.into_values().collect(),
+        );
         sink.push_tick(tick(boundary, 99.0, 4.0));
         sink.push_tick(tick(boundary + TimeDelta::milliseconds(1), 101.0, 5.0));
         let (_, updates) = inbox.drain().updates.pop().unwrap();
@@ -430,9 +438,16 @@ fn clock_boundaries_and_empty_intervals() {
             updates.bars[&boundary],
             (
                 Bar::new(boundary, 99.0, 101.0, 99.0, 101.0, 9.0),
-                Origin::Live
+                Origin::TicksAfterHeartbeat(2)
             )
         );
+        super::super::merge::merge(
+            &mut bars,
+            &mut from_ticks,
+            &clock,
+            updates.bars.into_values().collect(),
+        );
+        assert_eq!(bars, [Bar::new(boundary, 99.0, 101.0, 99.0, 101.0, 9.0)]);
     }
 }
 
@@ -765,4 +780,33 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
         updates.depth_columns.is_empty(),
         "new settings discard pending old rows"
     );
+}
+
+/// A whitespace bar keeps the last real close, so heartbeats after it append empty candles at that
+/// close, and without a real close they append none.
+#[test]
+fn heartbeats_after_whitespace_keep_the_last_real_close() {
+    for seeded in [true, false] {
+        let clock = BarClock::new(Timeframe::Min1);
+        let inbox = Arc::new(Inbox::default());
+        let sink = inbox.subscribe("ES".into(), clock.clone(), 10, None);
+        let (mut bars, mut from_ticks) = (Vec::new(), std::collections::BTreeMap::new());
+        if seeded {
+            sink.push_bar(Bar::new(at(0, 0), 109.0, 109.0, 109.0, 109.0, 1.0));
+        }
+        sink.push_bar(Bar::whitespace(at(1, 0)));
+        for minute in 2..=4 {
+            sink.advance_time(at(minute, 1));
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            let incoming = updates.bars.into_values().collect();
+            let merged = super::super::merge::merge(&mut bars, &mut from_ticks, &clock, incoming);
+            assert_eq!((updates.rejected, merged.rejected), (0, 0));
+        }
+        let empty = |minute| Bar::new(at(minute, 0), 109.0, 109.0, 109.0, 109.0, 0.0);
+        if seeded {
+            assert_eq!(bars[2..], [empty(2), empty(3), empty(4)]);
+        } else {
+            assert!(matches!(&bars[..], [bar] if bar.is_whitespace()));
+        }
+    }
 }
