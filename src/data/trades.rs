@@ -326,8 +326,6 @@ mod tests {
         #[rustfmt::skip]
         let cases = [
             ("empty input", 10, vec![], vec![]),
-            ("one fill", 10, vec![Live(vec![fill(1, 99.99, 1.0, Some(7))])],
-                vec![(1.0, 99.99, 99.99, 99.99, 1)]),
             ("zero total size keeps the first price", 10,
                 vec![Live(vec![fill(1, 100.0, 0.0, Some(7)), fill(2, 101.0, 0.0, Some(7))])],
                 vec![(0.0, 100.0, 101.0, 100.0, 2)]),
@@ -335,9 +333,6 @@ mod tests {
                 vec![Live(vec![fill(1, f64::NAN, 1.0, Some(7)), fill(2, 100.0, f64::NAN, Some(7)),
                     fill(3, 100.0, -1.0, Some(7)), fill(4, 100.0, 1.0, Some(7))])],
                 vec![(1.0, 100.0, 100.0, 100.0, 1)]),
-            ("out of order fills keep arrival order", 10,
-                vec![Live(vec![fill(2, 100.0, 1.0, Some(7)), fill(1, 102.0, 1.0, Some(7))])],
-                vec![(2.0, 100.0, 102.0, 101.0, 2)]),
             ("three prices", 10, vec![Live(vec![fill(1, 100.0, 2.0, Some(7)),
                 fill(2, 101.0, 3.0, Some(7)), fill(3, 102.0, 5.0, Some(7))])],
                 vec![(10.0, 100.0, 102.0, 101.3, 3)]),

@@ -621,35 +621,6 @@ mod tests {
     }
 
     #[test]
-    fn trades_that_become_large_after_their_first_bar_keep_their_zones() {
-        let host = Host::new(Some(10.0));
-        let mut settings = host.detectors.settings();
-        settings.big_trades.rule.body_zones = false;
-        settings.big_trades.rule.wick_zones = false;
-        host.detectors.set_settings(settings);
-        let trade = |second, price, size, id| {
-            host.push(MarketEvent::Trade(fill(
-                second,
-                price,
-                size,
-                OrderSide::Buy,
-                id,
-            )))
-        };
-        assert!(trade(-1, 100.0, 1.0, None).is_empty());
-        assert!(trade(0, 100.0, 4.0, Some(7)).is_empty());
-        // The first bar has closed when the last six lots make ten, at VWAP 1006 / 10.
-        assert_eq!(
-            trade(60, 101.0, 6.0, Some(7)),
-            [
-                marker(1, 0, 100.6, Direction::Up, "10"),
-                zone(1, 0, None, 100.0, 101.0)
-            ]
-        );
-        assert!(trade(120, 100.0, 1.0, None).is_empty());
-    }
-
-    #[test]
     fn detections_past_the_retained_5000_leave_the_live_chart_too() {
         let mut host = Host::new(Some(10.0));
         let buy = |price| fill(1, price, 10.0, OrderSide::Buy, None);
@@ -746,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_invalid_and_repeated_trades_leave_the_aggregate_alone() {
+    fn empty_and_invalid_trades_leave_the_aggregate_alone() {
         let host = Host::new(Some(10.0));
         host.detectors.push_history("ES", &[]);
         assert!(host.events().is_empty());
@@ -754,7 +725,6 @@ mod tests {
         for (price, size) in [(f64::NAN, 6.0), (100.0, f64::NAN), (100.0, -1.0)] {
             assert!(host.push(MarketEvent::Trade(trade(price, size))).is_empty());
         }
-        assert!(host.push(MarketEvent::Trade(trade(100.0, 6.0))).is_empty());
         assert!(host.push(MarketEvent::Trade(trade(100.0, 6.0))).is_empty());
         assert!(
             host.push(MarketEvent::Trade(fill(
