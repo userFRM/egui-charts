@@ -35,6 +35,10 @@ struct Stream {
     next_key: u64,
     /// Kept intact until success, including while newer live data arrives.
     history: Option<HistoryRequest>,
+    /// The chart's currency or unit conversion, which `clear_feed` replaces the stream on.
+    conversion: Option<String>,
+    /// Where older bars continue after an empty page.
+    cursor: Option<chrono::DateTime<chrono::Utc>>,
     retry_at: Option<f64>,
     failures: u32,
     end: bool,
@@ -61,21 +65,18 @@ impl Stream {
                     .history(history.clone(), self.inbox.reply(self.next_key));
             }
         } else {
-            self.feed
-                .resolve(&source.symbol, self.inbox.reply(self.next_key));
+            super::feed::resolve(
+                &*self.feed,
+                &source.symbol,
+                self.conversion.as_deref(),
+                self.inbox.reply(self.next_key),
+            );
         }
     }
 
     fn failed(&mut self, error: &FeedError, now: f64) {
         if error.is_recoverable() {
-            let backoff = std::time::Duration::from_secs(1 << self.failures.min(6))
-                .min(std::time::Duration::from_secs(60));
-            let delay = match error {
-                FeedError::RateLimited {
-                    retry_after: Some(after),
-                } => backoff.max(*after),
-                _ => backoff,
-            };
+            let delay = super::feed::retry_delay(self.failures, error);
             self.retry_at = Some(now + delay.as_secs_f64());
             self.failures = self.failures.saturating_add(1);
         }
@@ -296,7 +297,12 @@ impl Chart {
                         ctx.request_repaint_of(viewport);
                     }
                 });
-                feed.resolve(&request.symbol, inbox.reply(0));
+                super::feed::resolve(
+                    &**feed,
+                    &request.symbol,
+                    self.conversion.as_deref(),
+                    inbox.reply(0),
+                );
                 self.study_data.series.push(Series {
                     request: request.clone(),
                     bars: Vec::new(),
@@ -311,6 +317,8 @@ impl Chart {
                         pending: true,
                         next_key: 0,
                         history: None,
+                        conversion: self.conversion.clone(),
+                        cursor: None,
                         retry_at: None,
                         failures: 0,
                         end: false,
@@ -375,9 +383,11 @@ impl Chart {
                         answer
                             .downcast::<Result<MetricPage, FeedError>>()
                             .map(|result| {
-                                result.map(|page| HistoryPage {
-                                    bars: page.points.into_iter().map(Bar::from).collect(),
-                                    end_of_history: page.end_of_history,
+                                result.map(|page| {
+                                    HistoryPage::new(
+                                        page.points.into_iter().map(Bar::from).collect(),
+                                        page.end_of_history,
+                                    )
                                 })
                             })
                             .unwrap_or(Err(FeedError::NotSupported))
@@ -392,7 +402,18 @@ impl Chart {
                             let previous = stream.history.take().and_then(|request| request.before);
                             series.error = None;
                             stream.failures = 0;
-                            stream.end = page.end_of_history || page.bars.is_empty();
+                            let empty = page.bars.is_empty();
+                            let continuation = page.continue_before.filter(|_| empty);
+                            stream.cursor = continuation;
+                            stream.end =
+                                page.end_of_history || (empty && page.continue_before.is_none());
+                            if continuation.is_some_and(|at| previous.is_some_and(|b| at >= b)) {
+                                stream.cursor = None;
+                                stream.end = true;
+                                series.error = Some(FeedError::InvalidData(
+                                    "history continuation does not lie before the request".into(),
+                                ));
+                            }
                             let incoming = page
                                 .bars
                                 .into_iter()
@@ -405,6 +426,7 @@ impl Chart {
                                 incoming,
                             );
                             if previous.is_some()
+                                && continuation.is_none()
                                 && series.bars.first().map(|bar| bar.time) >= previous
                             {
                                 stream.end = true;
@@ -469,6 +491,7 @@ impl Chart {
                         timeframe: tf,
                         clock: series.clock.clone(),
                         extended_hours: extended,
+                        conversion: stream.conversion.clone(),
                         sink,
                     });
                 }
@@ -498,9 +521,17 @@ impl Chart {
                     symbol: series.request.symbol.clone(),
                     timeframe: series.request.timeframe.unwrap(),
                     clock: series.clock.clone(),
-                    before: series.bars.first().map(|bar| bar.time),
+                    before: series
+                        .bars
+                        .first()
+                        .map(|bar| bar.time)
+                        .into_iter()
+                        .chain(stream.cursor)
+                        .min(),
+                    since: None,
                     count,
                     extended_hours: extended,
+                    conversion: stream.conversion.clone(),
                 });
                 stream.request(&series.request);
             }
@@ -535,10 +566,7 @@ mod tests {
                 ),
                 _ => (vec![1.0; 5], 30),
             };
-            reply.send(Ok(HistoryPage {
-                bars: bars(&prices, minutes),
-                end_of_history: true,
-            }));
+            reply.send(Ok(HistoryPage::new(bars(&prices, minutes), true)));
         }
         fn metric_history(&self, _: MetricRequest, reply: Reply<MetricPage>) {
             reply.send(Ok(MetricPage {
@@ -717,14 +745,7 @@ mod tests {
                 let mut newest = bars(&[20.0], 60);
                 newest[0].time += Duration::hours(2);
                 assert_eq!(
-                    feed.answer(
-                        metric,
-                        Ok(HistoryPage {
-                            bars: newest,
-                            end_of_history: false
-                        })
-                    )
-                    .0,
+                    feed.answer(metric, Ok(HistoryPage::new(newest, false))).0,
                     None
                 );
                 pump(&mut chart, now + 0.25);
@@ -742,13 +763,7 @@ mod tests {
                 assert_eq!(feed.pending(metric), 0);
                 pump(&mut chart, now + 0.5 + delay);
                 assert_eq!(feed.pending(metric), 1);
-                let retried = feed.answer(
-                    metric,
-                    Ok(HistoryPage {
-                        bars: bars(&[12.0], 60),
-                        end_of_history: true,
-                    }),
-                );
+                let retried = feed.answer(metric, Ok(HistoryPage::new(bars(&[12.0], 60), true)));
                 assert_eq!(
                     retried, failed,
                     "retry must keep its boundary and count after a live prepend"
@@ -772,13 +787,7 @@ mod tests {
                 feed.answer(metric, Err(FeedError::Network("old page".into())));
                 pump(&mut chart, now + 12.0);
                 assert_eq!(chart.study_data_error(&request), None);
-                feed.answer(
-                    metric,
-                    Ok(HistoryPage {
-                        bars: bars(&[99.0], 60),
-                        end_of_history: true,
-                    }),
-                );
+                feed.answer(metric, Ok(HistoryPage::new(bars(&[99.0], 60), true)));
                 pump(&mut chart, now + 13.0);
                 assert_eq!(chart.study_data_error(&request), None);
                 assert_eq!(chart.study_data.series[0].bars[0].close, 99.0);

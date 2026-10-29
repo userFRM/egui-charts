@@ -3,9 +3,12 @@
 use crate::config::KeyboardAction;
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
+use crate::icons::icons;
 use crate::localization as l10n;
-use crate::services::{Storage, StoreKind};
+use crate::services::{ShareKind, Sharing, Storage, StoreKind};
 use crate::theme::ThemeExt;
+use crate::ui::share_controls::ShareControls;
+use crate::ui_kit::buttons::{ButtonSize, IconButton};
 use crate::ui_kit::list_item::{LabelContent, ListItem};
 use crate::widget::SavedLayout;
 use egui::Ui;
@@ -78,6 +81,11 @@ pub struct LayoutMenu {
     /// Whether the current layout is saved after each change; see
     /// [`autosave_due`](Self::autosave_due).
     pub autosave: bool,
+    /// Names of the starred layouts. The menu stars and unstars them, moves a name on a rename
+    /// and drops it on a delete; keep it between sessions in
+    /// [`UserSettings::layout_favorites`](crate::services::UserSettings::layout_favorites).
+    pub favorites: Vec<String>,
+    favorites_only: bool,
     editing: Option<bool>,
     new_name: String,
     storage: Option<Arc<dyn Storage>>,
@@ -92,6 +100,7 @@ pub struct LayoutMenu {
     /// A changed edit count with the input time it was first seen.
     changed: Option<(u64, f64)>,
     error: Option<String>,
+    share: ShareControls,
 }
 
 impl Default for LayoutMenu {
@@ -108,6 +117,8 @@ impl LayoutMenu {
             layouts: Vec::new(),
             config: LayoutMenuConfig::default(),
             autosave: false,
+            favorites: Vec::new(),
+            favorites_only: false,
             editing: None,
             new_name: String::new(),
             storage: None,
@@ -120,6 +131,7 @@ impl LayoutMenu {
             observed_layout: None,
             changed: None,
             error: None,
+            share: ShareControls::default(),
         }
     }
 
@@ -137,6 +149,13 @@ impl LayoutMenu {
         self.changed = None;
         self.storage = Some(storage);
         self.request(Request::List);
+    }
+
+    /// Offers copy-link and save-a-copy on the current stored layout, as `sharing` reports them.
+    /// A saved copy is read back from the [`Storage`] given to [`set_storage`](Self::set_storage),
+    /// where the host writes it.
+    pub fn set_sharing(&mut self, sharing: Arc<dyn Sharing>) {
+        self.share.set_service(sharing);
     }
 
     fn request(&mut self, request: Request) {
@@ -215,6 +234,9 @@ impl LayoutMenu {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
         let mut opened = None;
+        if self.share.poll(ctx).is_some() {
+            self.request(Request::List);
+        }
         loop {
             let answers = self.inbox.drain().answers;
             if answers.is_empty() {
@@ -256,6 +278,7 @@ impl LayoutMenu {
                             },
                             Ok(None) => {
                                 self.layouts.retain(|layout| *layout != name);
+                                self.favorites.retain(|layout| *layout != name);
                                 self.error = Some(format!("{name} no longer exists"));
                             }
                             Err(error) => self.error = Some(failed(&format!("open {name}"), error)),
@@ -273,6 +296,12 @@ impl LayoutMenu {
                                 if self.curr_layout.as_ref() == Some(&old) {
                                     self.curr_layout = Some(name.clone());
                                 }
+                                if old != name
+                                    && let Some(starred) =
+                                        self.favorites.iter_mut().find(|f| **f == old)
+                                {
+                                    *starred = name.clone();
+                                }
                                 if old != name {
                                     self.requests.push_front(Request::Delete(old));
                                 }
@@ -280,6 +309,7 @@ impl LayoutMenu {
                             }
                             (Request::Delete(name), Ok(())) => {
                                 self.layouts.retain(|layout| *layout != name);
+                                self.favorites.retain(|layout| *layout != name);
                             }
                             (Request::Save(name, _), Err(error)) => {
                                 if report {
@@ -489,7 +519,7 @@ impl LayoutMenu {
             action = LayoutAction::DownloadImage;
             ui.close();
         }
-        ui.toggle_value(&mut self.autosave, "Autosave")
+        ui.toggle_value(&mut self.autosave, l10n::text(ui.ctx(), "Autosave"))
             .on_hover_text(l10n::text(ui.ctx(), "Save the layout after each change"));
         if let Some(is_rename) = self.editing {
             let response = ui.add(
@@ -517,19 +547,57 @@ impl LayoutMenu {
                 ui.close();
             }
         }
+        if let Some(name) = self.curr_layout.as_deref()
+            && self.layouts.iter().any(|layout| layout == name)
+        {
+            self.share.show(ui, ShareKind::Layout, name);
+        }
         if self.layouts.is_empty() {
             return action;
         }
         ui.separator();
-        ui.colored_label(
-            ui.active_theme().ui.text_secondary,
-            l10n::text(ui.ctx(), "Layouts"),
-        );
+        ui.horizontal(|ui| {
+            ui.colored_label(
+                ui.active_theme().ui.text_secondary,
+                l10n::text(ui.ctx(), "Layouts"),
+            );
+            ui.toggle_value(&mut self.favorites_only, l10n::text(ui.ctx(), "Favorites"))
+                .on_hover_text(l10n::text(ui.ctx(), "Show only favorite layouts"));
+        });
+        let shown: Vec<&String> = self
+            .layouts
+            .iter()
+            .filter(|layout| !self.favorites_only || self.favorites.contains(layout))
+            .collect();
+        if shown.is_empty() {
+            ui.colored_label(
+                ui.active_theme().ui.text_secondary,
+                l10n::text(ui.ctx(), "No favorite layouts"),
+            );
+        }
+        let mut starred = None;
         egui::ScrollArea::vertical()
             .max_height(ui.available_height().clamp(0.0, 240.0))
             .show(ui, |ui| {
-                for layout in &self.layouts {
+                for layout in shown {
                     ui.horizontal(|ui| {
+                        let favorite = self.favorites.contains(layout);
+                        if IconButton::new(if favorite {
+                            &icons::STAR_FILLED
+                        } else {
+                            &icons::STAR_EMPTY
+                        })
+                        .size(ButtonSize::SM)
+                        .tooltip(if favorite {
+                            "Remove from favorites"
+                        } else {
+                            "Add to favorites"
+                        })
+                        .show(ui)
+                        .clicked()
+                        {
+                            starred = Some(layout.clone());
+                        }
                         if ui
                             .add_sized(
                                 egui::vec2(
@@ -558,6 +626,13 @@ impl LayoutMenu {
                     });
                 }
             });
+        if let Some(name) = starred {
+            if let Some(at) = self.favorites.iter().position(|f| *f == name) {
+                self.favorites.remove(at);
+            } else {
+                self.favorites.push(name);
+            }
+        }
         action
     }
 }
@@ -623,7 +698,8 @@ mod tests {
         menu.save("C", &layout);
         at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_none()));
         assert_eq!(menu.layouts, ["B", "C"]);
-        // A rename writes the new name before it deletes the old one.
+        // A rename writes the new name before it deletes the old one, and the star follows it.
+        menu.favorites = vec!["C".into(), "B".into()];
         menu.rename("A", &layout);
         at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_none()));
         assert!(host.0.lock().unwrap().contains_key("A"));
@@ -633,6 +709,7 @@ mod tests {
             host.0.lock().unwrap().keys().collect::<Vec<_>>(),
             ["A", "B"]
         );
+        assert_eq!(menu.favorites, ["A", "B"]);
         menu.rename("A", &layout);
         at(0.0, &mut |ctx| {
             menu.poll(ctx);
@@ -670,6 +747,9 @@ mod tests {
         assert_eq!(SavedLayout::from_json(&last).unwrap().mode, latest.mode);
         host.1.lock().unwrap().take().unwrap().send(Ok(()));
         menu.poll(&ctx);
+        menu.delete("B");
+        menu.poll(&ctx);
+        assert_eq!(menu.favorites, ["A"]);
         // Changing tabs starts a new debounce, without autosaving an unchanged tab.
         menu.curr_layout = Some("A".into());
         at(10.0, &mut |ctx| assert!(!menu.autosave_due(ctx, 99)));

@@ -714,7 +714,12 @@ mod tests {
             manager.drawings.push(line);
 
             manager.start_drag_handle(3, HandlePos::Start);
-            manager.update_drag_handle(Pos2::new(50.0, 50.0), |x| x, f64::from);
+            manager.update_drag_handle(
+                Pos2::new(50.0, 50.0),
+                |x| x,
+                f64::from,
+                |price, from, to| price + f64::from(to - from),
+            );
             manager.end_drag_handle();
             manager.delete_drawing(3);
             edit(&mut manager, |d| d.font_size = 30.0);
@@ -1186,14 +1191,24 @@ mod tests {
         assert_eq!(manager.drawings[0].chart_points[2].price, 50.0);
 
         manager.start_drag_handle(id, HandlePos::Point(2));
-        manager.update_drag_handle(Pos2::new(50.0, 105.0), x_to_bar, y_to_price);
+        manager.update_drag_handle(
+            Pos2::new(50.0, 105.0),
+            x_to_bar,
+            y_to_price,
+            |price, from, to| price - f64::from(to - from),
+        );
         manager.end_drag_handle();
         let points = &manager.drawings[0].chart_points;
         assert_eq!((points[1].price, points[2].price), (150.0, 95.0));
         assert_eq!(points[2].bar_idx, 110.0);
 
         manager.start_drag_handle(id, HandlePos::Point(1));
-        manager.update_drag_handle(Pos2::new(40.0, 85.0), x_to_bar, y_to_price);
+        manager.update_drag_handle(
+            Pos2::new(40.0, 85.0),
+            x_to_bar,
+            y_to_price,
+            |price, from, to| price - f64::from(to - from),
+        );
         manager.end_drag_handle();
         let points = &manager.drawings[0].chart_points;
         assert_eq!((points[1].bar_idx, points[1].price), (110.0, 115.0));

@@ -17,6 +17,7 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Utc};
 use egui::{Color32, Pos2, Rect};
+use serde::{Deserialize, Serialize};
 
 /// A price on a series axis, its tag colours, the map it is drawn on and its tag text.
 type AxisValue = (f64, (Color32, Color32), PriceMap, String);
@@ -50,7 +51,7 @@ fn shared_prices(
 }
 
 /// Display settings of a host-fed bar series.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SeriesOptions {
     /// Host-supplied title, displayed beside the series values.
     pub name: String,
