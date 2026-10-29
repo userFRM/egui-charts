@@ -1,16 +1,16 @@
 area,group,feature,status,provided_by,source
 Builder API,Broker API,Account information and account manager,done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs
-Builder API,Broker API,Brackets,done,host,src/model/trading.rs;src/ui/trading/ticket.rs;src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs
-Builder API,Broker API,Broker capability flags,done,host,src/model/trading.rs;src/ui/trading/mod.rs;src/ui/trading/ticket.rs;src/services/broker.rs;src/ui/trading/dom.rs;src/ui/trading/account_panel.rs
+Builder API,Broker API,Brackets,done,host,src/model/trading.rs;src/ui/trading/ticket/mod.rs;src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs
+Builder API,Broker API,Broker capability flags,done,host,src/model/trading.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/services/broker.rs;src/ui/trading/dom.rs;src/ui/trading/account_panel.rs
 Builder API,Broker API,Broker connection contract,done,host,src/services/broker.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Broker host callbacks,done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs
 Builder API,Broker API,Buy and sell buttons on the chart,done,host,src/chart/renderers/legend/mod.rs;src/widget/mod.rs;src/ui/trading/mod.rs
-Builder API,Broker API,Depth of market trading ladder,done,host,src/ui/trading/ticket.rs;src/ui/trading/dom.rs;src/ui/trading/mod.rs
+Builder API,Broker API,Depth of market trading ladder,done,host,src/ui/trading/ticket/mod.rs;src/ui/trading/dom.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Executions shown on the chart,done,host,src/ui/trading/mod.rs;src/ui/trading/executions.rs
-Builder API,Broker API,Instrument trading info and formatters,partial,host,src/model/trading.rs;src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/ticket.rs;src/ui/trading/account_panel.rs;src/ui/trading/format.rs;src/ui/trading/dom.rs
+Builder API,Broker API,Instrument trading info and formatters,partial,host,src/model/trading.rs;src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/account_panel.rs;src/ui/trading/format.rs;src/ui/trading/dom.rs
 Builder API,Broker API,Order and position lines on the chart,done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Builder API,Broker API,"Order placement, modification and cancellation",done,host,src/services/broker.rs;src/ui/trading/mod.rs
-Builder API,Broker API,Order ticket and order or position dialogs,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket.rs;src/ui/trading/account_panel.rs
+Builder API,Broker API,Order ticket and order or position dialogs,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/account_panel.rs
 Builder API,Broker API,"Order, position and execution queries",partial,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs
 Builder API,Broker API,Trading entry points in the UI,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs/trading.rs
 Builder API,Builder integration,Custom drawing tools from a downstream crate,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
@@ -396,8 +396,8 @@ Order flow,Order flow,Delta % and bid/ask ratio highlight markers on bars,done,l
 Order flow,Order flow,Delta POC per bar,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs
 Order flow,Order flow,Delta split into trade-size ranges,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/data/order_flow.rs
 Order flow,Order flow,Depth ladder liquidity and execution columns,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs
-Order flow,Order flow,"Depth ladder order entry, editing and brackets",partial,host,src/ui/trading/dom.rs;src/ui/trading/ticket.rs;src/ui/trading/mod.rs
-Order flow,Order flow,Depth ladder session and resettable profiles,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/ui/trading/ticket.rs
+Order flow,Order flow,"Depth ladder order entry, editing and brackets",partial,host,src/ui/trading/dom.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/mod.rs
+Order flow,Order flow,Depth ladder session and resettable profiles,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs
 Order flow,Order flow,Depth ladder with configurable visible levels,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/data/depth.rs
 Order flow,Order flow,Developing POC line through the session,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs
 Order flow,Order flow,Diagonal imbalance detection and highlighting,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
@@ -879,18 +879,18 @@ Terminal,Toolbars and panels,Undo / redo,partial,library,src/widget/history.rs;s
 Terminal,Toolbars and panels,Zoom in / zoom out buttons in the drawing toolbar,done,library,src/ui/drawing_toolbar/utilities/zoom.rs;src/widget/mod.rs;terminal/src/drawings.rs
 Terminal,Trading panel,Account manager,done,host,src/ui/trading/mod.rs;src/ui/trading/account_panel.rs
 Terminal,Trading panel,Bottom trading panel container,done,library,src/ui/trading/account_panel.rs
-Terminal,Trading panel,Brackets: take-profit and stop-loss attached to an entry,done,host,src/ui/trading/ticket.rs;src/ui/trading/mod.rs;src/services/paper.rs
+Terminal,Trading panel,Brackets: take-profit and stop-loss attached to an entry,done,host,src/ui/trading/ticket/mod.rs;src/ui/trading/mod.rs;src/services/paper.rs
 Terminal,Trading panel,Buy/Sell buttons on the chart,done,host,src/ui/symbol_header.rs;src/ui/trading/mod.rs
-Terminal,Trading panel,DOM / depth-of-market ladder with click-to-trade,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket.rs;src/ui/trading/dom.rs;src/widget/feed/mod.rs
+Terminal,Trading panel,DOM / depth-of-market ladder with click-to-trade,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/dom.rs;src/widget/feed/mod.rs
 Terminal,Trading panel,"Drag orders, take-profit and stop-loss on the chart to modify",done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs
 Terminal,Trading panel,Execution markers on the chart,done,library,src/ui/trading/mod.rs;src/ui/trading/executions.rs
 Terminal,Trading panel,Order and position lines on the chart,done,library,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
-Terminal,Trading panel,Order ticket,done,library,src/ui/trading/ticket.rs;src/ui/trading/mod.rs
+Terminal,Trading panel,Order ticket,done,library,src/ui/trading/ticket/mod.rs;src/ui/trading/mod.rs
 Terminal,Trading panel,Paper trading account,done,library,src/services/paper.rs;src/model/trading.rs
 Terminal,Trading panel,Place an order from the chart context menu,done,host,src/ui/trading/mod.rs;src/ui/context_menu/mod.rs
 Terminal,Trading panel,"Position line with P&L, close and reverse",done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Terminal,Trading panel,"Show/hide positions, orders and executions",done,library,src/ui/trading/mod.rs
-Terminal,Trading panel,Time in force and order presets,done,library,src/ui/trading/ticket.rs
+Terminal,Trading panel,Time in force and order presets,done,library,src/ui/trading/ticket/mod.rs
 Terminal,Trading panel,Trade button and broker / paper account picker,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/broker_picker.rs
 Terminal,Trading panel,Trading notifications,done,host,src/ui/trading/mod.rs
 Terminal,Watchlists and screeners,Add to watchlist from the chart context menu,done,library,src/ui/context_menu/mod.rs;src/ui/widget_bar/panels/watchlist.rs
