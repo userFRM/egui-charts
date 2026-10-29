@@ -263,8 +263,10 @@ impl Chart {
     /// Sets chart behavior options (builder pattern).
     ///
     /// Controls bar spacing, scroll/zoom constraints, right offset, and
-    /// time scale behavior. Applies the time scale options immediately.
+    /// time scale behavior. Applies the time scale options immediately. A non-finite
+    /// `bar_spacing`, `right_offset` or `right_offset_pixels` keeps its previous value.
     pub fn with_chart_options(mut self, options: ChartOptions) -> Self {
+        let options = self.finite_time_scale_options(options);
         {
             let ts_opt = &options.time_scale;
             self.state.time_scale_mut().apply_options(

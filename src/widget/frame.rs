@@ -4148,6 +4148,33 @@ mod tests {
         options.crosshair.mode = crate::config::CrosshairMode::Magnet;
         chart.set_chart_options(options.clone());
         assert_eq!(chart.get_time_scale_state(), (3.0, -20.0));
+        // Invalid options retain the configured values, even after a pan and repeated applies.
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for field in 0..3 {
+                let mut invalid_options = options.clone();
+                match field {
+                    0 => invalid_options.time_scale.right_offset = invalid,
+                    1 => invalid_options.time_scale.right_offset_pixels = Some(invalid),
+                    _ => invalid_options.time_scale.bar_spacing = invalid,
+                }
+                chart.apply_synced_time_scale(3.0, -30.0);
+                for _ in 0..3 {
+                    chart.set_chart_options(invalid_options.clone());
+                    assert_eq!(
+                        chart.get_time_scale_state(),
+                        (3.0, -30.0),
+                        "{field}, {invalid}"
+                    );
+                }
+                assert_eq!(chart.chart_options(), &options);
+                chart = chart.with_chart_options(invalid_options);
+                assert_eq!(chart.chart_options(), &options);
+                chart.apply_synced_time_scale(3.0, -30.0);
+                chart.set_chart_options(chart.chart_options().clone());
+                assert_eq!(chart.get_time_scale_state(), (3.0, -30.0));
+            }
+        }
+        chart.apply_synced_time_scale(3.0, -20.0);
         options.time_scale.min_bar_spacing = 4.0;
         chart.set_chart_options(options.clone());
         assert_eq!(chart.get_time_scale_state(), (4.0, -20.0));
