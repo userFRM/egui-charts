@@ -39,20 +39,20 @@ pub use time_and_sales::*;
 pub use watchlist::*;
 
 /// Height shared by market data rows.
-pub(super) const ROW_HEIGHT: f32 = 26.0;
+const ROW_HEIGHT: f32 = 26.0;
 
 /// Height of a panel header row, which fits its title and action buttons.
-pub(super) const HEADER_HEIGHT: f32 = 40.0;
+const HEADER_HEIGHT: f32 = 40.0;
 
 /// Text in the bundled face at `weight`, such as 700 for bold.
-pub(super) fn weighted(size: f32, weight: f32, color: Color32) -> TextFormat {
+fn weighted(size: f32, weight: f32, color: Color32) -> TextFormat {
     let mut format = TextFormat::simple(FontId::proportional(size), color);
     format.coords.push("wght", weight);
     format
 }
 
 /// `value` with an explicit sign, unsigned when it rounds to zero, or a dash when not finite.
-pub(super) fn signed(value: f64, decimals: usize) -> String {
+fn signed(value: f64, decimals: usize) -> String {
     let text = grouped(value, decimals);
     if value > 0.0 && text.bytes().any(|b| matches!(b, b'1'..=b'9')) {
         format!("+{text}")
@@ -62,7 +62,7 @@ pub(super) fn signed(value: f64, decimals: usize) -> String {
 }
 
 /// A price with thousands separators and `decimals` decimals, or a dash when not finite.
-pub(super) fn grouped(value: f64, decimals: usize) -> String {
+fn grouped(value: f64, decimals: usize) -> String {
     if !value.is_finite() {
         return "-".to_owned();
     }
@@ -71,7 +71,7 @@ pub(super) fn grouped(value: f64, decimals: usize) -> String {
 
 /// Format price with decimals chosen by its magnitude, so a negative price
 /// keeps the decimals of the positive price of the same size
-pub(crate) fn format_price(price: f64, decimals: Option<u8>) -> String {
+fn format_price(price: f64, decimals: Option<u8>) -> String {
     if !price.is_finite() {
         return "\u{2014}".to_owned();
     }
@@ -80,7 +80,7 @@ pub(crate) fn format_price(price: f64, decimals: Option<u8>) -> String {
 }
 
 /// Decimals of a price label without instrument precision, chosen by the price's magnitude
-pub(crate) fn price_decimals(price: f64) -> u8 {
+fn price_decimals(price: f64) -> u8 {
     match price.abs() {
         m if m >= 10000.0 => 0,
         m if m >= 1000.0 => 1,
