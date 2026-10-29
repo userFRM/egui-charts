@@ -642,39 +642,22 @@ mod tests {
 
     #[test]
     fn test_default_formatter() {
+        let formatter = DefaultTimeFormatter::default().clone_box();
         let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 45).unwrap();
-        for (formatter, kind, expected) in [
-            (
-                DefaultTimeFormatter::default().clone_box(),
-                TickMarkType::Year,
-                "2024",
-            ),
-            (
-                DefaultTimeFormatter::default().clone_box(),
-                TickMarkType::Month,
-                "Jun",
-            ),
-            (
-                DefaultTimeFormatter::default().clone_box(),
-                TickMarkType::Time,
-                "14:30",
-            ),
-            (
-                DefaultTimeFormatter::default().clone_box(),
-                TickMarkType::TimeWithSeconds,
-                "14:30:45",
-            ),
-            (
-                TimeFormatterBuilder::new()
-                    .with_24_hour(false)
-                    .with_seconds(false)
-                    .build(),
-                TickMarkType::Time,
-                "02:30 PM",
-            ),
-        ] {
-            assert_eq!(formatter.format(time, kind), expected, "{kind:?}");
-        }
+
+        assert_eq!(formatter.format(time, TickMarkType::Year), "2024");
+        assert_eq!(formatter.format(time, TickMarkType::Month), "Jun");
+        assert_eq!(formatter.format(time, TickMarkType::Time), "14:30");
+        assert_eq!(
+            formatter.format(time, TickMarkType::TimeWithSeconds),
+            "14:30:45"
+        );
+
+        let twelve_hour = TimeFormatterBuilder::new()
+            .with_24_hour(false)
+            .with_seconds(false)
+            .build();
+        assert_eq!(twelve_hour.format(time, TickMarkType::Time), "02:30 PM");
     }
 
     #[test]

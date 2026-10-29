@@ -1383,7 +1383,9 @@ mod tests {
                     })
                     .unwrap_or(0.0);
                 assert_eq!(position, if closed == 4.0 { -2.0 } else { 0.0 });
-                assert!(!events.iter().any(|event| matches!(event, AccountEvent::Order(order) if order.status == OrderStatus::Working)));
+                assert!(!events.iter().any(
+                    |e| matches!(e, AccountEvent::Order(o) if o.status == OrderStatus::Working)
+                ));
                 if closed == 1.0 {
                     // One unit bought at 100 and sold at the reaching price 106 earns 6, not 5.
                     let account = events
