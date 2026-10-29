@@ -1,6 +1,7 @@
 use crate::chart::renderers::{ChartMapping, RenderContext};
 use crate::model::Bar;
 use crate::model::LineStyle;
+use crate::painting::dashed_line::{draw_dashed_polyline, draw_dotted_polyline};
 use crate::scales::PriceMap;
 use crate::studies::{CrossDirection, Indicator, IndicatorLineStyle, PlotStyle, PlotType};
 use crate::tokens::DESIGN_TOKENS;
@@ -113,12 +114,13 @@ pub(crate) fn paint_study_plot(
                 } else {
                     2.0
                 };
-                painter.extend(egui::Shape::dashed_line(
+                draw_dashed_polyline(
+                    painter,
                     points,
                     Stroke::new(plot.width, plot.color),
                     6.0 * scale,
                     4.0 * scale,
-                ));
+                );
             }
             LineStyle::Dotted | LineStyle::SparseDotted => {
                 let spacing = if plot.pattern == LineStyle::Dotted {
@@ -126,12 +128,7 @@ pub(crate) fn paint_study_plot(
                 } else {
                     8.0
                 };
-                painter.extend(egui::Shape::dotted_line(
-                    points,
-                    plot.color,
-                    spacing,
-                    plot.width * 0.5,
-                ));
+                draw_dotted_polyline(painter, points, plot.color, spacing, plot.width * 0.5);
             }
         },
         PlotType::Histogram | PlotType::Columns => {
@@ -674,6 +671,86 @@ mod tests {
     use egui::{RawInput, Rect, Vec2};
 
     use crate::studies::{BollingerBands, SMA, StandardErrorBands};
+
+    #[test]
+    fn patterned_study_plots_only_walk_visible_lengths() {
+        let clip = Rect::from_min_size(Pos2::ZERO, Vec2::splat(100.0));
+        let color = Color32::from_rgb(17, 71, 191);
+        let mut counts = Vec::new();
+        for (pattern, period) in [
+            (LineStyle::Dashed, 10.0),
+            (LineStyle::LargeDashed, 20.0),
+            (LineStyle::Dotted, 4.0),
+            (LineStyle::SparseDotted, 8.0),
+        ] {
+            let mut paths = vec![
+                vec![Pos2::new(50.0, -1e7), Pos2::new(50.0, 1e7)],
+                // Lengths 13 and 24 carry the pattern across the corner.
+                vec![
+                    Pos2::new(10.0, 10.0),
+                    Pos2::new(23.0, 10.0),
+                    Pos2::new(23.0, 34.0),
+                ],
+            ];
+            if matches!(pattern, LineStyle::Dotted | LineStyle::SparseDotted) {
+                // These centres are outside the clip, but their radius overlaps it.
+                paths.push(vec![
+                    Pos2::new(10.0, -1.0),
+                    Pos2::new(23.0, -1.0),
+                    Pos2::new(23.0, 34.0),
+                ]);
+            }
+            for points in paths {
+                let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+                    paint_study_plot(
+                        &ui.painter().with_clip_rect(clip),
+                        &points,
+                        PlotStyle {
+                            color,
+                            width: 4.0,
+                            pattern,
+                            plot_type: PlotType::Line,
+                            visible: true,
+                        },
+                        0.0,
+                    );
+                });
+                let painted: Vec<_> = std::mem::take(&mut output.shapes)
+                    .into_iter()
+                    .map(|shape| shape.shape)
+                    .collect();
+                output.drop_without_applying_deltas();
+                if points.len() == 2 {
+                    counts.push((pattern, painted.len(), (100.0 / period) as usize + 2));
+                } else {
+                    let expected = match pattern {
+                        LineStyle::Dashed => {
+                            Shape::dashed_line(&points, Stroke::new(4.0, color), 6.0, 4.0)
+                        }
+                        LineStyle::LargeDashed => {
+                            Shape::dashed_line(&points, Stroke::new(4.0, color), 12.0, 8.0)
+                        }
+                        _ => Shape::dotted_line(&points, color, period, 2.0),
+                    };
+                    assert_eq!(painted, expected, "in-pane pattern {pattern:?}");
+                }
+            }
+        }
+        assert!(
+            counts
+                .iter()
+                .all(|(_, count, bound)| *count > 0 && count <= bound),
+            "shape counts must follow the visible length: {counts:?}"
+        );
+        // Periods 10 and 20 give 10 and 5 dashes; dots include centres on the clip edge.
+        assert_eq!(
+            counts
+                .iter()
+                .map(|(_, count, _)| *count)
+                .collect::<Vec<_>>(),
+            [10, 5, 26, 13]
+        );
+    }
 
     #[test]
     fn plot_geometry_uses_the_selected_stroke_and_zero_baseline() {
