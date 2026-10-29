@@ -62,7 +62,7 @@ pub use annotations::{Annotation, MarkerType};
 pub(crate) use bar::SpanCache;
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
-pub(crate) use bar::{index_at, time_at};
+pub(crate) use bar::{index_at, index_at_with_timeframe, time_at, time_at_with_timeframe};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub use chart_style::{

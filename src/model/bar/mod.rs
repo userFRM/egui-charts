@@ -22,4 +22,4 @@ pub use patterns::CandlePatterns;
 #[cfg(feature = "widget")]
 mod time;
 #[cfg(feature = "widget")]
-pub(crate) use time::{index_at, time_at};
+pub(crate) use time::{index_at, index_at_with_timeframe, time_at, time_at_with_timeframe};

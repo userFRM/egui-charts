@@ -2,7 +2,6 @@
 //! clipboard holds a study's name, inputs and presentation.
 
 use crate::drawings::persistence::{DrawingStorage, SaveError, stored_to_drawing_with};
-use crate::model::index_at;
 use crate::studies::{InputValue, StudyScale, StudySettings};
 use crate::widget::{Chart, SeriesId};
 
@@ -55,7 +54,7 @@ impl Chart {
             for point in &stored.points {
                 if point
                     .time()
-                    .and_then(|time| index_at(self.state.shown(), time))
+                    .and_then(|time| self.time_to_index(time))
                     .is_none()
                 {
                     return Err(serde::de::Error::custom(
@@ -66,11 +65,8 @@ impl Chart {
             copies.push(stored_to_drawing_with(
                 stored,
                 |point| {
-                    index_at(
-                        self.state.shown(),
-                        point.time().expect("validated timestamp"),
-                    )
-                    .expect("validated time mapping") as f32
+                    self.time_to_index(point.time().expect("validated timestamp"))
+                        .expect("validated time mapping") as f32
                 },
                 0,
             ));
