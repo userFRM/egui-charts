@@ -44,7 +44,7 @@ impl Timed for TimeScaleEvent {
 }
 
 /// Items in supplied painting order, indexed by time so a frame visits only those near the view.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct TimeOrdered<T> {
     items: Vec<T>,
     /// Indices into `items` by time; equal times keep the supplied order.
