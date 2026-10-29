@@ -38,7 +38,7 @@ impl Drawing {
                         )
                         && let Shape::LineSegment { points, .. } = &mut s.shape
                         && self.points.get(..2) == Some(points.as_slice())
-                        && let Some((a, b)) = self.trend_line_ends(rect.min.x, rect.max.x)
+                        && let Some((a, b)) = self.trend_line_ends(rect)
                     {
                         *points = [a, b];
                     }
@@ -251,14 +251,13 @@ impl Drawing {
         };
         let b = self.points.get(1).copied().unwrap_or(a);
         let ends = match self.tool_type {
-            T::TrendLine | T::InfoLine | T::TrendAngle => self
-                .trend_line_ends(rect.min.x, rect.max.x)
-                .map(|(a, b)| [a, b]),
-            T::Ray => Some([a, super::lines::ray_end(a, b, rect)]),
-            T::ExtendedLine => Some(super::lines::extended_line(a, b, rect)),
-            T::Arrow | T::ArrowMarker => self
-                .trend_line_ends(rect.min.x, rect.max.x)
-                .map(|(a, b)| [a, b]),
+            T::TrendLine
+            | T::InfoLine
+            | T::TrendAngle
+            | T::Ray
+            | T::ExtendedLine
+            | T::Arrow
+            | T::ArrowMarker => self.trend_line_ends(rect).map(|(a, b)| [a, b]),
             T::HorizontalLine => Some([Pos2::new(rect.min.x, a.y), Pos2::new(rect.max.x, a.y)]),
             T::HorizontalRay => Some([a, Pos2::new(rect.max.x, a.y)]),
             T::VerticalLine => Some([Pos2::new(a.x, rect.min.y), Pos2::new(a.x, rect.max.y)]),
@@ -272,6 +271,7 @@ impl Drawing {
                     | T::InfoLine
                     | T::TrendAngle
                     | T::ExtendedLine
+                    | T::Ray
                     | T::Arrow
                     | T::ArrowMarker
             ) && (b.x < a.x || (self.tool_type == T::ExtendedLine && b.x == a.x && b.y < a.y))

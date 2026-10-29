@@ -10,8 +10,8 @@
 
 use super::{
     ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig,
-    GhostCandleScreen, GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing,
-    RegressionTrendConfig, TimeframeVisibility,
+    GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing, RegressionTrendConfig,
+    TimeframeVisibility,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -96,10 +96,6 @@ pub struct Drawing {
     /// (empty for other tools); rebuilt with `points` by [`Self::update_screen_coords`]
     #[serde(skip)]
     pub level_ys: Vec<f32>,
-    /// Screen position of each candle a Ghost Feed projects (empty for other tools); rebuilt with
-    /// `points` by [`Self::update_screen_coords`]
-    #[serde(skip)]
-    pub(crate) ghost_candles: Vec<GhostCandleScreen>,
     /// Position as fractions of the pane width and height for anchored text and notes.
     /// `None` adopts the first displayed position, including for older saved drawings.
     #[serde(default)]
@@ -156,10 +152,10 @@ pub struct Drawing {
     /// Price and time divisions of Gann boxes and squares.
     #[serde(default)]
     pub gann: Option<GannConfig>,
-    /// Spacing and wick of the candles a Ghost Feed projects from its path.
+    /// Average range and noise, in ticks, of the candles a Ghost Feed projects.
     #[serde(default)]
     pub ghost_feed: Option<GhostFeedConfig>,
-    /// Whether a parallel channel draws its dashed halfway line.
+    /// Whether a rectangle or parallel channel draws its dashed halfway line.
     #[serde(default)]
     pub channel_midline: bool,
     /// Level lines and band fill of the pitchfork tools.
@@ -195,7 +191,6 @@ impl Drawing {
             points: Vec::new(),
             chart_points: Vec::new(),
             level_ys: Vec::new(),
-            ghost_candles: Vec::new(),
             screen_anchor: None,
             pane: None,
             color: [242, 54, 69, 255], // Default red (#F23645)
@@ -216,8 +211,11 @@ impl Drawing {
                 12.0
             },
             font_weight: FontWeight::Normal,
-            extend_left: false,
-            extend_right: false,
+            extend_left: tool_type == DrawingToolType::ExtendedLine,
+            extend_right: matches!(
+                tool_type,
+                DrawingToolType::Ray | DrawingToolType::ExtendedLine
+            ),
             arrow_start_style: ArrowStyle::None,
             arrow_end_style: if matches!(
                 tool_type,
@@ -284,26 +282,6 @@ impl Drawing {
             .fib_levels()
             .map(|(_, prices)| prices.into_iter().map(&price_to_y).collect())
             .unwrap_or_default();
-        self.ghost_candles = if self.tool_type == DrawingToolType::GhostFeed {
-            let config = self.ghost_feed.unwrap_or_default();
-            let half_width =
-                |bar: f32| (bar_to_x(bar + config.spacing as f32) - bar_to_x(bar)).abs() * 0.35;
-            config
-                .candles(&self.chart_points)
-                .into_iter()
-                .map(|c| GhostCandleScreen {
-                    x: bar_to_x(c.bar_idx + config.spacing as f32 / 2.0),
-                    half_width: half_width(c.bar_idx),
-                    open: price_to_y(c.open),
-                    high: price_to_y(c.high),
-                    low: price_to_y(c.low),
-                    close: price_to_y(c.close),
-                    rising: c.close > c.open,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
     }
 
     /// Rebuilds anchored text and note coordinates relative to the pane. Call after

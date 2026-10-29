@@ -21,20 +21,42 @@ impl Drawing {
         }
     }
 
-    /// Ends of a trend line from left to right, the left one extended to `min_x` and the right
-    /// one to `max_x` when the drawing extends that way; `None` below two anchors.
-    pub(crate) fn trend_line_ends(&self, min_x: f32, max_x: f32) -> Option<(Pos2, Pos2)> {
+    /// Ends from left to right, extended to the pane edges as configured; `None` below two
+    /// anchors. Vertical rays extend in anchor order, vertical extended lines top to bottom.
+    pub(crate) fn trend_line_ends(&self, rect: Rect) -> Option<(Pos2, Pos2)> {
         let &[a, b, ..] = self.points.as_slice() else {
             return None;
         };
+        if a.x == b.x {
+            use crate::drawings::DrawingToolType as T;
+            if matches!(self.tool_type, T::Ray | T::ExtendedLine) {
+                let (start, end) = if self.tool_type == T::ExtendedLine && b.y < a.y {
+                    (b, a)
+                } else {
+                    (a, b)
+                };
+                return Some((
+                    if self.extend_left {
+                        ray_end(end, start, rect)
+                    } else {
+                        start
+                    },
+                    if self.extend_right {
+                        ray_end(start, end, rect)
+                    } else {
+                        end
+                    },
+                ));
+            }
+        }
         let (mut left, mut right) = if a.x <= b.x { (a, b) } else { (b, a) };
         let slope = (right.y - left.y) / (right.x - left.x);
         if slope.is_finite() {
-            if self.extend_left && min_x < left.x {
-                left = Pos2::new(min_x, left.y + (min_x - left.x) * slope);
+            if self.extend_left && rect.min.x < left.x {
+                left = Pos2::new(rect.min.x, left.y + (rect.min.x - left.x) * slope);
             }
-            if self.extend_right && max_x > right.x {
-                right = Pos2::new(max_x, right.y + (max_x - right.x) * slope);
+            if self.extend_right && rect.max.x > right.x {
+                right = Pos2::new(rect.max.x, right.y + (rect.max.x - right.x) * slope);
             }
         }
         Some((left, right))
@@ -49,14 +71,14 @@ impl Drawing {
         color: Color32,
         stroke: Stroke,
     ) {
-        if let Some((left, right)) = self.trend_line_ends(rect.min.x, rect.max.x) {
+        if let Some((left, right)) = self.trend_line_ends(rect) {
             self.styled_segment(painter, left, right, stroke);
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
         }
     }
 
-    /// Render ray - extends from start through end to chart edge
+    /// Render a ray with its configured extensions and its start anchor.
     pub(crate) fn render_ray(
         &self,
         painter: &egui::Painter,
@@ -64,16 +86,13 @@ impl Drawing {
         color: Color32,
         stroke: Stroke,
     ) {
+        self.render_trend_line(painter, rect, color, stroke);
         if self.points.len() >= 2 {
-            let start = self.points[0];
-            self.styled_segment(painter, start, ray_end(start, self.points[1], rect), stroke);
-            painter.circle_filled(start, DESIGN_TOKENS.rounding.md, color);
-        } else if self.points.len() == 1 {
-            painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
+            painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.md, color);
         }
     }
 
-    /// Render extended line - extends infinitely in both directions
+    /// Render an extended line with its configured extensions and its anchors.
     pub(crate) fn render_extended_line(
         &self,
         painter: &egui::Painter,
@@ -81,16 +100,12 @@ impl Drawing {
         color: Color32,
         stroke: Stroke,
     ) {
+        self.render_trend_line(painter, rect, color, stroke);
         if self.points.len() >= 2 {
             let p1 = self.points[0];
             let p2 = self.points[1];
-            let [a, b] = extended_line(p1, p2, rect);
-            self.styled_segment(painter, a, b, stroke);
-
             painter.circle_filled(p1, DESIGN_TOKENS.rounding.sm, color);
             painter.circle_filled(p2, DESIGN_TOKENS.rounding.sm, color);
-        } else if self.points.len() == 1 {
-            painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
         }
     }
 
@@ -316,11 +331,30 @@ impl Drawing {
         }
     }
 
-    /// Render rect: its border and fill
-    pub(crate) fn render_rect(&self, painter: &egui::Painter, color: Color32, stroke: Stroke) {
-        if self.points.len() >= 2 {
-            let rect = Rect::from_two_pos(self.points[0], self.points[1]);
+    /// Rectangle border and fill bounds, including its configured extensions.
+    pub(crate) fn rectangle_bounds(&self, pane: Rect) -> Option<Rect> {
+        let &[a, b, ..] = self.points.as_slice() else {
+            return None;
+        };
+        let mut rect = Rect::from_two_pos(a, b);
+        if self.extend_left {
+            rect.min.x = rect.min.x.min(pane.min.x);
+        }
+        if self.extend_right {
+            rect.max.x = rect.max.x.max(pane.max.x);
+        }
+        Some(rect)
+    }
 
+    /// Render rect: its border and fill.
+    pub(crate) fn render_rect(
+        &self,
+        painter: &egui::Painter,
+        pane: Rect,
+        color: Color32,
+        stroke: Stroke,
+    ) {
+        if let Some(rect) = self.rectangle_bounds(pane) {
             // Fill if configured
             if let Some(fill) = self.fill_color {
                 let fill_color =
@@ -335,8 +369,24 @@ impl Drawing {
         }
     }
 
+    /// Draw the optional middle line after common border styling, so it stays thin and dashed.
+    pub(super) fn render_rect_middle_line(&self, painter: &egui::Painter, pane: Rect) {
+        if self.channel_midline
+            && let Some(rect) = self.rectangle_bounds(pane)
+        {
+            super::utils::draw_dashed_line(
+                painter,
+                Pos2::new(rect.min.x, rect.center().y),
+                Pos2::new(rect.max.x, rect.center().y),
+                Stroke::new(stroke::HAIRLINE, self.color32()),
+                DESIGN_TOKENS.rounding.lg,
+                DESIGN_TOKENS.rounding.md,
+            );
+        }
+    }
+
     /// Render the centre guides and the size labels of a rectangle that is selected or being
-    /// drawn; a deselected rectangle shows only its border and fill.
+    /// drawn. The optional persistent middle line is rendered separately.
     pub(crate) fn render_rect_guides(&self, painter: &egui::Painter) {
         if self.points.len() < 2 {
             return;
@@ -739,6 +789,153 @@ mod tests {
             assert_eq!(ray_end(start, end, rect), want);
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+
+        // y = x / 2 - 150: left edge is -150, right edge is 350.
+        use crate::drawings::{ArrowStyle, DrawingToolType};
+        for tool in [DrawingToolType::Ray, DrawingToolType::ExtendedLine] {
+            let defaults = Drawing::new(1, tool);
+            assert!(defaults.extend_right);
+            assert_eq!(defaults.extend_left, tool == DrawingToolType::ExtendedLine);
+            for (left, right, ys) in [
+                (false, false, [100., 300.]),
+                (false, true, [100., 600.]),
+                (true, false, [0., 300.]),
+                (true, true, [0., 600.]),
+            ] {
+                let mut vertical = defaults.clone();
+                vertical.points = vec![start, Pos2::new(500., 300.)];
+                vertical.extend_left = left;
+                vertical.extend_right = right;
+                assert_eq!(
+                    vertical.outline(rect).unwrap().lines,
+                    [ys.map(|y| Pos2::new(500., y))]
+                );
+            }
+            for (left, right, ends) in [
+                (false, false, [(500., 100.), (600., 150.)]),
+                (false, true, [(500., 100.), (1000., 350.)]),
+                (true, false, [(0., -150.), (600., 150.)]),
+                (true, true, [(0., -150.), (1000., 350.)]),
+            ] {
+                for reversed in [false, true] {
+                    let mut drawing = defaults.clone();
+                    drawing.points = vec![start, Pos2::new(600., 150.)];
+                    if reversed {
+                        drawing.points.reverse();
+                    }
+                    drawing.extend_left = left;
+                    drawing.extend_right = right;
+                    drawing.arrow_start_style = ArrowStyle::Square;
+                    drawing.arrow_end_style = ArrowStyle::Square;
+                    let expected = ends.map(|(x, y)| Pos2::new(x, y));
+                    assert_eq!(drawing.outline(rect).unwrap().lines, [expected]);
+                    let interaction = crate::drawings::services::DrawingInteraction::new();
+                    for (point, hit) in [
+                        (Pos2::new(400., 50.), left),
+                        (Pos2::new(550., 125.), true),
+                        (Pos2::new(800., 250.), right),
+                    ] {
+                        assert_eq!(
+                            interaction.hit_test(point, std::slice::from_ref(&drawing), "1D"),
+                            hit.then_some(1)
+                        );
+                    }
+                    let output = egui::Context::default().run_ui(Default::default(), |ui| {
+                        let view = ChartView {
+                            instrument: None,
+                            bars: &[],
+                            executions: None,
+                            revision: 0,
+                            bar_to_x: &|x| x,
+                            price_to_y: &|p| p as f32,
+                            time_axis: true,
+                        };
+                        drawing.render(ui.painter(), rect, &view);
+                    });
+                    assert!(output.shapes.iter().any(|s| matches!(&s.shape,
+                        egui::Shape::LineSegment { points, .. } if *points == expected)));
+                    for tip in expected {
+                        assert!(output.shapes.iter().any(|s| matches!(&s.shape,
+                            egui::Shape::Rect(r) if r.rect.center() == tip)));
+                    }
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
+    }
+
+    /// Extended zones paint and select the same box; the optional middle line stays thin and
+    /// dashed even with a wide border, and does not require selection.
+    #[test]
+    fn rectangle_extensions_and_middle_line_follow_the_painted_zone() {
+        use crate::drawings::{DrawingToolType, services::DrawingInteraction};
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.));
+        for (left, right, min, max) in [
+            (false, false, 100., 300.),
+            (true, false, 0., 300.),
+            (false, true, 100., 500.),
+            (true, true, 0., 500.),
+        ] {
+            for middle in [false, true] {
+                let mut drawing = Drawing::new(1, DrawingToolType::Rect);
+                assert!(!drawing.channel_midline);
+                drawing.points = vec![Pos2::new(300., 300.), Pos2::new(100., 100.)];
+                drawing.extend_left = left;
+                drawing.extend_right = right;
+                drawing.channel_midline = middle;
+                drawing.stroke_width = 5.;
+                drawing.fill_color = Some([10, 20, 30, 40]);
+                let expected = Rect::from_min_max(Pos2::new(min, 100.), Pos2::new(max, 300.));
+                let outline = drawing.outline(pane).expect("rectangle outline");
+                assert_eq!(Rect::from_points(&outline.areas[0]), expected);
+                let interaction = DrawingInteraction::new();
+                for (x, hit) in [(50., left), (200., true), (450., right)] {
+                    assert_eq!(
+                        interaction.hit_test(
+                            Pos2::new(x, 150.),
+                            std::slice::from_ref(&drawing),
+                            "1D"
+                        ),
+                        hit.then_some(1)
+                    );
+                }
+                let output = egui::Context::default().run_ui(Default::default(), |ui| {
+                    let view = ChartView {
+                        instrument: None,
+                        bars: &[],
+                        executions: None,
+                        revision: 0,
+                        bar_to_x: &|x| x,
+                        price_to_y: &|p| p as f32,
+                        time_axis: true,
+                    };
+                    drawing.render(ui.painter(), pane, &view);
+                });
+                assert!(output.shapes.iter().any(|s| matches!(&s.shape,
+                    egui::Shape::Rect(r) if r.rect == expected && r.fill == drawing.fill_color32().unwrap())));
+                let dashes: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match s.shape {
+                        egui::Shape::LineSegment { points, stroke }
+                            if points[0].y == 200. && points[1].y == 200. =>
+                        {
+                            Some((points, stroke))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(!dashes.is_empty(), middle);
+                if middle {
+                    assert_eq!(dashes.first().unwrap().0[0].x, min);
+                    assert!(dashes.last().unwrap().0[1].x > max - 10.);
+                    assert!(dashes.iter().all(|(p, s)| p[0].distance(p[1]) <= 8.
+                        && s.width == stroke::HAIRLINE
+                        && s.color == drawing.color32()));
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
     }
 
     /// Size labels and centre guides belong to a selected rectangle; a deselected one has

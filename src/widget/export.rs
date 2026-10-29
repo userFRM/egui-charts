@@ -543,13 +543,27 @@ impl Chart {
         chart.event_visibility = self.event_visibility.clone();
         // Freeze loaded source marks without connecting the offscreen chart to the host.
         if let Some(source) = &self.mark_source {
-            chart.marks.extend_from_slice(&source.page.bar_marks);
-            chart
+            chart.marks = self
+                .marks
+                .iter()
+                .chain(&source.page.bar_marks)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into();
+            chart.events = self
                 .events
-                .extend_from_slice(&source.page.time_scale_marks);
-            chart
+                .iter()
+                .chain(&source.page.time_scale_marks)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into();
+            chart.time_scale_events = self
                 .time_scale_events
-                .extend_from_slice(&source.page.events);
+                .iter()
+                .chain(&source.page.events)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into();
         }
         chart.desired_visible_bars = self.desired_visible_bars;
         chart.apply_visible_bars_once = self.apply_visible_bars_once;

@@ -586,7 +586,7 @@ fn price_at_y(price_to_y: &dyn Fn(f64) -> f32, y: f32, near: f64) -> Option<f64>
     Some((lo + hi) / 2.0)
 }
 
-/// Paints `text` over a `bg` box sized to it, the box placed at `pos` by `align`.
+/// Paints `text` over a `bg` box sized to it, placed at `pos` by `align`, and returns its bounds.
 pub(super) fn boxed_label(
     painter: &egui::Painter,
     align: egui::Align2,
@@ -594,17 +594,18 @@ pub(super) fn boxed_label(
     text: String,
     color: Color32,
     bg: Color32,
-) {
+) -> Rect {
     let galley = painter.layout_no_wrap(text, egui::FontId::proportional(typography::XS), color);
     let rect = align.anchor_size(pos, galley.size() + egui::vec2(8.0, 2.0));
     painter.rect_filled(rect, DESIGN_TOKENS.rounding.sm, bg);
     painter.galley(rect.center() - galley.size() / 2.0, galley, color);
+    rect
 }
 
 /// Milliseconds from bar `a` to bar `b`, from the bars' times. An index past either end of the
 /// series is placed at the most common spacing of the bars at that end; `None` with fewer than
 /// two bars.
-fn elapsed_ms(bars: &[Bar], a: f32, b: f32) -> Option<i64> {
+pub(super) fn elapsed_ms(bars: &[Bar], a: f32, b: f32) -> Option<i64> {
     let time = |index: f32| {
         let last = bars.len().checked_sub(1)?;
         let ms = |i: usize| bars[i].time.timestamp_millis();
@@ -638,7 +639,7 @@ fn spacing<'a>(bars: impl Iterator<Item = &'a Bar>) -> i64 {
 
 /// A duration in its two largest units: days and hours, hours and minutes, or minutes, and
 /// seconds below a minute.
-fn format_duration(ms: i64) -> String {
+pub(super) fn format_duration(ms: i64) -> String {
     let secs = ms.unsigned_abs() / 1000;
     match (secs / 86_400, secs / 3600 % 24, secs / 60 % 60) {
         (0, 0, 0) => format!("{secs}s"),

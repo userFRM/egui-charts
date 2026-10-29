@@ -306,7 +306,9 @@ impl IndicatorRenderer {
                 plot.config,
                 plot.color,
                 super::volume_profile::profile_span(&plot, coords),
-                plot.right_aligned,
+                crate::painting::volume_profile::ProfileStyle::Study {
+                    right_aligned: plot.right_aligned,
+                },
                 &|price| price_scale.price_to_y(price),
             );
         }
