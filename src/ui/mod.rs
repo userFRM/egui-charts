@@ -37,11 +37,13 @@ pub mod context_menu;
 pub mod export;
 pub mod financials;
 pub mod floating_replay_control;
+pub mod ideas;
 pub mod multi_chart;
 pub mod replay_status;
+mod share_controls;
 pub mod strategy_report;
+pub mod study_editor;
 pub mod symbol_header;
-pub mod terminal;
 mod tpo_context_menu;
 pub mod trading;
 

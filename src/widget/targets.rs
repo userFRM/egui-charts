@@ -266,10 +266,7 @@ mod tests {
     struct Feed(Mutex<Vec<(String, Reply<PriceTargets>)>>);
     impl Datafeed for Feed {
         fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
-            reply.send(Ok(HistoryPage {
-                bars: vec![],
-                end_of_history: true,
-            }));
+            reply.send(Ok(HistoryPage::new(vec![], true)));
         }
         fn price_targets(&self, symbol: &str, reply: Reply<PriceTargets>) {
             self.0.lock().unwrap().push((symbol.into(), reply));
