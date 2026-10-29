@@ -94,6 +94,7 @@ pub(crate) fn merge(
         }
         let old = stored.next_if(|old| slot(old) == at);
         let new = match (old, origin) {
+            (Some(old), Origin::Ticks(0)) if !old.is_whitespace() => old.clone(),
             (Some(old), Origin::TicksAfterHeartbeat(_)) if from_ticks.contains_key(&old.time) => {
                 from_ticks.remove(&old.time);
                 from_ticks.insert(bar.time, origin);
@@ -241,6 +242,16 @@ mod tests {
                 })
                 .collect()
         };
+        let heartbeat = {
+            let inbox = std::sync::Arc::new(crate::data::inbox::Inbox::default());
+            let sink = inbox.subscribe("ES".into(), Timeframe::Min1.into(), 100, None);
+            sink.push_tick(crate::model::Tick::new(at(0, 0), 10.0, 1.0, None));
+            inbox.drain();
+            sink.advance_time(at(1, 0));
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            let (bar, origin) = updates.bars.into_values().next().unwrap();
+            (origin, vec![bar])
+        };
         let heartbeat_trade = {
             let inbox = std::sync::Arc::new(crate::data::inbox::Inbox::default());
             let sink = inbox.subscribe("ES".into(), Timeframe::Min1.into(), 100, None);
@@ -254,6 +265,9 @@ mod tests {
         };
         #[rustfmt::skip]
         let cases = [
+            ("a heartbeat leaves the page bar in its slot unchanged",
+                vec![(History, vec![ohlcv(1, [12.0, 13.0, 11.5, 12.5, 6.0])]), heartbeat],
+                vec![ohlcv(1, [12.0, 13.0, 11.5, 12.5, 6.0])], (None, 0, 0)),
             ("a page bar folds in zero-size trades already in its slot",
                 vec![zero_size_trades[0].clone(),
                     (History, vec![ohlcv(0, [12.0, 13.0, 11.5, 12.5, 6.0])])],
