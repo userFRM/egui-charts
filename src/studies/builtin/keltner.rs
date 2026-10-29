@@ -27,7 +27,7 @@ use super::smoothing::Smoothing;
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Keltner Channels indicator
@@ -85,15 +85,6 @@ impl KeltnerChannels {
         self.lower_color = lower;
         self
     }
-
-    /// Calculate True Range
-    #[inline]
-    fn true_range(bar: &Bar, prev_close: f64) -> f64 {
-        let hl = bar.high - bar.low;
-        let hc = (bar.high - prev_close).abs();
-        let lc = (bar.low - prev_close).abs();
-        hl.max(hc).max(lc)
-    }
 }
 
 /// Construct with the conventional default parameters.
@@ -140,7 +131,7 @@ impl Indicator for KeltnerChannels {
                 }
                 let tr = state
                     .previous
-                    .map_or(bar.high - bar.low, |close| Self::true_range(bar, close));
+                    .map_or(bar.high - bar.low, |close| ATR::true_range(bar, close));
                 state.previous = Some(bar.close);
                 let middle = state.ema.next(
                     bar.close,

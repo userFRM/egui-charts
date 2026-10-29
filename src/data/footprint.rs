@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
+/// Inclusive thresholds allow a relative error of 1e-9, which covers the rounding of sizes
+/// summed trade by trade, and is far below one lot at any realistic volume.
+pub(crate) fn meets_threshold(value: f64, threshold: f64) -> bool {
+    value >= threshold * (1.0 - 1e-9)
+}
+
 /// Executed volume at one grouped price, with sells on the bid and buys on the ask.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FootprintLevel {
@@ -132,7 +138,8 @@ impl FootprintBar {
     }
 
     /// Contiguous value area grown from the POC toward the larger adjacent volume.
-    /// Ties add both sides. `share` is clamped to 0..=1, NaN to zero. Gaps hold zero volume.
+    /// Ties add one row on each side. `share` is clamped to 0..=1, NaN to zero.
+    /// Gaps hold zero volume.
     /// Returns inclusive lower and upper level keys; a zero-volume bar has no area.
     pub fn value_area(&self, share: f64) -> Option<(i64, i64)> {
         if self.volume() <= 0.0 {
@@ -209,7 +216,7 @@ impl FootprintBar {
         if !ratio.is_finite() || ratio < 1.0 {
             return (false, false);
         }
-        let dominant = |a: f64, b: f64| a > b && a / ratio >= b;
+        let dominant = |a: f64, b: f64| a > b && meets_threshold(a / ratio, b);
         if !diagonal {
             return (dominant(row.bid, row.ask), dominant(row.ask, row.bid));
         }
@@ -358,6 +365,11 @@ impl Footprint {
         self.min_size = min;
         self.max_size = max;
         Ok(())
+    }
+
+    /// Instrument tick size before price-row grouping.
+    pub fn tick_size(&self) -> f64 {
+        self.tick_size
     }
 
     /// Height of one grouped price row.
