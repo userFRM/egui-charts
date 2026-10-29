@@ -1938,6 +1938,9 @@ mod tests {
         let mut capabilities = Capabilities::default();
         (capabilities.limit, capabilities.stop, capabilities.brackets) = (true, true, true);
         let market = Market {
+            symbol: "ES",
+            formatter: None,
+            pip_value: None,
             last: Some(100.0),
             bid: Some(99.75),
             ask: Some(100.25),

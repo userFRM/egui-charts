@@ -592,8 +592,8 @@ mod tests {
             })
             .collect();
         let mut factory = IndicatorFactory::new();
-        factory.register("Spread", || {
-            Box::new(CustomIndicator::new("Spread", |bars| {
+        factory.register("Bar range", || {
+            Box::new(CustomIndicator::new("Bar range", |bars| {
                 bars.iter()
                     .map(|bar| IndicatorValue::Single(bar.high - bar.low))
                     .collect()
@@ -601,7 +601,7 @@ mod tests {
         });
         let mut chart = Chart::new(BarData::from_bars(bars.clone()));
         chart.set_symbol("A");
-        let spread = chart.add_indicator(factory.create("Spread").unwrap());
+        let spread = chart.add_indicator(factory.create("Bar range").unwrap());
         let rsi = chart.add_indicator(Box::new(RSI::new(5)));
         chart
             .set_indicator_source(
@@ -625,7 +625,7 @@ mod tests {
         chart.move_series_to_pane(extra, chart.series_pane(rsi).unwrap());
         assert!(
             chart.snapshot().is_err(),
-            "the built-in factory cannot rebuild Spread"
+            "the built-in factory cannot rebuild Bar range"
         );
         let json = SavedLayout {
             mode: ChartLayoutMode::Single,
@@ -658,7 +658,7 @@ mod tests {
             .indicators()
             .map(|(_, study)| study.name().to_owned())
             .collect();
-        assert_eq!(names, ["Spread", "RSI"]);
+        assert_eq!(names, ["Bar range", "RSI"]);
         let new_spread = restored.restored_series_id(spread.0).unwrap();
         let new_rsi = restored.restored_series_id(rsi.0).unwrap();
         assert_eq!(
