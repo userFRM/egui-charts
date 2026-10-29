@@ -12,7 +12,7 @@ use egui::{RichText, Ui};
 /// [`Profiles`](crate::services::Profiles) service. Details and follow state stay host-owned.
 /// Nothing is cached in the card, so replacing the directory's service clears what it shows.
 ///
-/// Handle `NotificationsAction::OpenProfile(id)` by selecting `id` in the host's layout, then
+/// Handle [`NotificationsAction::OpenProfile`] by selecting its profile in the host's layout, then
 /// call [`show`](Self::show) for it. Keep polling the directory every frame, including while
 /// the card is hidden. Install an egui image loader to display host-provided avatar URIs.
 ///
@@ -27,6 +27,8 @@ use egui::{RichText, Ui};
 /// ProfileCard::new(&selected).show(ui, &mut directory);
 /// # });
 /// ```
+///
+/// [`NotificationsAction::OpenProfile`]: crate::ui::widget_bar::panels::notifications::NotificationsAction::OpenProfile
 pub struct ProfileCard<'a> {
     id: &'a ProfileId,
 }
@@ -41,7 +43,7 @@ impl<'a> ProfileCard<'a> {
     /// A failed request keeps the reported follow state and may be retried or dismissed.
     pub fn show(self, ui: &mut Ui, directory: &mut ProfileDirectory) {
         let Some(profile) = directory.profile(self.id) else {
-            EmptyState::new(&l10n::text(ui.ctx(), "Profile unavailable")).show(ui);
+            EmptyState::new("Profile unavailable").show(ui);
             return;
         };
         let theme = ui.active_theme();
@@ -92,7 +94,7 @@ impl<'a> ProfileCard<'a> {
                     } else {
                         "Follow"
                     };
-                    if Button::new(l10n::text(ui.ctx(), label))
+                    if Button::new(label)
                         .primary()
                         .enabled(!pending)
                         .show(ui)
@@ -108,10 +110,7 @@ impl<'a> ProfileCard<'a> {
                     && let FollowStatus::Failed(message) = &operation.status
                 {
                     status_message(ui, MessageKind::Error, message);
-                    dismiss = Button::new(l10n::text(ui.ctx(), "Dismiss"))
-                        .small()
-                        .show(ui)
-                        .clicked();
+                    dismiss = Button::new("Dismiss").small().show(ui).clicked();
                 }
             });
         });
