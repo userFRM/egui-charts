@@ -95,12 +95,23 @@ impl ExchangeSessionProvider {
     }
 
     /// The trading date containing `time`, using the earliest window of that date for intraday
-    /// bars. Daily and longer bars carry their trading date in UTC.
+    /// bars. Daily and longer bars carry their trading date in UTC, or in this zone when they
+    /// open at its midnight.
     pub fn trading_date(&self, time: DateTime<Utc>) -> NaiveDate {
         if self.timeframe.duration_ms() >= Timeframe::Day1.duration_ms() {
-            time.date_naive()
+            self.bar_date(time)
         } else {
             self.trading_date_in(&self.opens([time]), time)
+        }
+    }
+
+    /// The date of a daily or longer bar: local when a clock aligned it to this zone's midnight.
+    fn bar_date(&self, open: DateTime<Utc>) -> NaiveDate {
+        let wall = self.wall_time(open);
+        if wall.time() == NaiveTime::MIN {
+            wall.date()
+        } else {
+            open.date_naive()
         }
     }
 
@@ -143,7 +154,8 @@ impl ExchangeSessionProvider {
     }
 
     /// Close of the last trading window in a daily, weekly or monthly bar. Daily and longer
-    /// bars carry their trading date in UTC; intraday bars use their active exchange window.
+    /// bars are dated as [`trading_date`](Self::trading_date) dates them; intraday bars use their
+    /// active exchange window.
     pub fn bar_session_close(
         &self,
         open: DateTime<Utc>,
@@ -160,7 +172,7 @@ impl ExchangeSessionProvider {
         {
             return None;
         }
-        let date = open.date_naive();
+        let date = self.bar_date(open);
         let end = match timeframe {
             _ if timeframe.duration_ms() == Timeframe::Day1.duration_ms() => date.succ_opt()?,
             Timeframe::Week1 => date.checked_add_days(chrono::Days::new(7))?,
@@ -468,7 +480,7 @@ mod tests {
     use chrono::{Duration, Weekday};
 
     #[test]
-    fn calendar_dividers_follow_utc_trading_dates_and_coarser_periods() {
+    fn calendar_dividers_follow_bar_dates_and_coarser_periods() {
         for (timeframe, dates, expected, break_type) in [
             (
                 Timeframe::Day1,
@@ -524,41 +536,44 @@ mod tests {
                 TimezoneId::named("America/New_York").unwrap(),
                 TimezoneId::named("Pacific/Chatham").unwrap(),
             ] {
+                // Bars stamped at midnight UTC, and bars a clock aligned to the zone's midnight.
+                let clock = crate::model::BarClock::new(timeframe).with_timezone(zone.clone());
                 let provider = ExchangeSessionProvider::new(zone, None).with_timeframe(timeframe);
-                let bars: Vec<_> = dates
+                let dates: Vec<_> = dates
                     .iter()
-                    .map(|&(year, month, day)| {
-                        Bar::new(
-                            Utc.with_ymd_and_hms(year, month, day, 0, 0, 0).unwrap(),
-                            1.0,
-                            1.0,
-                            1.0,
-                            1.0,
-                            1.0,
-                        )
-                    })
+                    .map(|&(year, month, day)| NaiveDate::from_ymd_opt(year, month, day).unwrap())
                     .collect();
-                let breaks = find_session_breaks(&bars, &provider);
-                assert!(breaks.iter().all(|(_, item)| item.break_type == break_type));
-                assert_eq!(
-                    breaks
+                for aligned in [false, true] {
+                    let bars: Vec<_> = dates
                         .iter()
-                        .map(|(i, item)| (*i, item.label.as_deref().unwrap()))
-                        .collect::<Vec<_>>(),
-                    expected,
-                    "{timeframe}"
-                );
-                for pair in bars.windows(2) {
+                        .map(|&date| {
+                            let open = if aligned {
+                                clock.open_on_date(date).unwrap()
+                            } else {
+                                date.and_time(NaiveTime::MIN).and_utc()
+                            };
+                            Bar::new(open, 1.0, 1.0, 1.0, 1.0, 1.0)
+                        })
+                        .collect();
+                    let breaks = find_session_breaks(&bars, &provider);
+                    assert!(breaks.iter().all(|(_, item)| item.break_type == break_type));
                     assert_eq!(
-                        provider.trading_date(pair[1].time),
-                        pair[1].time.date_naive()
+                        breaks
+                            .iter()
+                            .map(|(i, item)| (*i, item.label.as_deref().unwrap()))
+                            .collect::<Vec<_>>(),
+                        expected,
+                        "{timeframe} aligned {aligned}"
                     );
-                    let item = provider.session_break_between(&pair[0].time, &pair[1].time);
-                    let batch = breaks.iter().find(|(_, item)| item.ts == pair[1].time);
-                    assert_eq!(
-                        item.as_ref().map(|item| (&item.label, item.break_type)),
-                        batch.map(|(_, item)| (&item.label, item.break_type))
-                    );
+                    for (pair, date) in bars.windows(2).zip(&dates[1..]) {
+                        assert_eq!(provider.trading_date(pair[1].time), *date);
+                        let item = provider.session_break_between(&pair[0].time, &pair[1].time);
+                        let batch = breaks.iter().find(|(_, item)| item.ts == pair[1].time);
+                        assert_eq!(
+                            item.as_ref().map(|item| (&item.label, item.break_type)),
+                            batch.map(|(_, item)| (&item.label, item.break_type))
+                        );
+                    }
                 }
             }
         }
