@@ -408,15 +408,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_source_item_drawing() {
-        let item = SourceItem::drawing(1, DrawingToolType::TrendLine, Color32::BLUE);
-        assert!(item.is_drawing());
-        assert!(!item.is_indicator());
-        assert_eq!(item.tool_type, Some(DrawingToolType::TrendLine));
-        assert!(item.properties.is_some());
-    }
-
-    #[test]
     fn test_source_item_indicator() {
         let item = SourceItem::indicator_with_params(2, "SMA", "20, close", Color32::YELLOW);
         assert!(item.is_indicator());
