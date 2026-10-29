@@ -591,6 +591,15 @@ mod tests {
         host.subscribe();
         trade(&host, fill(30, 101.0, 1.0, Buy, None));
         trade(&host, fill(60, 101.0, 1.0, Buy, None));
+        let mut settings = host.detectors.settings();
+        settings.big_trades.rule.threshold = Threshold::Fixed(6.0);
+        host.detectors.set_settings(settings);
+        // The next bar closes on a six-lot at 99.99: (99.99 * (1 + 2 + 3)) / 6 = 99.99.
+        trade(&host, fill(120, 99.98, 1.0, Buy, None));
+        for (second, size) in [(130, 1.0), (131, 2.0), (132, 3.0)] {
+            trade(&host, fill(second, 99.99, size, Buy, Some(5)));
+        }
+        trade(&host, fill(180, 99.99, 1.0, Buy, None));
         assert_eq!(
             removed,
             [SignalEvent::Remove(SignalId("big-trade-zone-3".into()))]
