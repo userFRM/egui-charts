@@ -219,7 +219,12 @@ pub fn render_floating_tooltip(
         (
             study.label(),
             study.formatted_value(),
-            study.color.to_opaque(),
+            // A fully transparent colour holds no RGB, so it has no opaque form.
+            if study.color.a() == 0 {
+                options.text_color
+            } else {
+                study.color.to_opaque()
+            },
         )
     }));
 
@@ -764,45 +769,58 @@ mod tests {
         }
     }
 
-    /// Readout text keeps the plot's colour while removing its rendering opacity.
+    /// Readout text keeps the plot's colour while removing its rendering opacity, and a plot
+    /// without any colour falls back to the theme's text colour.
     #[test]
     fn study_readouts_paint_translucent_plot_colors_opaque() {
-        let ctx = egui::Context::default();
-        crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::dark());
-        let study = StudyValue {
-            formatted: None,
-            study: "Study".into(),
-            plot: "Plot".into(),
-            value: Some(12.5),
-            precision: 2,
-            format: crate::scales::StudyFormat::Fixed(2),
-            color: egui::Color32::from_rgba_unmultiplied(255, 0, 0, 0x99),
+        let options = TooltipOptions {
+            text_color: egui::Color32::from_rgb(10, 20, 30),
+            ..Default::default()
         };
-        let mut output = ctx.run_ui(Default::default(), |ui| {
-            render_floating_tooltip(
-                ui.painter(),
-                HOVER,
-                Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
-                &Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0),
-                None,
-                &TooltipOptions::default(),
-                egui::Color32::GREEN,
-                &crate::scales::TimeFormatterBuilder::new().build(),
-                60,
-                std::slice::from_ref(&study),
-                None,
-                ValueFormatters::default(),
-            );
-        });
-        let shapes = std::mem::take(&mut output.shapes);
-        output.drop_without_applying_deltas();
-        let color = shapes.iter().find_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) if text.galley.text() == "12.50" => {
-                Some(text.galley.job.sections[0].format.color)
-            }
-            _ => None,
-        });
-        assert_eq!(color, Some(egui::Color32::from_rgb(255, 0, 0)));
+        for (plot, expected) in [
+            (
+                egui::Color32::from_rgba_unmultiplied(255, 0, 0, 0x99),
+                egui::Color32::from_rgb(255, 0, 0),
+            ),
+            (egui::Color32::TRANSPARENT, options.text_color),
+        ] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::dark());
+            let study = StudyValue {
+                formatted: None,
+                study: "Study".into(),
+                plot: "Plot".into(),
+                value: Some(12.5),
+                precision: 2,
+                format: crate::scales::StudyFormat::Fixed(2),
+                color: plot,
+            };
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                render_floating_tooltip(
+                    ui.painter(),
+                    HOVER,
+                    Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
+                    &Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0),
+                    None,
+                    &options,
+                    egui::Color32::GREEN,
+                    &crate::scales::TimeFormatterBuilder::new().build(),
+                    60,
+                    std::slice::from_ref(&study),
+                    None,
+                    ValueFormatters::default(),
+                );
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let color = shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "12.50" => {
+                    Some(text.galley.job.sections[0].format.color)
+                }
+                _ => None,
+            });
+            assert_eq!(color, Some(expected), "plot colour {plot:?}");
+        }
     }
 
     /// The floating, held and tracking readouts lead with the instrument's symbol, and the

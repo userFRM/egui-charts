@@ -646,8 +646,10 @@ impl<'a> Legend<'a> {
                         } else {
                             "∅".to_owned()
                         };
+                        // A fully transparent colour holds no RGB, so it has no opaque form.
                         let color = study_colors
                             .get(index)
+                            .filter(|color| color.a() != 0)
                             .map_or(colors.text, |color| color.to_opaque());
                         layout.text(text, theme.text.ohlc, color, bounds.width());
                     }
