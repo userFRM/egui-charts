@@ -262,6 +262,7 @@ fn product(id: &str, icon: egui_charts::icons::Icon, title: &str, description: &
 /// Export formats the demo can perform, with browser downloads on the web.
 const EXPORT_FORMATS: &[ExportFormat] = &[
     ExportFormat::Png,
+    ExportFormat::Svg,
     ExportFormat::Csv,
     ExportFormat::Clipboard,
 ];
@@ -349,6 +350,7 @@ pub struct DemoApp {
     alert_dialog: AlertDialog,
     drawing_props: DrawingPropertiesDialog,
     keyboard_shortcuts: KeyboardShortcutsDialog,
+    data_table: egui_charts::ui::dialogs::DataTableDialog,
     interval_entry: Option<String>,
     interval_focus: bool,
     /// The saved-layout chooser of the Open layout shortcut is open.
@@ -610,6 +612,7 @@ impl DemoApp {
             alert_dialog: AlertDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
+            data_table: egui_charts::ui::dialogs::DataTableDialog::new(),
             interval_entry: None,
             interval_focus: false,
             open_layout: false,
@@ -1076,6 +1079,12 @@ impl DemoApp {
         self.show_interval_entry(ctx);
         self.show_open_layout(ctx);
 
+        if let egui_charts::ui::dialogs::DataTableAction::Export(csv) =
+            self.data_table.show(ctx, &self.chart)
+        {
+            self.save_text("chart_data.csv", &csv);
+        }
+
         // Export dialog (screenshot / CSV).
         match self.export_dialog.show(ctx) {
             ExportResponse::Export { config, save_path } => self.run_export(ctx, config, save_path),
@@ -1167,25 +1176,43 @@ impl DemoApp {
             ExportFormat::Png => ScreenshotTarget::File(save_path),
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
             ExportFormat::Csv => return self.export_csv(save_path),
+            ExportFormat::Svg => return self.export_svg(ctx, &config.image, save_path),
         };
         self.screenshot_requested = Some((target, config.image));
         ctx.request_repaint();
     }
 
     fn export_csv(&mut self, save_path: Option<std::path::PathBuf>) {
-        let from_dialog = save_path.is_some();
         let out = match self.chart.export_csv() {
             Ok(csv) => csv,
-            Err(error) => {
-                if from_dialog {
-                    self.export_dialog.mark_error(error.to_string());
-                }
-                self.notify(format!("Export failed: {error}"));
-                return;
-            }
+            Err(error) => return self.export_failed(save_path.is_some(), error.to_string()),
         };
+        self.write_export(save_path, "csv", out.as_bytes());
+    }
+
+    fn export_svg(
+        &mut self,
+        ctx: &egui::Context,
+        image: &egui_charts::widget::ImageExportOptions,
+        save_path: Option<std::path::PathBuf>,
+    ) {
+        match self.chart.export_svg(ctx, image) {
+            Ok(svg) => self.write_export(save_path, "svg", svg.as_bytes()),
+            Err(error) => self.export_failed(save_path.is_some(), error),
+        }
+    }
+
+    fn export_failed(&mut self, from_dialog: bool, error: String) {
+        if from_dialog {
+            self.export_dialog.mark_error(error.clone());
+        }
+        self.notify(format!("Export failed: {error}"));
+    }
+
+    fn write_export(&mut self, save_path: Option<std::path::PathBuf>, extension: &str, out: &[u8]) {
+        let from_dialog = save_path.is_some();
         let path = save_path.unwrap_or_else(|| {
-            let filename = format!("{}_export.csv", self.state.symbol);
+            let filename = format!("{}_export.{extension}", self.state.symbol);
             #[cfg(not(target_arch = "wasm32"))]
             return std::env::temp_dir().join(filename);
             #[cfg(target_arch = "wasm32")]
@@ -1194,7 +1221,7 @@ impl DemoApp {
         #[cfg(not(target_arch = "wasm32"))]
         let result = std::fs::write(&path, out).map_err(|e| e.to_string());
         #[cfg(target_arch = "wasm32")]
-        let result = browser_download(out.as_bytes(), &path);
+        let result = browser_download(out, &path);
         match result {
             Ok(()) => {
                 if from_dialog {
@@ -1202,12 +1229,7 @@ impl DemoApp {
                 }
                 self.notify(format!("Export successful: {}", path.display()));
             }
-            Err(error) => {
-                if from_dialog {
-                    self.export_dialog.mark_error(error.clone());
-                }
-                self.notify(format!("Export failed: {error}"));
-            }
+            Err(error) => self.export_failed(from_dialog, error),
         }
     }
 }
@@ -2853,6 +2875,7 @@ impl DemoApp {
                 }
             }
             ContextMenuAction::ResetChart => self.chart.reset_chart_view(),
+            ContextMenuAction::OpenDataTable => self.data_table.open(),
             ContextMenuAction::ExportCsv => self.export_csv(None),
             ContextMenuAction::Order(request) => self.trading.open_ticket(request),
             _ => {}
@@ -2960,6 +2983,7 @@ impl DemoApp {
 
     fn keyboard_dialog_open(&self) -> bool {
         self.keyboard_shortcuts.is_open
+            || self.data_table.is_open
             || self.quick_search.is_open()
             || self.symbol_search.is_open()
             || self.compare_dialog.is_open

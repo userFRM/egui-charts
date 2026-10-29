@@ -116,19 +116,14 @@ impl HeatmapStrip {
         self.cells.sort_by_key(|cell| cell.bar_idx);
     }
 
-    /// Append a cell in amortized constant time, in nondecreasing bar-index order.
-    /// Use [`Self::set_data`] to replace or insert historical cells.
-    ///
-    /// # Panics
-    /// Panics if `bar_idx` precedes the last cell's index.
+    /// Add a single cell, keeping the cells ordered by bar index. Appending in bar-index
+    /// order takes amortized constant time.
     pub fn add_cell(&mut self, bar_idx: usize, delta: f64, volume: f64) {
-        assert!(
-            self.cells.last().is_none_or(|last| last.bar_idx <= bar_idx),
-            "heatmap cells must be appended in bar-index order"
-        );
         self.max_abs_delta = self.max_abs_delta.max(delta.abs());
         self.max_volume = self.max_volume.max(volume);
-        self.cells.push(HeatmapCell::new(bar_idx, delta, volume));
+        let at = self.cells.partition_point(|cell| cell.bar_idx <= bar_idx);
+        self.cells
+            .insert(at, HeatmapCell::new(bar_idx, delta, volume));
     }
 
     /// Cells in bar-index order, with intensities normalized against all held deltas.
@@ -192,12 +187,17 @@ impl HeatmapStrip {
         let end = self
             .cells
             .partition_point(|cell| cell.bar_idx <= visible_range.1);
-        for cell in &self.cells[first..end] {
-            // Widen the paint to the right without changing the next bar's position.
+        for at in first..end {
+            let cell = &self.cells[at];
+            // Widen the paint to the right without changing the next bar's position, and stop it
+            // at the next cell so translucent cells never stack.
             let left = x(cell.bar_idx) - bar_width * 0.5;
+            let width = self.cells.get(at + 1).map_or(cell_width, |next| {
+                cell_width.min(x(next.bar_idx) - bar_width * 0.5 - left)
+            });
             let cell_rect = Rect::from_min_size(
                 Pos2::new(left, strip_rect.top()),
-                Vec2::new(cell_width, strip_rect.height()),
+                Vec2::new(width, strip_rect.height()),
             )
             .intersect(strip_rect);
             if !left.is_finite() || !cell_rect.is_positive() {
@@ -373,6 +373,12 @@ mod tests {
         appended.clear();
         appended.add_cell(0, 1.0, 1.0);
         assert_eq!(appended.cells().next().unwrap().intensity, 1.0);
+        appended.add_cell(5, 1.0, 1.0);
+        appended.add_cell(2, 1.0, 1.0);
+        assert_eq!(
+            appended.cells().map(|c| c.bar_idx).collect::<Vec<_>>(),
+            [0, 2, 5]
+        );
 
         strip.set_data([(0, 10.0, 1.0), (1, -10.0, 10.0), (2, 0.0, 5.0)]);
         strip.config.use_gradient = false;
@@ -448,6 +454,12 @@ mod tests {
                 Some(expected)
             );
             assert!(cells.iter().all(|r| rect.contains_rect(*r)));
+            assert!(
+                cells
+                    .windows(2)
+                    .all(|pair| pair[0].right() <= pair[1].left() + 1e-3),
+                "translucent cells do not stack, range {range:?}, offset {offset}"
+            );
         }
     }
 

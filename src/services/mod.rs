@@ -26,11 +26,15 @@ mod events;
 mod marks;
 mod notifications;
 mod paper;
+#[cfg(feature = "widget")]
+mod profile_directory;
+mod profiles;
 mod quotes;
 mod search;
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 mod settings;
+mod sharing;
 mod signals;
 mod storage;
 
@@ -38,7 +42,7 @@ mod storage;
 #[cfg_attr(docsrs, doc(cfg(feature = "alert-engine")))]
 pub use alert_engine::AlertEngine;
 pub use alerts::{AlertEvent, Alerts};
-pub use broker::{AccountEvent, Broker};
+pub use broker::{AccountEvent, Broker, HistoryKind, HistoryPage, HistoryRequest};
 pub use chats::{
     ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, NewChatRoom, NewChatRoomKind,
 };
@@ -46,12 +50,17 @@ pub use events::Events;
 #[cfg(feature = "widget")]
 pub(crate) use events::Listener;
 pub use marks::{Marks, MarksPage, MarksRequest};
-pub use notifications::{Notification, Notifications};
+pub use notifications::{Notification, NotificationTarget, Notifications};
 pub use paper::PaperAccount;
+#[cfg(feature = "widget")]
+#[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
+pub use profile_directory::{FollowOperation, FollowStatus, ProfileDirectory};
+pub use profiles::{Profile, ProfileEvent, ProfileId, Profiles};
 pub use quotes::Quotes;
 pub use search::{ExpressionError, SymbolExpression, SymbolQuery, SymbolSearch};
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub use settings::{MarketHeatmapSelection, SettingsStore, UserSettings};
+pub use sharing::{ShareKind, ShareLink, ShareOffer, Sharing};
 pub use signals::{SignalEvent, Signals};
-pub use storage::{Storage, StoreKind};
+pub use storage::{ConflictChoice, Revision, SaveOutcome, Storage, StoreKind, Versioned};

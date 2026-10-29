@@ -1,11 +1,11 @@
 //! The host's services and outputs, and their wiring into the chart slots.
 
 use super::Terminal;
-use crate::services::{
+use egui_charts::services::{
     Alerts, Broker, Chats, Marks, Notifications, Quotes, Signals, Storage, SymbolSearch,
 };
-use crate::ui::export::ExportFormat;
-use crate::ui::trading::BrokerTile;
+use egui_charts::ui::export::ExportFormat;
+use egui_charts::ui::trading::BrokerTile;
 use std::path::PathBuf;
 use std::sync::Arc;
 

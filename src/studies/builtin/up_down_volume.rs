@@ -252,3 +252,179 @@ impl Indicator for UpDownVolume {
             .to_vec()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::model::Bar;
+    use crate::studies::*;
+    use chrono::{TimeZone, Utc};
+
+    /// Candle direction, doji ties across parent bars and missing intrabar history stay distinct.
+    #[test]
+    fn up_down_volume_uses_host_intrabar_directions() {
+        use crate::model::{BarClock, Timeframe};
+        use crate::studies::{StudyData, StudyDataRequest};
+        let requested_interval = |study: &dyn Indicator| {
+            study
+                .data_requests()
+                .first()
+                .and_then(|request| request.timeframe)
+        };
+        let update = |study: &mut dyn Indicator, data: &[Bar], timeframe, bars: &[Bar]| {
+            study.update_data(
+                data,
+                0,
+                &[StudyData {
+                    request: StudyDataRequest {
+                        metric: None,
+                        symbol: String::new(),
+                        timeframe: Some(timeframe),
+                    },
+                    bars,
+                    clock: BarClock::new(timeframe),
+                    instrument: None,
+                    timeframe,
+                }],
+            );
+        };
+        let mut study = ConfiguredStudy::new(
+            IndicatorFactory::new()
+                .create("Up/Down Volume")
+                .expect("Up/Down Volume study"),
+        );
+        study.set_timeframe(Timeframe::Day1);
+        assert_eq!(requested_interval(&study), Some(Timeframe::Min5));
+        study.set_bar_clock(&BarClock::new(Timeframe::Min5));
+        assert_eq!(requested_interval(&study), Some(Timeframe::Min1));
+        study.set_bar_clock(&BarClock::new(Timeframe::Ms100));
+        assert_eq!(requested_interval(&study), None);
+        study.set_bar_clock(&BarClock::new(Timeframe::Min5));
+        let bars: Vec<_> = [0, 5, 10, 15]
+            .into_iter()
+            .map(|m| {
+                Bar::new(
+                    Utc.timestamp_opt(m * 60, 0).unwrap(),
+                    10.0,
+                    10.0,
+                    10.0,
+                    10.0,
+                    999.0,
+                )
+            })
+            .collect();
+        let intrabars: Vec<_> = [
+            (0, 10.0, 11.0, 10.0),
+            (1, 11.0, 10.0, 20.0),
+            (2, 10.0, 10.0, 30.0),
+            (5, 9.0, 9.0, 40.0),
+            (6, 9.0, 9.0, 50.0),
+            (15, 12.0, 13.0, 0.0),
+        ]
+        .into_iter()
+        .map(|(m, o, c, v)| {
+            Bar::new(
+                Utc.timestamp_opt(m * 60, 0).unwrap(),
+                o,
+                o.max(c),
+                o.min(c),
+                c,
+                v,
+            )
+        })
+        .collect();
+        update(&mut study, &bars, Timeframe::Min1, &intrabars);
+        // First parent: up=10+30, down=-20, delta=20. Next: -40+50=10.
+        for (i, want) in [
+            [Some(40.0), Some(-20.0), Some(20.0)],
+            [Some(50.0), Some(-40.0), Some(10.0)],
+            [None; 3],
+            [Some(0.0); 3],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (line, expected) in want.into_iter().enumerate() {
+                assert_eq!(
+                    study.values().value(line, i),
+                    expected,
+                    "bar {i}, line {line}"
+                );
+            }
+        }
+        // A stale interval is unavailable; malformed snapshots leave the accepted values intact.
+        update(&mut study, &bars, Timeframe::Min5, &intrabars);
+        assert_eq!(study.values().value(0, 0), None);
+        update(&mut study, &bars, Timeframe::Min1, &intrabars);
+        for invalid in [
+            {
+                let mut invalid = intrabars.clone();
+                invalid[1].time = invalid[0].time;
+                invalid
+            },
+            {
+                let mut invalid = intrabars.clone();
+                invalid[0].volume = -1.0;
+                invalid
+            },
+            {
+                let mut invalid = intrabars.clone();
+                invalid[0].open = f64::NAN;
+                invalid
+            },
+        ] {
+            update(&mut study, &bars, Timeframe::Min1, &invalid);
+            assert_eq!(study.values().value(2, 0), Some(20.0));
+        }
+        let mut corrected = intrabars;
+        corrected[0].volume = 15.0;
+        update(&mut study, &bars, Timeframe::Min1, &corrected);
+        assert_eq!(study.values().value(2, 0), Some(25.0));
+        update(&mut study, &bars, Timeframe::Min1, &[]);
+        assert_eq!(study.values().value(0, 0), None);
+        // Custom intervals must nest their intrabars without rounding long bars to dates.
+        for (seconds, lower) in [(90, Timeframe::Sec1), (90_000, Timeframe::Hour1)] {
+            let timeframe = Timeframe::Custom(std::num::NonZeroU64::new(seconds).unwrap());
+            study.set_timeframe(timeframe);
+            assert_eq!(requested_interval(&study), Some(lower));
+            let bar = |second| {
+                Bar::new(
+                    Utc.timestamp_opt(second, 0).unwrap(),
+                    1.0,
+                    2.0,
+                    1.0,
+                    2.0,
+                    1.0,
+                )
+            };
+            let seconds = seconds as i64;
+            update(
+                &mut study,
+                &[bar(0), bar(seconds)],
+                lower,
+                &[0, seconds - lower.duration_ms() / 1000, seconds].map(bar),
+            );
+            assert_eq!(study.values().value(0, 0), Some(2.0));
+            assert_eq!(study.values().value(0, 1), Some(1.0));
+        }
+        #[cfg(feature = "widget")]
+        {
+            use crate::model::{BarData, Instrument};
+            use crate::widget::{Chart, test_frames::frame};
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.set_timeframe(Timeframe::Min5);
+            chart.set_symbol("OLD");
+            chart.set_instrument(Some(Instrument::new("OLD")));
+            chart.add_indicator(Box::new(UpDownVolume::new()));
+            chart.set_symbol("NEW");
+            chart.set_instrument(Some(Instrument::new("NEW")));
+            let request = chart.study_data_requests().pop().unwrap();
+            assert_eq!(request.symbol, "NEW");
+            chart.set_study_data(request, vec![bars[0].clone()], Some(Instrument::new("NEW")));
+            frame(&egui::Context::default(), &mut chart, 0.0, Vec::new());
+            assert_eq!(
+                chart.indicators().next().unwrap().1.values().value(0, 0),
+                Some(999.0)
+            );
+        }
+    }
+}
