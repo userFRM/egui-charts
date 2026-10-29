@@ -8,7 +8,7 @@ use super::sizing::{LayoutTokens, RoundingTokens, ShadowTokens, SizingTokens, St
 /// Access the global instance via [`DESIGN_TOKENS`](super::DESIGN_TOKENS).
 /// Contains default spacing, sizing, rounding, stroke widths, shadow parameters
 /// and semantic color tokens. UI colors and text, spacing and radius scales come
-/// from the applied [`Theme`](crate::theme::Theme).
+/// from the applied `theme::Theme` (requires `widget`).
 #[derive(Clone, Debug)]
 pub struct DesignTokens {
     /// Spacing defaults.

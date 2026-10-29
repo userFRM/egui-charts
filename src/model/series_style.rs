@@ -58,7 +58,7 @@ impl PartialEq for AutoscaleProvider {
 /// How the alert levels of one bar series are drawn.
 ///
 /// Alerts are not bound to a series, so the host passes the alerts it resolves to a series to
-/// [`render_alert_levels`](crate::chart::render_alert_levels) with these `labels` and `color`,
+/// `chart::render_alert_levels` (requires `widget`) with these `labels` and `color`,
 /// and draws none while `visible` is unset.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SeriesAlerts {
