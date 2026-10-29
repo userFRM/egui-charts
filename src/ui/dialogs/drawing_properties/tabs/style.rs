@@ -19,6 +19,7 @@ pub struct StyleTab;
 
 impl StyleTab {
     pub fn show(ui: &mut Ui, props: &mut DrawingProps, pickers: &mut [ColorPickerState; 2]) {
+        let tool = props.tool_settings.as_ref().map(|t| t.settings.tool_type);
         let [color_picker, fill_picker] = pickers;
         ui.space_md();
 
@@ -45,33 +46,38 @@ impl StyleTab {
             });
             ui.end_row();
 
-            let label = ui.label(l10n::text(ui.ctx(), "Fill"));
-            ui.checkbox(&mut props.fill_enabled, l10n::text(ui.ctx(), "Enable fill"))
-                .labelled_by(label.id);
-            ui.end_row();
-
-            if props.fill_enabled {
-                ui.label(l10n::text(ui.ctx(), "Fill color"));
-                let fill = props
-                    .fill_color
-                    .unwrap_or(ui.active_theme().ui.accent.gamma_multiply(0.2));
-                props.fill_color = Some(fill);
-                if let Some(picked) = color_swatch(ui, fill_picker, fill, "drawing_props_fill") {
-                    // Palette swatches are opaque: keep the fill's opacity unless it was edited.
-                    let [r, g, b, a] = picked.to_srgba_unmultiplied();
-                    let a = if fill_picker.custom_mode { a } else { fill.a() };
-                    props.fill_color = Some(Color32::from_rgba_unmultiplied(r, g, b, a));
-                }
+            if tool.is_some_and(|tool| tool.supports_fill()) {
+                let label = ui.label(l10n::text(ui.ctx(), "Fill"));
+                ui.checkbox(&mut props.fill_enabled, l10n::text(ui.ctx(), "Enable fill"))
+                    .labelled_by(label.id);
                 ui.end_row();
+
+                if props.fill_enabled {
+                    ui.label(l10n::text(ui.ctx(), "Fill color"));
+                    let fill = props
+                        .fill_color
+                        .unwrap_or(ui.active_theme().ui.accent.gamma_multiply(0.2));
+                    props.fill_color = Some(fill);
+                    if let Some(picked) = color_swatch(ui, fill_picker, fill, "drawing_props_fill")
+                    {
+                        // Palette swatches are opaque: keep the fill's opacity unless it was edited.
+                        let [r, g, b, a] = picked.to_srgba_unmultiplied();
+                        let a = if fill_picker.custom_mode { a } else { fill.a() };
+                        props.fill_color = Some(Color32::from_rgba_unmultiplied(r, g, b, a));
+                    }
+                    ui.end_row();
+                }
             }
 
-            ui.label(l10n::text(ui.ctx(), "Extend"));
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut props.extend_left, l10n::text(ui.ctx(), "Left"));
-                ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
-                ui.checkbox(&mut props.extend_right, l10n::text(ui.ctx(), "Right"));
-            });
-            ui.end_row();
+            if tool.is_some_and(|tool| tool.supports_extend()) {
+                ui.label(l10n::text(ui.ctx(), "Extend"));
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut props.extend_left, l10n::text(ui.ctx(), "Left"));
+                    ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
+                    ui.checkbox(&mut props.extend_right, l10n::text(ui.ctx(), "Right"));
+                });
+                ui.end_row();
+            }
         });
     }
 }

@@ -737,6 +737,7 @@ impl DemoApp {
         app.drawing_templates
             .templates
             .set_storage(app.storage.clone());
+        app.drawing_props.templates.set_storage(app.storage.clone());
         let search: Arc<dyn egui_charts::services::SymbolSearch> = Arc::new(DemoSymbol::symbols());
         app.symbol_search.set_search_service(Some(search.clone()));
         app.compare_dialog.set_search_service(Some(search));
@@ -5762,14 +5763,14 @@ mod tests {
                             if let egui::Shape::Text(text) = &shape.shape
                                 && matches!(
                                     text.galley.job.text.as_str(),
-                                    "Apply" | "Cancel" | "Remove" | "Clone" | "Delete"
+                                    "Ok" | "Cancel" | "Template"
                                 )
                             {
                                 let bounds =
                                     egui::Rect::from_min_size(text.pos, text.galley.size());
                                 if matches!(
                                     text.galley.job.text.as_str(),
-                                    "Apply" | "Cancel" | "Clone" | "Delete"
+                                    "Ok" | "Cancel" | "Template"
                                 ) {
                                     footer.push(bounds);
                                 }
@@ -5863,6 +5864,14 @@ mod tests {
         app.chart.drawings_mut().drawings[0].visible = false;
         app.open_drawing_props_for(7);
         app.drawing_props.props.line_width = 4.0;
+        let texts = frame(&mut app, &ctx, vec![]);
+        let menu = texts
+            .iter()
+            .find(|(text, _)| text == "Template")
+            .unwrap()
+            .1
+            .center();
+        click(&mut app, &ctx, menu);
         let texts = frame(&mut app, &ctx, vec![]);
         let save = texts
             .iter()

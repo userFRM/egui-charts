@@ -9,7 +9,8 @@
 //!
 //! Open with [`DrawingPropertiesDialog::open_for_chart`] and call
 //! [`DrawingPropertiesDialog::show_and_apply`] each frame to apply validated edits in the library.
-//! Hosts handle Delete and Clone intents and persist [`crate::drawings::DrawingManager::tool_defaults`].
+//! Hosts persist [`crate::drawings::DrawingManager::tool_defaults`] and may attach storage to
+//! [`DrawingPropertiesDialog::templates`]. Delete and Clone are in the drawing context menu.
 
 mod actions;
 mod config;
@@ -208,14 +209,14 @@ mod tests {
                             if let egui::Shape::Text(text) = &shape.shape
                                 && matches!(
                                     text.galley.job.text.as_str(),
-                                    "Apply" | "Cancel" | "Remove" | "Clone" | "Delete"
+                                    "Ok" | "Cancel" | "Template"
                                 )
                             {
                                 let bounds =
                                     egui::Rect::from_min_size(text.pos, text.galley.size());
                                 if matches!(
                                     text.galley.job.text.as_str(),
-                                    "Apply" | "Cancel" | "Clone" | "Delete"
+                                    "Ok" | "Cancel" | "Template"
                                 ) {
                                     footer.push(bounds);
                                 }
@@ -303,6 +304,14 @@ mod tests {
         chart.drawings_mut().drawings[0].visible = false;
         dialog.open_for_chart(&chart, DrawingId(7));
         dialog.props.line_width = 4.0;
+        let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+        let menu = texts
+            .iter()
+            .find(|(text, _)| text == "Template")
+            .unwrap()
+            .1
+            .center();
+        click(&mut dialog, &mut chart, &ctx, menu);
         let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
         let save = texts
             .iter()

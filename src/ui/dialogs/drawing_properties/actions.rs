@@ -115,6 +115,35 @@ impl DrawingProps {
     /// Validate and apply one undoable edit to the unlocked selection. Tool inputs affect only
     /// matching tools; coordinates affect only `id`. Errors leave all live drawings unchanged.
     pub fn apply_to_chart(&self, id: DrawingId, chart: &mut Chart) -> Result<(), &'static str> {
+        let edits = self.edited_drawings(id, chart)?;
+        chart.user_action(|chart| {
+            let manager = chart.drawings_mut();
+            if !manager.is_selected(id.0) {
+                manager.select(id.0);
+            }
+            let ids: Vec<_> = edits.iter().map(|drawing| drawing.id).collect();
+            manager.edit_drawings(&ids, |drawing| {
+                if let Some(edited) = edits.iter().find(|edited| edited.id == drawing.id) {
+                    *drawing = edited.clone();
+                }
+            });
+            if self.save_as_default
+                && let Some(drawing) = manager.drawings.iter().find(|d| d.id == id.0)
+            {
+                let mut defaults = DrawingTemplate::from_drawing(drawing);
+                defaults.settings.visible = true;
+                manager.tool_defaults.insert(drawing.tool_type, defaults);
+            }
+        });
+        Ok(())
+    }
+
+    /// Prepare validated edits without history or persistence side effects, for live preview.
+    pub(super) fn edited_drawings(
+        &self,
+        id: DrawingId,
+        chart: &Chart,
+    ) -> Result<Vec<Drawing>, &'static str> {
         if self
             .symbol
             .as_ref()
@@ -144,63 +173,71 @@ impl DrawingProps {
         if !points.is_empty() && points.len() != target.chart_points.len() {
             return Err("Drawing anchors changed; reopen its properties");
         }
-        chart.user_action(|chart| {
-            let manager = chart.drawings_mut();
-            if !manager.is_selected(id.0) {
-                manager.select(id.0);
-            }
-            manager.edit_selected(|drawing| {
-                drawing.color = self.color.to_srgba_unmultiplied();
-                drawing.stroke_width = self.line_width;
-                drawing.line_style = self.line_style;
-                drawing.extend_left = self.extend_left;
-                drawing.extend_right = self.extend_right;
-                drawing.text = (!self.label.is_empty()).then(|| self.label.clone());
-                drawing.fill_color = self.fill_enabled.then(|| {
-                    self.fill_color
-                        .unwrap_or(self.color.gamma_multiply(0.2))
-                        .to_srgba_unmultiplied()
-                });
-                drawing.font_size = self.font_size;
-                drawing.timeframe_visibility = TimeframeVisibility {
-                    show_on_all: self.visible_all_timeframes,
-                    visible_timeframes: self.visible_timeframes.iter().cloned().collect(),
-                };
-                if let Some(template) = &self.tool_settings
-                    && template.settings.tool_type == drawing.tool_type
-                {
-                    let settings = &template.settings;
-                    drawing.fib_config = settings.fib_config.clone();
-                    drawing.pitchfork = settings.pitchfork.clone();
-                    drawing.gann = settings.gann.clone();
-                    drawing.ghost_feed = settings.ghost_feed;
-                    drawing.position_size = settings.position_size;
-                    drawing.position_sizing = settings.position_sizing;
-                    drawing.volume_profile = settings.volume_profile;
-                    drawing.regression_trend = settings.regression_trend;
-                    drawing.channel_midline = settings.channel_midline;
-                }
-                if drawing.id == id.0
-                    && !points.is_empty()
-                    && drawing
-                        .chart_points
-                        .iter()
-                        .zip(&points)
-                        .any(|(a, b)| a != b || a.time_anchor != b.time_anchor)
-                {
-                    drawing.chart_points = points.clone();
-                    drawing.screen_anchor = None;
-                }
+        let selected = chart.drawings().is_selected(id.0);
+        let mut edits = Vec::new();
+        for mut drawing in chart
+            .drawings()
+            .drawings
+            .iter()
+            .filter(|drawing| {
+                !drawing.locked
+                    && if selected {
+                        chart.drawings().is_selected(drawing.id)
+                    } else {
+                        drawing.id == id.0
+                    }
+            })
+            .cloned()
+        {
+            drawing.color = self.color.to_srgba_unmultiplied();
+            drawing.stroke_width = self.line_width;
+            drawing.line_style = self.line_style;
+            drawing.extend_left = self.extend_left;
+            drawing.extend_right = self.extend_right;
+            drawing.text = (!self.label.is_empty()).then(|| self.label.clone());
+            drawing.fill_color = self.fill_enabled.then(|| {
+                self.fill_color
+                    .unwrap_or(self.color.gamma_multiply(0.2))
+                    .to_srgba_unmultiplied()
             });
-            if self.save_as_default
-                && let Some(drawing) = manager.drawings.iter().find(|d| d.id == id.0)
+            drawing.font_size = self.font_size;
+            drawing.timeframe_visibility = TimeframeVisibility {
+                show_on_all: self.visible_all_timeframes,
+                visible_timeframes: self.visible_timeframes.iter().cloned().collect(),
+            };
+            if let Some(template) = &self.tool_settings
+                && template.settings.tool_type == drawing.tool_type
+                && template.settings.custom_tool == drawing.custom_tool
             {
-                let mut defaults = DrawingTemplate::from_drawing(drawing);
-                defaults.settings.visible = true;
-                manager.tool_defaults.insert(drawing.tool_type, defaults);
+                let settings = &template.settings;
+                drawing.font_weight = settings.font_weight;
+                drawing.arrow_start_style = settings.arrow_start_style;
+                drawing.arrow_end_style = settings.arrow_end_style;
+                drawing.custom_settings = settings.custom_settings.clone();
+                drawing.fib_config = settings.fib_config.clone();
+                drawing.pitchfork = settings.pitchfork.clone();
+                drawing.gann = settings.gann.clone();
+                drawing.ghost_feed = settings.ghost_feed;
+                drawing.position_size = settings.position_size;
+                drawing.position_sizing = settings.position_sizing;
+                drawing.volume_profile = settings.volume_profile;
+                drawing.regression_trend = settings.regression_trend;
+                drawing.channel_midline = settings.channel_midline;
             }
-        });
-        Ok(())
+            if drawing.id == id.0
+                && !points.is_empty()
+                && drawing
+                    .chart_points
+                    .iter()
+                    .zip(&points)
+                    .any(|(a, b)| a != b || a.time_anchor != b.time_anchor)
+            {
+                drawing.chart_points = points.clone();
+                drawing.screen_anchor = None;
+            }
+            edits.push(drawing);
+        }
+        Ok(edits)
     }
 
     pub(crate) fn validate(&self) -> Result<(), &'static str> {

@@ -20,6 +20,50 @@ impl DrawingToolType {
         )
     }
 
+    /// Whether the renderer has an optional filled area controlled by the drawing's fill.
+    pub fn supports_fill(&self) -> bool {
+        matches!(
+            self,
+            Self::Rect
+                | Self::Circle
+                | Self::Ellipse
+                | Self::Triangle
+                | Self::RotatedRect
+                | Self::Sector
+                | Self::ParallelChannel
+        )
+    }
+
+    /// Whether the drawing's left and right extension flags change its geometry.
+    pub fn supports_extend(&self) -> bool {
+        matches!(
+            self,
+            Self::TrendLine
+                | Self::InfoLine
+                | Self::TrendAngle
+                | Self::Arrow
+                | Self::ArrowMarker
+                | Self::ParallelChannel
+        )
+    }
+
+    /// Whether the renderer displays editable drawing text and its font size.
+    pub fn supports_text(&self) -> bool {
+        matches!(
+            self,
+            Self::TextLabel
+                | Self::AnchoredText
+                | Self::Note
+                | Self::AnchoredNote
+                | Self::Callout
+                | Self::Comment
+                | Self::PriceNote
+                | Self::FlagNote
+                | Self::Signpost
+                | Self::Table
+        )
+    }
+
     /// Returns the [`DrawingInteractionMode`] that governs how mouse input is
     /// captured when creating a drawing of this type.
     ///
