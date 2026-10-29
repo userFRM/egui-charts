@@ -317,14 +317,16 @@ impl Drawing {
 pub(crate) const MAX_CACHED_SPANS: usize = 32;
 
 impl Drawing {
-    /// Main rendering dispatcher - routes to category-specific render methods
-    ///
-    /// This method handles rendering for every drawing tool type,
-    /// delegating to the appropriate category-specific implementation.
+    /// Renders the drawing as unselected; see [`Drawing::render_with_selection`].
     pub fn render_original(&self, painter: &egui::Painter, rect: Rect, view: &ChartView) {
         self.render_with_selection(painter, rect, view, false);
     }
 
+    /// Main rendering dispatcher - routes to category-specific render methods
+    ///
+    /// This method handles rendering for every drawing tool type,
+    /// delegating to the appropriate category-specific implementation. `selected`
+    /// lets a tool mark its selection, as a position's statistics block does.
     pub(crate) fn render_with_selection(
         &self,
         painter: &egui::Painter,
