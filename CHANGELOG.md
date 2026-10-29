@@ -429,6 +429,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `strategies::Backtest` returns positive zero for flat positions and breakeven profits, so a flat position has no short sign and a breakeven short exports as `0` in the trades CSV.
+
 - Decimal closes in `strategies::Backtest` and `services::PaperAccount` discard remainders within a few ulps of the filled quantity. This also fixes the existing paper account behavior: buying 0.1 and 0.2 then selling 0.3 is flat, and scaling out a lot creates no dust trades.
 
 - A footprint built from the feed's trades drops the contribution of each trade the bounded store evicts, summing the bar that lost trades again from those held so its delta high and low agree with them, and keeps at most 5,000 bars and 50,000 price rows, the oldest bars first. `Footprint::complete_from` gives the open of the oldest bar whose executions are all held; bars before it, cut by eviction or the budget, are drawn as candles instead of as complete footprint bars. ([#1114](https://github.com/userFRM/egui-charts/issues/1114))

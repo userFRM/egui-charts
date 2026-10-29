@@ -316,10 +316,9 @@ struct Run {
 
 impl Run {
     fn position(&self) -> f64 {
-        self.lots
-            .iter()
-            .map(|lot| sign(lot.side) * lot.quantity)
-            .sum()
+        self.lots.iter().fold(0.0, |position, lot| {
+            position + sign(lot.side) * lot.quantity
+        })
     }
 
     /// Where `order` fills while the price moves from `start` to `end`, if it does.
@@ -428,7 +427,7 @@ impl Run {
             && let Some(lot) = self.lots.first_mut()
         {
             let closed = quantity.min(lot.quantity);
-            let profit = sign(lot.side) * (price - lot.price) * closed;
+            let profit = sign(lot.side) * (price - lot.price) * closed + 0.0;
             let mut trade = StrategyTrade::new(lot.side, closed, lot.time, lot.price);
             trade.exit = Some(StrategyExit::new(time, price, profit));
             trade.label = Some(format!("{} / {exit}", lot.entry));
@@ -455,6 +454,9 @@ mod tests {
 
     impl Strategy for Script {
         fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+            if context.position() == 0.0 {
+                assert!(context.position().is_sign_positive());
+            }
             (self.0)(context.bars().len() - 1, context);
         }
     }
@@ -684,6 +686,13 @@ mod tests {
                 context.entry("L", Buy, 1.0, OrderType::Limit(104.0));
             }
         }
+        fn short_breakeven(bar: usize, context: &mut StrategyContext<'_>) {
+            match bar {
+                0 => context.entry("S", Sell, 1.0, OrderType::Market),
+                1 => context.exit("X", None, None, None),
+                _ => {}
+            }
+        }
         // Decimal lots close at their entry price: two breakevens, flat equity and no open lot.
         // Thirds realise 3 * 0.1 * (102 - 100) = 0.6, all winners. B keeps 0.5 at 104,
         // so its mark at 102 is -1 and final equity is 9999.6. No fourth closed trade.
@@ -753,6 +762,17 @@ mod tests {
                 0,
                 0.0,
             ),
+            // A short closed at entry breaks even: positive zero profit, flat equity.
+            (
+                short_breakeven,
+                vec![(100.0, 100.0, 100.0, 100.0); 3],
+                vec![trade(Sell, 1.0, 1, 100.0, Some((2, 100.0, 0.0)), "S / X")],
+                vec![10_000.0; 4],
+                1,
+                0,
+                0,
+                0.0,
+            ),
         ] {
             let source: Vec<_> = prices
                 .into_iter()
@@ -768,6 +788,9 @@ mod tests {
                 actual.quantity = expected.quantity;
                 if let (Some(actual), Some(expected)) = (&mut actual.exit, &expected.exit) {
                     assert!((actual.profit - expected.profit).abs() < 1e-15);
+                    if actual.profit == 0.0 {
+                        assert!(actual.profit.is_sign_positive());
+                    }
                     actual.profit = expected.profit;
                 }
                 assert_eq!(actual, expected);
@@ -800,6 +823,7 @@ mod tests {
                 (closed > 0).then(|| wins as f64 / closed as f64)
             );
             assert_eq!(metrics.profit_factor, None);
+            assert!(!report.trades_csv().contains(",-0"));
         }
     }
 }
