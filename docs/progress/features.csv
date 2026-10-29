@@ -1,18 +1,18 @@
 area,group,feature,status,provided_by,source
-Builder API,Broker API,Account information and account manager,done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs
+Builder API,Broker API,Account information and account manager,done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs
 Builder API,Broker API,Brackets,done,host,src/model/trading.rs;src/ui/trading/ticket/mod.rs;src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs
-Builder API,Broker API,Broker capability flags,done,host,src/model/trading.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/services/broker.rs;src/ui/trading/dom.rs;src/ui/trading/account_panel.rs
+Builder API,Broker API,Broker capability flags,done,host,src/model/trading.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/services/broker.rs;src/ui/trading/dom.rs;src/ui/trading/account_panel/mod.rs
 Builder API,Broker API,Broker connection contract,done,host,src/services/broker.rs;src/ui/trading/mod.rs
-Builder API,Broker API,Broker host callbacks,done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs
+Builder API,Broker API,Broker host callbacks,done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs
 Builder API,Broker API,Buy and sell buttons on the chart,done,host,src/chart/renderers/legend/mod.rs;src/widget/mod.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Depth of market trading ladder,done,host,src/ui/trading/ticket/mod.rs;src/ui/trading/dom.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Executions shown on the chart,done,host,src/ui/trading/mod.rs;src/ui/trading/executions.rs
-Builder API,Broker API,Instrument trading info and formatters,partial,host,src/model/trading.rs;src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/account_panel.rs;src/ui/trading/format.rs;src/ui/trading/dom.rs
+Builder API,Broker API,Instrument trading info and formatters,partial,host,src/model/trading.rs;src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/format.rs;src/ui/trading/dom.rs
 Builder API,Broker API,Order and position lines on the chart,done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Builder API,Broker API,"Order placement, modification and cancellation",done,host,src/services/broker.rs;src/ui/trading/mod.rs
-Builder API,Broker API,Order ticket and order or position dialogs,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/account_panel.rs
-Builder API,Broker API,"Order, position and execution queries",partial,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs
-Builder API,Broker API,Trading entry points in the UI,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs/trading.rs
+Builder API,Broker API,Order ticket and order or position dialogs,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/account_panel/mod.rs
+Builder API,Broker API,"Order, position and execution queries",partial,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs
+Builder API,Broker API,Trading entry points in the UI,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/top_toolbar/components/settings_menu/dialog/tabs/trading.rs
 Builder API,Builder integration,Custom drawing tools from a downstream crate,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Builder API,Builder integration,Custom indicator metadata,done,library,src/studies/indicator_trait.rs;src/studies/inputs.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs;src/chart/renderers/study_scale.rs
 Builder API,Builder integration,Custom indicators from a downstream crate,done,library,src/studies/factory/mod.rs;src/ui/top_toolbar/components/indicator_dialog/dialog.rs;src/widget/series.rs;src/studies/custom.rs
@@ -831,7 +831,7 @@ Terminal,Replay,Pick the start bar by clicking on the chart,done,library,src/ui/
 Terminal,Replay,Play / pause autoplay,done,library,src/ui/replay/mod.rs;src/ui/replay/state.rs
 Terminal,Replay,Playback speed,done,library,src/ui/floating_replay_control.rs;src/ui/replay/mod.rs;src/ui/replay/state.rs
 Terminal,Replay,Replay on a lower timeframe / change interval during replay,done,library,src/ui/replay/session.rs;src/widget/replay.rs
-Terminal,Replay,Replay trading,done,library,src/services/paper.rs;src/ui/trading/account_panel.rs
+Terminal,Replay,Replay trading,done,library,src/services/paper.rs;src/ui/trading/account_panel/mod.rs
 Terminal,Replay,"Start options: select date, random bar, first available date",done,library,src/ui/replay/start.rs
 Terminal,Replay,Step forward and back one bar,done,library,src/ui/replay/mod.rs;src/ui/replay/state.rs
 Terminal,Replay,Synchronised replay across the charts of a layout,done,library,src/widget/replay.rs
@@ -877,8 +877,8 @@ Terminal,Toolbars and panels,Symbol search dialog with asset tabs and filters,do
 Terminal,Toolbars and panels,Top toolbar: symbol button,done,library,src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Undo / redo,partial,library,src/widget/history.rs;src/widget/feed/mod.rs;src/widget/price_series.rs;terminal/src/core.rs
 Terminal,Toolbars and panels,Zoom in / zoom out buttons in the drawing toolbar,done,library,src/ui/drawing_toolbar/utilities/zoom.rs;src/widget/mod.rs;terminal/src/drawings.rs
-Terminal,Trading panel,Account manager,done,host,src/ui/trading/mod.rs;src/ui/trading/account_panel.rs
-Terminal,Trading panel,Bottom trading panel container,done,library,src/ui/trading/account_panel.rs
+Terminal,Trading panel,Account manager,done,host,src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs
+Terminal,Trading panel,Bottom trading panel container,done,library,src/ui/trading/account_panel/mod.rs
 Terminal,Trading panel,Brackets: take-profit and stop-loss attached to an entry,done,host,src/ui/trading/ticket/mod.rs;src/ui/trading/mod.rs;src/services/paper.rs
 Terminal,Trading panel,Buy/Sell buttons on the chart,done,host,src/ui/symbol_header.rs;src/ui/trading/mod.rs
 Terminal,Trading panel,DOM / depth-of-market ladder with click-to-trade,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/dom.rs;src/widget/feed/mod.rs
