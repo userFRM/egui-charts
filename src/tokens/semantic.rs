@@ -120,11 +120,11 @@ pub struct FootprintSemanticTokens {
 /// TPO (Market Profile) chart colors
 #[derive(Clone, Debug)]
 pub struct TpoSemanticTokens {
-    /// Point of Control line color
+    /// Point of Control row color
     pub poc: Color32,
-    /// Value Area background color
+    /// Value Area tone for value-area coloring
     pub value_area: Color32,
-    /// Initial Balance bracket color
+    /// Initial Balance bar color
     pub initial_balance: Color32,
     /// Single prints highlight color
     pub single_print: Color32,
@@ -134,7 +134,7 @@ pub struct TpoSemanticTokens {
     pub letter_default: Color32,
     /// TPO grid line color
     pub grid: Color32,
-    /// Period colors used cyclically for time-based coloring.
+    /// First stop of the gradient across a session's periods.
     pub period_1: Color32,
     /// Period 2 color.
     pub period_2: Color32,
