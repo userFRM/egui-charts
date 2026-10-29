@@ -111,14 +111,6 @@ impl CursorModeState {
             self.last_pointer = None;
         }
     }
-
-    /// Reset all cursor mode states.
-    pub fn clear_all(&mut self) {
-        self.eraser.clear();
-        self.trail.clear();
-        self.last_pointer = None;
-        self.trail_style = None;
-    }
 }
 
 #[cfg(test)]
@@ -141,8 +133,6 @@ mod tests {
             modes.move_pointer(Some(egui::pos2(x, 10.0)));
             assert_eq!(modes.trail.len(), expected, "at {x} after {dt}");
         }
-        modes.clear_all();
-        assert!(modes.trail.is_empty());
     }
 
     /// Magic marks only while the button is held, Demonstration marks always, and changing the
