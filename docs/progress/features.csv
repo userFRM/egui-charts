@@ -381,8 +381,8 @@ Order flow,Order flow,Best bid and best ask lines drawn across the heatmap,done,
 Order flow,Order flow,Bid/ask split profile and delta profile,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs
 Order flow,Order flow,Bid/ask spread in ticks plotted over time with alert,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/services/alerts.rs
 Order flow,Order flow,Big trade zones,missing,host,
-Order flow,Order flow,Book speed,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory.rs;src/studies/factory/mod.rs
-Order flow,Order flow,Book thickness and resting-size delta over time,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/widget/feed/mod.rs;src/data/orders.rs;src/data/inbox/sink.rs;src/widget/feed.rs
+Order flow,Order flow,Book speed,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs
+Order flow,Order flow,Book thickness and resting-size delta over time,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/widget/feed/mod.rs;src/data/orders.rs;src/data/inbox/sink.rs
 Order flow,Order flow,"Bubble grouping: automatic, by time window, by price, tick grouping",done,library,src/chart/overlays/volume_bubbles.rs
 Order flow,Order flow,CVD drawn as candles,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/chart/series/mod.rs
 Order flow,Order flow,"Chart tabs, detached groups and shared crosshair",done,library,src/widget/layout.rs;src/widget/sync.rs
