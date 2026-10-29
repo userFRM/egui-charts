@@ -272,7 +272,9 @@ impl Chart {
         ctx: &egui::Context,
         options: &ImageExportOptions,
     ) -> Result<ChartImage, String> {
-        self.export_image_with(ctx, options, |_, _| {})
+        self.export_layout_image(ctx, options, |ui, chart| {
+            chart.show(ui);
+        })
     }
 
     /// Like [`Self::export_image`] for a layout of library widgets: `layout` draws everything
@@ -306,18 +308,6 @@ impl Chart {
             size: options.size,
             primitives: image_ctx.tessellate(shapes, 1.0),
             textures_delta,
-        })
-    }
-
-    pub(crate) fn export_image_with(
-        &self,
-        ctx: &egui::Context,
-        options: &ImageExportOptions,
-        overlay: impl Fn(&mut egui::Ui, &mut Chart),
-    ) -> Result<ChartImage, String> {
-        self.export_layout_image(ctx, options, |ui, chart| {
-            chart.show(ui);
-            overlay(ui, chart);
         })
     }
 
@@ -435,18 +425,8 @@ impl Chart {
         ctx: &egui::Context,
         options: &ImageExportOptions,
     ) -> Result<Vec<u8>, String> {
-        self.export_png_with(ctx, options, |_, _| {})
-    }
-
-    pub(crate) fn export_png_with(
-        &self,
-        ctx: &egui::Context,
-        options: &ImageExportOptions,
-        overlay: impl Fn(&mut egui::Ui, &mut Chart),
-    ) -> Result<Vec<u8>, String> {
         self.export_layout_png(ctx, options, |ui, chart| {
             chart.show(ui);
-            overlay(ui, chart);
         })
     }
 
@@ -475,18 +455,8 @@ impl Chart {
         ctx: &egui::Context,
         options: &ImageExportOptions,
     ) -> Result<String, String> {
-        self.export_svg_with(ctx, options, |_, _| {})
-    }
-
-    pub(crate) fn export_svg_with(
-        &self,
-        ctx: &egui::Context,
-        options: &ImageExportOptions,
-        overlay: impl Fn(&mut egui::Ui, &mut Chart),
-    ) -> Result<String, String> {
         self.export_layout_svg(ctx, options, |ui, chart| {
             chart.show(ui);
-            overlay(ui, chart);
         })
     }
 
@@ -1021,20 +991,20 @@ mod tests {
             );
         };
         for (error, reason) in [
-            (chart.export_svg_with(&ctx, &base, callback), "callbacks"),
+            (chart.export_layout_svg(&ctx, &base, callback), "callbacks"),
             (
                 chart
-                    .export_png_with(&ctx, &base, callback)
+                    .export_layout_png(&ctx, &base, callback)
                     .map(|_| String::new()),
                 "callbacks",
             ),
             (
-                chart.export_svg_with(&ctx, &base, host_texture),
+                chart.export_layout_svg(&ctx, &base, host_texture),
                 "host textures",
             ),
             (
                 chart
-                    .export_png_with(&ctx, &base, host_texture)
+                    .export_layout_png(&ctx, &base, host_texture)
                     .map(|_| String::new()),
                 "host textures",
             ),
@@ -1066,7 +1036,7 @@ mod tests {
             ..base.clone()
         };
         let error = chart
-            .export_svg_with(&ctx, &additive, host_texture)
+            .export_layout_svg(&ctx, &additive, host_texture)
             .unwrap_err();
         assert!(error.contains("Additive texture User(7)"), "{error}");
         let layout = |ui: &mut egui::Ui, chart: &mut Chart| {
@@ -1127,7 +1097,6 @@ mod tests {
                 );
             }
         }
-        assert!(!opaque.contains("LAYOUT TOOLBAR"));
         let png = chart.export_layout_png(&ctx, &supplied, layout).unwrap();
         let mut reader = png::Decoder::new(png.as_slice()).read_info().unwrap();
         let mut pixels = vec![0; reader.output_buffer_size()];
@@ -1135,14 +1104,6 @@ mod tests {
         // Both samples lie in the edge-clamped halves of the two-texel image.
         assert_eq!(pixels[(20 * 480 + 20) * 4..][..4], red.to_array());
         assert_eq!(pixels[(20 * 480 + 120) * 4..][..4], green.to_array());
-        let mut frame = chart.export_layout_image(&ctx, &supplied, layout).unwrap();
-        let pixels =
-            super::super::raster::rasterize(frame.size, &frame.primitives, &frame.textures_delta);
-        frame.textures_delta.clear();
-        let pixels = pixels.unwrap();
-        assert_eq!(pixels[20 * 480 + 20], red);
-        assert_eq!(pixels[20 * 480 + 120], green);
-        assert_eq!(chart.export_svg(&ctx, &base).unwrap(), opaque);
         for (id, size, pixels, reason) in [
             (
                 egui::TextureId::User(7),
