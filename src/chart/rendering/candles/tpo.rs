@@ -46,6 +46,9 @@ const PERIOD_COLUMN_PX: f32 = 24.0;
 /// zoomed in.
 const LETTER_MIN_COLUMN_PX: f32 = 7.0;
 
+/// Width kept free before each session for the level labels of the profile after it.
+const LABEL_ROOM_PX: f32 = 40.0;
+
 /// TPO rendering configuration (visual settings)
 #[derive(Debug, Clone)]
 pub struct TpoRenderConfig {
@@ -55,17 +58,17 @@ pub struct TpoRenderConfig {
     pub row_height: f32,
     /// POC row and underline color
     pub poc_color: Color32,
-    /// POC line width
+    /// Width of the POC underline drawn with letters
     pub poc_line_width: f32,
-    /// Value Area background color (with alpha)
+    /// Value Area tone for value-area coloring (with alpha)
     pub value_area_color: Color32,
-    /// Initial Balance bracket color
+    /// Initial Balance bar color
     pub initial_balance_color: Color32,
     /// Highlight behind rows touched by a single period (with alpha)
     pub single_print_color: Color32,
     /// Default letter color
     pub default_letter_color: Color32,
-    /// Color palette for period-based coloring
+    /// Gradient stops for period-based coloring
     pub period_colors: Vec<Color32>,
 }
 
@@ -352,7 +355,7 @@ pub fn render_live_tpo(
         &config,
         &sessions,
         |i| idx_to_coord(i, chart_rect_min_x),
-        |profile, anchor_x, column_width| {
+        |profile, anchor_x, column_width, labels| {
             draw_session_profile(
                 painter,
                 price_rect,
@@ -362,6 +365,7 @@ pub fn render_live_tpo(
                 &render_config,
                 anchor_x,
                 column_width,
+                labels,
                 bullish_color,
                 bearish_color,
             );
@@ -390,9 +394,10 @@ fn place_profiles(
     config: &TPOConfig,
     sessions: &ExchangeSessionProvider,
     idx_to_coord: impl Fn(usize) -> f32,
-    mut visit: impl FnMut(&TPOProfile, f32, f32),
+    mut visit: impl FnMut(&TPOProfile, f32, f32, bool),
 ) {
-    // Each profile with its left edge, its session's width and whether it starts out of view.
+    // Each profile with its left edge, its session's width, its widest row and whether it starts
+    // out of view.
     let mut placed = Vec::new();
     for (first, len, profiles) in units {
         let session = &full_data[*first..first + len];
@@ -424,21 +429,38 @@ fn place_profiles(
             let anchor_x = open_x.max(price_rect.left());
             let widest = profile.price_tpo_count.values().max().copied().unwrap_or(0);
             if end_x > anchor_x && widest > 0 {
-                // Leave room for the next session's level labels.
-                let fit = (end_x - anchor_x - 40.0).max(1.0) / widest as f32;
-                placed.push((profile, anchor_x, fit, open_x < anchor_x));
+                placed.push((
+                    profile,
+                    anchor_x,
+                    end_x - anchor_x,
+                    widest,
+                    open_x < anchor_x,
+                ));
             }
         }
     }
+    // Level labels sit in the room left before each next session, so they show only while every
+    // session in full view keeps at least as much width for its own profile.
+    let labels = placed
+        .iter()
+        .filter(|(.., cut)| !cut)
+        .all(|&(_, _, width, ..)| width >= 2.0 * LABEL_ROOM_PX);
+    let room = if labels { LABEL_ROOM_PX } else { 0.0 };
+    let fit = |width: f32, widest: usize| (width - room) / widest as f32;
     // One column width for every profile that fits its whole session, so all show letters or
     // all show blocks; a profile cut by the plot's edge narrows further on its own.
     let column = placed
         .iter()
         .filter(|(.., cut)| !cut)
-        .map(|&(_, _, fit, _)| fit)
+        .map(|&(_, _, width, widest, _)| fit(width, widest))
         .fold(PERIOD_COLUMN_PX, f32::min);
-    for (profile, anchor_x, fit, _) in placed {
-        visit(profile, anchor_x, column.min(fit).max(1.0));
+    for (profile, anchor_x, width, widest, _) in placed {
+        visit(
+            profile,
+            anchor_x,
+            column.min(fit(width, widest)).max(1.0),
+            labels,
+        );
     }
 }
 
@@ -475,7 +497,7 @@ pub(crate) fn profile_at(
         &config,
         &sessions,
         |i| mapping.idx_to_x(i),
-        |profile, anchor, column| {
+        |profile, anchor, column, _| {
             let column = column.min(profile_row_height(profile, &mapping.price));
             let price = mapping.y_to_price(pos.y);
             let row = (price / profile.tick_size).round() * profile.tick_size;
@@ -493,7 +515,7 @@ pub(crate) fn profile_at(
 }
 
 /// Draw one session's profile anchored at pixel x `anchor_x`, growing rightward in columns of
-/// `column_width` pixels.
+/// `column_width` pixels, with its level labels to the left when `labels` is set.
 #[allow(clippy::too_many_arguments)]
 fn draw_session_profile(
     painter: &Painter,
@@ -504,6 +526,7 @@ fn draw_session_profile(
     render_config: &TpoRenderConfig,
     anchor_x: f32,
     column_width: f32,
+    labels: bool,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
@@ -672,7 +695,11 @@ fn draw_session_profile(
         ),
     ] {
         let y = coords.price_to_y(price);
-        if !show || !price_rect.y_range().contains(y) || anchor_x - price_rect.left() < 32.0 {
+        if !labels
+            || !show
+            || !price_rect.y_range().contains(y)
+            || anchor_x - price_rect.left() < 32.0
+        {
             continue;
         }
         // Displace only the caption when levels coincide; the marker keeps its price.
@@ -964,6 +991,7 @@ mod tests {
                 &render_config,
                 10.0,
                 20.0,
+                true,
                 Color32::GREEN,
                 Color32::RED,
             );
@@ -979,6 +1007,57 @@ mod tests {
         };
         assert_eq!(highlighted(true), profile.single_prints.len());
         assert_eq!(highlighted(false), 0);
+    }
+
+    #[test]
+    fn level_labels_show_only_when_sessions_leave_room_for_them() {
+        // Three UTC days of four half-hour bars each
+        let bars: Vec<_> = (0..12)
+            .map(|i| {
+                let minute = i / 4 * 1440 + i % 4 * 30;
+                let time = chrono::DateTime::UNIX_EPOCH + Duration::minutes(minute);
+                Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0)
+            })
+            .collect();
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        // (pixels per bar, sessions labelled): the first session has no room left of the plot.
+        for (spacing, expected) in [(30.0, 2), (10.0, 0)] {
+            let ctx = egui::Context::default();
+            ctx.begin_pass(egui::RawInput::default());
+            render_live_tpo(
+                &ctx.layer_painter(egui::LayerId::background()),
+                rect,
+                &bars,
+                0..12,
+                1,
+                &coords,
+                &config,
+                &BarClock::new(Timeframe::Min30),
+                |i, _| i as f32 * spacing,
+                0.0,
+                Color32::GREEN,
+                Color32::RED,
+            );
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            let labelled = output
+                .shapes
+                .iter()
+                .filter(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "VAH"))
+                .count();
+            assert_eq!(labelled, expected, "{spacing} px per bar");
+        }
     }
 
     #[test]
@@ -1103,7 +1182,7 @@ mod tests {
                 &config,
                 &clock.sessions(),
                 |i| i as f32 * 10.0,
-                |profile, _, _| counts.push(profile.tpo_count_at(100.0, profile.tick_size)),
+                |profile, _, _, _| counts.push(profile.tpo_count_at(100.0, profile.tick_size)),
             );
             assert_eq!(counts, expected, "{range:?}, latest={latest_session_only}");
         }

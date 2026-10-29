@@ -1101,7 +1101,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
-- TPO charts use a smooth period gradient, separated blocks, neutral POC rows and initial balance bars, compact value-area and midpoint labels, and a thin price path. Profiles have clearer session spacing and theme-aware contrast in dark and light views. ([#1296](https://github.com/userFRM/egui-charts/issues/1296))
+- TPO charts use a smooth period gradient, separated blocks, neutral POC rows and initial balance bars, compact value-area and midpoint labels, and a thin price path. Profiles have clearer session spacing and theme-aware contrast in dark and light views; when sessions are too narrow to hold the labels, as on zoomed-out daily charts, the labels are left out and the profiles keep their full session width. ([#1296](https://github.com/userFRM/egui-charts/issues/1296))
 
 - `UserSettings` is `#[non_exhaustive]`, so that fields can be added without a breaking change. Migration: build `UserSettings` with `Default` and assign fields. `IndicatorDialogAction` implements `Clone` and `Debug`, and `SettingsAction` implements `Debug`.
 
