@@ -586,6 +586,22 @@ impl PriceMap {
         self.transform.to_price(self.y_to_scale(y))
     }
 
+    /// Translates a price by the scale-unit offset between two y coordinates.
+    ///
+    /// Equal y coordinates keep valid prices exactly unchanged. Non-positive logarithmic
+    /// prices start from their bounded off-pane coordinate.
+    pub fn translate_price(&self, price: f64, from_y: f32, to_y: f32) -> f64 {
+        if self.transform.mode == PriceScaleMode::Logarithmic && price <= 0.0 {
+            return self.y_to_price(self.price_to_y(price) + (to_y - from_y));
+        }
+        if from_y == to_y {
+            return price;
+        }
+        let shift = self.y_to_scale(to_y) - self.y_to_scale(from_y);
+        self.transform
+            .to_price(self.transform.to_scale(price) + shift)
+    }
+
     /// Converts scale units to a y coordinate.
     ///
     /// A flat range has no vertical extent to map onto, so every value lands on

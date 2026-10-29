@@ -607,6 +607,14 @@ mod tests {
     }
 
     #[test]
+    fn default_syncs_time_axis_and_crosshair_but_not_drawings() {
+        let options = ChartSyncOptions::default();
+        assert!(options.sync_time_axis);
+        assert!(options.sync_crosshair);
+        assert!(!options.sync_drawings);
+    }
+
+    #[test]
     fn presets_preserve_chart_state_and_route_input_to_visible_slots() {
         let rect = Rect::from_min_size(pos2(54.0, 70.0), vec2(1386.0, 716.0));
         for &mode in ChartLayoutMode::all() {
