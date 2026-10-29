@@ -23,6 +23,7 @@ pub mod widget_bar;
 // Chart controls
 pub mod chart_controls;
 pub mod replay;
+pub use replay::{floating as floating_replay_control, status as replay_status};
 
 // Dialogs
 pub mod dialogs;
@@ -35,11 +36,9 @@ pub mod connection_status;
 pub mod context_menu;
 pub mod export;
 pub mod financials;
-pub mod floating_replay_control;
 pub mod ideas;
 pub mod multi_chart;
 pub mod profile;
-pub mod replay_status;
 mod share_controls;
 pub mod strategy_report;
 pub mod study_editor;

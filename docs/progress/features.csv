@@ -829,14 +829,14 @@ Terminal,Replay,Indicators recompute on replayed bars only,partial,library,src/w
 Terminal,Replay,Jump to real time / exit replay and restore full data,done,library,src/widget/replay.rs
 Terminal,Replay,Pick the start bar by clicking on the chart,done,library,src/ui/replay/start.rs
 Terminal,Replay,Play / pause autoplay,done,library,src/ui/replay/mod.rs;src/ui/replay/state.rs
-Terminal,Replay,Playback speed,done,library,src/ui/floating_replay_control.rs;src/ui/replay/mod.rs;src/ui/replay/state.rs
+Terminal,Replay,Playback speed,done,library,src/ui/replay/floating.rs;src/ui/replay/mod.rs;src/ui/replay/state.rs
 Terminal,Replay,Replay on a lower timeframe / change interval during replay,done,library,src/ui/replay/session.rs;src/widget/replay.rs
 Terminal,Replay,Replay trading,done,library,src/services/paper.rs;src/ui/trading/account_panel.rs
 Terminal,Replay,"Start options: select date, random bar, first available date",done,library,src/ui/replay/start.rs
 Terminal,Replay,Step forward and back one bar,done,library,src/ui/replay/mod.rs;src/ui/replay/state.rs
 Terminal,Replay,Synchronised replay across the charts of a layout,done,library,src/widget/replay.rs
 Terminal,Replay,Tick replay,done,library,src/data/replay.rs
-Terminal,Replay,Update interval smaller than the chart interval,done,library,src/widget/replay.rs;src/ui/floating_replay_control.rs
+Terminal,Replay,Update interval smaller than the chart interval,done,library,src/widget/replay.rs;src/ui/replay/floating.rs
 Terminal,Templates and layouts,Autosave,done,library,src/ui/top_toolbar/components/layout_menu.rs
 Terminal,Templates and layouts,Chart settings templates,done,library,src/ui/dialogs/chart_settings/mod.rs
 Terminal,Templates and layouts,Cloud sync of layouts and settings across devices,partial,host,src/services/storage.rs;src/ui/top_toolbar/components/layout_menu.rs;src/services/settings.rs
