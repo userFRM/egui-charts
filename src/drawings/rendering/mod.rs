@@ -626,6 +626,7 @@ mod tests {
             DrawingToolType::Curve,
             DrawingToolType::GannFan,
             DrawingToolType::CyclicLines,
+            DrawingToolType::TimeCycles,
             DrawingToolType::XABCDPattern,
         ] {
             let mut drawing = Drawing::new(7, tool);
@@ -682,7 +683,7 @@ mod tests {
                 DrawingToolType::Rect
                     | DrawingToolType::Circle
                     | DrawingToolType::Triangle
-                    | DrawingToolType::CyclicLines
+                    | DrawingToolType::TimeCycles
                     | DrawingToolType::XABCDPattern
             ) {
                 fn has_fill(shapes: &[Shape], color: egui::Color32) -> bool {

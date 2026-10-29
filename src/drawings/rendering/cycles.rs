@@ -4,14 +4,12 @@
 
 use super::style::circle_sides;
 use crate::drawings::domain::Drawing;
-use crate::drawings::rendering::utils::draw_dashed_line;
-use crate::styles::{stroke, typography};
+use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 
 impl Drawing {
-    /// Renders cyclic vertical lines with customizable period and phase.
-    /// Features: repeating vertical lines, cycle number labels, phase shift support.
+    /// Renders full-height lines from the first anchor towards the second at their interval.
     pub(crate) fn render_cyclic_lines(&self, painter: &egui::Painter, chart_rect: Rect) {
         if self.points.len() < 2 {
             return;
@@ -25,64 +23,26 @@ impl Drawing {
             self.color[3],
         );
 
-        let period = (f64::from(p2.x) - f64::from(p1.x)).abs();
-        if !period.is_finite() || period < 1.0 {
+        let step = f64::from(p2.x) - f64::from(p1.x);
+        if !step.is_finite() || step.abs() < 1.0 {
             return;
         }
 
-        // Alternating fill between cycle lines
-        let fill_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 20);
-
-        let font = egui::FontId::proportional(typography::XS);
-
-        // Cycle numbers of the visible lines (negative left of the anchor), computed
-        // directly so an anchor far off screen costs nothing.
+        // Skip off-screen cycles directly; only nonnegative steps from the first anchor exist.
         let anchor = f64::from(p1.x);
-        let first = ((f64::from(chart_rect.min.x) - anchor) / period).ceil() as i64;
-        let last = ((f64::from(chart_rect.max.x) - anchor) / period).floor() as i64;
-        for cycle_num in first..=last {
-            let x = (anchor + cycle_num as f64 * period) as f32;
-            // Draw vertical line
+        let (near, far) = if step > 0.0 {
+            (chart_rect.min.x, chart_rect.max.x)
+        } else {
+            (chart_rect.max.x, chart_rect.min.x)
+        };
+        let first = ((f64::from(near) - anchor) / step).ceil().max(0.0) as i64;
+        let last = ((f64::from(far) - anchor) / step).floor() as i64;
+        for cycle in first..=last {
+            let x = (anchor + cycle as f64 * step) as f32;
             painter.vline(
                 x,
                 chart_rect.y_range(),
-                Stroke::new(stroke::HAIRLINE, color),
-            );
-
-            // Alternating fill between lines
-            if cycle_num % 2 != 0 && x + period as f32 <= chart_rect.max.x {
-                let fill_rect = Rect::from_min_max(
-                    Pos2::new(x, chart_rect.min.y),
-                    Pos2::new(x + period as f32, chart_rect.max.y),
-                );
-                painter.rect_filled(fill_rect, 0.0, fill_color);
-            }
-
-            // Cycle number label at top
-            let label = format!("{cycle_num}");
-            let label_bg = Rect::from_center_size(
-                Pos2::new(x, chart_rect.min.y + DESIGN_TOKENS.spacing.xl),
-                egui::vec2(
-                    DESIGN_TOKENS.sizing.technical_labels.cycle_label_width / 2.0,
-                    DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-                ),
-            );
-            painter.rect_filled(
-                label_bg,
-                DESIGN_TOKENS.rounding.sm,
-                DESIGN_TOKENS
-                    .semantic
-                    .extended
-                    .chart_axis_bg
-                    .gamma_multiply(0.78),
-            );
-            painter.text(
-                Pos2::new(x, chart_rect.min.y + 12.0),
-                egui::Align2::CENTER_CENTER,
-                label,
-                font.clone(),
-                color,
+                Stroke::new(self.stroke_width, color),
             );
         }
 
@@ -98,42 +58,6 @@ impl Drawing {
             p2,
             DESIGN_TOKENS.rounding.lg,
             Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-
-        // Period label at bottom center of first cycle
-        let period_bars = if !self.chart_points.is_empty() && self.chart_points.len() >= 2 {
-            (self.chart_points[1].bar_idx - self.chart_points[0].bar_idx).abs() as i32
-        } else {
-            (period / 10.0) as i32 // Approximate
-        };
-        let period_label = format!("Period: {period_bars} bars");
-        let period_bg = Rect::from_center_size(
-            Pos2::new(
-                (p1.x + p2.x) / 2.0,
-                chart_rect.max.y - DESIGN_TOKENS.spacing.xl - DESIGN_TOKENS.spacing.sm,
-            ),
-            egui::vec2(
-                DESIGN_TOKENS.sizing.technical_labels.channel_label_width
-                    + DESIGN_TOKENS.spacing.section_lg
-                    + DESIGN_TOKENS.spacing.sm,
-                DESIGN_TOKENS.sizing.technical_labels.elliott_label_size,
-            ),
-        );
-        painter.rect_filled(
-            period_bg,
-            DESIGN_TOKENS.rounding.sm,
-            DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_axis_bg
-                .gamma_multiply(0.86),
-        );
-        painter.text(
-            period_bg.center(),
-            egui::Align2::CENTER_CENTER,
-            period_label,
-            font,
-            color,
         );
     }
 
@@ -153,12 +77,11 @@ impl Drawing {
         );
 
         let arcs = time_cycle_arcs(center, edge, chart_rect.x_range());
-        let Some(&(first_arc, base_radius)) = arcs.first() else {
+        if arcs.is_empty() {
             return;
-        };
+        }
         // The last arc may run past the right edge of the pane.
         let painter = &painter.with_clip_rect(chart_rect);
-        let font = egui::FontId::proportional(typography::XS);
         let arc_stroke = Stroke::new(self.stroke_width, color);
         for (arc_center, radius) in arcs {
             let segments = circle_sides(radius * painter.pixels_per_point()).div_ceil(2);
@@ -169,7 +92,11 @@ impl Drawing {
                     arc_center + radius * egui::vec2(angle.cos(), angle.sin())
                 })
                 .collect();
-            painter.add(egui::Shape::line(points, arc_stroke));
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                self.fill_color32().unwrap_or(Color32::TRANSPARENT),
+                arc_stroke,
+            ));
         }
 
         // Draw center anchor point
@@ -186,41 +113,6 @@ impl Drawing {
             edge,
             DESIGN_TOKENS.rounding.md,
             Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-
-        // Base cycle info
-        let bars = if !self.chart_points.is_empty() && self.chart_points.len() >= 2 {
-            (self.chart_points[1].bar_idx - self.chart_points[0].bar_idx).abs() as i32
-        } else {
-            (base_radius / 10.0) as i32
-        };
-        let info_label = format!("Cycle: {bars} bars");
-        let info_bg = Rect::from_center_size(
-            Pos2::new(
-                first_arc.x,
-                first_arc.y - base_radius - DESIGN_TOKENS.spacing.xxl - DESIGN_TOKENS.spacing.sm,
-            ),
-            egui::vec2(
-                DESIGN_TOKENS.sizing.technical_labels.channel_label_width
-                    + DESIGN_TOKENS.spacing.xxl,
-                DESIGN_TOKENS.sizing.technical_labels.elliott_label_size,
-            ),
-        );
-        painter.rect_filled(
-            info_bg,
-            DESIGN_TOKENS.rounding.sm,
-            DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_axis_bg
-                .gamma_multiply(0.86),
-        );
-        painter.text(
-            info_bg.center(),
-            egui::Align2::CENTER_CENTER,
-            info_label,
-            font,
-            color,
         );
     }
 
@@ -239,10 +131,6 @@ impl Drawing {
             self.color[2],
             self.color[3],
         );
-
-        let wavelength = (p2.x - p1.x).abs() * 2.0;
-        let amplitude = (p2.y - p1.y).abs() / 2.0;
-        let center_y = (p1.y + p2.y) / 2.0;
 
         // Draw sine wave extending across chart
         let segments = 200;
@@ -267,33 +155,6 @@ impl Drawing {
             Stroke::new(self.stroke_width, color),
         ));
 
-        // Draw zero/center line (dashed)
-        let zero_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 80);
-        let dash_len = DESIGN_TOKENS.spacing.lg;
-        let gap_len = DESIGN_TOKENS.spacing.md + DESIGN_TOKENS.spacing.xs;
-        let (left, right) = (chart_rect.min.x, chart_rect.max.x);
-        draw_dashed_line(
-            painter,
-            Pos2::new(left, center_y),
-            Pos2::new(right, center_y),
-            Stroke::new(stroke::HAIRLINE, zero_color),
-            dash_len,
-            gap_len,
-        );
-
-        // Draw amplitude guides (dashed horizontal lines at the peak and trough)
-        for y in [p1.y, p2.y] {
-            draw_dashed_line(
-                painter,
-                Pos2::new(left, y),
-                Pos2::new(right, y),
-                Stroke::new(DESIGN_TOKENS.stroke.extra_thin, zero_color),
-                dash_len,
-                gap_len,
-            );
-        }
-
         // Draw anchor points
         painter.circle_filled(p1, DESIGN_TOKENS.rounding.lg, color);
         painter.circle_stroke(
@@ -306,78 +167,6 @@ impl Drawing {
             p2,
             DESIGN_TOKENS.rounding.lg,
             Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-
-        // Info labels
-        let font = egui::FontId::proportional(typography::XS);
-
-        // Wavelength label
-        let wave_bars = if !self.chart_points.is_empty() && self.chart_points.len() >= 2 {
-            ((self.chart_points[1].bar_idx - self.chart_points[0].bar_idx).abs() * 2.0) as i32
-        } else {
-            (wavelength / 10.0) as i32
-        };
-        let wavelength_label = format!("λ: {wave_bars} bars");
-        let wave_bg = Rect::from_center_size(
-            Pos2::new(
-                (p1.x + p2.x) / 2.0,
-                center_y + DESIGN_TOKENS.spacing.xxl + DESIGN_TOKENS.spacing.sm,
-            ),
-            egui::vec2(
-                DESIGN_TOKENS.sizing.technical_labels.pattern_label_width
-                    + DESIGN_TOKENS.spacing.lg,
-                DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-            ),
-        );
-        painter.rect_filled(
-            wave_bg,
-            DESIGN_TOKENS.rounding.sm,
-            DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_axis_bg
-                .gamma_multiply(0.78),
-        );
-        painter.text(
-            wave_bg.center(),
-            egui::Align2::CENTER_CENTER,
-            wavelength_label,
-            font.clone(),
-            color,
-        );
-
-        // Amplitude label
-        let amp_price = if !self.chart_points.is_empty() && self.chart_points.len() >= 2 {
-            (self.chart_points[1].price - self.chart_points[0].price).abs() / 2.0
-        } else {
-            (amplitude / 10.0) as f64
-        };
-        let amp_label = format!("A: {amp_price:.2}");
-        let amp_bg = Rect::from_center_size(
-            Pos2::new(
-                p2.x + DESIGN_TOKENS.spacing.xxl + DESIGN_TOKENS.spacing.sm,
-                (p1.y + p2.y) / 2.0,
-            ),
-            egui::vec2(
-                DESIGN_TOKENS.sizing.technical_labels.channel_offset_x,
-                DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-            ),
-        );
-        painter.rect_filled(
-            amp_bg,
-            DESIGN_TOKENS.rounding.sm,
-            DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_axis_bg
-                .gamma_multiply(0.78),
-        );
-        painter.text(
-            amp_bg.center(),
-            egui::Align2::CENTER_CENTER,
-            amp_label,
-            font,
-            color,
         );
     }
 }
@@ -415,6 +204,109 @@ fn time_cycle_arcs(p1: Pos2, p2: Pos2, x_range: egui::Rangef) -> Vec<(Pos2, f32)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn paint(drawing: &Drawing, rect: Rect) -> Vec<egui::Shape> {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| match drawing.tool_type {
+            crate::drawings::DrawingToolType::CyclicLines => {
+                drawing.render_cyclic_lines(ui.painter(), rect);
+            }
+            crate::drawings::DrawingToolType::TimeCycles => {
+                drawing.render_time_cycles(ui.painter(), rect);
+            }
+            _ => drawing.render_sine_line(ui.painter(), rect),
+        });
+        let shapes = output.shapes.iter().map(|s| s.shape.clone()).collect();
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    #[test]
+    fn cyclic_lines_repeat_only_towards_the_second_anchor() {
+        // x = first + n * (second - first), n >= 0, clipped to 0..250.
+        for (first, second, expected) in [
+            (100.0, 140.0, vec![100.0, 140.0, 180.0, 220.0]),
+            (140.0, 100.0, vec![140.0, 100.0, 60.0, 20.0]),
+            (-60.0, -20.0, vec![20.0, 60.0, 100.0, 140.0, 180.0, 220.0]),
+            (310.0, 270.0, vec![230.0, 190.0, 150.0, 110.0, 70.0, 30.0]),
+            (-60.0, -100.0, vec![]),
+            (310.0, 350.0, vec![]),
+            (0.0, 125.0, vec![0.0, 125.0, 250.0]),
+            (100.0, 100.0, vec![]),
+        ] {
+            let mut drawing = Drawing::new(1, crate::drawings::DrawingToolType::CyclicLines);
+            drawing.points = vec![Pos2::new(first, 80.0), Pos2::new(second, 90.0)];
+            drawing.fill_color = Some([12, 34, 56, 80]);
+            let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(250.0, 200.0));
+            let shapes = paint(&drawing, rect);
+            let positions: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::LineSegment { points, .. } => Some(points[0].x),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(positions, expected, "anchors {first}, {second}");
+            for shape in shapes {
+                match shape {
+                    egui::Shape::LineSegment { points, stroke } => {
+                        assert_eq!(points[0].x, points[1].x);
+                        assert_eq!([points[0].y, points[1].y], [0.0, 200.0]);
+                        assert_eq!(stroke, drawing.stroke());
+                    }
+                    // Permanent anchor decorations belong to a separate change.
+                    egui::Shape::Circle(_) | egui::Shape::Noop => {}
+                    other => panic!("unexpected cyclic line decoration: {other:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cycle_curves_have_no_guides_or_labels_and_time_cycles_can_fill() {
+        use crate::drawings::DrawingToolType::{SineLine, TimeCycles};
+        for tool in [TimeCycles, SineLine] {
+            for fill in [None, Some([12, 34, 56, 80])] {
+                let mut drawing = Drawing::new(1, tool);
+                drawing.points = vec![Pos2::new(100.0, 120.0), Pos2::new(140.0, 160.0)];
+                drawing.fill_color = fill;
+                let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(250.0, 200.0));
+                let mut paths = 0;
+                for shape in paint(&drawing, rect) {
+                    match shape {
+                        egui::Shape::Path(path) => {
+                            paths += 1;
+                            assert_eq!(path.closed, tool == TimeCycles);
+                            let expected_fill = if tool == TimeCycles {
+                                drawing.fill_color32().unwrap_or(Color32::TRANSPARENT)
+                            } else {
+                                Color32::TRANSPARENT
+                            };
+                            assert_eq!(path.fill, expected_fill);
+                            if tool == TimeCycles {
+                                // Diameter 40: endpoints at baseline 120, apex at 100.
+                                assert!((path.points.first().unwrap().y - 120.0).abs() < 1e-3);
+                                assert!((path.points.last().unwrap().y - 120.0).abs() < 1e-3);
+                                assert!(
+                                    (path
+                                        .points
+                                        .iter()
+                                        .map(|p| p.y)
+                                        .fold(f32::INFINITY, f32::min)
+                                        - 100.0)
+                                        .abs()
+                                        < 0.25
+                                );
+                            }
+                        }
+                        egui::Shape::Circle(_) | egui::Shape::Noop => {}
+                        other => panic!("unexpected {tool:?} decoration: {other:?}"),
+                    }
+                }
+                assert_eq!(paths, if tool == TimeCycles { 4 } else { 1 });
+            }
+        }
+    }
 
     /// The anchors span one cycle; arcs of that width follow each other from
     /// the earlier anchor to the right edge, on the first anchor's price.
