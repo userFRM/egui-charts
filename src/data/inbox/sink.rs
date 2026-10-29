@@ -300,9 +300,8 @@ impl Sink {
     /// The levels that changed since the update numbered `sequence - 1`, each with its new size; a
     /// size of 0 removes the level. The `symbol` of `changes` is ignored. Taken by reference, so a
     /// feed can clear and refill one `OrderBook` for every delta instead of allocating its levels
-    /// per message: the book itself allocates nothing for a delta once its sides reached their
-    /// depth. A delta numbered at or
-    /// below the last one applied is ignored. After a gap, before the first snapshot, or when a
+    /// per message. Changes are sorted by price and merged in one pass, with the last entry for
+    /// each price winning. A delta numbered at or below the last one applied is ignored. After a gap, before the first snapshot, or when a
     /// side would exceed 10,000 levels, the book is cleared and the chart calls
     /// [`Datafeed::request_depth_snapshot`] once; a snapshot pushed before the chart sees the loss
     /// cancels the call. Keep pushing deltas while the snapshot is fetched: those pushed while the

@@ -438,6 +438,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Depth deltas sort their changes and merge each side in one pass, so best-first batches no longer shift a growing side once per new level while holding the inbox lock. The last entry for a price still wins, and a resulting side beyond 10,000 levels is rejected before replacing either side. Larger batches of updates and removals remain accepted when their resulting sides fit. ([#1246](https://github.com/userFRM/egui-charts/issues/1246))
+
 - Heartbeats after a pushed whitespace bar keep the last real close for their zero-volume candles instead of creating invalid bars. Whitespace alone does not seed a heartbeat candle. ([#1248](https://github.com/userFRM/egui-charts/issues/1248))
 
 - History pages extend their bars with trades already streamed in the same slot, keeping the page open, the combined range and volume, and the latest trade close, for both chart and study series. Repeated pages do not count the trades again; an overflowing page bar is rejected and counted without discarding the trades. A feed must exclude already streamed trades from its page or answer the page before streaming trades it does not count. ([#1243](https://github.com/userFRM/egui-charts/issues/1243))
