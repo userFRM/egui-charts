@@ -7,8 +7,10 @@ use crate::data::{MaybeSend, Reply};
 use crate::model::{Alert, AlertId};
 
 /// The host's alerts. The host stores and evaluates them, on its own prices or on a server; the
-/// library shows what the host pushes, sends every change the user makes through
-/// [`save`](Alerts::save) and [`remove`](Alerts::remove), and evaluates nothing.
+/// library shows what the host pushes and sends every change the user makes through
+/// [`save`](Alerts::save) and [`remove`](Alerts::remove). With the `alert-engine` feature,
+/// [`AlertEngine`](crate::services::AlertEngine) is a ready-made implementation that evaluates
+/// the alerts on the bars the host feeds it; without it the library evaluates nothing.
 ///
 /// The host is the source of truth. The terminal shows only the alerts and triggers that
 /// [`watch`](Alerts::watch) pushed: an alert the user creates appears once the host pushes it, and
@@ -17,6 +19,19 @@ use crate::model::{Alert, AlertId};
 /// it shows is the one the host last pushed in an [`AlertEvent::Upsert`]. Sound and delivery
 /// outside the application (email, push notifications) are the host's: it can play a sound or send
 /// a message when it pushes the trigger.
+///
+/// Evaluation is the host's, so these rules are the contract between the library that edits an
+/// alert and the service that runs it. A channel is inclusive at both boundaries. The state
+/// conditions [`InsideChannel`](crate::model::AlertCondition::InsideChannel) and
+/// [`OutsideChannel`](crate::model::AlertCondition::OutsideChannel) hold on every evaluation
+/// while the value is in that state, so pair them with a frequency that limits repeats, whereas
+/// entering and exiting hold only on the evaluation that crosses a boundary.
+/// [`AlertFrequency::OncePerMinute`](crate::model::AlertFrequency::OncePerMinute) allows one
+/// trigger per UTC clock minute, from `hh:mm:00` up to but excluding the next minute, whatever the
+/// chart's interval. An alert's [`schedule`](crate::model::Alert::schedule) limits notifications
+/// only: evaluate and trigger the alert as usual, and deliver the notification when
+/// [`NotificationSchedule::allows`](crate::model::NotificationSchedule::allows) accepts the
+/// trigger time.
 ///
 /// These methods are called on the UI thread, while the terminal shows a frame or runs a command,
 /// and must return at once. Do the work elsewhere and answer through the [`Reply`] or push through
@@ -130,5 +145,8 @@ pub enum AlertEvent {
         time: DateTime<Utc>,
         /// Price observed by the host when available.
         price: Option<f64>,
+        /// The alert's message with its placeholders filled in, as [`Alert::expand_message`]
+        /// does, empty if the alert has none. The terminal shows it in the popup and the log.
+        message: String,
     },
 }

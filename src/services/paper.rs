@@ -221,6 +221,9 @@ impl State {
                 stop: true,
                 stop_limit: true,
                 brackets: true,
+                close: true,
+                reverse: true,
+                preview: false,
                 modify: true,
             },
         );

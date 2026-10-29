@@ -80,12 +80,7 @@ impl ConnorsRSI {
             state.1 = (state.1 * (period - 1) as f64 + gain) / period as f64;
             state.2 = (state.2 * (period - 1) as f64 + loss) / period as f64;
         }
-        let rs = if state.2 > 0.0 {
-            state.1 / state.2
-        } else {
-            100.0
-        };
-        100.0 - (100.0 / (1.0 + rs))
+        super::rsi::from_averages(state.1, state.2)
     }
 }
 
@@ -279,6 +274,19 @@ mod tests {
             .count();
 
         assert!(valid_cnt > 0);
+    }
+
+    /// A flat series has no gains or losses: both RSI components are the neutral 50 and no
+    /// return ranks above an equal one, so the composite is (50 + 50 + 0) / 3.
+    #[test]
+    fn flat_series_uses_neutral_rsi() {
+        let mut crsi = ConnorsRSI::new().with_periods(3, 2, 5);
+        let data: Vec<Bar> = (0..20).map(|_| make_bar(100.0)).collect();
+        crsi.calculate(&data);
+        match crsi.values.to_rows()[19] {
+            IndicatorValue::Single(v) => assert!((v - 100.0 / 3.0).abs() < 1e-9),
+            _ => panic!("expected a value after warmup"),
+        }
     }
 
     #[test]

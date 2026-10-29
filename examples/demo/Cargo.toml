@@ -11,7 +11,7 @@ name = "egui-charts-demo"
 path = "main.rs"
 
 [dependencies]
-egui-charts = { path = "../..", features = ["ui"] }
+egui-charts = { path = "../..", features = ["ui", "alert-engine"] }
 eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow", "persistence"] }
 # The emoji fonts draw the icons the drawing bar's Icons/Emojis menu places.
 egui = { version = "0.37.0", features = ["monochrome_emoji_fonts"] }

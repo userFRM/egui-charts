@@ -358,7 +358,7 @@ fn price_based(filters: &[String], frames: usize) {
 fn bubbles(filters: &[String], frames: usize) {
     use chrono::{Duration, TimeZone, Utc};
     use egui_charts::ChartBuilder;
-    use egui_charts::chart::overlays::VolumeBubblesConfig;
+    use egui_charts::chart::overlays::{BubbleGrouping, VolumeBubblesConfig};
     use egui_charts::data::{
         Datafeed, HistoryPage, HistoryRequest, Reply, TradePage, TradeRequest,
     };
@@ -368,10 +368,7 @@ fn bubbles(filters: &[String], frames: usize) {
     struct Feed(Vec<Bar>, Vec<Tick>);
     impl Datafeed for Feed {
         fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
-            reply.send(Ok(HistoryPage {
-                bars: self.0.clone(),
-                end_of_history: true,
-            }));
+            reply.send(Ok(HistoryPage::new(self.0.clone(), true)));
         }
         fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
             let mut page = TradePage::default();
@@ -420,7 +417,7 @@ fn bubbles(filters: &[String], frames: usize) {
     chart.set_chart_type(ChartType::Candles);
     chart.set_visible_bars(200);
     chart.set_volume_bubbles(Some(VolumeBubblesConfig {
-        price_step: Some(step),
+        grouping: BubbleGrouping::PriceStep(step),
         ..VolumeBubblesConfig::default()
     }));
     let samples = frame::run(vec2(1440.0, 900.0), pos2(700.0, 400.0), frames, |ui| {

@@ -205,8 +205,15 @@ impl PivotPoints {
         }
     }
 
+    /// The method and the latest period so far: its open, running high and low, latest close,
+    /// and first bar. `None` before a usable bar.
+    pub(super) fn latest_period(&self) -> Option<(PivotMethod, &Bar, usize)> {
+        let period = self.stepper.state().periods.back()?;
+        Some((self.method, &period.ohlc, period.start))
+    }
+
     /// `[P, R1, S1, ..., R5, S5]` from the previous period and the current period's open.
-    fn levels(method: PivotMethod, prev: &Bar, open: f64) -> [f64; 11] {
+    pub(super) fn levels(method: PivotMethod, prev: &Bar, open: f64) -> [f64; 11] {
         let (h, l, c) = (prev.high, prev.low, prev.close);
         let r = h - l;
         let p = (h + l + c) / 3.0;

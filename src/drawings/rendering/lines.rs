@@ -758,6 +758,7 @@ mod tests {
                 let view = ChartView {
                     instrument: None,
                     bars: &[],
+                    executions: None,
                     revision: 0,
                     bar_to_x: &|x| x,
                     price_to_y: &|p| p as f32,

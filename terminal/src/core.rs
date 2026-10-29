@@ -1,16 +1,16 @@
 //! What every group relies on: the core actions, theme, settings and the shared helpers.
 
 use super::{Action, ExportContents, ExportFile, Terminal};
-use crate::Chart;
-use crate::data::FeedStatus;
-use crate::model::{ChartType, Timeframe};
-use crate::services::{Notification, UserSettings};
-use crate::theme::Theme;
-use crate::ui::Control;
-use crate::ui::app_state::ChartAppState;
-use crate::ui::floating_replay_control::ReplayControlAction;
-use crate::ui::top_toolbar::TopToolbarAction;
-use crate::widget::SeriesId;
+use egui_charts::Chart;
+use egui_charts::data::FeedStatus;
+use egui_charts::model::{ChartType, Timeframe};
+use egui_charts::services::{Notification, UserSettings};
+use egui_charts::theme::Theme;
+use egui_charts::ui::Control;
+use egui_charts::ui::app_state::ChartAppState;
+use egui_charts::ui::floating_replay_control::ReplayControlAction;
+use egui_charts::ui::top_toolbar::TopToolbarAction;
+use egui_charts::widget::SeriesId;
 
 /// Whether settings are being read into the terminal or written from it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -242,14 +242,12 @@ impl Terminal {
     /// The settings as they are now, for storage.
     pub(super) fn user_settings(&mut self) -> UserSettings {
         let chart = self.chart();
-        let mut settings = UserSettings {
-            theme: self
-                .theme_choice
-                .map(|dark| if dark { "dark" } else { "light" }.into()),
-            symbol: Some(chart.symbol().to_owned()).filter(|symbol| !symbol.is_empty()),
-            interval: chart.timeframe(),
-            ..UserSettings::default()
-        };
+        let mut settings = UserSettings::default();
+        settings.theme = self
+            .theme_choice
+            .map(|dark| if dark { "dark" } else { "light" }.into());
+        settings.symbol = Some(chart.symbol().to_owned()).filter(|symbol| !symbol.is_empty());
+        settings.interval = chart.timeframe();
         self.group_settings(&mut settings, Direction::Save);
         settings
     }
