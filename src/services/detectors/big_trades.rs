@@ -193,7 +193,7 @@ impl BigTrades {
         self.zones
             .retain(|zone| zone.to.is_none() || !zone.classified);
 
-        let trade = self.fills.get_or_insert_with(|| Trade {
+        let trade = self.fills.get_or_insert(Trade {
             aggressor_order_id: fill.aggressor_order_id,
             first_time: fill.ts,
             side: fill.side,
