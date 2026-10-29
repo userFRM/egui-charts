@@ -356,10 +356,7 @@ impl Datafeed for Feed {
             })
             .filter(|bar| request.before.is_none_or(|before| bar.time < before))
             .collect();
-        reply.send(Ok(HistoryPage {
-            bars,
-            end_of_history: true,
-        }));
+        reply.send(Ok(HistoryPage::new(bars, true)));
     }
 
     fn subscribe(&self, subscription: Subscription) {

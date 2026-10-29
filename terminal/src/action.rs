@@ -1,24 +1,24 @@
 //! What the terminal's controls emit: each component's own action, unchanged.
 
-use crate::model::Instrument;
-use crate::ui::context_menu::ChartContextAction;
-use crate::ui::dialogs::{AlertDialogAction, DrawingPropertiesAction};
-use crate::ui::drawing_toolbar::DrawingToolbarAction;
-use crate::ui::export::ExportResponse;
-use crate::ui::floating_replay_control::ReplayControlAction;
-use crate::ui::replay::ReplayStartAction;
-use crate::ui::strategy_report::StrategyReportAction;
-use crate::ui::timeframe_toolbar::{DatePickerAction, TimeframeToolbarAction};
-use crate::ui::top_toolbar::components::indicator_dialog::IndicatorDialogAction;
-use crate::ui::top_toolbar::components::settings_menu::SettingsAction;
-use crate::ui::top_toolbar::{CompareAction, LayoutAction, TopToolbarAction};
-use crate::ui::trading::{AccountPanelAction, BrokerPickerAction};
-use crate::ui::widget_bar::panels::object_tree::ObjectTreeAction;
-use crate::ui::widget_bar::{
+use egui_charts::model::Instrument;
+use egui_charts::ui::context_menu::ChartContextAction;
+use egui_charts::ui::dialogs::{AlertDialogAction, DrawingPropertiesAction};
+use egui_charts::ui::drawing_toolbar::DrawingToolbarAction;
+use egui_charts::ui::export::ExportResponse;
+use egui_charts::ui::floating_replay_control::ReplayControlAction;
+use egui_charts::ui::replay::ReplayStartAction;
+use egui_charts::ui::strategy_report::StrategyReportAction;
+use egui_charts::ui::timeframe_toolbar::{DatePickerAction, TimeframeToolbarAction};
+use egui_charts::ui::top_toolbar::components::indicator_dialog::IndicatorDialogAction;
+use egui_charts::ui::top_toolbar::components::settings_menu::SettingsAction;
+use egui_charts::ui::top_toolbar::{CompareAction, LayoutAction, TopToolbarAction};
+use egui_charts::ui::trading::{AccountPanelAction, BrokerPickerAction};
+use egui_charts::ui::widget_bar::panels::object_tree::ObjectTreeAction;
+use egui_charts::ui::widget_bar::{
     AlertPanelAction, CalendarAction, HotlistsAction, NewsAction, NotificationsAction,
     ProductsAction, ScreenerAction, WatchlistAction, WidgetBarAction,
 };
-use crate::widget::ShortcutRequest;
+use egui_charts::widget::ShortcutRequest;
 
 /// What a terminal control emitted: the component's own action, unchanged.
 ///

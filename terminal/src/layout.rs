@@ -1,7 +1,7 @@
 //! The frame: the order in which the terminal polls, draws its regions and performs actions.
 
 use super::{Action, Terminal};
-use crate::ui_kit::notifications::NotificationPanel;
+use egui_charts::ui_kit::notifications::NotificationPanel;
 
 /// Where a group draws in the frame, in drawing order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,7 +30,7 @@ impl Terminal {
             self.first_frame(&ctx);
         }
         self.update_theme(&ctx);
-        crate::theme::apply_to_egui(&ctx, &self.theme);
+        egui_charts::theme::apply_to_egui(&ctx, &self.theme);
         // The root Ui was created before the theme was applied this frame.
         ui.set_style(ctx.global_style());
         self.poll_settings(&ctx);
