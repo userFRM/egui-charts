@@ -4,7 +4,7 @@ use super::{Chart, ChartLayout, SeriesId};
 use crate::data::merge::{Origin, merge};
 use crate::model::{Bar, BarClock};
 use chrono::{DateTime, Utc};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 pub(super) struct ReplayWindow {
     pub(super) time: DateTime<Utc>,
@@ -176,7 +176,7 @@ impl Chart {
                 });
                 merge(
                     &mut visible,
-                    &mut BTreeSet::new(),
+                    &mut BTreeMap::new(),
                     &clock,
                     partial.into_iter().map(|bar| (bar, Origin::Live)).collect(),
                 );
@@ -211,7 +211,7 @@ impl Chart {
         };
         let merged = merge(
             replay.bars.entry(id).or_default(),
-            &mut BTreeSet::new(),
+            &mut BTreeMap::new(),
             &clock,
             vec![(bar, Origin::Live)],
         );

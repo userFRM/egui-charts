@@ -1,6 +1,13 @@
-//! Shared validation for host drawing edits.
+//! Shared validation for host drawing edits, and the sizes drawings are drawn at.
 
 use super::{Drawing, DrawingToolType};
+
+/// The widest stroke in points a drawing is drawn with; the properties editor offers 1 to 10.
+pub(crate) const MAX_STROKE_WIDTH: f32 = 100.0;
+
+/// The largest pitchfork level, as a multiple of the tines' distance from the median, that is
+/// drawn. Larger levels lie far outside the chart, and near `f32::MAX` overflow its geometry.
+pub(crate) const MAX_PITCHFORK_LEVEL: f32 = 100.0;
 
 pub(super) fn validate(drawing: &Drawing) -> Result<(), &'static str> {
     let tool = drawing.tool_type;
@@ -22,12 +29,9 @@ pub(super) fn validate(drawing: &Drawing) -> Result<(), &'static str> {
     {
         return Err("Drawing coordinates must be finite");
     }
-    if drawing.stroke_width <= 0.0 || drawing.font_size <= 0.0 {
-        return Err("Drawing dimensions must be positive");
-    }
     let stored = super::persistence::drawing_to_stored(drawing, |_| 0);
-    if stored.non_finite_field().is_some() {
-        return Err("Drawing settings must be finite");
+    if stored.invalid_field().is_some() {
+        return Err("Drawing settings must be finite and in range");
     }
     Ok(())
 }

@@ -384,19 +384,14 @@ impl Chart {
             return;
         }
 
-        let font_id = egui::FontId::proportional(self.config.watermark_font_size);
+        let font_size = crate::styles::typography::font_size(self.config.watermark_font_size);
+        let font_id = egui::FontId::proportional(font_size);
 
         // Calculate position based on watermark_pos
         let pos = match self.config.watermark_pos {
             WatermarkPos::Center => rect.center(),
-            WatermarkPos::TopLeft => Pos2::new(
-                rect.min.x + 20.0,
-                rect.min.y + self.config.watermark_font_size,
-            ),
-            WatermarkPos::TopRight => Pos2::new(
-                rect.max.x - 20.0,
-                rect.min.y + self.config.watermark_font_size,
-            ),
+            WatermarkPos::TopLeft => Pos2::new(rect.min.x + 20.0, rect.min.y + font_size),
+            WatermarkPos::TopRight => Pos2::new(rect.max.x - 20.0, rect.min.y + font_size),
             WatermarkPos::BottomLeft => Pos2::new(rect.min.x + 20.0, rect.max.y - 20.0),
             WatermarkPos::BottomRight => Pos2::new(rect.max.x - 20.0, rect.max.y - 20.0),
         };
@@ -458,7 +453,7 @@ impl Chart {
         // Axis labels take their size from the theme's label text.
         let scaled = self.config.axis_font_size.map(|size| {
             let mut scaled = theme.clone().unwrap_or_else(|| ui.ctx().active_theme());
-            scaled.text.label = size;
+            scaled.text.label = crate::styles::typography::font_size(size);
             scaled
         });
         let _theme_scope = scaled

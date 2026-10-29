@@ -149,6 +149,9 @@ studies = []
 ## `services::AlertEngine`: an `Alerts` service that evaluates alerts on the bars the host feeds
 ## it while the application runs.  Needs no egui, so a server can run it.
 alert-engine = []
+## `services::OrderFlowDetectors`: a `Signals` service that finds order-flow events, such as
+## large aggressive executions, in the trades and depth the host feeds it.  Needs no egui.
+detectors = []
 ## `strategies::Backtest`, which runs a `strategies::Strategy` over bars and returns a
 ## `StrategyReport`.  Needs no egui, so a server can run it.
 strategies = []

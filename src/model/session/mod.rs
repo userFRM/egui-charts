@@ -103,6 +103,8 @@ pub enum SessionBreakType {
     Monthly,
     /// Custom session break
     Custom,
+    /// Yearly session break (end of calendar year)
+    Yearly,
 }
 
 /// Daily session provider with a configurable break hour.
@@ -186,26 +188,26 @@ impl SessionProvider for DailySessionProvider {
     }
 }
 
-/// Weekly session provider that detects ISO-week boundaries.
+/// Weekly session provider that detects boundaries after a configured UTC weekday.
 ///
-/// Defaults to Friday (typical equity-market week end). Configure with
+/// Defaults to Sunday, so a week starts on Monday. Configure with
 /// [`new`](Self::new) to use a different day.
 #[derive(Debug, Clone)]
 pub struct WeeklySessionProvider {
-    /// Day of week for session break
+    /// Last weekday of the session week; the break is at the following midnight UTC.
     pub break_day: Weekday,
 }
 
 impl Default for WeeklySessionProvider {
     fn default() -> Self {
         Self {
-            break_day: Weekday::Fri, // Friday close
+            break_day: Weekday::Sun,
         }
     }
 }
 
 impl WeeklySessionProvider {
-    /// Create a weekly provider that breaks when the given weekday changes.
+    /// Create a weekly provider that breaks at midnight UTC after `break_day`.
     pub fn new(break_day: Weekday) -> Self {
         Self { break_day }
     }
@@ -217,14 +219,15 @@ impl SessionProvider for WeeklySessionProvider {
         from: &DateTime<Utc>,
         to: &DateTime<Utc>,
     ) -> Option<SessionBreak> {
-        let from_week = from.iso_week().week();
-        let to_week = to.iso_week().week();
+        let week = |time: &DateTime<Utc>| {
+            (time.num_days_from_ce() - self.break_day.number_from_monday() as i32 - 1).div_euclid(7)
+        };
 
-        if from_week != to_week {
+        if week(from) != week(to) {
             Some(SessionBreak {
                 ts: *to,
                 break_type: SessionBreakType::Weekly,
-                label: Some(format!("Week {to_week}")),
+                label: Some(format!("Week {}", to.iso_week().week())),
             })
         } else {
             None
@@ -264,8 +267,8 @@ impl SessionProvider for MonthlySessionProvider {
 
 /// Composite session provider that combines multiple providers.
 ///
-/// When checking for a break, the first provider that reports one wins
-/// (short-circuit). Use [`standard`](Self::standard) for the common
+/// Providers added earlier take priority: the first provider that reports a break wins.
+/// Use [`standard`](Self::standard) for the common
 /// daily + weekly + monthly combination.
 pub struct CompositeSessionProvider {
     providers: Vec<Box<dyn SessionProvider>>,
@@ -284,12 +287,12 @@ impl CompositeSessionProvider {
         self.providers.push(provider);
     }
 
-    /// Create standard provider with daily, weekly, and monthly breaks
+    /// Create standard breaks with monthly priority over weekly, then daily.
     pub fn standard() -> Self {
         let mut composite = Self::new();
-        composite.add_provider(Box::new(DailySessionProvider::default()));
-        composite.add_provider(Box::new(WeeklySessionProvider::default()));
         composite.add_provider(Box::new(MonthlySessionProvider));
+        composite.add_provider(Box::new(WeeklySessionProvider::default()));
+        composite.add_provider(Box::new(DailySessionProvider::default()));
         composite
     }
 }
@@ -306,7 +309,7 @@ impl SessionProvider for CompositeSessionProvider {
         from: &DateTime<Utc>,
         to: &DateTime<Utc>,
     ) -> Option<SessionBreak> {
-        // Return the highest priority break (Monthly > Weekly > Daily)
+        // Return the first reporting provider, in insertion order.
         for provider in &self.providers {
             if let Some(break_info) = provider.session_break_between(from, to) {
                 return Some(break_info);
@@ -465,14 +468,84 @@ mod tests {
 
     #[test]
     fn test_composite_provider() {
-        let mut composite = CompositeSessionProvider::new();
-        composite.add_provider(Box::new(DailySessionProvider::default()));
-        composite.add_provider(Box::new(MonthlySessionProvider));
-
-        let bars = create_test_bars();
+        let composite = CompositeSessionProvider::standard();
+        let mut bars = create_test_bars();
+        bars.push(Bar::new(
+            Utc.with_ymd_and_hms(2024, 2, 5, 12, 0, 0).unwrap(),
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+        ));
         let breaks = find_session_breaks(&bars, &composite);
+        assert_eq!(
+            breaks
+                .iter()
+                .map(|(index, item)| (*index, item.break_type))
+                .collect::<Vec<_>>(),
+            [
+                (1, SessionBreakType::Daily),
+                (2, SessionBreakType::Monthly),
+                (3, SessionBreakType::Weekly)
+            ]
+        );
+        let mut custom = CompositeSessionProvider::new();
+        custom.add_provider(Box::new(DailySessionProvider::default()));
+        custom.add_provider(Box::new(MonthlySessionProvider));
+        assert_eq!(
+            find_session_breaks(&bars, &custom)[1].1.break_type,
+            SessionBreakType::Daily
+        );
+    }
 
-        // Should detect both daily and monthly breaks
-        assert!(!breaks.is_empty());
+    #[test]
+    fn weekly_breaks_follow_the_configured_day_across_years() {
+        for (provider, from, to, expected) in [
+            (
+                WeeklySessionProvider::new(Weekday::Wed),
+                "2024-03-12T12:00:00Z",
+                "2024-03-14T12:00:00Z",
+                true,
+            ),
+            (
+                WeeklySessionProvider::new(Weekday::Wed),
+                "2024-03-17T12:00:00Z",
+                "2024-03-18T12:00:00Z",
+                false,
+            ),
+            (
+                WeeklySessionProvider::new(Weekday::Wed),
+                "2024-03-13T23:59:59Z",
+                "2024-03-14T00:00:00Z",
+                true,
+            ),
+            (
+                WeeklySessionProvider::default(),
+                "2024-03-17T23:59:59Z",
+                "2024-03-18T00:00:00Z",
+                true,
+            ),
+            (
+                WeeklySessionProvider::default(),
+                "2024-03-15T23:59:59Z",
+                "2024-03-16T00:00:00Z",
+                false,
+            ),
+            (
+                WeeklySessionProvider::default(),
+                "2024-01-03T12:00:00Z",
+                "2025-01-01T12:00:00Z",
+                true,
+            ),
+        ] {
+            assert_eq!(
+                provider
+                    .session_break_between(&from.parse().unwrap(), &to.parse().unwrap())
+                    .is_some(),
+                expected,
+                "{from}..{to}"
+            );
+        }
     }
 }
