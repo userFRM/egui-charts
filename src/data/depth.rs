@@ -409,15 +409,11 @@ mod tests {
                 .map(|push| match push {
                     Snapshot(sequence, book) => depth.snapshot(sequence, book),
                     Delta(sequence, changes) => {
-                        let capacity = depth.changes.capacity();
                         let result = depth.delta(sequence, &changes);
                         assert!(
                             depth.changes.capacity() <= MAX_LEVELS,
                             "{name}: change buffer"
                         );
-                        if changes.bids.len().max(changes.asks.len()) <= capacity {
-                            assert_eq!(depth.changes.capacity(), capacity, "{name}: reused buffer");
-                        }
                         result
                     }
                 })
@@ -435,5 +431,24 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// Small deltas keep the warmed change buffer for the next update.
+    #[test]
+    fn small_deltas_keep_the_change_buffer() {
+        let mut depth = Book::new(None);
+        depth
+            .snapshot(10, book(&[(99.0, 1.0)], &[(100.0, 2.0)]))
+            .unwrap();
+        let changes = book(&[(99.0, 3.0)], &[(100.0, 4.0)]);
+        depth.delta(11, &changes).unwrap();
+        let capacity = depth.changes.capacity();
+        assert!(capacity > 0, "the first delta keeps its buffer");
+        depth.delta(12, &changes).unwrap();
+        assert_eq!(
+            depth.changes.capacity(),
+            capacity,
+            "the second delta reuses it"
+        );
     }
 }
