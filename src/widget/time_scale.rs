@@ -100,13 +100,28 @@ impl Chart {
         true
     }
 
+    /// Calendar zone behind the axis; `None` selects the system's local zone.
+    pub(super) fn calendar_timezone(&self) -> Option<crate::model::TimezoneId> {
+        let timezone = self.display_timezone();
+        match timezone {
+            crate::scales::TimezoneMode::Local => None,
+            _ => Some(timezone.to_tz().unwrap_or_default()),
+        }
+    }
+
     /// The UTC time at a logical index, `None` without data or for a non-finite index.
     ///
     /// Between bars the time is interpolated, and in whitespace it is extrapolated, as in
-    /// [`Chart::visible_time_range`], at the smallest positive spacing among the outermost 16
-    /// bars, or by calendar months for a known month or year timeframe.
+    /// [`Chart::visible_time_range`], by the known timeframe duration or the most common positive
+    /// spacing among the outermost 16 bars (shorter spacing breaks ties, one second if none).
+    /// Known month and year timeframes step by calendar months in the display time zone.
     pub fn index_to_time(&self, index: f64) -> Option<DateTime<Utc>> {
-        crate::model::time_at_with_timeframe(self.state.shown(), index, self.timeframe())
+        crate::model::time_at_with_timeframe(
+            self.state.shown(),
+            index,
+            self.timeframe(),
+            self.calendar_timezone().as_ref(),
+        )
     }
 
     /// The fractional logical index of a UTC time, `None` without data.
@@ -114,7 +129,12 @@ impl Chart {
     /// The inverse of [`Chart::index_to_time`]: a time between two bars lies between their
     /// indices, and a time outside the data is extrapolated into whitespace.
     pub fn time_to_index(&self, time: DateTime<Utc>) -> Option<f64> {
-        crate::model::index_at_with_timeframe(self.state.shown(), time, self.timeframe())
+        crate::model::index_at_with_timeframe(
+            self.state.shown(),
+            time,
+            self.timeframe(),
+            self.calendar_timezone().as_ref(),
+        )
     }
 
     /// Gives the horizontal axis a meaning other than time, such as option strikes or bond

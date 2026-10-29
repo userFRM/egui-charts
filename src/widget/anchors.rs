@@ -39,13 +39,19 @@ impl Chart {
     pub(super) fn anchor_drawing_points(&mut self) {
         let bars = self.state.shown();
         let timeframe = self.timeframe();
+        let timezone = self.calendar_timezone();
         let mut anchor = |point: &mut ChartPoint| {
             if point
                 .time_anchor
                 .is_none_or(|(_, projected)| projected != point.bar_idx)
             {
-                point.time_anchor = time_at_with_timeframe(bars, point.bar_idx as f64, timeframe)
-                    .map(|time| (time, point.bar_idx));
+                point.time_anchor = time_at_with_timeframe(
+                    bars,
+                    point.bar_idx as f64,
+                    timeframe,
+                    timezone.as_ref(),
+                )
+                .map(|time| (time, point.bar_idx));
             }
         };
         self.drawings.visit_chart_points(&mut anchor);
@@ -56,6 +62,7 @@ impl Chart {
     pub(super) fn project_drawing_points(&mut self) {
         let bars = self.state.shown();
         let timeframe = self.timeframe();
+        let timezone = self.calendar_timezone();
         let state = &self.state;
         let chart_type = self.chart_type;
         let params = &self.chart_type_params;
@@ -70,10 +77,16 @@ impl Chart {
                     time,
                 )
                 .map(|index| index as f64)
-                .or_else(|| index_at_with_timeframe(bars, time, timeframe));
+                .or_else(|| index_at_with_timeframe(bars, time, timeframe, timezone.as_ref()));
                 if let Some(index) = index {
                     // Keep the rank of an anchor already on one of several equal-time elements.
-                    if time_at_with_timeframe(bars, point.bar_idx as f64, timeframe) != Some(time) {
+                    if time_at_with_timeframe(
+                        bars,
+                        point.bar_idx as f64,
+                        timeframe,
+                        timezone.as_ref(),
+                    ) != Some(time)
+                    {
                         point.bar_idx = index as f32;
                         point.time_anchor = Some((time, point.bar_idx));
                     }
@@ -85,9 +98,10 @@ impl Chart {
     }
 
     /// Exports the current symbol's drawings with timestamps, using the chart's own mapping.
-    /// Between bars time is interpolated; outside them the smallest positive spacing among
-    /// the outermost 16 bars is extended (one second if none), retaining repeated-edge ranks.
-    /// Known month and year intervals step by calendar months. Empty charts export retained
+    /// Between bars time is interpolated; outside them the known timeframe duration or most
+    /// common positive spacing among the outermost 16 bars is extended (shorter spacing breaks
+    /// ties, one second if none), retaining repeated-edge ranks. Known month and year intervals
+    /// step by calendar months in the display time zone. Empty charts export retained
     /// anchors; an index with no loaded mapping returns an error rather than clamping or
     /// inventing time.
     pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
@@ -193,12 +207,27 @@ mod tests {
         use chrono::Duration;
 
         let date = |y, m, d| Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap();
+        let hourly = [
+            (4, 9, 30),
+            (4, 10, 0),
+            (4, 11, 0),
+            (4, 12, 0),
+            (4, 13, 0),
+            (4, 14, 0),
+            (4, 15, 0),
+            (5, 9, 30),
+            (5, 10, 0),
+            (5, 11, 0),
+        ]
+        .map(|(day, hour, minute)| Utc.with_ymd_and_hms(2024, 3, day, hour, minute, 0).unwrap())
+        .to_vec();
         let bar = |time| Bar::new(time, 10.0, 12.0, 9.0, 11.0, 1.0);
-        for (times, timeframe, expected_left, expected_right, next) in [
+        for (times, timeframe, timezone, expected_left, expected_right, next) in [
             // Thursday, Friday, Monday: the weekend cannot turn one slot into three days.
             (
                 vec![date(2024, 2, 8), date(2024, 2, 9), date(2024, 2, 12)],
                 None,
+                "UTC",
                 date(2024, 2, 7),
                 date(2024, 2, 13),
                 date(2024, 2, 13),
@@ -207,6 +236,7 @@ mod tests {
             (
                 vec![date(2024, 2, 2), date(2024, 2, 5), date(2024, 2, 6)],
                 None,
+                "UTC",
                 date(2024, 2, 1),
                 date(2024, 2, 7),
                 date(2024, 2, 7),
@@ -218,6 +248,7 @@ mod tests {
                     date(2024, 1, 3) + Duration::minutes(870),
                 ],
                 Some(Timeframe::Min1),
+                "UTC",
                 date(2024, 1, 2) + Duration::minutes(1257),
                 date(2024, 1, 3) + Duration::minutes(871),
                 date(2024, 1, 3) + Duration::minutes(871),
@@ -225,6 +256,7 @@ mod tests {
             (
                 vec![date(2024, 2, 1), date(2024, 3, 1), date(2024, 4, 1)],
                 Some(Timeframe::Month1),
+                "UTC",
                 date(2024, 1, 1),
                 date(2024, 5, 1),
                 date(2024, 5, 1),
@@ -232,6 +264,7 @@ mod tests {
             (
                 vec![date(2024, 7, 1), date(2024, 10, 1), date(2025, 1, 1)],
                 Some("3month".parse().unwrap()),
+                "UTC",
                 date(2024, 4, 1),
                 date(2025, 4, 1),
                 date(2025, 4, 1),
@@ -239,6 +272,7 @@ mod tests {
             (
                 vec![date(2023, 12, 31), date(2024, 1, 31), date(2024, 2, 29)],
                 Some(Timeframe::Month1),
+                "UTC",
                 date(2023, 11, 30),
                 date(2024, 3, 31),
                 date(2024, 3, 31),
@@ -246,20 +280,68 @@ mod tests {
             (
                 vec![date(2023, 1, 1), date(2024, 1, 1), date(2025, 1, 1)],
                 Some("12month".parse().unwrap()),
+                "UTC",
                 date(2022, 1, 1),
                 date(2026, 1, 1),
                 date(2026, 1, 1),
             ),
+            // Local month starts follow the clock change in November.
+            #[cfg(feature = "timezones")]
+            (
+                vec![
+                    date(2024, 9, 1) + Duration::hours(4),
+                    date(2024, 10, 1) + Duration::hours(4),
+                    date(2024, 11, 1) + Duration::hours(4),
+                ],
+                Some(Timeframe::Month1),
+                "America/New_York",
+                date(2024, 8, 1) + Duration::hours(4),
+                date(2024, 12, 1) + Duration::hours(5),
+                date(2024, 12, 1) + Duration::hours(5),
+            ),
+            // Clock-aligned hours keep the half-hour opening bar out of the step.
+            (
+                hourly.clone(),
+                Some(Timeframe::Hour1),
+                "UTC",
+                Utc.with_ymd_and_hms(2024, 3, 4, 8, 30, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 3, 5, 12, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 3, 5, 12, 0, 0).unwrap(),
+            ),
+            (
+                hourly,
+                None,
+                "UTC",
+                Utc.with_ymd_and_hms(2024, 3, 4, 8, 30, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 3, 5, 12, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 3, 5, 12, 0, 0).unwrap(),
+            ),
+            // A holiday shifts the weekly keys without changing the known duration.
+            (
+                vec![date(2024, 1, 8), date(2024, 1, 16), date(2024, 1, 22)],
+                Some(Timeframe::Week1),
+                "UTC",
+                date(2024, 1, 1),
+                date(2024, 1, 29),
+                date(2024, 1, 29),
+            ),
         ] {
+            let last = times.len() - 1;
+            let right_index = (last + 1) as f32;
             let mut chart = Chart::new(BarData::from_bars(times.into_iter().map(bar).collect()));
             if let Some(timeframe) = timeframe {
                 chart.set_timeframe(timeframe);
             }
+            chart.chart_options.time_scale.timezone =
+                crate::scales::TimezoneMode::Timezone(timezone.parse().unwrap());
             let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
-            drawing.chart_points = vec![ChartPoint::new(-1.0, 10.0), ChartPoint::new(3.0, 11.0)];
+            drawing.chart_points = vec![
+                ChartPoint::new(-1.0, 10.0),
+                ChartPoint::new(right_index, 11.0),
+            ];
             drawing.completed = true;
             chart.drawings_mut().drawings.push(drawing);
-            for (index, expected) in [(-1.0, expected_left), (3.0, expected_right)] {
+            for (index, expected) in [(right_index, expected_right), (-1.0, expected_left)] {
                 assert_eq!(
                     chart.drawing_point_time(&ChartPoint::new(index, 10.0)),
                     Some(expected),
@@ -273,7 +355,11 @@ mod tests {
             }
             for (index, left, right) in [
                 (-0.5, expected_left, chart.state.shown()[0].time),
-                (2.5, chart.state.shown()[2].time, expected_right),
+                (
+                    last as f64 + 0.5,
+                    chart.state.shown()[last].time,
+                    expected_right,
+                ),
             ] {
                 let midpoint = left + (right - left) / 2;
                 assert_eq!(chart.index_to_time(index), Some(midpoint));
@@ -291,9 +377,10 @@ mod tests {
                 300.0,
                 false,
             );
-            for start in [0, 2] {
-                let coords =
-                    crate::chart::renderers::ChartMapping::new(rect, 100.0, start, 2, 5.0, price);
+            for start in [0, last] {
+                let coords = crate::chart::renderers::ChartMapping::new(
+                    rect, 100.0, start, last, 5.0, price,
+                );
                 let (_, keys) = crate::chart::renderers::time_axis_marks(
                     &crate::chart::renderers::RenderContext::new(&painter, rect),
                     &chart.state.shown()[start..],
@@ -304,7 +391,7 @@ mod tests {
                 );
                 assert_eq!(
                     keys.iter()
-                        .find(|(_, index)| *index == 3)
+                        .find(|(_, index)| *index == right_index as usize)
                         .map(|(time, _)| *time),
                     Some(expected_right)
                 );
@@ -312,12 +399,18 @@ mod tests {
             let saved = chart.save_drawings().unwrap().to_json().unwrap();
             chart.load_drawings(&saved).unwrap();
             chart.update(SeriesId::MAIN, bar(next));
-            assert_eq!(chart.drawings().drawings[0].chart_points[1].bar_idx, 3.0);
+            assert_eq!(
+                chart.drawings().drawings[0].chart_points[1].bar_idx,
+                right_index
+            );
             let mut extended = vec![bar(expected_left)];
             extended.extend_from_slice(&chart.state.data().bars);
             chart.set_data(SeriesId::MAIN, extended);
             assert_eq!(chart.drawings().drawings[0].chart_points[0].bar_idx, 0.0);
-            assert_eq!(chart.drawings().drawings[0].chart_points[1].bar_idx, 4.0);
+            assert_eq!(
+                chart.drawings().drawings[0].chart_points[1].bar_idx,
+                right_index + 1.0
+            );
         }
     }
 

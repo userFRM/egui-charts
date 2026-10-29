@@ -1678,8 +1678,8 @@ mod tests {
         );
     }
 
-    /// Merges retain anchor times, interpolating gaps and using the smallest edge spacing.
-    /// After the 90 s and 100 s inserts, -60 / 10 = -6 and 7 + (360 - 240) / 10 = 19.
+    /// Merges retain anchor times, interpolating gaps and using the most common edge spacing.
+    /// After the inserts, 30 s occurs most: -60 / 30 = -2 and 7 + (360 - 240) / 30 = 11.
     #[test]
     #[cfg(feature = "drawings")]
     fn inserted_bars_preserve_drawing_times_including_future_anchors() {
@@ -1688,7 +1688,7 @@ mod tests {
         #[rustfmt::skip]
         let cases = [
             ("inserts at two positions", vec![live(90), live(100), live(210)],
-                vec![-1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 6.0], vec![-6.0, 0.0, 1.0, 4.0, 5.0, 7.0, 19.0]),
+                vec![-1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 6.0], vec![-2.0, 0.0, 1.0, 4.0, 5.0, 7.0, 11.0]),
             ("append", vec![live(300)], vec![3.0, 6.0], vec![3.0, 6.0]),
             ("history in front", vec![(bar(-60, 1.0), Origin::History)], vec![-1.0, 0.0], vec![0.0, 1.0]),
         ];

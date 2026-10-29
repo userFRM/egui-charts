@@ -1,8 +1,8 @@
 //! Fractional index and UTC interpolation for sorted bars.
 
 use super::Bar;
-use crate::model::Timeframe;
-use chrono::{DateTime, Datelike, Duration, Months, Utc};
+use crate::model::{Timeframe, TimezoneId, local_instant, local_time};
+use chrono::{DateTime, Datelike, Duration, Months, NaiveDateTime, Utc};
 
 // Use differences relative to an actual bar, preserving sub-millisecond execution times.
 fn seconds(duration: Duration) -> f64 {
@@ -22,7 +22,13 @@ fn segment(bars: &[Bar], index: usize) -> (usize, usize) {
 }
 
 // Sample the loaded edge, never the viewport: a session closure is not a bar interval.
-fn edge_step(bars: &[Bar], at: usize) -> f64 {
+fn edge_step(bars: &[Bar], at: usize, timeframe: Option<Timeframe>) -> f64 {
+    if let Some(duration) = timeframe
+        .map(|tf| tf.duration())
+        .filter(|d| *d > Duration::zero())
+    {
+        return seconds(duration);
+    }
     let sample = if at == 0 {
         &bars[..bars.len().min(16)]
     } else {
@@ -31,13 +37,23 @@ fn edge_step(bars: &[Bar], at: usize) -> f64 {
     let (left, right) = segment(bars, at);
     let distinct = (left != right)
         .then(|| seconds(bars[right].time - bars[left].time) / (right - left) as f64);
-    sample
-        .windows(2)
-        .map(|pair| seconds(pair[1].time - pair[0].time))
-        // Keep the per-index spacing of repeated edge elements.
-        .chain(distinct)
+    // Keep the per-index spacing of repeated edge elements.
+    if right - left > 1 {
+        return distinct.unwrap_or(1.0);
+    }
+    let mut steps = [0.0; 15];
+    for (step, pair) in steps.iter_mut().zip(sample.windows(2)) {
+        *step = seconds(pair[1].time - pair[0].time);
+    }
+    steps
+        .into_iter()
         .filter(|step| *step > 0.0)
-        .reduce(f64::min)
+        .max_by(|a, b| {
+            let count = |step| steps.iter().filter(|&&value| value == step).count();
+            // Prefer the shorter spacing when session gaps tie with regular intervals.
+            count(*a).cmp(&count(*b)).then_with(|| b.total_cmp(a))
+        })
+        .or(distinct)
         .unwrap_or(1.0)
 }
 
@@ -49,7 +65,19 @@ fn calendar_months(timeframe: Option<Timeframe>) -> Option<u32> {
     }
 }
 
-fn shift_months(origin: DateTime<Utc>, months: i64) -> Option<DateTime<Utc>> {
+fn calendar_time(time: DateTime<Utc>, timezone: Option<&TimezoneId>) -> NaiveDateTime {
+    match timezone {
+        Some(zone) => local_time(zone.clone(), time),
+        None => local_time(chrono::Local, time),
+    }
+}
+
+fn shift_months(
+    origin: DateTime<Utc>,
+    months: i64,
+    timezone: Option<&TimezoneId>,
+) -> Option<DateTime<Utc>> {
+    let origin = calendar_time(origin, timezone);
     let count = Months::new(u32::try_from(months.unsigned_abs()).ok()?);
     let shifted = if months < 0 {
         origin.checked_sub_months(count)?
@@ -57,16 +85,20 @@ fn shift_months(origin: DateTime<Utc>, months: i64) -> Option<DateTime<Utc>> {
         origin.checked_add_months(count)?
     };
     // Month-end anchors stay at month end after a short month is appended.
-    if origin.date_naive().succ_opt()?.month() != origin.month() {
+    let shifted = if origin.date().succ_opt()?.month() != origin.month() {
         let end = shifted
             .with_day(1)?
             .checked_add_months(Months::new(1))?
-            .date_naive()
+            .date()
             .pred_opt()?
             .day();
-        shifted.with_day(end)
+        shifted.with_day(end)?
     } else {
-        Some(shifted)
+        shifted
+    };
+    match timezone {
+        Some(zone) => local_instant(zone.clone(), shifted),
+        None => local_instant(chrono::Local, shifted),
     }
 }
 
@@ -79,13 +111,14 @@ fn add_seconds(time: DateTime<Utc>, seconds: f64) -> Option<DateTime<Utc>> {
 }
 
 pub(crate) fn time_at(bars: &[Bar], index: f64) -> Option<DateTime<Utc>> {
-    time_at_with_timeframe(bars, index, None)
+    time_at_with_timeframe(bars, index, None, Some(&TimezoneId::utc()))
 }
 
 pub(crate) fn time_at_with_timeframe(
     bars: &[Bar],
     index: f64,
     timeframe: Option<Timeframe>,
+    timezone: Option<&TimezoneId>,
 ) -> Option<DateTime<Utc>> {
     if bars.is_empty() || !index.is_finite() {
         return None;
@@ -99,14 +132,14 @@ pub(crate) fn time_at_with_timeframe(
             if count.abs() > u32::MAX as f64 {
                 return None;
             }
-            let left = shift_months(bars[at].time, count as i64)?;
+            let left = shift_months(bars[at].time, count as i64, timezone)?;
             if offset == whole {
                 return Some(left);
             }
-            let right = shift_months(bars[at].time, count as i64 + i64::from(months))?;
+            let right = shift_months(bars[at].time, count as i64 + i64::from(months), timezone)?;
             return add_seconds(left, (offset - whole) * seconds(right - left));
         }
-        return add_seconds(bars[at].time, offset * edge_step(bars, at));
+        return add_seconds(bars[at].time, offset * edge_step(bars, at, timeframe));
     }
     if offset == 0.0 {
         return Some(bars[at].time);
@@ -118,13 +151,14 @@ pub(crate) fn time_at_with_timeframe(
 }
 
 pub(crate) fn index_at(bars: &[Bar], time: DateTime<Utc>) -> Option<f64> {
-    index_at_with_timeframe(bars, time, None)
+    index_at_with_timeframe(bars, time, None, Some(&TimezoneId::utc()))
 }
 
 pub(crate) fn index_at_with_timeframe(
     bars: &[Bar],
     time: DateTime<Utc>,
     timeframe: Option<Timeframe>,
+    timezone: Option<&TimezoneId>,
 ) -> Option<f64> {
     let first = bars.first()?;
     let at = bars
@@ -136,21 +170,24 @@ pub(crate) fn index_at_with_timeframe(
     if time < first.time || time > bars[at].time {
         let origin = bars[at].time;
         if let Some(months) = calendar_months(timeframe) {
-            let distance = i64::from(time.year() - origin.year()) * 12 + i64::from(time.month())
-                - i64::from(origin.month());
+            let local = calendar_time(time, timezone);
+            let origin_local = calendar_time(origin, timezone);
+            let distance = i64::from(local.year() - origin_local.year()) * 12
+                + i64::from(local.month())
+                - i64::from(origin_local.month());
             let mut whole = distance.div_euclid(i64::from(months));
-            let mut left = shift_months(origin, whole * i64::from(months))?;
+            let mut left = shift_months(origin, whole * i64::from(months), timezone)?;
             if time < left {
                 whole -= 1;
-                left = shift_months(origin, whole * i64::from(months))?;
+                left = shift_months(origin, whole * i64::from(months), timezone)?;
             }
             if time == left {
                 return Some(at as f64 + whole as f64);
             }
-            let right = shift_months(origin, (whole + 1) * i64::from(months))?;
+            let right = shift_months(origin, (whole + 1) * i64::from(months), timezone)?;
             return Some(at as f64 + whole as f64 + seconds(time - left) / seconds(right - left));
         }
-        return Some(at as f64 + seconds(time - origin) / edge_step(bars, at));
+        return Some(at as f64 + seconds(time - origin) / edge_step(bars, at, timeframe));
     }
     let (left, right) = segment(bars, at.saturating_sub(1));
     let step = seconds(bars[right].time - bars[left].time) / (right - left) as f64;
