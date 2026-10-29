@@ -387,9 +387,9 @@ impl Chart {
     /// Bar series accept data; unknown ids and study ids are ignored with a warning.
     pub fn set_markers(&mut self, series: SeriesId, markers: Vec<Marker>) {
         if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
-            item.markers = markers;
+            item.markers = markers.into();
         } else if self.main_series_present && holds_bars(series, "set_markers") {
-            self.marks = markers;
+            self.marks = markers.into();
         }
     }
 
@@ -664,7 +664,7 @@ impl Chart {
             self.set_main_series_visible(false);
             self.main_series_present = false;
             self.set_feed_paused(true);
-            self.marks.clear();
+            self.marks = Default::default();
             self.price_lines.clear();
             return true;
         }

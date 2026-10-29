@@ -13,11 +13,11 @@
 use egui::{Rect, UiBuilder, pos2, vec2};
 use egui_charts::ChartType;
 use egui_charts::drawings::{ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType};
-use egui_charts::model::BarData;
+use egui_charts::model::{BarData, EventKind, Marker, TimeScaleEvent};
 use egui_charts::studies::{
     ADX, ATR, BollingerBands, EMA, IchimokuCloud, MACD, ParabolicSAR, RSI, SMA, Stochastic,
 };
-use egui_charts::widget::Chart;
+use egui_charts::widget::{Chart, SeriesId};
 
 #[path = "../examples/bare_chart.rs"]
 #[expect(dead_code, reason = "the bench draws only the example's sample bars")]
@@ -36,6 +36,10 @@ struct Scenario {
     drawings: Drawings,
     /// Smallest bar spacing in pixels, below the default 0.5 to zoom out further.
     min_bar_spacing: f32,
+    /// The chart type drawn.
+    chart_type: ChartType,
+    /// What the chart marks on every bar.
+    annotations: Annotations,
 }
 
 /// Where the 500 drawings of a scenario are anchored, every drawing tool in turn.
@@ -46,7 +50,17 @@ enum Drawings {
     AcrossHistory,
 }
 
-const SCENARIOS: [Scenario; 7] = [
+/// What a scenario marks on every bar of its history.
+#[derive(PartialEq)]
+enum Annotations {
+    None,
+    /// A one-letter marker on every bar.
+    Markers,
+    /// A news event on every bar.
+    Events,
+}
+
+const SCENARIOS: [Scenario; 11] = [
     Scenario {
         name: "1 chart, 5,000,000 bars, zoomed out",
         bars: 5_000_000,
@@ -56,6 +70,8 @@ const SCENARIOS: [Scenario; 7] = [
         studies: false,
         drawings: Drawings::None,
         min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
     },
     Scenario {
         name: "1 chart, 1,000,000 bars, all in view",
@@ -66,6 +82,56 @@ const SCENARIOS: [Scenario; 7] = [
         studies: false,
         drawings: Drawings::None,
         min_bar_spacing: 0.0,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
+    },
+    Scenario {
+        name: "1 chart, 1,000,000 bars, all in view, volume footprint",
+        bars: 1_000_000,
+        visible: 1_000_000,
+        charts: 1,
+        columns: 1,
+        studies: false,
+        drawings: Drawings::None,
+        min_bar_spacing: 0.0,
+        chart_type: ChartType::VolumeFootprint,
+        annotations: Annotations::None,
+    },
+    Scenario {
+        name: "1 chart, 200,000 bars",
+        bars: 200_000,
+        visible: 200,
+        charts: 1,
+        columns: 1,
+        studies: false,
+        drawings: Drawings::None,
+        min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
+    },
+    Scenario {
+        name: "1 chart, 200,000 bars, a marker on every bar",
+        bars: 200_000,
+        visible: 200,
+        charts: 1,
+        columns: 1,
+        studies: false,
+        drawings: Drawings::None,
+        min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::Markers,
+    },
+    Scenario {
+        name: "1 chart, 200,000 bars, a news event on every bar",
+        bars: 200_000,
+        visible: 200,
+        charts: 1,
+        columns: 1,
+        studies: false,
+        drawings: Drawings::None,
+        min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::Events,
     },
     Scenario {
         name: "1 chart, 5,000,000 bars, zoomed in",
@@ -76,6 +142,8 @@ const SCENARIOS: [Scenario; 7] = [
         studies: false,
         drawings: Drawings::None,
         min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
     },
     Scenario {
         name: "4 charts, 100,000 bars",
@@ -86,6 +154,8 @@ const SCENARIOS: [Scenario; 7] = [
         studies: false,
         drawings: Drawings::None,
         min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
     },
     Scenario {
         name: "8 charts, 100,000 bars, 10 studies each",
@@ -96,6 +166,8 @@ const SCENARIOS: [Scenario; 7] = [
         studies: true,
         drawings: Drawings::None,
         min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
     },
     Scenario {
         name: "1 chart, 10,000 bars, 500 drawings in view",
@@ -106,6 +178,8 @@ const SCENARIOS: [Scenario; 7] = [
         studies: false,
         drawings: Drawings::InView,
         min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
     },
     Scenario {
         name: "1 chart, 10,000 bars, 500 drawings across the history",
@@ -116,6 +190,8 @@ const SCENARIOS: [Scenario; 7] = [
         studies: false,
         drawings: Drawings::AcrossHistory,
         min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
     },
 ];
 
@@ -238,7 +314,7 @@ fn chart(scenario: &Scenario) -> Chart {
     let mut options = egui_charts::config::ChartOptions::default();
     options.time_scale.min_bar_spacing = scenario.min_bar_spacing;
     let mut chart = Chart::new(BarData::from_bars(bars)).with_chart_options(options);
-    chart.set_chart_type(ChartType::Candles);
+    chart.set_chart_type(scenario.chart_type);
     chart.set_visible_bars(scenario.visible);
     chart.set_symbol("SAMPLE");
     if scenario.studies {
@@ -279,6 +355,40 @@ fn chart(scenario: &Scenario) -> Chart {
             })
             .collect();
         chart.drawings_mut().add_synced_drawing(drawing);
+    }
+    if scenario.annotations != Annotations::None {
+        let times: Vec<_> = chart
+            .bars(SeriesId::MAIN)
+            .iter()
+            .map(|bar| bar.time)
+            .collect();
+        match scenario.annotations {
+            Annotations::Markers => {
+                chart.set_markers(
+                    SeriesId::MAIN,
+                    times
+                        .into_iter()
+                        .map(|time| Marker::new(time).with_text("B"))
+                        .collect(),
+                );
+            }
+            Annotations::Events => {
+                chart.set_time_scale_events(
+                    times
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, time)| TimeScaleEvent {
+                            id: index.to_string(),
+                            time,
+                            kind: EventKind::News,
+                            title: "Headline".into(),
+                            details: String::new(),
+                        })
+                        .collect(),
+                );
+            }
+            Annotations::None => {}
+        }
     }
     chart
 }
