@@ -97,17 +97,15 @@ mod tests {
                     Shape::Rect(body) => {
                         let rising =
                             body.fill == Color32::from_rgba_unmultiplied(184, 227, 220, 128);
-                        let (border, count) = if rising {
-                            ([8, 153, 129], &mut up)
+                        let (fill, border, count) = if rising {
+                            ([184, 227, 220], [8, 153, 129], &mut up)
                         } else {
-                            ([242, 54, 69], &mut down)
+                            ([237, 165, 166], [242, 54, 69], &mut down)
                         };
-                        if !rising {
-                            assert_eq!(
-                                body.fill,
-                                Color32::from_rgba_unmultiplied(237, 165, 166, 128)
-                            );
-                        }
+                        assert_eq!(
+                            body.fill,
+                            Color32::from_rgba_unmultiplied(fill[0], fill[1], fill[2], 128)
+                        );
                         assert_eq!(
                             body.stroke.color,
                             Color32::from_rgba_unmultiplied(border[0], border[1], border[2], 128)
