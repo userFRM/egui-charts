@@ -4550,11 +4550,12 @@ mod tests {
     }
 
     #[test]
-    fn session_shortcut_switches_the_default_sample_and_keeps_continuous_markets() {
+    fn session_shortcut_switches_symbols_with_hours_and_keeps_continuous_markets() {
         for (symbol, initial, expected) in [
             ("SAMPLE", SessionType::Full24x7, SessionType::RTH),
             ("SAMPLE", SessionType::RTH, SessionType::ETH),
             ("SAMPLE", SessionType::ETH, SessionType::RTH),
+            ("AAPL", SessionType::RTH, SessionType::ETH),
             ("BTCUSD", SessionType::Full24x7, SessionType::Full24x7),
         ] {
             let ctx = egui::Context::default();
