@@ -1,5 +1,6 @@
 //! Style tab - color, line width, line style.
 
+use crate::drawings::{ArrowStyle, DrawingToolType};
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use egui::{Color32, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
@@ -44,6 +45,56 @@ impl StyleTab {
                 );
             });
             ui.end_row();
+
+            if let Some(template) = &mut props.tool_settings {
+                let settings = &mut template.settings;
+                if matches!(
+                    settings.tool_type,
+                    DrawingToolType::TrendLine
+                        | DrawingToolType::Ray
+                        | DrawingToolType::ExtendedLine
+                        | DrawingToolType::InfoLine
+                        | DrawingToolType::TrendAngle
+                        | DrawingToolType::Arrow
+                        | DrawingToolType::Path
+                        | DrawingToolType::Polyline
+                ) {
+                    for (label, style) in [
+                        ("Line start", &mut settings.arrow_start_style),
+                        ("Line end", &mut settings.arrow_end_style),
+                    ] {
+                        let label = ui.label(l10n::text(ui.ctx(), label));
+                        ui.label_inputs_by(label.id, |ui| {
+                            // Keep host-supplied endpoint styles selectable when reopening them.
+                            let mut choices = vec![ArrowStyle::None, ArrowStyle::Arrow];
+                            if !choices.contains(style) {
+                                choices.push(*style);
+                            }
+                            ui.combo_select(label.id, style, choices, |v| {
+                                match v {
+                                    ArrowStyle::None => "Plain",
+                                    ArrowStyle::Arrow => "Arrow",
+                                    ArrowStyle::OpenArrow => "Open arrow",
+                                    ArrowStyle::Circle => "Circle",
+                                    ArrowStyle::Square => "Square",
+                                    ArrowStyle::Diamond => "Diamond",
+                                }
+                                .into()
+                            });
+                        });
+                        ui.end_row();
+                    }
+                }
+                if settings.tool_type == DrawingToolType::Rect {
+                    let label = ui.label(l10n::text(ui.ctx(), "Middle line"));
+                    ui.checkbox(
+                        &mut settings.channel_midline,
+                        l10n::text(ui.ctx(), "Show middle line"),
+                    )
+                    .labelled_by(label.id);
+                    ui.end_row();
+                }
+            }
 
             let label = ui.label(l10n::text(ui.ctx(), "Fill"));
             ui.checkbox(&mut props.fill_enabled, l10n::text(ui.ctx(), "Enable fill"))

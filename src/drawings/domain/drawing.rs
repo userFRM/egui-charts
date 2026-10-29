@@ -159,7 +159,7 @@ pub struct Drawing {
     /// Spacing and wick of the candles a Ghost Feed projects from its path.
     #[serde(default)]
     pub ghost_feed: Option<GhostFeedConfig>,
-    /// Whether a parallel channel draws its dashed halfway line.
+    /// Whether a rectangle or parallel channel draws its dashed halfway line.
     #[serde(default)]
     pub channel_midline: bool,
     /// Level lines and band fill of the pitchfork tools.
@@ -216,8 +216,11 @@ impl Drawing {
                 12.0
             },
             font_weight: FontWeight::Normal,
-            extend_left: false,
-            extend_right: false,
+            extend_left: tool_type == DrawingToolType::ExtendedLine,
+            extend_right: matches!(
+                tool_type,
+                DrawingToolType::Ray | DrawingToolType::ExtendedLine
+            ),
             arrow_start_style: ArrowStyle::None,
             arrow_end_style: if matches!(
                 tool_type,
