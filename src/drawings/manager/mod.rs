@@ -360,24 +360,22 @@ impl DrawingManager {
         let before: Vec<_> = self
             .drawings
             .iter()
-            .filter(|d| d.selectable && self.selection.is_selected(d.id) && !d.locked)
-            .cloned()
+            .enumerate()
+            .filter(|(_, d)| d.selectable && self.selection.is_selected(d.id) && !d.locked)
+            .map(|(index, d)| (index, d.clone()))
             .collect();
         if before.is_empty() {
             return;
         }
-        let snapshot = self.drawings.iter().cloned().enumerate().collect();
-        for old in &before {
-            if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == old.id) {
-                edit(drawing);
-            }
+        for (index, old) in &before {
+            edit(&mut self.drawings[*index]);
             self.queue_edit(old);
         }
         self.painted
             .get_mut()
             .unwrap_or_else(|e| e.into_inner())
-            .retain(|p| !before.iter().any(|d| d.id == p.id));
-        self.history.push_snapshot(snapshot);
+            .retain(|p| !before.iter().any(|(_, d)| d.id == p.id));
+        self.history.push_snapshot(before);
     }
 
     /// Deselects all drawings.
@@ -752,18 +750,26 @@ mod tests {
         }
     }
 
+    /// A bulk command on drawing 2 records only that drawing, so its undo and redo keep
+    /// changes made to the others outside history.
     #[test]
     fn bulk_edits_preserve_unrelated_host_changes_and_drawing_order() {
         for edit in [
-            (|d: &mut Drawing| d.folder = vec!["Analysis".into()]) as fn(&mut Drawing),
-            |d| d.visible = false,
-            |d| d.locked = true,
+            (|m: &mut DrawingManager| m.edit_drawings(&[2], |d| d.folder = vec!["Analysis".into()]))
+                as fn(&mut DrawingManager),
+            |m| m.edit_drawings(&[2], |d| d.visible = false),
+            |m| m.edit_drawings(&[2], |d| d.locked = true),
+            |m| {
+                m.select(2);
+                m.edit_selected(|d| d.color = [255, 0, 0, 255]);
+            },
+            |m| m.set_group(&[2], Some("Group".into())),
         ] {
             let mut manager = DrawingManager::new();
             manager.drawings = (0..3)
                 .map(|id| Drawing::new(id, DrawingToolType::HorizontalLine))
                 .collect();
-            manager.edit_drawings(&[2], edit);
+            edit(&mut manager);
             manager.pending_sync.lock().unwrap().clear();
             // Host updates outside this edit must survive both history directions.
             manager.drawings[0].label = Some("Host update".into());
