@@ -259,7 +259,7 @@ Drawings,Drawing management,Stay in drawing mode,done,library,src/drawings/manag
 Drawings,Drawing management,Style settings honoured by renderers,partial,library,src/drawings/rendering/style.rs;src/drawings/rendering/fibonacci.rs
 Drawings,Drawing management,Sync drawings across layouts,done,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Text entry for annotation tools,done,library,src/widget/tool_interaction/mod.rs;src/widget/tool_interaction/text.rs
-Drawings,Drawing management,Undo and redo of drawing edits,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/widget/history.rs;src/widget/keyboard.rs;src/drawings/services/history.rs
+Drawings,Drawing management,Undo and redo of drawing edits,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/drawings/manager/interaction.rs;src/widget/history.rs;src/widget/keyboard.rs;src/drawings/services/history.rs
 Drawings,Drawing management,Visibility per timeframe,done,library,src/widget/feed.rs;src/ui/dialogs/drawing_properties/actions.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Z-order,done,library,src/drawings/manager/mod.rs;src/ui/widget_bar/panels/object_tree/chart_actions.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,ABCD pattern,done,library,src/drawings/rendering/patterns.rs;src/config/drawing_tool/behavior.rs
