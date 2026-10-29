@@ -117,6 +117,8 @@ struct PaintedDrawing {
     id: usize,
     points: Vec<Pos2>,
     shapes: Vec<ClippedShape>,
+    /// A regression trend's fitted endpoints, where its handles sit.
+    regression_ends: Option<[Pos2; 2]>,
     /// The tessellation of `shapes`, made once a second frame paints the same shapes.
     tessellated: Option<Tessellated>,
 }
