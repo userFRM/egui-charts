@@ -40,7 +40,8 @@ const CALIBRATE_EVERY: u64 = 100;
 /// is in the body of that bar if its volume-weighted price lies between the bar's open and close,
 /// both included, and in a wick otherwise. Zones of the kinds not kept are then removed. Zones
 /// in a bar the service did not see open, the first one after tracking starts or the interval
-/// changes, or under a trade-based interval, stay.
+/// changes, or under a trade-based interval, stay. A trade that first becomes large after its
+/// first fill's bar has closed also keeps its zone: that bar is no longer held for classification.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct BigTradeRule {
@@ -286,7 +287,8 @@ impl BigTrades {
                 return true;
             }
             zone.classified = true;
-            // A zone older than the bar lies in a bar the service did not see open.
+            // shortcut: late threshold crossings have no saved first bar,
+            // retain bars if classification is needed.
             let body = (bottom..=top).contains(&zone.price);
             if !bar.whole
                 || zone.from < bar.open_time
