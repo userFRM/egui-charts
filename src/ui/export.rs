@@ -47,6 +47,8 @@ fn path_field() -> Id {
 pub enum ExportFormat {
     /// PNG raster image format
     Png,
+    /// SVG vector image format, from [`Chart::export_svg`](crate::widget::Chart::export_svg)
+    Svg,
     /// Copy to system clipboard
     Clipboard,
     /// CSV export of loaded bars and visible study plots
@@ -58,6 +60,7 @@ impl ExportFormat {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Png => "PNG",
+            Self::Svg => "SVG",
             Self::Clipboard => "Clipboard",
             Self::Csv => "CSV",
         }
@@ -67,6 +70,7 @@ impl ExportFormat {
     pub fn file_extension(&self) -> Option<&'static str> {
         match self {
             Self::Png => Some("png"),
+            Self::Svg => Some("svg"),
             Self::Clipboard => None,
             Self::Csv => Some("csv"),
         }
@@ -376,6 +380,12 @@ impl ExportDialog {
                             .changed();
                         changed |= ui
                             .checkbox(
+                                &mut self.config.image.include_watermark,
+                                l10n::text(ui.ctx(), "Watermark"),
+                            )
+                            .changed();
+                        changed |= ui
+                            .checkbox(
                                 &mut self.config.image.include_crosshair,
                                 l10n::text(ui.ctx(), "Crosshair"),
                             )
@@ -569,6 +579,10 @@ impl ExportButton {
 ///             ExportFormat::Png => {
 ///                 // Render chart to PNG bytes
 ///                 Ok(vec![])  // Replace with actual PNG bytes
+///             }
+///             ExportFormat::Svg => {
+///                 // Render chart to SVG text bytes
+///                 Ok(b"<svg/>".to_vec())
 ///             }
 ///             ExportFormat::Clipboard => {
 ///                 // Same as PNG

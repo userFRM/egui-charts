@@ -405,25 +405,25 @@ fn price_based(filters: &[String], frames: usize) {
     }
 }
 
-/// Prints the frame of volume bubbles from 100,000 trades over 1,667 one-minute bars, 40 price
-/// levels a bar, 200 bars in view on a 1440 by 900 window.
-fn bubbles(filters: &[String], frames: usize) {
+/// The chart of the volume bubbles workload: `count` trades at 60 a one-minute bar, over 40 price
+/// levels, 200 bars in view. With `session` the bars are the New York regular session of one day
+/// and the chart's clock follows it; without, they start at midnight UTC.
+fn bubble_chart(count: i64, session: bool) -> egui_charts::widget::Chart {
     use chrono::{Duration, TimeZone, Utc};
     use egui_charts::ChartBuilder;
     use egui_charts::chart::overlays::{BubbleGrouping, VolumeBubblesConfig};
     use egui_charts::data::{
         Datafeed, HistoryPage, HistoryRequest, Reply, TradePage, TradeRequest,
     };
-    use egui_charts::model::{Bar, OrderSide, Tick, Timeframe};
+    use egui_charts::model::{
+        Bar, Instrument, OrderSide, Session, SessionWindow, Tick, Timeframe, TimezoneId,
+    };
     use std::sync::Arc;
 
     struct Feed(Vec<Bar>, Vec<Tick>);
     impl Datafeed for Feed {
         fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
-            reply.send(Ok(HistoryPage {
-                bars: self.0.clone(),
-                end_of_history: true,
-            }));
+            reply.send(Ok(HistoryPage::new(self.0.clone(), true)));
         }
         fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
             let mut page = TradePage::default();
@@ -433,12 +433,12 @@ fn bubbles(filters: &[String], frames: usize) {
         }
     }
 
-    let name = "volume bubbles, 100,000 trades, 200 bars in view";
-    if !filters.is_empty() && !filters.iter().any(|f| name.contains(f.as_str())) {
-        return;
-    }
-    let (count, levels, step) = (100_000_i64, 40, 0.05);
-    let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+    let (levels, step) = (40, 0.05);
+    let start = if session {
+        Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap()
+    } else {
+        Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
+    };
     let mut seed = 0x1234_5678_u64;
     let mut unit = || {
         seed ^= seed << 13;
@@ -469,12 +469,38 @@ fn bubbles(filters: &[String], frames: usize) {
         .with_feed(Arc::new(Feed(bars, trades)))
         .with_initial_bars(len)
         .build();
+    if session {
+        use chrono::Weekday::*;
+        let weekdays = [Mon, Tue, Wed, Thu, Fri];
+        let clock = |hour, minute| chrono::NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        chart.set_instrument(Some(
+            Instrument::new("BUBBLES")
+                .with_time_zone(TimezoneId::named("America/New_York").unwrap())
+                .with_session(Session::new([SessionWindow::new(
+                    weekdays,
+                    clock(9, 30),
+                    clock(16, 0),
+                )])),
+        ));
+    }
     chart.set_chart_type(ChartType::Candles);
     chart.set_visible_bars(200);
     chart.set_volume_bubbles(Some(VolumeBubblesConfig {
         grouping: BubbleGrouping::PriceStep(step),
         ..VolumeBubblesConfig::default()
     }));
+    chart
+}
+
+/// Prints the frame of volume bubbles from 100,000 trades over 1,667 one-minute bars, 40 price
+/// levels a bar, 200 bars in view on a 1440 by 900 window.
+fn bubbles(filters: &[String], frames: usize) {
+    let name = "volume bubbles, 100,000 trades, 200 bars in view";
+    if !filters.is_empty() && !filters.iter().any(|f| name.contains(f.as_str())) {
+        return;
+    }
+    let count = 100_000_i64;
+    let mut chart = bubble_chart(count, false);
     let samples = frame::run(vec2(1440.0, 900.0), pos2(700.0, 400.0), frames, |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
             chart.show(ui);

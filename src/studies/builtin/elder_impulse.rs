@@ -12,7 +12,7 @@ pub enum ImpulseSignal {
     Bullish,
     /// EMA falling, MACD histogram falling
     Bearish,
-    /// Mixed signals
+    /// Mixed signals or an unchanged EMA or MACD histogram
     Neutral,
 }
 
@@ -120,7 +120,7 @@ impl Indicator for ElderImpulseSystem {
                 let hist_rising = histogram > previous[1];
                 IndicatorValue::Single(if rising && hist_rising {
                     1.0
-                } else if !rising && !hist_rising {
+                } else if ema < previous[0] && histogram < previous[1] {
                     -1.0
                 } else {
                     0.0
@@ -170,29 +170,25 @@ impl Indicator for ElderImpulseSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-
-    fn make_bar(close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: close,
-            high: close,
-            low: close,
-            close,
-            volume: 1000.0,
-            colors: None,
-            payload: None,
-        }
-    }
+    use crate::studies::test_support::make_bar;
 
     #[test]
     fn test_elder_impulse() {
-        let mut impulse = ElderImpulseSystem::new(5, 6, 12, 5);
-
-        let data: Vec<Bar> = (0..30).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        impulse.calculate(&data);
-
-        assert_eq!(impulse.values.len(), 30);
+        for direction in [0.0, 1.0, -1.0] {
+            let mut impulse = ElderImpulseSystem::new(5, 6, 12, 5);
+            // A constant has neither slope; accelerating rises/falls give both slopes that sign.
+            let data: Vec<Bar> = (0..40)
+                .map(|i| make_bar(100.0 + direction * (i * i) as f64))
+                .collect();
+            impulse.calculate(&data);
+            assert_eq!(impulse.values.len(), data.len());
+            for bar in 0..data.len() {
+                assert_eq!(
+                    impulse.values().value(0, bar),
+                    (bar >= 16).then_some(direction),
+                    "direction {direction}, bar {bar}"
+                );
+            }
+        }
     }
 }
