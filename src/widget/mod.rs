@@ -33,8 +33,7 @@
 //! connected by the host.
 
 #[cfg(feature = "drawings")]
-#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
-pub use crate::chart::cursor_modes::{CursorModeState, EraserMode, eraser::EraserConfig};
+use crate::chart::cursor_modes::CursorModeState;
 use crate::chart::renderers::ChartMapping;
 use crate::chart::selection::SelectionState;
 use crate::chart::series::SeriesSettings;

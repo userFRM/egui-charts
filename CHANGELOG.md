@@ -456,7 +456,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- `widget::ValueFormatters` is publicly exported so hosts can name, store and pass the formatters used by `Legend`. The drawing interaction types `widget::{CursorModeState, EraserMode, EraserConfig}` and the toolbar callback's `styles::LayoutContext` are also exported with their respective `drawings` and `ui` features. Public signatures are checked by the `unnameable_types` lint. ([#1310](https://github.com/userFRM/egui-charts/issues/1310))
+- `widget::ValueFormatters` is publicly exported so hosts can name, store and pass the formatters used by `Legend`, and `styles::LayoutContext`, which `ResponsiveToolbar` passes to its content, is exported with the `ui` feature. Public signatures are checked by the `unnameable_types` lint. ([#1310](https://github.com/userFRM/egui-charts/issues/1310))
 
 - `PaperAccount::new` documents its panic when `balance` is NaN or infinite under a Panics heading. ([#1318](https://github.com/userFRM/egui-charts/issues/1318))
 
@@ -1137,7 +1137,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
-- `Chart`'s per-frame pan, zoom, tracking, focus and keyboard handlers and `calculate_bar_spacing` are now crate-private; unused `calculate_visible_bars` is removed. Migration: input is handled by `Chart::show`; dispatch host shortcuts with `Chart::dispatch_shortcuts`, and zoom from code with `set_visible_logical_range` or `execute_box_zoom`. `execute_box_zoom` remains public and `zoom_back` undoes it. ([#1311](https://github.com/userFRM/egui-charts/issues/1311))
+- `Chart`'s per-frame pan, zoom, tracking, focus, keyboard and drawing handlers, including `handle_drawings` and `render_eraser_highlight`, and `calculate_bar_spacing` are now crate-private; unused `calculate_visible_bars` is removed. Migration: input is handled by `Chart::show`; dispatch host shortcuts with `Chart::dispatch_shortcuts`, and zoom from code with `set_visible_logical_range` or `execute_box_zoom`. `execute_box_zoom` remains public and `zoom_back` undoes it. ([#1311](https://github.com/userFRM/egui-charts/issues/1311))
 
 - `UserSettings` is `#[non_exhaustive]`, so that fields can be added without a breaking change. Migration: build `UserSettings` with `Default` and assign fields. `IndicatorDialogAction` implements `Clone` and `Debug`, and `SettingsAction` implements `Debug`.
 
@@ -1373,8 +1373,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Removed
 
-- Removed `model::Annotation` and `model::MarkerType`, which nothing drew, with the private `AnnotationPos` type. Migration: use `Marker`. ([#1310](https://github.com/userFRM/egui-charts/issues/1310))
-
+- `model::Annotation` and `model::MarkerType`, which nothing drew, with the unnameable `AnnotationPos`. Migration: use `Marker`. ([#1310](https://github.com/userFRM/egui-charts/issues/1310))
 - The loose ALMA smoothness check, drawing-tool inventory pins, a duplicate tracking default check and an enum-distinctness tautology. ([#258](https://github.com/userFRM/egui-charts/issues/258))
 - `model::QuoteSource` and `QuoteSourceError`, a polled quote source nothing consumed, `ui::widget_bar::WatchlistQuote` and `ui::symbol_header::QuoteData`. Migration: implement `services::Quotes` and attach it with `WatchlistPanel::set_service`, and use `model::Quote` in place of the two quote types. ([#222](https://github.com/userFRM/egui-charts/issues/222))
 - `TradeSide::Unknown` and `model::RangeTickData`. A trade of unknown side has `Tick::side` set to `None`, the one way to say it, and `to_range_bars_from_ticks` builds range bars from `Tick`, the crate's one trade type. Migration: replace `Some(TradeSide::Unknown)` with `None`, and build `Tick::new(ts, price, volume, None)` in place of a `RangeTickData`. ([#228](https://github.com/userFRM/egui-charts/issues/228))

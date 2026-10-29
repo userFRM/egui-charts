@@ -36,7 +36,7 @@ impl Chart {
     ///
     /// # Arguments
     /// - `cursor_modes` - Mutable reference to cursor mode state (passed separately to avoid borrow conflicts)
-    pub fn handle_drawings(
+    pub(crate) fn handle_drawings(
         &self,
         ui: &mut Ui,
         drawing_manager: &mut DrawingManager,
@@ -308,7 +308,7 @@ impl Chart {
     }
 
     /// Render eraser highlight for hovered drawing
-    pub fn render_eraser_highlight(
+    pub(crate) fn render_eraser_highlight(
         &self,
         painter: &Painter,
         drawing_manager: &DrawingManager,
