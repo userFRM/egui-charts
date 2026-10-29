@@ -208,7 +208,7 @@ pub(crate) fn render_study_tags(
                 transform.to_scale(value),
                 study.precision().unwrap_or_else(|| {
                     map.price_precision()
-                        .unwrap_or_else(|| tick_decimals(map, map.price_to_y(value)))
+                        .unwrap_or_else(|| tick_decimals(map, map.price_to_y(value)).max(2))
                 }),
                 formatter,
             )
@@ -219,11 +219,7 @@ pub(crate) fn render_study_tags(
         tags.push((
             map.price_to_y(value),
             named_label(axis.show_study_names, study.name(), label),
-            (
-                axis.study_value_color
-                    .map_or(Color32::WHITE, tag_text_color),
-                color,
-            ),
+            (tag_text_color(color), color),
         ));
     }
     // The lines of one study stack in the order of their prices.
@@ -297,7 +293,7 @@ pub fn render_price_line(
         transform.to_scale(line.price),
         price_map
             .price_precision()
-            .unwrap_or_else(|| tick_decimals(price_map, y)),
+            .unwrap_or_else(|| tick_decimals(price_map, y).max(2)),
         None,
     );
     let (text_color, fill) = axis_label_colors(line);
@@ -474,7 +470,7 @@ pub(crate) fn render_quote_tags_with_countdown(
                         transform.to_scale(close.price),
                         price_map
                             .price_precision()
-                            .unwrap_or_else(|| tick_decimals(price_map, close_y)),
+                            .unwrap_or_else(|| tick_decimals(price_map, close_y).max(2)),
                         formatter,
                     ),
                 );
@@ -509,9 +505,9 @@ pub(crate) fn render_quote_tags_with_countdown(
         }
         let label = transform.label(
             transform.to_scale(quote.price),
-            price_map
-                .price_precision()
-                .unwrap_or_else(|| tick_decimals(price_map, price_map.price_to_y(quote.price))),
+            price_map.price_precision().unwrap_or_else(|| {
+                tick_decimals(price_map, price_map.price_to_y(quote.price)).max(2)
+            }),
             formatter,
         );
         rows.push((1, y, format!("{} {label}", quote.qualifier), color));
@@ -667,7 +663,7 @@ mod tests {
                 (-50.0, 50.0),
                 125.0,
                 true,
-                Some((25.0, Some("+25%"))),
+                Some((25.0, Some("+25.00%"))),
             ),
             (
                 "off the scale",
@@ -1007,9 +1003,9 @@ mod tests {
         assert_eq!(actions, ["add", "settings"]);
     }
 
-    /// A study's last-value tag carries its name only while the axis shows study names.
+    /// Study tags keep their optional names and choose readable text for the plot fill.
     #[test]
-    fn study_value_tags_lead_with_the_study_name_when_shown() {
+    fn study_value_tags_use_plot_contrast_and_optional_names() {
         use crate::studies::{CustomIndicator, Indicator, IndicatorValue};
         let map = PriceMap::new(
             PriceTransform::default(),
@@ -1021,7 +1017,28 @@ mod tests {
         let mut study = CustomIndicator::new("Mine", |_| vec![IndicatorValue::Single(50.0)]);
         study.calculate(&[]);
         let plot = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 100.0));
-        for (show_study_names, expected) in [(false, "50.00"), (true, "Mine 50.00")] {
+        // White contrast is 1.63:1 on gold, 1.22:1 on yellow and 2.78:1 on green.
+        for (show_study_names, fill, text_color, expected) in [
+            (
+                false,
+                Color32::from_rgb(255, 193, 7),
+                Color32::BLACK,
+                "50.00",
+            ),
+            (
+                true,
+                Color32::from_rgb(255, 235, 59),
+                Color32::BLACK,
+                "Mine 50.00",
+            ),
+            (
+                true,
+                Color32::from_rgb(76, 175, 80),
+                Color32::WHITE,
+                "Mine 50.00",
+            ),
+        ] {
+            study.set_colors(vec![fill]);
             let ctx = Context::default();
             let output = ctx.run_ui(RawInput::default(), |ui| {
                 render_study_tags(
@@ -1042,12 +1059,12 @@ mod tests {
                 .shapes
                 .iter()
                 .filter_map(|shape| match &shape.shape {
-                    Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    Shape::Text(text) => Some((text.galley.text().to_owned(), text.fallback_color)),
                     _ => None,
                 })
                 .collect();
             output.drop_without_applying_deltas();
-            assert_eq!(labels, [expected]);
+            assert_eq!(labels, [(expected.to_owned(), text_color)], "{fill:?}");
         }
     }
 }

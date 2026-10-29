@@ -2243,7 +2243,7 @@ impl Chart {
                 let label = price_map.transform().label(
                     price_map.transform().to_scale(value),
                     price_map.price_precision().unwrap_or_else(|| {
-                        renderers::tick_decimals(&price_map, price_map.price_to_y(value))
+                        renderers::tick_decimals(&price_map, price_map.price_to_y(value)).max(2)
                     }),
                     price_formatter.as_deref(),
                 );
@@ -2468,7 +2468,7 @@ impl Chart {
                     let price = price_map.transform().label(
                         price_map.transform().to_scale(value),
                         price_map.price_precision().unwrap_or_else(|| {
-                            renderers::tick_decimals(&price_map, price_map.price_to_y(value))
+                            renderers::tick_decimals(&price_map, price_map.price_to_y(value)).max(2)
                         }),
                         price_formatter.as_deref(),
                     );
@@ -2478,13 +2478,14 @@ impl Chart {
                     } else {
                         format!("{name} {price}")
                     };
+                    let text_color = rendering::axes::tag_text_color(color);
                     let tag = rendering::axes::render_axis_value(
                         &painter,
                         price_rect,
                         axis_edge,
                         price_map.price_to_y(value),
                         label,
-                        (egui::Color32::WHITE, color),
+                        (text_color, color),
                         &tags,
                         self.config.price_axis.allow_label_overlap,
                     );
@@ -2492,7 +2493,7 @@ impl Chart {
                         let badge = painter.layout_no_wrap(
                             l10n::text(ui.ctx(), name),
                             rendering::axes::axis_font(ui.ctx()),
-                            egui::Color32::WHITE,
+                            text_color,
                         );
                         let box_rect = Rect::from_min_size(
                             egui::pos2(
@@ -2506,11 +2507,7 @@ impl Chart {
                             egui::vec2(badge.size().x + 7.0, rect.height()),
                         );
                         painter.rect_filled(box_rect, 2.0, color);
-                        painter.galley(
-                            box_rect.center() - badge.size() / 2.0,
-                            badge,
-                            egui::Color32::WHITE,
-                        );
+                        painter.galley(box_rect.center() - badge.size() / 2.0, badge, text_color);
                     }
                     tags.push(tag);
                 }
@@ -3057,7 +3054,7 @@ impl Chart {
                 price_map.transform().label(
                     price_map.transform().to_scale(bar.close),
                     price_map.price_precision().unwrap_or_else(|| {
-                        renderers::tick_decimals(&price_map, price_map.price_to_y(bar.close))
+                        renderers::tick_decimals(&price_map, price_map.price_to_y(bar.close)).max(2)
                     }),
                     price_formatter.as_deref(),
                 )
