@@ -153,7 +153,7 @@ pub(crate) fn resample_periods(
         if session.windows.is_empty() && !session.extended_windows.is_empty() {
             return Some(Vec::new());
         }
-        session.extended_windows.clear();
+        session.clear_extended_windows();
     }
     let provider = ExchangeSessionProvider::new(zone, session);
     let opens = provider.opens(bars.iter().map(|bar| bar.time));

@@ -26,7 +26,7 @@
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Avg Directional Index indicator
@@ -77,15 +77,6 @@ impl ADX {
         self
     }
 
-    /// Calculate True Range
-    #[inline]
-    fn true_range(bar: &Bar, prev_close: f64) -> f64 {
-        let hl = bar.high - bar.low;
-        let hc = (bar.high - prev_close).abs();
-        let lc = (bar.low - prev_close).abs();
-        hl.max(hc).max(lc)
-    }
-
     /// Wilder's smoothing
     #[inline]
     fn wilders_smooth(prev: f64, current: f64, period: usize) -> f64 {
@@ -131,7 +122,7 @@ impl Indicator for ADX {
                 let down = previous[1] - bar.low;
                 let plus = if up > down && up > 0.0 { up } else { 0.0 };
                 let minus = if down > up && down > 0.0 { down } else { 0.0 };
-                let tr = Self::true_range(bar, previous[2]);
+                let tr = ATR::true_range(bar, previous[2]);
                 if state.count <= self.period {
                     state.plus += plus;
                     state.minus += minus;

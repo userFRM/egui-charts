@@ -58,12 +58,6 @@ impl CCI {
         self.color = color;
         self
     }
-
-    /// Calculate typical price (TP) for a bar
-    #[inline]
-    fn typical_price(bar: &Bar) -> f64 {
-        (bar.high + bar.low + bar.close) / 3.0
-    }
 }
 
 /// Construct with the conventional default parameters.
@@ -85,7 +79,7 @@ impl CCI {
         }
 
         // Calculate typical prices
-        let tp: Vec<f64> = data.iter().map(Self::typical_price).collect();
+        let tp: Vec<f64> = data.iter().map(Bar::typical_price).collect();
 
         for i in 0..data.len() {
             if i + 1 < self.period {

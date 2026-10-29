@@ -287,10 +287,7 @@ impl Datafeed for Feed {
     }
 
     fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
-        reply.send(Ok(HistoryPage {
-            bars: Vec::new(),
-            end_of_history: true,
-        }));
+        reply.send(Ok(HistoryPage::new(Vec::new(), true)));
     }
 
     fn subscribe(&self, subscription: Subscription) {

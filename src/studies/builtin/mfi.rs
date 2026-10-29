@@ -58,12 +58,6 @@ impl MoneyFlowIndex {
         self.color = color;
         self
     }
-
-    /// Calculate typical price
-    #[inline]
-    fn typical_price(bar: &Bar) -> f64 {
-        (bar.high + bar.low + bar.close) / 3.0
-    }
 }
 
 /// Construct with the conventional default parameters.
@@ -85,7 +79,7 @@ impl MoneyFlowIndex {
         }
 
         // Calculate typical prices and raw money flow
-        let typical_prices: Vec<f64> = data.iter().map(Self::typical_price).collect();
+        let typical_prices: Vec<f64> = data.iter().map(Bar::typical_price).collect();
         let raw_money_flows: Vec<f64> = data
             .iter()
             .zip(typical_prices.iter())

@@ -152,6 +152,23 @@ pub fn change(values: &[f64], period: usize) -> Vec<f64> {
         .collect()
 }
 
+/// Percentage change from `period` bars ago. NaN where that bar is unavailable or zero.
+#[cfg(feature = "studies")]
+pub(crate) fn calculate_roc(values: &[f64], period: usize) -> Vec<f64> {
+    let mut roc = Vec::with_capacity(values.len());
+
+    for i in 0..values.len() {
+        if i < period || values[i - period] == 0.0 {
+            roc.push(f64::NAN);
+        } else {
+            let change = (values[i] - values[i - period]) / values[i - period] * 100.0;
+            roc.push(change);
+        }
+    }
+
+    roc
+}
+
 /// True where `a` moves from below `b` to above it. Equal values retain the last
 /// unequal comparison, so a touch and return does not cross. Missing values break
 /// comparisons. Output has `a.len()` entries; missing `b` entries are gaps.
