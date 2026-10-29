@@ -126,6 +126,7 @@ impl Chart {
                 y.clamp(price_rect.min.y, price_rect.max.y)
             })
         };
+        let translate_price = |price, from, to| price_map.translate_price(price, from, to);
 
         // Update all drawings' screen coords before rendering (handles pan/zoom)
         drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y);
@@ -263,6 +264,7 @@ impl Chart {
                 price_rect,
                 &x_to_bar_snapped,
                 &y_to_price,
+                &translate_price,
             );
         }
 
