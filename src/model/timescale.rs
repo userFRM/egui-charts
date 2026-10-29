@@ -105,7 +105,8 @@ impl TimeScale {
 
     /// Apply options coming from `TimeScaleOptions`
     /// Note: this does not own `TimeScaleOptions` to avoid a dependency cycle.
-    /// Non-finite spacing and right offsets are ignored, retaining their previous values.
+    /// Non-finite spacing retains the current spacing, clamped to the new bounds.
+    /// Non-finite right offsets retain their previous values.
     pub fn apply_options(
         &mut self,
         bar_spacing: f32,
@@ -470,9 +471,11 @@ impl TimeScale {
     }
 
     fn clamp_spacing(&self, spacing: f64) -> f64 {
-        if !spacing.is_finite() {
-            return self.bar_spacing;
-        }
+        let spacing = if spacing.is_finite() {
+            spacing
+        } else {
+            self.bar_spacing
+        };
         match self.spacing_bounds() {
             (min, max) if max > 0.0 => spacing.clamp(min, max),
             (min, _) => spacing.max(min),
@@ -607,10 +610,14 @@ mod tests {
 
     #[test]
     fn inconsistent_spacing_bounds_clamp_without_panicking() {
-        // zoom(-100) asks for -9 times the spacing, so each row ends at its effective minimum.
+        // Check the setup spacing before zoom(-100) clamps it to its effective minimum.
         type Setup = fn(&mut TimeScale);
-        let rows: [(&str, Setup, f32); 5] = [
-            ("NaN width with bars", |ts| ts.set_width(f32::NAN), 0.5),
+        let rows: [(&str, Setup, (f32, f32)); 8] = [
+            (
+                "NaN width with bars",
+                |ts| ts.set_width(f32::NAN),
+                (8.0, 0.5),
+            ),
             (
                 "NaN spacing with fixed left edge and maximum",
                 |ts| {
@@ -618,17 +625,17 @@ mod tests {
                     ts.set_max_bar_spacing(50.0);
                     ts.set_bar_spacing(f32::NAN);
                 },
-                0.5,
+                (8.0, 0.5),
             ),
             (
                 "minimum above maximum",
                 |ts| ts.apply_options(6.0, 10.0, 5.0, false, false, 2.0, None),
-                5.0,
+                (5.0, 5.0),
             ),
             (
                 "NaN minimum",
                 |ts| ts.apply_options(6.0, f32::NAN, 0.0, false, false, 2.0, None),
-                0.5,
+                (6.0, 0.5),
             ),
             (
                 "minimum set above maximum",
@@ -636,15 +643,34 @@ mod tests {
                     ts.set_max_bar_spacing(5.0);
                     ts.set_min_bar_spacing(10.0);
                 },
-                5.0,
+                (5.0, 5.0),
+            ),
+            (
+                "NaN spacing with a raised minimum",
+                |ts| ts.apply_options(f32::NAN, 10.0, 0.0, false, false, 2.0, None),
+                (10.0, 10.0),
+            ),
+            (
+                "NaN spacing with a lowered maximum",
+                |ts| ts.apply_options(f32::NAN, 0.5, 5.0, false, false, 2.0, None),
+                (5.0, 0.5),
+            ),
+            (
+                "NaN spacing with a lowered maximum and fixed left edge",
+                |ts| {
+                    ts.set_bar_spacing(6.0);
+                    ts.apply_options(f32::NAN, 0.5, 4.0, true, false, 2.0, None);
+                },
+                (4.0, 0.5),
             ),
         ];
-        for (name, setup, expected) in rows {
+        for (name, setup, (set, zoomed)) in rows {
             let mut ts = TimeScale::new();
             ts.set_bar_cnt(100);
             setup(&mut ts);
+            assert_eq!(ts.bar_spacing(), set, "{name}");
             ts.zoom(-100.0, 400.0, 0.0, 800.0);
-            assert_eq!(ts.bar_spacing(), expected, "{name}");
+            assert_eq!(ts.bar_spacing(), zoomed, "{name}");
         }
     }
 }
