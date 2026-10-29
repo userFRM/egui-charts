@@ -163,23 +163,17 @@ mod tests {
             assert_eq!(resolved, closes[abs_idx - start_idx]);
         }
 
-        // The first and last handle positions are the regression cases: with the
-        // old `closes.get(i)` lookup these returned `None` and nothing drew.
-        assert_eq!(close_for_abs_idx(&closes, start_idx, start_idx), Some(10.0));
-        assert_eq!(
-            close_for_abs_idx(&closes, start_idx, visible_range.end - 1),
-            Some(10.0 + 99.0)
-        );
-    }
-
-    #[test]
-    fn close_lookup_rejects_out_of_window_indices() {
-        let start_idx = 400;
-        let closes: Vec<f64> = vec![1.0, 2.0, 3.0];
-
-        // Before the window: would underflow if subtracted naively.
-        assert_eq!(close_for_abs_idx(&closes, start_idx, start_idx - 1), None);
-        // Past the available data.
-        assert_eq!(close_for_abs_idx(&closes, start_idx, start_idx + 3), None);
+        for (abs_idx, expected) in [
+            (start_idx, Some(10.0)),
+            (visible_range.end - 1, Some(109.0)),
+            (start_idx - 1, None),
+            (visible_range.end, None),
+        ] {
+            assert_eq!(
+                close_for_abs_idx(&closes, start_idx, abs_idx),
+                expected,
+                "{abs_idx}"
+            );
+        }
     }
 }

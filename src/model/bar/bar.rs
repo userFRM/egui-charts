@@ -464,24 +464,20 @@ mod tests {
     }
 
     #[test]
-    fn test_bullish_bearish() {
-        let bullish = sample_bullish_bar();
-        let bearish = sample_bearish_bar();
-
-        assert!(bullish.is_bullish());
-        assert!(!bullish.is_bearish());
-        assert!(bearish.is_bearish());
-        assert!(!bearish.is_bullish());
-    }
-
-    #[test]
-    fn test_measurements() {
-        let bar = sample_bullish_bar();
-
-        assert_eq!(bar.body_height(), 5.0); // |105 - 100|
-        assert_eq!(bar.range(), 15.0); // 110 - 95
-        assert_eq!(bar.upper_wick(), 5.0); // 110 - 105
-        assert_eq!(bar.lower_wick(), 5.0); // 100 - 95
+    fn bar_shape() {
+        for (bar, bullish, bearish) in [
+            (sample_bullish_bar(), true, false),
+            (sample_bearish_bar(), false, true),
+        ] {
+            assert_eq!(bar.is_bullish(), bullish);
+            assert_eq!(bar.is_bearish(), bearish);
+            assert_eq!(bar.body_height(), 5.0);
+            assert_eq!(bar.range(), 15.0);
+            assert_eq!(bar.upper_wick(), 5.0);
+            assert_eq!(bar.lower_wick(), 5.0);
+            assert_eq!(bar.body_top(), 105.0);
+            assert_eq!(bar.body_bottom(), 100.0);
+        }
     }
 
     #[test]
@@ -589,16 +585,5 @@ mod tests {
         // Removed bars.
         state.set_data(BarData::from_bars(bars[..3].to_vec()));
         assert_ne!(state.revision(), streaming);
-    }
-
-    #[test]
-    fn test_body_positions() {
-        let bullish = sample_bullish_bar();
-        assert_eq!(bullish.body_top(), 105.0);
-        assert_eq!(bullish.body_bottom(), 100.0);
-
-        let bearish = sample_bearish_bar();
-        assert_eq!(bearish.body_top(), 105.0);
-        assert_eq!(bearish.body_bottom(), 100.0);
     }
 }

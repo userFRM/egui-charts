@@ -736,14 +736,9 @@ mod tests {
         let (lo, hi) = (10f64.ln(), 1000f64.ln());
         let marks = generator.generate_marks(&map(PriceScaleMode::Logarithmic, lo, hi));
 
-        assert!(!marks.is_empty());
-
-        // Should have marks at powers of 10
-        let has_10 = marks.iter().any(|m| (m.price - 10.0).abs() < 0.01);
-        let has_100 = marks.iter().any(|m| (m.price - 100.0).abs() < 0.01);
-        let has_1000 = marks.iter().any(|m| (m.price - 1000.0).abs() < 0.01);
-
-        assert!(has_10 || has_100 || has_1000);
+        // Axis endpoints are unlabelled; the interior 1/2/5 decade marks remain.
+        let prices: Vec<_> = marks.iter().map(|mark| mark.price).collect();
+        assert_eq!(prices, [20.0, 50.0, 100.0, 200.0, 500.0]);
 
         // 18,200..22,800 holds one multiple of a power of ten (20,000), so the marks
         // fall back to 400-unit price steps. Spacing drops the 22,400 mark near the top.

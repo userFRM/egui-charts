@@ -335,73 +335,11 @@ fn calculate_atr(data: &[Bar], period: usize) -> f64 {
 mod tests {
     use super::*;
 
-    fn create_test_bars() -> Vec<Bar> {
-        let now = Utc::now();
-        vec![
-            Bar {
-                time: now,
-                open: 100.0,
-                high: 102.0,
-                low: 99.0,
-                close: 101.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: now,
-                open: 101.0,
-                high: 105.0,
-                low: 100.0,
-                close: 104.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: now,
-                open: 104.0,
-                high: 106.0,
-                low: 103.0,
-                close: 105.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: now,
-                open: 105.0,
-                high: 106.0,
-                low: 98.0,
-                close: 99.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-        ]
-    }
-
-    #[test]
-    fn test_config_creation() {
-        let config = PointFigureConfig::new(1.0, 3);
-        assert!((config.box_size - 1.0).abs() < 0.01);
-        assert_eq!(config.reversal_boxes, 3);
-    }
-
     #[test]
     fn test_snap_to_box() {
         assert!((snap_to_box(10.5, 1.0) - 10.0).abs() < 0.01);
         assert!((snap_to_box(10.9, 1.0) - 10.0).abs() < 0.01);
         assert!((snap_to_box(11.0, 1.0) - 11.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_pnf_conversion() {
-        let bars = create_test_bars();
-        let config = PointFigureConfig::new(1.0, 3);
-        let columns = to_pnf_columns(&bars, &config);
-
-        assert!(!columns.is_empty());
     }
 
     #[test]

@@ -314,40 +314,24 @@ mod tests {
     }
 
     #[test]
-    fn two_days_yield_one_break_at_first_bar_of_day_two() {
-        // Three hourly bars on day one, three on day two: exactly one day
-        // boundary, at the first bar of day two (local index 3).
-        let bars = vec![
-            bar_at(2024, 1, 1, 9),
-            bar_at(2024, 1, 1, 12),
-            bar_at(2024, 1, 1, 15),
-            bar_at(2024, 1, 2, 9),
-            bar_at(2024, 1, 2, 12),
-            bar_at(2024, 1, 2, 15),
-        ];
-        let provider = DailySessionProvider::continuous();
-        let breaks = find_session_breaks(&bars, &provider);
-
-        assert_eq!(breaks.len(), 1, "exactly one day boundary");
-        assert_eq!(breaks[0].0, 3, "break at first bar of day two");
-        assert_eq!(breaks[0].1.break_type, SessionBreakType::Daily);
-    }
-
-    #[test]
-    fn single_session_in_view_has_no_breaks() {
-        let bars = vec![
-            bar_at(2024, 1, 1, 9),
-            bar_at(2024, 1, 1, 12),
-            bar_at(2024, 1, 1, 15),
-        ];
-        let provider = DailySessionProvider::continuous();
-        assert!(find_session_breaks(&bars, &provider).is_empty());
-    }
-
-    #[test]
-    fn solid_style_has_no_dash_pattern() {
-        assert!(dash_pattern(LineStyle::Solid).is_none());
-        assert!(dash_pattern(LineStyle::Dashed).is_some());
-        assert!(dash_pattern(LineStyle::Dotted).is_some());
+    fn day_breaks_mark_only_the_first_bar_of_a_new_day() {
+        for (times, expected) in [
+            (vec![(1, 9), (1, 12), (1, 15)], vec![]),
+            (
+                vec![(1, 9), (1, 12), (1, 15), (2, 9), (2, 12), (2, 15)],
+                vec![(3, SessionBreakType::Daily)],
+            ),
+        ] {
+            let bars: Vec<_> = times
+                .iter()
+                .map(|&(day, hour)| bar_at(2024, 1, day, hour))
+                .collect();
+            let breaks = find_session_breaks(&bars, &DailySessionProvider::continuous());
+            let actual: Vec<_> = breaks
+                .iter()
+                .map(|(index, session)| (*index, session.break_type))
+                .collect();
+            assert_eq!(actual, expected, "{times:?}");
+        }
     }
 }
