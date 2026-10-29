@@ -868,7 +868,7 @@ impl DemoApp {
             egui_charts::ui::Control::DividendAdjustment,
         ] {
             self.timeframe_toolbar
-                .set_control_visible(control, spec.symbol == "SAMPLE");
+                .set_control_visible(control, DemoSymbol::has_hours(spec.symbol));
         }
         self.timeframe_toolbar
             .set_session(if matches!(spec.exchange, "Crypto" | "Forex") {
@@ -2557,7 +2557,7 @@ impl DemoApp {
                         }
                     }
                     ui.label(
-                        "SAMPLE: weekdays, regular 14:30–21:00 UTC; extended 08:30–21:00 UTC.",
+                        "Weekdays in New York time: regular 09:30–16:00; extended 04:00–20:00.",
                     );
                 });
             self.timeframe_toolbar.state.session_menu_open &= open;
@@ -3035,7 +3035,7 @@ impl DemoApp {
                     A::SaveLayout => self.handle_top_toolbar(ctx, TopToolbarAction::Save),
                     A::OpenLayout => self.open_layout = true,
                     A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
-                    A::ToggleSession if self.state.symbol == "SAMPLE" => {
+                    A::ToggleSession if DemoSymbol::has_hours(&self.state.symbol) => {
                         let session =
                             if self.timeframe_toolbar.state.session_type == SessionType::RTH {
                                 SessionType::ETH
@@ -4550,11 +4550,12 @@ mod tests {
     }
 
     #[test]
-    fn session_shortcut_switches_the_default_sample_and_keeps_continuous_markets() {
+    fn session_shortcut_switches_symbols_with_hours_and_keeps_continuous_markets() {
         for (symbol, initial, expected) in [
             ("SAMPLE", SessionType::Full24x7, SessionType::RTH),
             ("SAMPLE", SessionType::RTH, SessionType::ETH),
             ("SAMPLE", SessionType::ETH, SessionType::RTH),
+            ("AAPL", SessionType::RTH, SessionType::ETH),
             ("BTCUSD", SessionType::Full24x7, SessionType::Full24x7),
         ] {
             let ctx = egui::Context::default();

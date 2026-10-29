@@ -6,8 +6,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Datelike, Days, NaiveTime, Utc};
 use egui::{RichText, Sense, Ui, vec2};
 
+use super::ROW_HEIGHT;
 use super::controls::{cell, dropdown};
-use super::watchlist::ROW_HEIGHT;
 use crate::data::inbox::Inbox;
 use crate::data::{CalendarEvent, CalendarKind, CalendarQuery, Datafeed, FeedError, Importance};
 use crate::icons::icons;
