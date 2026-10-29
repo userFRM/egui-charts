@@ -110,6 +110,8 @@ impl Drawing {
         }
     }
 
+    /// The first fitted bar, the number of bars and the least-squares fit of the anchored range,
+    /// or `None` without bars or when the fit is not finite.
     fn regression_fit(&self, view: &ChartView) -> Option<(usize, usize, LinearFit)> {
         let &[a, b, ..] = self.chart_points.as_slice() else {
             return None;

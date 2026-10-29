@@ -1,6 +1,6 @@
-//! Coordinates tab - staged price and UTC time points.
+//! Coordinates tab - staged price (bars only for a regression trend) and UTC time points.
 
-use crate::drawings::{ChartPoint, Drawing};
+use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -22,6 +22,7 @@ pub struct CoordinatePoint {
     /// Fractional bar index, used when no timestamp is available.
     pub bar_index: String,
     original: Option<(ChartPoint, Option<DateTime<Utc>>)>,
+    /// The price is not editable: the drawing's prices follow its bars.
     bar_only: bool,
 }
 
@@ -49,8 +50,7 @@ impl CoordinatesState {
                         time: time
                             .map_or_else(String::new, |t| t.format("%H:%M:%S%.f").to_string()),
                         original: Some((original, time)),
-                        bar_only: drawing.tool_type
-                            == crate::drawings::DrawingToolType::RegressionTrend,
+                        bar_only: drawing.tool_type == DrawingToolType::RegressionTrend,
                     }
                 })
                 .collect(),
@@ -178,7 +178,6 @@ fn field(ui: &mut Ui, label: &str, value: &mut String, hint: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::drawings::DrawingToolType;
     use crate::model::BarData;
 
     #[test]
