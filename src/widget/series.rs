@@ -11,7 +11,7 @@ use crate::model::{
 };
 use crate::studies::Indicator;
 use chrono::{DateTime, Utc};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 
 /// Which bar [`Chart::bar_index_at`] finds for a time no bar opens at.
@@ -132,7 +132,7 @@ impl Chart {
             let len = item.bars.len();
             let incoming = vec![(bar, Origin::Live)];
             let before = ChangeMarks::before(&item.bars, &clock, &incoming);
-            let merged = merge(&mut item.bars, &mut BTreeSet::new(), &clock, incoming);
+            let merged = merge(&mut item.bars, &mut BTreeMap::new(), &clock, incoming);
             item.feed.rejected_bars += merged.rejected;
             if let Some(marks) = &mut item.change_marks {
                 marks.record(&item.bars, &clock, before);
@@ -976,7 +976,7 @@ pub(super) fn clean(bars: Vec<Bar>, clock: &BarClock) -> (Vec<Bar>, u64) {
     }
     let mut clean = Vec::with_capacity(bars.len());
     let incoming = bars.into_iter().map(|bar| (bar, Origin::History)).collect();
-    let merged = merge(&mut clean, &mut BTreeSet::new(), clock, incoming);
+    let merged = merge(&mut clean, &mut BTreeMap::new(), clock, incoming);
     (clean, merged.rejected)
 }
 

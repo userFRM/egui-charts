@@ -274,7 +274,7 @@ fn count_bars_follow_accepted_trades_across_frames() {
         let sink = inbox.subscribe("ES".into(), clock.clone(), 10_000, None);
         let mut bars = BTreeMap::new();
         let mut merged = Vec::new();
-        let mut from_ticks = std::collections::BTreeSet::new();
+        let mut from_ticks = std::collections::BTreeMap::new();
         for i in 0..(count * 2 + 1) {
             let trade =
                 tick(at(0, 5), 100.0 + (i % 3) as f64, (i % 4 + 1) as f64).with_id(i as u64);
@@ -424,7 +424,7 @@ fn clock_boundaries_and_empty_intervals() {
             Bar::new(boundary, 103.0, 103.0, 103.0, 103.0, 0.0)
         );
         let mut bars = Vec::new();
-        let mut from_ticks = std::collections::BTreeSet::new();
+        let mut from_ticks = std::collections::BTreeMap::new();
         super::super::merge::merge(
             &mut bars,
             &mut from_ticks,
@@ -790,7 +790,7 @@ fn heartbeats_after_whitespace_keep_the_last_real_close() {
         let clock = BarClock::new(Timeframe::Min1);
         let inbox = Arc::new(Inbox::default());
         let sink = inbox.subscribe("ES".into(), clock.clone(), 10, None);
-        let (mut bars, mut from_ticks) = (Vec::new(), std::collections::BTreeSet::new());
+        let (mut bars, mut from_ticks) = (Vec::new(), std::collections::BTreeMap::new());
         if seeded {
             sink.push_bar(Bar::new(at(0, 0), 109.0, 109.0, 109.0, 109.0, 1.0));
         }

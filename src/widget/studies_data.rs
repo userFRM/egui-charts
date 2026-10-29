@@ -9,7 +9,7 @@ use crate::data::{
 };
 use crate::model::{Bar, BarClock, Instrument, Timeframe};
 use crate::studies::{StudyData, StudyDataRequest};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -24,7 +24,7 @@ struct Series {
     clock: BarClock,
     error: Option<FeedError>,
     stream: Option<Stream>,
-    from_ticks: BTreeSet<chrono::DateTime<chrono::Utc>>,
+    from_ticks: BTreeMap<chrono::DateTime<chrono::Utc>, Origin>,
 }
 
 struct Stream {
@@ -242,7 +242,7 @@ impl Chart {
             clock,
             error: None,
             stream: None,
-            from_ticks: BTreeSet::new(),
+            from_ticks: BTreeMap::new(),
         });
         self.invalidate_study_data();
     }
@@ -316,7 +316,7 @@ impl Chart {
                     instrument: None,
                     clock: clock(request, None, self.extended_hours()),
                     error: None,
-                    from_ticks: BTreeSet::new(),
+                    from_ticks: BTreeMap::new(),
                     stream: Some(Stream {
                         feed: Arc::clone(feed),
                         inbox,
@@ -935,7 +935,7 @@ mod tests {
             assert!(
                 series
                     .from_ticks
-                    .iter()
+                    .keys()
                     .all(|time| *time == DateTime::UNIX_EPOCH)
             );
             if replacement {

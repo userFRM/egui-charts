@@ -2,7 +2,7 @@
 
 use crate::model::{Bar, BarClock};
 use chrono::{DateTime, Utc};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 /// Where an incoming bar comes from, which decides what happens to a stored bar of the same slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,7 +12,7 @@ pub(crate) enum Origin {
     /// A live bar: replaces the stored bar.
     Live,
     /// This many trades folded into a bar: extends the last bar or appends a newer one; older
-    /// ones are late.
+    /// ones are late. Zero trades denotes an empty heartbeat candle.
     Ticks(u64),
     /// Trades whose first execution replaces a heartbeat, or extends a page already in its slot.
     TicksAfterHeartbeat(u64),
@@ -32,11 +32,12 @@ pub(crate) struct Merged {
 
 /// Merges `incoming`, in any order, into `bars` by the rules of each bar's origin. `bars` are the
 /// bars of one series: valid, in time order, at most one per slot of `clock`, which must be the
-/// same for every merge into the series. `from_ticks` holds the times of the series' bars built
-/// from ticks, which extend the newest history bar of the same slot once; keep it with the bars.
+/// same for every merge into the series. `from_ticks` holds the origins of the series' bars built
+/// from ticks, distinguishing empty heartbeats from trades that extend the newest history bar
+/// of the same slot once; keep it with the bars.
 pub(crate) fn merge(
     bars: &mut Vec<Bar>,
-    from_ticks: &mut BTreeSet<DateTime<Utc>>,
+    from_ticks: &mut BTreeMap<DateTime<Utc>, Origin>,
     clock: &BarClock,
     mut incoming: Vec<(Bar, Origin)>,
 ) -> Merged {
@@ -93,19 +94,25 @@ pub(crate) fn merge(
         }
         let old = stored.next_if(|old| slot(old) == at);
         let new = match (old, origin) {
-            (Some(old), Origin::TicksAfterHeartbeat(_)) if from_ticks.contains(&old.time) => bar,
+            (Some(old), Origin::TicksAfterHeartbeat(_)) if from_ticks.contains_key(&old.time) => {
+                from_ticks.remove(&old.time);
+                from_ticks.insert(bar.time, origin);
+                bar
+            }
             (Some(old), Origin::Ticks(trades) | Origin::TicksAfterHeartbeat(trades)) => {
                 // Trades filling a whitespace bar extend its eventual history bar.
                 if old.is_whitespace() {
-                    from_ticks.insert(old.time);
+                    from_ticks.insert(old.time, origin);
                 }
                 fold(old, &bar).unwrap_or_else(|| {
                     merged.rejected += trades;
                     old.clone()
                 })
             }
-            (Some(old), Origin::History) if !from_ticks.contains(&old.time) => old.clone(),
-            (Some(old), Origin::History) if Some(at) != page_end || old.volume == 0.0 => {
+            (Some(old), Origin::History) if !from_ticks.contains_key(&old.time) => old.clone(),
+            (Some(old), Origin::History)
+                if Some(at) != page_end || from_ticks.get(&old.time) == Some(&Origin::Ticks(0)) =>
+            {
                 from_ticks.remove(&old.time);
                 bar
             }
@@ -124,7 +131,7 @@ pub(crate) fn merge(
                 bar
             }
             (None, Origin::Ticks(_) | Origin::TicksAfterHeartbeat(_)) => {
-                from_ticks.insert(bar.time);
+                from_ticks.insert(bar.time, origin);
                 bar
             }
             (None, _) => bar,
@@ -219,7 +226,7 @@ mod tests {
         let mut invalid = vec![bar(1, 5.0), bar(2, f64::NAN), bar(3, 5.0)];
         invalid[0].high = 4.0;
         invalid[2].volume = -1.0;
-        let zero_size_trades = {
+        let zero_size_trades: Vec<_> = {
             let inbox = std::sync::Arc::new(crate::data::inbox::Inbox::default());
             let sink = inbox.subscribe("ES".into(), Timeframe::Min1.into(), 100, None);
             [vec![(0, 10.0)], vec![(10, 12.0), (20, 11.0)]]
@@ -247,6 +254,10 @@ mod tests {
         };
         #[rustfmt::skip]
         let cases = [
+            ("a page bar folds in zero-size trades already in its slot",
+                vec![zero_size_trades[0].clone(),
+                    (History, vec![ohlcv(0, [12.0, 13.0, 11.5, 12.5, 6.0])])],
+                vec![ohlcv(0, [12.0, 13.0, 10.0, 10.0, 6.0])], (Some(0), 0, 0)),
             ("zero-size trades keep the forming candle across drains",
                 zero_size_trades,
                 vec![ohlcv(0, [10.0, 12.0, 10.0, 11.0, 0.0])], (Some(0), 0, 0)),
@@ -328,7 +339,7 @@ mod tests {
         ];
         let clock = BarClock::new(Timeframe::Min1);
         for (name, steps, bars, expected) in cases {
-            let (mut series, mut from_ticks) = (Vec::new(), BTreeSet::new());
+            let (mut series, mut from_ticks) = (Vec::new(), BTreeMap::new());
             let mut merged = None;
             for (origin, incoming) in steps {
                 merged = Some(merge(
