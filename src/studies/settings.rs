@@ -142,7 +142,8 @@ impl StudyIntervalRange {
 }
 
 /// Host-serializable presentation settings of an applied study.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+#[non_exhaustive]
 pub struct StudySettings {
     /// One style per declared output line.
     pub plots: Vec<PlotStyle>,

@@ -25,6 +25,7 @@ pub trait DrawingRenderer: Send + Sync {
 /// Whether a built-in tool appears in a picker and can create new drawings. Existing drawings
 /// remain visible and editable, so hiding a tool never makes a saved annotation disappear.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ToolAvailability {
     /// Include the tool in picker lists.
     pub visible: bool,

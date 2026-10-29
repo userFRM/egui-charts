@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 
 /// Average formula of the oscillator's two averages or of its signal line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OscillatorAverage {
     /// Alpha 2/(length+1), seeded with the mean of the first `length` values.
     Exponential,

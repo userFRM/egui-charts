@@ -28,6 +28,7 @@ pub struct CVD {
 
 /// How [`CVD`] estimates a bar's delta from its prices
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum CVDMode {
     /// Estimate based on bar close position within range
     #[default]

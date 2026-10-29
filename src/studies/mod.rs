@@ -76,7 +76,7 @@ pub use indicator_trait::{
 };
 
 mod chart_state;
-pub use chart_state::{ChartState, ZoomState};
+pub use chart_state::ChartState;
 
 #[cfg(feature = "studies")]
 mod template;

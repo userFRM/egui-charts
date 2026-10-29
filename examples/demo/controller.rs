@@ -6056,12 +6056,11 @@ mod tests {
                 account_size: 10_000.0,
                 percent: 1.0,
             });
-            settings.position_sizing = PositionSizing {
-                point_value: 50.0,
-                lot_size: 10.0,
-                quantity_step: 0.01,
-                leverage: 5.0,
-            };
+            settings.position_sizing = PositionSizing::default();
+            settings.position_sizing.point_value = 50.0;
+            settings.position_sizing.lot_size = 10.0;
+            settings.position_sizing.quantity_step = 0.01;
+            settings.position_sizing.leverage = 5.0;
             let sizing = settings.position_sizing;
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);

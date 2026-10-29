@@ -17,6 +17,7 @@ pub enum VolumeColorRule {
 
 /// Moving average formula for volume.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum VolumeAverage {
     /// Arithmetic mean of a complete window.
     Simple,

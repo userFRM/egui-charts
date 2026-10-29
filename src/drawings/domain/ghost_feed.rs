@@ -9,6 +9,7 @@ pub const MAX_GHOST_CANDLES: usize = 1000;
 /// How a Ghost Feed builds its projected candles from the clicked path.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct GhostFeedConfig {
     /// Bars one projected candle spans; the first starts at the path's first anchor. Must be
     /// positive and finite.
@@ -30,6 +31,7 @@ impl Default for GhostFeedConfig {
 /// One projected candle: where the path opens and closes over its bars, and the highest and
 /// lowest price it reaches in between, widened by the wick.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct GhostCandle {
     /// Bar index where the candle opens.
     pub bar_idx: f32,

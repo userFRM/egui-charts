@@ -17,6 +17,7 @@ use egui::{Color32, Pos2};
 
 /// Configuration for selection handle appearance and hit testing.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct HandleConfig {
     /// Handle diameter in pixels.
     pub size: f32,

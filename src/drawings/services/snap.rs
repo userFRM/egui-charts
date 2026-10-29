@@ -12,6 +12,7 @@ use egui::Pos2;
 
 /// Options for snap behavior
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SnapOptions {
     /// Enable snap to OHLC prices
     pub snap_to_price: bool,
@@ -39,6 +40,7 @@ impl Default for SnapOptions {
 
 /// Snap targets - prices and times to snap to
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct SnapTargets {
     /// Y-coordinates of OHLC prices in screen space
     pub prices: Vec<f32>,

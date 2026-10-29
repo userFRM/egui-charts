@@ -108,6 +108,11 @@
 //! `..Theme::light()`, which keeps compiling when a field is added.
 //! `widget::MismatchDirection`, `model::PriceLineSource` and `model::LogicalRange` are
 //! complete by meaning.
+//! The drawing configurations `drawings::{FibonacciConfig, PitchforkConfig, GannConfig}`
+//! are built the same way, and the records a custom study returns from
+//! `studies::Indicator` methods, such as `studies::PlotStyle` and `studies::StudyZone`,
+//! stay exhaustive so that a study can build them directly; studies grow through new
+//! default trait methods instead.
 
 // ─── Crate-level lint configuration ──────────────────────────────────────────
 #![allow(clippy::too_many_arguments)]

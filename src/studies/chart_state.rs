@@ -13,7 +13,7 @@ use std::sync::Arc;
 /// The chart maintains a stack of these snapshots so the user can press
 /// "zoom out" to return to a previous view.
 #[derive(Debug, Clone, Copy)]
-pub struct ZoomState {
+struct ZoomState {
     /// Pixels per bar at the time of the snapshot.
     pub bar_spacing: f32,
     /// Right offset in bars from the chart edge.

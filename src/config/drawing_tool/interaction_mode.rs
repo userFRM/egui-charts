@@ -28,6 +28,7 @@
 /// );
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum DrawingInteractionMode {
     /// Click once to place (e.g., `HorizontalLine`, `TextLabel`, arrow markers).
     ///

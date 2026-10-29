@@ -3,6 +3,7 @@
 /// Drawing properties without anchors or record identity. Apply to an existing drawing of the
 /// same type; its coordinates, name, notes, layer and persistence identity stay intact.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct DrawingTemplate {
     /// Tool and reusable properties. Serialization omits anchors and record identity.
     pub settings: crate::drawings::Drawing,

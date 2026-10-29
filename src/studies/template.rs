@@ -5,6 +5,7 @@ use crate::studies::{ConfiguredStudy, Indicator, IndicatorFactory, InputValue, S
 /// Serializable inputs and presentation of one study. Hosts may resolve `name` through their
 /// own study factory when they supply custom studies.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct StudyTemplate {
     /// Study factory name.
     pub name: String,

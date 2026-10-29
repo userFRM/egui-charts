@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 /// What a volume profile was built from.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ProfileInput {
     /// The chart bars the profile covers.
     pub bars: Range<usize>,

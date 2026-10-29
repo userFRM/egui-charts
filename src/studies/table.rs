@@ -2,6 +2,7 @@
 
 /// A cell in a study table.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum StudyCell {
     /// A row label or other text.
     Text(String),
@@ -11,6 +12,7 @@ pub enum StudyCell {
 
 /// A labelled table drawn in the lower right of the study's pane.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct StudyTable {
     /// Caption above the column headings.
     pub title: String,

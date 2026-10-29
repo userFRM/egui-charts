@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Meaning of a footprint annotation. Sells trade on the bid and buys on the ask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FootprintStudyKind {
     /// Consecutive sell imbalances.
     StackedBid,
@@ -35,6 +36,7 @@ pub enum FootprintStudyKind {
 
 /// Where a level or zone stands against later trading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FootprintStudyState {
     /// A marker that stays inside its own bar.
     Local,
@@ -48,6 +50,7 @@ pub enum FootprintStudyState {
 
 /// A level or zone beginning at one bar and optionally ending at its first revisit.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FootprintStudy {
     /// Bar that created the level or zone.
     pub start: DateTime<Utc>,
@@ -69,6 +72,7 @@ pub struct FootprintStudy {
 /// imbalances at 300%, unfinished highs and lows, naked and delta POCs, and leaves the rest off.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct FootprintStudyConfig {
     /// Dominance multiple of an imbalance, normally 3 (300%).
     pub imbalance_ratio: f64,

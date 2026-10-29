@@ -53,6 +53,7 @@ impl TradeProfileRanges {
 
 /// Executed volume over one session or composite, with the POC after each contributing bar.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct TradeProfile {
     /// Half-open range of bar opening times.
     pub range: Range<DateTime<Utc>>,
