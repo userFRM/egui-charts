@@ -246,7 +246,7 @@ mod tests {
 
         for bar in 0..3 {
             assert!(
-                matches!(hv.values().to_rows()[bar], IndicatorValue::None),
+                matches!(hv.values.to_rows()[bar], IndicatorValue::None),
                 "warm-up bar {bar}"
             );
         }
