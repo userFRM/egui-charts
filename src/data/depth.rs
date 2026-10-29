@@ -32,6 +32,9 @@ pub(crate) struct Book {
     symbol: String,
     bids: Side,
     asks: Side,
+    /// Reused sorted change indices and merged suffixes, checked before either side is replaced.
+    changes: Vec<(u64, usize)>,
+    merged: [Side; 2],
     /// Deltas pushed while the book has no snapshot: one run of consecutive sequence numbers.
     held: VecDeque<(u64, OrderBook)>,
     /// Levels of the held deltas, an empty delta counting as one so a stream of them is bounded.
@@ -106,12 +109,32 @@ impl Book {
                 return Err(lost);
             }
         }
-        let bids = merge_side(&self.bids, &changes.bids, self.tick, 0);
-        let asks = merge_side(&self.asks, &changes.asks, self.tick, u64::MAX);
+        let bids = merge_side(
+            &self.bids,
+            &changes.bids,
+            self.tick,
+            0,
+            &mut self.changes,
+            &mut self.merged[0],
+        );
+        let asks = merge_side(
+            &self.asks,
+            &changes.asks,
+            self.tick,
+            u64::MAX,
+            &mut self.changes,
+            &mut self.merged[1],
+        );
         let (Some(bids), Some(asks)) = (bids, asks) else {
             return Err(self.lose(true));
         };
-        (self.bids, self.asks) = (bids, asks);
+        for ((side, at), merged) in [(&mut self.bids, bids), (&mut self.asks, asks)]
+            .into_iter()
+            .zip(&mut self.merged)
+        {
+            side.truncate(at);
+            side.append(merged);
+        }
         (self.sequence, self.ts, self.changed) = (Some(sequence), changes.ts, true);
         Ok(())
     }
@@ -195,40 +218,50 @@ impl Book {
     }
 }
 
-/// Sorts changes once and merges in one pass, bounding the result before replacing either side.
+/// Sorts changes once and merges the touched suffix into a reused buffer. Returns its start,
+/// bounding the result before either side is replaced; an unchanged side has an empty suffix.
 fn merge_side(
     side: &Side,
     levels: &[OrderBookLevel],
     tick: Option<f64>,
     order: u64,
-) -> Option<Side> {
-    // Reversed so the stable sort and dedup keep the last entry for each price, including zero.
-    let mut changes: Vec<_> = levels
-        .iter()
-        .rev()
-        .map(|level| (key(tick, level.price) ^ order, level))
-        .collect();
-    changes.sort_by_key(|(key, _)| *key);
+    changes: &mut Vec<(u64, usize)>,
+    merged: &mut Side,
+) -> Option<usize> {
+    merged.clear();
+    if levels.is_empty() {
+        return Some(side.len());
+    }
+    changes.clear();
+    changes.extend(
+        levels
+            .iter()
+            .enumerate()
+            .map(|(at, level)| (key(tick, level.price) ^ order, at)),
+    );
+    // Index breaks ties so the last entry wins without an allocating stable sort.
+    changes.sort_unstable_by_key(|&(key, at)| (key, std::cmp::Reverse(at)));
     changes.dedup_by_key(|(key, _)| *key);
-    let mut old = side.iter().peekable();
-    let mut merged = Vec::with_capacity((side.len() + changes.len()).min(MAX_LEVELS));
-    for (key, level) in changes {
+    let at = side.partition_point(|(key, _)| *key < changes[0].0);
+    let mut old = side[at..].iter().peekable();
+    for &(key, index) in changes.iter() {
         while let Some(stored) = old.next_if(|(stored, _)| *stored < key) {
             merged.push(stored.clone());
         }
         old.next_if(|(stored, _)| *stored == key);
+        let level = &levels[index];
         if level.size > 0.0 {
             merged.push((key, level.clone()));
         }
-        if merged.len() > MAX_LEVELS {
+        if at + merged.len() > MAX_LEVELS {
             return None;
         }
     }
-    if merged.len() + old.len() > MAX_LEVELS {
+    if at + merged.len() + old.len() > MAX_LEVELS {
         return None;
     }
     merged.extend(old.cloned());
-    Some(merged)
+    Some(at)
 }
 
 /// Finite prices, finite and non-negative sizes.
@@ -271,32 +304,6 @@ mod tests {
             bids: levels(bids),
             asks: levels(asks),
         }
-    }
-
-    /// A best-first oversized delta must not shift a growing side once per inserted level.
-    #[test]
-    fn oversized_best_first_delta_is_bounded() {
-        let changes = book(
-            &Vec::from_iter((0..80_000).rev().map(|i| (i as f64, 1.0))),
-            &[],
-        );
-        let mut depth = Book::new(Some(0.25));
-        depth.snapshot(1, book(&[], &[])).unwrap();
-        let start = std::time::Instant::now();
-        let result = depth.delta(2, &changes);
-        let elapsed = start.elapsed();
-        assert_eq!(
-            result,
-            Err(Lost {
-                invalid: true,
-                request: true
-            })
-        );
-        assert!(
-            elapsed < std::time::Duration::from_millis(500),
-            "delta took {elapsed:?}"
-        );
-        assert!(depth.bids.is_empty() && depth.asks.is_empty());
     }
 
     enum Push {

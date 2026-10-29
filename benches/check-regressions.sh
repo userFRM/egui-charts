@@ -25,7 +25,7 @@ instructions() {
 printf '| Scenario | Base instructions | Head instructions | Change | Tolerance |\n'
 printf '|---|---:|---:|---:|---:|\n'
 fail=0
-for scenario in frame-1000 frame-100000 frame-1000000 heikin tick tick-studies append append-studies studies drawings; do
+for scenario in frame-1000 frame-100000 frame-1000000 heikin tick tick-studies append append-studies studies drawings depth; do
     base0=$(instructions "$base_bin" "$scenario" 0)
     head0=$(instructions "$head_bin" "$scenario" 0)
     base20=$(instructions "$base_bin" "$scenario" 20)
