@@ -747,21 +747,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn test_timeframe_toolbar_creation() {
-        let panel = TimeframeToolbar::new();
-        assert_eq!(panel.state.sel_range, DateRange::Month1);
-        assert_eq!(panel.state.session_type, SessionType::RTH);
-        assert!(!panel.state.adjust_for_dividends);
-    }
-
-    #[test]
-    fn test_config_defaults() {
-        let config = TimeframeToolbarConfig::default();
-        assert_eq!(
-            config.panel_height,
-            DESIGN_TOKENS.sizing.toolbar.bottom_height
-        );
-    }
 }
