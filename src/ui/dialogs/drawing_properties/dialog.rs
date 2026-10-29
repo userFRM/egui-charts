@@ -632,7 +632,7 @@ mod tests {
                 (Tool::Rect, true, false, false),
                 (Tool::Brush, false, false, false),
                 (Tool::TrendLine, false, true, false),
-                (Tool::TextLabel, false, false, true),
+                (Tool::TextLabel, true, false, true),
                 (Tool::Highlighter, false, false, false),
             ] {
                 chart.drawings_mut().drawings = vec![Drawing::new(7, tool)];

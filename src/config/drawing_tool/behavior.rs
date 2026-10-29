@@ -20,17 +20,48 @@ impl DrawingToolType {
         )
     }
 
-    /// Whether the renderer has an optional filled area controlled by the drawing's fill.
+    /// Whether the renderer paints a filled area that takes the drawing's fill colour.
     pub fn supports_fill(&self) -> bool {
-        matches!(
+        !matches!(
             self,
-            Self::Rect
-                | Self::Circle
-                | Self::Ellipse
-                | Self::Triangle
-                | Self::RotatedRect
-                | Self::Sector
-                | Self::ParallelChannel
+            Self::CrossCursor
+                | Self::DotCursor
+                | Self::ArrowCursor
+                | Self::Eraser
+                | Self::TrendLine
+                | Self::Ray
+                | Self::ExtendedLine
+                | Self::HorizontalLine
+                | Self::HorizontalRay
+                | Self::VerticalLine
+                | Self::CrossLine
+                | Self::RegressionTrend
+                | Self::FibonacciRetracement
+                | Self::FibonacciExtension
+                | Self::TrendBasedFibTime
+                | Self::FibonacciCircles
+                | Self::FibonacciSpiral
+                | Self::FibonacciSpeedResistanceArcs
+                | Self::FibonacciWedge
+                | Self::Pitchfan
+                | Self::LongPos
+                | Self::ShortPos
+                | Self::AnchoredVWAP
+                | Self::FixedRangeVolumeProfile
+                | Self::AnchoredVolumeProfile
+                | Self::PriceRange
+                | Self::Brush
+                | Self::Highlighter
+                | Self::ArrowMarker
+                | Self::Arrow
+                | Self::Path
+                | Self::Polyline
+                | Self::Arc
+                | Self::Curve
+                | Self::DoubleCurve
+                | Self::AnchoredNote
+                | Self::FontIcon
+                | Self::Sticker
         )
     }
 
@@ -47,7 +78,7 @@ impl DrawingToolType {
         )
     }
 
-    /// Whether the renderer displays editable drawing text and its font size.
+    /// Whether the renderer displays the drawing's editable text.
     pub fn supports_text(&self) -> bool {
         matches!(
             self,
@@ -61,6 +92,8 @@ impl DrawingToolType {
                 | Self::FlagNote
                 | Self::Signpost
                 | Self::Table
+                | Self::Tweet
+                | Self::Idea
         )
     }
 
