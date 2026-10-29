@@ -177,6 +177,10 @@ impl SymbolTab {
                 ui.checkbox(&mut params.tpo_split_sessions, "")
                     .labelled_by(label.id);
                 ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Single prints"));
+                ui.checkbox(&mut params.tpo_single_prints, "")
+                    .labelled_by(label.id);
+                ui.end_row();
             }
             ChartType::Baseline => {
                 let label = ui.label(l10n::text(ui.ctx(), "Base level"));
@@ -376,7 +380,7 @@ impl SymbolTab {
         }
     }
 
-    fn color_picker(ui: &mut Ui, color: &mut Color32) {
+    pub(super) fn color_picker(ui: &mut Ui, color: &mut Color32) {
         let id = ui.next_auto_id();
         let mut state = ui
             .data(|data| data.get_temp::<ColorPickerState>(id))

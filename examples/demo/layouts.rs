@@ -695,12 +695,17 @@ impl DemoApp {
             .map(|dark| if dark { "dark" } else { "light" }.into());
         settings.symbol = Some(self.state.symbol.clone());
         settings.interval = Some(self.state.timeframe);
-        settings.drawing_favorites = self.drawing_toolbar.state.favorites.clone();
+        let toolbar = &self.drawing_toolbar.state;
+        settings.drawing_favorites = toolbar.favorites.clone();
+        settings.drawing_favorites_hidden = !toolbar.floating_visible;
+        settings.drawing_favorites_pos = toolbar.floating_pos.map(|pos| (pos.x, pos.y));
         settings.layout = menu
             .curr_layout
             .clone()
             .filter(|name| menu.layouts.contains(name));
         settings.layout_autosave = menu.autosave;
+        settings.layout_favorites = menu.favorites.clone();
+        settings.market_heatmap = self.market_heatmap.selection.clone();
         settings
     }
 
@@ -720,8 +725,15 @@ impl DemoApp {
         {
             self.switch_timeframe(interval);
         }
-        self.drawing_toolbar.state.favorites = settings.drawing_favorites;
+        let toolbar = &mut self.drawing_toolbar.state;
+        toolbar.favorites = settings.drawing_favorites;
+        toolbar.floating_visible = !settings.drawing_favorites_hidden;
+        toolbar.floating_pos = settings
+            .drawing_favorites_pos
+            .map(|(x, y)| egui::pos2(x, y));
         self.top_toolbar.layout_menu.autosave = settings.layout_autosave;
+        self.top_toolbar.layout_menu.favorites = settings.layout_favorites;
+        self.market_heatmap.selection = settings.market_heatmap;
         if let Some(layout) = settings.layout {
             self.top_toolbar.layout_menu.open(&layout);
         }

@@ -126,6 +126,9 @@ impl DemoApp {
                 self.refresh_strategy_signals();
             }
             StrategyReportAction::ExportCsv(csv) => self.save_text("strategy-trades.csv", &csv),
+            StrategyReportAction::ExportSummaryCsv { filename, content } => {
+                self.save_text(&filename, &content)
+            }
             _ => {}
         }
     }

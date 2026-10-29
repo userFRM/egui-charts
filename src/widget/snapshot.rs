@@ -92,6 +92,9 @@ pub struct ChartSnapshot {
     pub chart_type_params: ChartTypeParams,
     /// Whether the main series is drawn.
     pub main_series_visible: bool,
+    /// Visibility and style of the main series' alert levels; absent in older layouts.
+    #[serde(default)]
+    pub main_series_alerts: crate::model::SeriesAlerts,
     /// The display settings of the settings dialog, the price scale's mode and margins included.
     pub settings: ChartSettingsState,
     /// Complete appearance settings; absent in version 1 layouts.
@@ -198,6 +201,7 @@ impl Chart {
             chart_type: self.chart_type,
             chart_type_params: self.chart_type_params.clone(),
             main_series_visible: self.main_series_visible,
+            main_series_alerts: self.main_series_style.alerts,
             settings: ChartSettingsState::from_chart(self),
             config: Some(self.config.clone()),
             palette: Some(self.followed_palette()),
@@ -349,6 +353,7 @@ impl Chart {
         self.set_chart_type(snapshot.chart_type);
         self.set_chart_type_params(snapshot.chart_type_params.clone());
         self.set_main_series_visible(snapshot.main_series_visible);
+        self.main_series_style.alerts = snapshot.main_series_alerts;
         snapshot.settings.apply_to_chart(self)?;
         if let Some(config) = &snapshot.config {
             self.config = config.clone();

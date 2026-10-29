@@ -89,6 +89,13 @@ impl Indicator for TimePriceOpportunity {
             )
             .with_default(InputValue::Toggle(defaults.split_sessions)),
             StudyInput::new(
+                "single_prints",
+                "Single prints",
+                InputValue::Toggle(self.config.show_single_prints),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.show_single_prints)),
+            StudyInput::new(
                 "display",
                 "Display",
                 InputValue::Choice(usize::from(
@@ -123,6 +130,7 @@ impl Indicator for TimePriceOpportunity {
                 self.config.value_area_pct = percent / 100.0
             }
             ("split_sessions", InputValue::Toggle(split)) => self.config.split_sessions = split,
+            ("single_prints", InputValue::Toggle(show)) => self.config.show_single_prints = show,
             ("display", InputValue::Choice(choice @ 0..=1)) => {
                 self.config.display_mode = [TPODisplayMode::Letters, TPODisplayMode::Blocks][choice]
             }

@@ -177,6 +177,7 @@ impl Chart {
             volume_formatter: None,
             series_formatters: Default::default(),
             extended_hours: false,
+            conversion: None,
             measured_axis_width: 0.0,
             last_layout: None,
             last_ratio_lock: false,

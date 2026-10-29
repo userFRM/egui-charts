@@ -2,7 +2,7 @@
 //!
 //! Provides configurable colors and options for candlestick/bar chart series.
 
-use crate::model::PriceSource;
+use crate::model::{PriceSource, SeriesAlerts};
 use crate::scales::PriceScaleMode;
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -59,6 +59,9 @@ pub struct SeriesSettings {
     /// Invert the price scale
     pub invert_scale: bool,
 
+    /// Visibility and style of this series' alert levels
+    pub alerts: SeriesAlerts,
+
     // === Canvas Tab ===
     /// Background type: 0 = Solid, 1 = Gradient
     pub background_type: u8,
@@ -97,6 +100,7 @@ impl Default for SeriesSettings {
             show_price_line: true,
             show_prev_close_line: false,
             invert_scale: false,
+            alerts: SeriesAlerts::default(),
             // Canvas Tab
             background_type: 0, // Solid
             show_vertical_grid: true,

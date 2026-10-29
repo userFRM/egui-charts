@@ -1,7 +1,9 @@
 //! Typed alerts, as a host or a server stores and evaluates them.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveTime, Utc, Weekday};
 use serde::{Deserialize, Serialize};
+
+use super::{Bar, Timeframe, TimezoneId};
 
 /// The host's identifier of an alert.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -11,8 +13,8 @@ pub struct AlertId(
 );
 
 /// An alert as the host stores and evaluates it. The library creates and edits alerts through
-/// [`Alerts::save`](crate::services::Alerts::save) and shows the ones the host pushes; it never
-/// evaluates them.
+/// [`Alerts::save`](crate::services::Alerts::save) and shows the ones the host pushes. It evaluates
+/// them only through the host's service; `AlertEngine` (feature `alert-engine`) is one.
 ///
 /// It is serialisable so that a server can store and evaluate the same type. Fields added later
 /// will carry `#[serde(default)]`, so alerts stored by an earlier version keep loading. A
@@ -31,6 +33,10 @@ pub struct Alert {
     /// Host watchlist identifier. When present, evaluate independently on each member symbol.
     #[serde(default)]
     pub watchlist: Option<String>,
+    /// The timeframe whose bars the alert is evaluated on. `None` for an alert that has not been
+    /// fixed to one yet; `AlertEngine` fixes it to the first timeframe it evaluates the alert on.
+    #[serde(default)]
+    pub timeframe: Option<Timeframe>,
     /// Value tested by the first condition.
     #[serde(default)]
     pub source: AlertSource,
@@ -45,7 +51,12 @@ pub struct Alert {
     /// The alert expires at this time; `None` never expires.
     #[serde(default)]
     pub expires: Option<DateTime<Utc>>,
-    /// Text the host shows or sends when the alert fires.
+    /// When notifications may be delivered; `None` delivers at any time. The schedule restricts
+    /// delivery only: the alert is still evaluated, and fires, outside it.
+    #[serde(default)]
+    pub schedule: Option<Box<NotificationSchedule>>,
+    /// Text the host shows or sends when the alert fires. [`Alert::expand_message`] fills in the
+    /// placeholders `{{symbol}}`, `{{close}}` and so on when it fires.
     #[serde(default)]
     pub message: String,
     /// Where the alert stands, as the host reports it.
@@ -62,13 +73,90 @@ impl Alert {
             condition,
             name: String::new(),
             watchlist: None,
+            timeframe: None,
             source: AlertSource::Price,
             additional_conditions: Vec::new(),
             frequency: AlertFrequency::default(),
             expires: None,
+            schedule: None,
             message: String::new(),
             status: AlertStatus::default(),
         }
+    }
+}
+
+impl Alert {
+    /// The message with its placeholders filled in from the trigger: `{{symbol}}` and
+    /// `{{timeframe}}` as given, `{{time}}` the open time of `bar` in RFC 3339, `{{open}}`,
+    /// `{{high}}`, `{{low}}`, `{{close}}` and `{{volume}}` of `bar`, `{{value}}` the value of the
+    /// alert's source and `{{output_N}}` the value of output `N` of the study the source names,
+    /// empty if the source is not a study. `value` gives the value of a source at the bar. A value
+    /// that is missing or not finite becomes empty text, a number is written in the shortest form
+    /// that reads back the same, and a placeholder the alert does not know stays as written.
+    ///
+    /// ```
+    /// use egui_charts::model::{Alert, AlertCondition, Bar, Timeframe};
+    ///
+    /// let mut alert = Alert::new("AAPL", AlertCondition::Above(100.0));
+    /// alert.message = "{{symbol}} closed at {{close}} on {{timeframe}}".into();
+    /// let time = chrono::DateTime::from_timestamp(0, 0).unwrap();
+    /// let bar = Bar::new(time, 99.0, 102.0, 98.0, 101.5, 1000.0);
+    /// assert_eq!(
+    ///     alert.expand_message("AAPL", Timeframe::Min5, &bar, |_| None),
+    ///     "AAPL closed at 101.5 on 5min"
+    /// );
+    /// ```
+    pub fn expand_message(
+        &self,
+        symbol: &str,
+        timeframe: Timeframe,
+        bar: &Bar,
+        value: impl Fn(&AlertSource) -> Option<f64>,
+    ) -> String {
+        let number = |number: Option<f64>| {
+            number
+                .filter(|number| number.is_finite())
+                .map(|number| number.to_string())
+                .unwrap_or_default()
+        };
+        let field = |name: &str| -> Option<String> {
+            Some(match name {
+                "symbol" => symbol.to_owned(),
+                "timeframe" => timeframe.to_string(),
+                "time" => bar.time.to_rfc3339(),
+                "open" => number(Some(bar.open)),
+                "high" => number(Some(bar.high)),
+                "low" => number(Some(bar.low)),
+                "close" => number(Some(bar.close)),
+                "volume" => number(Some(bar.volume)),
+                "value" => number(value(&self.source)),
+                _ => {
+                    let output = name.strip_prefix("output_")?.parse().ok()?;
+                    match &self.source {
+                        AlertSource::Study { id, .. } => number(value(&AlertSource::Study {
+                            id: id.clone(),
+                            output,
+                        })),
+                        _ => String::new(),
+                    }
+                }
+            })
+        };
+        let mut text = String::new();
+        let mut rest = self.message.as_str();
+        while let Some(start) = rest.find("{{")
+            && let Some(length) = rest[start + 2..].find("}}")
+        {
+            let end = start + 2 + length;
+            text.push_str(&rest[..start]);
+            match field(&rest[start + 2..end]) {
+                Some(filled) => text.push_str(&filled),
+                None => text.push_str(&rest[start..end + 2]),
+            }
+            rest = &rest[end + 2..];
+        }
+        text.push_str(rest);
+        text
     }
 }
 
@@ -98,6 +186,22 @@ pub enum AlertCondition {
     },
     /// Previous value was inside the inclusive channel, current value is outside it.
     ExitingChannel {
+        /// Inclusive lower boundary, strictly below `upper`.
+        lower: f64,
+        /// Inclusive upper boundary.
+        upper: f64,
+    },
+    /// The current value is inside the inclusive channel, `lower <= value <= upper`, whatever the
+    /// previous value was.
+    InsideChannel {
+        /// Inclusive lower boundary, strictly below `upper`.
+        lower: f64,
+        /// Inclusive upper boundary.
+        upper: f64,
+    },
+    /// The current value is outside the inclusive channel, below `lower` or above `upper`,
+    /// whatever the previous value was.
+    OutsideChannel {
         /// Inclusive lower boundary, strictly below `upper`.
         lower: f64,
         /// Inclusive upper boundary.
@@ -195,7 +299,10 @@ impl AlertCondition {
             | Self::CrossingDown(v)
             | Self::Above(v)
             | Self::Below(v) => v.is_finite(),
-            Self::EnteringChannel { lower, upper } | Self::ExitingChannel { lower, upper } => {
+            Self::EnteringChannel { lower, upper }
+            | Self::ExitingChannel { lower, upper }
+            | Self::InsideChannel { lower, upper }
+            | Self::OutsideChannel { lower, upper } => {
                 lower.is_finite() && upper.is_finite() && lower < upper
             }
             Self::MovingBy { value, bars } => value.is_finite() && *value != 0.0 && *bars > 0,
@@ -232,6 +339,8 @@ impl std::fmt::Display for AlertCondition {
             Self::Below(v) => write!(f, "Less than {v}"),
             Self::EnteringChannel { lower, upper } => write!(f, "Entering {lower} to {upper}"),
             Self::ExitingChannel { lower, upper } => write!(f, "Exiting {lower} to {upper}"),
+            Self::InsideChannel { lower, upper } => write!(f, "Inside {lower} to {upper}"),
+            Self::OutsideChannel { lower, upper } => write!(f, "Outside {lower} to {upper}"),
             Self::MovingBy { value, bars } => write!(f, "Moving by {value} over {bars} bars"),
             Self::MovingByPercent { percent, bars } => {
                 write!(f, "Moving by {percent}% over {bars} bars")
@@ -263,6 +372,56 @@ impl Alert {
                 .additional_conditions
                 .iter()
                 .all(|rule| rule.source.is_valid() && rule.condition.is_valid())
+            && self
+                .schedule
+                .as_ref()
+                .is_none_or(|schedule| schedule.is_valid())
+    }
+}
+
+/// When an alert's notifications may be delivered: on the selected weekdays, inside the time
+/// windows, both read on the clock of `timezone`, so a daylight-saving change moves the windows
+/// with the local clock.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NotificationSchedule {
+    /// The zone whose weekday and clock decide.
+    pub timezone: TimezoneId,
+    /// Weekdays on which a window starts, at least one.
+    pub days: Vec<Weekday>,
+    /// Delivery windows, at least one.
+    pub windows: Vec<NotificationWindow>,
+}
+
+/// A window of the day, from `start` up to but excluding `end`, in the schedule's zone. A window
+/// whose `end` is before `start` crosses midnight and belongs to the weekday it starts on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationWindow {
+    /// First clock time inside the window.
+    pub start: NaiveTime,
+    /// First clock time after the window; different from `start`.
+    pub end: NaiveTime,
+}
+
+impl NotificationSchedule {
+    /// Whether at least one weekday and one window are selected and no window is empty.
+    pub fn is_valid(&self) -> bool {
+        !self.days.is_empty()
+            && !self.windows.is_empty()
+            && self.windows.iter().all(|w| w.start != w.end)
+    }
+
+    /// Whether a notification raised at `at` may be delivered.
+    pub fn allows(&self, at: DateTime<Utc>) -> bool {
+        let local = at.with_timezone(&self.timezone);
+        let (day, time) = (local.weekday(), local.time());
+        self.windows.iter().any(|w| {
+            if w.start < w.end {
+                self.days.contains(&day) && (w.start..w.end).contains(&time)
+            } else {
+                (self.days.contains(&day) && time >= w.start)
+                    || (self.days.contains(&day.pred()) && time < w.end)
+            }
+        })
     }
 }
 
@@ -280,6 +439,9 @@ pub enum AlertFrequency {
     OncePerBar,
     /// Evaluate only completed bars, at most once per bar.
     OncePerBarClose,
+    /// At most one trigger per clock minute of UTC, identified by the minute's start, whatever the
+    /// chart's interval.
+    OncePerMinute,
 }
 
 impl std::fmt::Display for AlertFrequency {
@@ -289,6 +451,7 @@ impl std::fmt::Display for AlertFrequency {
             Self::EveryTime => "Every time",
             Self::OncePerBar => "Once per bar",
             Self::OncePerBarClose => "Once per bar close",
+            Self::OncePerMinute => "Once per minute",
         })
     }
 }
@@ -340,15 +503,106 @@ mod tests {
     }
 
     #[test]
+    fn messages_fill_placeholders_from_the_evaluated_bar() {
+        let time = DateTime::from_timestamp(1_704_067_200, 0).unwrap();
+        let bar = Bar::new(time, 99.0, 102.5, f64::NAN, 101.5, 1000.0);
+        let study = AlertSource::Study {
+            id: "3".into(),
+            output: 0,
+        };
+        // Output 0 of the study is 70.25 and output 1 is 3; no other output has a value.
+        let value = |source: &AlertSource| match source {
+            AlertSource::Study { id, output: 0 } if id == "3" => Some(70.25),
+            AlertSource::Study { id, output: 1 } if id == "3" => Some(3.0),
+            AlertSource::Price => Some(101.5),
+            _ => None,
+        };
+        for (message, source, expected) in [
+            (
+                "{{symbol}} closed at {{close}}",
+                AlertSource::Price,
+                "AAPL closed at 101.5",
+            ),
+            (
+                "{{timeframe}} {{time}} {{open}} {{high}} [{{low}}] {{volume}}",
+                AlertSource::Price,
+                "5min 2024-01-01T00:00:00+00:00 99 102.5 [] 1000",
+            ),
+            ("{{value}}/{{output_1}}", study.clone(), "70.25/3"),
+            ("{{output_2}}.", study.clone(), "."),
+            ("{{value}}{{output_1}}", AlertSource::Price, "101.5"),
+            (
+                "{{ close }} {{nope}} {{output_x}} {{close",
+                AlertSource::Price,
+                "{{ close }} {{nope}} {{output_x}} {{close",
+            ),
+            ("{{{{close}}}}", AlertSource::Price, "{{{{close}}}}"),
+        ] {
+            let mut alert = Alert::new("AAPL", AlertCondition::Above(100.0));
+            alert.source = source;
+            alert.message = message.into();
+            assert_eq!(
+                alert.expand_message("AAPL", Timeframe::Min5, &bar, value),
+                expected,
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 14] = [
+        let rows: [(Edit, bool); 18] = [
             (|a| a.condition = AlertCondition::Crossing(f64::NAN), false),
             (
                 |a| a.condition = AlertCondition::Above(f64::INFINITY),
                 false,
             ),
             (|a| a.condition = AlertCondition::Below(-12.5), true),
+            (
+                |a| {
+                    a.condition = AlertCondition::InsideChannel {
+                        lower: 1.0,
+                        upper: 2.0,
+                    }
+                },
+                true,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::OutsideChannel {
+                        lower: 2.0,
+                        upper: 2.0,
+                    }
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.schedule = Some(Box::new(NotificationSchedule {
+                        timezone: TimezoneId::utc(),
+                        days: Vec::new(),
+                        windows: vec![NotificationWindow {
+                            start: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                            end: NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+                        }],
+                    }))
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.schedule = Some(Box::new(NotificationSchedule {
+                        timezone: TimezoneId::utc(),
+                        days: vec![Weekday::Mon],
+                        windows: vec![NotificationWindow {
+                            start: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                            end: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                        }],
+                    }))
+                },
+                false,
+            ),
             (
                 |a| {
                     a.condition = AlertCondition::EnteringChannel {
@@ -449,14 +703,45 @@ mod tests {
                 name: String::new(),
                 source: AlertSource::Price,
                 watchlist: None,
+                timeframe: None,
                 additional_conditions: Vec::new(),
                 symbol: "AAPL".into(),
                 condition: AlertCondition::CrossingUp(101.5),
                 frequency: AlertFrequency::Once,
                 expires: None,
+                schedule: None,
                 message: String::new(),
                 status: AlertStatus::Active,
             }
         );
+    }
+
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn a_stored_schedule_round_trips_and_a_window_may_cross_midnight() {
+        let stored = serde_json::json!({
+            "symbol": "AAPL", "condition": {"InsideChannel": {"lower": 1.0, "upper": 2.0}},
+            "frequency": "OncePerMinute",
+            "schedule": {"timezone": "America/New_York", "days": ["Fri"],
+                "windows": [{"start": "22:00:00", "end": "02:00:00"}]}
+        });
+        let alert: Alert = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&alert).unwrap()["schedule"],
+            stored["schedule"]
+        );
+        let schedule = alert.schedule.unwrap();
+        let at = |s: &str| s.parse::<DateTime<Utc>>().unwrap();
+        // Friday 2026-03-06 22:30 EST is 03:30 UTC on Saturday: inside. Saturday 01:59 EST
+        // still belongs to Friday's window; 02:00 does not.
+        assert!(schedule.allows(at("2026-03-07T03:30:00Z")));
+        assert!(schedule.allows(at("2026-03-07T06:59:00Z")));
+        assert!(!schedule.allows(at("2026-03-07T07:00:00Z")));
+        // Thursday 22:30 EST: its weekday is not selected.
+        assert!(!schedule.allows(at("2026-03-06T03:30:00Z")));
+        // After the clocks go forward on Sunday 2026-03-08, Friday 22:30 is 02:30 UTC.
+        assert!(schedule.allows(at("2026-03-14T02:30:00Z")));
+        assert!(schedule.allows(at("2026-03-14T05:59:00Z")));
+        assert!(!schedule.allows(at("2026-03-14T06:00:00Z")));
     }
 }
