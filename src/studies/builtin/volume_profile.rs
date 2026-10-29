@@ -506,11 +506,10 @@ impl ProfileStudy {
         if !(raw.is_finite() && raw > 0.0) {
             return None;
         }
-        let height = match self.tick_size {
-            Some(tick) => tick * nice_ceil((raw / tick).max(1.0))?,
-            None => nice_ceil(raw)?,
-        };
-        (height.is_finite() && height > 0.0).then_some(height)
+        match self.tick_size {
+            Some(tick) => nice_ceil((raw / tick).max(1.0)).map(|ticks| tick * ticks),
+            None => nice_ceil(raw),
+        }
     }
 
     fn profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
@@ -692,10 +691,8 @@ macro_rules! profile_study {
                 self.profile.profiles(visible)
             }
             fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
-                let resolutions = instrument.map_or(&[][..], |i| &i.profile_resolutions[..]);
-                if self.profile.resolutions != resolutions {
-                    self.profile.resolutions = resolutions.to_vec();
-                }
+                self.profile.resolutions =
+                    instrument.map_or_else(Vec::new, |i| i.profile_resolutions.clone());
                 self.profile.tick_size = instrument
                     .and_then(|i| i.tick_size)
                     .filter(|t| t.is_finite() && *t > 0.0);
