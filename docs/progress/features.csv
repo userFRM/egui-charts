@@ -40,7 +40,7 @@ Builder API,Datafeed API,Extended hours,done,host,src/model/instrument.rs;src/da
 Builder API,Datafeed API,HTTP history and streaming adapter,missing,host,
 Builder API,Datafeed API,History paging when scrolling back,done,host,src/widget/frame.rs;src/widget/feed.rs
 Builder API,Datafeed API,History request parameters,done,host,src/data/mod.rs;src/widget/feed.rs
-Builder API,Datafeed API,Host data feed contract,done,host,src/data/mod.rs;src/widget/builder.rs;src/widget/feed.rs
+Builder API,Datafeed API,Host data feed contract,done,host,src/data/mod.rs;src/prelude.rs;src/widget/builder.rs;src/widget/feed.rs
 Builder API,Datafeed API,Interval resampling,done,library,src/data/mod.rs;src/data/resample.rs
 Builder API,Datafeed API,Live bar stream lifecycle,done,host,src/widget/feed.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs
 Builder API,Datafeed API,Paginated symbol search,done,host,src/services/search.rs;src/ui/top_toolbar/components/symbol_search/service.rs;src/ui/top_toolbar/components/symbol_search/mod.rs
