@@ -452,6 +452,7 @@ mod tests {
                 for (width, row_count, row_height, display, va_lines) in [
                     (400.0, 24, 11.5, ProfileDisplay::Total, false),
                     (24.0, 24, 11.5, ProfileDisplay::Total, false),
+                    (24.0, 4, 74.0, ProfileDisplay::UpDown, true),
                     (1200.0, 24, 11.5, ProfileDisplay::Total, false),
                     (400.0, 1000, 0.15, ProfileDisplay::Total, false),
                     (400.0, 4, 74.0, ProfileDisplay::UpDown, false),
@@ -549,6 +550,7 @@ mod tests {
                         }
                     }
                     let mut lines = Vec::new();
+                    let mut labels = 0;
                     for shape in &shapes {
                         match &shape.shape {
                             egui::Shape::LineSegment { points, .. } => lines.push(points.to_vec()),
@@ -561,6 +563,7 @@ mod tests {
                                 assert_ne!(label, "POC");
                                 if ["VAH", "VAL"].contains(&label) {
                                     assert!(va_lines);
+                                    labels += 1;
                                     let away = if price_to_y(15.0) < price_to_y(9.0) {
                                         8.0
                                     } else {
@@ -581,6 +584,9 @@ mod tests {
                         }
                     }
                     assert_eq!(lines.len(), if va_lines { 3 } else { 1 });
+                    // Labels need 50 px between the first anchor and the rows' far edge.
+                    let reach = if anchored { 800.0 - 100.0 } else { width };
+                    assert_eq!(labels, if va_lines && reach >= 50.0 { 2 } else { 0 });
                     assert!(
                         lines
                             .iter()

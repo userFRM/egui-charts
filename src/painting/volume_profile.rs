@@ -68,10 +68,11 @@ pub(crate) fn paint_profile(
         let gap = ((bottom - top) * 0.5).min(1.0);
         let width = (volume / max_volume) as f32 * max_width;
 
+        let in_value_area = (va_low..=va_high).contains(&row);
         // Color coding: POC is bright, Value Area is medium, outside is dim
         let bar_color = if row == poc {
             DESIGN_TOKENS.semantic.extended.favorite_gold
-        } else if (va_low..=va_high).contains(&row) {
+        } else if in_value_area {
             Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 180)
         } else {
             Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 80)
@@ -92,7 +93,6 @@ pub(crate) fn paint_profile(
                 color,
             );
         };
-        let in_value_area = (va_low..=va_high).contains(&row);
         let rgba = |c: [u8; 4]| {
             let alpha = if drawing && !in_value_area {
                 c[3] / 2
