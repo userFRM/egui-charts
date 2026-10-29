@@ -263,8 +263,8 @@ impl LiveFeed {
     }
 
     /// The last regular-hours price with its time and the regular close of the day before, and a
-    /// later trade outside regular hours: pre-market in its extended window before the open,
-    /// post-market otherwise. `None` for symbols without trading hours.
+    /// later trade in an extended window: pre-market before the open, post-market after the close.
+    /// `None` for symbols without trading hours.
     pub(super) fn regular_quote(
         &self,
     ) -> Option<(DateTime<Utc>, f64, f64, Option<ExtendedHoursQuote>)> {
@@ -272,7 +272,6 @@ impl LiveFeed {
         if !DemoSymbol::has_hours(&sim.symbol) {
             return None;
         }
-        let hours = us_equity_hours();
         let latest =
             sim.trades.back().map_or(sim.now, |trade| trade.ts) + TimeDelta::nanoseconds(1);
         let newest = |before, extended| {
@@ -285,32 +284,22 @@ impl LiveFeed {
                 },
             )
         };
-        let newest_first = sim
-            .trades
-            .iter()
-            .rev()
-            .map(|trade| (trade.ts, trade.price))
-            .chain(sim.history.iter().rev().map(|bar| (bar.time, bar.close)));
         let (time, last) = newest(latest, false)?;
         let midnight = time.date_naive().and_hms_opt(0, 0, 0)?.and_utc();
         let (_, prev_close) = newest(midnight, false)?;
-        let extended =
-            newest_first
-                .clone()
-                .next()
-                .filter(|&(t, _)| t > time)
-                .map(|(time, last)| ExtendedHoursQuote {
-                    session: if hours.is_open(time, true)
-                        && time.with_timezone(&us_equity_zone()).time()
-                            < us_equity_session().windows[0].open
-                    {
-                        ExtendedSession::PreMarket
-                    } else {
-                        ExtendedSession::PostMarket
-                    },
-                    last,
-                    time,
-                });
+        let extended = newest(latest, true)
+            .filter(|&(t, _)| t > time)
+            .map(|(time, last)| ExtendedHoursQuote {
+                session: if time.with_timezone(&us_equity_zone()).time()
+                    < us_equity_session().windows[0].open
+                {
+                    ExtendedSession::PreMarket
+                } else {
+                    ExtendedSession::PostMarket
+                },
+                last,
+                time,
+            });
         Some((time, last, prev_close, extended))
     }
 
@@ -1102,6 +1091,88 @@ mod tests {
                     }
                     assert_eq!(bars(false), raw);
                 }
+            }
+        }
+    }
+
+    /// Closed nights and weekends keep the newest extended-session price and its own time.
+    #[test]
+    fn the_extended_quote_is_the_newest_trade_inside_an_extended_window() {
+        for (now, end, session) in [
+            (
+                "2026-10-24T15:00:00Z",
+                "2026-10-24T00:00:00Z",
+                ExtendedSession::PostMarket,
+            ),
+            (
+                "2026-10-27T03:00:00Z",
+                "2026-10-27T00:00:00Z",
+                ExtendedSession::PostMarket,
+            ),
+            (
+                "2026-10-26T12:00:00Z",
+                "2026-10-26T12:00:00Z",
+                ExtendedSession::PreMarket,
+            ),
+            (
+                "2026-03-06T22:00:00Z",
+                "2026-03-06T22:00:00Z",
+                ExtendedSession::PostMarket,
+            ),
+            (
+                "2026-03-08T15:00:00Z",
+                "2026-03-07T01:00:00Z",
+                ExtendedSession::PostMarket,
+            ),
+            (
+                "2026-03-09T12:00:00Z",
+                "2026-03-09T12:00:00Z",
+                ExtendedSession::PreMarket,
+            ),
+            (
+                "2026-10-30T21:00:00Z",
+                "2026-10-30T21:00:00Z",
+                ExtendedSession::PostMarket,
+            ),
+            (
+                "2026-11-01T15:00:00Z",
+                "2026-10-31T00:00:00Z",
+                ExtendedSession::PostMarket,
+            ),
+            (
+                "2026-11-02T13:00:00Z",
+                "2026-11-02T13:00:00Z",
+                ExtendedSession::PreMarket,
+            ),
+        ] {
+            let end = end.parse::<DateTime<Utc>>().unwrap();
+            for symbol in ["AAPL", "SAMPLE"] {
+                let feed = LiveFeed::new(symbol, now.parse().unwrap());
+                for view in [SessionType::RTH, SessionType::ETH, SessionType::Full24x7] {
+                    for adjusted in [false, true] {
+                        feed.set_view(view, adjusted);
+                        let (time, _, _, extended) = feed.regular_quote().unwrap();
+                        let extended = extended.unwrap();
+                        assert!(us_equity_hours().is_open(time, false));
+                        assert_eq!(extended.session, session, "{symbol} at {now}");
+                        assert!(
+                            (end - TimeDelta::minutes(1)..end).contains(&extended.time),
+                            "{symbol} at {now}: {}",
+                            extended.time
+                        );
+                        assert!(extended.time > time);
+                        assert!(us_equity_hours().is_open(extended.time, true));
+                        assert!(!us_equity_hours().is_open(extended.time, false));
+                    }
+                }
+            }
+        }
+        for symbol in ["AAPL", "SAMPLE", "SPX", "BTCUSD", "ETHUSD"] {
+            let feed = LiveFeed::new(symbol, "2026-10-26T15:00:00Z".parse().unwrap());
+            if matches!(symbol, "AAPL" | "SAMPLE") {
+                assert!(feed.regular_quote().unwrap().3.is_none());
+            } else {
+                assert!(feed.regular_quote().is_none());
             }
         }
     }
