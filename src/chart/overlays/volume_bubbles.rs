@@ -393,21 +393,23 @@ impl VolumeBubbles {
         x: impl Fn(usize) -> f32,
         price_to_y: impl Fn(f64) -> f32,
     ) {
-        let (Some(first), Some(last)) = (bars.first(), bars.last()) else {
+        if bars.is_empty() {
             return;
-        };
+        }
         let slot = self.clock.timeframe().map_or(0, |t| t.duration_ms());
-        let open_of = |i: usize| self.clock.bar_open(bars[i].time);
+        // The clock walks a calendar for each call, so each bar's open is asked once.
+        let opens: Vec<_> = bars.iter().map(|bar| self.clock.bar_open(bar.time)).collect();
+        let open_of = |i: usize| opens[i];
         let slot_of = |i: usize| match bars.get(i + 1) {
             Some(_) if slot > 0 => slot.min((open_of(i + 1) - open_of(i)).num_milliseconds()),
             Some(_) => (open_of(i + 1) - open_of(i)).num_milliseconds(),
             None => slot,
         };
-        let end = self.clock.bar_open(last.time) + TimeDelta::milliseconds(slot_of(bars.len() - 1));
+        let end = opens[opens.len() - 1] + TimeDelta::milliseconds(slot_of(bars.len() - 1));
         let min_size = self.config.min_size_filter.unwrap_or(f64::NEG_INFINITY);
         let mut shown: Vec<(f32, f32, Bubble)> = Vec::new();
-        for bubble in self.between(self.clock.bar_open(first.time), end) {
-            let i = bars.partition_point(|bar| self.clock.bar_open(bar.time) <= bubble.at);
+        for bubble in self.between(opens[0], end) {
+            let i = opens.partition_point(|open| *open <= bubble.at);
             let Some(i) = i.checked_sub(1) else { continue };
             let elapsed = (bubble.at - open_of(i)).num_milliseconds();
             let (x, merges) = match self.config.grouping {
