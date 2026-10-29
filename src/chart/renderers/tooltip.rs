@@ -216,11 +216,18 @@ pub fn render_floating_tooltip(
         .into_iter()
         .map(|(label, value)| (label.to_owned(), value, value_color))
         .collect();
-    rows.extend(
-        studies
-            .iter()
-            .map(|study| (study.label(), study.formatted_value(), study.color)),
-    );
+    rows.extend(studies.iter().map(|study| {
+        (
+            study.label(),
+            study.formatted_value(),
+            // A fully transparent colour holds no RGB, so it has no opaque form.
+            if study.color.a() == 0 {
+                options.text_color
+            } else {
+                study.color.to_opaque()
+            },
+        )
+    }));
 
     if rows.is_empty() {
         return;
@@ -332,16 +339,20 @@ pub fn render_floating_tooltip(
         if y + label.size().y.max(value.size().y) > tooltip_rect.bottom() - padding {
             break;
         }
-        painter.galley(
-            Pos2::new(tooltip_rect.min.x + padding, y),
-            label,
-            options.text_color,
-        );
-        painter.galley(
-            Pos2::new(values_right - value.size().x, y),
-            value,
-            options.text_color,
-        );
+        if !label.text().is_empty() {
+            painter.galley(
+                Pos2::new(tooltip_rect.min.x + padding, y),
+                label,
+                options.text_color,
+            );
+        }
+        if !value.text().is_empty() {
+            painter.galley(
+                Pos2::new(values_right - value.size().x, y),
+                value,
+                options.text_color,
+            );
+        }
     }
 }
 
@@ -440,17 +451,24 @@ pub fn render_tracking_tooltip(
         let text_y = bar_rect.center().y;
 
         // Draw main text
-        let main_rect = painter.text(
-            Pos2::new(bar_rect.min.x + 10.0, text_y),
-            egui::Align2::LEFT_CENTER,
-            &main_text,
-            font_id.clone(),
-            options.text_color,
-        );
+        let main_right = if main_text.is_empty() {
+            bar_rect.min.x + 10.0
+        } else {
+            painter
+                .text(
+                    Pos2::new(bar_rect.min.x + 10.0, text_y),
+                    egui::Align2::LEFT_CENTER,
+                    &main_text,
+                    font_id.clone(),
+                    options.text_color,
+                )
+                .max
+                .x
+        };
 
         // Draw change text with color
         painter.text(
-            Pos2::new(main_rect.max.x + 15.0, text_y),
+            Pos2::new(main_right + 15.0, text_y),
             egui::Align2::LEFT_CENTER,
             &change_text,
             font_id,
@@ -462,6 +480,9 @@ pub fn render_tracking_tooltip(
 
     // If no change display, just show combined text
     let text = parts.join("   ");
+    if text.is_empty() {
+        return;
+    }
     let font_id = FontId::proportional(font_size(options.font_size));
 
     painter.text(
@@ -655,6 +676,153 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     const HOVER: Pos2 = Pos2::new(400.0, 250.0);
+
+    /// Empty titles and optional readouts never submit text with non-finite bounds.
+    #[test]
+    fn chart_readouts_have_finite_shape_bounds() {
+        fn check(shape: &egui::Shape) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(check),
+                egui::Shape::Noop => {}
+                // egui gives invisible control frames no visual bounds.
+                egui::Shape::Rect(rect)
+                    if shape.visual_bounding_rect() == Rect::NOTHING
+                        && rect.fill == egui::Color32::TRANSPARENT
+                        && rect.stroke.is_empty() =>
+                {
+                    assert!(rect.rect.is_finite());
+                }
+                _ => assert!(
+                    shape.visual_bounding_rect().is_finite(),
+                    "non-finite bounds: {shape:?}"
+                ),
+            }
+        }
+
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for symbol in [None, Some("SAMPLE")] {
+                for (mode, change_only) in [
+                    (TooltipMode::Floating, false),
+                    (TooltipMode::Tracking, false),
+                    (TooltipMode::Tracking, true),
+                ] {
+                    let ctx = egui::Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let bars = (0..500)
+                        .map(|i| {
+                            Bar::new(
+                                chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0)
+                                    .unwrap(),
+                                100.0,
+                                110.0,
+                                90.0,
+                                105.0,
+                                1000.0,
+                            )
+                        })
+                        .collect();
+                    let mut chart =
+                        crate::widget::Chart::new(crate::model::BarData::from_bars(bars));
+                    if let Some(symbol) = symbol {
+                        chart.set_symbol(symbol);
+                    }
+                    let mut options = chart.chart_options().clone();
+                    options.tooltip.mode = mode;
+                    if mode == TooltipMode::Tracking {
+                        // The volume study's rows would keep the tracking text from being empty.
+                        chart.config_mut().show_volume = false;
+                        options.tooltip.show_ohlc = false;
+                        options.tooltip.show_time = false;
+                        options.tooltip.show_volume = false;
+                        options.tooltip.show_indicators = false;
+                        options.tooltip.show_change = change_only;
+                    }
+                    chart.set_chart_options(options);
+                    for hover in [None, Some(HOVER)] {
+                        let mut output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(Rect::from_min_size(
+                                    Pos2::ZERO,
+                                    Vec2::new(800.0, 600.0),
+                                )),
+                                events: hover.map_or_else(
+                                    || vec![egui::Event::PointerGone],
+                                    |pos| vec![egui::Event::PointerMoved(pos)],
+                                ),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                chart.show(ui);
+                            },
+                        );
+                        let shapes = std::mem::take(&mut output.shapes);
+                        output.drop_without_applying_deltas();
+                        assert!(shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::Shape::Text(text) if text.galley.text().starts_with("O "))));
+                        if hover.is_some() && mode == TooltipMode::Floating {
+                            assert!(shapes.iter().any(|shape| matches!(&shape.shape,
+                                egui::Shape::Text(text) if text.galley.text() == "Open")));
+                        }
+                        shapes.iter().for_each(|shape| check(&shape.shape));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Readout text keeps the plot's colour while removing its rendering opacity, and a plot
+    /// without any colour falls back to the theme's text colour.
+    #[test]
+    fn study_readouts_paint_translucent_plot_colors_opaque() {
+        let options = TooltipOptions {
+            text_color: egui::Color32::from_rgb(10, 20, 30),
+            ..Default::default()
+        };
+        for (plot, expected) in [
+            (
+                egui::Color32::from_rgba_unmultiplied(255, 0, 0, 0x99),
+                egui::Color32::from_rgb(255, 0, 0),
+            ),
+            (egui::Color32::TRANSPARENT, options.text_color),
+        ] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::dark());
+            let study = StudyValue {
+                formatted: None,
+                study: "Study".into(),
+                plot: "Plot".into(),
+                value: Some(12.5),
+                precision: 2,
+                format: crate::scales::StudyFormat::Fixed(2),
+                color: plot,
+            };
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                render_floating_tooltip(
+                    ui.painter(),
+                    HOVER,
+                    Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
+                    &Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0),
+                    None,
+                    &options,
+                    egui::Color32::GREEN,
+                    &crate::scales::TimeFormatterBuilder::new().build(),
+                    60,
+                    std::slice::from_ref(&study),
+                    None,
+                    ValueFormatters::default(),
+                );
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let color = shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "12.50" => {
+                    Some(text.galley.job.sections[0].format.color)
+                }
+                _ => None,
+            });
+            assert_eq!(color, Some(expected), "plot colour {plot:?}");
+        }
+    }
 
     /// The floating, held and tracking readouts lead with the instrument's symbol, and the
     /// symbol follows a change of instrument.

@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 
 use super::{AccountEvent, Broker, Events};
 use crate::data::{FeedError, Reply};
+use crate::model::rounding_tolerance;
 use crate::model::{
     Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderRequest,
     OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce, TradingRules,
@@ -296,15 +297,13 @@ impl State {
             return Ok(());
         }
         let last = self.last[&request.symbol];
-        let buy = request.side == OrderSide::Buy;
-        let limit_reached = |limit| if buy { last <= limit } else { last >= limit };
-        let stop_reached = |stop| if buy { last >= stop } else { last <= stop };
-        let immediate = match request.order_type {
-            OrderType::Market => true,
-            OrderType::Limit(limit) => limit_reached(limit),
-            OrderType::Stop(stop) => stop_reached(stop),
-            OrderType::StopLimit { stop, limit } => stop_reached(stop) && limit_reached(limit),
-        };
+        let reached =
+            |order_type: OrderType| order_type.fill_price(request.side, last, last).is_some();
+        let immediate = reached(request.order_type)
+            && match request.order_type {
+                OrderType::StopLimit { limit, .. } => reached(OrderType::Limit(limit)),
+                _ => true,
+            };
         if immediate && after.abs() < held.abs() {
             return Ok(());
         }
@@ -371,7 +370,13 @@ impl State {
                 position.average_price = price;
             }
         }
-        position.quantity = held + signed;
+        let remaining = held + signed;
+        position.quantity =
+            if remaining.abs() <= rounding_tolerance(held.abs().max(signed.abs()), 1e-9) {
+                0.0
+            } else {
+                remaining
+            };
         self.value(terms, &mut position);
         if position.quantity != 0.0 {
             self.positions
@@ -424,8 +429,7 @@ impl State {
             {
                 continue;
             }
-            let buy = exit.request.side == OrderSide::Buy;
-            if position.quantity == 0.0 || buy == (position.quantity > 0.0) {
+            if !exit.request.side.reduces(position.quantity) {
                 self.cancel_working(&exit.id);
             } else if exit.request.quantity > position.quantity.abs() {
                 exit.request.quantity = position.quantity.abs();
@@ -516,27 +520,22 @@ impl State {
         let mut index = 0;
         while index < self.working.len() {
             let order = &mut self.working[index];
-            let buy = order.request.side == OrderSide::Buy;
-            let fill = match order.request.order_type {
-                OrderType::Market if order.request.symbol == symbol => Some(price),
-                _ if order.request.symbol != symbol => None,
-                OrderType::Limit(limit) if (buy && price <= limit) || (!buy && price >= limit) => {
-                    Some(price)
-                }
-                OrderType::Stop(stop) if (buy && price >= stop) || (!buy && price <= stop) => {
-                    Some(price)
-                }
-                OrderType::StopLimit { stop, limit }
-                    if (buy && price >= stop) || (!buy && price <= stop) =>
-                {
-                    // Triggered: it works on as a limit order, which may fill at once.
-                    order.request.order_type = OrderType::Limit(limit);
-                    let order = order.clone();
-                    self.push(AccountEvent::Order(order));
-                    continue;
-                }
-                _ => None,
+            let fill = if order.request.symbol == symbol {
+                order
+                    .request
+                    .order_type
+                    .fill_price(order.request.side, price, price)
+            } else {
+                None
             };
+            if let (Some(_), OrderType::StopLimit { limit, .. }) = (fill, order.request.order_type)
+            {
+                // Triggered: it works on as a limit order, which may fill at once.
+                order.request.order_type = OrderType::Limit(limit);
+                let order = order.clone();
+                self.push(AccountEvent::Order(order));
+                continue;
+            }
             if let Some(fill) = fill {
                 let order = self.working.remove(index);
                 let mut request = order.request.clone();
@@ -832,6 +831,34 @@ mod tests {
                 near(account.equity.unwrap(), balance + open);
                 near(account.available_funds.unwrap(), balance + open - margin);
             }
+            // Close the remaining unit, then 0.1 + 0.2 with 0.3 on either side.
+            // One more unit scaled out in ten tenths is also flat: 1 - 10 * 0.1 = 0.
+            for fill in [
+                direction,
+                0.1 * direction,
+                0.2 * direction,
+                -0.3 * direction,
+                direction,
+            ]
+            .into_iter()
+            .chain([-0.1 * direction; 10])
+            {
+                place(
+                    &paper,
+                    OrderRequest::new(
+                        "SYM",
+                        if fill > 0.0 {
+                            OrderSide::Buy
+                        } else {
+                            OrderSide::Sell
+                        },
+                        fill.abs(),
+                        OrderType::Market,
+                    ),
+                )
+                .unwrap();
+            }
+            assert!(!paper.lock().positions.contains_key("SYM"));
             paper.set_price("SYM", 100.0);
             place(
                 &paper,
@@ -859,7 +886,7 @@ mod tests {
                     .iter()
                     .filter(|e| matches!(e, AccountEvent::Execution(_)))
                     .count(),
-                5
+                20
             );
             paper.reset();
             let events = snapshot(&paper);

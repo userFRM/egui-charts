@@ -111,6 +111,22 @@ pub struct StoredDrawing {
     pub modified_at: i64,
     /// User notes
     pub notes: Option<String>,
+    /// The study pane holding the drawing, which a chart resolves to its own pane with the same
+    /// studies, or to the price pane when it has none, since study ids are local to each chart.
+    /// `None` for the price pane, and in records written before it was stored, which keep the
+    /// study id in `drawing.pane`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<StoredPane>,
+}
+
+/// A study pane identified by its studies rather than by a chart's study ids.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoredPane {
+    /// The name of each study in the pane, in legend order, with its input ids and their values
+    /// as serialized [`InputValue`](crate::studies::InputValue)s.
+    pub studies: Vec<(String, Vec<(String, serde_json::Value)>)>,
+    /// The pane's rank, from the top, among the chart's panes holding the same studies.
+    pub rank: usize,
 }
 
 impl StoredDrawing {
@@ -124,6 +140,7 @@ impl StoredDrawing {
             created_at: now,
             modified_at: now,
             notes: None,
+            pane: None,
         }
     }
 
@@ -701,6 +718,7 @@ mod v1 {
             created_at: stored.created_at,
             modified_at: stored.modified_at,
             notes: stored.notes,
+            pane: None,
         })
     }
 }

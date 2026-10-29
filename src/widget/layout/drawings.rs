@@ -1,7 +1,6 @@
 //! Propagate drawing changes without consuming the host's persistence queue.
 
 use crate::drawings::{ChartPoint, Drawing};
-use crate::model::{index_at, time_at};
 use crate::widget::{Chart, PaneId};
 use std::collections::{HashMap, HashSet};
 
@@ -160,15 +159,8 @@ fn map_drawing(drawing: &Drawing, source: &Chart, target: &Chart) -> Option<Draw
         .chart_points
         .iter()
         .map(|point| {
-            let time = point
-                .time_anchor
-                .filter(|(_, index)| *index == point.bar_idx)
-                .map(|(time, _)| time)
-                .or_else(|| time_at(source.state.shown(), point.bar_idx as f64))?;
-            let index = index_at(target.state.shown(), time)? as f32;
-            let mut point = ChartPoint::new(index, point.price);
-            point.time_anchor = Some((time, index));
-            Some(point)
+            let time = source.drawing_point_time(point)?;
+            target.drawing_point_at(time, point.price)
         })
         .collect::<Option<_>>()?;
     copy.points.clear();

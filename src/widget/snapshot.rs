@@ -382,8 +382,9 @@ impl Chart {
         self.apply_synced_time_scale(snapshot.bar_spacing, snapshot.right_offset);
         let skipped = match drawings {
             Some(json) => {
-                let skipped = self.load_drawings(&json).map_err(|e| e.to_string())?;
-                self.remap_drawing_panes();
+                let skipped = self
+                    .load_drawings_remapped(&json, true)
+                    .map_err(|e| e.to_string())?;
                 self.history.drawing_edits += 1;
                 self.save_restored_drawings();
                 skipped
