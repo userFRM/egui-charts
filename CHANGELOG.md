@@ -159,7 +159,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - `Primitive::draw_merged` receives the chart's physical-pixel merge factor and `PrimitiveView::point_groups` supplies aligned source ranges for custom aggregation, with no groups for empty views; existing renderers keep their `draw` behavior. Hovered added series and mixed study/series panes follow `hovered_series_on_top` with timestamp-aware hit testing and visual ordering. Cached merge groups also supply exact visible price ranges without scanning every bar each frame. The demo saves encoded PNG bytes directly, with optional crosshair inclusion. ([#834](https://github.com/userFRM/egui-charts/issues/834))
 
-- `Chart::set_volume_formatter` formats volume readouts, widget-only volume axis tags and volume-formatted studies; `set_series_formatter` overrides one bar series' raw prices while relative scales keep the percentage formatter. Chart price and percentage hooks also reach OHLC legends and tooltips, and image exports retain the hooks. `Indicator::set_value_formatter` lets configured studies retain host formatting. Migration: `Legend` literals add `formatters: ValueFormatters::default()` or use `Legend::new`; `StudyValue` literals add `formatted: None`; `render_tooltip_with_options` takes `ValueFormatters::default()` as its final argument for the existing formatting. Hosts supply numeric separators and currency conventions through their formatters. ([#203](https://github.com/userFRM/egui-charts/issues/203))
+- `Chart::set_volume_formatter` formats volume readouts, widget-only volume axis tags and volume-formatted studies; `set_series_formatter` overrides one bar series' raw prices while relative scales keep the percentage formatter. Chart price and percentage hooks also reach OHLC legends and tooltips, and image exports retain the hooks. `Indicator::set_value_formatter` lets configured studies retain host formatting. Migration: use `Legend::new`; `StudyValue` literals add `formatted: None`. Hosts supply numeric separators and currency conventions through their formatters. ([#203](https://github.com/userFRM/egui-charts/issues/203))
 
 - Pointer events include hidden added series and their payloads. Unchanged whitespace slots emit no repeated move events, while changes to their host payloads remain observable. `Chart::set_pointer_kind` lets host input integrations identify pens, which egui does not distinguish from touch. `None` restores automatic mouse/touch detection. The demo API samples render a host legend and its tooltip from the saved event alone. ([#829](https://github.com/userFRM/egui-charts/issues/829))
 
@@ -453,6 +453,8 @@ All notable changes to this project are documented in this file. The format is b
 - `ToolbarState::lock_all` and `ToolbarState::hide_drawings`, `hide_indicators`, `hide_positions` and `hide_orders` hold what the Lock button and the Hide menu show: the lock button is filled with a closed padlock while `lock_all` is set, and the Hide menu checks each hidden group. The bar sets them from the clicks it reports; a host that changes the chart's state elsewhere sets them too. Migration: struct literals of `ToolbarState` set the five fields or use `..ToolbarState::default()`.
 
 ### Fixed
+
+- `widget::ValueFormatters` is publicly exported so hosts can name, store and pass the formatters used by `Legend`. Public signatures are checked by the `unnameable_types` lint. ([#1310](https://github.com/userFRM/egui-charts/issues/1310))
 
 - `PaperAccount::new` documents its panic when `balance` is NaN or infinite under a Panics heading. ([#1318](https://github.com/userFRM/egui-charts/issues/1318))
 
@@ -852,7 +854,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - Floating and tracking tooltip times use the same chart-zone formatter as the crosshair, including daylight-saving changes. Exchange display mode reads the instrument zone when supplied. `Chart::format_time` gives host readouts the same format and source-bar precision on every chart type, and the demo Data Window uses it. Floating readouts paint above the legend so their time row remains visible.
 
-- Migration for standalone renderers: pass the chart-zone `TimeFormatter` and the bar duration in seconds as the final two arguments to `render_tooltip_with_options`. Pass `ticks_visible` before `slot` to `render_time_labels`; `false` preserves the previous tick-free axis.
+- Migration for standalone renderers: pass `ticks_visible` before `slot` to `render_time_labels`; `false` preserves the previous tick-free axis.
 
 - Applying the demo's time-zone setting updates chart readouts and the bottom clock without resetting pan or zoom. Reopening settings retains the zone selected from either control.
 
@@ -1368,6 +1370,8 @@ All notable changes to this project are documented in this file. The format is b
 - `MagnetButton::show`, `HideMenu::show` and `RemoveMenu::show` return the button's `Response`, where they returned tuples of flags and a rect. `MagnetButton::show_submenu(ui, magnet_on, magnet_type)`, `HideMenu::show_submenu(ui, trading, state)`, `RemoveMenu::show_submenu(ui)` and `TemplatesButton::show_submenu(ui, templates)` draw into the `Ui` they are given. `components::render_svg_at_rect_themed` no longer moves the layout cursor.
 
 ### Removed
+
+- Removed `model::Annotation` and `model::MarkerType`, which nothing drew, with the private `AnnotationPos` type. Migration: use `Marker`. ([#1310](https://github.com/userFRM/egui-charts/issues/1310))
 
 - The loose ALMA smoothness check, drawing-tool inventory pins, a duplicate tracking default check and an enum-distinctness tautology. ([#258](https://github.com/userFRM/egui-charts/issues/258))
 - `model::QuoteSource` and `QuoteSourceError`, a polled quote source nothing consumed, `ui::widget_bar::WatchlistQuote` and `ui::symbol_header::QuoteData`. Migration: implement `services::Quotes` and attach it with `WatchlistPanel::set_service`, and use `model::Quote` in place of the two quote types. ([#222](https://github.com/userFRM/egui-charts/issues/222))

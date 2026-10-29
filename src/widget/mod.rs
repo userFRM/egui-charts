@@ -51,7 +51,8 @@ use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
 mod indicator_pane;
 pub use crate::chart::renderers::{
-    Legend, LegendStatus, QuoteSide, StudyAction, StudyValue, Watermark, WatermarkLine,
+    Legend, LegendStatus, QuoteSide, StudyAction, StudyValue, ValueFormatters, Watermark,
+    WatermarkLine,
 };
 pub use crate::chart::selection::{ChartElementId, SeriesId};
 pub use builder::ChartBuilder;
