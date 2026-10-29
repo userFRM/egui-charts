@@ -46,7 +46,7 @@ Builder API,Datafeed API,Live bar stream lifecycle,done,host,src/widget/feed.rs;
 Builder API,Datafeed API,Paginated symbol search,done,host,src/services/search.rs;src/ui/top_toolbar/components/symbol_search/service.rs;src/ui/top_toolbar/components/symbol_search.rs
 Builder API,Datafeed API,Per-symbol resolution capabilities,done,host,src/model/instrument.rs;src/widget/feed.rs;src/ui/top_toolbar/components/timeframe_selector.rs
 Builder API,Datafeed API,Price precision from symbol metadata,done,host,src/model/instrument.rs;src/scales/price_formatter.rs;src/widget/feed.rs;src/widget/frame.rs;src/ui/trading/mod.rs
-Builder API,Datafeed API,Quotes for watchlist and details,done,host,src/services/quotes.rs;src/ui/widget_bar/panels/watchlist.rs;src/ui/trading/mod.rs
+Builder API,Datafeed API,Quotes for watchlist and details,done,host,src/services/quotes.rs;src/ui/widget_bar/panels/watchlist.rs;src/ui/trading/mod.rs;examples/demo/live.rs
 Builder API,Datafeed API,Realtime bar updates,done,host,src/data/inbox.rs;src/widget/feed.rs;src/data/merge.rs;src/widget/series.rs
 Builder API,Datafeed API,Resolve symbol to symbol metadata,done,host,src/data/mod.rs;src/model/instrument.rs;src/widget/feed.rs
 Builder API,Datafeed API,Server time,done,host,src/data/inbox.rs;src/widget/feed.rs;src/widget/mod.rs;src/widget/frame.rs

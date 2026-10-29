@@ -174,9 +174,44 @@ pub fn us_equity_zone() -> egui_charts::model::TimezoneId {
     egui_charts::model::TimezoneId::named("America/New_York").expect("America/New_York is known")
 }
 
-/// The hours of [`us_equity_session`] in [`us_equity_zone`].
-pub fn us_equity_hours() -> egui_charts::model::ExchangeSessionProvider {
-    egui_charts::model::ExchangeSessionProvider::new(us_equity_zone(), Some(us_equity_session()))
+/// The hours of [`us_equity_session`] in [`us_equity_zone`], built once.
+pub fn us_equity_hours() -> &'static egui_charts::model::ExchangeSessionProvider {
+    static HOURS: std::sync::OnceLock<egui_charts::model::ExchangeSessionProvider> =
+        std::sync::OnceLock::new();
+    HOURS.get_or_init(|| {
+        egui_charts::model::ExchangeSessionProvider::new(
+            us_equity_zone(),
+            Some(us_equity_session()),
+        )
+    })
+}
+
+/// The latest open stretch before `time` ends here. Closed nights and weekends are skipped
+/// by local calendar arithmetic, so quote lookups can start at this bound.
+pub fn latest_open_end(time: DateTime<Utc>, extended_hours: bool) -> DateTime<Utc> {
+    use chrono::{Datelike, Duration, NaiveTime, TimeZone};
+    let previous = time - Duration::nanoseconds(1);
+    if us_equity_hours().is_open(previous, extended_hours) {
+        return time;
+    }
+    let zone = us_equity_zone();
+    let local = previous.with_timezone(&zone);
+    let open = if extended_hours { (4, 0) } else { (9, 30) };
+    let open = NaiveTime::from_hms_opt(open.0, open.1, 0).unwrap();
+    let mut day = local.date_naive();
+    if local.time() < open {
+        day -= Duration::days(1);
+    }
+    while day.weekday().num_days_from_monday() >= 5 {
+        day -= Duration::days(1);
+    }
+    let close = day
+        .and_hms_opt(if extended_hours { 20 } else { 16 }, 0, 0)
+        .unwrap();
+    zone.from_local_datetime(&close)
+        .single()
+        .expect("the session close exists")
+        .to_utc()
 }
 
 /// An ex-dividend instant inside the live history: one to three trading days before the clock,
@@ -440,6 +475,67 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn quote_bounds_skip_closed_time_across_dst() {
+        for (time, regular, extended) in [
+            (
+                "2026-03-09T08:00:00Z",
+                "2026-03-06T21:00:00Z",
+                "2026-03-07T01:00:00Z",
+            ),
+            (
+                "2026-03-09T13:30:00Z",
+                "2026-03-06T21:00:00Z",
+                "2026-03-09T13:30:00Z",
+            ),
+            (
+                "2026-03-09T20:00:00Z",
+                "2026-03-09T20:00:00Z",
+                "2026-03-09T20:00:00Z",
+            ),
+            (
+                "2026-03-10T00:00:00Z",
+                "2026-03-09T20:00:00Z",
+                "2026-03-10T00:00:00Z",
+            ),
+            (
+                "2026-11-02T09:00:00Z",
+                "2026-10-30T20:00:00Z",
+                "2026-10-31T00:00:00Z",
+            ),
+            (
+                "2026-11-02T14:30:00Z",
+                "2026-10-30T20:00:00Z",
+                "2026-11-02T14:30:00Z",
+            ),
+            (
+                "2026-11-02T21:00:00Z",
+                "2026-11-02T21:00:00Z",
+                "2026-11-02T21:00:00Z",
+            ),
+            (
+                "2026-11-03T03:00:00Z",
+                "2026-11-02T21:00:00Z",
+                "2026-11-03T01:00:00Z",
+            ),
+            (
+                "2026-10-24T15:00:00Z",
+                "2026-10-23T20:00:00Z",
+                "2026-10-24T00:00:00Z",
+            ),
+        ] {
+            let time = time.parse().unwrap();
+            assert_eq!(
+                latest_open_end(time, false),
+                regular.parse::<DateTime<Utc>>().unwrap()
+            );
+            assert_eq!(
+                latest_open_end(time, true),
+                extended.parse::<DateTime<Utc>>().unwrap()
+            );
         }
     }
 }
