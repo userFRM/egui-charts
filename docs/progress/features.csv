@@ -345,7 +345,7 @@ Drawings,Drawings,Pin,done,library,src/drawings/rendering/annotations/notes.rs;s
 Drawings,Drawings,Pitchfan,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Pitchfork,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Polyline,done,library,src/drawings/rendering/lines.rs;src/drawings/manager/mod.rs;src/widget/tool_interaction/interaction.rs;src/drawings/manager/edit.rs
-Drawings,Drawings,Position forecast,done,library,src/drawings/rendering/trading/forecast.rs
+Drawings,Drawings,Position forecast,done,library,src/drawings/rendering/trading/forecast.rs;src/drawings/rendering/measurements.rs;src/drawings/rendering/trading/projection.rs
 Drawings,Drawings,Price label,done,library,src/drawings/rendering/annotations/labels.rs
 Drawings,Drawings,Price note,done,library,src/drawings/rendering/annotations/labels.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Price range,done,library,src/drawings/rendering/measurements.rs

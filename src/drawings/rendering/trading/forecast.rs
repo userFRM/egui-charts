@@ -1,11 +1,15 @@
 //! Forecast tool rendering
 
 use crate::drawings::domain::{ChartPoint, Drawing};
+use crate::drawings::rendering::measurements::{boxed_label, elapsed_ms, format_duration};
 use crate::drawings::rendering::{ChartView, bars_between};
 use crate::model::{Bar, percent_change};
-use crate::styles::typography;
+use crate::scales::{
+    DefaultPriceFormatter, PriceFormatter, instrument_price_precision, price_decimals,
+};
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Stroke};
+use egui::{Align2, Pos2};
 
 impl Drawing {
     /// Renders a forecast from the start anchor to the target anchor, with the
@@ -17,58 +21,92 @@ impl Drawing {
             return;
         };
 
-        // Trend line
-        painter.line_segment([start, end], Stroke::new(self.stroke_width, self.color32()));
+        self.draw_projection_main_line(painter, start, end, self.color32());
 
-        let price_change = to.price - from.price;
-        let price_change_pct = percent_change(from.price, to.price);
-        let bar_count = (to.bar_idx - from.bar_idx).round();
-
-        let (status, status_color) = match forecast_outcome(view.bars, from, to) {
-            Some(true) => ("SUCCESS", DESIGN_TOKENS.semantic.extended.bullish),
-            Some(false) => ("FAILED", DESIGN_TOKENS.semantic.extended.bearish),
-            None => (
-                "PENDING",
-                DESIGN_TOKENS.semantic.extended.chart_text_secondary,
-            ),
+        let chart = painter.ctx().active_theme().chart;
+        let precision = view
+            .instrument
+            .and_then(instrument_price_precision)
+            .map_or_else(|| price_decimals(from.price), usize::from);
+        let formatter = DefaultPriceFormatter::with_precision(precision);
+        let anchor_label = |point: ChartPoint| {
+            let mut text = formatter.format(point.price);
+            if view.time_axis {
+                let time = elapsed_ms(view.bars, 0.0, point.bar_idx)
+                    .and_then(|ms| view.bars.first()?.time.timestamp_millis().checked_add(ms))
+                    .and_then(chrono::DateTime::from_timestamp_millis);
+                if let Some(time) = time {
+                    text.push_str(&format!("\n{}", time.format("%Y-%m-%d %H:%M")));
+                }
+            }
+            text
         };
-
-        // Info box above an upward target, below a downward one
-        let box_size = egui::vec2(220.0, 50.0);
-        let top = if price_change >= 0.0 {
-            end.y - DESIGN_TOKENS.spacing.md - box_size.y
+        let change = to.price - from.price;
+        let change_text = formatter.format(change);
+        let sign = if change_text.starts_with('-') {
+            ""
         } else {
-            end.y + DESIGN_TOKENS.spacing.md
+            "+"
         };
-        let box_rect = Rect::from_min_size(Pos2::new(end.x - box_size.x / 2.0, top), box_size);
-        if !painter.clip_rect().intersects(box_rect) {
-            return;
+        let mut target = format!(
+            "{sign}{change_text} ({:+.2}%)",
+            percent_change(from.price, to.price)
+        );
+        if let Some(ms) = elapsed_ms(view.bars, from.bar_idx, to.bar_idx).filter(|_| view.time_axis)
+        {
+            target.push_str(&format!(" in {}", format_duration(ms)));
         }
+        target.push_str(&format!("\n{}", anchor_label(to)));
 
-        // Status header bar
-        let header_rect = Rect::from_min_size(box_rect.min, egui::vec2(box_size.x, 25.0));
-        painter.rect_filled(header_rect, DESIGN_TOKENS.rounding.md, status_color);
-        painter.text(
-            header_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            status,
-            egui::FontId::proportional(typography::MD),
-            Color32::WHITE,
+        let up = change >= 0.0;
+        let gap = DESIGN_TOKENS.spacing.md;
+        boxed_label(
+            painter,
+            if up {
+                Align2::CENTER_TOP
+            } else {
+                Align2::CENTER_BOTTOM
+            },
+            start + egui::vec2(0.0, if up { gap } else { -gap }),
+            anchor_label(from),
+            chart.axis_text,
+            chart.bg_axis,
         );
-
-        // White info section
-        let info_rect =
-            Rect::from_min_max(Pos2::new(box_rect.min.x, header_rect.max.y), box_rect.max);
-        painter.rect_filled(info_rect, DESIGN_TOKENS.rounding.md, Color32::WHITE);
-
-        // Price change and duration (dark text on white)
-        painter.text(
-            info_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            format!("{price_change:+.2} ({price_change_pct:+.2}%) in {bar_count} bars"),
-            egui::FontId::proportional(typography::LG),
-            DESIGN_TOKENS.semantic.chart.bg, // Dark chart background color for contrast
+        let outcome = forecast_outcome(view.bars, from, to).map(|success| {
+            if success {
+                ("SUCCESS", chart.candle_up)
+            } else {
+                ("FAILED", chart.candle_down)
+            }
+        });
+        let badge = |align, pos, status: &str, color| {
+            boxed_label(painter, align, pos, status.to_owned(), color, chart.bg_axis)
+        };
+        let mut target_pos = end + egui::vec2(0.0, if up { -gap } else { gap });
+        if up && let Some((status, color)) = outcome {
+            let rect = badge(Align2::CENTER_BOTTOM, target_pos, status, color);
+            target_pos.y = rect.top() - DESIGN_TOKENS.spacing.xs;
+        }
+        let rect = boxed_label(
+            painter,
+            if up {
+                Align2::CENTER_BOTTOM
+            } else {
+                Align2::CENTER_TOP
+            },
+            target_pos,
+            target,
+            chart.axis_text,
+            chart.bg_axis,
         );
+        if !up && let Some((status, color)) = outcome {
+            badge(
+                Align2::CENTER_TOP,
+                Pos2::new(end.x, rect.bottom() + DESIGN_TOKENS.spacing.xs),
+                status,
+                color,
+            );
+        }
     }
 }
 
@@ -101,6 +139,175 @@ fn forecast_outcome(bars: &[Bar], from: ChartPoint, to: ChartPoint) -> Option<bo
 mod tests {
     use super::*;
     use crate::drawings::rendering::sample_bars;
+
+    #[test]
+    fn forecast_cards_show_prices_dates_direction_and_only_decided_outcomes() {
+        use crate::drawings::DrawingToolType;
+        use crate::model::Instrument;
+        use crate::theme::{Theme, apply_to_egui};
+        use egui::{Pos2, Rect, Shape};
+
+        for theme in [Theme::light(), Theme::dark()] {
+            for (target_bar, target_price, reached, time_axis, target, badge) in [
+                (
+                    9.0,
+                    1.10055,
+                    false,
+                    true,
+                    "+0.00055 (+0.05%) in 57d\n1.10055\n1970-02-27 00:00",
+                    None,
+                ),
+                (
+                    3.0,
+                    1.10055,
+                    true,
+                    true,
+                    "+0.00055 (+0.05%) in 3d\n1.10055\n1970-01-04 00:00",
+                    Some("SUCCESS"),
+                ),
+                (
+                    3.0,
+                    1.09945,
+                    false,
+                    true,
+                    "-0.00055 (-0.05%) in 3d\n1.09945\n1970-01-04 00:00",
+                    Some("FAILED"),
+                ),
+                (
+                    9.0,
+                    1.10055,
+                    false,
+                    false,
+                    "+0.00055 (+0.05%)\n1.10055",
+                    None,
+                ),
+                (
+                    9.0,
+                    1000000.12345,
+                    false,
+                    true,
+                    "+999999.02345 (+90909002.13%) in 57d\n1000000.12345\n1970-02-27 00:00",
+                    None,
+                ),
+            ] {
+                let mut bars = sample_bars();
+                for (i, bar) in bars.iter_mut().enumerate() {
+                    bar.time = chrono::DateTime::from_timestamp(i as i64 * 86_400, 0).unwrap();
+                    bar.open = 1.1;
+                    bar.close = 1.1;
+                    bar.low = 1.1;
+                    bar.high = 1.1002;
+                }
+                // A gap at the edge must not turn each future bar into another 49 days.
+                bars[6].time = chrono::DateTime::from_timestamp(54 * 86_400, 0).unwrap();
+                if reached {
+                    bars[2].high = 1.1006;
+                }
+                let instrument = Instrument::new("PAIR").with_tick_size(0.00001);
+                let mut drawing = Drawing::new(1, DrawingToolType::Forecast);
+                drawing.chart_points = vec![
+                    ChartPoint::new(0.0, 1.1),
+                    ChartPoint::new(target_bar, target_price),
+                ];
+                drawing.points = vec![
+                    Pos2::new(200.0, 300.0),
+                    Pos2::new(600.0, if target_price >= 1.1 { 200.0 } else { 400.0 }),
+                ];
+                let ctx = egui::Context::default();
+                apply_to_egui(&ctx, &theme);
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    drawing.render_forecast(
+                        ui.painter(),
+                        &ChartView {
+                            instrument: Some(&instrument),
+                            bars: &bars,
+                            revision: 0,
+                            bar_to_x: &|b| b,
+                            price_to_y: &|p| p as f32,
+                            time_axis,
+                            executions: None,
+                        },
+                    );
+                });
+                output.textures_delta.clear();
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::Text(t) => Some(t),
+                        _ => None,
+                    })
+                    .collect();
+                let rects: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::Rect(r) => Some(r),
+                        _ => None,
+                    })
+                    .collect();
+                let label = |text: &str| {
+                    texts
+                        .iter()
+                        .find(|t| t.galley.job.text == text)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "missing {text:?}: {:?}",
+                                texts.iter().map(|t| &t.galley.job.text).collect::<Vec<_>>()
+                            )
+                        })
+                };
+                let source = if time_axis {
+                    "1.10000\n1970-01-01 00:00"
+                } else {
+                    "1.10000"
+                };
+                label(source);
+                // 0.00055 / 1.1 * 100 = 0.05%; bar 9 is day 54 + 3 = 57.
+                let target_text = label(target);
+                assert_eq!(texts.len(), 2 + usize::from(badge.is_some()));
+                assert_eq!(rects.len(), texts.len());
+                for text in &texts {
+                    let bounds = Rect::from_min_size(text.pos, text.galley.size());
+                    assert!(
+                        rects.iter().any(|r| r.rect.contains_rect(bounds)),
+                        "card must contain its text"
+                    );
+                }
+                for text in [label(source), target_text] {
+                    assert_eq!(
+                        text.galley.job.sections[0].format.color,
+                        theme.chart.axis_text
+                    );
+                    assert!(
+                        rects
+                            .iter()
+                            .any(|r| r.fill == theme.chart.bg_axis && r.rect.contains(text.pos))
+                    );
+                }
+                if let Some(badge) = badge {
+                    assert!(label(badge).pos.y > target_text.pos.y + target_text.galley.size().y);
+                }
+                let lines: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match s.shape {
+                        Shape::LineSegment { points, .. } => Some(points),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(lines.len(), 3, "line and two arrowhead wings");
+                let end = drawing.points[1];
+                let direction = (end - drawing.points[0]).normalized();
+                for wing in &lines[1..] {
+                    assert_eq!(wing[0], end);
+                    assert!((wing[1].distance(end) - 12.0).abs() < 0.001);
+                    assert!((wing[1] - end).dot(direction) < 0.0);
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
 
     /// Expected verdicts read off the sample bars by hand.
     #[test]
