@@ -85,13 +85,13 @@ The heatmap shows a new column for every 50 ms period in which the host sent an 
 visible cadence is that of the feed, up to 20 columns a second. `cargo bench --bench heatmap`
 measures it: 400 depth deltas a second, each changing 8 levels near the touch, into a book of
 1,000 levels a side, in a 1440 by 900 window showing the last three one-minute bars, on an Intel
-Core i7-10700KF (16 threads, release build, 60 s of market time, measured 2026-10-29):
+Core i7-10700KF (16 threads, release build, 60 s of market time):
 
 | Scenario | Sink per delta | Frame p50 / p95 / max | Texture upload | Textures | Heap retained |
 |---|---:|---:|---:|---:|---:|
-| 100 levels, 1 s columns (defaults) | 0.9 µs | 0.4 / 0.5 / 1.2 ms | 11 KB/s | 0.8 MB | 0.6 MB |
-| 1,000 levels, 50 ms columns | 2.2 µs | 1.1 / 1.9 / 3.2 ms | 394 KB/s | 7.3 MB | 20 MB |
-| the same, history filled to every resolution | 2.1 µs | 1.9 / 2.8 / 12.7 ms | 367 KB/s | 16.8 MB | 56 MB |
+| 100 levels, 1 s columns (defaults) | 0.4 µs | 0.3 / 0.4 / 1.6 ms | 11 KB/s | 0.8 MB | 0.6 MB |
+| 1,000 levels, 50 ms columns | 1.8 µs | 1.0 / 2.2 / 3.5 ms | 394 KB/s | 7.3 MB | 20 MB |
+| the same, history filled to every resolution | 2.2 µs | 2.1 / 3.9 / 5.8 ms | 367 KB/s | 16.8 MB | 56 MB |
 
 Depth deltas sort their changes and merge only the touched suffix of each side, reusing buffers.
 Small updates near the touch do not copy the whole book and allocate nothing once those buffers
@@ -104,8 +104,8 @@ most 74 KB once the history is full, and the first frame that draws a loaded his
 of it (2.4 MB here). A filled history holds 1,687 columns covering 50 minutes, bounded by
 `columns * 8 * rows * 2 * 16` bytes, 61 MB for this configuration.
 
-The supported budget is this configuration on a machine of that class: a 95th-percentile frame
-under 5 ms and under 60 MB of heap for 1,000 levels at 50 ms. The library degrades by dropping resolution, never
+The supported budget is this configuration on a machine of that class: a frame under 5 ms and
+under 60 MB of heap for 1,000 levels at 50 ms. The library degrades by dropping resolution, never
 by skipping updates silently:
 
 - Updates faster than the cadence coalesce. A column holds the book as it stood at the end of
