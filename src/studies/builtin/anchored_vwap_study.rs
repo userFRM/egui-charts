@@ -27,11 +27,6 @@ impl AnchoredVWAP {
             visible: true,
         }
     }
-
-    #[inline]
-    fn typical_price(bar: &Bar) -> f64 {
-        (bar.high + bar.low + bar.close) / 3.0
-    }
 }
 
 impl Default for AnchoredVWAP {
@@ -75,7 +70,7 @@ impl Indicator for AnchoredVWAP {
                 {
                     return IndicatorValue::None;
                 }
-                let price = Self::typical_price(bar);
+                let price = bar.typical_price();
                 state.1 += price * bar.volume;
                 state.2 += bar.volume;
                 IndicatorValue::Single(if state.2.abs() < 1e-10 {

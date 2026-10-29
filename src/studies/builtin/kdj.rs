@@ -174,20 +174,7 @@ impl Indicator for KDJ {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-
-    fn make_bar(high: f64, low: f64, close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: (high + low) / 2.0,
-            high,
-            low,
-            close,
-            volume: 1000.0,
-            colors: None,
-            payload: None,
-        }
-    }
+    use crate::studies::test_support::make_range_bar as make_bar;
 
     /// Reference values from the published KDJ formula, computed in exact rational arithmetic:
     /// `RSV = (C - LLV(L, N)) / (HHV(H, N) - LLV(L, N)) * 100`, `K = ((M1 - 1) * K[-1] + RSV) / M1`,
