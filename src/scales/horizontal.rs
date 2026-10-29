@@ -36,8 +36,8 @@ pub struct TickMarkLayout {
 /// replaces it.
 pub trait HorizontalScale: Send + Sync {
     /// The marks to label among `points`, the key and logical index of each bar in view in
-    /// order, extended into the whitespace on either side by keys extrapolated at the median
-    /// step. The renderer places each mark at its key and skips labels that would overlap.
+    /// order, extended into whitespace using the chart's full-history time mapping. The
+    /// renderer places each mark at its key and skips labels that would overlap.
     fn tick_marks(
         &self,
         points: &[(DateTime<Utc>, usize)],
@@ -59,7 +59,7 @@ impl HorizontalScale for Box<dyn TimeFormatter> {
         let (Some(first), Some(last)) = (points.first(), points.last()) else {
             return Vec::new();
         };
-        // The extrapolated keys repeat the median step, so the median of the bars in view stays.
+        // The median controls clock precision; point timestamps already carry the chart mapping.
         let mut deltas_ms: Vec<i64> = points
             .windows(2)
             .filter_map(|pair| {

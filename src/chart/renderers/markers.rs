@@ -8,7 +8,8 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2, epaint::StrokeKind};
 
 /// Render markers on the chart. Times between bars interpolate; whitespace extends the
-/// nearest distinct pair (one second for a single bar). Vertical placement uses the nearest bar.
+/// most common positive spacing among the outermost 16 bars (shorter spacing breaks ties,
+/// one second if none). Vertical placement uses the nearest bar.
 /// Returns the index and visible hit area of each marker drawn, in painting order.
 pub fn render_markers(
     context: &RenderContext,
@@ -170,9 +171,10 @@ pub(crate) fn render_event_breaks(
 
 /// Draws host-supplied event badges just above `baseline`, using the chart's time mapping.
 /// An event between bars uses the first bar at or after its time; whitespace extrapolates the
-/// nearest bar interval. Colliding badges stack upward. Returns the clicked event ID;
-/// callers handle that action before starting a chart drag. The badges use the event's colour,
-/// text and tooltip, without assigning any market meaning to them.
+/// most common positive spacing among the outermost 16 bars. Colliding badges stack upward.
+/// Returns the clicked event ID; callers handle that action before starting a chart drag.
+/// The badges use the event's colour, text and tooltip, without assigning any market meaning
+/// to them.
 pub fn render_event_band(
     ui: &mut egui::Ui,
     events: &[Marker],

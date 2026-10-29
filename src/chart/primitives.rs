@@ -117,8 +117,9 @@ impl PrimitiveView<'_> {
         self.mapping.idx_to_x(0) + index as f32 * self.mapping.bar_spacing
     }
 
-    /// The x of a UTC time, interpolated between bars and extrapolated into whitespace as
-    /// [`Chart::time_to_index`](crate::widget::Chart::time_to_index) does. `None` without bars.
+    /// The x of a UTC time, interpolated between bars. Without a timeframe, whitespace extends
+    /// the most common positive spacing among the outermost 16 bars (shorter spacing breaks
+    /// ties, one second if none). `None` without bars.
     pub fn time_to_x(&self, time: DateTime<Utc>) -> Option<f32> {
         crate::model::index_at(self.bars, time).map(|index| self.index_to_x(index))
     }
