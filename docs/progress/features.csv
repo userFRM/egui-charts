@@ -251,7 +251,7 @@ Drawings,Drawing management,Lock and unlock a drawing,done,library,src/widget/to
 Drawings,Drawing management,Magnet modes,done,library,src/widget/tool_interaction/mod.rs;src/drawings/services/snap.rs;src/drawings/manager/mod.rs
 Drawings,Drawing management,Multi-select drawings,done,library,src/widget/tool_interaction/selection.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Drawings,Drawing management,Object tree,done,library,src/ui/widget_bar/panels/object_tree/chart_actions.rs;src/ui/widget_bar/panels/object_tree/source_tree.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
-Drawings,Drawing management,Per-tool settings dialog,partial,library,src/ui/dialogs/drawing_properties/dialog.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/ui/dialogs/drawing_properties/tabs/style.rs
+Drawings,Drawing management,Per-tool settings dialog,done,library,src/ui/dialogs/drawing_properties/dialog.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/ui/dialogs/drawing_properties/tabs/style.rs
 Drawings,Drawing management,Persistence of drawings per symbol,done,library,src/widget/stored_drawings.rs;src/widget/frame.rs
 Drawings,Drawing management,Remove all drawings,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Select a drawing by clicking its body,done,library,src/drawings/manager/mod.rs;src/drawings/services/interaction.rs;src/widget/tool_interaction/selection.rs;src/drawings/manager/paint.rs

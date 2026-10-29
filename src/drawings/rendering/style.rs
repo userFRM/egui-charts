@@ -249,10 +249,13 @@ impl Drawing {
         };
         let b = self.points.get(1).copied().unwrap_or(a);
         let ends = match self.tool_type {
-            T::TrendLine | T::InfoLine | T::TrendAngle | T::Ray | T::ExtendedLine => {
-                self.trend_line_ends(rect).map(|(a, b)| [a, b])
-            }
-            T::Arrow | T::ArrowMarker => self.trend_line_ends(rect).map(|(a, b)| [a, b]),
+            T::TrendLine
+            | T::InfoLine
+            | T::TrendAngle
+            | T::Ray
+            | T::ExtendedLine
+            | T::Arrow
+            | T::ArrowMarker => self.trend_line_ends(rect).map(|(a, b)| [a, b]),
             T::HorizontalLine => Some([Pos2::new(rect.min.x, a.y), Pos2::new(rect.max.x, a.y)]),
             T::HorizontalRay => Some([a, Pos2::new(rect.max.x, a.y)]),
             T::VerticalLine => Some([Pos2::new(a.x, rect.min.y), Pos2::new(a.x, rect.max.y)]),

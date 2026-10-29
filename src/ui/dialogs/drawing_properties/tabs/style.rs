@@ -70,16 +70,19 @@ impl StyleTab {
                             if !choices.contains(style) {
                                 choices.push(*style);
                             }
+                            let ctx = ui.ctx().clone();
                             ui.combo_select(label.id, style, choices, |v| {
-                                match v {
-                                    ArrowStyle::None => "Plain",
-                                    ArrowStyle::Arrow => "Arrow",
-                                    ArrowStyle::OpenArrow => "Open arrow",
-                                    ArrowStyle::Circle => "Circle",
-                                    ArrowStyle::Square => "Square",
-                                    ArrowStyle::Diamond => "Diamond",
-                                }
-                                .into()
+                                l10n::text(
+                                    &ctx,
+                                    match v {
+                                        ArrowStyle::None => "Plain",
+                                        ArrowStyle::Arrow => "Arrow",
+                                        ArrowStyle::OpenArrow => "Open arrow",
+                                        ArrowStyle::Circle => "Circle",
+                                        ArrowStyle::Square => "Square",
+                                        ArrowStyle::Diamond => "Diamond",
+                                    },
+                                )
                             });
                         });
                         ui.end_row();

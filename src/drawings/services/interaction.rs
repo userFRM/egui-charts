@@ -687,9 +687,9 @@ mod tests {
     }
 
     /// Each point is at least 40 px from every anchor. A ray from (0, 0) through (100, 50) runs on
-    /// through (300, 150) and back through (-100, -50) with both extensions on; one from (500, 100) through
-    /// (400, 150) runs left through (200, 250). The cross line through (100, 100) runs
-    /// down through (100, 300). The pattern's second leg runs from
+    /// through (300, 150) and back through (-100, -50) with both extensions on; one from
+    /// (500, 100) through (400, 150) runs left through (200, 250). The cross line through
+    /// (100, 100) runs down through (100, 300). The pattern's second leg runs from
     /// (100, 100) to (200, 0) through (150, 50). The triangle's edge from (200, 0) to (100, 200)
     /// passes (150, 100); without a fill its inside is empty. The circle around (100, 100)
     /// through (150, 100) passes (100, 150), and its centre is empty. The pitchfork's median
