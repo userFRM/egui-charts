@@ -43,6 +43,12 @@ impl OrderSide {
             OrderSide::Sell => "SELL",
         }
     }
+
+    /// Whether an exit on this side reduces `position`, a signed net quantity: not once the
+    /// position is flat or on this side, as after a close or a reverse.
+    pub(crate) fn reduces(self, position: f64) -> bool {
+        position != 0.0 && (self == OrderSide::Buy) != (position > 0.0)
+    }
 }
 
 /// How an order executes. Prices are in the symbol's price units.

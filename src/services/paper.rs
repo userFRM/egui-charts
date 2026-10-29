@@ -422,8 +422,7 @@ impl State {
             {
                 continue;
             }
-            let buy = exit.request.side == OrderSide::Buy;
-            if position.quantity == 0.0 || buy == (position.quantity > 0.0) {
+            if !exit.request.side.reduces(position.quantity) {
                 self.cancel_working(&exit.id);
             } else if exit.request.quantity > position.quantity.abs() {
                 exit.request.quantity = position.quantity.abs();

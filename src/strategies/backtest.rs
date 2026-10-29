@@ -99,8 +99,9 @@ impl StrategyContext<'_> {
 
     /// Places an exit that reduces the open position by `quantity`, or closes it with `None`. It
     /// fills at the `take_profit` limit or the `stop_loss` stop, whichever the price reaches
-    /// first, or at market without either. An exit only reduces the position, and waits while
-    /// the position is flat.
+    /// first, or at market without either. An exit only reduces the position open when it is
+    /// placed or, placed while flat, the position the next entry opens; once that position is
+    /// closed or reversed, the exit is cancelled.
     pub fn exit(
         &mut self,
         id: impl Into<String>,
@@ -109,7 +110,12 @@ impl StrategyContext<'_> {
         stop_loss: Option<f64>,
     ) {
         if take_profit.into_iter().chain(stop_loss).all(f64::is_finite) {
-            self.place(id.into(), quantity, Kind::Exit(take_profit, stop_loss));
+            let side = exit_side(self.position);
+            self.place(
+                id.into(),
+                quantity,
+                Kind::Exit(take_profit, stop_loss, side),
+            );
         }
     }
 
@@ -144,8 +150,8 @@ struct Working {
 
 enum Kind {
     Entry(OrderSide, OrderType),
-    /// Take profit and stop loss.
-    Exit(Option<f64>, Option<f64>),
+    /// Take profit, stop loss and the exit's side, `None` until a position opens for it to reduce.
+    Exit(Option<f64>, Option<f64>, Option<OrderSide>),
 }
 
 /// An entry's quantity that is still open.
@@ -277,6 +283,17 @@ impl Backtest {
     }
 }
 
+/// The side of an exit from `position`, `None` while flat.
+fn exit_side(position: f64) -> Option<OrderSide> {
+    if position > 0.0 {
+        Some(OrderSide::Sell)
+    } else if position < 0.0 {
+        Some(OrderSide::Buy)
+    } else {
+        None
+    }
+}
+
 fn sign(side: OrderSide) -> f64 {
     match side {
         OrderSide::Buy => 1.0,
@@ -304,11 +321,8 @@ impl Run {
     fn fill_price(&self, order: &Working, start: f64, end: f64) -> Option<f64> {
         match order.kind {
             Kind::Entry(side, order_type) => order_type.fill_price(side, start, end),
-            Kind::Exit(take_profit, stop_loss) => {
-                let side = match self.lots.first()?.side {
-                    OrderSide::Buy => OrderSide::Sell,
-                    OrderSide::Sell => OrderSide::Buy,
-                };
+            Kind::Exit(take_profit, stop_loss, side) => {
+                let side = side?;
                 if take_profit.is_none() && stop_loss.is_none() {
                     return Some(start);
                 }
@@ -358,11 +372,12 @@ impl Run {
             let order = &self.orders[index];
             let market = matches!(
                 order.kind,
-                Kind::Entry(_, OrderType::Market) | Kind::Exit(None, None)
+                Kind::Entry(_, OrderType::Market) | Kind::Exit(None, None, _)
             );
             if market && self.fill_price(order, price, price).is_some() {
                 let order = self.orders.remove(index);
                 self.fill(order, price, time);
+                index = 0;
             } else {
                 index += 1;
             }
@@ -392,6 +407,14 @@ impl Run {
                 );
             }
         }
+        let position = self.position();
+        self.orders.retain_mut(|order| match &mut order.kind {
+            Kind::Exit(.., side) => {
+                *side = side.or(exit_side(position));
+                side.is_none_or(|side| side.reduces(position))
+            }
+            Kind::Entry(..) => true,
+        });
     }
 
     /// Closes up to `quantity` of the open lots, oldest first, as trades exited by `exit`.
@@ -456,8 +479,31 @@ mod tests {
                 context.exit("Flat", Some(100.0), None, None);
                 context.entry("Last", Buy, 1.0, OrderType::Market);
             }
+            6 => {
+                context.exit("Guard", None, Some(110.0), Some(90.0));
+                context.entry("Flip", Sell, 1.0, OrderType::Market);
+            }
+            7 => context.exit("Cover", None, Some(96.0), Some(103.0)),
+            8 => {
+                context.entry("Long3", Buy, 1.0, OrderType::Market);
+                context.exit("Target", None, Some(104.0), Some(90.0));
+            }
+            9 => context.exit("Out", None, None, None),
+            10 => context.entry("Long4", Buy, 1.0, OrderType::Market),
+            11 => {
+                context.entry("Reverse", Sell, 1.0, OrderType::Stop(103.0));
+                context.exit("Stop", None, Some(108.0), Some(103.0));
+            }
             _ => {}
         }
+    }
+
+    /// The script with the long's exit placed before the stop and reverse entry on bar 11.
+    fn stop_first(bar: usize, context: &mut StrategyContext<'_>) {
+        if bar == 11 {
+            context.exit("Stop", None, Some(108.0), Some(103.0));
+        }
+        script(bar, context);
     }
 
     // Worked by hand from the path rule documented on `Backtest`.
@@ -479,6 +525,20 @@ mod tests {
             (99.0, 101.0, 98.0, 100.0),
             // At the open, Flat closes only the remaining 1 of Add, then Last opens.
             (100.0, 101.0, 99.0, 100.5),
+            // At the open, Flip closes Last and opens a short. Guard, placed for Last, is
+            // cancelled rather than closing the short at once.
+            (100.0, 101.0, 99.0, 100.0),
+            // Low first: the short's take profit at 96 fills before the high reaches its stop.
+            (100.0, 105.0, 96.0, 97.0),
+            // Long3 opens; Target, placed while flat, protects it.
+            (97.0, 98.0, 96.0, 97.5),
+            // Out closes Long3, which cancels Target.
+            (98.0, 99.0, 97.0, 98.0),
+            // Long4 opens above Target's take profit at 104 and stays open.
+            (105.0, 106.0, 104.5, 105.5),
+            // Low first: at 103 Reverse closes Long4 and opens a short, which cancels Stop, so
+            // neither its stop at 103 nor its take profit at 108 closes the short.
+            (105.0, 108.5, 102.0, 102.5),
         ]
         .into_iter()
         .enumerate()
@@ -515,22 +575,57 @@ mod tests {
                 trade(Buy, 4.0, 4, 98.0, Some((5, 99.0, 4.0)), "Long2 / Part"),
                 trade(Buy, 1.0, 5, 99.0, Some((5, 99.0, 0.0)), "Add / Part"),
                 trade(Buy, 1.0, 5, 99.0, Some((6, 100.0, 1.0)), "Add / Flat"),
-                trade(Buy, 1.0, 6, 100.0, None, "Last"),
+                trade(Buy, 1.0, 6, 100.0, Some((7, 100.0, 0.0)), "Last / Flip"),
+                trade(Sell, 1.0, 7, 100.0, Some((8, 96.0, 4.0)), "Flip / Cover"),
+                trade(Buy, 1.0, 9, 97.0, Some((10, 98.0, 1.0)), "Long3 / Out"),
+                trade(
+                    Buy,
+                    1.0,
+                    11,
+                    105.0,
+                    Some((12, 103.0, -2.0)),
+                    "Long4 / Reverse"
+                ),
+                trade(Sell, 1.0, 12, 103.0, None, "Reverse"),
             ]
         );
         let equity = [
             10_000.0, 10_000.0, 10_010.0, 10_040.0, 10_037.5, 10_066.5, 10_067.5, 10_068.0,
+            10_067.5, 10_071.5, 10_072.0, 10_072.5, 10_073.0, 10_071.0,
         ];
-        let times = std::iter::once(hour(-1)).chain((0..7).map(hour));
+        let times = std::iter::once(hour(-1)).chain((0..13).map(hour));
         assert_eq!(report.equity, times.zip(equity).collect::<Vec<_>>());
         assert_eq!(report.equity_curve(), report.equity);
-        assert_eq!(report.performance().skipped_trades, 0);
+        // Closed profits: 40 + 22.5 + 4 + 0 + 1 + 0 + 4 + 1 - 2 = 70.5.
+        let metrics = report.performance();
+        assert_eq!(
+            (
+                metrics.closed_trades,
+                metrics.open_trades,
+                metrics.skipped_trades
+            ),
+            (9, 1, 0)
+        );
+        assert_eq!((metrics.winning_trades, metrics.losing_trades), (6, 1));
+        assert_eq!(
+            (metrics.net_profit, metrics.gross_profit, metrics.gross_loss),
+            (70.5, 72.5, 2.0)
+        );
+        assert_eq!(metrics.win_rate, Some(6.0 / 9.0));
+        assert_eq!(metrics.profit_factor, Some(36.25));
 
         // Without the later bars the run sees and does the same up to its last bar.
         let first = backtest.run(&mut Script(script), &bars[..4]);
         assert_eq!(first.equity, report.equity[..5]);
         assert_eq!(first.trades[0], report.trades[0]);
         assert_eq!(first.trades[1], trade(Sell, 5.0, 3, 102.5, None, "Short"));
+
+        // Placing the long's exit first only changes which of the two closes the long at 103.
+        let stop_first = backtest.run(&mut Script(stop_first), &bars);
+        assert_eq!(stop_first.equity, report.equity);
+        let mut trades = report.trades.clone();
+        trades[8].label = Some("Long4 / Stop".to_owned());
+        assert_eq!(stop_first.trades, trades);
 
         // On close, the first market entry fills at the close of the bar it was placed on.
         let on_close = Backtest {
