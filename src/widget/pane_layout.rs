@@ -370,8 +370,11 @@ impl Chart {
     /// The studies of study pane `pane` and its rank among the panes holding the same ones, or
     /// `None` for the price pane and panes without studies.
     fn pane_identity(&self, pane: PaneId) -> Option<(Vec<PaneStudy>, usize)> {
+        if pane == PaneId::MAIN {
+            return None;
+        }
         let studies = self.pane_studies(pane);
-        if pane == PaneId::MAIN || studies.is_empty() {
+        if studies.is_empty() {
             return None;
         }
         let rank = self
