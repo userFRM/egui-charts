@@ -204,23 +204,17 @@ impl HandleService {
         H: Fn(f64, f32, f32) -> f64,
     {
         if handle == HandlePos::Middle {
-            if let Some((_, center)) = Self::get_handles(drawing)
+            let count = drawing.points.len().max(1) as f32;
+            let centroid = drawing
+                .points
+                .iter()
+                .fold(egui::Vec2::ZERO, |sum, p| sum + p.to_vec2())
+                / count;
+            let center = Self::get_handles(drawing)
                 .into_iter()
                 .find(|(h, _)| *h == handle)
-                .or_else(|| {
-                    (!drawing.points.is_empty()).then(|| {
-                        (
-                            handle,
-                            Pos2::ZERO
-                                + drawing
-                                    .points
-                                    .iter()
-                                    .fold(egui::Vec2::ZERO, |sum, p| sum + p.to_vec2())
-                                    / drawing.points.len() as f32,
-                        )
-                    })
-                })
-            {
+                .map_or(Pos2::ZERO + centroid, |(_, p)| p);
+            if !drawing.points.is_empty() {
                 let bars = x_to_bar(new_pos.x) - x_to_bar(center.x);
                 for point in &mut drawing.chart_points {
                     point.bar_idx += bars;

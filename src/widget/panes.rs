@@ -1223,20 +1223,7 @@ mod tests {
             });
         }
         let time = ctx.input(|input| input.time) + 0.1;
-        let output = ctx.run_ui(
-            RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
-                time: Some(time),
-                events,
-                ..Default::default()
-            },
-            |ui| {
-                egui::CentralPanel::default().show(ui, |ui| chart.show(ui));
-            },
-        );
-        let cursor = output.platform_output.cursor_icon;
-        output.drop_without_applying_deltas();
-        cursor
+        crate::widget::test_frames::frame(ctx, chart, time, events)
     }
 
     fn click(ctx: &Context, chart: &mut crate::widget::Chart, pos: Pos2) {

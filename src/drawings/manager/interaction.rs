@@ -53,16 +53,6 @@ impl DrawingManager {
                         .into_iter()
                         .find(|(h, _)| *h == handle)
                         .map(|(_, p)| p)
-                        .or_else(|| {
-                            (!drawing.points.is_empty()).then(|| {
-                                Pos2::ZERO
-                                    + drawing
-                                        .points
-                                        .iter()
-                                        .fold(egui::Vec2::ZERO, |sum, p| sum + p.to_vec2())
-                                        / drawing.points.len() as f32
-                            })
-                        })
                 })
                 .flatten();
         }

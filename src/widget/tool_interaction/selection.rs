@@ -7,7 +7,7 @@
 //! - Keyboard shortcuts (Delete, Escape)
 
 use crate::chart::cursor_modes::CursorModeState;
-use crate::drawings::{DrawingManager, HandlePos};
+use crate::drawings::{DrawingManager, DrawingToolType, HandlePos};
 use egui::{Painter, Rect, Response, Stroke, Ui, epaint::StrokeKind};
 
 /// Handle drawing selection, handle dragging, and eraser-mode deletion.
@@ -148,11 +148,12 @@ pub fn handle_selection<F1, F2, F3>(
     }
 }
 
+/// The cursor for a handle: a resize arrow along the way it moves its drawing, or a grab for a body move.
 fn handle_cursor(manager: &DrawingManager, id: usize, handle: HandlePos) -> egui::CursorIcon {
     use egui::CursorIcon;
     let reversed = manager.drawings.iter().any(|d| {
         d.id == id
-            && d.tool_type == crate::drawings::DrawingToolType::Rect
+            && d.tool_type == DrawingToolType::Rect
             && d.points.len() >= 2
             && (d.points[1].x - d.points[0].x) * (d.points[1].y - d.points[0].y) < 0.0
     });
@@ -218,7 +219,7 @@ pub fn render_eraser_highlight(
 mod tests {
     use super::*;
     use crate::drawings::manager::DrawingSyncAction;
-    use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+    use crate::drawings::{ChartPoint, Drawing};
     use egui::{Context, Event, Id, PointerButton, Pos2, RawInput, Sense};
 
     /// Shift projects a dragged endpoint onto 45 degrees, locks body movement to one axis,
@@ -393,24 +394,8 @@ mod tests {
 
     #[test]
     fn body_drag_selects_without_panning_and_copies_with_modifiers() {
-        use crate::widget::test_frames::chart;
+        use crate::widget::test_frames::{chart, frame};
         use egui::{Modifiers, vec2};
-        let frame = |ctx: &Context, chart: &mut crate::widget::Chart, time, events| {
-            let output = ctx.run_ui(
-                RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
-                    time: Some(time),
-                    events,
-                    ..Default::default()
-                },
-                |ui| {
-                    egui::CentralPanel::default().show(ui, |ui| chart.show(ui));
-                },
-            );
-            let cursor = output.platform_output.cursor_icon;
-            output.drop_without_applying_deltas();
-            cursor
-        };
         for (tool, selected) in [DrawingToolType::TrendLine, DrawingToolType::Rect]
             .into_iter()
             .flat_map(|tool| [false, true].map(|selected| (tool, selected)))
