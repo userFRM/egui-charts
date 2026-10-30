@@ -371,7 +371,7 @@ impl Drawing {
         if unit.abs() < 1.0 {
             return;
         }
-        if config.show_background || self.fill_color.is_some() {
+        if config.show_background {
             for (i, pair) in levels.windows(2).enumerate() {
                 if self.fib_config.is_none() && i % 2 != 0 {
                     continue;
@@ -384,8 +384,7 @@ impl Drawing {
                     painter.rect_filled(
                         Rect::from_x_y_ranges(a.min(b)..=a.max(b), chart_rect.y_range()),
                         0.0,
-                        self.fill_color32()
-                            .unwrap_or_else(|| band_color(pair[1], config.background_opacity)),
+                        band_color(pair[1], config.background_opacity),
                     );
                 }
             }
