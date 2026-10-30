@@ -102,8 +102,8 @@ fn average_slot(id: &str) -> Option<usize> {
 /// the marker appears only when the last nonzero difference changes sign.
 /// A missing value breaks that comparison, so a gap cannot create a signal.
 ///
-/// Its inputs hold the number of averages, the crossing pair and the colouring by direction, then the length,
-/// formula and price of each average, so that a template recreates it.
+/// Its inputs hold the number of averages, the crossing pair and the colouring by direction,
+/// then the length, formula and price of each average, so that a template recreates it.
 #[derive(Clone)]
 pub struct MACombination {
     lines: Vec<AverageLine>,

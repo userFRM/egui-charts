@@ -23,7 +23,8 @@ pub struct StudyTemplate {
 }
 
 impl StudyTemplate {
-    /// Capture the current calculation inputs, presentation and value scale, without computed values.
+    /// Capture the current calculation inputs, presentation and value scale, without computed
+    /// values.
     /// Hosts remap chart-local study source ids when saving or restoring a set of studies.
     pub fn from_study(study: &dyn Indicator) -> Self {
         Self {
