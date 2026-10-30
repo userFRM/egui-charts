@@ -42,6 +42,9 @@ impl LogicalRange {
 /// The minimum bar spacing used when the configured one is not a finite number.
 const DEFAULT_MIN_BAR_SPACING: f32 = 0.5;
 
+/// Keep spacing divisors positive without restricting subpixel views of large histories.
+const MIN_BAR_SPACING: f32 = 1e-6;
+
 /// Time-scale coordinate engine -- pure logic, no UI dependencies.
 ///
 /// Manages the horizontal mapping between logical bar indices and pixel
@@ -170,16 +173,23 @@ impl TimeScale {
         self.apply_constraints();
     }
 
-    /// Update min bar spacing
+    /// Update min bar spacing, floored at 0.000001 pixels. Non-finite values are ignored.
     pub fn set_min_bar_spacing(&mut self, min: f32) {
+        if !min.is_finite() {
+            return;
+        }
         self.min_bar_spacing = min.max(0.0);
         // Re-apply spacing to respect new constraints
         self.bar_spacing = self.clamp_spacing(self.bar_spacing);
         self.apply_constraints();
     }
 
-    /// Update max bar spacing (0 = unlimited)
+    /// Update max bar spacing (0 = unlimited), with positive limits floored at 0.000001 pixels.
+    /// Non-finite values are ignored.
     pub fn set_max_bar_spacing(&mut self, max: f32) {
+        if !max.is_finite() {
+            return;
+        }
         self.max_bar_spacing = max.max(0.0);
         // Re-apply spacing to respect new constraints
         self.bar_spacing = self.clamp_spacing(self.bar_spacing);
@@ -456,14 +466,15 @@ impl TimeScale {
 
     /// The spacing bounds in a form `clamp` accepts: a NaN or infinite minimum is the default, a NaN
     /// or infinite maximum is unlimited (0), and a minimum above a set maximum is that maximum.
+    /// Both the minimum and a positive maximum have a small positive floor.
     fn spacing_bounds(&self) -> (f64, f64) {
-        let max = if self.max_bar_spacing.is_finite() {
-            self.max_bar_spacing.max(0.0) as f64
+        let max = if self.max_bar_spacing.is_finite() && self.max_bar_spacing > 0.0 {
+            self.max_bar_spacing.max(MIN_BAR_SPACING) as f64
         } else {
             0.0
         };
         let min = if self.min_bar_spacing.is_finite() {
-            self.min_bar_spacing.max(0.0) as f64
+            self.min_bar_spacing.max(MIN_BAR_SPACING) as f64
         } else {
             DEFAULT_MIN_BAR_SPACING as f64
         };
@@ -573,9 +584,11 @@ mod tests {
     #[test]
     fn non_finite_inputs_keep_the_time_scale_state() {
         type Change = fn(&mut TimeScale, f32);
-        let changes: [(&str, Change); 9] = [
+        let changes: [(&str, Change); 11] = [
             ("width", TimeScale::set_width),
             ("spacing", TimeScale::set_bar_spacing),
+            ("minimum spacing", TimeScale::set_min_bar_spacing),
+            ("maximum spacing", TimeScale::set_max_bar_spacing),
             ("offset", |ts, value| ts.set_right_offset(value)),
             ("bars", TimeScale::scroll_bars),
             ("pixels", TimeScale::scroll_pixels),
@@ -600,6 +613,10 @@ mod tests {
                     ts.scroll_bars(1.0);
                     ts.scroll_to_realtime();
                     assert_eq!(ts.right_offset(), 10.0, "{name}, {invalid}");
+                    ts.set_bar_spacing(0.0);
+                    assert_eq!(ts.bar_spacing(), 0.5, "{name}, {invalid}");
+                    ts.set_bar_spacing(100.0);
+                    assert_eq!(ts.bar_spacing(), 50.0, "{name}, {invalid}");
                     ts.apply_options(8.0, 0.5, 50.0, true, false, invalid, None);
                     assert_eq!(ts.right_offset(), 7.0, "bar offset, {invalid}");
                     assert_eq!(ts.visible_logical_range(), LogicalRange::new(7.0, 106.0));
@@ -610,9 +627,34 @@ mod tests {
 
     #[test]
     fn inconsistent_spacing_bounds_clamp_without_panicking() {
-        // Check the setup spacing before zoom(-100) clamps it to its effective minimum.
+        // Zoom-outs stop at the effective minimum and leave zooming and scrolling usable.
         type Setup = fn(&mut TimeScale);
-        let rows: [(&str, Setup, (f32, f32)); 6] = [
+        let rows: [(&str, Setup, (f32, f32)); 11] = [
+            (
+                "zero minimum",
+                |ts| ts.set_min_bar_spacing(0.0),
+                (8.0, 1e-6),
+            ),
+            (
+                "negative minimum option",
+                |ts| ts.apply_options(6.0, -1.0, 0.0, false, false, 2.0, None),
+                (6.0, 1e-6),
+            ),
+            (
+                "maximum below floor",
+                |ts| ts.set_max_bar_spacing(1e-8),
+                (1e-6, 1e-6),
+            ),
+            (
+                "minimum below floor",
+                |ts| ts.set_min_bar_spacing(1e-8),
+                (8.0, 1e-6),
+            ),
+            (
+                "NaN minimum setter",
+                |ts| ts.set_min_bar_spacing(f32::NAN),
+                (8.0, 0.5),
+            ),
             (
                 "minimum above maximum",
                 |ts| ts.apply_options(6.0, 10.0, 5.0, false, false, 2.0, None),
@@ -655,8 +697,41 @@ mod tests {
             ts.set_bar_cnt(100);
             setup(&mut ts);
             assert_eq!(ts.bar_spacing(), set, "{name}");
-            ts.zoom(-100.0, 400.0, 0.0, 800.0);
-            assert_eq!(ts.bar_spacing(), zoomed, "{name}");
+            for fix_left in [false, true] {
+                ts.set_fix_left_edge(fix_left);
+                for delta in [-10.0, -9.999_999, -100.0] {
+                    for _ in 0..100 {
+                        ts.zoom(delta, 799.0, 0.0, 800.0);
+                        assert_eq!(ts.bar_spacing(), zoomed, "{name}");
+                        let range = ts.visible_logical_range();
+                        assert!(range.left.is_finite() && range.right.is_finite(), "{name}");
+                        assert!(ts.right_offset().is_finite(), "{name}");
+                        assert!(ts.right_offset_precise().is_finite(), "{name}");
+                    }
+                }
+                // At the fixed left edge, width / spacing - bar count is the offset.
+                if fix_left {
+                    ts.scroll_bars(f32::MAX);
+                    let expected = 800.0 / f64::from(zoomed) - 100.0;
+                    assert!(
+                        (ts.right_offset_precise() - expected).abs() < 1e-6,
+                        "{name}"
+                    );
+                }
+                ts.zoom(5.0, 400.0, 0.0, 800.0);
+                if set > zoomed {
+                    assert!(ts.bar_spacing() > zoomed, "{name}");
+                }
+                ts.set_bar_spacing(set);
+                ts.set_fix_left_edge(false);
+                ts.set_right_offset(0.0);
+                ts.scroll_pixels(10.0);
+                let expected = (-10.0 / f64::from(set)).max(-200.0);
+                assert!(
+                    (ts.right_offset_precise() - expected).abs() < 1e-6,
+                    "{name}"
+                );
+            }
         }
     }
 }
