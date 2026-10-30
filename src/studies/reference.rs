@@ -45,6 +45,11 @@
 //!   conventional zone rule (a gap of at least a percentage of the 14-bar mean range, closed or
 //!   shrunk by the first bar to enter it), and RSI divergences by comparing consecutive Wilder RSI
 //!   pivots with the price at the same bars.
+//! - The simple average of the source or the exponential average seeded with the mean of the first
+//!   values for the Keltner middle line, with bands of Wilder's average true range, the bar's true
+//!   range (high minus low on the first bar) or Wilder's average of the bar range over the middle
+//!   line's length; the simple averages of the highs and of the lows for the MA Channel; and
+//!   separate upper and lower residual deviations for the regression channel.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
@@ -90,6 +95,7 @@ use crate::studies::{
     BollingerBars, ChandeKrollStop, ChopZone, Median, VolatilityStop, WilliamsAlligator,
 };
 use crate::studies::{Gaps, PivotPointsHighLow, RsiDivergence, WilliamsFractals};
+use crate::studies::{KeltnerBand, MAChannel, OscillatorAverage};
 use crate::studies::{
     PriceMomentumOscillator, PringsSpecialK, RciRibbon, RelativeVolatilityIndex,
     SMIErgodicIndicator, SMIErgodicOscillator, WoodiesCCI,
@@ -544,6 +550,22 @@ fn staple_studies_match_published_definitions() {
         ("CCI(20)", Box::new(CCI::default())),
         ("MFI(14)", Box::new(MoneyFlowIndex::default())),
         ("Keltner(20,10,2)", Box::new(KeltnerChannels::default())),
+        (
+            "Keltner(20,10,2,SMA,HL2)",
+            Box::new(
+                KeltnerChannels::default()
+                    .with_average(OscillatorAverage::Simple)
+                    .with_source(crate::model::PriceSource::HL2),
+            ),
+        ),
+        (
+            "Keltner(20,10,2,TR)",
+            Box::new(KeltnerChannels::default().with_band(KeltnerBand::TrueRange)),
+        ),
+        (
+            "Keltner(20,10,2,Range)",
+            Box::new(KeltnerChannels::default().with_band(KeltnerBand::Range)),
+        ),
         ("LinReg(14)", Box::new(LinearRegression::default())),
         (
             "LinRegSlope(14)",
@@ -592,10 +614,17 @@ fn staple_studies_match_published_definitions() {
         ("Mass(9,25)", Box::new(MassIndex::default())),
         ("%B(20,2)", Box::new(PercentB::default())),
         ("BBW(20,2)", Box::new(BollingerBandsWidth::default())),
-        ("Env(20,2.5,SMA)", Box::new(Envelopes::default())),
+        (
+            "Env(20,2.5,SMA)",
+            Box::new(Envelopes::new(20, 2.5, EnvelopeAverage::Simple)),
+        ),
         (
             "Env(20,2.5,EMA)",
             Box::new(Envelopes::new(20, 2.5, EnvelopeAverage::Exponential)),
+        ),
+        (
+            "MAChannel(20,10,3,-2)",
+            Box::new(MAChannel::new(20, 10).with_offsets(3, -2)),
         ),
         ("CV(10,10)", Box::new(ChaikinVolatility::default())),
         ("CMO(14)", Box::new(ChandeMomentumOscillator::default())),
@@ -891,6 +920,19 @@ fn staple_studies_match_published_definitions() {
         (
             "LinRegChannel-hand",
             Box::new(crate::studies::LinearRegressionChannel::new(3, 2.0)) as Box<dyn Indicator>,
+            {
+                let mut series = ties.clone();
+                for (bar, c) in series.iter_mut().zip([1.0, 4.0, 2.0, 4.0]) {
+                    bar.close = c;
+                }
+                series
+            },
+        ),
+        (
+            "LinRegChannel-asym-hand",
+            Box::new(
+                crate::studies::LinearRegressionChannel::new(3, 2.0).with_multipliers(2.0, 1.0),
+            ) as Box<dyn Indicator>,
             {
                 let mut series = ties.clone();
                 for (bar, c) in series.iter_mut().zip([1.0, 4.0, 2.0, 4.0]) {
@@ -1446,6 +1488,35 @@ fn regression_channel_refits_the_last_n_bars_on_update() {
     };
     assert!((lines[1] - 8.0 / 3.0).abs() < 1e-12);
     assert_eq!(open.correlation(), Some(0.0));
+}
+
+/// Each MA Channel offset draws its own line that many bars later, or earlier when negative.
+#[test]
+fn ma_channel_draws_each_line_its_own_bars_later() {
+    let bars: Vec<_> = [(2.0, 1.0), (4.0, 1.0), (6.0, 4.0), (8.0, 4.0)]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (high, low))| {
+            Bar::new(
+                Utc.timestamp_opt(i as i64, 0).unwrap(),
+                low,
+                high,
+                low,
+                low,
+                1.0,
+            )
+        })
+        .collect();
+    let mut study = MAChannel::new(2, 3).with_offsets(1, -1);
+    study.calculate(&bars);
+    // Upper means 3, 5 and 7 on bars 1 to 3; lower means 2 and 3 on bars 2 and 3.
+    let drawn = |line, bars| {
+        (0..bars)
+            .map(|bar| study.plot_value(line, bar))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(drawn(0, 5), [None, None, Some(3.0), Some(5.0), Some(7.0)]);
+    assert_eq!(drawn(1, 4), [None, Some(2.0), Some(3.0), None]);
 }
 
 /// The configurable cross, triple and ribbon presets are reachable by their catalogue names.

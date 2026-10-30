@@ -527,6 +527,22 @@ fn dialogs_expose_titles_and_label_their_fields() {
             &[(Role::ComboBox, "Line style")],
         ),
         (
+            "Drawing Properties",
+            |ctx| {
+                let mut dialog = DrawingPropertiesDialog::new();
+                let mut props = DrawingProps::default();
+                props.timeframe_visibility.show_on_all = false;
+                dialog.open(DrawingId(1), "Trend Line".into(), props);
+                dialog.active_tab = PropertiesTab::Visibility;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::CheckBox, "Ticks"),
+                (Role::SpinButton, "Ticks from"),
+                (Role::SpinButton, "Ticks to"),
+            ],
+        ),
+        (
             "Main series · Candles",
             |ctx| {
                 let mut dialog = super::dialogs::series_settings::SeriesSettingsDialog::new();

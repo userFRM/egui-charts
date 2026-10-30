@@ -52,7 +52,7 @@ use crate::icons::icons;
 use crate::model::{Instrument, SymbolType};
 use crate::services::{Storage, SymbolExpression, SymbolSearch};
 use crate::theme::ThemeExt;
-use crate::ui_kit::buttons::IconButton;
+use crate::ui_kit::buttons::{ButtonSize, IconButton};
 use crate::ui_kit::modal::Modal;
 use crate::ui_kit::tab_bar::{TabBar, TabLabel};
 use egui::{Context, RichText, Vec2};
@@ -169,6 +169,7 @@ impl Default for SymbolSearchConfig {
 pub struct SymbolSearchDialog {
     is_open: bool,
     focus_search: bool,
+    select_query: bool,
     search_query: String,
     sel_idx: usize,
     filtered_symbols: Vec<Instrument>,
@@ -206,6 +207,7 @@ impl SymbolSearchDialog {
         Self {
             is_open: false,
             focus_search: true,
+            select_query: false,
             search_query: String::new(),
             sel_idx: 0,
             filtered_symbols: Vec::new(),
@@ -288,6 +290,7 @@ impl SymbolSearchDialog {
     pub fn open(&mut self) {
         self.is_open = true;
         self.focus_search = true;
+        self.select_query = false;
         self.search_query.clear();
         self.sel_idx = 0;
         self.category = Category(None);
@@ -300,6 +303,14 @@ impl SymbolSearchDialog {
     pub fn open_with_query(&mut self, query: String) {
         self.open();
         self.search_query = query;
+    }
+
+    /// Opens symbol search with the supplied text selected on its first focused frame, so
+    /// typing replaces it. Hosts pass the current symbol when the user opens search from a
+    /// toolbar or an action.
+    pub fn open_with_selected_query(&mut self, query: String) {
+        self.open_with_query(query);
+        self.select_query = true;
     }
 
     /// Closes the symbol search dialog
@@ -362,7 +373,7 @@ impl SymbolSearchDialog {
         let mut sel_symbol = None;
         let mut should_close = false;
         let search_id = egui::Id::unique("symbol_search_input");
-        let focus_search = std::mem::take(&mut self.focus_search);
+        let focus_search = self.focus_search;
         let search_focused = ctx.memory(|m| m.has_focus(search_id));
         let (up, down) = ctx.input(|input| {
             (
@@ -395,8 +406,8 @@ impl SymbolSearchDialog {
                 });
                 ui.ctx()
                     .accesskit_node_builder(ui.response().id, |node| node.set_modal());
+                let theme = ui.active_theme();
                 ui.horizontal(|ui| {
-                    let theme = ui.active_theme();
                     ui.add(
                         icons::QUICK_SEARCH
                             .as_image_tinted(Vec2::splat(24.0), theme.ui.text_secondary),
@@ -405,19 +416,32 @@ impl SymbolSearchDialog {
                     if focus_search {
                         ui.memory_mut(|memory| memory.request_focus(search_id));
                     }
-                    let response = ui
-                        .add(
-                            egui::TextEdit::singleline(&mut self.search_query)
-                                .id(search_id)
-                                .font(egui::FontId::proportional(16.0))
-                                .hint_text(
-                                    RichText::new(l10n::text(ui.ctx(), "Search symbols"))
-                                        .size(16.0),
-                                )
-                                .frame(egui::Frame::NONE)
-                                .desired_width((ui.available_width() - 40.0).max(0.0)),
+                    let has_query = !self.search_query.is_empty();
+                    let mut field = egui::TextEdit::singleline(&mut self.search_query)
+                        .id(search_id)
+                        .font(egui::FontId::proportional(16.0))
+                        .hint_text(RichText::new(l10n::text(ui.ctx(), "Search symbols")).size(16.0))
+                        .frame(egui::Frame::NONE)
+                        .desired_width(
+                            (ui.available_width() - if has_query { 72.0 } else { 40.0 }).max(0.0),
                         )
+                        .show(ui);
+                    let response = field
+                        .response
+                        .response
                         .accessible_name(l10n::text(ui.ctx(), "Search symbols"));
+                    if has_query
+                        && IconButton::new(&icons::CLOSE)
+                            .size(ButtonSize::SM)
+                            .tooltip("Clear search")
+                            .show(ui)
+                            .clicked()
+                    {
+                        self.search_query.clear();
+                        self.sel_idx = 0;
+                        self.refresh_results(ctx, all_symbols);
+                        response.request_focus();
+                    }
                     if IconButton::new(&icons::CLOSE)
                         .tooltip("Close")
                         .show(ui)
@@ -428,6 +452,15 @@ impl SymbolSearchDialog {
                     // Sizing passes clear invisible widgets' focus while building the field.
                     if focus_search {
                         response.request_focus();
+                        if !ui.is_sizing_pass() {
+                            self.focus_search = false;
+                            if std::mem::take(&mut self.select_query) {
+                                field.state.cursor.set_char_range(Some(
+                                    egui::text::CCursorRange::select_all(&field.galley),
+                                ));
+                                field.state.store(ui.ctx(), response.id);
+                            }
+                        }
                     }
                     if response.changed() {
                         self.sel_idx = 0;
@@ -471,13 +504,6 @@ impl SymbolSearchDialog {
                 if !categories.contains(&self.category) {
                     self.category = Category(None);
                 }
-                if TabBar::new(&categories, &mut self.category)
-                    .pills()
-                    .show(ui)
-                {
-                    self.sel_idx = 0;
-                    self.refresh_results(ctx, all_symbols);
-                }
                 let mut sources = self
                     .feed_exchanges
                     .clone()
@@ -489,28 +515,52 @@ impl SymbolSearchDialog {
                         }
                     }
                 }
-                if !sources.is_empty() {
-                    let all = l10n::text(ui.ctx(), "All sources");
-                    let before = self.search.exchange.clone();
-                    egui::ComboBox::from_id_salt("symbol_sources")
-                        .selected_text(self.search.exchange.as_deref().unwrap_or(&all))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.search.exchange, None, all.as_str());
-                            for source in sources {
-                                let label = source.clone();
-                                ui.selectable_value(&mut self.search.exchange, Some(source), label);
-                            }
-                        })
-                        .response
-                        .accessible_name(l10n::text(ui.ctx(), "Source"));
-                    if self.search.exchange != before {
-                        self.sel_idx = 0;
-                        self.refresh_results(ctx, all_symbols);
+                let before_category = self.category;
+                let before_exchange = self.search.exchange.clone();
+                ui.horizontal(|ui| {
+                    let source_width = if sources.is_empty() {
+                        0.0
+                    } else {
+                        120.0 + ui.spacing().item_spacing.x
+                    };
+                    let tabs_width = (ui.available_width() - source_width).max(0.0);
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(tabs_width, 32.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            TabBar::new(&categories, &mut self.category)
+                                .pills()
+                                .single_row()
+                                .show(ui);
+                        },
+                    );
+                    if !sources.is_empty() {
+                        let all = l10n::text(ui.ctx(), "All sources");
+                        egui::ComboBox::from_id_salt("symbol_sources")
+                            .width(120.0)
+                            .truncate()
+                            .selected_text(self.search.exchange.as_deref().unwrap_or(&all))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.search.exchange, None, all.as_str());
+                                for source in sources {
+                                    let label = source.clone();
+                                    ui.selectable_value(
+                                        &mut self.search.exchange,
+                                        Some(source),
+                                        label,
+                                    );
+                                }
+                            })
+                            .response
+                            .accessible_name(l10n::text(ui.ctx(), "Source"));
                     }
-                    ui.add_space(4.0);
+                });
+                if self.category != before_category || self.search.exchange != before_exchange {
+                    self.sel_idx = 0;
+                    self.refresh_results(ctx, all_symbols);
                 }
                 rows = self.rows();
-                ui.add_space(4.0);
+                ui.add_space(theme.spacing.xl);
 
                 self.search.status(ui);
                 if let Some((status, error)) = &self.expression_status {
@@ -804,29 +854,59 @@ mod tests {
     fn service_results_reach_both_symbol_choosers_without_a_local_catalog() {
         for compare in [false, true] {
             let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::light());
             let source: Arc<dyn SymbolSearch> = Arc::new(vec![
                 crate::model::Instrument::new("HOST").with_description("Host instrument"),
             ]);
             let mut search = SymbolSearchDialog::new();
             search.set_search_service(Some(source.clone()));
+            search.set_feed_capabilities(&crate::data::FeedCapabilities {
+                exchanges: Some(vec!["Host venue".into()]),
+                ..Default::default()
+            });
             search.open_with_query("host".into());
             let mut comparison = CompareSymbolsDialog::new();
             comparison.set_search_service(Some(source));
             comparison.open();
             comparison.search_query = "host".into();
             for step in 0..3 {
-                let output = ctx.run_ui(Default::default(), |ui| {
-                    if compare {
-                        let _ = comparison.show(ui.ctx(), &[]);
-                    } else {
-                        let _ = search.show(ui.ctx(), &[]);
-                    }
-                });
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1440.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        if compare {
+                            let _ = comparison.show(ui.ctx(), &[]);
+                        } else {
+                            let _ = search.show(ui.ctx(), &[]);
+                        }
+                    },
+                );
                 let painted = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "HOST"));
-                output.drop_without_applying_deltas();
                 if step > 0 {
                     assert!(painted, "service result absent from chooser {compare}");
+                    if !compare {
+                        let name = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) if text.galley.text() == "HOST" => {
+                                    Some(text.pos)
+                                }
+                                _ => None,
+                            })
+                            .unwrap();
+                        assert!(
+                            (name.y - 237.0).abs() <= 4.0,
+                            "result row must start near y=229: {name:?}"
+                        );
+                    }
                 }
+                output.drop_without_applying_deltas();
             }
         }
     }
@@ -914,7 +994,7 @@ mod tests {
                     nested: false,
                 };
                 let (response, _) = dialog.render_symbol_item(ui, &symbols[0], false, row);
-                assert_eq!(response.rect.height(), 32.0);
+                assert_eq!(response.rect.height(), 56.0);
             })
             .drop_without_applying_deltas();
             dialog.open();
@@ -982,6 +1062,138 @@ mod tests {
             )
             .drop_without_applying_deltas();
             assert!(!dialog.is_open());
+        }
+    }
+
+    #[test]
+    fn opening_with_a_selected_query_replaces_it_and_clear_restores_results() {
+        for (query, selected) in [("BTCUSDT", true), ("ÉTH", true), ("TS", false)] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::light());
+            let mut dialog = SymbolSearchDialog::new();
+            if selected {
+                dialog.open_with_selected_query(query.into());
+            } else {
+                dialog.open_with_query(query.into());
+            }
+            let symbols = create_test_symbols();
+            let mut frame = |events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let _ = dialog.show(ui.ctx(), &symbols);
+                    },
+                );
+                let query = dialog.search_query.clone();
+                output.drop_without_applying_deltas();
+                query
+            };
+            frame(vec![]);
+            frame(vec![]);
+            let state =
+                egui::TextEdit::load_state(&ctx, egui::Id::unique("symbol_search_input")).unwrap();
+            let range = state.cursor.char_range().unwrap().as_sorted_char_range();
+            assert_eq!(
+                range == (egui::text::CharIndex::ZERO..query.chars().count().into()),
+                selected
+            );
+            // A typed shortcut query keeps the next keystroke after it.
+            let typed = if selected {
+                "AAPL".to_owned()
+            } else {
+                format!("{query}AAPL")
+            };
+            assert_eq!(frame(vec![egui::Event::Text("AAPL".into())]), typed);
+            // The clear control sits immediately before the close control in the query row.
+            let clear = egui::pos2(1076.0, 143.0);
+            frame(vec![egui::Event::PointerMoved(clear)]);
+            for pressed in [true, false] {
+                frame(vec![egui::Event::PointerButton {
+                    pos: clear,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }]);
+            }
+            assert!(dialog.search_query.is_empty());
+            assert_eq!(dialog.filtered_symbols.len(), symbols.len());
+            assert_eq!(
+                ctx.memory(|m| m.focused()),
+                Some(egui::Id::unique("symbol_search_input"))
+            );
+        }
+    }
+
+    #[test]
+    fn result_rows_highlight_substrings_and_truncate_long_descriptions() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for (query, symbol, description, marked) in [
+                ("sa", "SAMPLE", "A sample description", "SAsa"),
+                ("é", "ÉTH", "Éther", "ÉÉ"),
+                ("i", "İND", "İstanbul", "İİ"),
+                ("", "SAMPLE", "A long description ", ""),
+            ] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut dialog = SymbolSearchDialog::new();
+                dialog.search_query = query.into();
+                let instrument = Instrument::new(symbol)
+                    .with_description(format!("{description}{}", " long".repeat(60)));
+                let mut row_rect = egui::Rect::NOTHING;
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(400.0, 150.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        (row_rect, _) = {
+                            let (response, toggled) = dialog.render_symbol_item(
+                                ui,
+                                &instrument,
+                                false,
+                                Row {
+                                    index: 0,
+                                    members: 0,
+                                    nested: false,
+                                },
+                            );
+                            (response.rect, toggled)
+                        };
+                    },
+                );
+                let mut highlights = String::new();
+                let mut elided = false;
+                for shape in &output.shapes {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        let job = &text.galley.job;
+                        for section in &job.sections {
+                            if section.format.color == theme.ui.accent {
+                                highlights.push_str(
+                                    &job.text[section.byte_range.start.0..section.byte_range.end.0],
+                                );
+                            }
+                        }
+                        elided |= text.galley.elided;
+                        assert!(row_rect.contains_rect(egui::Rect::from_min_size(
+                            text.pos,
+                            text.galley.size()
+                        )));
+                    }
+                }
+                assert_eq!(highlights, marked);
+                assert!(elided);
+                output.drop_without_applying_deltas();
+            }
         }
     }
 

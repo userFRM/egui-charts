@@ -566,7 +566,11 @@ impl ChartConfig {
         self.bullish_wick_color = Some(theme.chart.candle_up);
         self.bearish_wick_color = Some(theme.chart.candle_down);
         self.session_break_color = theme.chart.grid_line_major;
-        self.watermark_color = theme.chart.grid_line;
+        self.watermark_color = if theme.dark {
+            theme.chart.grid_line
+        } else {
+            theme.chart.bg.lerp_to_gamma(theme.ui.text, 0.18)
+        };
         self
     }
 }
@@ -578,7 +582,7 @@ mod tests {
     #[test]
     fn with_theme_recolours_session_breaks_and_watermark() {
         let config = ChartConfig::default().with_theme(&Theme::light());
-        assert_eq!(config.session_break_color, Color32::from_rgb(209, 209, 209));
+        assert_eq!(config.session_break_color, Color32::from_rgb(229, 229, 229));
         assert_eq!(config.watermark_color, Color32::from_rgb(209, 209, 209));
     }
 }

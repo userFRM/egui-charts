@@ -349,6 +349,20 @@ pub trait Indicator: Send {
         Vec::new()
     }
 
+    /// The oldest time this study reads from `request`, one of its
+    /// [`data_requests`](Indicator::data_requests). A connected feed stops loading older
+    /// history of that series once it holds a bar at or before the earliest such time of the
+    /// studies reading it, and loads more when that time moves earlier. `None`, the default,
+    /// and a time before the chart's first bar load the series back to that bar. Price-based
+    /// chart types such as Renko do not use the times and always load it back to that bar.
+    fn data_start(
+        &self,
+        request: &super::StudyDataRequest,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        let _ = request;
+        None
+    }
+
     /// Update with requested histories. Studies using only chart bars keep the default.
     /// Pass 0 when a requested history changes; nonzero `from` retains the same requested
     /// histories and follows [`update`](Indicator::update)'s unchanged-prefix contract.

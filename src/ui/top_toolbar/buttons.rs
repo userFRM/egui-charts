@@ -74,7 +74,9 @@ impl<'a> ToolbarIconButton<'a> {
         let icon_pos = rect.center() - icon_size / 2.0;
         let icon_rect = Rect::from_min_size(icon_pos, icon_size);
         if ui.is_rect_visible(icon_rect) {
-            let icon_color = if is_active || is_hovered {
+            let icon_color = if !ui.is_enabled() {
+                ui.active_theme().ui.text_disabled
+            } else if is_active || is_hovered {
                 ui.visuals().widgets.hovered.fg_stroke.color
             } else {
                 ui.visuals().text_color()
@@ -224,18 +226,18 @@ impl TextButton {
         self
     }
 
+    pub(crate) fn width(&self, ui: &Ui) -> f32 {
+        let galley = ui.painter().layout_no_wrap(
+            l10n::text(ui.ctx(), &self.text),
+            egui::FontId::proportional(ui.active_theme().text.title),
+            Color32::PLACEHOLDER,
+        );
+        galley.size().x + self.config.padding * 2.0
+    }
+
     /// Show the component and return its response.
     pub fn show(self, ui: &mut Ui) -> Response {
-        let padding = self.config.padding;
-        // Measure actual text width
-        let font_id = egui::FontId::proportional(ui.active_theme().text.title);
-        let galley = ui.painter().layout_no_wrap(
-            l10n::text(ui.ctx(), self.text.clone()),
-            font_id,
-            ui.active_theme().ui.text,
-        );
-        let text_width = galley.rect.width();
-        let total_width = text_width + padding * 2.0;
+        let total_width = self.width(ui);
         let height = self.config.btn_size;
 
         let (rect, response) =
@@ -263,7 +265,7 @@ impl TextButton {
             ui.visuals().text_color(),
         );
 
-        let translated_label = l10n::text(ui.ctx(), &self.text);
+        let translated_label = l10n::text(ui.ctx(), self.tooltip.unwrap_or(&self.text));
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), &translated_label)
         });
@@ -318,6 +320,9 @@ impl<'a> TextIconButton<'a> {
     }
 
     pub(crate) fn width(&self, ui: &Ui) -> f32 {
+        if self.text.is_empty() {
+            return self.config.padding * 3.0 + icon_sizes::XS;
+        }
         let font_id = egui::FontId::proportional(ui.active_theme().text.title);
         let galley = ui.painter().layout_no_wrap(
             l10n::text(ui.ctx(), self.text),
@@ -355,14 +360,16 @@ impl<'a> TextIconButton<'a> {
             } else {
                 ui.visuals().text_color()
             };
-            let text_x = rect.min.x + padding;
-            ui.painter().text(
-                Pos2::new(text_x, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                l10n::text(ui.ctx(), self.text),
-                font_id,
-                text_color,
-            );
+            if !self.text.is_empty() {
+                let text_x = rect.min.x + padding;
+                ui.painter().text(
+                    Pos2::new(text_x, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    l10n::text(ui.ctx(), self.text),
+                    font_id,
+                    text_color,
+                );
+            }
 
             // Icon (chevron)
             let icon_x = rect.max.x - padding - icon_size;
@@ -388,7 +395,7 @@ impl<'a> TextIconButton<'a> {
 /// Neutral colour of the toolbar's group rules and pill outlines.
 pub(crate) fn rule_color(theme: &Theme) -> Color32 {
     if theme.dark {
-        theme.ui.border.lerp_to_gamma(theme.ui.text, 0.18)
+        theme.ui.border.lerp_to_gamma(theme.ui.text, 0.16)
     } else {
         theme.ui.panel_bg.lerp_to_gamma(theme.ui.text, 0.085)
     }

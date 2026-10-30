@@ -7,8 +7,10 @@
 //! the volume profile, regression trend and position drawings
 //! ([`VolumeProfileConfig`](crate::data::VolumeProfileConfig), [`RegressionTrendConfig`], [`PositionSize`], [`PositionSizing`]).
 
+use crate::model::TimeframeUnit;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::ops::RangeInclusive;
 
 /// Identifies a selection handle position on a drawing.
 ///
@@ -96,16 +98,24 @@ impl ArrowStyle {
 
 pub use crate::config::FontWeight;
 
-/// Per-timeframe visibility configuration
+/// The intervals a drawing shows on.
 ///
-/// Allows drawings to be visible only on specific timeframes.
+/// While [`show_on_all`](Self::show_on_all) is set, a drawing shows on every interval. Otherwise it
+/// shows on the intervals named in [`visible_timeframes`](Self::visible_timeframes) and on those
+/// whose unit has a range in [`ranges`](Self::ranges) holding their value. An interval's unit and
+/// value are those of its label, as [`Timeframe::as_str`](crate::model::Timeframe::as_str) writes
+/// it: `90min` is 90 minutes, and a 24 hour interval, labelled `1D`, is 1 day.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct TimeframeVisibility {
-    /// If true, show on all timeframes (default behavior)
+    /// Show on every interval.
     pub show_on_all: bool,
-    /// Set of timeframe strings where this drawing is visible
+    /// Interval labels the drawing shows on, matched exactly.
     #[serde(serialize_with = "serialize_sorted")]
     pub visible_timeframes: HashSet<String>,
+    /// Values of each unit the drawing shows on, both ends included, such as 1 to 4 hours for
+    /// 1h, 2h, 3h and 4h. A range whose start is after its end holds no value.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ranges: BTreeMap<TimeframeUnit, RangeInclusive<u64>>,
 }
 
 /// Writes the set sorted, so saving the same drawings gives the same file.
@@ -116,12 +126,33 @@ fn serialize_sorted<S: serde::Serializer>(
     serializer.collect_seq(set.iter().collect::<std::collections::BTreeSet<_>>())
 }
 
+/// The value and unit of an interval label written by `Timeframe::as_str`, such as `90min`.
+fn interval_parts(label: &str) -> Option<(u64, TimeframeUnit)> {
+    let split = label.find(|c: char| !c.is_ascii_digit())?;
+    let unit = match &label[split..] {
+        "t" => TimeframeUnit::Tick,
+        "v" => TimeframeUnit::Volume,
+        "r" => TimeframeUnit::Range,
+        "delta" => TimeframeUnit::Delta,
+        "ms" => TimeframeUnit::Millisecond,
+        "s" => TimeframeUnit::Second,
+        "min" => TimeframeUnit::Minute,
+        "h" => TimeframeUnit::Hour,
+        "D" => TimeframeUnit::Day,
+        "W" => TimeframeUnit::Week,
+        "M" => TimeframeUnit::Month,
+        _ => return None,
+    };
+    Some((label[..split].parse().ok()?, unit))
+}
+
 impl TimeframeVisibility {
     /// Create visibility for all timeframes (default)
     pub fn all() -> Self {
         Self {
             show_on_all: true,
             visible_timeframes: HashSet::new(),
+            ranges: BTreeMap::new(),
         }
     }
 
@@ -130,13 +161,47 @@ impl TimeframeVisibility {
         Self {
             show_on_all: false,
             visible_timeframes: timeframes.iter().map(|s| (*s).to_string()).collect(),
+            ranges: BTreeMap::new(),
         }
     }
 
-    /// Check if visible on the given timeframe
+    /// Check if visible on the interval labelled `timeframe`
     #[inline]
     pub fn is_visible_on(&self, timeframe: &str) -> bool {
-        self.show_on_all || self.visible_timeframes.contains(timeframe)
+        self.show_on_all
+            || self.visible_timeframes.contains(timeframe)
+            || (!self.ranges.is_empty()
+                && interval_parts(timeframe).is_some_and(|(value, unit)| {
+                    self.ranges
+                        .get(&unit)
+                        .is_some_and(|range| range.contains(&value))
+                }))
+    }
+
+    /// The values of `unit` the drawing shows on: its range, widened to cover the labels of that
+    /// unit in [`visible_timeframes`](Self::visible_timeframes). `None` when neither names the unit.
+    pub fn range(&self, unit: TimeframeUnit) -> Option<RangeInclusive<u64>> {
+        self.visible_timeframes
+            .iter()
+            .filter_map(|label| interval_parts(label))
+            .filter(|&(_, of)| of == unit)
+            .map(|(value, _)| value..=value)
+            .chain(self.ranges.get(&unit).cloned())
+            .reduce(|a, b| *a.start().min(b.start())..=*a.end().max(b.end()))
+    }
+
+    /// Show the drawing on `range` of `unit`, or on no interval of that unit for `None`, in place
+    /// of that unit's labels in [`visible_timeframes`](Self::visible_timeframes). A range turns
+    /// [`show_on_all`](Self::show_on_all) off.
+    pub fn set_range(&mut self, unit: TimeframeUnit, range: Option<RangeInclusive<u64>>) {
+        self.visible_timeframes
+            .retain(|label| interval_parts(label).is_none_or(|(_, of)| of != unit));
+        if let Some(range) = range {
+            self.show_on_all = false;
+            self.ranges.insert(unit, range);
+        } else {
+            self.ranges.remove(&unit);
+        }
     }
 
     /// Add a timeframe to visibility
@@ -148,7 +213,7 @@ impl TimeframeVisibility {
     /// Remove a timeframe from visibility
     pub fn remove_timeframe(&mut self, timeframe: &str) {
         self.visible_timeframes.remove(timeframe);
-        if self.visible_timeframes.is_empty() {
+        if self.visible_timeframes.is_empty() && self.ranges.is_empty() {
             self.show_on_all = true;
         }
     }
@@ -254,6 +319,12 @@ impl FibonacciLevel {
 pub struct FibonacciConfig {
     /// Individual level configurations
     pub levels: Vec<FibonacciLevel>,
+    /// Width of every level line, in points.
+    #[serde(default = "fib_level_width")]
+    pub level_width: f32,
+    /// Line pattern shared by every level.
+    #[serde(default)]
+    pub level_style: crate::model::LineStyle,
     /// Show background fill between levels
     pub show_background: bool,
     /// Background opacity (0-255)
@@ -265,10 +336,10 @@ pub struct FibonacciConfig {
     /// Reverse the direction (flip vertically)
     pub reverse: bool,
     /// Show prices in level labels. `None` retains the tool's legacy choice:
-    /// on for retracements and extensions, off for channels.
+    /// inherited from each level.
     #[serde(default)]
     pub show_prices: Option<bool>,
-    /// Show the level value in labels. `None` preserves legacy labels (off for wedges).
+    /// Show the level value in labels; enabled when unset.
     #[serde(default)]
     pub show_levels: Option<bool>,
     /// Format level values as percentages rather than ratios.
@@ -280,6 +351,10 @@ pub struct FibonacciConfig {
     /// Measure retracement and extension levels in logarithmic price when all anchors are positive.
     #[serde(default)]
     pub logarithmic: bool,
+}
+
+fn fib_level_width() -> f32 {
+    2.0
 }
 
 fn percent_levels() -> bool {
@@ -299,6 +374,8 @@ impl Default for FibonacciConfig {
                 FibonacciLevel::new(0.786, "78.6%", [156, 39, 176, 255]),
                 FibonacciLevel::new(1.0, "100%", [120, 123, 134, 255]),
             ],
+            level_width: fib_level_width(),
+            level_style: crate::model::LineStyle::Solid,
             show_background: false,
             background_opacity: 30,
             extend_left: false,
@@ -307,8 +384,8 @@ impl Default for FibonacciConfig {
             logarithmic: false,
             show_prices: None,
             show_levels: None,
-            levels_as_percent: true,
-            labels_on_left: false,
+            levels_as_percent: false,
+            labels_on_left: true,
         }
     }
 }
@@ -326,16 +403,18 @@ impl FibonacciConfig {
                 FibonacciLevel::new(2.0, "200%", [76, 175, 80, 255]),
                 FibonacciLevel::new(2.618, "261.8%", [156, 39, 176, 255]),
             ],
+            level_width: fib_level_width(),
+            level_style: crate::model::LineStyle::Solid,
             show_background: false,
             background_opacity: 30,
             extend_left: false,
-            extend_right: true,
+            extend_right: false,
             reverse: false,
             logarithmic: false,
             show_prices: None,
             show_levels: None,
-            levels_as_percent: true,
-            labels_on_left: false,
+            levels_as_percent: false,
+            labels_on_left: true,
         }
     }
 
@@ -391,6 +470,12 @@ impl FibonacciConfig {
                 (4.236, pink),
                 (4.618, red),
             ],
+            T::FibonacciWedge => {
+                let mut config = Self::default();
+                config.levels.retain(|l| l.value != 0.0);
+                config.show_levels = Some(true);
+                return config;
+            }
             T::FibonacciExtension => return Self::extension_default(),
             _ => return Self::default(),
         };
@@ -405,13 +490,13 @@ impl FibonacciConfig {
                 .collect(),
             show_background: tool != T::FibonacciTimeZones,
             background_opacity: 51,
-            levels_as_percent: tool != T::FibonacciTimeZones,
+            levels_as_percent: false,
             ..Self::default()
         }
     }
 
     /// Label content; a tool without a price passes `None`.
-    pub(crate) fn label_text(&self, level: &FibonacciLevel, price: Option<f64>) -> String {
+    pub(crate) fn label_text(&self, level: &FibonacciLevel, price: Option<&str>) -> String {
         if self.show_prices.is_none()
             && self.show_levels.is_none()
             && !level.show_price
@@ -425,9 +510,9 @@ impl FibonacciConfig {
             .then(|| level.label(self.levels_as_percent));
         let price = price.filter(|_| self.show_prices.unwrap_or(level.show_price));
         match (value, price) {
-            (Some(value), Some(price)) => format!("{value} ({price:.2})"),
+            (Some(value), Some(price)) => format!("{value} ({price})"),
             (Some(value), None) => value,
-            (None, Some(price)) => format!("{price:.2}"),
+            (None, Some(price)) => price.to_owned(),
             (None, None) => String::new(),
         }
     }
@@ -468,6 +553,7 @@ impl FibonacciConfig {
         self.visible_levels().map(move |level| {
             let value = f64::from(level.value);
             if extension {
+                let value = if self.reverse { -value } else { value };
                 if self.logarithmic && start > 0.0 && end > 0.0 && origin > 0.0 {
                     (origin.ln() + (end.ln() - start.ln()) * value).exp()
                 } else {
@@ -655,6 +741,7 @@ impl Default for PositionSize {
 mod tests {
     use super::*;
     use crate::data::VolumeProfileConfig;
+    use crate::model::Timeframe;
 
     /// Reference: quantity = risked amount / |entry - stop| (reference.py);
     /// none when a size from the risk has its stop at the entry, or a setting
@@ -783,6 +870,8 @@ mod tests {
         }
     }
 
+    /// A drawing shows on intervals whose unit and value, read from the label, fall in a range,
+    /// and on labels saved before ranges, matched exactly until their unit's range is set.
     #[test]
     fn test_timeframe_visibility() {
         let mut vis = TimeframeVisibility::all();
@@ -792,6 +881,64 @@ mod tests {
         vis.add_timeframe("1h");
         assert!(vis.is_visible_on("1h"));
         assert!(!vis.is_visible_on("1D"));
+
+        let n = |v| std::num::NonZeroU64::new(v).unwrap();
+        let mut vis = TimeframeVisibility::all();
+        vis.set_range(TimeframeUnit::Hour, Some(1..=4));
+        vis.set_range(TimeframeUnit::Minute, Some(1..=59));
+        vis.set_range(TimeframeUnit::Second, Some(1..=600));
+        vis.set_range(TimeframeUnit::Tick, Some(100..=1000));
+        for (timeframe, shown) in [
+            (Timeframe::Hour1, true),                // "1h", the start
+            (Timeframe::Custom(n(2 * 3600)), true),  // "2h", not one of the nine former names
+            (Timeframe::Hour4, true),                // "4h", the end
+            (Timeframe::Custom(n(5 * 3600)), false), // "5h"
+            (Timeframe::Day1, false),                // "1D"
+            (Timeframe::Min30, true),                // "30min"
+            (Timeframe::Custom(n(90 * 60)), false),  // "90min", 90 > 59
+            (Timeframe::Month1, false),              // "1M" is a month, not a minute
+            (Timeframe::Sec30, true),                // "30s"
+            (Timeframe::Ms500, false),               // "500ms" is not 500 seconds
+            (Timeframe::Ticks(n(99)), false),
+            (Timeframe::Ticks(n(100)), true),
+            (Timeframe::Ticks(n(1000)), true),
+            (Timeframe::Ticks(n(1001)), false),
+            (Timeframe::Range(n(100)), false), // "100r", unit not set
+            (Timeframe::Delta(n(100)), false), // "100delta"
+        ] {
+            assert_eq!(vis.is_visible_on(&timeframe.as_str()), shown, "{timeframe}");
+        }
+        vis.show_on_all = true;
+        assert!(vis.is_visible_on("1D"));
+
+        let mut saved = TimeframeVisibility::specific(&["1h", "4h", "1D"]);
+        assert_eq!(saved.range(TimeframeUnit::Hour), Some(1..=4));
+        assert!(!saved.is_visible_on("2h"));
+        saved.set_range(TimeframeUnit::Hour, Some(2..=3));
+        assert_eq!(saved.range(TimeframeUnit::Hour), Some(2..=3));
+        assert!(
+            !saved.is_visible_on("1h") && saved.is_visible_on("2h") && saved.is_visible_on("1D")
+        );
+        saved.remove_timeframe("1D");
+        assert!(!saved.is_visible_on("1D") && saved.is_visible_on("3h"));
+        saved.set_range(TimeframeUnit::Hour, None);
+        assert_eq!(saved.range(TimeframeUnit::Hour), None);
+
+        let legacy = r#"{"show_on_all":false,"visible_timeframes":["4h"]}"#;
+        let loaded: TimeframeVisibility = serde_json::from_str(legacy).unwrap();
+        assert_eq!(loaded, TimeframeVisibility::specific(&["4h"]));
+        assert_eq!(serde_json::to_string(&loaded).unwrap(), legacy);
+        let mut hours = TimeframeVisibility::default();
+        hours.set_range(TimeframeUnit::Hour, Some(1..=4));
+        let json = serde_json::to_string(&hours).unwrap();
+        assert_eq!(
+            json,
+            r#"{"show_on_all":false,"visible_timeframes":[],"ranges":{"Hour":{"start":1,"end":4}}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<TimeframeVisibility>(&json).unwrap(),
+            hours
+        );
     }
 
     /// Anchors 100 then 200: level v sits at 200 - 100 * v, or at 100 + 100 * v when reversed.

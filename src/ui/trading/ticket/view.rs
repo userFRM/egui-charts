@@ -5,10 +5,10 @@ use crate::chart::decimals;
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
-use crate::ui::trading::widgets::{hit, side_fill, side_name, text, track};
+use crate::ui::trading::widgets::{SECTION_TITLE_SIZE, hit, side_fill, side_name, text, track};
 use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
-use egui::{Align, Align2, Color32, Layout, Rect, RichText, Role, Sense, Ui, WidgetInfo, vec2};
+use egui::{Align, Align2, Layout, Rect, RichText, Role, Sense, Ui, WidgetInfo, vec2};
 
 impl OrderTicket {
     /// Draws the ticket's contents into `ui`, the panel the host gives it. Returns what the user
@@ -45,7 +45,7 @@ impl OrderTicket {
                     ui.label(
                         RichText::new(l10n::text(ui.ctx(), reason))
                             .color(ui.active_theme().ui.error)
-                            .size(12.0),
+                            .size(ui.active_theme().text.label),
                     );
                 }
                 let height = ui.available_height().max(360.0);
@@ -147,9 +147,14 @@ impl OrderTicket {
     ) {
         ui.horizontal(|ui| {
             ui.set_min_height(32.0);
-            ui.label(RichText::new(&self.symbol).strong().size(15.0));
+            ui.label(
+                RichText::new(&self.symbol)
+                    .strong()
+                    .size(SECTION_TITLE_SIZE),
+            );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if IconButton::new(&icons::CLOSE)
+                    .icon_scale(1.0)
                     .tooltip("Close")
                     .show(ui)
                     .clicked()
@@ -157,6 +162,7 @@ impl OrderTicket {
                     self.open = false;
                 }
                 let more = IconButton::new(&icons::UI_MORE_HORIZONTAL)
+                    .icon_scale(1.0)
                     .tooltip("More")
                     .show(ui);
                 egui::Popup::menu(&more)
@@ -230,7 +236,7 @@ impl OrderTicket {
     fn switch(&mut self, ui: &mut Ui) {
         let theme = ui.active_theme();
         let (track, selected_fill) = track(ui);
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
         ui.painter().rect_filled(rect, 8.0, track);
         let width = rect.width() / 2.0;
         for (index, (tab, label)) in [(Tab::Order, "Order"), (Tab::Dom, "DOM")]
@@ -254,7 +260,7 @@ impl OrderTicket {
                 cell.center(),
                 Align2::CENTER_CENTER,
                 label,
-                14.0,
+                theme.text.title,
                 if selected {
                     theme.ui.text
                 } else {
@@ -272,7 +278,7 @@ impl OrderTicket {
             ui.label(
                 RichText::new(l10n::text(ui.ctx(), reason))
                     .color(theme.ui.error)
-                    .size(12.0),
+                    .size(ui.active_theme().text.label),
             );
         }
         let mut preview = None;
@@ -289,7 +295,7 @@ impl OrderTicket {
             preview = request.clone().ok().map(Action::Preview);
         }
         let (rect, response) =
-            ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::click());
+            ui.allocate_exact_size(vec2(ui.available_width(), 58.0), Sense::click());
         let name = side_name(self.side);
         let detail = request.as_ref().map_or(String::new(), |request| {
             summary(
@@ -309,19 +315,26 @@ impl OrderTicket {
         if request.is_err() {
             fill = fill.gamma_multiply(0.5);
         } else if response.hovered() {
-            fill = fill.gamma_multiply(0.9);
+            fill = match self.side {
+                crate::model::OrderSide::Buy => theme.ui.accent_hover,
+                crate::model::OrderSide::Sell => theme.ui.danger_bg_hover,
+            };
         }
         ui.painter().rect_filled(rect, 8.0, fill);
+        let ink = match self.side {
+            crate::model::OrderSide::Buy => theme.ui.accent_text,
+            crate::model::OrderSide::Sell => theme.ui.danger_text,
+        };
         let top = rect.center_top() + vec2(0.0, 8.0);
-        text(ui, top, Align2::CENTER_TOP, name, 16.0, Color32::WHITE);
+        text(ui, top, Align2::CENTER_TOP, name, theme.text.heading, ink);
         let bottom = rect.center_bottom() - vec2(0.0, 8.0);
         text(
             ui,
             bottom,
             Align2::CENTER_BOTTOM,
             &detail,
-            12.0,
-            Color32::WHITE,
+            theme.text.label,
+            ink,
         );
         (response.clicked())
             .then_some(request.ok())

@@ -308,10 +308,7 @@ impl DrawingPropertiesDialog {
         d.extend_right = self.props.extend_right;
         d.text = (!self.props.label.is_empty()).then(|| self.props.label.clone());
         d.font_size = self.props.font_size;
-        d.timeframe_visibility = crate::drawings::TimeframeVisibility {
-            show_on_all: self.props.visible_all_timeframes,
-            visible_timeframes: self.props.visible_timeframes.iter().cloned().collect(),
-        };
+        d.timeframe_visibility = self.props.timeframe_visibility.clone();
         Some(template)
     }
 
@@ -332,13 +329,7 @@ impl DrawingPropertiesDialog {
         self.props.extend_right = d.extend_right;
         self.props.label = d.text.clone().unwrap_or_default();
         self.props.font_size = d.font_size;
-        self.props.visible_all_timeframes = d.timeframe_visibility.show_on_all;
-        self.props.visible_timeframes = d
-            .timeframe_visibility
-            .visible_timeframes
-            .iter()
-            .cloned()
-            .collect();
+        self.props.timeframe_visibility = d.timeframe_visibility.clone();
         self.props.tool_settings = Some(Box::new(template));
     }
 
@@ -542,7 +533,7 @@ impl DrawingPropertiesDialog {
         let action = match self.drawing_id {
             Some(id) if apply => {
                 self.props.coordinates = self.coordinates.clone();
-                DrawingPropertiesAction::Apply(id, self.props.clone())
+                DrawingPropertiesAction::Apply(id, Box::new(self.props.clone()))
             }
             _ if cancel => DrawingPropertiesAction::Cancel,
             _ => DrawingPropertiesAction::None,
@@ -687,6 +678,29 @@ mod tests {
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
             }
         }
+    }
+
+    /// The Visibility tab writes only the unit row the user edits, so labels saved before
+    /// interval ranges keep their exact visibility.
+    #[test]
+    fn visibility_rows_keep_saved_interval_labels_until_edited() {
+        use crate::drawings::TimeframeVisibility;
+        use crate::model::TimeframeUnit;
+        let ctx = Context::default();
+        let mut chart = Chart::new(BarData::new());
+        let mut drawing = Drawing::new(7, Tool::TrendLine);
+        drawing.timeframe_visibility = TimeframeVisibility::specific(&["1h", "4h"]);
+        chart.drawings_mut().drawings = vec![drawing];
+        let mut dialog = DrawingPropertiesDialog::new();
+        dialog.open_for_chart(&chart, DrawingId(7));
+        dialog.active_tab = PropertiesTab::Visibility;
+        frame(&mut dialog, &mut chart, &ctx, vec![]);
+        frame(&mut dialog, &mut chart, &ctx, vec![]);
+        let mut want = TimeframeVisibility::specific(&["1h", "4h"]);
+        assert_eq!(chart.drawings().drawings[0].timeframe_visibility, want);
+        click(&mut dialog, &mut chart, &ctx, "Ticks");
+        want.ranges.insert(TimeframeUnit::Tick, 1..=1_000_000);
+        assert_eq!(chart.drawings().drawings[0].timeframe_visibility, want);
     }
 
     /// Preview edits leave both histories alone; accepting a sequence commits one bulk edit.

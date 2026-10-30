@@ -1,7 +1,7 @@
 //! Symbol and status line tabs of the chart settings dialog.
 
 use super::super::SettingsDialog;
-use super::{styled_checkbox, styled_dropdown};
+use super::{checkbox, styled_checkbox, styled_dropdown};
 use crate::localization as l10n;
 use crate::theme::Theme;
 use crate::theme::ThemeExt;
@@ -94,7 +94,7 @@ impl SettingsDialog {
                                             .size(theme.text.title)
                                             .color(theme.ui.text);
                                         if candles {
-                                            ui.checkbox(shown, label)
+                                            checkbox(ui, shown, label)
                                         } else {
                                             ui.label(label)
                                         }
@@ -102,7 +102,8 @@ impl SettingsDialog {
                                 )
                                 .inner;
                             ui.spacing_mut().item_spacing.x = 8.0;
-                            ui.spacing_mut().interact_size.y = 32.0;
+                            ui.spacing_mut().interact_size.y =
+                                DESIGN_TOKENS.sizing.settings_dialog.button_height;
                             ui.add_enabled_ui(!candles || *shown, |ui| {
                                 ui.label_inputs_by(checkbox.id, |ui| {
                                     for (color, picker, id) in

@@ -134,7 +134,7 @@ impl IndicatorSettingsDialog {
                 )
                 .show(ui);
                 ui.separator();
-                egui::ScrollArea::vertical()
+                egui::ScrollArea::both()
                     .max_height((ui.available_height() - 72.0).max(0.0))
                     .show(ui, |ui| match self.tab {
                         Tab::Inputs => {

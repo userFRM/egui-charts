@@ -1,7 +1,7 @@
 //! Sidebar + content two-column layout using `egui_extras::StripBuilder`.
 //!
 //! Use [`SidebarLayout`] for a fixed-width navigation column beside flexible
-//! content, separated by a rule. Sizes use egui logical points.
+//! content. Sizes use egui logical points.
 //!
 //! # Example
 //! ```
@@ -24,7 +24,6 @@ use egui_extras::{Size, StripBuilder};
 /// Two-column layout: fixed-width sidebar + flexible content area.
 ///
 /// Uses `egui_extras::StripBuilder` for clean proportional column sizing.
-/// Renders a vertical separator between the columns automatically.
 pub struct SidebarLayout {
     sidebar_width: f32,
 }
@@ -42,7 +41,6 @@ impl SidebarLayout {
     pub fn show(self, ui: &mut Ui, sidebar: impl FnOnce(&mut Ui), content: impl FnOnce(&mut Ui)) {
         StripBuilder::new(ui)
             .size(Size::exact(self.sidebar_width))
-            .size(Size::exact(1.0)) // separator
             .size(Size::remainder())
             .horizontal(|mut strip| {
                 // Sidebar column
@@ -50,17 +48,7 @@ impl SidebarLayout {
                     sidebar(ui);
                 });
 
-                // Vertical separator
-                strip.cell(|ui| {
-                    let rect = ui.available_rect_before_wrap();
-                    ui.painter().rect_filled(
-                        rect,
-                        0.0,
-                        ui.style().visuals.widgets.noninteractive.bg_stroke.color,
-                    );
-                });
-
-                // Content column, 16 px from the divider and the top
+                // Content column, inset from the sidebar and the top.
                 strip.cell(|ui| {
                     let inset = ui.active_theme().spacing.xxl;
                     let left = inset - ui.spacing().item_spacing.x;
@@ -124,7 +112,10 @@ impl<'a> SidebarTab<'a> {
         let theme = ui.active_theme();
         let width = ui.available_width();
         let height = DESIGN_TOKENS.sizing.button_xl;
+        // Rows touch, so the pitch is the tile height; the caller's spacing is kept for its other widgets.
+        let spacing = std::mem::take(&mut ui.spacing_mut().item_spacing.y);
         let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+        ui.spacing_mut().item_spacing.y = spacing;
         let translated_label = l10n::text(ui.ctx(), self.label);
         response.widget_info(|| WidgetInfo::labeled(Role::Tab, ui.is_enabled(), &translated_label));
         ui.ctx()
@@ -146,7 +137,7 @@ impl<'a> SidebarTab<'a> {
 
         // Every tab reserves the icon slot, so labels line up with or without an icon.
         let icon_size = DESIGN_TOKENS.sizing.icon_md;
-        let icon_x = rect.min.x + theme.spacing.xl;
+        let icon_x = rect.min.x + theme.spacing.xxl + theme.spacing.sm;
         if let Some(icon) = self.icon {
             let icon_rect = Rect::from_min_size(
                 Pos2::new(icon_x, rect.center().y - icon_size / 2.0),
@@ -158,7 +149,7 @@ impl<'a> SidebarTab<'a> {
 
         // Label
         let mut format =
-            egui::TextFormat::simple(egui::FontId::proportional(theme.text.body), text_color);
+            egui::TextFormat::simple(egui::FontId::proportional(theme.text.title), text_color);
         if self.is_active {
             format.coords.push("wght", 600.0);
         }
