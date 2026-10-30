@@ -2040,6 +2040,8 @@ fn stream_studies_keep_every_quote_and_book_loss_between_frames() {
     );
 }
 
+/// A new bar that crosses no input drop updates order-flow studies from that bar: closed bars
+/// keep their values and no study on the input blanks for a frame.
 /// Hand values: one buy of 1 in each of 11,000 one-minute bars. Each input holds all 11,000,
 /// so the CVD of bar 10,999 is 11,000 and a 10-bar flow sum is 10. Bar 11,000 is the 11,001st:
 /// the input drops its oldest 1,001 and the CVD starts again at bar 1,001, 9,999 at bar 10,999.
