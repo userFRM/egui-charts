@@ -4,8 +4,6 @@
 
 use super::style::circle_sides;
 use crate::drawings::domain::Drawing;
-use crate::styles::stroke;
-use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 
 impl Drawing {
@@ -45,20 +43,6 @@ impl Drawing {
                 Stroke::new(self.stroke_width, color),
             );
         }
-
-        // Draw anchor points with white stroke
-        painter.circle_filled(p1, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            p1,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(p2, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            p2,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
     }
 
     /// Renders time cycles: the anchors span one cycle, repeated as half circles
@@ -98,22 +82,6 @@ impl Drawing {
                 arc_stroke,
             ));
         }
-
-        // Draw center anchor point
-        painter.circle_filled(center, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            center,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::THICK, Color32::WHITE),
-        );
-
-        // Draw edge point
-        painter.circle_filled(edge, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_stroke(
-            edge,
-            DESIGN_TOKENS.rounding.md,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
     }
 
     /// Renders a sine wave line for cyclical analysis.
@@ -154,20 +122,6 @@ impl Drawing {
             wave,
             Stroke::new(self.stroke_width, color),
         ));
-
-        // Draw anchor points
-        painter.circle_filled(p1, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            p1,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(p2, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            p2,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
     }
 }
 
@@ -254,8 +208,7 @@ mod tests {
                         assert_eq!([points[0].y, points[1].y], [0.0, 200.0]);
                         assert_eq!(stroke, drawing.stroke());
                     }
-                    // Permanent anchor decorations belong to a separate change.
-                    egui::Shape::Circle(_) | egui::Shape::Noop => {}
+                    egui::Shape::Noop => {}
                     other => panic!("unexpected cyclic line decoration: {other:?}"),
                 }
             }
@@ -299,7 +252,7 @@ mod tests {
                                 );
                             }
                         }
-                        egui::Shape::Circle(_) | egui::Shape::Noop => {}
+                        egui::Shape::Noop => {}
                         other => panic!("unexpected {tool:?} decoration: {other:?}"),
                     }
                 }

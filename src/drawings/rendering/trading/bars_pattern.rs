@@ -29,22 +29,22 @@ impl Drawing {
         self.draw_source_region(painter, source_rect, color);
 
         // If we have a third point, draw the projection
-        if let (Some(&proj_anchor), Some(&at)) = (self.points.get(2), self.chart_points.get(2))
+        if let (Some(_), Some(&at)) = (self.points.get(2), self.chart_points.get(2))
             && let Some((start, projected)) = projected_bars(view.bars, [from, to, at])
         {
-            self.draw_pattern_projection(
-                painter,
-                view,
-                source_rect,
-                proj_anchor,
-                start,
-                &projected,
-                color,
-            );
+            self.draw_pattern_projection(painter, view, source_rect, start, &projected);
         }
 
-        // Source anchor points
-        self.draw_pattern_anchors(painter, source_start, source_end, color);
+        if !self.completed && self.points.len() == 2 {
+            for &point in &[source_start, source_end] {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.lg, self.color32());
+                painter.circle_stroke(
+                    point,
+                    DESIGN_TOKENS.rounding.lg,
+                    Stroke::new(stroke::MEDIUM, Color32::WHITE),
+                );
+            }
+        }
     }
 
     fn draw_source_region(&self, painter: &egui::Painter, source_rect: Rect, color: Color32) {
@@ -75,16 +75,13 @@ impl Drawing {
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn draw_pattern_projection(
         &self,
         painter: &egui::Painter,
         view: &ChartView,
         source_rect: Rect,
-        proj_anchor: Pos2,
         start: f32,
         projected: &[Bar],
-        color: Color32,
     ) {
         let font = egui::FontId::proportional(typography::XS);
         let proj_rect = bars_rect(view, start, projected);
@@ -137,14 +134,6 @@ impl Drawing {
             "PROJECTION",
             font,
             Color32::WHITE,
-        );
-
-        // Projection anchor point
-        painter.circle_filled(proj_anchor, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            proj_anchor,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
         );
 
         // Connection arrow from source to projection
@@ -202,27 +191,6 @@ impl Drawing {
                 Pos2::new(arrow_end.x - arrow_size, arrow_end.y + arrow_size * 0.6),
             ],
             Stroke::new(stroke::MEDIUM, arrow_color),
-        );
-    }
-
-    fn draw_pattern_anchors(
-        &self,
-        painter: &egui::Painter,
-        source_start: Pos2,
-        source_end: Pos2,
-        color: Color32,
-    ) {
-        painter.circle_filled(source_start, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            source_start,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(source_end, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            source_end,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
         );
     }
 }

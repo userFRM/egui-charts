@@ -31,8 +31,7 @@ impl Drawing {
     /// Renders the anchored VWAP from the anchor bar to the last bar, with
     /// bands one and two volume-weighted standard deviations away.
     pub(crate) fn render_anchored_vwap(&self, painter: &egui::Painter, view: &ChartView) {
-        let (Some(&anchor), Some(anchor_at)) = (self.points.first(), self.chart_points.first())
-        else {
+        let (Some(_), Some(anchor_at)) = (self.points.first(), self.chart_points.first()) else {
             return;
         };
         let color = self.color32();
@@ -40,13 +39,6 @@ impl Drawing {
         if let Some((first, bars)) = bars_between(view.bars, anchor_at.bar_idx, f32::INFINITY) {
             self.draw_vwap(painter, view, first, bars, color);
         }
-
-        painter.circle_filled(anchor, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            anchor,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::THICK, Color32::WHITE),
-        );
     }
 
     fn draw_vwap(
@@ -146,12 +138,10 @@ impl Drawing {
         else {
             return;
         };
-        let color = self.color32();
         if let Some((first, bars)) = bars_between(view.bars, a.bar_idx, b.bar_idx) {
             let (left, right) = (p1.x.min(p2.x), p1.x.max(p2.x));
             self.draw_volume_profile(painter, view, first, bars, left, right);
         }
-        self.draw_volume_profile_anchors(painter, &[p1, p2], color);
     }
 
     /// Renders the volume profile from the anchor bar to the last bar.
@@ -164,7 +154,6 @@ impl Drawing {
             let right = (view.bar_to_x)((first + bars.len() - 1) as f32);
             self.draw_volume_profile(painter, view, first, bars, anchor.x, right);
         }
-        self.draw_volume_profile_anchors(painter, &[anchor], self.color32());
     }
 
     /// Draws the profile of `bars`, the span that starts at bar `first`, as
@@ -255,22 +244,6 @@ impl Drawing {
             _ => return None,
         };
         self.span_profile(view, first, bars).as_ref().clone()
-    }
-
-    fn draw_volume_profile_anchors(
-        &self,
-        painter: &egui::Painter,
-        anchors: &[Pos2],
-        color: Color32,
-    ) {
-        for &anchor in anchors {
-            painter.circle_filled(anchor, DESIGN_TOKENS.rounding.lg, color);
-            painter.circle_stroke(
-                anchor,
-                DESIGN_TOKENS.rounding.lg,
-                Stroke::new(stroke::MEDIUM, Color32::WHITE),
-            );
-        }
     }
 }
 

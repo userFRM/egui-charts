@@ -125,14 +125,6 @@ impl Drawing {
             font,
             color,
         );
-
-        // Anchor point
-        painter.circle_filled(anchor, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            anchor,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
     }
 
     /// Renders a comment marker with expandable bubble.

@@ -238,9 +238,6 @@ impl Drawing {
             egui::FontId::proportional(typography::SM),
             color,
         );
-
-        painter.circle_filled(p1, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_filled(p2, DESIGN_TOKENS.rounding.md, color);
     }
 
     pub(crate) fn render_date_range(
@@ -313,9 +310,6 @@ impl Drawing {
         let range_rect =
             Rect::from_x_y_ranges(p1.x.min(p2.x)..=p1.x.max(p2.x), chart_rect.y_range());
         painter.rect_filled(range_rect, 0.0, fill_color);
-
-        painter.circle_filled(p1, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_filled(p2, DESIGN_TOKENS.rounding.md, color);
     }
 
     // === NEW TOOL RENDER FUNCTIONS ===
@@ -373,10 +367,6 @@ impl Drawing {
 
         // Draw the main line with proper stroke
         painter.line_segment([start, end], Stroke::new(self.stroke_width, color));
-
-        // Draw anchor points
-        painter.circle_filled(start, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_filled(end, DESIGN_TOKENS.rounding.md, color);
 
         let Some(info_text) = self.measurement_label(view.bars, view.instrument, view.time_axis)
         else {
