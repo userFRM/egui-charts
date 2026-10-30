@@ -507,7 +507,11 @@ mod tests {
                             < crate::theme::contrast(theme.ui.border_control, theme.ui.panel_bg)
                     );
                 } else if !theme.dark {
-                    assert_ne!(fill, theme.ui.panel_bg, "disabled fields must have a fill");
+                    assert_ne!(
+                        theme.ui.panel_bg.blend(fill),
+                        theme.ui.panel_bg,
+                        "disabled fields must have a fill"
+                    );
                 }
                 output.drop_without_applying_deltas();
             }
