@@ -15,6 +15,7 @@ use crate::model::{Order, OrderSide, OrderType};
 use crate::theme::ThemeExt;
 use crate::ui::connection_status::show_connection_status_with_label;
 use crate::ui::model::ConnectionState;
+use crate::ui::top_toolbar::buttons::rule_color;
 use crate::ui::trading::widgets::{grouped, semibold, side_color};
 use crate::ui_kit::buttons::ButtonSize;
 use crate::ui_kit::{EmptyState, IconButton};
@@ -66,6 +67,7 @@ impl Trading {
                 if ui
                     .add(
                         egui::Button::new(l10n::text(ui.ctx(), "Trade"))
+                            .min_size(vec2(63.0, 25.0))
                             .corner_radius(ui.active_theme().radius.sm),
                     )
                     .on_hover_text(l10n::text(ui.ctx(), "Open the order ticket"))
@@ -76,6 +78,7 @@ impl Trading {
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if IconButton::new(&icons::MAXIMIZE)
+                    .icon_scale(0.9)
                     .tooltip("Maximize panel")
                     .show(ui)
                     .clicked()
@@ -83,6 +86,7 @@ impl Trading {
                     action = Some(AccountPanelAction::Maximize);
                 }
                 if IconButton::new(&icons::MINUS)
+                    .icon_scale(0.9)
                     .tooltip("Minimize panel")
                     .show(ui)
                     .clicked()
@@ -173,7 +177,7 @@ impl Trading {
                         ),
                     ];
                     let painter = ui.painter();
-                    let value_font = FontId::proportional(theme.text.body);
+                    let value_font = FontId::proportional(theme.text.title);
                     let figures: Vec<_> = figures
                         .into_iter()
                         .filter_map(|(label, value, signed, info)| {
@@ -182,7 +186,7 @@ impl Trading {
                             let color = if signed {
                                 pnl_color(&theme, value, &text)
                             } else {
-                                theme.ui.text
+                                theme.ui.text_secondary
                             };
                             let label = painter.layout_job(semibold(
                                 &l10n::text(ui.ctx(), label),
@@ -230,11 +234,13 @@ impl Trading {
                 }
             });
 
-        // Tabs, with the number of positions and working orders.
+        // Tabs, with the number of positions and working orders, over a track that carries the
+        // active tab's underline.
         egui::ScrollArea::horizontal()
             .id_salt("account_tabs")
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                let mut underline = None;
+                let tabs = ui.horizontal(|ui| {
                     ui.add_space(8.0);
                     ui.spacing_mut().item_spacing.x = 20.0;
                     for tab in Tab::ALL {
@@ -261,17 +267,25 @@ impl Trading {
                         };
                         let response = ui.add(egui::Button::new(label).frame(false));
                         if active {
-                            let underline = Rect::from_min_max(
-                                egui::pos2(response.rect.left(), response.rect.bottom() + 2.0),
-                                egui::pos2(response.rect.right(), response.rect.bottom() + 5.0),
-                            );
-                            ui.painter().rect_filled(underline, 1.0, theme.ui.text);
+                            underline = Some(response.rect.x_range());
                         }
                         if response.clicked() {
                             self.account_panel.tab = tab;
                         }
                     }
                 });
+                let (track, _) = ui.allocate_exact_size(
+                    vec2(ui.available_width().max(tabs.response.rect.width()), 4.0),
+                    Sense::hover(),
+                );
+                ui.painter().rect_filled(track, 0.0, rule_color(&theme));
+                if let Some(x_range) = underline {
+                    ui.painter().rect_filled(
+                        Rect::from_x_y_ranges(x_range, track.y_range()),
+                        0.0,
+                        theme.ui.text,
+                    );
+                }
             });
         if self.account_panel.tab == Tab::History {
             ui.horizontal(|ui| {
@@ -287,13 +301,6 @@ impl Trading {
                 );
             });
         }
-        let rule = ui.available_rect_before_wrap();
-        ui.add_space(6.0);
-        ui.painter().hline(
-            rule.x_range().shrink(8.0),
-            rule.top() + 4.0,
-            Stroke::new(1.0, theme.ui.border),
-        );
 
         let tab = if self.account_panel.tab == Tab::History && self.account_panel.show_executions {
             Tab::Executions
@@ -517,7 +524,7 @@ impl Trading {
             .filter(|(_, column)| !self.account_panel.hidden.contains(&(tab, column.title)))
             .collect();
         let font = FontId::proportional(theme.text.body);
-        let heading = FontId::proportional(theme.text.small);
+        let heading = FontId::proportional(theme.text.body);
         let unit_font = FontId::proportional(theme.text.tiny);
         // Columns take their smallest width, at least their title's, and share what is left; a
         // narrow panel scrolls.
@@ -579,7 +586,7 @@ impl Trading {
                             align,
                             l10n::text(ui.ctx(), column.title),
                             heading.clone(),
-                            theme.ui.text_secondary,
+                            theme.ui.text_muted,
                         );
                 }
                 let chooser = ui.put(chooser, |ui: &mut Ui| {
@@ -651,6 +658,15 @@ impl Trading {
                                 rect.bottom() - 0.5,
                                 Stroke::new(1.0, theme.ui.border),
                             );
+                            let has_actions = row.edit.is_some() || row.close.is_some();
+                            let visible = rect.right().min(ui.clip_rect().right());
+                            // Cells stop short of the actions, which stay in view at the end of a
+                            // row wider than a narrow panel.
+                            let mut cells_clip = ui.clip_rect();
+                            if has_actions {
+                                cells_clip.max.x = visible - ACTIONS_WIDTH;
+                            }
+                            let cells = ui.painter().with_clip_rect(cells_clip);
                             for (&(index, column), cell_rect) in columns.iter().zip(edges(rect)) {
                                 let cell = &row.cells[index];
                                 if cell.symbol && !cell.text.is_empty() {
@@ -660,8 +676,8 @@ impl Trading {
                                         theme.ui.text,
                                     ));
                                     let chip = Rect::from_min_size(
-                                        egui::pos2(cell_rect.left(), rect.center().y - 12.0),
-                                        vec2((galley.size().x + 16.0).min(cell_rect.width()), 24.0),
+                                        egui::pos2(cell_rect.left(), rect.center().y - 15.0),
+                                        vec2((galley.size().x + 16.0).min(cell_rect.width()), 30.0),
                                     );
                                     let current = cell.text == chart_symbol;
                                     let (fill, text) = if current {
@@ -680,13 +696,13 @@ impl Trading {
                                             Sense::click(),
                                         )
                                         .on_hover_cursor(egui::CursorIcon::PointingHand);
-                                    ui.painter().rect_filled(chip, 4.0, fill);
+                                    cells.rect_filled(chip, 4.0, fill);
                                     let galley = ui.painter().layout_job(semibold(
                                         &cell.text,
                                         theme.text.small,
                                         text,
                                     ));
-                                    ui.painter().with_clip_rect(chip.shrink(4.0)).galley(
+                                    cells.with_clip_rect(chip.shrink(4.0)).galley(
                                         chip.left_center() + vec2(8.0, -galley.size().y / 2.0),
                                         galley,
                                         text,
@@ -699,7 +715,7 @@ impl Trading {
                                     }
                                     continue;
                                 }
-                                let painter = ui.painter().with_clip_rect(cell_rect);
+                                let painter = cells.with_clip_rect(cell_rect);
                                 let y = rect.center().y;
                                 let mut right = cell_rect.right();
                                 if !cell.unit.is_empty() && !cell.text.is_empty() {
@@ -725,8 +741,7 @@ impl Trading {
                                     cell.color,
                                 );
                             }
-                            if hovered && (row.edit.is_some() || row.close.is_some()) {
-                                let visible = rect.right().min(ui.clip_rect().right());
+                            if has_actions {
                                 let buttons = Rect::from_min_max(
                                     egui::pos2(visible - ACTIONS_WIDTH, rect.top()),
                                     egui::pos2(visible - 12.0, rect.bottom()),
@@ -736,6 +751,8 @@ impl Trading {
                                         .max_rect(buttons)
                                         .layout(Layout::right_to_left(Align::Center)),
                                 );
+                                child.visuals_mut().widgets.inactive.fg_stroke.color =
+                                    theme.ui.text_muted;
                                 let (close, edit) = match row.close.as_ref().or(row.edit.as_ref()) {
                                     Some(RowAction::Position(_)) => ("Close position", ""),
                                     _ => ("Cancel order", "Modify order"),
