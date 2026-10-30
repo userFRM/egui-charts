@@ -152,25 +152,22 @@ pub(crate) fn merge(
 }
 
 /// Opens every empty heartbeat candle from `bars[first]` on at the close of the newest bar before
-/// it that is not whitespace. The sink opened the candle at the last close the stream saw, so a
-/// page, or a corrected bar, merged before it in either order would otherwise leave a gap. A
-/// candle with no such bar keeps its close. A bar of origin `Ticks(0)` holds no trade: the first
-/// trade in its slot arrives as `TicksAfterHeartbeat` and replaces it and its origin.
+/// it that is not whitespace. The sink opens a candle at the last close the stream saw, which a
+/// page or a corrected bar merged before or after it makes stale. A candle with no such bar keeps
+/// its close. A bar of origin `Ticks(0)` holds no trade: the first trade in its slot arrives as
+/// `TicksAfterHeartbeat` and replaces it and its origin.
 fn carry_closes(bars: &mut [Bar], from_ticks: &BTreeMap<DateTime<Utc>, Origin>, first: usize) {
-    let Some(start) = bars.get(first).map(|bar| bar.time) else {
-        return;
-    };
     let candles = from_ticks
-        .range(start..)
+        .range(bars[first].time..)
         .filter(|(_, origin)| **origin == Origin::Ticks(0));
     for (time, _) in candles {
         let Ok(at) = bars.binary_search_by_key(time, |bar| bar.time) else {
             continue;
         };
-        let newest = bars[..at].iter().rev().find(|bar| !bar.is_whitespace());
-        let Some(close) = newest.map(|bar| bar.close) else {
+        let Some(newest) = bars[..at].iter().rev().find(|bar| !bar.is_whitespace()) else {
             continue;
         };
+        let close = newest.close;
         let candle = &mut bars[at];
         (candle.open, candle.high, candle.low, candle.close) = (close, close, close, close);
     }
