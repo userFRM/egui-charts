@@ -465,9 +465,7 @@ impl Chart {
             self.kinetic_scroll.velocity *= damping;
 
             let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
-            if !self.kinetic_scroll.velocity.is_finite()
-                || self.kinetic_scroll.velocity.abs() < min_v_px_s
-            {
+            if self.kinetic_scroll.velocity.abs() < min_v_px_s {
                 self.kinetic_scroll = super::state::KineticScrollState::new();
                 return;
             }
