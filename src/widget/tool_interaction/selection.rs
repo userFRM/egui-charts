@@ -98,7 +98,11 @@ pub fn handle_selection<F1, F2, F3>(
                 drawing_manager.start_drag_handle(selected[0], handle);
             } else if let Some(id) = drawing_manager.hit_test(origin)
                 && (drawing_manager.is_selected(id)
-                    || ui.input(|i| i.modifiers.ctrl || i.modifiers.command))
+                    || (ui.input(|i| i.modifiers.ctrl || i.modifiers.command)
+                        && drawing_manager
+                            .drawings
+                            .iter()
+                            .any(|d| d.id == id && !d.locked)))
             {
                 if !drawing_manager.is_selected(id) {
                     drawing_manager.select(id);
