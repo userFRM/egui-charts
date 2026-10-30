@@ -87,7 +87,7 @@ use egui_charts::widget::settings::ChartSettingsState;
 use live::LiveFeed;
 use std::sync::Arc;
 
-use crate::sampledata::{DemoSymbol, visible_bars_for_range};
+use crate::sampledata::{DemoSymbol, us_equity_session, visible_bars_for_range};
 
 fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
     study
@@ -2557,9 +2557,15 @@ impl DemoApp {
                             self.apply_session();
                         }
                     }
-                    ui.label(
-                        "Weekdays in New York time: regular 09:30–16:00; extended 04:00–20:00.",
-                    );
+                    let hours = us_equity_session();
+                    let (regular, extended) = (&hours.windows[0], &hours.extended_windows);
+                    ui.label(format!(
+                        "Weekdays in New York time: regular {}–{}; extended {}–{}.",
+                        regular.open.format("%H:%M"),
+                        regular.close.format("%H:%M"),
+                        extended[0].open.format("%H:%M"),
+                        extended[1].close.format("%H:%M"),
+                    ));
                 });
             self.timeframe_toolbar.state.session_menu_open &= open;
         }
