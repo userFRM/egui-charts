@@ -1,6 +1,6 @@
-//! Coordinates tab - staged price and UTC time points.
+//! Coordinates tab - staged price (bars only for a regression trend) and UTC time points.
 
-use crate::drawings::{ChartPoint, Drawing};
+use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -22,6 +22,8 @@ pub struct CoordinatePoint {
     /// Fractional bar index, used when no timestamp is available.
     pub bar_index: String,
     original: Option<(ChartPoint, Option<DateTime<Utc>>)>,
+    /// The price is not editable: the drawing's prices follow its bars.
+    bar_only: bool,
 }
 
 /// Coordinates staged independently of the live drawing until Apply.
@@ -48,6 +50,7 @@ impl CoordinatesState {
                         time: time
                             .map_or_else(String::new, |t| t.format("%H:%M:%S%.f").to_string()),
                         original: Some((original, time)),
+                        bar_only: drawing.tool_type == DrawingToolType::RegressionTrend,
                     }
                 })
                 .collect(),
@@ -57,7 +60,7 @@ impl CoordinatesState {
     pub(crate) fn resolve(&self, chart: &Chart) -> Result<Vec<ChartPoint>, &'static str> {
         if self.points.iter().all(|point| {
             point.original.is_some_and(|(original, time)| {
-                point.price == original.price.to_string()
+                (point.bar_only || point.price == original.price.to_string())
                     && point.bar_index == original.bar_idx.to_string()
                     && point.date
                         == time.map_or_else(String::new, |t| t.format("%Y-%m-%d").to_string())
@@ -71,12 +74,18 @@ impl CoordinatesState {
         self.points
             .iter()
             .map(|point| {
-                let price = point
-                    .price
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|v| v.is_finite())
-                    .ok_or("Enter a finite price for every point")?;
+                let price = if let Some((original, _)) = point.original
+                    && point.bar_only
+                {
+                    original.price
+                } else {
+                    point
+                        .price
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|v| v.is_finite())
+                        .ok_or("Enter a finite price for every point")?
+                };
                 if point.date.is_empty() && point.time.is_empty() {
                     let index = point
                         .bar_index
@@ -140,7 +149,9 @@ impl CoordinatesTab {
                 FormGrid::new(format!("coord_grid_{i}"))
                     .spacing(ui.active_theme().spacing.lg, ui.active_theme().spacing.sm)
                     .show(ui, |ui| {
-                        field(ui, "Price", &mut point.price, "");
+                        if !point.bar_only {
+                            field(ui, "Price", &mut point.price, "");
+                        }
                         if point.original.is_some_and(|(_, time)| time.is_none()) {
                             field(ui, "Bar index", &mut point.bar_index, "");
                         } else {
@@ -162,4 +173,50 @@ fn field(ui: &mut Ui, label: &str, value: &mut String, hint: &str) {
     )
     .labelled_by(label.id);
     ui.end_row();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::BarData;
+
+    #[test]
+    fn regression_coordinates_edit_only_the_bar_range() {
+        let chart = Chart::new(BarData::from_bars(Vec::new()));
+        for tool in [DrawingToolType::RegressionTrend, DrawingToolType::TrendLine] {
+            let mut drawing = Drawing::new(1, tool);
+            drawing.chart_points = vec![ChartPoint::new(2.0, 123.5), ChartPoint::new(8.0, 90.0)];
+            let mut state = CoordinatesState::from_drawing(&drawing, &chart);
+            let ctx = egui::Context::default();
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                CoordinatesTab::show(ui, &mut state)
+            });
+            let price_labels = output
+                .shapes
+                .iter()
+                .filter(
+                    |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Price"),
+                )
+                .count();
+            output.drop_without_applying_deltas();
+            assert_eq!(
+                price_labels,
+                if tool == DrawingToolType::RegressionTrend {
+                    0
+                } else {
+                    2
+                }
+            );
+            state.points[0].price = "NaN".into();
+            state.points[0].bar_index = "3".into();
+            if tool == DrawingToolType::RegressionTrend {
+                assert_eq!(
+                    state.resolve(&chart).unwrap(),
+                    vec![ChartPoint::new(3.0, 123.5), ChartPoint::new(8.0, 90.0)]
+                );
+            } else {
+                assert!(state.resolve(&chart).is_err());
+            }
+        }
+    }
 }

@@ -349,14 +349,14 @@ Drawings,Drawings,Position forecast,done,library,src/drawings/rendering/trading/
 Drawings,Drawings,Price label,done,library,src/drawings/rendering/annotations/labels.rs
 Drawings,Drawings,Price note,done,library,src/drawings/rendering/annotations/labels.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Price range,done,library,src/drawings/rendering/measurements.rs
-Drawings,Drawings,Projection,done,library,src/drawings/rendering/trading/projection.rs;src/config/drawing_tool/behavior.rs
+Drawings,Drawings,Projection,done,library,src/drawings/rendering/trading/projection.rs;src/drawings/rendering/measurements.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Ray,done,library,src/drawings/rendering/lines.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/mod.rs;src/drawings/domain/drawing.rs;src/drawings/persistence.rs;src/drawings/rendering/style.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Rectangle,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/measurements.rs;src/widget/tool_interaction/interaction.rs;src/drawings/manager/paint.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/mod.rs;src/drawings/services/interaction.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Regression trend,done,library,src/drawings/rendering/channels.rs;src/model/math.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
+Drawings,Drawings,Regression trend,done,library,src/drawings/rendering/channels.rs;src/model/math.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/config/drawing_tool/behavior.rs;src/drawings/services/handle.rs;src/drawings/manager/paint.rs;src/drawings/manager/interaction.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/coordinates.rs
 Drawings,Drawings,Rotated rectangle,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Schiff pitchfork,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/pitchfork.rs
 Drawings,Drawings,Screen-anchored drawing creation,done,library,src/drawings/domain/drawing.rs;src/widget/drawing_api.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
-Drawings,Drawings,Sector,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs
+Drawings,Drawings,Sector,done,library,src/drawings/rendering/shapes.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Short position,done,library,src/drawings/manager/mod.rs;src/drawings/rendering/trading/position.rs;src/drawings/services/handle.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Signpost,done,library,src/drawings/rendering/annotations/signpost.rs;src/widget/tool_interaction/text.rs
 Drawings,Drawings,Sine line,done,library,src/drawings/rendering/cycles.rs;src/drawings/rendering/style.rs

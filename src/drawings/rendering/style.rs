@@ -131,6 +131,7 @@ impl Drawing {
                     self.tool_type,
                     DrawingToolType::LongPos
                         | DrawingToolType::ShortPos
+                        | DrawingToolType::RegressionTrend
                         | DrawingToolType::TrendBasedFibTime
                 )
                 && let Some(configured) = self.fill_color32()
@@ -138,7 +139,7 @@ impl Drawing {
                 *color = configured;
             }
         };
-        let dash = if custom_fork {
+        let dash = if custom_fork || self.tool_type == DrawingToolType::RegressionTrend {
             None
         } else {
             self.line_style.dash_pattern()
