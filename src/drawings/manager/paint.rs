@@ -445,8 +445,8 @@ mod tests {
             (
                 DrawingToolType::Sector,
                 vec![(100., 100.), (200., 100.), (100., 50.)],
-                (50., 150.),
                 (150., 50.),
+                (50., 150.),
             ),
             (
                 DrawingToolType::ArrowMarkLeft,
