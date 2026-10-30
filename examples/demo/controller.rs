@@ -827,9 +827,15 @@ impl DemoApp {
             .map_or_else(|| "UTC".to_owned(), |zone| zone.name().to_owned());
         let clock_changed = self.timeframe_toolbar.state.timezone != name;
         self.timeframe_toolbar.set_timezone(name);
+        let symbol_changed = self.state.symbol != self.chart.symbol();
+        if symbol_changed {
+            self.sync_symbol();
+            self.stop_replay();
+        }
         if let Some(tf) = self.chart.timeframe()
-            && (tf != self.state.timeframe || clock_changed)
+            && (tf != self.state.timeframe || clock_changed || symbol_changed)
         {
+            // Reloads the bars, for the restored symbol too.
             self.switch_timeframe(tf);
         }
     }
@@ -859,14 +865,23 @@ impl DemoApp {
         {
             self.symbol_search.record_symbol(&row);
         }
+        self.user_action(|app| {
+            app.chart.set_symbol(DemoSymbol::find(symbol).symbol);
+            app.sync_symbol();
+            app.regenerate_bars();
+            // A symbol change invalidates an in-flight replay.
+            app.stop_replay();
+        });
+    }
+
+    fn sync_symbol(&mut self) {
         self.copied_drawing = None;
-        let spec = DemoSymbol::find(symbol);
+        let spec = DemoSymbol::find(self.chart.symbol());
         self.live.set_symbol(spec.symbol);
         self.time_and_sales.clear();
         self.watchlist.set_selected(spec.symbol);
         self.timeframe_toolbar.state.session_menu_open = false;
         self.state.symbol = spec.symbol.to_string();
-        self.chart.set_symbol(spec.symbol);
         for control in [
             egui_charts::ui::Control::Session,
             egui_charts::ui::Control::DividendAdjustment,
@@ -880,9 +895,6 @@ impl DemoApp {
             } else {
                 SessionType::RTH
             });
-        self.regenerate_bars();
-        // A symbol change invalidates an in-flight replay.
-        self.stop_replay();
     }
 
     fn regenerate_bars(&mut self) {
@@ -3380,6 +3392,77 @@ mod tests {
     use egui_charts::model::LineStyle;
     use egui_charts::ui::dialogs::DrawingProps;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    /// Symbol navigation keeps earlier edits and synchronizes the host on undo and redo.
+    #[test]
+    fn symbol_navigation_undo_redo_keeps_the_demo_on_the_chart_symbol() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-10-27T19:29:50Z".parse().unwrap(),
+            true,
+        );
+        app.switch_symbol("AAPL");
+        let original_symbol = app.state.symbol.clone();
+        let original_type = app.chart.chart_type();
+        let original_bars = app.chart.bars(SeriesId::MAIN).to_vec();
+        app.chart.apply_synced_time_scale(8.0, -30.0);
+        let original_view = app.chart.get_time_scale_state();
+        app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
+        app.switch_symbol("BTCUSD");
+        let new_bars = app.chart.bars(SeriesId::MAIN).to_vec();
+        assert_ne!(original_bars, new_bars);
+        app.start_replay();
+        assert!(app.replay.is_some());
+
+        for (action, symbol, kind, session) in [
+            (
+                TopToolbarAction::Undo,
+                original_symbol.as_str(),
+                ChartType::Line,
+                SessionType::RTH,
+            ),
+            (
+                TopToolbarAction::Undo,
+                original_symbol.as_str(),
+                original_type,
+                SessionType::RTH,
+            ),
+            (
+                TopToolbarAction::Redo,
+                original_symbol.as_str(),
+                ChartType::Line,
+                SessionType::RTH,
+            ),
+            (
+                TopToolbarAction::Redo,
+                "BTCUSD",
+                ChartType::Line,
+                SessionType::Full24x7,
+            ),
+        ] {
+            app.handle_top_toolbar(&ctx, action);
+            assert_eq!(app.chart.symbol(), symbol);
+            assert_eq!(app.state.symbol, symbol);
+            assert_eq!(app.live.instrument().symbol, symbol);
+            assert_eq!(app.state.chart_type, kind);
+            assert_eq!(app.timeframe_toolbar.state.session_type, session);
+            let bars = if symbol == "BTCUSD" {
+                &new_bars
+            } else {
+                &original_bars
+            };
+            assert_eq!(app.chart.bars(SeriesId::MAIN), bars);
+            assert_eq!(&app.bars, bars);
+            if symbol == original_symbol {
+                assert_eq!(app.chart.get_time_scale_state(), original_view);
+            }
+            assert!(app.replay.is_none());
+            assert!(!app.state.replay_active);
+            assert!(app.chart.replay_time().is_none());
+        }
+        assert!(!app.chart.can_redo());
+    }
 
     /// Drawing double clicks reach the properties dialog without taking over inline text editing.
     #[test]

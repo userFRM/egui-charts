@@ -157,7 +157,7 @@ Chart,Crosshair and interaction,Mouse wheel zoom anchored at the cursor,done,lib
 Chart,Crosshair and interaction,Pinch zoom and two-finger pan,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
 Chart,Crosshair and interaction,Price scale and time scale context menus,done,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/axis.rs
 Chart,Crosshair and interaction,Table view of chart data,done,library,src/widget/export.rs;src/ui/dialogs/data_table.rs;src/ui/context_menu/mod.rs
-Chart,Crosshair and interaction,Undo and redo,partial,library,src/widget/history.rs
+Chart,Crosshair and interaction,Undo and redo,partial,library,src/widget/history.rs;src/widget/feed/mod.rs;examples/demo/controller.rs
 Chart,Crosshair and interaction,Zoom-to-rectangle tool,done,library,src/widget/pan_zoom.rs;src/chart/rendering/overlays/box_zoom.rs
 Chart,Keyboard shortcuts,Copy and paste drawings,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/clipboard.rs;src/model/bar/time.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs
 Chart,Keyboard shortcuts,Ctrl+Left/Right move further,done,library,src/config/keyboard.rs;src/widget/keyboard.rs
@@ -880,7 +880,7 @@ Terminal,Toolbars and panels,Selected drawing toolbar,done,library,src/ui/floati
 Terminal,Toolbars and panels,Strategy Report panel,done,library,src/ui/strategy_report/mod.rs
 Terminal,Toolbars and panels,Symbol search dialog with asset tabs and filters,done,host,src/ui/dialogs/symbol_search/mod.rs;src/ui/dialogs/symbol_search/service.rs;terminal/src/studies.rs
 Terminal,Toolbars and panels,Top toolbar: symbol button,done,library,src/ui/top_toolbar/toolbar.rs
-Terminal,Toolbars and panels,Undo / redo,partial,library,src/widget/history.rs;src/widget/feed/mod.rs;src/widget/price_series.rs;terminal/src/core.rs
+Terminal,Toolbars and panels,Undo / redo,partial,library,src/widget/history.rs;src/widget/feed/mod.rs;src/widget/price_series.rs;terminal/src/core.rs;examples/demo/controller.rs
 Terminal,Toolbars and panels,Zoom in / zoom out buttons in the drawing toolbar,done,library,src/ui/drawing_toolbar/utilities/zoom.rs;src/widget/mod.rs;terminal/src/drawings.rs
 Terminal,Trading panel,Account manager,done,host,src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs
 Terminal,Trading panel,Bottom trading panel container,done,library,src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs
