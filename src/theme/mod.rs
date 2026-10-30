@@ -248,12 +248,12 @@ impl Default for TextSizes {
             body: 13.0,
             title: 14.0,
             heading: 16.0,
-            chart_title: 16.0,
+            chart_title: 13.0,
             toolbar: 14.0,
             ohlc: 13.0,
             axis: 12.0,
             price_tag: 12.0,
-            bottom_bar: 14.0,
+            bottom_bar: 12.0,
         }
     }
 }
@@ -449,12 +449,12 @@ mod tests {
             ("micro", 8.0),
             ("marker", 9.0),
             ("dialog_title", 20.0),
-            ("chart_title", 16.0),
+            ("chart_title", 13.0),
             ("toolbar", 14.0),
             ("ohlc", 13.0),
             ("axis", 12.0),
             ("price_tag", 12.0),
-            ("bottom_bar", 14.0),
+            ("bottom_bar", 12.0),
         ] {
             for override_size in [None, Some(19.0)] {
                 let mut saved = serde_json::to_value(Theme::dark()).unwrap();

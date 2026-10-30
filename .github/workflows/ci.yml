@@ -116,9 +116,9 @@ jobs:
       - name: Run library tests (no default features)
         if: matrix.full
         run: cargo test --no-default-features --lib
-      - name: Run workflow example tests
+      - name: Run example tests
         if: matrix.full
-        run: cargo test --all-features --example scripting --example backtesting
+        run: cargo test --all-features --example scripting --example backtesting --example network_feed
       - name: Run library tests (UI without named time zones)
         if: matrix.full
         run: cargo test --no-default-features --features ui --lib
@@ -153,6 +153,9 @@ jobs:
         run: >-
           wasm-pack test --headless --chrome --lib
           ${{ matrix.features == 'all' && '--all-features' || '--no-default-features --features widget' }}
+      - name: Build the network feed example for the browser
+        if: matrix.features == 'widget'
+        run: cargo clippy --target wasm32-unknown-unknown --no-default-features --features widget --example network_feed -- -D warnings
 
   bare-chart:
     if: github.event.pull_request.draft != true

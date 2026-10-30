@@ -427,6 +427,7 @@ pub fn render_chart_type(
                 ctx.revision,
                 ctx.price_scale,
                 &tpo_config,
+                ctx.tick_size,
                 ctx.clock,
                 &idx_to_coord,
                 params.chart_rect_min_x(),

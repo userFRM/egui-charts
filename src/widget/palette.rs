@@ -76,9 +76,9 @@ mod tests {
     #[cfg(feature = "ui")]
     #[test]
     fn restored_snapshots_follow_the_active_palette_and_keep_edited_colours() {
-        for (from, to) in [
-            (Theme::light(), Theme::dark()),
-            (Theme::dark(), Theme::light()),
+        for (from, to, from_watermark, to_watermark) in [
+            (Theme::light(), Theme::dark(), 209, 34),
+            (Theme::dark(), Theme::light(), 34, 209),
         ] {
             for edited in [false, true] {
                 let ctx = egui::Context::default();
@@ -96,7 +96,7 @@ mod tests {
                 let watermark = if edited {
                     egui::Color32::RED
                 } else {
-                    from.chart.grid_line
+                    egui::Color32::from_gray(from_watermark)
                 };
                 assert_eq!(saved.config().watermark_color, watermark);
                 let snapshot = saved.snapshot().unwrap();
@@ -127,7 +127,7 @@ mod tests {
                         if edited {
                             egui::Color32::RED
                         } else {
-                            to.chart.grid_line
+                            egui::Color32::from_gray(to_watermark)
                         }
                     );
                     assert_eq!(reopened.config().bearish_color, egui::Color32::RED);
@@ -144,9 +144,13 @@ mod tests {
         let mut local = chart(&[100.0], &[110.0]);
         shared.config_mut().bearish_color = egui::Color32::RED;
         local.set_theme_override(Some(Theme::high_contrast()));
-        for (step, theme) in [Theme::light(), Theme::dark(), Theme::high_contrast()]
-            .into_iter()
-            .enumerate()
+        for (step, (theme, watermark)) in [
+            (Theme::light(), egui::Color32::from_gray(209)),
+            (Theme::dark(), egui::Color32::from_gray(34)),
+            (Theme::high_contrast(), egui::Color32::from_white_alpha(40)),
+        ]
+        .into_iter()
+        .enumerate()
         {
             apply_to_egui(&ctx, &theme);
             frame(&ctx, &mut built, step as f64, vec![]);
@@ -159,7 +163,7 @@ mod tests {
                 shared.config().session_break_color,
                 theme.chart.grid_line_major
             );
-            assert_eq!(shared.config().watermark_color, theme.chart.grid_line);
+            assert_eq!(shared.config().watermark_color, watermark);
             assert_eq!(shared.config().bearish_color, egui::Color32::RED);
             assert_eq!(
                 local.config().background_color,

@@ -657,7 +657,7 @@ fn tpo_profile_menu_merges_and_splits_sessions() {
             config.tick_size = 1.0;
             to_tpo_profiles(chart.bars(SeriesId::MAIN), &config, &chart.bar_clock())
                 .iter()
-                .map(|p| p.tpo_count_at(101.0, p.tick_size))
+                .map(|p| p.tpo_count_at(101.0))
                 .collect::<Vec<_>>()
         };
         assert_eq!(counts(&chart), [4, 4, 4, 4]);

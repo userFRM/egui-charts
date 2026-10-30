@@ -178,7 +178,8 @@ mod tests {
                         })
                         .collect();
                     output.drop_without_applying_deltas();
-                    let expected = if alpha == 0 {
+                    // The command palette leaves the chart undimmed, like the settings dialogs.
+                    let expected = if alpha == 0 || surface == 2 {
                         vec![]
                     } else {
                         vec![Color32::from_black_alpha(alpha)]
