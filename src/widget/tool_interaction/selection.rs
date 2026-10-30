@@ -29,6 +29,7 @@ pub fn handle_selection<F1, F2, F3>(
     F2: Fn(f32) -> f64,
     F3: Fn(f64, f32, f32) -> f64,
 {
+    drawing_manager.interaction_modifiers = ui.input(|i| i.modifiers);
     let pointer_pos = if response.clicked() || response.drag_started() || response.dragged() {
         response.interact_pointer_pos()
     } else {
@@ -96,9 +97,20 @@ pub fn handle_selection<F1, F2, F3>(
             {
                 drawing_manager.start_drag_handle(selected[0], handle);
             } else if let Some(id) = drawing_manager.hit_test(origin)
-                && drawing_manager.is_selected(id)
+                && (drawing_manager.is_selected(id)
+                    || (ui.input(|i| i.modifiers.ctrl || i.modifiers.command)
+                        && drawing_manager
+                            .drawings
+                            .iter()
+                            .any(|d| d.id == id && !d.locked)))
             {
+                if !drawing_manager.is_selected(id) {
+                    drawing_manager.select(id);
+                }
                 drawing_manager.start_drag_body(id, origin);
+            }
+            if ui.input(|i| i.modifiers.ctrl || i.modifiers.command) {
+                drawing_manager.copy_dragged_drawings();
             }
             drawing_manager.update_drag_handle_with_coords(
                 price_rect.clamp(pos),
@@ -172,6 +184,241 @@ mod tests {
     use crate::drawings::manager::DrawingSyncAction;
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
     use egui::{Context, Event, Id, PointerButton, Pos2, RawInput, Sense};
+
+    /// Shift projects a dragged endpoint onto 45 degrees, locks body movement to one axis,
+    /// and command drags leave the original untouched with a single undoable copy.
+    #[test]
+    fn modifier_drags_constrain_points_and_copy_once() {
+        use egui::{Modifiers, pos2, vec2};
+        for (tool, off_pane, pan) in [
+            (DrawingToolType::TrendLine, false, egui::Vec2::ZERO),
+            (DrawingToolType::Ray, false, egui::Vec2::ZERO),
+            (DrawingToolType::ParallelChannel, false, egui::Vec2::ZERO),
+            (DrawingToolType::TrendLine, true, egui::Vec2::ZERO),
+            (DrawingToolType::Ray, true, egui::Vec2::ZERO),
+            (DrawingToolType::TrendLine, false, vec2(20.0, 0.0)),
+            (DrawingToolType::TrendLine, false, vec2(0.0, 20.0)),
+        ] {
+            for body in [false, true] {
+                for modifiers in [Modifiers::SHIFT, Modifiers::CTRL, Modifiers::COMMAND] {
+                    if (off_pane || pan != egui::Vec2::ZERO)
+                        && (body || modifiers != Modifiers::SHIFT)
+                    {
+                        continue;
+                    }
+                    let ctx = Context::default();
+                    let pane = Rect::from_min_size(Pos2::ZERO, vec2(500.0, 400.0));
+                    let mut manager = DrawingManager::new();
+                    manager.update_pane_anchors(pane);
+                    let mut cursors = CursorModeState::default();
+                    let mut drawing = Drawing::new(7, tool);
+                    drawing.points = vec![pos2(80.0, 80.0), pos2(180.0, 180.0)];
+                    if tool == DrawingToolType::ParallelChannel {
+                        drawing.points.push(pos2(80.0, 260.0));
+                    }
+                    if off_pane {
+                        drawing.points[0] = pos2(
+                            if tool == DrawingToolType::Ray {
+                                800.0
+                            } else {
+                                80.0
+                            },
+                            -100.0,
+                        );
+                    }
+                    drawing.chart_points = drawing
+                        .points
+                        .iter()
+                        .map(|p| ChartPoint::new(p.x, f64::from(p.y)))
+                        .collect();
+                    drawing.completed = true;
+                    drawing.stored_id = Some("original".into());
+                    let before = drawing.chart_points.clone();
+                    manager.drawings.push(drawing);
+                    if modifiers != Modifiers::CTRL {
+                        manager.select(7);
+                    }
+                    let from = if body {
+                        pos2(110.0, 110.0)
+                    } else {
+                        pos2(180.0, 180.0)
+                    };
+                    let to = if off_pane {
+                        pos2(140.0, 0.0)
+                    } else if body {
+                        pos2(210.5, 160.0)
+                    } else {
+                        pos2(240.0, 200.0)
+                    };
+                    let button = |pos, pressed| Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers,
+                    };
+                    for (frame, events) in [
+                        vec![Event::PointerMoved(from)],
+                        vec![button(from, true)],
+                        vec![Event::PointerMoved(to)],
+                        vec![button(to, false)],
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let offset = if frame == 3 { pan } else { egui::Vec2::ZERO };
+                        if offset != egui::Vec2::ZERO {
+                            manager.update_pane_screen_coords(
+                                |bar| bar + offset.x,
+                                |price| price as f32 + offset.y,
+                            );
+                        }
+                        ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(pane),
+                                events: std::iter::once(Event::ModifiersChanged(modifiers))
+                                    .chain(events)
+                                    .collect(),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                let response = ui.interact(
+                                    pane,
+                                    Id::NULL.with("chart"),
+                                    Sense::click_and_drag(),
+                                );
+                                handle_selection(
+                                    ui,
+                                    &mut manager,
+                                    &mut cursors,
+                                    &response,
+                                    pane,
+                                    &|x| x - offset.x,
+                                    &|y: f32| {
+                                        f64::from(y.clamp(pane.top(), pane.bottom()) - offset.y)
+                                    },
+                                    &|price, from, to| price + f64::from(to - from),
+                                );
+                            },
+                        )
+                        .drop_without_applying_deltas();
+                    }
+                    let copying = modifiers != Modifiers::SHIFT;
+                    assert_eq!(manager.drawings.len(), if copying { 2 } else { 1 });
+                    if copying {
+                        assert_eq!(manager.drawings[0].chart_points, before);
+                    }
+                    let moved = manager.drawings.last().unwrap();
+                    let expected = if pan != egui::Vec2::ZERO {
+                        pos2(210.0 + pan.x, 210.0 + pan.y)
+                    } else if off_pane {
+                        if tool == DrawingToolType::Ray {
+                            pos2(140.0, -100.0)
+                        } else {
+                            pos2(180.0, 0.0)
+                        }
+                    } else if body {
+                        if copying {
+                            pos2(280.5, 230.0)
+                        } else {
+                            pos2(280.5, 180.0)
+                        }
+                    } else if copying {
+                        to
+                    } else {
+                        pos2(220.0, 220.0)
+                    };
+                    assert_eq!(
+                        moved.points[1], expected,
+                        "{tool:?}, body {body}, {modifiers:?}"
+                    );
+                    // A Shift move keeps whole bars, though its converter is precise.
+                    let bar = if body && !copying {
+                        expected.x.round()
+                    } else {
+                        expected.x
+                    };
+                    assert_eq!(
+                        moved.chart_points[1],
+                        ChartPoint::new(bar - pan.x, f64::from(expected.y - pan.y))
+                    );
+                    if copying {
+                        assert_eq!(moved.stored_id, None);
+                    }
+                    assert!(manager.undo());
+                    assert_eq!(manager.drawings.len(), 1);
+                    assert_eq!(manager.drawings[0].chart_points, before);
+                    assert!(!manager.undo());
+                    assert!(manager.redo());
+                    assert_eq!(manager.drawings.last().unwrap().points[1], expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn modifier_copy_drag_does_not_pan_the_chart() {
+        use crate::widget::test_frames::{chart, frame};
+        use egui::{Modifiers, vec2};
+        for selected in [false, true] {
+            for modifiers in [Modifiers::CTRL, Modifiers::COMMAND] {
+                let ctx = Context::default();
+                let mut chart = chart(&[10.0], &[20.0]);
+                let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+                drawing.completed = true;
+                drawing.chart_points =
+                    vec![ChartPoint::new(30.0, 14.0), ChartPoint::new(70.0, 17.0)];
+                let before = drawing.chart_points.clone();
+                chart.drawings_mut().drawings.push(drawing);
+                if selected {
+                    chart.drawings_mut().select(7);
+                }
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let points = &chart.drawings().drawings[0].points;
+                let from = points[0].lerp(points[1], 0.25);
+                let to = from + vec2(40.0, 20.0);
+                let view = chart.get_time_scale_state();
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers,
+                };
+                for (i, events) in [
+                    vec![Event::PointerMoved(from)],
+                    vec![button(from, true)],
+                    vec![Event::PointerMoved(from + vec2(12.0, 6.0))],
+                    vec![Event::PointerMoved(to)],
+                    vec![button(to, false)],
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    frame(
+                        &ctx,
+                        &mut chart,
+                        0.1 + i as f64 * 0.1,
+                        std::iter::once(Event::ModifiersChanged(modifiers))
+                            .chain(events)
+                            .collect(),
+                    );
+                }
+                assert_eq!(
+                    chart.get_time_scale_state(),
+                    view,
+                    "selected {selected}, {modifiers:?}"
+                );
+                assert_eq!(chart.drawings().drawings.len(), 2);
+                assert_eq!(chart.drawings().drawings[0].chart_points, before);
+                assert_ne!(chart.drawings().drawings[1].chart_points, before);
+                assert!(chart.undo());
+                assert_eq!(chart.drawings().drawings.len(), 1);
+                assert_eq!(chart.drawings().drawings[0].chart_points, before);
+                assert!(!chart.can_undo());
+                assert!(chart.redo());
+                assert_eq!(chart.drawings().drawings.len(), 2);
+            }
+        }
+    }
 
     /// Edge handles and bodies follow an outward drag from its first frame, just as inward drags do.
     #[test]
