@@ -25,7 +25,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(ZLEMA::new(l(0))),
         Box::new(HammingMA::new(l(0))),
         Box::new(MultipleMA::new()),
-        Box::new(MAChannel::new(l(0), x(1.0))),
+        Box::new(MAChannel::new(l(0), l(1)).with_offsets(3, -2)),
         Box::new(EMACross::new(l(0), l(1))),
         Box::new(MACross::new(l(0), l(1))),
         Box::new(MixedMACross::new(l(0), l(1))),
@@ -103,13 +103,19 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(ATR::new(l(0))),
         Box::new(TrueRange::new()),
         Box::new(KeltnerChannels::new(l(0), l(1), x(2.0))),
+        Box::new(
+            KeltnerChannels::new(l(0), l(1), x(2.0))
+                .with_average(OscillatorAverage::Simple)
+                .with_band(KeltnerBand::Range)
+                .with_source(crate::model::PriceSource::HL2),
+        ),
         Box::new(DonchianChannels::new(l(0))),
         Box::new(StandardDeviation::new(l(0))),
         Box::new(HistoricalVolatility::new(l(0)).with_trading_days(x(252.0))),
         Box::new(ChaikinVolatility::new(l(0), l(1))),
         Box::new(ChandelierExit::new(l(0), x(3.0))),
         Box::new(AccelerationBands::new(l(0), x(4.0))),
-        Box::new(Envelopes::new(l(0), x(2.5), EnvelopeAverage::Simple)),
+        Box::new(Envelopes::new(l(0), x(10.0), EnvelopeAverage::Simple)),
         Box::new(PercentB::new(l(0), x(2.0))),
         Box::new(CloseToCloseVol::new(l(0))),
         Box::new(OhlcVolatility::new(l(0))),
@@ -224,7 +230,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(AdxBreakout::new(l(0), l(1), l(2))),
         Box::new(PriceChannel::new(l(0))),
         Box::new(LinearRegression::new(l(0))),
-        Box::new(LinearRegressionChannel::new(l(0), x(2.0))),
+        Box::new(LinearRegressionChannel::new(l(0), x(2.0)).with_multipliers(x(2.0), x(1.0))),
         Box::new(LinearRegressionSlope::new(l(0))),
         Box::new(TrendStrengthIndex::new(l(0))),
         Box::new(StandardError::new(l(0))),

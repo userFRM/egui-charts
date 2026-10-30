@@ -1,92 +1,110 @@
-use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::update_window;
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::{Indicator, IndicatorValues};
 use egui::Color32;
 
-/// Moving Average Channel
+/// Moving Average Channel: the simple average of the highs as the upper line and of the lows as
+/// the lower line, each over its own length and drawn its own number of bars later (earlier for
+/// a negative offset), with the band between them filled. A window with a non-finite high (low)
+/// has no upper (lower) value.
 #[derive(Clone)]
 pub struct MAChannel {
-    period: usize,
-    offset_percent: f64,
+    upper_length: usize,
+    lower_length: usize,
+    upper_offset: i32,
+    lower_offset: i32,
     values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl MAChannel {
-    /// `offset_percent` is clamped into 0 to `f64::MAX`, NaN to 0.
-    pub fn new(period: usize, offset_percent: f64) -> Self {
+    /// A channel over `upper_length` highs and `lower_length` lows, each at least 1, drawn on
+    /// the bars they end at.
+    pub fn new(upper_length: usize, lower_length: usize) -> Self {
         Self {
-            period: period.max(1),
-            offset_percent: clamp_param(offset_percent, 0.0, f64::MAX),
+            upper_length: upper_length.max(1),
+            lower_length: lower_length.max(1),
+            upper_offset: 0,
+            lower_offset: 0,
             values: IndicatorValues::new(),
             colors: vec![
-                palette::LIGHT_BLUE, // Upper
-                palette::ORANGE,     // Middle
-                palette::ORANGE,     // Lower
+                palette::LIGHT_BLUE,                       // Upper
+                palette::ORANGE,                           // Lower
+                palette::LIGHT_BLUE.gamma_multiply_u8(13), // Fill
             ],
             visible: true,
         }
+    }
+
+    /// Draw the upper line `upper` and the lower line `lower` bars later; negative values draw
+    /// earlier.
+    pub fn with_offsets(mut self, upper: i32, lower: i32) -> Self {
+        self.upper_offset = upper;
+        self.lower_offset = lower;
+        self
     }
 }
 
 impl Default for MAChannel {
     fn default() -> Self {
-        Self::new(20, 1.0)
+        Self::new(20, 20)
     }
 }
 
 impl MAChannel {
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        let multiplier = self.offset_percent / 100.0;
-
-        for i in 0..data.len() {
-            if i + 1 < self.period {
-                values.push(IndicatorValue::None);
+        // Each window is summed afresh, so an update equals a full calculation bit for bit.
+        let mean = |i: usize, n: usize, price: fn(&Bar) -> f64| {
+            if i + 1 < n {
+                f64::NAN
             } else {
-                let start = i + 1 - self.period;
-                let sma: f64 =
-                    data[start..=i].iter().map(|b| b.close).sum::<f64>() / self.period as f64;
-
-                let upper = sma * (1.0 + multiplier);
-                let lower = sma * (1.0 - multiplier);
-
-                values.push_lines(&[upper, sma, lower]);
+                data[i + 1 - n..=i].iter().map(price).sum::<f64>() / n as f64
             }
+        };
+        let mut values = IndicatorValues::new();
+        for i in 0..data.len() {
+            values.push_lines(&[
+                mean(i, self.upper_length, |b| b.high),
+                mean(i, self.lower_length, |b| b.low),
+            ]);
         }
         values
     }
 }
 
 impl Indicator for MAChannel {
-    fn source(&self) -> Option<crate::studies::StudySource> {
-        Some(crate::studies::StudySource::Price(
-            crate::model::PriceSource::Close,
-        ))
+    crate::studies::inputs::study_inputs!(self;
+        upper_length: length("Upper length", 1, usize::MAX),
+        upper_offset: integer("Upper offset", i32::MIN, i32::MAX),
+        lower_length: length("Lower length", 1, usize::MAX),
+        lower_offset: integer("Lower offset", i32::MIN, i32::MAX)
+    ; {});
+
+    fn plot_offset(&self, line: usize) -> isize {
+        match line {
+            0 => self.upper_offset as isize,
+            1 => self.lower_offset as isize,
+            _ => 0,
+        }
     }
 
-    crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX),
-        offset_percent: number("Offset percent", 0.0, f64::MAX)
-    ; {});
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        vec![crate::studies::StudyFill {
+            first: crate::studies::FillBoundary::Plot(0),
+            second: crate::studies::FillBoundary::Plot(1),
+            color: self.colors[2],
+            inverted_color: None,
+        }]
+    }
 
     fn name(&self) -> &str {
         "MA Channel"
     }
 
     fn desc(&self) -> &str {
-        "Moving Average Channel - MA with upper and lower offset bands"
+        "Moving Average Channel - Simple averages of the highs and of the lows"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
@@ -95,11 +113,12 @@ impl Indicator for MAChannel {
 
     fn update(&mut self, data: &[Bar], from: usize) {
         let mut values = std::mem::take(&mut self.values);
+        let window = self.upper_length.max(self.lower_length);
         update_window(
             &mut values,
             data,
             from,
-            |_data, from| from.saturating_sub(self.period - 1),
+            |_data, from| from.saturating_sub(window - 1),
             |data| self.compute(data),
         );
         self.values = values;
@@ -118,8 +137,9 @@ impl Indicator for MAChannel {
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        if colors.len() >= 3 {
-            self.colors = colors;
+        if colors.len() >= 2 {
+            let n = colors.len().min(self.colors.len());
+            self.colors[..n].copy_from_slice(&colors[..n]);
         }
     }
 
@@ -128,7 +148,7 @@ impl Indicator for MAChannel {
     }
 
     fn line_count(&self) -> usize {
-        3
+        2
     }
 
     fn is_visible(&self) -> bool {
@@ -145,9 +165,8 @@ impl Indicator for MAChannel {
 
     fn line_names(&self) -> Vec<String> {
         vec![
-            format!("Upper(+{}%)", self.offset_percent),
-            format!("MA({})", self.period),
-            format!("Lower(-{}%)", self.offset_percent),
+            format!("Upper({})", self.upper_length),
+            format!("Lower({})", self.lower_length),
         ]
     }
 }
