@@ -77,28 +77,6 @@ impl Drawing {
         }
     }
 
-    /// Render a ray with its configured extensions.
-    pub(crate) fn render_ray(
-        &self,
-        painter: &egui::Painter,
-        rect: Rect,
-        color: Color32,
-        stroke: Stroke,
-    ) {
-        self.render_trend_line(painter, rect, color, stroke);
-    }
-
-    /// Render an extended line with its configured extensions.
-    pub(crate) fn render_extended_line(
-        &self,
-        painter: &egui::Painter,
-        rect: Rect,
-        color: Color32,
-        stroke: Stroke,
-    ) {
-        self.render_trend_line(painter, rect, color, stroke);
-    }
-
     /// Render horizontal line
     pub(crate) fn render_horizontal_line(
         &self,
@@ -118,7 +96,6 @@ impl Drawing {
         &self,
         painter: &egui::Painter,
         rect: Rect,
-        _color: Color32,
         stroke: Stroke,
     ) {
         if !self.points.is_empty() {
@@ -141,7 +118,6 @@ impl Drawing {
         &self,
         painter: &egui::Painter,
         rect: Rect,
-        _color: Color32,
         stroke: Stroke,
     ) {
         if !self.points.is_empty() {

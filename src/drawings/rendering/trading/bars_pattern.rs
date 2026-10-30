@@ -29,7 +29,8 @@ impl Drawing {
         self.draw_source_region(painter, source_rect, color);
 
         // If we have a third point, draw the projection
-        if let (Some(_), Some(&at)) = (self.points.get(2), self.chart_points.get(2))
+        if self.points.len() > 2
+            && let Some(&at) = self.chart_points.get(2)
             && let Some((start, projected)) = projected_bars(view.bars, [from, to, at])
         {
             self.draw_pattern_projection(painter, view, source_rect, start, &projected);

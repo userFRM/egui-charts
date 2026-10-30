@@ -31,7 +31,7 @@ impl Drawing {
     /// Renders the anchored VWAP from the anchor bar to the last bar, with
     /// bands one and two volume-weighted standard deviations away.
     pub(crate) fn render_anchored_vwap(&self, painter: &egui::Painter, view: &ChartView) {
-        let (Some(_), Some(anchor_at)) = (self.points.first(), self.chart_points.first()) else {
+        let Some(anchor_at) = self.chart_points.first() else {
             return;
         };
         let color = self.color32();
