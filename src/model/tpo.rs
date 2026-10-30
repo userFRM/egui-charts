@@ -423,9 +423,13 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
             current_profile = Some(TPOProfile::new(bar.time, tick_size));
             current_session_start = Some(bar.time);
 
-            // Set opening price
+            // The opening price, and the initial balance from the session's first bar
             if let Some(ref mut profile) = current_profile {
                 profile.opening_price = bar.open;
+                if config.initial_balance_minutes > 0 {
+                    profile.initial_balance_high = bar.high;
+                    profile.initial_balance_low = bar.low;
+                }
             }
         }
 
@@ -445,14 +449,11 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
             // Update initial balance (first N minutes)
             if let Some(session_start) = current_session_start {
                 let elapsed = (bar.time - session_start).num_minutes();
-                if elapsed < config.initial_balance_minutes as i64 {
-                    if profile.initial_balance_high == 0.0 {
-                        profile.initial_balance_high = bar.high;
-                        profile.initial_balance_low = bar.low;
-                    } else {
-                        profile.initial_balance_high = profile.initial_balance_high.max(bar.high);
-                        profile.initial_balance_low = profile.initial_balance_low.min(bar.low);
-                    }
+                if config.initial_balance_minutes > 0
+                    && elapsed < config.initial_balance_minutes as i64
+                {
+                    profile.initial_balance_high = profile.initial_balance_high.max(bar.high);
+                    profile.initial_balance_low = profile.initial_balance_low.min(bar.low);
                 }
             }
         }
@@ -685,68 +686,46 @@ mod tests {
     use crate::model::Timeframe;
     use chrono::{Duration, TimeZone};
 
-    fn create_test_bars() -> Vec<Bar> {
-        let start = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
-        vec![
-            Bar {
-                time: start,
-                open: 100.0,
-                high: 102.0,
-                low: 99.0,
-                close: 101.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: start + Duration::minutes(30),
-                open: 101.0,
-                high: 103.0,
-                low: 100.0,
-                close: 102.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: start + Duration::minutes(60),
-                open: 102.0,
-                high: 104.0,
-                low: 101.0,
-                close: 103.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: start + Duration::minutes(90),
-                open: 103.0,
-                high: 104.0,
-                low: 102.0,
-                close: 103.5,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-        ]
-    }
-
     #[test]
-    fn test_tpo_initial_balance() {
-        let bars = create_test_bars();
+    fn initial_balance_spans_its_bars_whatever_their_sign() {
+        // (minutes between bars, bars as (high, low), initial balance as (high, low)), tick 0.25
+        // and the default 60-minute balance from 14:30 UTC
+        type Case<'a> = (i64, &'a [(f64, f64)], (f64, f64));
+        let cases: [Case; 3] = [
+            // The first bar's high is zero
+            (30, &[(0.0, -1.0), (-0.25, -0.5)], (0.0, -1.0)),
+            // The running high reaches zero at the second bar
+            (1, &[(-1.0, -2.0), (0.0, -1.5), (-0.5, -0.75)], (0.0, -2.0)),
+            // Only the bars of the first hour count: not those at 60 and 90 minutes
+            (
+                30,
+                &[
+                    (102.0, 99.0),
+                    (103.0, 100.0),
+                    (104.0, 101.0),
+                    (104.0, 102.0),
+                ],
+                (103.0, 99.0),
+            ),
+        ];
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap();
         let config = TPOConfig {
-            tick_size: 1.0,
-            initial_balance_minutes: 60,
+            tick_size: 0.25,
             ..Default::default()
         };
-        let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min1.into());
-
-        let profile = &profiles[0];
-
-        // Initial balance should be set from first 60 minutes
-        assert!(profile.initial_balance_high > 0.0);
-        assert!(profile.initial_balance_low > 0.0);
-        assert!(profile.initial_balance_high >= profile.initial_balance_low);
+        for (spacing, bars, expected) in cases {
+            let bars: Vec<_> = bars
+                .iter()
+                .enumerate()
+                .map(|(i, &(high, low))| bar_at(start, spacing * i as i64, low, high, low, high))
+                .collect();
+            let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min1.into())[0];
+            assert_eq!(
+                (profile.initial_balance_high, profile.initial_balance_low),
+                expected,
+                "{bars:?}"
+            );
+        }
     }
 
     /// Build a single bar at a chosen offset from a fixed session start.
