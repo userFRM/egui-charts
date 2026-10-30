@@ -15,8 +15,6 @@ pub enum MagnetType {
     Weak,
     /// Snap to the nearest OHLC value of the bar under the pointer
     Strong,
-    /// Snap to OHLC price values, with the same behavior as strong magnet
-    OHLC,
 }
 
 /// Drawing toolbar state

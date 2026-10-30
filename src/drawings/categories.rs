@@ -106,8 +106,8 @@ pub fn get_category_sections(category: &str) -> Vec<(&'static str, Vec<DrawingTo
                 "GANN",
                 vec![
                     DrawingToolType::GannBox,
-                    DrawingToolType::GannSquare,
                     DrawingToolType::GannFixed,
+                    DrawingToolType::GannSquare,
                     DrawingToolType::GannFan,
                 ],
             ),

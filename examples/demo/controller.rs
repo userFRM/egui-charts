@@ -1668,13 +1668,10 @@ impl DemoApp {
             DrawingToolbarDomainState, MagnetType, categories::cursors::CursorType,
         };
         let dm = self.chart.drawings();
-        let magnet_type = if !dm.options.strong_magnet {
-            MagnetType::Weak
-        } else if self.drawing_toolbar.state.magnet_type == MagnetType::OHLC {
-            // OHLC is an alias of strong snapping; retain the user's menu choice.
-            MagnetType::OHLC
-        } else {
+        let magnet_type = if dm.options.strong_magnet {
             MagnetType::Strong
+        } else {
+            MagnetType::Weak
         };
         self.drawing_toolbar
             .sync_from_domain_state(&DrawingToolbarDomainState {
@@ -1777,6 +1774,19 @@ impl DemoApp {
                 for id in ids {
                     chart.set_indicator_visible(id, false);
                 }
+                return;
+            }
+            DrawingToolbarAction::HideAll => {
+                self.chart.drawings_mut().set_visibility_all(false);
+                let ids: Vec<SeriesId> = self.chart.indicators().map(|(id, _)| id).collect();
+                for id in ids {
+                    self.chart.set_indicator_visible(id, false);
+                }
+                return;
+            }
+            DrawingToolbarAction::RemoveDrawingsAndIndicators => {
+                self.chart.drawings_mut().clear_all();
+                self.remove_all_indicators();
                 return;
             }
             _ => {}
@@ -5582,11 +5592,7 @@ mod tests {
                 MagnetType::Strong,
             ),
             (CrosshairStyle::Magic, CursorType::Magic, MagnetType::Strong),
-            (CrosshairStyle::Dot, CursorType::Dot, MagnetType::OHLC),
         ] {
-            if magnet == MagnetType::OHLC {
-                app.drawing_toolbar.state.magnet_type = magnet;
-            }
             app.chart.set_crosshair_style(style);
             let dm = app.chart.drawings_mut();
             dm.options.magnet_mode = true;

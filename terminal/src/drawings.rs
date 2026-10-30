@@ -206,13 +206,10 @@ impl Terminal {
         }
         toolbar.state.has_zoom_history = chart.state().has_zoom_history();
         let manager = chart.drawings();
-        let magnet_type = if !manager.options.strong_magnet {
-            MagnetType::Weak
-        } else if toolbar.state.magnet_type == MagnetType::OHLC {
-            // OHLC is an alias of strong snapping; retain the user's menu choice.
-            MagnetType::OHLC
-        } else {
+        let magnet_type = if manager.options.strong_magnet {
             MagnetType::Strong
+        } else {
+            MagnetType::Weak
         };
         toolbar.sync_from_domain_state(&DrawingToolbarDomainState {
             sel_tool: manager.active_tool,
@@ -368,6 +365,20 @@ impl Terminal {
                 chart
                     .drawings_mut()
                     .start_icon_insertion(icon_name.to_string());
+            }
+            DrawingToolbarAction::HideAll => {
+                chart.drawings_mut().set_visibility_all(false);
+                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+                for id in ids {
+                    chart.set_indicator_visible(id, false);
+                }
+            }
+            DrawingToolbarAction::RemoveDrawingsAndIndicators => {
+                chart.drawings_mut().clear_all();
+                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+                for id in ids {
+                    chart.remove_series(id);
+                }
             }
             // Zoom and the actions of other groups never get here.
             _ => {}
@@ -848,7 +859,7 @@ mod tests {
             terminal.chart().chart_options().crosshair.style,
             CrosshairStyle::Full
         );
-        // Crosshair style, magnet strength and whether the user picked the OHLC alias.
+        // Crosshair style, magnet strength.
         for (style, cursor, magnet) in [
             (CrosshairStyle::Full, CursorType::Cross, MagnetType::Weak),
             (CrosshairStyle::Dot, CursorType::Dot, MagnetType::Strong),
@@ -858,7 +869,6 @@ mod tests {
                 CursorType::Demonstration,
                 MagnetType::Strong,
             ),
-            (CrosshairStyle::Dot, CursorType::Dot, MagnetType::OHLC),
         ] {
             terminal.drawings.toolbar.state.magnet_type = magnet;
             terminal.chart_mut().set_crosshair_style(style);
@@ -1031,6 +1041,73 @@ mod tests {
         assert!(!terminal.drawings.colour_drag);
         assert!(terminal.chart_mut().undo());
         assert_eq!(terminal.chart().drawings().drawings[0].color, original);
+    }
+
+    #[test]
+    fn hide_all_and_remove_both_reach_drawings_and_studies_in_one_step() {
+        let mut terminal = ready();
+        for id in 1..=2 {
+            terminal
+                .chart_mut()
+                .drawings_mut()
+                .add_synced_drawing(line(id));
+        }
+        for period in [3, 5] {
+            terminal
+                .chart_mut()
+                .add_indicator(Box::new(SMA::new(period)));
+        }
+        // A rendered chart also has its built-in volume study.
+        let study_ids: Vec<_> = terminal.chart().indicators().map(|(id, _)| id).collect();
+        // Repeating Hide all must keep groups hidden rather than toggle them back on.
+        run(&mut terminal, DrawingToolbarAction::HideAll);
+        run(&mut terminal, DrawingToolbarAction::HideAll);
+        assert!(
+            terminal
+                .chart()
+                .drawings()
+                .drawings
+                .iter()
+                .all(|d| !d.visible)
+        );
+        assert!(
+            terminal
+                .chart()
+                .indicators()
+                .all(|(_, study)| !study.is_visible())
+        );
+        terminal.run(Action::TopToolbar(TopToolbarAction::Undo));
+        assert!(
+            terminal
+                .chart()
+                .drawings()
+                .drawings
+                .iter()
+                .all(|d| d.visible)
+        );
+        assert!(
+            terminal
+                .chart()
+                .indicators()
+                .all(|(_, study)| study.is_visible())
+        );
+
+        run(
+            &mut terminal,
+            DrawingToolbarAction::RemoveDrawingsAndIndicators,
+        );
+        assert!(terminal.chart().drawings().drawings.is_empty());
+        assert_eq!(terminal.chart().indicators().count(), 0);
+        terminal.run(Action::TopToolbar(TopToolbarAction::Undo));
+        assert_eq!(terminal.chart().drawings().drawings.len(), 2);
+        assert_eq!(
+            terminal
+                .chart()
+                .indicators()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>(),
+            study_ids,
+        );
     }
 
     #[test]
