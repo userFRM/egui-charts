@@ -1437,11 +1437,6 @@ impl DemoApp {
         self.top_toolbar.sync_from_app_state(&self.state);
         self.top_toolbar.state.can_undo = self.chart.can_undo();
         self.top_toolbar.state.can_redo = self.chart.can_redo();
-        let bg = if self.theme.dark {
-            bg.lerp_to_gamma(self.theme.ui.text, 0.07)
-        } else {
-            bg
-        };
         egui::Panel::top("toolbar")
             .exact_size(self.top_toolbar.config.height + 4.0)
             .show_separator_line(false)
@@ -1707,7 +1702,7 @@ impl DemoApp {
             !drawings.is_empty() && drawings.iter().all(|d| d.locked);
         egui::Panel::left("drawing_toolbar")
             .resizable(false)
-            .exact_size(54.0)
+            .exact_size(56.0)
             .show_separator_line(false)
             .frame(
                 panel_frame(bg)
@@ -1912,10 +1907,10 @@ impl DemoApp {
         }
         egui::Panel::right("widget_bar")
             .resizable(false)
-            .exact_size(49.0)
+            .exact_size(46.0)
             .show_separator_line(false)
             .frame(panel_frame(bg).outer_margin(egui::Margin {
-                left: 4,
+                left: 1,
                 ..egui::Margin::ZERO
             }))
             .show(ui, |ui| {
@@ -1959,6 +1954,13 @@ impl DemoApp {
             .resizable(true)
             .default_size(300.0)
             .min_size(220.0)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::side_top_panel(ui.style()).outer_margin(egui::Margin {
+                    left: 4,
+                    ..egui::Margin::ZERO
+                }),
+            )
             .show(ui, |ui| match which {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
@@ -2478,7 +2480,7 @@ impl DemoApp {
             .exact_size(height)
             .show_separator_line(false)
             .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
-                top: 1,
+                top: 4,
                 ..egui::Margin::ZERO
             }))
             .show(ui, |ui| trading.show_account_panel(ui, &symbol))
@@ -2722,6 +2724,22 @@ impl DemoApp {
                 }
                 self.trading.show(ui, &mut self.chart);
             });
+        // The chart's rectangular background covers the frame; restore its top-left cutout.
+        let corner = chart.response.rect.min;
+        let radius = 4.0;
+        let points = (0..=8)
+            .map(|step| {
+                let angle = std::f32::consts::PI + step as f32 * std::f32::consts::FRAC_PI_2 / 8.0;
+                let x = corner.x + radius * (1.0 + angle.cos());
+                let y = corner.y + radius * (1.0 + angle.sin());
+                egui::epaint::BandPoint::new(x, corner.y..=y.max(corner.y))
+            })
+            .collect();
+        ui.painter()
+            .add(egui::Shape::Band(egui::epaint::BandShape::filled(
+                points,
+                self.theme.ui.border,
+            )));
         self.replay_control.set_dock_rect(chart.response.rect);
         if !self.replay_selecting && self.replay.is_none() {
             self.activate_chart_slot(self.layout.active());
