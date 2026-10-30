@@ -80,6 +80,25 @@ impl Chart {
     /// Spacing stops at the configured maximum, or 50 pixels when unlimited, centring short
     /// spans. The minimum spacing and local edge constraints still apply.
     pub fn apply_synced_time_range(&mut self, range: VisibleTimeRange) -> bool {
+        self.fit_time_range(range, SYNC_MAX_BAR_SPACING)
+    }
+
+    /// As [`apply_synced_time_range`](Self::apply_synced_time_range) for a range from a chart
+    /// of interval `source`; only a different interval falls back to the 50-pixel cap.
+    pub(crate) fn apply_synced_time_range_from(
+        &mut self,
+        range: VisibleTimeRange,
+        source: Option<crate::model::Timeframe>,
+    ) -> bool {
+        let cap = if source == self.timeframe() {
+            f64::INFINITY
+        } else {
+            SYNC_MAX_BAR_SPACING
+        };
+        self.fit_time_range(range, cap)
+    }
+
+    fn fit_time_range(&mut self, range: VisibleTimeRange, default_max: f64) -> bool {
         if range.from >= range.to {
             return false;
         }
@@ -93,7 +112,7 @@ impl Chart {
         if to <= from || scale.width() <= 1.0 || to < -0.5 || from > scale.base_idx() as f64 + 0.5 {
             return false;
         }
-        scale.fit_logical_range(from, to, SYNC_MAX_BAR_SPACING);
+        scale.fit_logical_range(from, to, default_max);
         self.tracking_mode_active = false;
         self.kinetic_scroll = super::state::KineticScrollState::new();
         true

@@ -260,11 +260,12 @@ impl ChartLayout {
     /// Fits an explicit date selection to the active chart, or its synchronization group
     /// when `sync_date_range` is enabled. Call after the charts have rendered at their sizes.
     pub fn apply_date_range(&self, charts: &mut [&mut Chart], range: super::VisibleTimeRange) {
+        let source = charts.get(self.active).and_then(|chart| chart.timeframe());
         for (index, chart) in charts.iter_mut().take(16).enumerate() {
             if index == self.active
                 || (self.sync.sync_date_range && self.same_group(index, self.active))
             {
-                chart.apply_synced_time_range(range);
+                chart.apply_synced_time_range_from(range, source);
             }
         }
     }
@@ -555,6 +556,7 @@ impl ChartLayout {
         // The source's main-pane price, or `None` over volume and indicator panes.
         let price = hovered.and_then(|source| charts[source].last_crosshair?.1);
         let range = charts[self.active].visible_time_range();
+        let source = charts[self.active].timeframe();
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
             chart.set_synced_crosshair_time(None);
             if self.sync.sync_crosshair
@@ -578,7 +580,7 @@ impl ChartLayout {
                 match &mut self.pending_ranges[index] {
                     Some(pending) => *pending = range,
                     None => {
-                        chart.apply_synced_time_range(range);
+                        chart.apply_synced_time_range_from(range, source);
                     }
                 }
             }
@@ -1055,6 +1057,23 @@ mod tests {
                 let actual = chart.visible_time_range().unwrap();
                 assert!((actual.from - latest.from).num_milliseconds().abs() < 1);
                 assert!((actual.to - latest.to).num_milliseconds().abs() < 1);
+            }
+
+            // Charts of one interval zoom together past the cross-interval spacing cap.
+            let mut layout = ChartLayout {
+                mode,
+                ..Default::default()
+            };
+            let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+            frame(&mut layout, &mut charts);
+            charts[0].set_visible_bars(8);
+            frame(&mut layout, &mut charts);
+            assert!(charts[0].get_time_scale_state().0 > 72.0);
+            let source = charts[0].visible_time_range().unwrap();
+            for chart in &charts[1..] {
+                let actual = chart.visible_time_range().unwrap();
+                assert!((actual.from - source.from).num_milliseconds().abs() < 1);
+                assert!((actual.to - source.to).num_milliseconds().abs() < 1);
             }
         }
     }
