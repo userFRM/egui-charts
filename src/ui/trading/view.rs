@@ -1,6 +1,7 @@
 //! The trading controller's chart view: the order ticket's panel, the orders, positions and fills
 //! drawn on the chart, the image exports, and the confirmations of what the user changes there.
 
+use super::format::Numbers;
 use super::ticket::{self, Action, Market};
 use super::{Preview, Trading, executions};
 use crate::chart::selection::SeriesId;
@@ -235,7 +236,13 @@ impl Trading {
                             .is_some_and(|request| request.symbol == symbol)
                     })
                     .collect();
-                executions::show(ui, chart, &fills, display.show_execution_labels, decimals);
+                // `Trading::numbers` takes the ticket's decimals; prices here keep the market's.
+                let numbers = Numbers {
+                    symbol,
+                    decimals,
+                    formatter: self.formatter.as_deref(),
+                };
+                executions::show(ui, chart, &fills, display.show_execution_labels, numbers);
             }
             render_trading_lines(
                 ui,
@@ -1014,6 +1021,11 @@ mod tests {
     fn trading_display_preferences_position_lines_and_control_image_exports() {
         use crate::chart::TradingLabelAlignment::{Center, Left, Right};
         let defaults: TradingSettings = serde_json::from_str("{}").unwrap();
+        assert!(
+            !defaults.show_execution_labels,
+            "settings saved before labels were on by default keep them off"
+        );
+        assert!(TradingSettings::default().show_execution_labels);
         assert!(defaults.extend_lines);
         assert_eq!(defaults.label_alignment, Right);
         assert!(!defaults.include_in_image);

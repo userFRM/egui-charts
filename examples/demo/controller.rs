@@ -3671,7 +3671,14 @@ mod tests {
                     })
                 };
                 value |= has_text("Trade value") && has_text("110.00");
-                marked |= has_text("1 @ 100.00") && has_text("1 @ 110.00");
+                // The notices write the sides too, so look for the triangles rather than a label.
+                let has_mark = |color| {
+                    output.shapes.iter().any(|shape| {
+                        matches!(&shape.shape, egui::Shape::Path(path)
+                        if path.closed && path.points.len() == 3 && path.fill == color)
+                    })
+                };
+                marked |= has_mark(app.theme.ui.accent) && has_mark(app.theme.chart.candle_down);
                 if pass == 2 {
                     for toast in app.toasts.toasts().iter().rev().take(5) {
                         let rect = ctx
