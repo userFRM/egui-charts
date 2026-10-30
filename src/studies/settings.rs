@@ -488,6 +488,16 @@ impl Indicator for ConfiguredStudy {
             self.study.data_requests()
         }
     }
+    fn data_start(
+        &self,
+        request: &super::StudyDataRequest,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
+            self.study.data_start(request)
+        } else {
+            None
+        }
+    }
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[super::StudyData<'_>]) {
         if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
             if self.study.data_requests().is_empty() {

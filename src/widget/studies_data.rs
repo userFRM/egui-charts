@@ -263,6 +263,33 @@ impl Chart {
         self.element_studies.dirty = true;
     }
 
+    /// How far back the connected feed loads the resolved study history `request`: to the
+    /// chart's first bar, or to a later start that every study reading it states through
+    /// `Indicator::data_start`. `None` while the chart has no bars.
+    fn study_data_reach(
+        &self,
+        request: &StudyDataRequest,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        let first = self.state.data().bars.first()?.time;
+        // Price-based chart types run their studies on elements; the source studies asked
+        // here are not given the view, so their histories load in full.
+        if self.chart_type.is_time_independent() {
+            return Some(first);
+        }
+        let mut starts = Vec::new();
+        for (_, study) in self.indicators() {
+            for declared in study.data_requests() {
+                if resolved(&declared, self.symbol(), self.timeframe()) == *request {
+                    starts.push(study.data_start(&declared));
+                }
+            }
+        }
+        // `None` sorts first: a study without a start, or a history no study reads, loads it
+        // to the first bar.
+        let start = starts.into_iter().min().flatten();
+        Some(start.map_or(first, |start| start.max(first)))
+    }
+
     pub(super) fn pump_study_data(&mut self, ctx: &egui::Context, feed: Option<Arc<dyn Datafeed>>) {
         let requests = self.study_data_requests();
         let previous = self.study_data.series.len();
@@ -329,7 +356,10 @@ impl Chart {
         }
         let extended = self.extended_hours();
         let now = ctx.input(|input| input.time);
-        let first = self.state.data().bars.first().map(|bar| bar.time);
+        let reaches: Vec<_> = requests
+            .iter()
+            .map(|request| self.study_data_reach(request))
+            .collect();
         let count = self.state.data().bars.len().max(300);
         let mut changed = removed || self.study_data.series.len() != previous;
         for series in &mut self.study_data.series {
@@ -511,15 +541,19 @@ impl Chart {
                     );
                 }
             }
+            let reach = requests
+                .iter()
+                .position(|request| *request == series.request)
+                .and_then(|at| reaches[at]);
             if !stream.pending
                 && stream.retry_at.is_none()
                 && !stream.end
                 && series.error.is_none()
                 && series.instrument.is_some()
                 && (series.bars.is_empty()
-                    || first
+                    || reach
                         .zip(series.bars.first())
-                        .is_some_and(|(first, bar)| first < bar.time))
+                        .is_some_and(|(reach, bar)| reach < bar.time))
             {
                 stream.history = Some(HistoryRequest {
                     symbol: series.request.symbol.clone(),
@@ -1228,5 +1262,68 @@ mod tests {
         assert_eq!(values(&mut chart), [Some(10.0), None]);
         chart.set_replay_time(None);
         assert_eq!(values(&mut chart), [Some(10.0), Some(14.0), Some(24.0)]);
+    }
+
+    /// A volume profile on a finer interval loads that history back to the first bar its
+    /// profiles in view read, not to the chart's first bar, and loads more only when that bar
+    /// moves earlier. Price-based chart types keep loading to the chart's first bar.
+    #[test]
+    fn finer_profile_history_stops_at_the_profile_span() {
+        use crate::model::ChartType;
+        let feed = Arc::new(RetryFeed::default());
+        let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&[1.0; 10], 60)));
+        chart.set_symbol("MAIN");
+        chart.set_timeframe(Timeframe::Hour1);
+        let mut profile: Box<dyn crate::studies::Indicator> =
+            Box::new(crate::studies::VolProfileVisible::new(10));
+        profile
+            .set_input(
+                "source_interval",
+                InputValue::Timeframe(Some(Timeframe::Min30)),
+            )
+            .unwrap();
+        let id = chart.add_indicator(profile);
+        let ctx = egui::Context::default();
+        // Half-hour bars from 00:00 to 09:30, answered two at a time from the newest.
+        let fine = bars(&[1.0; 20], 30);
+        let hour = |hour: i64| Some(DateTime::UNIX_EPOCH + Duration::hours(hour));
+        for (chart_type, view, expected) in [
+            (ChartType::Candles, 8..10, vec![None, hour(9)]),
+            (ChartType::Candles, 5..10, vec![hour(8), hour(7), hour(6)]),
+            (ChartType::Candles, 9..10, vec![]),
+            (
+                ChartType::Renko,
+                9..10,
+                vec![hour(5), hour(4), hour(3), hour(2), hour(1)],
+            ),
+        ] {
+            chart.set_chart_type(chart_type);
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_visible_range(view.clone());
+            let mut befores = Vec::new();
+            loop {
+                ctx.run_ui(egui::RawInput::default(), |_| {})
+                    .drop_without_applying_deltas();
+                chart.pump_study_data(&ctx, Some(feed.clone()));
+                let resolve = feed.resolves.lock().unwrap().pop();
+                if let Some(reply) = resolve {
+                    reply.send(Ok(Instrument::new("MAIN")));
+                    continue;
+                }
+                let Some((request, reply)) = feed.histories.lock().unwrap().pop() else {
+                    break;
+                };
+                befores.push(request.before);
+                let end = fine
+                    .partition_point(|bar| request.before.is_none_or(|before| bar.time < before));
+                reply.send(Ok(HistoryPage::new(
+                    fine[end.saturating_sub(2)..end].to_vec(),
+                    end <= 2,
+                )));
+            }
+            assert_eq!(befores, expected, "{chart_type:?} {view:?}");
+        }
     }
 }
