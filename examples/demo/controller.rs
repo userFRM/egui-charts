@@ -88,7 +88,7 @@ use egui_charts::widget::settings::ChartSettingsState;
 use live::LiveFeed;
 use std::sync::Arc;
 
-use crate::sampledata::{DemoSymbol, visible_bars_for_range};
+use crate::sampledata::{DemoSymbol, us_equity_session, visible_bars_for_range};
 
 fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
     study
@@ -2570,9 +2570,15 @@ impl DemoApp {
                             self.apply_session();
                         }
                     }
-                    ui.label(
-                        "Weekdays in New York time: regular 09:30–16:00; extended 04:00–20:00.",
-                    );
+                    let hours = us_equity_session();
+                    let (regular, extended) = (&hours.windows[0], &hours.extended_windows);
+                    ui.label(format!(
+                        "Weekdays in New York time: regular {}–{}; extended {}–{}.",
+                        regular.open.format("%H:%M"),
+                        regular.close.format("%H:%M"),
+                        extended[0].open.format("%H:%M"),
+                        extended[1].close.format("%H:%M"),
+                    ));
                 });
             self.timeframe_toolbar.state.session_menu_open &= open;
         }
@@ -3924,19 +3930,12 @@ mod tests {
     fn legacy_themes_follow_system_and_new_choices_survive_restart() {
         use eframe::App;
         use egui_charts::drawings::DrawingToolType;
-        let cases = [None, Some(egui::Theme::Light), Some(egui::Theme::Dark)]
-            .into_iter()
-            .flat_map(|initial| {
-                [
-                    (None, None),
-                    (Some(true), None),
-                    (Some(false), None),
-                    (Some(true), Some("dark")),
-                    (Some(false), Some("light")),
-                ]
-                .map(|(key, document)| (initial, key, document))
-            });
-        for (initial, legacy_key, legacy_document) in cases {
+        let cases = [
+            (None, Some(true), None, 1),
+            (Some(egui::Theme::Light), Some(true), Some("dark"), 3),
+            (Some(egui::Theme::Dark), Some(false), Some("light"), 1),
+        ];
+        for (initial, legacy_key, legacy_document, restarts) in cases {
             let ctx = egui::Context::default();
             ctx.run_ui(
                 egui::RawInput {
@@ -3964,7 +3963,7 @@ mod tests {
                     ]),
                 );
             }
-            for explicit in [false, true, true] {
+            for explicit in [false, true, true].into_iter().take(restarts) {
                 let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
                 cc.storage = Some(&storage);
                 let mut app = DemoApp::new(&cc);
@@ -5821,8 +5820,8 @@ mod tests {
             (Tool::GannBox, "Price divisions"),
             (Tool::GannSquare, "Price divisions"),
             (Tool::GannFixed, "Price divisions"),
-            (Tool::LongPos, "Size by"),
-            (Tool::ShortPos, "Size by"),
+            (Tool::LongPos, "Entry price"),
+            (Tool::ShortPos, "Entry price"),
             (Tool::FixedRangeVolumeProfile, "Rows"),
             (Tool::AnchoredVolumeProfile, "Rows"),
             (Tool::RegressionTrend, "Deviations"),

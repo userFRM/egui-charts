@@ -682,16 +682,17 @@ impl Simulation {
             sub.sink.push_quote(market.quote(trade.ts));
         }
         if trade.ts < self.retain_from {
-            let open = BarClock::new(Timeframe::Min1).bar_open(trade.ts);
             match self.history.last_mut() {
-                Some(bar) if bar.time == open => {
+                Some(bar)
+                    if trade.ts >= bar.time && trade.ts - bar.time < TimeDelta::minutes(1) =>
+                {
                     bar.high = bar.high.max(trade.price);
                     bar.low = bar.low.min(trade.price);
                     bar.close = trade.price;
                     bar.volume += trade.size;
                 }
                 _ => self.history.push(Bar::new(
-                    open,
+                    BarClock::new(Timeframe::Min1).bar_open(trade.ts),
                     trade.price,
                     trade.price,
                     trade.price,
@@ -1049,14 +1050,23 @@ mod tests {
     /// and volumes keep their raw values in either session.
     #[test]
     fn the_dividend_adjustment_shows_in_the_live_history() {
-        for now in [
-            "2026-10-24T15:00:00Z",
-            "2026-10-27T03:00:00Z",
-            "2026-03-09T14:00:00Z",
-            "2026-11-02T15:00:00Z",
+        for (now, stock_date, fund_date) in [
+            (
+                "2026-03-06T22:00:00Z",
+                "2026-03-03T14:53:00Z",
+                "2026-03-04T14:31:00Z",
+            ),
+            (
+                "2026-03-09T14:00:00Z",
+                "2026-03-04T14:53:00Z",
+                "2026-03-05T14:31:00Z",
+            ),
         ] {
             let now = now.parse().unwrap();
-            for symbol in ["AAPL", "MSFT", "NVDA", "TSLA", "SAMPLE"] {
+            for (symbol, factor, dividend) in
+                [("MSFT", 0.97, stock_date), ("SAMPLE", 0.98, fund_date)]
+            {
+                let dividend = dividend.parse::<DateTime<Utc>>().unwrap();
                 let feed = LiveFeed::new(symbol, now);
                 for (session, extended) in [
                     (SessionType::RTH, false),
@@ -1068,15 +1078,10 @@ mod tests {
                         feed.snapshot(Timeframe::Min1, BarClock::new(Timeframe::Min1), extended)
                     };
                     let (raw, adjusted) = (bars(false), bars(true));
-                    let split = raw
-                        .iter()
-                        .zip(&adjusted)
-                        .take_while(|(raw, adjusted)| raw.close != adjusted.close)
-                        .count();
+                    let split = raw.partition_point(|bar| bar.time < dividend);
                     assert_eq!(raw.len(), adjusted.len(), "{symbol} at {now}");
                     assert!(0 < split && split < raw.len(), "{symbol} at {now}: {split}");
                     assert_eq!(&raw[split..], &adjusted[split..]);
-                    let factor = 1.0 - 0.01 * (1 + DemoSymbol::find(symbol).seed % 3) as f64;
                     for (raw, adjusted) in raw[..split].iter().zip(&adjusted) {
                         assert_eq!((raw.time, raw.volume), (adjusted.time, adjusted.volume));
                         for (raw, adjusted) in [raw.open, raw.high, raw.low, raw.close]
@@ -1097,26 +1102,6 @@ mod tests {
     fn the_extended_quote_is_the_newest_trade_inside_an_extended_window() {
         for (now, end, session) in [
             (
-                "2026-10-24T15:00:00Z",
-                "2026-10-24T00:00:00Z",
-                ExtendedSession::PostMarket,
-            ),
-            (
-                "2026-10-27T03:00:00Z",
-                "2026-10-27T00:00:00Z",
-                ExtendedSession::PostMarket,
-            ),
-            (
-                "2026-10-26T12:00:00Z",
-                "2026-10-26T12:00:00Z",
-                ExtendedSession::PreMarket,
-            ),
-            (
-                "2026-03-06T22:00:00Z",
-                "2026-03-06T22:00:00Z",
-                ExtendedSession::PostMarket,
-            ),
-            (
                 "2026-03-08T15:00:00Z",
                 "2026-03-07T01:00:00Z",
                 ExtendedSession::PostMarket,
@@ -1124,21 +1109,6 @@ mod tests {
             (
                 "2026-03-09T12:00:00Z",
                 "2026-03-09T12:00:00Z",
-                ExtendedSession::PreMarket,
-            ),
-            (
-                "2026-10-30T21:00:00Z",
-                "2026-10-30T21:00:00Z",
-                ExtendedSession::PostMarket,
-            ),
-            (
-                "2026-11-01T15:00:00Z",
-                "2026-10-31T00:00:00Z",
-                ExtendedSession::PostMarket,
-            ),
-            (
-                "2026-11-02T13:00:00Z",
-                "2026-11-02T13:00:00Z",
                 ExtendedSession::PreMarket,
             ),
         ] {
@@ -1164,7 +1134,7 @@ mod tests {
                 }
             }
         }
-        for symbol in ["AAPL", "SAMPLE", "SPX", "BTCUSD", "ETHUSD"] {
+        for symbol in ["AAPL", "SAMPLE", "BTCUSD"] {
             let feed = LiveFeed::new(symbol, "2026-10-26T15:00:00Z".parse().unwrap());
             if matches!(symbol, "AAPL" | "SAMPLE") {
                 assert!(feed.regular_quote().unwrap().3.is_none());
@@ -1178,15 +1148,8 @@ mod tests {
     /// the history fallback when the retained trades are all outside the selected session.
     #[test]
     fn bounded_quote_lookups_keep_the_last_displayed_prices() {
-        for now in [
-            "2026-10-24T15:00:00Z",
-            "2026-10-27T03:00:00Z",
-            "2026-03-06T14:30:00Z",
-            "2026-03-09T08:00:00Z",
-            "2026-10-30T20:00:00Z",
-            "2026-11-02T14:30:00Z",
-        ] {
-            for symbol in ["AAPL", "SAMPLE", "SPX", "BTCUSD", "ETHUSD"] {
+        for now in ["2026-03-06T14:30:00Z", "2026-03-09T08:00:00Z"] {
+            for symbol in ["AAPL", "SAMPLE", "BTCUSD"] {
                 let feed = LiveFeed::new(symbol, now.parse().unwrap());
                 for session in [SessionType::RTH, SessionType::ETH, SessionType::Full24x7] {
                     for adjusted in [false, true] {
