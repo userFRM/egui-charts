@@ -537,7 +537,7 @@ impl DrawingPropertiesDialog {
         let action = match self.drawing_id {
             Some(id) if apply => {
                 self.props.coordinates = self.coordinates.clone();
-                DrawingPropertiesAction::Apply(id, self.props.clone())
+                DrawingPropertiesAction::Apply(id, Box::new(self.props.clone()))
             }
             _ if cancel => DrawingPropertiesAction::Cancel,
             _ => DrawingPropertiesAction::None,

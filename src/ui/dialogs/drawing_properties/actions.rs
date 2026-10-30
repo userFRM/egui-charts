@@ -81,7 +81,7 @@ pub enum DrawingPropertiesAction {
     /// Cancel the current interaction.
     Cancel,
     /// Apply the supplied properties to the drawing.
-    Apply(DrawingId, DrawingProps),
+    Apply(DrawingId, Box<DrawingProps>),
     /// Delete the identified drawing.
     Delete(DrawingId),
     /// Duplicate the identified drawing.
