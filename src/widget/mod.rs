@@ -930,9 +930,10 @@ impl Chart {
     /// The view is kept: the bar spacing changes only when `time_scale.bar_spacing` changes or
     /// the new spacing bounds exclude it, and the chart scrolls only when `time_scale.right_offset`
     /// or `right_offset_pixels` changes. A non-finite `bar_spacing`, `right_offset` or
-    /// `right_offset_pixels` keeps its previous value.
+    /// `right_offset_pixels` keeps its previous value, and a `kinetic_scroll.damping_coeff`
+    /// outside `0.0..1.0` is replaced by the default.
     pub fn set_chart_options(&mut self, options: ChartOptions) {
-        let options = self.finite_time_scale_options(options);
+        let options = self.normalize_chart_options(options);
         let (old, new) = (&self.chart_options.time_scale, &options.time_scale);
         if (
             old.bar_spacing,
@@ -976,8 +977,12 @@ impl Chart {
         self.chart_options = options;
     }
 
-    /// Retain configured values before comparison, since a stored NaN never equals itself.
-    fn finite_time_scale_options(&self, mut options: ChartOptions) -> ChartOptions {
+    /// Normalize numeric options before storing or comparing them, since NaN never equals itself.
+    fn normalize_chart_options(&self, mut options: ChartOptions) -> ChartOptions {
+        if !(0.0..1.0).contains(&options.kinetic_scroll.damping_coeff) {
+            options.kinetic_scroll.damping_coeff =
+                crate::config::KineticScrollOptions::default().damping_coeff;
+        }
         let (old, new) = (&self.chart_options.time_scale, &mut options.time_scale);
         if !new.bar_spacing.is_finite() {
             new.bar_spacing = old.bar_spacing;

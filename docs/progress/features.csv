@@ -151,7 +151,7 @@ Chart,Crosshair and interaction,Drag to pan,done,library,src/widget/frame.rs;src
 Chart,Crosshair and interaction,Go to date,done,library,src/widget/builder.rs;src/widget/pan_zoom.rs
 Chart,Crosshair and interaction,Horizontal scroll,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
 Chart,Crosshair and interaction,Hover tooltip and floating data window,done,library,src/widget/frame.rs;src/chart/renderers/tooltip.rs;src/widget/readout.rs
-Chart,Crosshair and interaction,Kinetic scroll,done,library,src/widget/pan_zoom.rs;src/config/kinetic.rs
+Chart,Crosshair and interaction,Kinetic scroll,done,library,src/widget/pan_zoom.rs;src/config/kinetic.rs;src/widget/mod.rs;src/widget/builder.rs
 Chart,Crosshair and interaction,Magnet crosshair,done,library,src/widget/crosshair.rs;src/widget/price_series.rs
 Chart,Crosshair and interaction,Mouse wheel zoom anchored at the cursor,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs;src/model/timescale.rs
 Chart,Crosshair and interaction,Pinch zoom and two-finger pan,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
