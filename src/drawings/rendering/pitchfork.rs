@@ -169,7 +169,7 @@ impl Drawing {
         let mut config = self.pitchfork.clone().unwrap_or_default();
         config
             .levels
-            .retain(|l| l.value.is_finite() && l.value >= 0.0);
+            .retain(|l| (0.0..=MAX_PITCHFORK_LEVEL).contains(&l.value));
         config.levels.sort_by(|a, b| a.value.total_cmp(&b.value));
         let mut bands = self.pitchfork_bands(rect).into_iter();
         for pair in config
@@ -209,8 +209,11 @@ impl Drawing {
             let width = if self.pitchfork.is_none() && level.value == 1.0 {
                 stroke::HAIRLINE
             } else {
-                self.stroke_width
+                level.width.unwrap_or(self.stroke_width)
             };
+            if !(width > 0.0 && width <= crate::drawings::validation::MAX_STROKE_WIDTH) {
+                continue;
+            }
             for [a, b] in level_lines(&base, level.value, rect) {
                 if let Some((dash, gap)) = level.line_style.dash_pattern() {
                     super::utils::draw_dashed_line(
@@ -484,7 +487,7 @@ mod tests {
 
             // Inject custom settings through the saved form so old files and new fields both use serde.
             let mut saved = serde_json::to_value(&drawing).unwrap();
-            let config = serde_json::json!({"levels":[
+            let mut config = serde_json::json!({"levels":[
                 {"value":0.0,"visible":true,"color":[10,20,30,255],"line_style":"Dotted"},
                 {"value":0.5,"visible":false,"color":[10,20,30,255],"line_style":"Dashed"},
                 {"value":1.0,"visible":true,"color":[10,20,30,255],"line_style":"Solid"},
@@ -492,6 +495,9 @@ mod tests {
             ],"show_background":true,"background_opacity":35});
             saved["pitchfork"] = config.clone();
             let mut restored: Drawing = serde_json::from_value(saved.clone()).unwrap();
+            for level in config["levels"].as_array_mut().unwrap() {
+                level["width"] = serde_json::Value::Null;
+            }
             assert_eq!(
                 serde_json::to_value(&restored).unwrap()["pitchfork"],
                 config
@@ -502,6 +508,23 @@ mod tests {
                 restored.pitchfork_lines(rect).unwrap().len(),
                 lines.len() - 2
             );
+            // Missing widths inherit the drawing width; explicit widths survive saving and painting.
+            saved["pitchfork"]["levels"][2]["width"] = 6.0.into();
+            saved["pitchfork"]["levels"][3]["width"] = 3.0.into();
+            let mut wide: Drawing = serde_json::from_value(saved.clone()).unwrap();
+            wide.points = drawing.points.clone();
+            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                wide.draw_fork(ui.painter(), rect)
+            });
+            output.textures_delta.clear();
+            for width in [3.0, 6.0] {
+                assert!(
+                    output.shapes.iter().any(|s| matches!(&s.shape,
+                    egui::Shape::LineSegment {stroke,..} if stroke.width==width)),
+                    "{tool:?}: level width {width}"
+                );
+            }
+            output.drop_without_applying_deltas();
             saved["pitchfork"]["show_background"] = false.into();
             let mut unfilled: Drawing = serde_json::from_value(saved.clone()).unwrap();
             unfilled.points = drawing.points.clone();

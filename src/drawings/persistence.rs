@@ -166,6 +166,14 @@ impl StoredDrawing {
         if !(d.stroke_width > 0.0 && d.stroke_width <= MAX_STROKE_WIDTH) {
             return Some("stroke_width".into());
         }
+        if let Some(i) = d
+            .pitchfork
+            .iter()
+            .flat_map(|c| &c.levels)
+            .position(|l| l.width.is_some_and(|w| !(w > 0.0 && w <= MAX_STROKE_WIDTH)))
+        {
+            return Some(format!("pitchfork.levels[{i}].width"));
+        }
         if d.screen_anchor
             .is_some_and(|anchor| anchor.into_iter().any(|value| !value.is_finite()))
         {
@@ -718,6 +726,7 @@ mod v1 {
             .map_err(serde_json::Error::custom)?;
         let Color { r, g, b, a } = stored.color;
         let mut drawing = Drawing::with_color(0, tool_type, [r, g, b, a]);
+        drawing.fib_config = None;
         drawing.stroke_width = stored.line_width;
         drawing.locked = stored.locked;
         drawing.visible = stored.visible;
@@ -902,6 +911,7 @@ mod tests {
             extend_right: true,
             reverse: true,
             logarithmic: true,
+            ..FibonacciConfig::default()
         });
         d.volume_profile = VolumeProfileConfig::new(50, 0.68);
         d.regression_trend = RegressionTrendConfig::new(1.5);
@@ -1107,6 +1117,50 @@ mod tests {
             );
         }
 
+        // New level defaults apply to new drawings, never to either saved format's fixed levels.
+        for tool in [
+            DrawingToolType::FibonacciTimeZones,
+            DrawingToolType::TrendBasedFibTime,
+            DrawingToolType::FibonacciSpeedFan,
+            DrawingToolType::FibonacciCircles,
+            DrawingToolType::FibonacciSpeedResistanceArcs,
+        ] {
+            for (fixture, legacy) in [
+                (v1_json, true),
+                (include_str!("fixtures/storage_v2.json"), false),
+            ] {
+                let mut value: serde_json::Value = serde_json::from_str(fixture).unwrap();
+                let records = value["drawings"].as_array_mut().unwrap();
+                records.truncate(1);
+                let fields = if legacy {
+                    &mut records[0]
+                } else {
+                    &mut records[0]["drawing"]
+                };
+                fields["tool_type"] = serde_json::to_value(tool).unwrap();
+                if !legacy {
+                    fields["fib_config"] = serde_json::Value::Null;
+                }
+                if tool == DrawingToolType::TrendBasedFibTime {
+                    let points = value["drawings"][0]["points"].as_array_mut().unwrap();
+                    points.push(points[0].clone());
+                }
+                let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+                assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+                assert!(
+                    loaded.drawings[0].drawing.fib_config.is_none(),
+                    "{tool:?}, legacy={legacy}"
+                );
+                let (again, skipped) =
+                    DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
+                assert!(skipped.is_empty());
+                assert!(
+                    again.drawings[0].drawing.fib_config.is_none(),
+                    "{tool:?}: retain fixed levels after saving"
+                );
+            }
+        }
+
         // Earlier rays and extended lines ignored the saved Extend flags. Adopt their old
         // reach once, then retain explicit changes on the next save and load.
         for (tool, name) in [
@@ -1232,7 +1286,27 @@ mod tests {
             storage.drawings[0].points.truncate(anchors);
             serde_json::to_string_pretty(&storage).unwrap()
         };
+        let with_level_width = |width| {
+            let mut value = serde_json::to_value(&storage).unwrap();
+            value["drawings"][0]["drawing"]["pitchfork"] = serde_json::json!({
+                "levels":[{"value":1.0,"visible":true,"color":[1,2,3,255],"line_style":"Solid","width":width}],
+                "show_background":false,"background_opacity":51
+            });
+            serde_json::to_string(&value).unwrap()
+        };
         let unreadable = [
+            (
+                with_level_width(0.0),
+                "out-of-range pitchfork.levels[0].width",
+                &["2"][..],
+                0,
+            ),
+            (
+                with_level_width(101.0),
+                "out-of-range pitchfork.levels[0].width",
+                &["2"][..],
+                0,
+            ),
             (
                 current.replacen("\"ts_ms\":", "\"subms_ns\": 1000000, \"ts_ms\":", 1),
                 "anchor timestamp is outside the supported range",
@@ -1363,7 +1437,29 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 19] = [
+        let cases: [(Spoil, &str); 21] = [
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .pitchfork
+                        .get_or_insert_with(Default::default)
+                        .levels[0]
+                        .width = Some(f32::NAN)
+                },
+                "invalid pitchfork.levels[0].width",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .pitchfork
+                        .get_or_insert_with(Default::default)
+                        .levels[0]
+                        .width = Some(0.0)
+                },
+                "invalid pitchfork.levels[0].width",
+            ),
             (
                 |s| first(s).drawing.position_sizing.leverage = f64::NAN,
                 "invalid position_sizing",

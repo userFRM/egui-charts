@@ -469,6 +469,10 @@ mod tests {
                         revision: 0,
                         bar_to_x: &|x| x,
                         price_to_y,
+                        y_to_price: &|y| {
+                            8.0 + f64::from(y - price_to_y(8.0))
+                                / f64::from(price_to_y(9.0) - price_to_y(8.0))
+                        },
                         time_axis: true,
                         executions: None,
                     };
@@ -610,6 +614,7 @@ mod tests {
                 revision: 0,
                 bar_to_x: &|x| x,
                 price_to_y: &|price| price as f32,
+                y_to_price: &f64::from,
                 time_axis: true,
                 executions: None,
             };
@@ -663,6 +668,7 @@ mod tests {
             revision: 0,
             bar_to_x: &|x| x,
             price_to_y: &|price| price as f32,
+            y_to_price: &f64::from,
             time_axis: true,
             executions,
         };

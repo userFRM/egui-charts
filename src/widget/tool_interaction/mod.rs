@@ -307,6 +307,7 @@ impl Chart {
             revision: self.state.revision(),
             bar_to_x: &bar_to_x,
             price_to_y: &price_to_y,
+            y_to_price: &|y| price_map.y_to_price(y),
             time_axis: self.horizontal_scale.is_none(),
             executions: self
                 .feed_link

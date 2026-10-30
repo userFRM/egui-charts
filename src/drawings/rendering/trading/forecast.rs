@@ -224,6 +224,7 @@ mod tests {
                             revision: 0,
                             bar_to_x: &|b| b,
                             price_to_y: &|p| p as f32,
+                            y_to_price: &f64::from,
                             time_axis,
                             executions: None,
                         },

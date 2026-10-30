@@ -155,6 +155,7 @@ pub(crate) struct TextEditState {
 /// #     revision: u64,
 /// #     bar_to_x: impl Fn(f32) -> f32 + Copy,
 /// #     price_to_y: impl Fn(f64) -> f32 + Copy,
+/// #     y_to_price: impl Fn(f32) -> f64 + Copy,
 /// # ) {
 /// // 1. Sync state from app
 /// manager.sync_from_app_state(drawing_state);
@@ -166,7 +167,7 @@ pub(crate) struct TextEditState {
 /// // ... (start_drawing_with_coords, add_point_with_coords, etc.)
 ///
 /// // 4. Render against the chart's bars and coordinate mapping
-/// let view = ChartView { instrument: None, bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y, time_axis: true, executions: None };
+/// let view = ChartView { instrument: None, bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y, y_to_price: &y_to_price, time_axis: true, executions: None };
 /// manager.render_all(painter, price_rect, &view);
 /// # }
 /// ```

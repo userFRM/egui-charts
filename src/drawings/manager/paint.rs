@@ -356,6 +356,7 @@ mod tests {
                                 revision: 0,
                                 bar_to_x: &|b| 100.0 + b * 100.0,
                                 price_to_y: &|p| 500.0 - p as f32 * 10.0,
+                                y_to_price: &|y| f64::from((500.0 - y) / 10.0),
                                 time_axis: true,
                                 executions: None,
                             },
@@ -482,7 +483,7 @@ mod tests {
                 DrawingToolType::FibonacciCircles,
                 vec![(100., 100.), (200., 100.)],
                 (100., 200.),
-                (400., 350.),
+                (580., 390.),
             ),
             (
                 DrawingToolType::CyclicLines,
@@ -513,6 +514,7 @@ mod tests {
                         revision: 0,
                         bar_to_x: &|b| b * 10.0,
                         price_to_y: &|p| 500.0 - p as f32,
+                        y_to_price: &|y| 500.0 - f64::from(y),
                         time_axis: true,
                         executions: None,
                     };
@@ -593,6 +595,7 @@ mod tests {
                     revision: 0,
                     bar_to_x: &|b| b * 10.0,
                     price_to_y: &|p| 500.0 - p as f32,
+                    y_to_price: &|y| 500.0 - f64::from(y),
                     time_axis: true,
                     executions: None,
                 };

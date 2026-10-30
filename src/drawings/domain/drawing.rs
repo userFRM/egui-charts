@@ -248,7 +248,15 @@ impl Drawing {
             timeframe_visibility: TimeframeVisibility::all(),
             position_size: None,
             position_sizing: PositionSizing::default(),
-            fib_config: None,
+            fib_config: matches!(
+                tool_type,
+                DrawingToolType::FibonacciTimeZones
+                    | DrawingToolType::FibonacciSpeedFan
+                    | DrawingToolType::TrendBasedFibTime
+                    | DrawingToolType::FibonacciCircles
+                    | DrawingToolType::FibonacciSpeedResistanceArcs
+            )
+            .then(|| FibonacciConfig::for_tool(tool_type)),
             volume_profile: None,
             regression_trend: None,
             pitchfork: None,
@@ -443,7 +451,9 @@ impl Drawing {
                         .enumerate()
                         .filter(|(_, level)| level.visible)
                         .zip(prices)
-                        .map(|((index, level), price)| (index, level.label.clone(), price))
+                        .map(|((index, level), price)| {
+                            (index, level.label(config.levels_as_percent), price)
+                        })
                         .collect()
                 })
                 .unwrap_or_default(),
@@ -707,6 +717,8 @@ mod tests {
         let mut fib = drawing(T::FibonacciRetracement, &[(0.0, 100.0), (10.0, 200.0)]);
         let mut config = FibonacciConfig::default();
         config.levels[1].visible = false;
+        config.levels[2].label = "100%".into();
+        config.levels[3].label.clear();
         fib.fib_config = Some(config);
         // (drawing, bar) -> (level, name, price); prices by hand.
         for (drawing, bar, scale, expected) in [

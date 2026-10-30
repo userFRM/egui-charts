@@ -155,6 +155,7 @@ pub(crate) fn paint_drawings(
         revision: 0,
         bar_to_x: &bar_to_x,
         price_to_y: &price_to_y,
+        y_to_price: &|y| price.y_to_price(y),
         time_axis: false,
         executions: None,
     };

@@ -400,7 +400,6 @@ fn dialogs_expose_titles_and_label_their_fields() {
             &[
                 (Role::CheckBox, "Level 1 visible"),
                 (Role::SpinButton, "Level 1 ratio"),
-                (Role::TextInput, "Level 1 label"),
             ],
         ),
         (
