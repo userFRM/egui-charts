@@ -45,7 +45,7 @@ macro_rules! register_builtins {
             let key = <$ty as Default>::default().name().to_string();
             $factory.constructors.insert(
                 key,
-                ($category, Box::new(|| Box::new(<$ty as Default>::default()))),
+                (Some($category), Box::new(|| Box::new(<$ty as Default>::default()))),
             );
         )+)+
     };
@@ -58,8 +58,15 @@ macro_rules! register_builtins {
 /// its conventional default parameters. Each name selects a distinct calculation
 /// or source range. Additional indicators can be registered at runtime with
 /// [`register`](Self::register).
+///
+/// [`create`](Self::create) and [`has`](Self::has) also resolve the names of seven exported
+/// studies the catalogue leaves out, so that a template, a copied study or a saved layout of
+/// one is recreated: `CVD`, `C2C Vol`, `HL2`, `HLC3`, `Price Channel`, `Ehlers Fisher` and
+/// `MA Combination`, which creates [`MACombination::ribbon`] for its inputs to reshape. They have
+/// no category and are not in [`list`](Self::list) or [`count`](Self::count).
 pub struct IndicatorFactory {
-    constructors: HashMap<String, (&'static str, IndicatorConstructor)>,
+    /// The category of each name, `None` for a built-in outside the catalogue, and its constructor.
+    constructors: HashMap<String, (Option<&'static str>, IndicatorConstructor)>,
 }
 
 impl IndicatorFactory {
@@ -89,7 +96,25 @@ impl IndicatorFactory {
     ///
     /// Types use their defaults; automatic drawings select a construction kind and
     /// stream studies select aggregation parameters. Names come from each study.
+    /// Exported studies outside the catalogue are registered first, without a category, so a
+    /// listed study of the same name would replace them.
     fn register_builtin(&mut self) {
+        // Exported studies outside the catalogue, resolved by name so that saved copies load.
+        let unlisted: [fn() -> Box<dyn Indicator>; 7] = [
+            || Box::new(CVD::default()),
+            || Box::new(CloseToCloseVol::default()),
+            || Box::new(HL2::default()),
+            || Box::new(HLC3::default()),
+            || Box::new(PriceChannel::default()),
+            || Box::new(EhlersFisher::default()),
+            || Box::new(MACombination::ribbon()),
+        ];
+        for constructor in unlisted {
+            self.constructors.insert(
+                constructor().name().to_owned(),
+                (None, Box::new(constructor)),
+            );
+        }
         register_builtins!(
             self,
             "Moving averages" => [
@@ -334,7 +359,7 @@ impl IndicatorFactory {
             self.constructors.insert(
                 name,
                 (
-                    "Order flow",
+                    Some("Order flow"),
                     Box::new(move || Box::new(OrderFlowStudy::new(kind))),
                 ),
             );
@@ -344,7 +369,7 @@ impl IndicatorFactory {
             self.constructors.insert(
                 name,
                 (
-                    Self::PATTERNS,
+                    Some(Self::PATTERNS),
                     Box::new(move || Box::new(ChartPatterns::new(family))),
                 ),
             );
@@ -355,7 +380,7 @@ impl IndicatorFactory {
             self.constructors.insert(
                 name,
                 (
-                    "Support and resistance",
+                    Some("Support and resistance"),
                     Box::new(move || Box::new(AutoDrawing::new(kind, 5.0, 10))),
                 ),
             );
@@ -397,7 +422,7 @@ impl IndicatorFactory {
             return false;
         }
         self.constructors
-            .insert(name, (category, Box::new(constructor)));
+            .insert(name, (Some(category), Box::new(constructor)));
         true
     }
 
@@ -408,17 +433,25 @@ impl IndicatorFactory {
 
     /// The category of the indicator registered under `name`, such as `"Momentum"` or
     /// `"Volume"` for a built-in and [`CUSTOM`](Self::CUSTOM) for one added with
-    /// [`register`](Self::register), or `None` if not found.
+    /// [`register`](Self::register), or `None` if not found or left out of the catalogue.
     pub fn category(&self, name: &str) -> Option<&'static str> {
-        self.constructors.get(name).map(|(category, _)| *category)
+        self.constructors
+            .get(name)
+            .and_then(|(category, _)| *category)
     }
 
-    /// Return a list of all registered indicator names (unordered).
+    /// The names a study picker offers, unordered: every registered name except the exported
+    /// studies outside the catalogue.
     pub fn list(&self) -> Vec<String> {
-        self.constructors.keys().cloned().collect()
+        self.constructors
+            .iter()
+            .filter(|(_, (category, _))| category.is_some())
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 
-    /// Check whether an indicator with `name` is registered.
+    /// Whether [`create`](Self::create) resolves `name`, also one that [`list`](Self::list)
+    /// leaves out.
     pub fn has(&self, name: &str) -> bool {
         self.constructors.contains_key(name)
     }
@@ -435,9 +468,12 @@ impl IndicatorFactory {
         self.constructors.clear();
     }
 
-    /// Return the number of currently registered indicators.
+    /// The number of names in [`list`](Self::list).
     pub fn count(&self) -> usize {
-        self.constructors.len()
+        self.constructors
+            .values()
+            .filter(|(category, _)| category.is_some())
+            .count()
     }
 }
 
