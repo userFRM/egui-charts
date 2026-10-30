@@ -659,7 +659,7 @@ Studies,Indicators,Momentum,done,library,src/studies/builtin/momentum.rs;src/wid
 Studies,Indicators,Money Flow,done,library,src/studies/builtin/mfi.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/builtin/rsi.rs;src/studies/factory/mod.rs
 Studies,Indicators,Moon Phases,done,library,src/studies/builtin/lunar_phases.rs;src/studies/factory/mod.rs
 Studies,Indicators,Moving Average Adaptive,done,library,src/studies/builtin/kama.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Moving Average Channel,done,library,src/studies/builtin/ma_channel.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Moving Average Channel,done,library,src/studies/builtin/ma_channel.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/template.rs
 Studies,Indicators,Moving Average Convergence Divergence,done,library,src/studies/builtin/macd.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/studies/palette.rs
 Studies,Indicators,Moving Average Double,done,library,src/studies/builtin/ma_combination.rs;src/studies/builtin/ma_presets.rs;src/studies/builtin/ma_multiple.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Moving Average Hamming,done,library,src/studies/builtin/ma_hamming.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs

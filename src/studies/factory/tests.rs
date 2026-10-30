@@ -214,7 +214,7 @@ fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
 fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
     use crate::studies::{FillBoundary, InputValue};
 
-    let rows: [(&str, &[(&str, InputValue)], &[(usize, usize)]); 2] = [
+    let rows: [(&str, &[(&str, InputValue)], &[(usize, usize)]); 3] = [
         (
             "Envelopes",
             &[("percent", InputValue::Number(10.0))],
@@ -228,6 +228,16 @@ fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
                 ("lower_multiplier", InputValue::Number(2.0)),
             ],
             &[(0, 1), (1, 2)],
+        ),
+        (
+            "MA Channel",
+            &[
+                ("upper_length", InputValue::Length(20)),
+                ("lower_length", InputValue::Length(20)),
+                ("upper_offset", InputValue::Integer(0)),
+                ("lower_offset", InputValue::Integer(0)),
+            ],
+            &[(0, 1)],
         ),
     ];
     for (name, inputs, bands) in rows {

@@ -85,6 +85,16 @@ impl StudyTemplate {
                     })
                     .collect();
             }
+            // Before it averaged highs and lows, MA Channel drew the close average with percentage
+            // bands, which Envelopes draws with a simple average.
+            "MA Channel" if has("offset_percent") => {
+                template.name = "Envelopes".to_owned();
+                for (id, _) in &mut template.inputs {
+                    if id == "offset_percent" {
+                        *id = "percent".to_owned();
+                    }
+                }
+            }
             _ => return None,
         }
         Some(template)
@@ -272,7 +282,7 @@ mod tests {
         ];
         let deviation = 2.0 / 3.0_f64.sqrt();
         // Upper, middle and lower line on bars 1 to 3; bar 0 has no value.
-        let rows: [(&str, &[(&str, InputValue)], &str, [[f64; 3]; 3]); 1] = [
+        let rows: [(&str, &[(&str, InputValue)], &str, [[f64; 3]; 3]); 2] = [
             // A residual deviation of 2/sqrt(3) around the flat fit 10/3 of the last three closes.
             (
                 "LinReg Channel",
@@ -283,6 +293,16 @@ mod tests {
                 ],
                 "LinReg Channel",
                 [[10.0 / 3.0 + deviation, 10.0 / 3.0, 10.0 / 3.0 - deviation]; 3],
+            ),
+            // The two-bar simple average of the closes, 2.5, 3 and 3, times 1.5 and 0.5.
+            (
+                "MA Channel",
+                &[
+                    ("period", InputValue::Length(2)),
+                    ("offset_percent", InputValue::Number(50.0)),
+                ],
+                "Envelopes",
+                [[3.75, 2.5, 1.25], [4.5, 3.0, 1.5], [4.5, 3.0, 1.5]],
             ),
         ];
         let factory = IndicatorFactory::new();

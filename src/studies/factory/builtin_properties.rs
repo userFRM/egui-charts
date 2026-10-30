@@ -25,7 +25,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(ZLEMA::new(l(0))),
         Box::new(HammingMA::new(l(0))),
         Box::new(MultipleMA::new()),
-        Box::new(MAChannel::new(l(0), x(1.0))),
+        Box::new(MAChannel::new(l(0), l(1)).with_offsets(3, -2)),
         Box::new(EMACross::new(l(0), l(1))),
         Box::new(MACross::new(l(0), l(1))),
         Box::new(MixedMACross::new(l(0), l(1))),
