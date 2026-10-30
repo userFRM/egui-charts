@@ -282,11 +282,11 @@ mod tests {
         ];
         let deviation = 2.0 / 3.0_f64.sqrt();
         // Upper, middle and lower line on bars 1 to 3; bar 0 has no value.
-        let rows: [(&str, &[(&str, InputValue)], &str, [[f64; 3]; 3]); 2] = [
+        let rows = [
             // A residual deviation of 2/sqrt(3) around the flat fit 10/3 of the last three closes.
             (
                 "LinReg Channel",
-                &[
+                vec![
                     ("period", InputValue::Length(3)),
                     ("multiplier", InputValue::Number(1.0)),
                     ("extend", InputValue::Toggle(false)),
@@ -297,7 +297,7 @@ mod tests {
             // The two-bar simple average of the closes, 2.5, 3 and 3, times 1.5 and 0.5.
             (
                 "MA Channel",
-                &[
+                vec![
                     ("period", InputValue::Length(2)),
                     ("offset_percent", InputValue::Number(50.0)),
                 ],
