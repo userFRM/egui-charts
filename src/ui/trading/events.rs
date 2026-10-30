@@ -225,6 +225,7 @@ impl Trading {
                     self.sound = Some(self.display.execution_sound.clone());
                 }
             }
+            AccountEvent::Status(status) => self.connection = Some(status),
             _ => {}
         }
     }
@@ -764,5 +765,81 @@ mod tests {
         trading.set_service(Arc::new(Recorder::default()));
         assert_eq!(trading.take_execution_sound(), None);
         assert!(trading.calculator.is_none());
+    }
+
+    /// The account panel's tab marks a broker that reports that it is connecting or
+    /// disconnected until it reports that it is live, also at the demo's minimized panel height,
+    /// and `is_connected` is false meanwhile. A broker that never reports a status counts as
+    /// connected, and a new stream starts without the old one's status. A regression keeps
+    /// dropping the status, keeps reporting a dropped broker as connected, carries a status into
+    /// the next stream or hides the mark in a minimized panel.
+    #[test]
+    fn the_account_panel_and_is_connected_follow_the_brokers_status() {
+        use crate::data::FeedStatus;
+        // The connection labels the account panel draws in a panel `height` points high.
+        let marks = |trading: &mut Trading, height: f32| {
+            let ctx = egui::Context::default();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, height),
+                )),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                trading.show_account_panel(ui, "SYM");
+            });
+            let marks: Vec<String> = (output.shapes.iter())
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text)
+                        if ["Live", "Connecting...", "Offline"].contains(&text.galley.text()) =>
+                    {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            marks
+        };
+        let check = |trading: &mut Trading,
+                     step: &str,
+                     broker: bool,
+                     connected: bool,
+                     mark: Option<&str>| {
+            assert_eq!(
+                (trading.has_broker(), trading.is_connected()),
+                (broker, connected),
+                "{step}"
+            );
+            // 42 points is the demo's minimized panel, which draws only the tab strip.
+            for height in [42.0, 320.0] {
+                assert_eq!(
+                    marks(trading, height),
+                    Vec::from_iter(mark),
+                    "{step} at {height}"
+                );
+            }
+        };
+        let mut trading = Trading::default();
+        check(&mut trading, "no broker", false, false, None);
+        trading.set_service(Arc::new(Recorder::default()));
+        trading.poll(&egui::Context::default(), &mut Toasts::new());
+        check(&mut trading, "no status", true, true, None);
+        for (status, connected, mark) in [
+            (FeedStatus::Connecting, false, Some("Connecting...")),
+            (FeedStatus::Live, true, None),
+            (FeedStatus::Disconnected, false, Some("Offline")),
+            (FeedStatus::Live, true, None),
+            (FeedStatus::Disconnected, false, Some("Offline")),
+        ] {
+            trading.apply(AccountEvent::Status(status), &mut Toasts::new());
+            check(&mut trading, &format!("{status:?}"), true, connected, mark);
+        }
+        // A new stream, as after a lag, starts without the old stream's status.
+        trading.connect();
+        check(&mut trading, "new stream", true, true, None);
+        trading.disconnect();
+        check(&mut trading, "disconnected", false, false, None);
     }
 }
