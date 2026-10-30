@@ -58,6 +58,7 @@ use egui_charts::ui::dialogs::{
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
 use egui_charts::ui::floating_replay_control::{FloatingReplayControl, ReplayControlAction};
+use egui_charts::ui::floating_toolbar::FloatingSelectionToolbar;
 use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplaySession, ReplayStartPicker};
 use egui_charts::ui::timeframe_toolbar::{
     DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction,
@@ -327,6 +328,7 @@ pub struct DemoApp {
     // Persistent toolbars.
     pub(crate) top_toolbar: TopToolbar,
     drawing_toolbar: DrawingToolbar,
+    selection_toolbar: FloatingSelectionToolbar,
     pub(crate) timeframe_toolbar: TimeframeToolbar,
     widget_bar: WidgetBar,
 
@@ -587,6 +589,7 @@ impl DemoApp {
             theme_choice,
             top_toolbar,
             drawing_toolbar: DrawingToolbar::default(),
+            selection_toolbar: FloatingSelectionToolbar::new(),
             timeframe_toolbar,
             widget_bar,
             indicator_dialog: IndicatorDialog::new(),
@@ -2696,6 +2699,11 @@ impl DemoApp {
             self.activate_chart_slot(self.layout.active());
         }
         self.drain_chart_events(ui.ctx());
+        if !self.keyboard_dialog_open()
+            && let Some(action) = self.selection_toolbar.show_and_apply(ui, &mut self.chart)
+        {
+            self.handle_drawing_context(ui.ctx(), action);
+        }
         self.menus
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
         self.menus
@@ -2708,6 +2716,7 @@ impl DemoApp {
     fn drain_chart_events(&mut self, ctx: &egui::Context) {
         let mut replay_click = None;
         let mut open_settings = false;
+        let mut drawing_settings = None;
         for event in self.chart.drain_events() {
             match event {
                 egui_charts::widget::ChartEvent::CrosshairMoved(pointer) => {
@@ -2734,6 +2743,11 @@ impl DemoApp {
                 {
                     open_settings = true;
                 }
+                egui_charts::widget::ChartEvent::DoubleClick { position } => {
+                    if let Some(egui_charts::widget::PointerTarget::Drawing(id)) = position.target {
+                        drawing_settings = Some(id);
+                    }
+                }
                 egui_charts::widget::ChartEvent::SymbolChanged(_)
                 | egui_charts::widget::ChartEvent::TimeframeChanged(_) => {
                     self.last_chart_click = None;
@@ -2747,6 +2761,17 @@ impl DemoApp {
         }
         if open_settings && !self.replay_selecting {
             self.open_chart_settings_dialog();
+        }
+        if let Some(id) = drawing_settings
+            && !self.replay_selecting
+            && self
+                .chart
+                .drawings()
+                .drawings
+                .iter()
+                .any(|d| d.id == id && (d.locked || !d.tool_type.edits_text_inline()))
+        {
+            self.open_drawing_props_for(id);
         }
     }
 
@@ -2815,7 +2840,7 @@ impl DemoApp {
             ChartContextAction::Chart(a) => self.handle_chart_context(a),
             ChartContextAction::Series(a) => self.handle_series_context(a),
             ChartContextAction::Study { id, action } => self.handle_study_context(ctx, id, action),
-            ChartContextAction::Drawing(a) => self.handle_drawing_context(a),
+            ChartContextAction::Drawing(a) => self.handle_drawing_context(ctx, a),
             _ => {}
         }
     }
@@ -2894,11 +2919,15 @@ impl DemoApp {
         }
     }
 
-    fn handle_drawing_context(&mut self, action: DrawingContextMenuAction) {
-        self.user_action(|app| app.handle_drawing_context_edit(action));
+    fn handle_drawing_context(&mut self, ctx: &egui::Context, action: DrawingContextMenuAction) {
+        self.user_action(|app| app.handle_drawing_context_edit(ctx, action));
     }
 
-    fn handle_drawing_context_edit(&mut self, action: DrawingContextMenuAction) {
+    fn handle_drawing_context_edit(
+        &mut self,
+        ctx: &egui::Context,
+        action: DrawingContextMenuAction,
+    ) {
         // The library selects the right-clicked drawing, so the selected id is
         // the menu's target.
         let Some(id) = self.chart.drawings().sel_drawing() else {
@@ -2909,6 +2938,26 @@ impl DemoApp {
             DrawingContextMenuAction::Delete => dm.delete_selected(),
             DrawingContextMenuAction::Edit => self.open_drawing_props_for(id),
             DrawingContextMenuAction::Clone => self.clone_drawing(id),
+            DrawingContextMenuAction::Copy => match self.chart.copy_selected_drawings() {
+                Ok(Some(text)) => {
+                    ctx.copy_text(text.clone());
+                    self.copied_drawing = Some(text);
+                    self.copied_study = None;
+                }
+                Ok(None) => {}
+                Err(error) => self
+                    .toasts
+                    .error(format!("Could not copy drawings: {error}")),
+            },
+            DrawingContextMenuAction::BringForward | DrawingContextMenuAction::SendBackward => {
+                let action = if action == DrawingContextMenuAction::BringForward {
+                    ObjectTreeAction::MoveUp(id)
+                } else {
+                    ObjectTreeAction::MoveDown(id)
+                };
+                self.object_tree
+                    .apply_to_chart(&mut self.chart, &action, &[]);
+            }
             DrawingContextMenuAction::Lock => dm.edit_drawing(id, |d| d.locked = !d.locked),
             DrawingContextMenuAction::Hide => dm.edit_drawing(id, |d| d.visible = !d.visible),
             DrawingContextMenuAction::BringToFront => dm.bring_to_front(id),
@@ -3315,6 +3364,90 @@ mod tests {
     use egui_charts::model::LineStyle;
     use egui_charts::ui::dialogs::DrawingProps;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    /// Drawing double clicks reach the properties dialog without taking over inline text editing.
+    #[test]
+    fn drawing_double_click_opens_geometry_settings() {
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType as Tool};
+        for (tool, settings) in [
+            (Tool::TrendLine, true),
+            (Tool::Rect, true),
+            (Tool::TextLabel, false),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                "2026-10-27T19:29:50Z".parse().unwrap(),
+                true,
+            );
+            app.chart = Chart::new(BarData::new());
+            let mut drawing = Drawing::new(7, tool);
+            drawing.chart_points = vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 110.0)];
+            drawing.text = Some("Annotation".into());
+            drawing.completed = true;
+            app.chart.drawings_mut().drawings.push(drawing);
+            app.chart.set_data(
+                SeriesId::MAIN,
+                (0..40)
+                    .map(|i| {
+                        Bar::new(
+                            chrono::DateTime::from_timestamp(i * 60, 0).unwrap(),
+                            100.0,
+                            120.0,
+                            90.0,
+                            105.0,
+                            1.0,
+                        )
+                    })
+                    .collect(),
+            );
+            let frame = |app: &mut DemoApp, events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        time: Some(ctx.input(|i| i.time) + 0.1),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        app.chart.show(ui);
+                        app.drain_chart_events(ui.ctx());
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            frame(&mut app, vec![]);
+            let points = &app.chart.drawings().drawings[0].points;
+            let pos = if settings {
+                points[0].lerp(points[1], 0.5)
+            } else {
+                points[0] + egui::vec2(10.0, -5.0)
+            };
+            assert!(
+                ctx.content_rect().contains(pos),
+                "drawing must be on screen"
+            );
+            frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+            for _ in 0..2 {
+                frame(
+                    &mut app,
+                    [true, false]
+                        .map(|pressed| egui::Event::PointerButton {
+                            pos,
+                            pressed,
+                            button: egui::PointerButton::Primary,
+                            modifiers: egui::Modifiers::NONE,
+                        })
+                        .to_vec(),
+                );
+            }
+            assert_eq!(app.drawing_props.is_open, settings, "{tool:?}");
+            assert!(!app.settings_dialog.is_open);
+        }
+    }
 
     #[test]
     fn advancing_a_paused_sample_keeps_intermediate_bars() {
