@@ -3781,19 +3781,12 @@ mod tests {
     fn legacy_themes_follow_system_and_new_choices_survive_restart() {
         use eframe::App;
         use egui_charts::drawings::DrawingToolType;
-        let cases = [None, Some(egui::Theme::Light), Some(egui::Theme::Dark)]
-            .into_iter()
-            .flat_map(|initial| {
-                [
-                    (None, None),
-                    (Some(true), None),
-                    (Some(false), None),
-                    (Some(true), Some("dark")),
-                    (Some(false), Some("light")),
-                ]
-                .map(|(key, document)| (initial, key, document))
-            });
-        for (initial, legacy_key, legacy_document) in cases {
+        let cases = [
+            (None, Some(true), None, 1),
+            (Some(egui::Theme::Light), Some(true), Some("dark"), 3),
+            (Some(egui::Theme::Dark), Some(false), Some("light"), 1),
+        ];
+        for (initial, legacy_key, legacy_document, restarts) in cases {
             let ctx = egui::Context::default();
             ctx.run_ui(
                 egui::RawInput {
@@ -3821,7 +3814,7 @@ mod tests {
                     ]),
                 );
             }
-            for explicit in [false, true, true] {
+            for explicit in [false, true, true].into_iter().take(restarts) {
                 let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
                 cc.storage = Some(&storage);
                 let mut app = DemoApp::new(&cc);

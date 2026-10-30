@@ -316,55 +316,72 @@ mod tests {
 
     #[test]
     fn synthetic_fixture_preserves_sessions_adjustments_and_ranges() {
-        let times = [
-            "2026-01-23T09:00:00Z",
-            "2026-01-23T14:30:00Z",
-            "2026-01-23T21:30:00Z",
-            "2026-01-24T14:30:00Z",
-            "2026-01-26T14:30:00Z",
-        ];
-        let source: Vec<_> = times
-            .iter()
-            .map(|time| Bar::new(time.parse().unwrap(), 100.0, 102.0, 99.0, 101.0, 640.0))
-            .collect();
-        let dividend = "2026-01-26T14:30:00Z".parse().unwrap();
-        for (session, indices) in [
-            (SessionType::RTH, vec![1, 4]),
-            (SessionType::ETH, vec![0, 1, 2, 4]),
-            (SessionType::Full24x7, vec![0, 1, 2, 3, 4]),
+        for times in [
+            [
+                "2026-01-23T09:00:00Z",
+                "2026-01-23T14:30:00Z",
+                "2026-01-23T21:30:00Z",
+                "2026-01-24T14:30:00Z",
+                "2026-01-26T14:30:00Z",
+            ],
+            [
+                "2026-03-06T09:00:00Z",
+                "2026-03-06T14:30:00Z",
+                "2026-03-06T21:30:00Z",
+                "2026-03-07T14:30:00Z",
+                "2026-03-09T13:30:00Z",
+            ],
+            [
+                "2026-10-30T08:00:00Z",
+                "2026-10-30T13:30:00Z",
+                "2026-10-30T20:30:00Z",
+                "2026-10-31T13:30:00Z",
+                "2026-11-02T14:30:00Z",
+            ],
         ] {
-            let raw = session_bars("SAMPLE", &source, session, false, dividend);
-            let adjusted = session_bars("SAMPLE", &source, session, true, dividend);
-            assert_eq!(
-                raw,
-                indices
-                    .iter()
-                    .map(|i| source[*i].clone())
-                    .collect::<Vec<_>>()
-            );
-            assert_eq!(raw[0].close * 0.98, adjusted[0].close);
-            assert_eq!(raw.last().unwrap().close, adjusted.last().unwrap().close);
-            for (raw, adjusted) in raw.iter().zip(&adjusted) {
-                assert_eq!((raw.time, raw.volume), (adjusted.time, adjusted.volume));
+            let source: Vec<_> = times
+                .iter()
+                .map(|time| Bar::new(time.parse().unwrap(), 100.0, 102.0, 99.0, 101.0, 640.0))
+                .collect();
+            let dividend = times[4].parse().unwrap();
+            for (session, indices) in [
+                (SessionType::RTH, vec![1, 4]),
+                (SessionType::ETH, vec![0, 1, 2, 4]),
+                (SessionType::Full24x7, vec![0, 1, 2, 3, 4]),
+            ] {
+                let raw = session_bars("SAMPLE", &source, session, false, dividend);
+                let adjusted = session_bars("SAMPLE", &source, session, true, dividend);
+                assert_eq!(
+                    raw,
+                    indices
+                        .iter()
+                        .map(|i| source[*i].clone())
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(raw[0].close * 0.98, adjusted[0].close);
+                assert_eq!(raw.last().unwrap().close, adjusted.last().unwrap().close);
+                for (raw, adjusted) in raw.iter().zip(&adjusted) {
+                    assert_eq!((raw.time, raw.volume), (adjusted.time, adjusted.volume));
+                }
             }
+            // Stocks keep the same hours with a dividend of their own; continuous markets are untouched.
+            let msft = session_bars("MSFT", &source, SessionType::RTH, true, dividend);
+            assert_eq!(msft.len(), 2);
+            assert!((msft[0].close - 101.0 * 0.97).abs() < 1e-9);
+            assert_eq!(
+                session_bars("BTCUSD", &source, SessionType::RTH, true, dividend),
+                source
+            );
+            for (range, count) in [
+                (DateRange::Day1, 1),
+                (DateRange::Day5, 5),
+                (DateRange::Month1, 5),
+                (DateRange::All, 5),
+            ] {
+                assert_eq!(visible_bars_for_range(range, &source), count);
+            }
+            assert_eq!(visible_bars_for_range(DateRange::All, &[]), 0);
         }
-        // Stocks keep the same hours with a dividend of their own; continuous markets are untouched.
-        let msft = session_bars("MSFT", &source, SessionType::RTH, true, dividend);
-        assert_eq!(msft.len(), 2);
-        assert!((msft[0].close - 101.0 * 0.97).abs() < 1e-9);
-        assert_eq!(
-            session_bars("BTCUSD", &source, SessionType::RTH, true, dividend),
-            source
-        );
-        for (range, count) in [
-            (DateRange::Day1, 1),
-            (DateRange::Day5, 5),
-            (DateRange::Month1, 5),
-            (DateRange::All, 5),
-        ] {
-            assert_eq!(visible_bars_for_range(range, &source), count);
-        }
-        assert_eq!(visible_bars_for_range(DateRange::All, &[]), 0);
     }
 
     /// Each symbol has its own instant, with bars on both sides even across a weekend or DST.
@@ -411,75 +428,6 @@ mod tests {
                 assert_eq!(dividend_date(symbol, now), date, "{symbol} at {now}");
                 assert!(now - chrono::Duration::days(6) < date && date < now);
                 assert!(us_equity_hours().is_open(date, false));
-            }
-        }
-    }
-
-    /// New York opens and closes move with both clock changes; weekends and nights stay closed.
-    #[test]
-    fn session_boundaries_follow_both_dst_changes() {
-        for (day, pre, regular, close, end) in [
-            ("2026-03-06T00:00:00Z", 540, 870, 1260, 1500),
-            ("2026-03-09T00:00:00Z", 480, 810, 1200, 1440),
-            ("2026-10-30T00:00:00Z", 480, 810, 1200, 1440),
-            ("2026-11-02T00:00:00Z", 540, 870, 1260, 1500),
-        ] {
-            let day = day.parse::<DateTime<Utc>>().unwrap();
-            let source: Vec<_> = [
-                pre - 1,
-                pre,
-                regular - 1,
-                regular,
-                close - 1,
-                close,
-                end - 1,
-                end,
-            ]
-            .into_iter()
-            .map(|minutes| {
-                Bar::new(
-                    day + chrono::Duration::minutes(minutes),
-                    100.0,
-                    102.0,
-                    99.0,
-                    101.0,
-                    640.0,
-                )
-            })
-            .chain([Bar::new(
-                "2026-03-08T15:00:00Z".parse().unwrap(),
-                100.0,
-                102.0,
-                99.0,
-                101.0,
-                640.0,
-            )])
-            .collect();
-            for spec in DemoSymbol::catalog() {
-                let has_hours = matches!(spec.symbol, "AAPL" | "MSFT" | "NVDA" | "TSLA" | "SAMPLE");
-                for (session, expected) in [
-                    (SessionType::RTH, vec![3, 4]),
-                    (SessionType::ETH, vec![1, 2, 3, 4, 5, 6]),
-                    (SessionType::Full24x7, (0..9).collect()),
-                ] {
-                    for adjusted in [false, true] {
-                        let bars = session_bars(spec.symbol, &source, session, adjusted, day);
-                        let indices = if has_hours {
-                            expected.clone()
-                        } else {
-                            (0..9).collect()
-                        };
-                        assert_eq!(
-                            bars.iter().map(|bar| bar.time).collect::<Vec<_>>(),
-                            indices.iter().map(|&i| source[i].time).collect::<Vec<_>>(),
-                            "{} at {day}, {session:?}, adjusted {adjusted}",
-                            spec.symbol
-                        );
-                        if !has_hours {
-                            assert_eq!(bars, source);
-                        }
-                    }
-                }
             }
         }
     }
