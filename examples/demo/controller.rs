@@ -835,9 +835,8 @@ impl DemoApp {
         if let Some(tf) = self.chart.timeframe()
             && (tf != self.state.timeframe || clock_changed || symbol_changed)
         {
+            // Reloads the bars, for the restored symbol too.
             self.switch_timeframe(tf);
-        } else if symbol_changed {
-            self.regenerate_bars();
         }
     }
 
