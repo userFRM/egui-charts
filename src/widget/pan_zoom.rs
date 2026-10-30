@@ -727,8 +727,7 @@ mod tests {
     use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 
     /// Invalid damping falls back at both option entry points and the animation still ends.
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[test]
     fn kinetic_damping_options_decay_to_a_stop() {
         for runtime in [false, true] {
             for (coefficient, expected) in [
@@ -773,8 +772,7 @@ mod tests {
     }
 
     /// Non-finite velocity and overflowing motion stop without changing the viewport.
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[test]
     fn kinetic_invalid_motion_stops_before_scrolling() {
         for (velocity, elapsed) in [
             (f32::NAN, None),
