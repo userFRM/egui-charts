@@ -8,7 +8,7 @@ use egui::{Color32, Pos2, Shape, Stroke};
 
 impl Drawing {
     /// The first anchor is the center, the second fixes the radius, and the third fixes
-    /// the end ray. Positive screen angles sweep clockwise, including sectors over 180°.
+    /// the end ray. The sweep takes the short arc in (-180°, 180°], clockwise at 180°.
     pub(super) fn sector_points(&self) -> Option<Vec<Pos2>> {
         let [center, start, end, ..] = *self.points else {
             return None;
@@ -18,8 +18,13 @@ impl Drawing {
             return None;
         }
         let from = (start - center).angle();
-        let sweep = ((end - center).angle() - from).rem_euclid(std::f32::consts::TAU);
-        let steps = ((sweep / std::f32::consts::TAU * 128.0).ceil() as usize).max(1);
+        let mut sweep = (end - center).angle() - from;
+        if sweep > std::f32::consts::PI {
+            sweep -= std::f32::consts::TAU;
+        } else if sweep <= -std::f32::consts::PI {
+            sweep += std::f32::consts::TAU;
+        }
+        let steps = ((sweep.abs() / std::f32::consts::TAU * 128.0).ceil() as usize).max(1);
         let mut points = vec![center];
         points.extend((0..=steps).map(|i| {
             let angle = from + sweep * i as f32 / steps as f32;
@@ -249,7 +254,7 @@ mod tests {
             (
                 DrawingToolType::Sector,
                 vec![(100.0, 100.0), (200.0, 100.0), (100.0, 50.0)],
-                vec![(200.0, 100.0), (0.0, 100.0), (100.0, 0.0)],
+                vec![(200.0, 100.0), (170.71068, 29.28932), (100.0, 0.0)],
             ),
             (
                 DrawingToolType::RotatedRect,

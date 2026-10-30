@@ -25,7 +25,7 @@ instructions() {
 printf '| Scenario | Base instructions | Head instructions | Change | Tolerance |\n'
 printf '|---|---:|---:|---:|---:|\n'
 fail=0
-for scenario in frame-1000 frame-100000 frame-1000000 heikin tick tick-studies append append-studies studies drawings depth bubbles tpo-400 tpo-1600 trade-replay session-resample; do
+for scenario in frame-1000 frame-100000 frame-1000000 heikin tick tick-studies append append-studies studies drawings depth bubbles tpo-400 tpo-1600 trade-replay session-resample markers events; do
     # A replay already looks up 100,000 ids; one measured batch is enough.
     samples=20
     [[ $scenario != trade-replay ]] || samples=1

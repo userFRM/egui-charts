@@ -155,8 +155,8 @@ impl Drawing {
         }
         let &second = p.get(1)?;
         match self.tool_type {
-            T::TrendLine => {
-                let (left, right) = self.trend_line_ends(rect.min.x, rect.max.x)?;
+            T::TrendLine | T::Ray | T::ExtendedLine => {
+                let (left, right) = self.trend_line_ends(rect)?;
                 outline.lines = vec![[left, right]];
             }
             T::TrendAngle
@@ -223,8 +223,7 @@ impl Drawing {
                     outline.areas.push(corners.to_vec());
                 }
             }
-            T::Ray => outline.lines = vec![[first, lines::ray_end(first, second, rect)]],
-            T::ExtendedLine => outline.lines = vec![lines::extended_line(first, second, rect)],
+            T::Rect => boxed(&mut outline, self.rectangle_bounds(rect)?),
             T::PriceRange => {
                 let mid_x = (first.x + second.x) / 2.0;
                 outline.lines = vec![
@@ -363,7 +362,7 @@ impl Drawing {
             DrawingToolType::InfoLine => self.render_info_line(painter, view),
 
             // Shapes (8 tools)
-            DrawingToolType::Rect => self.render_rect(painter, color, stroke),
+            DrawingToolType::Rect => self.render_rect(painter, rect, color, stroke),
             DrawingToolType::RotatedRect => self.render_rotated_rect(painter),
             DrawingToolType::Circle => self.render_circle(painter, color, stroke),
             DrawingToolType::Ellipse => self.render_ellipse(painter, color, stroke),
@@ -429,7 +428,8 @@ impl Drawing {
             DrawingToolType::ShortPos => self.render_pos_tool(painter, view, false, selected),
             DrawingToolType::Forecast => self.render_forecast(painter, view),
             DrawingToolType::BarsPattern => self.render_bars_pattern(painter, view),
-            DrawingToolType::GhostFeed => self.render_ghost_feed(painter),
+            // Candle colours and the neutral path are independent of the common drawing style.
+            DrawingToolType::GhostFeed => return self.render_ghost_feed(painter, view),
             DrawingToolType::ProjectionTool => self.render_projection_tool(painter, rect, view),
 
             // Volume (3 tools)
@@ -489,6 +489,9 @@ impl Drawing {
             | DrawingToolType::Eraser => {}
         }
         self.finish_style(painter, start, rect);
+        if self.tool_type == DrawingToolType::Rect {
+            self.render_rect_middle_line(painter, rect);
+        }
     }
 
     /// Render this drawing using the modular render system
@@ -541,7 +544,6 @@ impl Drawing {
                 | T::ShortPos
                 | T::Forecast
                 | T::BarsPattern
-                | T::GhostFeed
                 | T::FixedRangeVolumeProfile
                 | T::Measure
                 | T::DateAndPriceRange
@@ -702,7 +704,8 @@ mod tests {
     }
 
     /// The settings the properties dialog offers for a tool are the ones its renderer uses: a
-    /// fill colour reaches a filled area, extension moves geometry and the text is painted.
+    /// fill colour reaches a filled area, extension moves geometry (each flag flipped from the
+    /// tool's default, since an extended line starts extended) and the text is painted.
     /// Icons keep their glyph in the text field, which the glyph picker edits.
     #[test]
     fn tool_capabilities_match_their_renderers() {
@@ -728,6 +731,10 @@ mod tests {
                 .iter()
                 .map(|p| crate::drawings::ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
                 .collect();
+            if tool == DrawingToolType::RegressionTrend {
+                drawing.chart_points[0].bar_idx = 0.0;
+                drawing.chart_points[1].bar_idx = 6.0;
+            }
             let mut filled = drawing.clone();
             filled.fill_color = Some([12, 34, 56, 80]);
             let fill = filled.fill_color32().unwrap();
@@ -740,7 +747,8 @@ mod tests {
             });
             assert_eq!(tool.supports_fill(), fill, "{tool:?} fill");
             let mut extended = drawing.clone();
-            (extended.extend_left, extended.extend_right) = (true, true);
+            (extended.extend_left, extended.extend_right) =
+                (!drawing.extend_left, !drawing.extend_right);
             let extend = format!("{:?}", paint(&extended)) != format!("{:?}", paint(&drawing));
             assert_eq!(tool.supports_extend(), extend, "{tool:?} extend");
             let mut labelled = drawing.clone();
@@ -1080,10 +1088,15 @@ mod tests {
 
     fn paint(drawing: &Drawing) -> Vec<Shape> {
         let ctx = Context::default();
+        let bars = sample_bars();
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
                 instrument: None,
-                bars: &[],
+                bars: if drawing.tool_type == DrawingToolType::RegressionTrend {
+                    &bars
+                } else {
+                    &[]
+                },
                 revision: 0,
                 bar_to_x: &|b| b * 10.0,
                 price_to_y: &|p| 500.0 - p as f32,

@@ -9,8 +9,9 @@ impl DrawingManager {
     // === Handle delegation ===
 
     /// Returns the selection handle positions for a drawing (tool-type-aware).
+    /// Regression trends use the fitted endpoints from the last [`Self::render_all`].
     pub fn get_handles(&self, drawing: &Drawing) -> Vec<(HandlePos, Pos2)> {
-        HandleService::get_handles(drawing)
+        HandleService::get_handles(&self.handle_drawing(drawing))
     }
 
     /// Hit-tests a point against the handles of a drawing.
@@ -27,7 +28,11 @@ impl DrawingManager {
         {
             return None;
         }
-        HandleService::hit_test_handle(drawing, point, self.options.handle_config.size)
+        HandleService::hit_test_handle(
+            &self.handle_drawing(drawing),
+            point,
+            self.options.handle_config.size,
+        )
     }
 
     /// Begins a handle drag operation, saving the drawing's current state for undo. A locked
@@ -210,6 +215,16 @@ impl DrawingManager {
         H: Fn(f64, f32, f32) -> f64,
     {
         if let Some((id, handle)) = self.dragging_handle {
+            // A fitted end can be rounded or clamped away from its stored anchor.
+            if let Some(drawing) = self.drawings.iter().find(|d| d.id == id)
+                && drawing.tool_type == DrawingToolType::RegressionTrend
+                && self
+                    .get_handles(drawing)
+                    .into_iter()
+                    .any(|(h, point)| h == handle && x_to_bar(new_pos.x) == x_to_bar(point.x))
+            {
+                return;
+            }
             // Compute snapped position before mutable borrow
             let mut snapped = self.snap_point(new_pos, &self.drawings);
             let mut constrained_price = None;

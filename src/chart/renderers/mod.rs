@@ -42,7 +42,7 @@ pub use labels::{
 pub(crate) use labels::{
     SeriesAction, price_marks, render_time_grid, study_controls, tick_decimals, time_axis_marks,
 };
-pub(crate) use markers::{render_change_mark, render_event_breaks};
+pub(crate) use markers::{render_change_mark, render_event_badges, render_event_breaks};
 pub use markers::{render_event_band, render_markers};
 pub use session_breaks::{
     SessionBackgroundRenderer, SessionBreakRenderConfig, SessionBreakRenderer,

@@ -105,28 +105,39 @@ impl Drawing {
     /// bars between the anchors, with bands the configured number of standard
     /// deviations away
     pub(crate) fn render_regression_trend(&self, painter: &egui::Painter, view: &ChartView) {
-        let (&[start, end, ..], &[a, b, ..]) =
-            (self.points.as_slice(), self.chart_points.as_slice())
-        else {
-            return;
+        if let Some((first, len, fit)) = self.regression_fit(view) {
+            self.draw_regression_channel(painter, view, first, len, &fit, self.color32());
+        }
+    }
+
+    /// The first fitted bar, the number of bars and the least-squares fit of the anchored range,
+    /// or `None` without bars or when the fit is not finite.
+    fn regression_fit(&self, view: &ChartView) -> Option<(usize, usize, LinearFit)> {
+        let &[a, b, ..] = self.chart_points.as_slice() else {
+            return None;
         };
-        let color = self.color32();
+        let (first, bars) = bars_between(view.bars, a.bar_idx, b.bar_idx)?;
+        let fit = span_moments(view, first, bars).fit()?;
+        (fit.intercept.is_finite()
+            && fit.slope.is_finite()
+            && fit.sigma.is_finite()
+            && fit.r_squared.is_finite())
+        .then_some((first, bars.len(), fit))
+    }
 
-        if let Some((first, bars)) = bars_between(view.bars, a.bar_idx, b.bar_idx)
-            && let Some(fit) = span_moments(view, first, bars).fit()
-        {
-            self.draw_regression_channel(painter, view, first, bars.len(), &fit, color);
+    /// Fitted endpoints in anchor order, before extension, for selection and hit testing.
+    pub(crate) fn regression_ends(&self, view: &ChartView) -> Option<[Pos2; 2]> {
+        let (first, len, fit) = self.regression_fit(view)?;
+        let mut ends = [0, len - 1].map(|i| {
+            Pos2::new(
+                (view.bar_to_x)((first + i) as f32),
+                (view.price_to_y)(fit.intercept + fit.slope * i as f64),
+            )
+        });
+        if self.chart_points[0].bar_idx > self.chart_points[1].bar_idx {
+            ends.reverse();
         }
-
-        // Draw anchor points with white border
-        for anchor in [start, end] {
-            painter.circle_filled(anchor, DESIGN_TOKENS.rounding.lg, color);
-            painter.circle_stroke(
-                anchor,
-                DESIGN_TOKENS.rounding.lg,
-                Stroke::new(stroke::MEDIUM, Color32::WHITE),
-            );
-        }
+        ends.iter().all(|p| p.is_finite()).then_some(ends)
     }
 
     fn draw_regression_channel(
@@ -152,64 +163,64 @@ impl Drawing {
         };
         let [upper, center, lower] = [deviations, 0.0, -deviations].map(line);
 
-        // Fill between the bands
-        let fill = Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 25);
-        painter.add(egui::epaint::PathShape::convex_polygon(
-            vec![upper[0], upper[1], lower[1], lower[0]],
-            fill,
-            Stroke::NONE,
-        ));
-
-        // Draw the band lines
-        let band_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180);
-        for band in [upper, lower] {
-            painter.line_segment(band, Stroke::new(stroke::HAIRLINE, band_color));
+        let label_pos = lower[0] + egui::vec2(4.0, 4.0);
+        let extend = |[a, b]: [Pos2; 2]| {
+            let at = |x: f32| {
+                let dx = b.x - a.x;
+                Pos2::new(
+                    x,
+                    if dx.abs() < 1e-6 {
+                        a.y
+                    } else {
+                        a.y + (b.y - a.y) * ((x - a.x) / dx)
+                    },
+                )
+            };
+            [
+                if self.extend_left {
+                    at(painter.clip_rect().left())
+                } else {
+                    a
+                },
+                if self.extend_right {
+                    at(painter.clip_rect().right())
+                } else {
+                    b
+                },
+            ]
+        };
+        let [upper, center, lower] = [upper, center, lower].map(extend);
+        let band_color = DESIGN_TOKENS.semantic.brand.accent;
+        if let Some(fill) = self.fill_color {
+            for (a, b, rgb) in [
+                (upper, center, [fill[0], fill[1], fill[2]]),
+                (center, lower, [self.color[0], self.color[1], self.color[2]]),
+            ] {
+                painter.add(egui::Shape::convex_polygon(
+                    vec![a[0], a[1], b[1], b[0]],
+                    Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill[3]),
+                    Stroke::NONE,
+                ));
+            }
         }
-
-        // Draw main regression line (thicker)
-        painter.line_segment(center, Stroke::new(self.stroke_width + 0.5, color));
-
-        // Draw info label with R² and the correlation
-        let line_end = center[1];
-        let label_pos = Pos2::new(line_end.x + typography::XS, line_end.y - typography::XXL);
-        let label_bg = DESIGN_TOKENS
-            .semantic
-            .extended
-            .chart_axis_bg
-            .gamma_multiply(0.9);
-        let label_rect = Rect::from_min_size(
+        for band in [upper, lower] {
+            painter.line_segment(band, Stroke::new(self.stroke_width, band_color));
+        }
+        super::utils::draw_dashed_line(
+            painter,
+            center[0],
+            center[1],
+            Stroke::new(self.stroke_width, color),
+            8.0,
+            4.0,
+        );
+        painter.text(
             label_pos,
-            egui::Vec2::new(
-                DESIGN_TOKENS.sizing.technical_labels.channel_label_width,
-                DESIGN_TOKENS.sizing.technical_labels.channel_label_height,
-            ),
-        );
-        painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
-        painter.rect_stroke(
-            label_rect,
-            DESIGN_TOKENS.rounding.sm,
-            Stroke::new(stroke::HAIRLINE, color),
-            egui::epaint::StrokeKind::Inside,
-        );
-
-        // R² value
-        painter.text(
-            Pos2::new(label_pos.x + 35.0, label_pos.y + typography::XS),
-            egui::Align2::CENTER_CENTER,
-            format!("R² = {:.2}", fit.r_squared),
-            egui::FontId::proportional(typography::XS),
-            color,
-        );
-
-        // Pearson correlation
-        painter.text(
-            Pos2::new(label_pos.x + 35.0, label_pos.y + typography::XXL),
-            egui::Align2::CENTER_CENTER,
+            egui::Align2::LEFT_TOP,
             fit.correlation
-                .map_or_else(|| "r = n/a".to_owned(), |r| format!("r = {r:.2}")),
+                .map_or_else(|| "n/a".to_owned(), |r| format!("{r:.2}")),
             egui::FontId::proportional(typography::XS),
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180),
+            band_color,
         );
     }
 
@@ -689,5 +700,162 @@ mod tests {
         .fit()
         .unwrap();
         assert_eq!((flat.r_squared, flat.correlation), (1.0, None));
+    }
+
+    /// Closes 10, 14, 12 have Sxx = 2, Sxy = 2, Syy = 8: y = 11 + x,
+    /// residual sigma = sqrt(3), r = 1/2. Each half ends on that same centre line.
+    #[test]
+    fn regression_channel_respects_fill_extension_and_line_roles() {
+        use crate::drawings::{ChartPoint, RegressionTrendConfig};
+        use egui::{Context, RawInput, Shape};
+        let bars: Vec<_> = [10.0, 14.0, 12.0]
+            .into_iter()
+            .map(|close| Bar {
+                close,
+                ..sample_bars()[0].clone()
+            })
+            .collect();
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 500.0));
+        for reverse in [false, true] {
+            for (left, right, xs) in [
+                (false, false, [100.0, 300.0]),
+                (false, true, [100.0, 500.0]),
+                (true, false, [0.0, 300.0]),
+            ] {
+                for filled in [false, true] {
+                    let mut drawing = Drawing::new(1, DrawingToolType::RegressionTrend);
+                    drawing.chart_points =
+                        vec![ChartPoint::new(0.0, 30.0), ChartPoint::new(2.0, 5.0)];
+                    if reverse {
+                        drawing.chart_points.reverse();
+                    }
+                    drawing
+                        .update_screen_coords(|b| 100.0 + b * 100.0, |p| 500.0 - p as f32 * 10.0);
+                    drawing.regression_trend = RegressionTrendConfig::new(1.0);
+                    drawing.stroke_width = 3.0;
+                    drawing.line_style = crate::model::LineStyle::Dotted;
+                    drawing.fill_color = filled.then_some([41, 98, 255, 51]);
+                    drawing.extend_left = left;
+                    drawing.extend_right = right;
+                    let ctx = Context::default();
+                    let output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(pane),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            drawing.render(
+                                ui.painter(),
+                                pane,
+                                &ChartView {
+                                    instrument: None,
+                                    bars: &bars,
+                                    revision: 0,
+                                    bar_to_x: &|b| 100.0 + b * 100.0,
+                                    price_to_y: &|p| 500.0 - p as f32 * 10.0,
+                                    time_axis: true,
+                                    executions: None,
+                                },
+                            );
+                        },
+                    );
+                    fn collect(shape: &Shape, out: &mut Vec<Shape>) {
+                        match shape {
+                            Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+                            _ => out.push(shape.clone()),
+                        }
+                    }
+                    let mut shapes = Vec::new();
+                    for shape in &output.shapes {
+                        collect(&shape.shape, &mut shapes);
+                    }
+                    output.drop_without_applying_deltas();
+                    let fills: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|s| match s {
+                            Shape::Path(p) if p.fill.a() > 0 => Some(p),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(fills.len(), if filled { 2 } else { 0 });
+                    let center_y = |x: f32| 400.0 - x / 10.0;
+                    if filled {
+                        for (color, offset) in [
+                            (
+                                Color32::from_rgba_unmultiplied(41, 98, 255, 51),
+                                -10.0 * 3f32.sqrt(),
+                            ),
+                            (
+                                Color32::from_rgba_unmultiplied(242, 54, 69, 51),
+                                10.0 * 3f32.sqrt(),
+                            ),
+                        ] {
+                            let fill = fills
+                                .iter()
+                                .find(|p| p.fill == color)
+                                .expect("half fill colour");
+                            for expected in [
+                                Pos2::new(xs[0], center_y(xs[0])),
+                                Pos2::new(xs[1], center_y(xs[1])),
+                                Pos2::new(xs[0], center_y(xs[0]) + offset),
+                                Pos2::new(xs[1], center_y(xs[1]) + offset),
+                            ] {
+                                assert!(
+                                    fill.points.iter().any(|p| p.distance(expected) < 1e-3),
+                                    "missing {expected:?}"
+                                );
+                            }
+                        }
+                    }
+                    let lines: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|s| match s {
+                            Shape::LineSegment { points, stroke } => Some((points, stroke)),
+                            _ => None,
+                        })
+                        .collect();
+                    for offset in [-10.0 * 3f32.sqrt(), 10.0 * 3f32.sqrt()] {
+                        assert!(lines.iter().any(|(p, s)| s.width == 3.0
+                            && s.color == Color32::from_rgb(41, 98, 255)
+                            && p[0].distance(Pos2::new(xs[0], center_y(xs[0]) + offset)) < 1e-3
+                            && p[1].distance(Pos2::new(xs[1], center_y(xs[1]) + offset)) < 1e-3));
+                    }
+                    let center: Vec<_> = lines
+                        .iter()
+                        .filter(|(_, s)| s.color == drawing.color32())
+                        .collect();
+                    assert!(center.len() > 1, "the centre line is dashed");
+                    let mut points = Vec::new();
+                    for (p, s) in center {
+                        assert_eq!(s.width, 3.0);
+                        assert!(p[0].distance(p[1]) < (xs[1] - xs[0]) / 2.0);
+                        for point in p.iter() {
+                            assert!((point.y - center_y(point.x)).abs() < 1e-3);
+                            points.push(*point);
+                        }
+                    }
+                    let bounds = Rect::from_points(&points);
+                    let tolerance = (xs[1] - xs[0]) * 0.1;
+                    assert!(
+                        bounds.left() <= xs[0] + tolerance && bounds.right() >= xs[1] - tolerance
+                    );
+                    let text: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|s| match s {
+                            Shape::Text(t) => Some(t),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(text.len(), 1);
+                    assert_eq!(text[0].galley.job.text, "0.50");
+                    assert!((text[0].pos.x - 100.0).abs() < 15.0);
+                    assert!(
+                        !shapes
+                            .iter()
+                            .any(|s| matches!(s, Shape::Circle(_) | Shape::Rect(_)))
+                    );
+                }
+            }
+        }
     }
 }
