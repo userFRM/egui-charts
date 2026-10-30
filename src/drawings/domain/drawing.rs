@@ -142,6 +142,12 @@ pub struct Drawing {
     /// Instrument economics for long and short position sizing. Older drawings use unit sizing.
     #[serde(default)]
     pub position_sizing: PositionSizing,
+    /// Target zone and level colour of position tools; `None` keeps the default green.
+    #[serde(default)]
+    pub position_target_color: Option<[u8; 4]>,
+    /// Stop zone and level colour of position tools; `None` keeps the default red.
+    #[serde(default)]
+    pub position_stop_color: Option<[u8; 4]>,
     /// Customizable Fibonacci levels for Fib tools
     pub fib_config: Option<FibonacciConfig>,
     /// Rows and value area of the volume profile tools
@@ -248,6 +254,8 @@ impl Drawing {
             timeframe_visibility: TimeframeVisibility::all(),
             position_size: None,
             position_sizing: PositionSizing::default(),
+            position_target_color: None,
+            position_stop_color: None,
             fib_config: matches!(
                 tool_type,
                 DrawingToolType::FibonacciTimeZones

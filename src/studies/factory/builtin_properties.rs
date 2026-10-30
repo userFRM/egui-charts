@@ -109,7 +109,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(ChaikinVolatility::new(l(0), l(1))),
         Box::new(ChandelierExit::new(l(0), x(3.0))),
         Box::new(AccelerationBands::new(l(0), x(4.0))),
-        Box::new(Envelopes::new(l(0), x(2.5), "SMA")),
+        Box::new(Envelopes::new(l(0), x(2.5), EnvelopeAverage::Simple)),
         Box::new(PercentB::new(l(0), x(2.0))),
         Box::new(CloseToCloseVol::new(l(0))),
         Box::new(OhlcVolatility::new(l(0))),

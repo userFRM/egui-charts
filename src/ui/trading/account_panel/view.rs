@@ -538,6 +538,7 @@ impl Trading {
         };
 
         let mut row_action = None;
+        let mut at_end = false;
         egui::ScrollArea::horizontal()
             .id_salt("account_panel_columns")
             .auto_shrink([false, false])
@@ -617,12 +618,14 @@ impl Trading {
                     })
                     .fill_height()
                     .show(&mut empty);
+                    at_end = true;
                     return;
                 }
                 egui::ScrollArea::vertical()
                     .id_salt(("account_panel_rows", tab))
                     .auto_shrink([false, false])
                     .show_rows(ui, ROW_HEIGHT, rows.len(), |ui, range| {
+                        at_end |= range.end == rows.len();
                         for row in &rows[range] {
                             let (rect, _) =
                                 ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
@@ -747,6 +750,10 @@ impl Trading {
                     });
             });
 
+        // A history shown to its end asks the broker for the page before it.
+        if at_end && let Some(kind) = tab.history() {
+            self.load_older(kind);
+        }
         match row_action {
             Some((RowAction::Position(position), _)) => {
                 self.pending = Some(TradingLineAction::Close(position.clone()));

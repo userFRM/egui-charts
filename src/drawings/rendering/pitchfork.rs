@@ -161,7 +161,7 @@ impl Drawing {
         bands
     }
 
-    /// Paints the levels, band fill, construction links and anchors.
+    /// Paints the levels, band fill and construction links.
     fn draw_fork(&self, painter: &egui::Painter, rect: Rect) {
         let Some(base) = self.pitchfork_base_lines(rect) else {
             return;
@@ -235,9 +235,6 @@ impl Drawing {
                 Stroke::new(stroke::HAIRLINE / 2.0, self.color32().gamma_multiply(0.4)),
             );
         }
-        for &p in &self.points[..3] {
-            painter.circle_filled(p, DESIGN_TOKENS.rounding.md, self.color32());
-        }
     }
 
     pub(crate) fn render_pitchfan(&self, painter: &egui::Painter, rect: Rect) {
@@ -297,9 +294,6 @@ impl Drawing {
                 );
             }
         }
-
-        painter.circle_filled(center, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_filled(end, DESIGN_TOKENS.rounding.sm, color);
     }
 }
 

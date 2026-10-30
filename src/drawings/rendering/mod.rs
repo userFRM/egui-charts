@@ -336,16 +336,13 @@ impl Drawing {
         match self.tool_type {
             // Simple Lines (9 tools)
             DrawingToolType::TrendLine => self.render_trend_line(painter, rect, color, stroke),
-            DrawingToolType::Ray => self.render_ray(painter, rect, color, stroke),
-            DrawingToolType::ExtendedLine => {
-                self.render_extended_line(painter, rect, color, stroke)
+            DrawingToolType::Ray | DrawingToolType::ExtendedLine => {
+                self.render_trend_line(painter, rect, color, stroke)
             }
             DrawingToolType::HorizontalLine => self.render_horizontal_line(painter, rect, stroke),
-            DrawingToolType::HorizontalRay => {
-                self.render_horizontal_ray(painter, rect, color, stroke)
-            }
+            DrawingToolType::HorizontalRay => self.render_horizontal_ray(painter, rect, stroke),
             DrawingToolType::VerticalLine => self.render_vertical_line(painter, rect, stroke),
-            DrawingToolType::CrossLine => self.render_cross_line(painter, rect, color, stroke),
+            DrawingToolType::CrossLine => self.render_cross_line(painter, rect, stroke),
             DrawingToolType::TrendAngle => {
                 return self.render_trend_angle(painter, rect, color, stroke);
             }
