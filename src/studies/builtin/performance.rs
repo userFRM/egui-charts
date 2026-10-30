@@ -124,6 +124,10 @@ impl Indicator for Performance {
                         .map(|bar| (bar.time.date_naive(), bar.close))
                         .collect()
                 });
+            // The lookup is a binary search, so bars out of time order count as none supplied.
+            if !self.daily.is_sorted_by_key(|(day, _)| *day) {
+                self.daily.clear();
+            }
         }
         self.update(data, from);
     }
@@ -320,7 +324,8 @@ mod tests {
     }
 
     /// On an intraday chart each period starts from the requested daily bars, the daily close
-    /// winning on the same date, and from the chart's own bars when none are supplied.
+    /// winning on the same date, and from the chart's own bars when none are supplied or they
+    /// are out of time order.
     #[test]
     fn performance_takes_period_starts_from_daily_bars() {
         use crate::model::{BarClock, Timeframe};
@@ -358,29 +363,25 @@ mod tests {
             metric: None,
         };
         let from_daily = [20.0, 44.0, 100.0, 125.0, 80.0, 260.0].map(Some);
+        let without_daily = [Some(12.5), None, None, None, None, None];
+        let reversed: Vec<_> = daily.iter().rev().cloned().collect();
         for (chart, supplied, expected) in [
-            (today.to_vec(), true, from_daily),
-            (week_before.clone(), true, from_daily),
-            (
-                week_before,
-                false,
-                [Some(12.5), None, None, None, None, None],
-            ),
+            (today.to_vec(), &daily[..], from_daily),
+            (week_before.clone(), &daily[..], from_daily),
+            (week_before.clone(), &[][..], without_daily),
+            (week_before, &reversed[..], without_daily),
         ] {
             let mut study = Performance::new();
             study.set_timeframe(Timeframe::Min1);
             assert_eq!(study.data_requests(), vec![request.clone()]);
-            let sources: Vec<_> = supplied
-                .then(|| StudyData {
-                    request: request.clone(),
-                    bars: &daily,
-                    clock: BarClock::new(Timeframe::Day1),
-                    instrument: None,
-                    timeframe: Timeframe::Day1,
-                })
-                .into_iter()
-                .collect();
-            study.update_data(&chart, 0, &sources);
+            let source = StudyData {
+                request: request.clone(),
+                bars: supplied,
+                clock: BarClock::new(Timeframe::Day1),
+                instrument: None,
+                timeframe: Timeframe::Day1,
+            };
+            study.update_data(&chart, 0, &[source]);
             for (line, expected) in expected.into_iter().enumerate() {
                 let got = study.values().value(line, chart.len() - 1);
                 match expected {
