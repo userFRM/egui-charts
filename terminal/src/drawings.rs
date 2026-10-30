@@ -1057,6 +1057,8 @@ mod tests {
                 .chart_mut()
                 .add_indicator(Box::new(SMA::new(period)));
         }
+        // A rendered chart also has its built-in volume study.
+        let study_ids: Vec<_> = terminal.chart().indicators().map(|(id, _)| id).collect();
         // Repeating Hide all must keep groups hidden rather than toggle them back on.
         run(&mut terminal, DrawingToolbarAction::HideAll);
         run(&mut terminal, DrawingToolbarAction::HideAll);
@@ -1098,7 +1100,14 @@ mod tests {
         assert_eq!(terminal.chart().indicators().count(), 0);
         terminal.run(Action::TopToolbar(TopToolbarAction::Undo));
         assert_eq!(terminal.chart().drawings().drawings.len(), 2);
-        assert_eq!(terminal.chart().indicators().count(), 2);
+        assert_eq!(
+            terminal
+                .chart()
+                .indicators()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>(),
+            study_ids,
+        );
     }
 
     #[test]
