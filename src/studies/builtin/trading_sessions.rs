@@ -60,15 +60,28 @@ pub struct TradingSessions {
     visible: bool,
 }
 
+/// The exchange time zones of the default sessions, each with the standard-time offset in hours
+/// that stands in for it without `timezones`.
+const ZONES: [(&str, i32); 3] = [
+    ("Asia/Tokyo", 9),
+    ("Europe/London", 0),
+    ("America/New_York", -5),
+];
+
+/// The time zone named `name` or, without `timezones`, the offset that stands in for the zone
+/// of a default session, so that a template saved with `timezones` loads without it.
+fn zone(name: &str) -> Option<TimezoneId> {
+    TimezoneId::named(name).or_else(|| {
+        let (_, hours) = ZONES.into_iter().find(|(zone, _)| *zone == name)?;
+        TimezoneId::fixed_offset(hours * 3600)
+    })
+}
+
 impl TradingSessions {
     /// Tokyo 09:00 to 15:00, London 08:30 to 16:30 and New York 09:30 to 16:00, each in
     /// its exchange time zone. Without `timezones`, these use fixed standard-time offsets
     /// of +09:00, +00:00 and -05:00. Override them with [`with_session`](Self::with_session).
     pub fn new() -> Self {
-        let zone = |name, hours| {
-            TimezoneId::named(name)
-                .unwrap_or_else(|| TimezoneId::fixed_offset(hours * 3600).unwrap())
-        };
         let tint =
             |color: Color32| Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 38);
         Self {
@@ -76,11 +89,7 @@ impl TradingSessions {
             show: [true; 3],
             start: [9 * 60, 8 * 60 + 30, 9 * 60 + 30],
             end: [15 * 60, 16 * 60 + 30, 16 * 60],
-            zones: [
-                zone("Asia/Tokyo", 9),
-                zone("Europe/London", 0),
-                zone("America/New_York", -5),
-            ],
+            zones: ZONES.map(|(name, _)| zone(name).unwrap()),
             daily: false,
             values: IndicatorValues::new(),
             colors: [
@@ -240,8 +249,8 @@ impl Indicator for TradingSessions {
             ("name", InputValue::Text(name)) => self.names[slot] = name,
             ("start", InputValue::Length(minutes)) => self.start[slot] = minutes,
             ("end", InputValue::Length(minutes)) => self.end[slot] = minutes,
-            ("zone", InputValue::Text(zone)) => {
-                self.zones[slot] = TimezoneId::named(&zone).ok_or("unknown time zone")?;
+            ("zone", InputValue::Text(name)) => {
+                self.zones[slot] = zone(&name).ok_or("unknown time zone")?;
             }
             _ => return Err("unknown study input"),
         }

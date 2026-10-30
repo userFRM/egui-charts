@@ -204,5 +204,20 @@ mod tests {
             }
         }
         assert_eq!(differing, Vec::<String>::new());
+
+        // Default sessions saved with `timezones` name their zones, and load without it.
+        let mut sessions = StudyTemplate::from_study(&TradingSessions::new());
+        let zones = sessions
+            .inputs
+            .iter_mut()
+            .filter(|(id, _)| id.starts_with("zone "));
+        for ((_, value), name) in zones.zip(["Asia/Tokyo", "Europe/London", "America/New_York"]) {
+            *value = InputValue::Text(name.to_owned());
+        }
+        let mut restored = sessions.create().unwrap();
+        let mut study = TradingSessions::new();
+        restored.calculate(&bars);
+        study.calculate(&bars);
+        assert_eq!(shown(restored.as_ref()), shown(&study));
     }
 }
