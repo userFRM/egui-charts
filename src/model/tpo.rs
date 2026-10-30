@@ -51,9 +51,11 @@ pub struct TPOProfile {
     pub letters: Vec<TPOLetter>,
     /// TPO count at each price level
     pub price_tpo_count: HashMap<i64, usize>,
-    /// Point of Control - price with most TPOs
+    /// Point of control: the price of the row with the most TPOs. A tie takes the lower price.
     pub poc_price: f64,
-    /// Upper boundary of the configured TPO-count value area.
+    /// Upper boundary of the configured TPO-count value area. The area grows from the point of
+    /// control toward whichever of the next two rows above or the next two rows below holds more
+    /// TPOs; equal counts add one row on each side.
     pub value_area_high: f64,
     /// Lower boundary of the configured TPO-count value area.
     pub value_area_low: f64,
@@ -67,7 +69,7 @@ pub struct TPOProfile {
     pub profile_low: f64,
     /// Opening price
     pub opening_price: f64,
-    /// Single prints (price levels with only 1 TPO)
+    /// Single prints: the prices of the rows with exactly one TPO, in ascending order
     pub single_prints: Vec<f64>,
     /// Poor highs (multiple TPOs at high)
     pub has_poor_high: bool,
@@ -527,11 +529,11 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
         return;
     }
 
-    // Find POC (price with most TPOs)
+    // Find POC (price with most TPOs); a tie takes the lower price
     let (poc_key, _) = profile
         .price_tpo_count
         .iter()
-        .max_by_key(|(_, count)| *count)
+        .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
         .unwrap();
     profile.poc_price = key_to_price(*poc_key, profile.tick_size);
 
@@ -544,7 +546,8 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
     // POC, then repeatedly extend the contiguous range one row at a time,
     // always toward whichever adjacent side (the two rows immediately above
     // the current high, or the two rows immediately below the current low)
-    // holds more TPOs. Counts are accumulated until the running total reaches
+    // holds more TPOs; equal sums add one row on each side, as volume profiles
+    // do. Counts are accumulated until the running total reaches
     // `value_area_pct` of all TPOs. The result is guaranteed contiguous and
     // centered on the POC, the usual market-profile convention.
     let target_tpos = (total_tpos as f64 * config.value_area_pct).ceil() as usize;
@@ -574,9 +577,16 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
             0
         };
 
-        // Prefer the heavier side; when only one side remains, take it.
+        // Prefer the heavier side; equal sums add one row on each side, as volume profiles do;
+        // when only one side remains, take it.
         let go_up = match (up_avail, down_avail) {
-            (true, true) => up_pair >= down_pair,
+            (true, true) if up_pair == down_pair => {
+                va_low_key -= 1;
+                va_high_key += 1;
+                accumulated_tpos += count_at(va_low_key) + count_at(va_high_key);
+                continue;
+            }
+            (true, true) => up_pair > down_pair,
             (true, false) => true,
             (false, true) => false,
             (false, false) => break,
@@ -609,6 +619,7 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
         .filter(|(_, count)| **count == 1)
         .map(|(&key, _)| key_to_price(key, profile.tick_size))
         .collect();
+    profile.single_prints.sort_by(f64::total_cmp);
 
     // Check for poor high/low (multiple TPOs at extreme)
     let high_key = price_to_key(profile.profile_high, profile.tick_size);
@@ -988,16 +999,63 @@ mod tests {
             ..Default::default()
         };
         let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min1.into())[0];
-
-        // Independently find the heaviest level and confirm POC matches it.
-        let heaviest = profile
-            .price_tpo_count
-            .iter()
-            .max_by_key(|(_, c)| **c)
-            .map(|(&k, _)| key_to_price(k, 1.0))
-            .unwrap();
-        assert_eq!(profile.poc_price, heaviest);
         assert_eq!(profile.poc_price, 102.0);
+    }
+
+    #[test]
+    fn ties_give_one_point_of_control_and_value_area_on_every_build() {
+        // (case, half-hour periods from 14:30 UTC as (low, high), (POC, VAL, VAH), single prints)
+        type Case<'a> = (&'a str, Vec<(f64, f64)>, (f64, f64, f64), Vec<f64>);
+        let cases: [Case; 2] = [
+            // A spans 100 to 109, B to D print 100 and E to G 109. Rows 100 and 109 hold 4 TPOs
+            // and 101 to 108 one each, 16 in all, so the 70% value area needs 12. The tie takes
+            // 100, from which the area can only grow upward, one TPO per row, reaching 12 at 108.
+            (
+                "tied point of control",
+                [(100.0, 109.0)]
+                    .into_iter()
+                    .chain([(100.0, 100.0); 3])
+                    .chain([(109.0, 109.0); 3])
+                    .collect(),
+                (100.0, 100.0, 108.0),
+                (101..=108).map(f64::from).collect(),
+            ),
+            // A spans 100 to 104, B and C print 102: rows of 1, 1, 3, 1 and 1 TPOs, 7 in all, so
+            // the value area needs 5. From 102 the two rows above and the two below hold 2 each,
+            // so it adds 101 and 103 and stops at 5.
+            (
+                "tied value area expansion",
+                vec![(100.0, 104.0), (102.0, 102.0), (102.0, 102.0)],
+                (102.0, 101.0, 103.0),
+                vec![100.0, 101.0, 103.0, 104.0],
+            ),
+        ];
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap();
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        for (case, periods, levels, single_prints) in cases {
+            let bars: Vec<_> = periods
+                .iter()
+                .enumerate()
+                .map(|(i, &(low, high))| bar_at(start, 30 * i as i64, low, high, low, high))
+                .collect();
+            // Each build hashes its rows with a new seed, so an unbroken tie varies between builds.
+            for _ in 0..64 {
+                let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min30.into())[0];
+                assert_eq!(
+                    (
+                        profile.poc_price,
+                        profile.value_area_low,
+                        profile.value_area_high
+                    ),
+                    levels,
+                    "{case}"
+                );
+                assert_eq!(profile.single_prints, single_prints, "{case}");
+            }
+        }
     }
 
     #[test]
