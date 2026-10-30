@@ -3,16 +3,19 @@
 //! Each reference is the last finite close on or before the same trading date one week,
 //! one, three or six months, or one year earlier. Month subtraction clamps to the last day
 //! of a shorter month. Year to date uses the last close of the previous calendar year.
-//! Dates follow the instrument's trading calendar, as VWAP does. Missing history and a zero
-//! reference close have no value. No daily history is fetched for an intraday chart.
+//! Dates follow the instrument's trading calendar, as VWAP does. On an interval shorter than a
+//! day the study requests the symbol's daily bars and takes the later of the daily close and the
+//! chart's own close on or before each date, the daily close on the same date. Missing history
+//! and a zero reference close have no value.
 
 use super::anchor_period::ExchangeDays;
-use crate::model::{Bar, Instrument};
+use crate::model::{Bar, Instrument, Timeframe};
 use crate::scales::StudyFormat;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{
-    Indicator, IndicatorValue, IndicatorValues, PlotStyle, StudyCell, StudyTable,
+    Indicator, IndicatorValue, IndicatorValues, PlotStyle, StudyCell, StudyData, StudyDataRequest,
+    StudyTable,
 };
 use chrono::{Datelike, Days, Months, NaiveDate};
 use egui::Color32;
@@ -28,6 +31,10 @@ pub struct Performance {
     history: Vec<(NaiveDate, f64)>,
     before_last_history: usize,
     intraday: bool,
+    /// The chart interval, which decides whether daily bars are requested.
+    timeframe: Option<Timeframe>,
+    /// Trading date and finite close of each requested daily bar, in time order.
+    daily: Vec<(NaiveDate, f64)>,
     table: StudyTable,
     colors: [Color32; 6],
     visible: bool,
@@ -42,7 +49,8 @@ struct State {
 }
 
 impl Performance {
-    /// Performance over the chart's loaded bars, in UTC until an instrument is supplied.
+    /// Performance over the chart's loaded bars, and on intraday charts over the daily bars the
+    /// host supplies for [`Indicator::data_requests`], in UTC until an instrument is supplied.
     pub fn new() -> Self {
         Self {
             days: ExchangeDays::default(),
@@ -51,6 +59,8 @@ impl Performance {
             history: Vec::new(),
             before_last_history: 0,
             intraday: false,
+            timeframe: None,
+            daily: Vec::new(),
             table: StudyTable {
                 title: "Performance".into(),
                 columns: vec!["Period".into(), "Change".into()],
@@ -79,8 +89,47 @@ impl Indicator for Performance {
         self.days.set(instrument)
     }
 
+    fn set_timeframe(&mut self, timeframe: Timeframe) {
+        self.timeframe = Some(timeframe);
+        // Daily and longer charts read their own bars; drop daily bars of an earlier interval.
+        if self.data_requests().is_empty() {
+            self.daily.clear();
+        }
+    }
+
+    /// The chart symbol's daily bars, on intervals shorter than a day.
+    fn data_requests(&self) -> Vec<StudyDataRequest> {
+        self.timeframe
+            .filter(|timeframe| timeframe.duration_ms() < Timeframe::Day1.duration_ms())
+            .map(|_| StudyDataRequest {
+                symbol: String::new(),
+                timeframe: Some(Timeframe::Day1),
+                metric: None,
+            })
+            .into_iter()
+            .collect()
+    }
+
+    fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
+        if from == 0 {
+            let request = self.data_requests().pop();
+            self.daily = sources
+                .iter()
+                .find(|source| Some(&source.request) == request.as_ref())
+                .map_or_else(Vec::new, |source| {
+                    source
+                        .bars
+                        .iter()
+                        .filter(|bar| bar.close.is_finite())
+                        .map(|bar| (bar.time.date_naive(), bar.close))
+                        .collect()
+                });
+        }
+        self.update(data, from);
+    }
+
     fn calculate(&mut self, data: &[Bar]) {
-        self.update(data, 0);
+        self.update_data(data, 0, &[]);
     }
 
     fn update(&mut self, data: &[Bar], mut from: usize) {
@@ -118,13 +167,19 @@ impl Indicator for Performance {
                         NaiveDate::from_ymd_opt(date.year(), 1, 1).and_then(|day| day.pred_opt()),
                         date.checked_sub_months(Months::new(12)),
                     ];
+                    let before = |history: &[(NaiveDate, f64)], target| {
+                        let at = history.partition_point(|(day, _)| *day <= target);
+                        at.checked_sub(1).map(|at| history[at])
+                    };
                     for (line, target) in targets.into_iter().enumerate() {
                         state.latest[line] = target.and_then(|target| {
-                            let at = self
-                                .history
-                                .partition_point(|(day, _)| *day <= target)
-                                .checked_sub(1)?;
-                            let reference = self.history[at].1;
+                            // The later of the two closes; on the same date the daily one,
+                            // since `max_by_key` keeps the last of equal keys.
+                            let (_, reference) =
+                                [before(&self.history, target), before(&self.daily, target)]
+                                    .into_iter()
+                                    .flatten()
+                                    .max_by_key(|(day, _)| *day)?;
                             let change = 100.0 * (bar.close - reference) / reference;
                             (reference != 0.0 && change.is_finite()).then_some(change)
                         });
@@ -261,6 +316,83 @@ mod tests {
             assert!(!painted.iter().any(
                 |shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == "Change")
             ));
+        }
+    }
+
+    /// On an intraday chart each period starts from the requested daily bars, the daily close
+    /// winning on the same date, and from the chart's own bars when none are supplied.
+    #[test]
+    fn performance_takes_period_starts_from_daily_bars() {
+        use crate::model::{BarClock, Timeframe};
+        let bar = |(y, m, d, h, min, c)| {
+            Bar::new(
+                Utc.with_ymd_and_hms(y, m, d, h, min, 0).unwrap(),
+                c,
+                c,
+                c,
+                c,
+                1.0,
+            )
+        };
+        let daily = [
+            (2023, 3, 15, 0, 0, 50.0),
+            (2023, 9, 15, 0, 0, 80.0),
+            (2023, 12, 14, 0, 0, 90.0),
+            (2023, 12, 29, 0, 0, 100.0),
+            (2024, 2, 15, 0, 0, 125.0),
+            (2024, 3, 8, 0, 0, 150.0),
+            // Today's developing bar is never a period start.
+            (2024, 3, 15, 0, 0, 999.0),
+        ]
+        .map(bar);
+        let today = [
+            (2024, 3, 15, 14, 30, 200.0),
+            (2024, 3, 15, 14, 31, 210.0),
+            (2024, 3, 15, 14, 32, 180.0),
+        ]
+        .map(bar);
+        let week_before = [&[bar((2024, 3, 8, 20, 0, 160.0))][..], &today].concat();
+        let request = StudyDataRequest {
+            symbol: String::new(),
+            timeframe: Some(Timeframe::Day1),
+            metric: None,
+        };
+        let from_daily = [20.0, 44.0, 100.0, 125.0, 80.0, 260.0].map(Some);
+        for (chart, supplied, expected) in [
+            (today.to_vec(), true, from_daily),
+            (week_before.clone(), true, from_daily),
+            (
+                week_before,
+                false,
+                [Some(12.5), None, None, None, None, None],
+            ),
+        ] {
+            let mut study = Performance::new();
+            study.set_timeframe(Timeframe::Min1);
+            assert_eq!(study.data_requests(), vec![request.clone()]);
+            let sources: Vec<_> = supplied
+                .then(|| StudyData {
+                    request: request.clone(),
+                    bars: &daily,
+                    clock: BarClock::new(Timeframe::Day1),
+                    instrument: None,
+                    timeframe: Timeframe::Day1,
+                })
+                .into_iter()
+                .collect();
+            study.update_data(&chart, 0, &sources);
+            for (line, expected) in expected.into_iter().enumerate() {
+                let got = study.values().value(line, chart.len() - 1);
+                match expected {
+                    Some(expected) => assert!(
+                        (got.unwrap() - expected).abs() < 1e-10,
+                        "line {line}: {got:?}"
+                    ),
+                    None => assert_eq!(got, None, "line {line}"),
+                }
+            }
+            study.set_timeframe(Timeframe::Day1);
+            assert!(study.data_requests().is_empty());
         }
     }
 }
