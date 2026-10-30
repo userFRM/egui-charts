@@ -3622,7 +3622,6 @@ mod tests {
                 .any(|t| t.message == format!("Filled: Sell 1 {symbol} at 110.00"))
         );
         assert!(Arc::ptr_eq(&paper, &app.paper));
-        app.trading.display.show_execution_labels = true;
         app.chart.fit_content();
         for toast in app.toasts.toasts_mut() {
             toast.duration = 0.0;
@@ -5369,7 +5368,7 @@ mod tests {
         state.trading.show_positions = false;
         state.trading.show_orders = false;
         state.trading.show_executions = false;
-        state.trading.show_execution_labels = true;
+        state.trading.show_execution_labels = false;
         app.apply_chart_settings(state.clone());
         assert_eq!(app.trading.display, state.trading);
         assert_eq!(

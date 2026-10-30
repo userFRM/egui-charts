@@ -356,7 +356,7 @@ impl Default for ScalesAndLinesSettings {
 /// Trading tab settings: the Buy and Sell buttons' behaviour, notifications and the layers
 /// `ui::trading::Trading::show` draws through `Trading::display` with the `ui` feature.
 /// The Buy and Sell buttons themselves are [`StatusLineOptions::show_quote_boxes`].
-/// Saved settings without a field take its default.
+/// Saved settings without a field take its default, unless the field says otherwise.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct TradingSettings {
