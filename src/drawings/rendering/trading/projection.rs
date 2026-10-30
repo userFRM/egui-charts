@@ -65,8 +65,16 @@ impl Drawing {
         // Target zone (shaded rectangle at projection end)
         self.draw_projection_target_zone(painter, proj_end, dy, dashed_color);
 
-        // Anchor points with white stroke
-        self.draw_projection_anchors(painter, start, end, proj_point, color);
+        if !self.completed && self.points.len() == 2 {
+            for &point in &[start, end] {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.lg, self.color32());
+                painter.circle_stroke(
+                    point,
+                    DESIGN_TOKENS.rounding.lg,
+                    Stroke::new(stroke::MEDIUM, Color32::WHITE),
+                );
+            }
+        }
 
         // Labels
         self.draw_projection_labels(painter, start, end, proj_end, dy, color, dashed_color);
@@ -120,36 +128,6 @@ impl Drawing {
             Stroke::new(stroke::HAIRLINE, dashed_color),
             StrokeKind::Outside,
         );
-    }
-
-    fn draw_projection_anchors(
-        &self,
-        painter: &egui::Painter,
-        start: Pos2,
-        end: Pos2,
-        proj_point: Pos2,
-        color: Color32,
-    ) {
-        painter.circle_filled(start, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            start,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(end, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            end,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        if self.points.len() >= 3 {
-            painter.circle_filled(proj_point, DESIGN_TOKENS.rounding.lg, color);
-            painter.circle_stroke(
-                proj_point,
-                DESIGN_TOKENS.rounding.lg,
-                Stroke::new(stroke::MEDIUM, Color32::WHITE),
-            );
-        }
     }
 
     fn draw_projection_labels(

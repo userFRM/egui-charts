@@ -497,20 +497,6 @@ impl Drawing {
 
         // Draw base line connecting anchor points
         painter.line_segment([start, end], Stroke::new(self.stroke_width, color));
-
-        // Draw anchor points
-        painter.circle_filled(start, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            start,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(end, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            end,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
     }
 
     /// Render Fibonacci Channel - Parallel channel with Fibonacci level lines
@@ -523,15 +509,7 @@ impl Drawing {
         let Some((config, lines)) = self.fib_channel_level_lines(chart_rect) else {
             return;
         };
-        let (start, end) = (self.points[0], self.points[1]);
         let visible_levels: Vec<_> = config.visible_levels().collect();
-
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
 
         // Draw filled zones between levels
         if (config.show_background || self.fill_color.is_some()) && visible_levels.len() > 1 {
@@ -613,19 +591,16 @@ impl Drawing {
             }
         }
 
-        // Draw anchor points
-        painter.circle_filled(start, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            start,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(end, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            end,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
+        if !self.completed && self.points.len() == 2 {
+            for &point in self.points.as_slice() {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.lg, self.color32());
+                painter.circle_stroke(
+                    point,
+                    DESIGN_TOKENS.rounding.lg,
+                    Stroke::new(stroke::MEDIUM, Color32::WHITE),
+                );
+            }
+        }
     }
 
     pub(crate) fn render_fibonacci_circles(&self, painter: &egui::Painter) {
@@ -708,7 +683,6 @@ impl Drawing {
         }
 
         painter.line_segment([center, edge], Stroke::new(self.stroke_width, color));
-        painter.circle_filled(center, DESIGN_TOKENS.rounding.md, color);
     }
 
     /// Render Fibonacci Speed Resistance Fan - Fan lines at Fibonacci ratios
@@ -812,20 +786,6 @@ impl Drawing {
 
         // Draw the main trend line (thicker)
         painter.line_segment([start, end], Stroke::new(self.stroke_width + 0.5, color));
-
-        // Draw anchor points
-        painter.circle_filled(start, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            start,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(end, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            end,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
     }
 
     pub(crate) fn render_fibonacci_spiral(&self, painter: &egui::Painter) {

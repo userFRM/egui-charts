@@ -477,7 +477,7 @@ pub use parkinson_vol::ParkinsonVol;
 pub use zero_trend_vol::ZeroTrendVol;
 
 // Re-exports - Ninth batch (Moving average variants and cross indicators)
-pub use envelopes::Envelopes;
+pub use envelopes::{EnvelopeAverage, Envelopes};
 pub use guppy_ma::GuppyMA;
 pub use ma_channel::MAChannel;
 pub use ma_combination::{AverageLine, AverageType, MACombination};

@@ -5,7 +5,7 @@ use crate::model::{Bar, PriceSource};
 use crate::studies::stepper::Stepper;
 use crate::studies::{
     CrossDirection, Indicator, IndicatorFill, IndicatorLineStyle, IndicatorMarker, IndicatorValue,
-    IndicatorValues,
+    IndicatorValues, StudyInput,
 };
 use egui::Color32;
 
@@ -81,11 +81,17 @@ impl AverageLine {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Ribbon {
-    None,
-    Directional,
-    Muted,
+/// The most averages a combination holds.
+const MAX_AVERAGES: usize = 14;
+
+/// The average index of a per-average input id such as `period_2`.
+fn average_slot(id: &str) -> Option<usize> {
+    let (field, index) = id.rsplit_once('_')?;
+    if matches!(field, "period" | "kind" | "source") {
+        index.parse().ok()
+    } else {
+        None
+    }
 }
 
 /// Two to fourteen independently configured averages. Two to four form a
@@ -95,6 +101,9 @@ enum Ribbon {
 /// Crossings of lines 0 and 1 are marked by default. A touch does not cross:
 /// the marker appears only when the last nonzero difference changes sign.
 /// A missing value breaks that comparison, so a gap cannot create a signal.
+///
+/// Its inputs hold the number of averages, the crossing pair and the colouring by direction,
+/// then the length, formula and price of each average, so that a template recreates it.
 #[derive(Clone)]
 pub struct MACombination {
     lines: Vec<AverageLine>,
@@ -104,18 +113,31 @@ pub struct MACombination {
     sourced: Vec<Vec<Bar>>,
     crossing: Stepper<(usize, Option<std::cmp::Ordering>)>,
     markers: Vec<IndicatorMarker>,
-    pair: Option<(usize, usize)>,
+    /// The two averages whose crossings are marked, numbered from 1; 0 picks none.
+    cross: [usize; 2],
+    default_cross: [usize; 2],
     pub(super) wait_for_all: bool,
-    ribbon: Ribbon,
+    /// Whether each line is coloured by its own direction, the slowest wide and filled.
+    directional: bool,
+    default_directional: bool,
     visible: bool,
 }
 
 impl MACombination {
     /// Create two to fourteen lines. Returns an error for any other count.
     pub fn new(lines: Vec<AverageLine>) -> Result<Self, &'static str> {
-        if !(2..=14).contains(&lines.len()) {
+        if !(2..=MAX_AVERAGES).contains(&lines.len()) {
             return Err("a combination needs 2 to 14 averages");
         }
+        let lines: Vec<_> = lines
+            .into_iter()
+            .map(|mut line| {
+                line.period = line
+                    .period
+                    .max(if line.kind == AverageType::Hull { 2 } else { 1 });
+                line
+            })
+            .collect();
         Ok(Self {
             defaults: lines.clone(),
             lines,
@@ -124,9 +146,11 @@ impl MACombination {
             sourced: Vec::new(),
             crossing: Stepper::default(),
             markers: Vec::new(),
-            pair: Some((0, 1)),
+            cross: [1, 2],
+            default_cross: [1, 2],
             wait_for_all: false,
-            ribbon: Ribbon::None,
+            directional: false,
+            default_directional: false,
             visible: true,
         })
     }
@@ -137,7 +161,8 @@ impl MACombination {
         if first == second || first >= self.lines.len() || second >= self.lines.len() {
             return Err("crossing indices must name two different averages");
         }
-        self.pair = Some((first, second));
+        self.cross = [first + 1, second + 1];
+        self.default_cross = self.cross;
         Ok(self)
     }
 
@@ -151,15 +176,18 @@ impl MACombination {
                 .collect(),
         )
         .unwrap();
-        study.ribbon = Ribbon::Directional;
-        study.pair = None;
+        study.directional = true;
+        study.default_directional = true;
+        study.cross = [0, 0];
+        study.default_cross = [0, 0];
         study
     }
 
     /// A single-hue ribbon, all lines 1 px, without a fill or crossing markers.
     pub fn muted_ribbon() -> Self {
         let mut study = Self::ribbon();
-        study.ribbon = Ribbon::Muted;
+        study.directional = false;
+        study.default_directional = false;
         for (i, line) in study.lines.iter_mut().enumerate() {
             line.color = Color32::from_rgb(
                 75 + (44 * i / 11) as u8,
@@ -167,13 +195,38 @@ impl MACombination {
                 76 + (45 * i / 11) as u8,
             );
         }
+        study.defaults = study.lines.clone();
         study
+    }
+
+    /// The zero-based averages whose crossings are marked: two different picks among the lines.
+    fn crossing_pair(&self) -> Option<(usize, usize)> {
+        let [first, second] = self.cross;
+        let picked = |pick: usize| (1..=self.lines.len()).contains(&pick);
+        if first != second && picked(first) && picked(second) {
+            Some((first - 1, second - 1))
+        } else {
+            None
+        }
+    }
+
+    /// The inputs a preset offers: those of its averages and, for a ribbon, its colouring by
+    /// direction. A preset keeps its number of averages and its crossing pair.
+    pub(super) fn preset_inputs(&self, ribbon: bool) -> Vec<StudyInput> {
+        self.inputs()
+            .into_iter()
+            .filter(|input| match input.id.as_str() {
+                "average_count" | "cross_first" | "cross_second" => false,
+                "directional" => ribbon,
+                _ => true,
+            })
+            .collect()
     }
 }
 
 impl Indicator for MACombination {
     fn inputs(&self) -> Vec<crate::studies::StudyInput> {
-        use crate::studies::{InputKind, InputValue, StudyInput};
+        use crate::studies::{InputKind, InputValue};
         let kinds = [
             AverageType::Simple,
             AverageType::Exponential,
@@ -183,70 +236,108 @@ impl Indicator for MACombination {
             AverageType::Hull,
         ];
         let sources = PriceSource::all();
-        self.lines
-            .iter()
-            .enumerate()
-            .flat_map(|(index, line)| {
-                [
-                    StudyInput::new(
-                        format!("period_{index}"),
-                        format!("Length {}", index + 1),
-                        InputValue::Length(line.period),
-                        InputKind::Length(
-                            if line.kind == AverageType::Hull { 2 } else { 1 },
-                            usize::MAX,
-                        ),
-                    )
-                    .with_default(InputValue::Length(self.defaults[index].period)),
-                    StudyInput::new(
-                        format!("kind_{index}"),
-                        format!("Average {}", index + 1),
-                        InputValue::Choice(
-                            kinds.iter().position(|kind| *kind == line.kind).unwrap(),
-                        ),
-                        InputKind::Choice(
-                            kinds.iter().map(|kind| kind.label().to_owned()).collect(),
-                        ),
-                    )
-                    .with_default(InputValue::Choice(
-                        kinds
-                            .iter()
-                            .position(|kind| *kind == self.defaults[index].kind)
-                            .unwrap(),
-                    )),
-                    StudyInput::new(
-                        format!("source_{index}"),
-                        format!("Source {}", index + 1),
-                        InputValue::Choice(
-                            sources
-                                .iter()
-                                .position(|source| *source == line.source)
-                                .unwrap(),
-                        ),
-                        InputKind::Choice(
-                            sources
-                                .iter()
-                                .map(|source| source.label().to_owned())
-                                .collect(),
-                        ),
-                    )
-                    .with_default(InputValue::Choice(
+        let picks: Vec<String> = (0..=MAX_AVERAGES)
+            .map(|pick| {
+                if pick == 0 {
+                    "None".to_owned()
+                } else {
+                    pick.to_string()
+                }
+            })
+            .collect();
+        let mut inputs = vec![
+            StudyInput::new(
+                "average_count",
+                "Averages",
+                InputValue::Length(self.lines.len()),
+                InputKind::Length(2, MAX_AVERAGES),
+            )
+            .with_default(InputValue::Length(self.defaults.len())),
+            StudyInput::new(
+                "directional",
+                "Colour by direction",
+                InputValue::Toggle(self.directional),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(self.default_directional)),
+            StudyInput::new(
+                "cross_first",
+                "Crossing average",
+                InputValue::Choice(self.cross[0]),
+                InputKind::Choice(picks.clone()),
+            )
+            .with_default(InputValue::Choice(self.default_cross[0])),
+            StudyInput::new(
+                "cross_second",
+                "Crossed average",
+                InputValue::Choice(self.cross[1]),
+                InputKind::Choice(picks),
+            )
+            .with_default(InputValue::Choice(self.default_cross[1])),
+        ];
+        inputs.extend(self.lines.iter().enumerate().flat_map(|(index, line)| {
+            // An average added after construction has no construction default; it is its own.
+            let default = self.defaults.get(index).unwrap_or(line);
+            [
+                StudyInput::new(
+                    format!("period_{index}"),
+                    format!("Length {}", index + 1),
+                    InputValue::Length(line.period),
+                    InputKind::Length(
+                        if line.kind == AverageType::Hull { 2 } else { 1 },
+                        usize::MAX,
+                    ),
+                )
+                .with_default(InputValue::Length(default.period)),
+                StudyInput::new(
+                    format!("kind_{index}"),
+                    format!("Average {}", index + 1),
+                    InputValue::Choice(kinds.iter().position(|kind| *kind == line.kind).unwrap()),
+                    InputKind::Choice(kinds.iter().map(|kind| kind.label().to_owned()).collect()),
+                )
+                .with_default(InputValue::Choice(
+                    kinds.iter().position(|kind| *kind == default.kind).unwrap(),
+                )),
+                StudyInput::new(
+                    format!("source_{index}"),
+                    format!("Source {}", index + 1),
+                    InputValue::Choice(
                         sources
                             .iter()
-                            .position(|source| *source == self.defaults[index].source)
+                            .position(|source| *source == line.source)
                             .unwrap(),
-                    )),
-                ]
-            })
-            .collect()
+                    ),
+                    InputKind::Choice(
+                        sources
+                            .iter()
+                            .map(|source| source.label().to_owned())
+                            .collect(),
+                    ),
+                )
+                .with_default(InputValue::Choice(
+                    sources
+                        .iter()
+                        .position(|source| *source == default.source)
+                        .unwrap(),
+                )),
+            ]
+        }));
+        inputs
     }
 
+    /// `average_count` resizes the averages, so it comes first in an applied set of inputs; an
+    /// input of an average past the last has nothing to edit and is accepted unchanged. Averages
+    /// added take the settings the study was built with at their place, or copy the last one.
+    /// A crossing pick past the averages, or the same average twice, marks no crossings.
     fn set_input(
         &mut self,
         id: &str,
         value: crate::studies::InputValue,
     ) -> Result<(), &'static str> {
         use crate::studies::InputValue;
+        if average_slot(id).is_some_and(|index| (self.lines.len()..MAX_AVERAGES).contains(&index)) {
+            return Ok(());
+        }
         let schema = self
             .inputs()
             .into_iter()
@@ -255,26 +346,47 @@ impl Indicator for MACombination {
         if !schema.accepts(&value) {
             return Err("study input is outside its accepted values");
         }
-        let (field, index) = id.rsplit_once('_').ok_or("unknown study input")?;
-        let index: usize = index.parse().map_err(|_| "unknown study input")?;
-        let line = self.lines.get_mut(index).ok_or("unknown study input")?;
-        match (field, value) {
-            ("period", InputValue::Length(period)) => line.period = period,
-            ("kind", InputValue::Choice(kind)) => {
-                line.kind = [
-                    AverageType::Simple,
-                    AverageType::Exponential,
-                    AverageType::Weighted,
-                    AverageType::Smoothed,
-                    AverageType::VolumeWeighted,
-                    AverageType::Hull,
-                ][kind];
-                line.period = line
-                    .period
-                    .max(if line.kind == AverageType::Hull { 2 } else { 1 });
+        match (id, value) {
+            ("average_count", InputValue::Length(count)) => {
+                self.lines.truncate(count);
+                while self.lines.len() < count {
+                    let index = self.lines.len();
+                    let line = self
+                        .defaults
+                        .get(index)
+                        .cloned()
+                        .unwrap_or_else(|| self.lines[index - 1].clone());
+                    self.lines.push(line);
+                }
             }
-            ("source", InputValue::Choice(source)) => line.source = PriceSource::all()[source],
-            _ => return Err("unknown study input"),
+            ("directional", InputValue::Toggle(directional)) => self.directional = directional,
+            ("cross_first", InputValue::Choice(pick)) => self.cross[0] = pick,
+            ("cross_second", InputValue::Choice(pick)) => self.cross[1] = pick,
+            (id, value) => {
+                let (field, index) = id.rsplit_once('_').ok_or("unknown study input")?;
+                let index: usize = index.parse().map_err(|_| "unknown study input")?;
+                let line = self.lines.get_mut(index).ok_or("unknown study input")?;
+                match (field, value) {
+                    ("period", InputValue::Length(period)) => line.period = period,
+                    ("kind", InputValue::Choice(kind)) => {
+                        line.kind = [
+                            AverageType::Simple,
+                            AverageType::Exponential,
+                            AverageType::Weighted,
+                            AverageType::Smoothed,
+                            AverageType::VolumeWeighted,
+                            AverageType::Hull,
+                        ][kind];
+                        line.period =
+                            line.period
+                                .max(if line.kind == AverageType::Hull { 2 } else { 1 });
+                    }
+                    ("source", InputValue::Choice(source)) => {
+                        line.source = PriceSource::all()[source]
+                    }
+                    _ => return Err("unknown study input"),
+                }
+            }
         }
         self.calculate(&[]);
         Ok(())
@@ -322,6 +434,7 @@ impl Indicator for MACombination {
                 average.update(sourced, start);
             }
         }
+        let pair = self.crossing_pair();
         self.markers
             .truncate(self.markers.partition_point(|marker| marker.bar < start));
         self.crossing
@@ -339,7 +452,7 @@ impl Indicator for MACombination {
                     state.1 = None;
                     return IndicatorValue::None;
                 }
-                if let Some((first, second)) = self.pair {
+                if let Some((first, second)) = pair {
                     if lines[first].is_finite() && lines[second].is_finite() {
                         let direction = lines[first].partial_cmp(&lines[second]).unwrap();
                         if direction != std::cmp::Ordering::Equal {
@@ -394,22 +507,24 @@ impl Indicator for MACombination {
         &self.markers
     }
     fn line_style(&self, line: usize) -> IndicatorLineStyle {
-        let slowest = line + 1 == self.lines.len();
-        if self.ribbon == Ribbon::Directional {
-            IndicatorLineStyle {
-                width: if slowest { 3.0 } else { 1.0 },
-                rising: Some(self.lines[line].color),
-                falling: Some(Color32::from_rgb(38, 198, 218)),
-                fill: slowest.then_some(IndicatorFill {
-                    color: Color32::from_rgb(98, 55, 174),
-                    top_alpha: 38,
-                    bottom_alpha: 10,
-                }),
+        match self.lines.get(line) {
+            Some(average) if self.directional => {
+                let slowest = line + 1 == self.lines.len();
+                IndicatorLineStyle {
+                    width: if slowest { 3.0 } else { 1.0 },
+                    rising: Some(average.color),
+                    falling: Some(Color32::from_rgb(38, 198, 218)),
+                    fill: slowest.then_some(IndicatorFill {
+                        color: Color32::from_rgb(98, 55, 174),
+                        top_alpha: 38,
+                        bottom_alpha: 10,
+                    }),
+                }
             }
-        } else {
-            IndicatorLineStyle::default()
+            _ => IndicatorLineStyle::default(),
         }
     }
+
     fn is_visible(&self) -> bool {
         self.visible
     }
@@ -426,13 +541,16 @@ macro_rules! impl_ma_preset {
     ($ty:ident, $name:literal, $description:literal $(, $marker:expr)?) => {
         impl crate::studies::Indicator for $ty {
             fn inputs(&self) -> Vec<crate::studies::StudyInput> {
-                self.inner.inputs()
+                self.inner.preset_inputs(matches!($name, "MA Ribbon"))
             }
             fn set_input(
                 &mut self,
                 id: &str,
                 value: crate::studies::InputValue,
             ) -> Result<(), &'static str> {
+                if !self.inputs().iter().any(|input| input.id == id) {
+                    return Err("unknown study input");
+                }
                 self.inner.set_input(id, value)
             }
             fn name(&self) -> &str {

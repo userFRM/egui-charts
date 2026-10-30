@@ -313,7 +313,7 @@ impl<const RISING: bool> Indicator for Wedge<RISING> {
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
-            color: self.colors[line],
+            color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: if line < 2 { 2.0 } else { 1.0 },
             pattern: crate::model::LineStyle::Solid,
             plot_type: match line {

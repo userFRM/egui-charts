@@ -186,6 +186,11 @@ impl Chart {
                         }
                     }
                     Received::Failed(error) => store.error = Some(error),
+                    Received::Conflict => {
+                        store.error = Some(format!(
+                            "Could not save drawings of {name}: they were changed elsewhere"
+                        ))
+                    }
                     Received::Saved(_) => {}
                 }
             }
