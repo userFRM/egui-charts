@@ -1038,7 +1038,7 @@ pub(crate) mod test_frames {
     use super::Chart;
     use crate::model::{Bar, BarData};
     use chrono::{TimeZone, Utc};
-    use egui::{Context, Event, Pos2, RawInput, Rect, Shape, Vec2};
+    use egui::{Context, CursorIcon, Event, Pos2, RawInput, Rect, Shape, Vec2};
 
     /// 100 daily bars; bar `i` opens at `lows[i % len]` and closes at `highs[i % len]`.
     pub(crate) fn chart(lows: &[f64], highs: &[f64]) -> Chart {
@@ -1054,13 +1054,12 @@ pub(crate) mod test_frames {
         Chart::new(BarData::from_bars(bars))
     }
 
-    /// Runs one frame at `time` seconds with `events` and returns the shapes it painted.
-    pub(crate) fn shapes(
+    fn run(
         ctx: &Context,
         chart: &mut Chart,
         time: f64,
         events: Vec<Event>,
-    ) -> Vec<Shape> {
+    ) -> (Vec<Shape>, CursorIcon) {
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
             time: Some(time),
@@ -1082,12 +1081,28 @@ pub(crate) mod test_frames {
         for clipped in std::mem::take(&mut output.shapes) {
             flatten(clipped.shape, &mut shapes);
         }
+        let cursor = output.platform_output.cursor_icon;
         output.drop_without_applying_deltas();
-        shapes
+        (shapes, cursor)
     }
 
-    /// Runs one frame at `time` seconds with `events`.
-    pub(crate) fn frame(ctx: &Context, chart: &mut Chart, time: f64, events: Vec<Event>) {
-        shapes(ctx, chart, time, events);
+    /// Runs one frame at `time` seconds with `events` and returns the shapes it painted.
+    pub(crate) fn shapes(
+        ctx: &Context,
+        chart: &mut Chart,
+        time: f64,
+        events: Vec<Event>,
+    ) -> Vec<Shape> {
+        run(ctx, chart, time, events).0
+    }
+
+    /// Runs one frame at `time` seconds with `events` and returns the cursor it asked for.
+    pub(crate) fn frame(
+        ctx: &Context,
+        chart: &mut Chart,
+        time: f64,
+        events: Vec<Event>,
+    ) -> CursorIcon {
+        run(ctx, chart, time, events).1
     }
 }

@@ -13,7 +13,7 @@ use std::collections::HashSet;
 /// Identifies a selection handle position on a drawing.
 ///
 /// Different tool types expose different handle layouts. Two-point tools use
-/// `Start`, `End`, and `Middle`; rectangles use the four corner handles;
+/// `Start` and `End`; rectangles use four corner and four edge handles;
 /// multi-point tools use indexed `Point(i)` handles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HandlePos {
@@ -21,7 +21,7 @@ pub enum HandlePos {
     Start,
     /// Last anchor point of the drawing.
     End,
-    /// Centroid/midpoint handle -- dragging this moves the entire drawing.
+    /// Whole-drawing move, also used internally for body drags.
     Middle,
     /// Top-left corner (used by rectangle and similar axis-aligned shapes).
     TopLeft,
@@ -31,6 +31,14 @@ pub enum HandlePos {
     BottomLeft,
     /// Bottom-right corner.
     BottomRight,
+    /// Top edge midpoint.
+    Top,
+    /// Bottom edge midpoint.
+    Bottom,
+    /// Left edge midpoint.
+    Left,
+    /// Right edge midpoint.
+    Right,
     /// Indexed anchor point for multi-point drawings (e.g., `Point(2)` is the
     /// third point in an XABCD pattern).
     Point(usize),
