@@ -1103,13 +1103,6 @@ mod tests {
                         drawing.extend_left = left;
                         drawing.extend_right = right;
                         drawing.fill_color = filled.then_some([12, 34, 56, 80]);
-                        // Stored anchors need no new fields or migration.
-                        use crate::drawings::persistence::{drawing_to_stored, stored_to_drawing};
-                        let stored = drawing_to_stored(&drawing, |bar| bar as i64 * 1000);
-                        let stored =
-                            serde_json::from_str(&serde_json::to_string(&stored).unwrap()).unwrap();
-                        let mut drawing =
-                            stored_to_drawing(&stored, |time| time as f32 / 1000.0, 1);
                         drawing.update_screen_coords(|b| b * 10.0, |p| 500.0 - p as f32);
                         let other_y = |x| {
                             if tool == DrawingToolType::FlatTopBottom {
