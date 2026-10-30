@@ -12,6 +12,7 @@
 //!   with selection highlighting.
 
 use crate::drawings::domain::{Drawing, DrawingToolType, HandlePos};
+use crate::styles::typography::font_size;
 use crate::theme::ThemeExt;
 use egui::{Color32, Pos2};
 
@@ -55,6 +56,7 @@ impl HandleService {
     /// - **Two-point tools** (TrendLine, Fibonacci, etc.): Start, End, and Middle handles
     /// - **Rectangle**: Four corner handles and a Middle handle
     /// - **Single-point tools** (HorizontalLine, VerticalLine): One Start handle
+    /// - **Glyphs**: Four resize corners around the centre and a Middle move handle
     /// - **Three-anchor channels**: Four indexed handles, one at each line end
     /// - **Multi-point tools**: Indexed handles at each point plus a centroid Middle handle
     pub fn get_handles(drawing: &Drawing) -> Vec<(HandlePos, Pos2)> {
@@ -84,6 +86,19 @@ impl HandleService {
                     handles.push((HandlePos::BottomLeft, Pos2::new(p1.x, p2.y)));
                     handles.push((HandlePos::BottomRight, p2));
                     handles.push((HandlePos::Middle, p1 + (p2 - p1) / 2.0));
+                }
+            }
+            DrawingToolType::FontIcon | DrawingToolType::Sticker => {
+                if let Some(&center) = drawing.points.first() {
+                    let rect = egui::Rect::from_center_size(
+                        center,
+                        egui::Vec2::splat(font_size(drawing.font_size)),
+                    );
+                    handles.push((HandlePos::TopLeft, rect.left_top()));
+                    handles.push((HandlePos::TopRight, rect.right_top()));
+                    handles.push((HandlePos::BottomLeft, rect.left_bottom()));
+                    handles.push((HandlePos::BottomRight, rect.right_bottom()));
+                    handles.push((HandlePos::Middle, center));
                 }
             }
             DrawingToolType::HorizontalLine => {
@@ -173,17 +188,15 @@ impl HandleService {
     /// Returns `Some(HandlePos)` if `point` is within `handle_size * 1.5` pixels
     /// of a handle center, `None` otherwise.
     pub fn hit_test_handle(drawing: &Drawing, point: Pos2, handle_size: f32) -> Option<HandlePos> {
-        let handles = Self::get_handles(drawing);
         let hit_radius = handle_size * 1.5;
-
-        for (pos, handle_point) in handles {
-            let dist =
-                ((point.x - handle_point.x).powi(2) + (point.y - handle_point.y).powi(2)).sqrt();
-            if dist <= hit_radius {
-                return Some(pos);
-            }
-        }
-        None
+        // The nearest handle wins, so a small glyph's centre still moves it instead of
+        // grabbing a corner that lies within reach.
+        Self::get_handles(drawing)
+            .into_iter()
+            .map(|(pos, handle_point)| (pos, point.distance(handle_point)))
+            .filter(|&(_, dist)| dist <= hit_radius)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(pos, _)| pos)
     }
 
     /// Moves a handle to a new screen position, updating both screen coordinates
@@ -232,6 +245,21 @@ impl HandleService {
             }
             DrawingToolType::Rect => {
                 Self::update_rect_handle(drawing, handle, new_pos, &x_to_bar, &y_to_price);
+            }
+            DrawingToolType::FontIcon | DrawingToolType::Sticker
+                if matches!(
+                    handle,
+                    HandlePos::TopLeft
+                        | HandlePos::TopRight
+                        | HandlePos::BottomLeft
+                        | HandlePos::BottomRight
+                ) =>
+            {
+                if let Some(&center) = drawing.points.first() {
+                    // The centre-to-corner distance is half the square's diagonal.
+                    drawing.font_size =
+                        font_size(center.distance(new_pos) * std::f32::consts::SQRT_2);
+                }
             }
             DrawingToolType::HorizontalLine => {
                 if !drawing.points.is_empty() && !drawing.chart_points.is_empty() {
@@ -494,6 +522,21 @@ impl HandleService {
             }
         };
         let radius = config.size / 2.0;
+        let glyph = matches!(
+            drawing.tool_type,
+            DrawingToolType::FontIcon | DrawingToolType::Sticker
+        );
+        if glyph && let Some(&center) = drawing.points.first() {
+            painter.rect_stroke(
+                egui::Rect::from_center_size(
+                    center,
+                    egui::Vec2::splat(font_size(drawing.font_size)),
+                ),
+                0.0,
+                egui::Stroke::new(1.0, color(config.color)),
+                egui::StrokeKind::Outside,
+            );
+        }
 
         let position = matches!(
             drawing.tool_type,
@@ -501,7 +544,7 @@ impl HandleService {
         );
         for (pos, point) in Self::get_handles(drawing) {
             // A position moves by its body; its target and stop handles are squares.
-            if position && pos == HandlePos::Middle {
+            if (position || glyph) && pos == HandlePos::Middle {
                 continue;
             }
             let ring = if dragging_handle == Some(pos) {
@@ -577,6 +620,28 @@ mod tests {
     fn get_handles_by_tool() {
         use HandlePos::*;
         let cases = [
+            (
+                DrawingToolType::FontIcon,
+                vec![pos2(100.0, 200.0)],
+                vec![
+                    (TopLeft, pos2(84.0, 184.0)),
+                    (TopRight, pos2(116.0, 184.0)),
+                    (BottomLeft, pos2(84.0, 216.0)),
+                    (BottomRight, pos2(116.0, 216.0)),
+                    (Middle, pos2(100.0, 200.0)),
+                ],
+            ),
+            (
+                DrawingToolType::Sticker,
+                vec![pos2(100.0, 200.0)],
+                vec![
+                    (TopLeft, pos2(84.0, 184.0)),
+                    (TopRight, pos2(116.0, 184.0)),
+                    (BottomLeft, pos2(84.0, 216.0)),
+                    (BottomRight, pos2(116.0, 216.0)),
+                    (Middle, pos2(100.0, 200.0)),
+                ],
+            ),
             (
                 DrawingToolType::ParallelChannel,
                 vec![pos2(100.0, 200.0), pos2(300.0, 400.0), pos2(200.0, 200.0)],
@@ -838,6 +903,93 @@ mod tests {
         }
     }
 
+    /// Corner drags keep the centre fixed, clamp to loadable sizes and undo as one gesture.
+    #[test]
+    fn glyph_corner_drags_resize_about_the_centre() {
+        use crate::drawings::DrawingManager;
+        for tool in [DrawingToolType::FontIcon, DrawingToolType::Sticker] {
+            for handle in [
+                HandlePos::TopLeft,
+                HandlePos::TopRight,
+                HandlePos::BottomLeft,
+                HandlePos::BottomRight,
+            ] {
+                let mut manager = DrawingManager::new();
+                let drawing = create_test_drawing(tool, vec![pos2(100.0, 200.0)]);
+                let anchors = drawing.chart_points.clone();
+                manager.drawings.push(drawing);
+                manager.start_drag_handle(1, handle);
+                // A corner is half a diagonal from the centre: side = radius * sqrt(2).
+                // Offsets (30, 40) have radius 50, giving side 70.710678.
+                for (point, size) in [
+                    (pos2(70.0, 160.0), 70.710_68),
+                    (pos2(100.0, 200.0), 1.0),
+                    (pos2(1000.0, 2000.0), 256.0),
+                    (pos2(148.0, 248.0), 96.0),
+                ] {
+                    manager.update_drag_handle(point, x_to_bar, y_to_price, |p, from, to| {
+                        p + f64::from(from - to)
+                    });
+                    let drawing = &manager.drawings[0];
+                    assert!(
+                        (drawing.font_size - size).abs() < 1e-4,
+                        "{tool:?} {handle:?}"
+                    );
+                    assert_eq!(drawing.points, [pos2(100.0, 200.0)]);
+                    assert_eq!(drawing.chart_points, anchors);
+                    assert!(
+                        crate::drawings::persistence::drawing_to_stored(drawing, |bar| {
+                            bar as i64 * 60_000
+                        })
+                        .invalid_field()
+                        .is_none()
+                    );
+                }
+                let ctx = egui::Context::default();
+                let output = ctx.run_ui(egui::RawInput::default(), |_| {
+                    HandleService::render_handles(
+                        &egui::Painter::new(
+                            ctx.clone(),
+                            egui::LayerId::background(),
+                            egui::Rect::EVERYTHING,
+                        ),
+                        &manager.drawings[0],
+                        &HandleConfig::default(),
+                        Some(handle),
+                    );
+                });
+                assert!(
+                    output.shapes.iter().any(|s| matches!(&s.shape,
+                        egui::Shape::Rect(r) if r.rect.center() == pos2(100.0, 200.0)
+                            && (r.rect.width() - 96.0).abs() < 1e-4
+                            && (r.rect.height() - 96.0).abs() < 1e-4 && r.stroke.width > 0.0
+                    )),
+                    "selected glyph has a square frame"
+                );
+                output.drop_without_applying_deltas();
+                manager.end_drag_handle();
+                assert!(manager.undo());
+                assert_eq!(manager.drawings[0].font_size, 32.0);
+                assert!(!manager.undo(), "one undo for the whole drag");
+                assert!(manager.redo());
+                assert!((manager.drawings[0].font_size - 96.0).abs() < 1e-4);
+                HandleService::update_handle(
+                    &mut manager.drawings[0],
+                    HandlePos::Middle,
+                    pos2(110.0, 220.0),
+                    x_to_bar,
+                    y_to_price,
+                    |p, from, to| p + f64::from(from - to),
+                );
+                assert_eq!(manager.drawings[0].points, [pos2(110.0, 220.0)]);
+                assert_eq!(
+                    manager.drawings[0].chart_points,
+                    [ChartPoint::new(11.0, 780.0)]
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_hit_test_handle() {
         let drawing = create_test_drawing(
@@ -852,6 +1004,19 @@ mod tests {
         // Test missing all handles
         let miss = HandleService::hit_test_handle(&drawing, Pos2::new(500.0, 500.0), 8.0);
         assert_eq!(miss, None);
+
+        // A 16 px glyph has its corners within reach of its centre: the centre still moves it.
+        let mut glyph = create_test_drawing(DrawingToolType::Sticker, vec![pos2(100.0, 200.0)]);
+        glyph.font_size = 16.0;
+        for (point, expected) in [
+            (pos2(100.0, 200.0), HandlePos::Middle),
+            (pos2(108.0, 208.0), HandlePos::BottomRight),
+        ] {
+            assert_eq!(
+                HandleService::hit_test_handle(&glyph, point, 8.0),
+                Some(expected)
+            );
+        }
     }
 
     /// A handle drag moves the screen points and the persisted chart points

@@ -331,7 +331,7 @@ Drawings,Drawings,Head and shoulders,done,library,src/drawings/rendering/pattern
 Drawings,Drawings,Highlighter,done,library,src/drawings/rendering/shapes.rs;src/widget/tool_interaction/interaction.rs
 Drawings,Drawings,Horizontal line,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Horizontal ray,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs
-Drawings,Drawings,Icons and emojis,done,library,src/ui/drawing_toolbar/glyph_picker.rs;src/drawings/manager/mod.rs;src/drawings/rendering/media.rs;src/drawings/glyphs.rs;src/drawings/manager/interaction.rs
+Drawings,Drawings,Icons and emojis,done,library,src/ui/drawing_toolbar/glyph_picker.rs;src/drawings/manager/mod.rs;src/drawings/rendering/media.rs;src/drawings/glyphs.rs;src/drawings/manager/interaction.rs;src/drawings/services/handle.rs
 Drawings,Drawings,Ideas,done,host,src/drawings/rendering/media.rs;src/widget/tool_interaction/text.rs;src/drawings/categories.rs
 Drawings,Drawings,Image,done,library,src/drawings/rendering/media.rs;src/widget/tool_interaction/text.rs;src/drawings/categories.rs
 Drawings,Drawings,Info line,done,library,src/drawings/rendering/measurements.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/style.rs;src/config/drawing_tool/behavior.rs
@@ -364,7 +364,7 @@ Drawings,Drawings,Signpost,done,library,src/drawings/rendering/annotations/signp
 Drawings,Drawings,Sine line,done,library,src/drawings/rendering/cycles.rs;src/drawings/rendering/style.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Single-point drawing creation,done,library,src/widget/drawing_api.rs;src/drawings/manager/mod.rs;src/drawings/domain/drawing.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Social posts,done,host,src/drawings/rendering/media.rs;src/widget/tool_interaction/text.rs;src/drawings/categories.rs
-Drawings,Drawings,Stickers,done,library,src/drawings/glyphs.rs;src/ui/drawing_toolbar/glyph_picker.rs;src/drawings/rendering/media.rs
+Drawings,Drawings,Stickers,done,library,src/drawings/glyphs.rs;src/ui/drawing_toolbar/glyph_picker.rs;src/drawings/rendering/media.rs;src/drawings/services/handle.rs
 Drawings,Drawings,Table,done,library,src/drawings/rendering/annotations/table.rs;src/widget/tool_interaction/text.rs
 Drawings,Drawings,Text,done,library,src/drawings/rendering/annotations/text.rs;src/drawings/rendering/style.rs;src/widget/tool_interaction/text.rs
 Drawings,Drawings,Three drives pattern,done,library,src/drawings/rendering/patterns.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs
