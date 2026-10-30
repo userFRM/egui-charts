@@ -292,21 +292,23 @@ impl Drawing {
                 continue;
             }
             let segments = circle_sides(radius * painter.pixels_per_point()).div_ceil(2);
+            let inner_radius = previous.filter(|_| config.show_background);
+            let mut inner = Vec::with_capacity(if inner_radius.is_some() {
+                segments + 1
+            } else {
+                0
+            });
             let points: Vec<_> = (0..=segments)
                 .map(|i| {
                     let angle = std::f32::consts::PI * (1.0 - i as f32 / segments as f32);
-                    speed_arc_point(start, end, radius, angle)
+                    let direction = speed_arc_direction(start, end, angle);
+                    if let Some(radius) = inner_radius {
+                        inner.push(end + radius * direction);
+                    }
+                    end + radius * direction
                 })
                 .collect();
-            if config.show_background
-                && let Some(inner_radius) = previous
-            {
-                let inner: Vec<_> = (0..=segments)
-                    .map(|i| {
-                        let angle = std::f32::consts::PI * (1.0 - i as f32 / segments as f32);
-                        speed_arc_point(start, end, inner_radius, angle)
-                    })
-                    .collect();
+            if inner_radius.is_some() {
                 paint_band(
                     painter,
                     &inner,
@@ -601,18 +603,20 @@ impl Drawing {
                 && let Some(inner_radius) = previous
             {
                 let segments = circle_sides(radius * painter.pixels_per_point());
-                let ring = |r| {
-                    (0..=segments)
-                        .map(|i| {
-                            let angle = std::f32::consts::TAU * i as f32 / segments as f32;
-                            center + r * egui::vec2(angle.cos(), angle.sin())
-                        })
-                        .collect::<Vec<_>>()
-                };
+                let (inner, outer): (Vec<_>, Vec<_>) = (0..=segments)
+                    .map(|i| {
+                        let angle = std::f32::consts::TAU * i as f32 / segments as f32;
+                        let direction = egui::vec2(angle.cos(), angle.sin());
+                        (
+                            center + inner_radius * direction,
+                            center + radius * direction,
+                        )
+                    })
+                    .unzip();
                 paint_band(
                     painter,
-                    &ring(inner_radius),
-                    &ring(radius),
+                    &inner,
+                    &outer,
                     band_color(level, config.background_opacity),
                 );
             }
@@ -1094,6 +1098,8 @@ fn paint_band(painter: &egui::Painter, inner: &[Pos2], outer: &[Pos2], color: Co
         return;
     }
     let mut mesh = egui::Mesh::default();
+    mesh.reserve_vertices(inner.len() * 2);
+    mesh.reserve_triangles(inner.len().saturating_sub(1) * 2);
     for (&inside, &outside) in inner.iter().zip(outer) {
         mesh.colored_vertex(inside, color);
         mesh.colored_vertex(outside, color);
@@ -1123,9 +1129,14 @@ fn wedge_arc_points(start: Pos2, edge: Pos2, boundary: Pos2, ratio: f32) -> Vec<
 /// A point of a speed resistance arc of `radius` around `end`, `angle`
 /// radians from the forward direction, on the side of `end` facing `start`'s
 /// price: below the end of a rise, above the end of a fall.
+#[cfg(test)]
 fn speed_arc_point(start: Pos2, end: Pos2, radius: f32, angle: f32) -> Pos2 {
+    end + radius * speed_arc_direction(start, end, angle)
+}
+
+fn speed_arc_direction(start: Pos2, end: Pos2, angle: f32) -> egui::Vec2 {
     let side = if start.y >= end.y { 1.0 } else { -1.0 };
-    end + radius * egui::vec2(angle.cos(), side * angle.sin())
+    egui::vec2(angle.cos(), side * angle.sin())
 }
 
 /// Where the speed resistance fan line through `start` and the point `ratio`
@@ -1159,6 +1170,62 @@ fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f32) -> Pos2 {
 mod tests {
     use super::*;
     use std::f32::consts::FRAC_PI_2;
+
+    #[test]
+    fn fibonacci_bands_keep_both_sampled_edges() {
+        for tool in [Tool::FibonacciCircles, Tool::FibonacciSpeedResistanceArcs] {
+            for end in [Pos2::new(150.0, 120.0), Pos2::new(150.0, 80.0)] {
+                let start = Pos2::new(100.0, 100.0);
+                let mut drawing = Drawing::new(0, tool);
+                drawing.points = vec![start, end];
+                drawing.fib_config = Some(FibonacciConfig {
+                    levels: vec![
+                        FibonacciLevel::new(0.25, "", [255; 4]),
+                        FibonacciLevel::new(1.0, "", [255; 4]),
+                    ],
+                    show_background: true,
+                    ..Default::default()
+                });
+                let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                    if tool == Tool::FibonacciCircles {
+                        drawing.render_fibonacci_circles(ui.painter());
+                    } else {
+                        drawing.render_fibonacci_arc(ui.painter());
+                    }
+                });
+                output.textures_delta.clear();
+                let mesh = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Mesh(mesh) => Some(mesh),
+                        _ => None,
+                    })
+                    .unwrap();
+                let radius = start.distance(end);
+                let segments = if tool == Tool::FibonacciCircles {
+                    circle_sides(radius)
+                } else {
+                    circle_sides(radius).div_ceil(2)
+                };
+                assert_eq!(mesh.vertices.len(), 2 * (segments + 1));
+                assert_eq!(mesh.indices.len(), 6 * segments);
+                for (i, pair) in mesh.vertices.as_chunks::<2>().0.iter().enumerate() {
+                    for (vertex, ratio) in pair.iter().zip([0.25, 1.0]) {
+                        let expected = if tool == Tool::FibonacciCircles {
+                            let angle = std::f32::consts::TAU * i as f32 / segments as f32;
+                            start + radius * ratio * egui::vec2(angle.cos(), angle.sin())
+                        } else {
+                            let angle = std::f32::consts::PI * (1.0 - i as f32 / segments as f32);
+                            speed_arc_point(start, end, radius * ratio, angle)
+                        };
+                        assert_eq!(vertex.pos, expected, "{tool:?}, sample {i}, ratio {ratio}");
+                    }
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
 
     /// Saved ratios, visibility and colours drive every formerly fixed renderer and its hit lines.
     #[test]
