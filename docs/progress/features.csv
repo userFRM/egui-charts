@@ -641,7 +641,7 @@ Studies,Indicators,Historical Volatility,done,library,src/studies/builtin/histor
 Studies,Indicators,Hull Moving Average,done,library,src/studies/builtin/hma.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Ichimoku Cloud,done,library,src/studies/builtin/ichimoku.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Kaufman's Adaptive Moving Average,done,library,src/studies/builtin/kama.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Keltner Channels,done,library,src/studies/builtin/keltner.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Keltner Channels,done,library,src/studies/builtin/keltner.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/builtin/price_oscillator.rs
 Studies,Indicators,Klinger Oscillator,done,library,src/studies/builtin/klinger.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Know Sure Thing,done,library,src/studies/builtin/know_sure_thing.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Least Squares Moving Average,done,library,src/studies/builtin/lsma.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs

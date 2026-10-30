@@ -103,6 +103,12 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(ATR::new(l(0))),
         Box::new(TrueRange::new()),
         Box::new(KeltnerChannels::new(l(0), l(1), x(2.0))),
+        Box::new(
+            KeltnerChannels::new(l(0), l(1), x(2.0))
+                .with_average(OscillatorAverage::Simple)
+                .with_band(KeltnerBand::Range)
+                .with_source(crate::model::PriceSource::HL2),
+        ),
         Box::new(DonchianChannels::new(l(0))),
         Box::new(StandardDeviation::new(l(0))),
         Box::new(HistoricalVolatility::new(l(0)).with_trading_days(x(252.0))),

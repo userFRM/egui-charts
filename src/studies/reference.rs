@@ -45,6 +45,10 @@
 //!   conventional zone rule (a gap of at least a percentage of the 14-bar mean range, closed or
 //!   shrunk by the first bar to enter it), and RSI divergences by comparing consecutive Wilder RSI
 //!   pivots with the price at the same bars.
+//! - The simple average of the source or the exponential average seeded with the mean of the first
+//!   values for the Keltner middle line, with bands of Wilder's average true range, the bar's true
+//!   range (high minus low on the first bar) or Wilder's average of the bar range over the middle
+//!   line's length.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
@@ -90,6 +94,7 @@ use crate::studies::{
     BollingerBars, ChandeKrollStop, ChopZone, Median, VolatilityStop, WilliamsAlligator,
 };
 use crate::studies::{Gaps, PivotPointsHighLow, RsiDivergence, WilliamsFractals};
+use crate::studies::{KeltnerBand, OscillatorAverage};
 use crate::studies::{
     PriceMomentumOscillator, PringsSpecialK, RciRibbon, RelativeVolatilityIndex,
     SMIErgodicIndicator, SMIErgodicOscillator, WoodiesCCI,
@@ -544,6 +549,22 @@ fn staple_studies_match_published_definitions() {
         ("CCI(20)", Box::new(CCI::default())),
         ("MFI(14)", Box::new(MoneyFlowIndex::default())),
         ("Keltner(20,10,2)", Box::new(KeltnerChannels::default())),
+        (
+            "Keltner(20,10,2,SMA,HL2)",
+            Box::new(
+                KeltnerChannels::default()
+                    .with_average(OscillatorAverage::Simple)
+                    .with_source(crate::model::PriceSource::HL2),
+            ),
+        ),
+        (
+            "Keltner(20,10,2,TR)",
+            Box::new(KeltnerChannels::default().with_band(KeltnerBand::TrueRange)),
+        ),
+        (
+            "Keltner(20,10,2,Range)",
+            Box::new(KeltnerChannels::default().with_band(KeltnerBand::Range)),
+        ),
         ("LinReg(14)", Box::new(LinearRegression::default())),
         (
             "LinRegSlope(14)",

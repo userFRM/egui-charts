@@ -6,7 +6,8 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 use std::collections::VecDeque;
 
-/// Average formula of the oscillator's two averages or of its signal line.
+/// Average formula of an oscillator's averages and signal line, and of the middle line of
+/// [`KeltnerChannels`](super::KeltnerChannels).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OscillatorAverage {
     /// Alpha 2/(length+1), seeded with the mean of the first `length` values.
@@ -23,7 +24,7 @@ pub(super) struct Mean {
 }
 
 impl Mean {
-    fn next(&mut self, kind: OscillatorAverage, input: f64, length: usize) -> f64 {
+    pub(super) fn next(&mut self, kind: OscillatorAverage, input: f64, length: usize) -> f64 {
         match kind {
             OscillatorAverage::Exponential => {
                 self.exponential
