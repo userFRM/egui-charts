@@ -464,6 +464,26 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
     let mut config = drawing.fibonacci_config().into_owned();
     let original = config.clone();
     ui.strong(l10n::text(ui.ctx(), "Fibonacci levels"));
+    ui.horizontal_wrapped(|ui| {
+        let label = ui.label(l10n::text(ui.ctx(), "Level width"));
+        ui.add(
+            egui::DragValue::new(&mut config.level_width)
+                .range(0.1..=crate::drawings::validation::MAX_STROKE_WIDTH)
+                .speed(0.1)
+                .suffix(" px"),
+        )
+        .labelled_by(label.id);
+        let label = ui.label(l10n::text(ui.ctx(), "Level style"));
+        let ctx = ui.ctx().clone();
+        ui.label_inputs_by(label.id, |ui| {
+            ui.combo_select(
+                "fib_level_style",
+                &mut config.level_style,
+                LineStyle::all().iter().copied(),
+                |style| l10n::text(&ctx, style.name()),
+            );
+        });
+    });
     level_grid(
         ui,
         &mut config.levels,
@@ -496,9 +516,7 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
             drawing.tool_type,
             Tool::FibonacciRetracement | Tool::FibonacciExtension | Tool::FibonacciChannel
         ) {
-            let mut prices = config
-                .show_prices
-                .unwrap_or(drawing.tool_type != Tool::FibonacciChannel);
+            let mut prices = config.show_prices.unwrap_or(true);
             if ui
                 .checkbox(&mut prices, l10n::text(ui.ctx(), "Prices"))
                 .changed()
@@ -506,9 +524,7 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
                 config.show_prices = Some(prices);
             }
         }
-        let mut levels = config
-            .show_levels
-            .unwrap_or(drawing.tool_type != Tool::FibonacciWedge);
+        let mut levels = config.show_levels.unwrap_or(true);
         if ui
             .checkbox(&mut levels, l10n::text(ui.ctx(), "Levels"))
             .changed()
@@ -529,7 +545,10 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
         Tool::FibonacciRetracement | Tool::FibonacciExtension | Tool::FibonacciChannel
     ) {
         ui.horizontal_wrapped(|ui| {
-            if drawing.tool_type == Tool::FibonacciRetracement {
+            if matches!(
+                drawing.tool_type,
+                Tool::FibonacciRetracement | Tool::FibonacciExtension
+            ) {
                 ui.checkbox(&mut config.reverse, l10n::text(ui.ctx(), "Reverse"));
             }
             ui.checkbox(&mut config.extend_left, l10n::text(ui.ctx(), "Extend left"));

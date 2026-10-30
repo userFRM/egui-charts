@@ -302,6 +302,11 @@ impl Chart {
 
         // Render existing drawings against the chart's bars
         let view = ChartView {
+            price_formatter: self
+                .series_formatters
+                .get(&crate::widget::SeriesId::MAIN)
+                .or(self.price_formatter.as_ref())
+                .map(|f| f.as_ref()),
             instrument: self.instrument(),
             bars: self.state.shown(),
             revision: self.state.revision(),

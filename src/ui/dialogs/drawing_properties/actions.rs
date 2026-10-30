@@ -257,6 +257,13 @@ impl DrawingProps {
             {
                 return Err("Fibonacci ratios must be finite");
             }
+            if settings
+                .fib_config
+                .as_ref()
+                .is_some_and(|c| !(c.level_width > 0.0 && c.level_width <= MAX_STROKE_WIDTH))
+            {
+                return Err("Fibonacci widths must be above 0 and at most 100");
+            }
             if settings.pitchfork.as_ref().is_some_and(|c| {
                 c.levels
                     .iter()
@@ -502,28 +509,39 @@ mod tests {
             assert!(chart.drawings().drawings[1].fib_config.is_none());
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
-            assert!(chart.drawings().drawings[0].fib_config.is_none());
+            assert_eq!(
+                format!("{:?}", chart.drawings().drawings[0].fib_config),
+                format!("{:?}", Drawing::new(7, tool).fib_config)
+            );
             assert!(chart.redo());
             chart.drawings_mut().edit_drawing(7, |d| d.locked = true);
             props.font_size = 18.0;
             props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
             assert_eq!(chart.drawings().drawings[0].font_size, 12.0);
             assert_eq!(chart.drawings().drawings[1].font_size, 18.0);
-            // A malformed ratio cannot partially change common style or another selected tool.
-            props
-                .tool_settings
-                .as_mut()
-                .unwrap()
-                .settings
-                .fib_config
-                .as_mut()
-                .unwrap()
-                .levels[0]
-                .value = f32::NAN;
-            props.line_width = 9.0;
-            assert!(props.apply_to_chart(DrawingId(7), &mut chart).is_err());
-            assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0);
-            assert_eq!(chart.drawings().drawings[1].stroke_width, 2.0);
+            // Malformed ratios or widths cannot partly change another selected drawing.
+            for (ratio, width) in [(f32::NAN, 2.0), (1.0, 0.0), (1.0, 100.01), (1.0, f32::NAN)] {
+                let config = props
+                    .tool_settings
+                    .as_mut()
+                    .unwrap()
+                    .settings
+                    .fib_config
+                    .as_mut()
+                    .unwrap();
+                config.levels[0].value = ratio;
+                config.level_width = width;
+                props.line_width = 9.0;
+                assert!(props.apply_to_chart(DrawingId(7), &mut chart).is_err());
+                assert_eq!(
+                    chart.drawings().drawings[0].stroke_width,
+                    Drawing::new(7, tool).stroke_width
+                );
+                assert_eq!(
+                    chart.drawings().drawings[1].stroke_width,
+                    Drawing::new(7, tool).stroke_width
+                );
+            }
         }
     }
 }

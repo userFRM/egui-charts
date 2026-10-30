@@ -254,6 +254,12 @@ impl FibonacciLevel {
 pub struct FibonacciConfig {
     /// Individual level configurations
     pub levels: Vec<FibonacciLevel>,
+    /// Width of every level line, in points.
+    #[serde(default = "fib_level_width")]
+    pub level_width: f32,
+    /// Line pattern shared by every level.
+    #[serde(default)]
+    pub level_style: crate::model::LineStyle,
     /// Show background fill between levels
     pub show_background: bool,
     /// Background opacity (0-255)
@@ -265,10 +271,10 @@ pub struct FibonacciConfig {
     /// Reverse the direction (flip vertically)
     pub reverse: bool,
     /// Show prices in level labels. `None` retains the tool's legacy choice:
-    /// on for retracements and extensions, off for channels.
+    /// inherited from each level.
     #[serde(default)]
     pub show_prices: Option<bool>,
-    /// Show the level value in labels. `None` preserves legacy labels (off for wedges).
+    /// Show the level value in labels; enabled when unset.
     #[serde(default)]
     pub show_levels: Option<bool>,
     /// Format level values as percentages rather than ratios.
@@ -280,6 +286,10 @@ pub struct FibonacciConfig {
     /// Measure retracement and extension levels in logarithmic price when all anchors are positive.
     #[serde(default)]
     pub logarithmic: bool,
+}
+
+fn fib_level_width() -> f32 {
+    2.0
 }
 
 fn percent_levels() -> bool {
@@ -299,6 +309,8 @@ impl Default for FibonacciConfig {
                 FibonacciLevel::new(0.786, "78.6%", [156, 39, 176, 255]),
                 FibonacciLevel::new(1.0, "100%", [120, 123, 134, 255]),
             ],
+            level_width: fib_level_width(),
+            level_style: crate::model::LineStyle::Solid,
             show_background: false,
             background_opacity: 30,
             extend_left: false,
@@ -307,8 +319,8 @@ impl Default for FibonacciConfig {
             logarithmic: false,
             show_prices: None,
             show_levels: None,
-            levels_as_percent: true,
-            labels_on_left: false,
+            levels_as_percent: false,
+            labels_on_left: true,
         }
     }
 }
@@ -326,16 +338,18 @@ impl FibonacciConfig {
                 FibonacciLevel::new(2.0, "200%", [76, 175, 80, 255]),
                 FibonacciLevel::new(2.618, "261.8%", [156, 39, 176, 255]),
             ],
+            level_width: fib_level_width(),
+            level_style: crate::model::LineStyle::Solid,
             show_background: false,
             background_opacity: 30,
             extend_left: false,
-            extend_right: true,
+            extend_right: false,
             reverse: false,
             logarithmic: false,
             show_prices: None,
             show_levels: None,
-            levels_as_percent: true,
-            labels_on_left: false,
+            levels_as_percent: false,
+            labels_on_left: true,
         }
     }
 
@@ -391,6 +405,12 @@ impl FibonacciConfig {
                 (4.236, pink),
                 (4.618, red),
             ],
+            T::FibonacciWedge => {
+                let mut config = Self::default();
+                config.levels.retain(|l| l.value != 0.0);
+                config.show_levels = Some(true);
+                return config;
+            }
             T::FibonacciExtension => return Self::extension_default(),
             _ => return Self::default(),
         };
@@ -405,13 +425,13 @@ impl FibonacciConfig {
                 .collect(),
             show_background: tool != T::FibonacciTimeZones,
             background_opacity: 51,
-            levels_as_percent: tool != T::FibonacciTimeZones,
+            levels_as_percent: false,
             ..Self::default()
         }
     }
 
     /// Label content; a tool without a price passes `None`.
-    pub(crate) fn label_text(&self, level: &FibonacciLevel, price: Option<f64>) -> String {
+    pub(crate) fn label_text(&self, level: &FibonacciLevel, price: Option<&str>) -> String {
         if self.show_prices.is_none()
             && self.show_levels.is_none()
             && !level.show_price
@@ -425,9 +445,9 @@ impl FibonacciConfig {
             .then(|| level.label(self.levels_as_percent));
         let price = price.filter(|_| self.show_prices.unwrap_or(level.show_price));
         match (value, price) {
-            (Some(value), Some(price)) => format!("{value} ({price:.2})"),
+            (Some(value), Some(price)) => format!("{value} ({price})"),
             (Some(value), None) => value,
-            (None, Some(price)) => format!("{price:.2}"),
+            (None, Some(price)) => price.to_owned(),
             (None, None) => String::new(),
         }
     }
@@ -468,6 +488,7 @@ impl FibonacciConfig {
         self.visible_levels().map(move |level| {
             let value = f64::from(level.value);
             if extension {
+                let value = if self.reverse { -value } else { value };
                 if self.logarithmic && start > 0.0 && end > 0.0 && origin > 0.0 {
                     (origin.ln() + (end.ln() - start.ln()) * value).exp()
                 } else {

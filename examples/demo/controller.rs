@@ -6092,7 +6092,10 @@ mod tests {
             assert!(app.chart.drawings().drawings[1].fib_config.is_none());
             assert_eq!(app.chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(app.chart.undo());
-            assert!(app.chart.drawings().drawings[0].fib_config.is_none());
+            assert_eq!(
+                format!("{:?}", app.chart.drawings().drawings[0].fib_config),
+                format!("{:?}", Drawing::new(7, tool).fib_config)
+            );
             assert!(app.chart.redo());
             app.chart
                 .drawings_mut()
@@ -6114,8 +6117,14 @@ mod tests {
                 .value = f32::NAN;
             props.line_width = 9.0;
             assert!(props.apply_to_chart(DrawingId(7), &mut app.chart).is_err());
-            assert_eq!(app.chart.drawings().drawings[0].stroke_width, 2.0);
-            assert_eq!(app.chart.drawings().drawings[1].stroke_width, 2.0);
+            assert_eq!(
+                app.chart.drawings().drawings[0].stroke_width,
+                Drawing::new(7, tool).stroke_width
+            );
+            assert_eq!(
+                app.chart.drawings().drawings[1].stroke_width,
+                Drawing::new(7, tool).stroke_width
+            );
         }
     }
 

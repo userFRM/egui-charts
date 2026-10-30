@@ -150,6 +150,7 @@ pub(crate) fn paint_drawings(
     };
     let price_to_y = |p| price.price_to_y(p);
     let view = crate::drawings::rendering::ChartView {
+        price_formatter: None,
         instrument: None,
         bars: &[],
         revision: 0,
