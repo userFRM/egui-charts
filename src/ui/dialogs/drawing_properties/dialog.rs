@@ -450,6 +450,11 @@ impl DrawingPropertiesDialog {
                     .tool_settings
                     .as_ref()
                     .is_some_and(|t| t.settings.tool_type.supports_text()),
+                PropertiesTab::Coordinates => self
+                    .props
+                    .tool_settings
+                    .as_ref()
+                    .is_none_or(|t| CoordinatesTab::available(t.settings.tool_type)),
                 _ => true,
             })
             .collect();
@@ -642,14 +647,23 @@ mod tests {
                 (Tool::TextLabel, true, false, true),
                 (Tool::Highlighter, false, false, false),
             ] {
-                chart.drawings_mut().drawings = vec![Drawing::new(7, tool)];
+                let mut drawing = Drawing::new(7, tool);
+                drawing.chart_points = vec![ChartPoint::new(1.0, 100.0); 3];
+                chart.drawings_mut().drawings = vec![drawing];
                 dialog.open_for_chart(&chart, DrawingId(7));
+                let freehand = matches!(tool, Tool::Brush | Tool::Highlighter);
+                assert_eq!(
+                    dialog.coordinates.points.len(),
+                    if freehand { 0 } else { 3 },
+                    "{tool:?}: staged anchors"
+                );
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
                 let labels = frame(&mut dialog, &mut chart, &ctx, vec![]);
                 for (label, present) in [
                     ("Fill", fill),
                     ("Extend", extend),
                     ("Text", text),
+                    ("Coordinates", !freehand),
                     ("Template", true),
                     ("Ok", true),
                     ("Delete", false),
