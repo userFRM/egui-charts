@@ -111,6 +111,30 @@ impl DrawingToolType {
         )
     }
 
+    /// Whether the renderer draws the drawing's line start and line end styles.
+    pub fn supports_line_ends(&self) -> bool {
+        matches!(
+            self,
+            Self::TrendLine
+                | Self::Ray
+                | Self::ExtendedLine
+                | Self::InfoLine
+                | Self::TrendAngle
+                | Self::HorizontalLine
+                | Self::HorizontalRay
+                | Self::VerticalLine
+                | Self::Arrow
+                | Self::ArrowMarker
+                | Self::Path
+                | Self::Polyline
+        )
+    }
+
+    /// Whether the renderer draws a middle line when the drawing's middle line flag is on.
+    pub fn supports_middle_line(&self) -> bool {
+        matches!(self, Self::Rect | Self::ParallelChannel)
+    }
+
     /// Returns the [`DrawingInteractionMode`] that governs how mouse input is
     /// captured when creating a drawing of this type.
     ///
