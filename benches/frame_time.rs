@@ -8,6 +8,8 @@
 //! A third prints the frame of volume bubbles from 100,000 trades; `-- bubbles` runs it alone.
 //! A fourth prints the frame of a zoomed-out daily TPO chart at 400 and at 1,600 sessions;
 //! `-- tpo` runs it alone.
+//! A fifth draws a host-supplied footprint with executions on all 100,000 visible bars;
+//! `-- footprint-host` runs it alone.
 //! `--regression <scenario>` runs a compact workload for `benches/check-regressions.sh`.
 
 use egui::{Rect, UiBuilder, pos2, vec2};
@@ -203,6 +205,8 @@ fn main() {
         let name = args.get(at + 1).expect("a regression scenario");
         if matches!(name.as_str(), "tpo-400" | "tpo-1600") {
             tpo(std::slice::from_ref(name), frames);
+        } else if name == "footprint-host" {
+            footprint(std::slice::from_ref(name), frames);
         } else {
             regression::run(name, frames);
         }
@@ -262,6 +266,61 @@ fn main() {
     bubbles(&filters, frames);
     println!();
     tpo(&filters, frames);
+    println!();
+    footprint(&filters, frames);
+}
+
+/// A host footprint, without the feed's history budget, with executions on every visible bar.
+fn footprint(filters: &[String], frames: usize) {
+    use egui_charts::chart::overlays::FootprintConfig;
+    use egui_charts::data::Footprint;
+    use egui_charts::model::{BarClock, OrderSide, Tick, Timeframe};
+
+    let name = "footprint-host, 100,000 bars, all in view";
+    if !filters.is_empty() && !filters.iter().any(|f| name.contains(f.as_str())) {
+        return;
+    }
+    let bars: Vec<_> = (0..100_000).map(|i| example::sample_bar(i, 0)).collect();
+    let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+    for bar in &bars {
+        for (price, size, side) in [
+            (bar.low, 2.0, OrderSide::Sell),
+            (bar.close, 3.0, OrderSide::Buy),
+            (bar.high, 1.0, OrderSide::Buy),
+        ] {
+            flow.push(&Tick::new(bar.time, price, size, Some(side)))
+                .unwrap();
+        }
+    }
+    assert_eq!(flow.bars().len(), bars.len());
+    let mut options = egui_charts::config::ChartOptions::default();
+    options.time_scale.min_bar_spacing = 0.0;
+    let mut chart = Chart::new(BarData::from_bars(bars)).with_chart_options(options);
+    chart.set_visible_bars(100_000);
+    let config = FootprintConfig::default();
+    let samples = frame::run(vec2(1440.0, 900.0), pos2(700.0, 400.0), frames, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            chart.show_footprint(ui, &flow, &config);
+        });
+    });
+    let median = |time: fn(&frame::Sample) -> std::time::Duration| {
+        let mut times: Vec<_> = samples.iter().map(time).collect();
+        times.sort();
+        times
+            .get(times.len() / 2)
+            .map_or(0.0, |d| d.as_secs_f64() * 1e3)
+    };
+    println!(
+        "| host footprint | shapes | vertices | frame ms (median) | tessellation ms (median) |"
+    );
+    println!("|---|---:|---:|---:|---:|");
+    println!(
+        "| {name} | {} | {} | {:.3} | {:.3} |",
+        samples.last().map_or(0, |s| s.shapes),
+        samples.last().map_or(0, |s| s.vertices),
+        median(|s| s.frame),
+        median(|s| s.tessellate),
+    );
 }
 
 /// Daily TPO sessions, all in view, including the workload used by the regression check.
