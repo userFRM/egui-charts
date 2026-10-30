@@ -420,6 +420,7 @@ mod tests {
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut value = 1.0;
                 let mut popup_value = 1.0;
+                let popup = egui::Id::unique("field_popup");
                 let mut frame = |events| {
                     ctx.run_ui(
                         egui::RawInput {
@@ -441,7 +442,7 @@ mod tests {
                                 });
                             });
                             if state == "popup-focus" {
-                                egui::Area::new(egui::Id::new("field_popup"))
+                                egui::Area::new(popup)
                                     .order(egui::Order::Foreground)
                                     .fixed_pos(pos2(4.0, 4.0))
                                     .show(ui.ctx(), |ui| {

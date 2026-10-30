@@ -7,6 +7,7 @@ use crate::icons::icons;
 use crate::localization as l10n;
 use crate::model::{OrderRequest, OrderSide};
 use crate::theme::ThemeExt;
+use crate::ui::top_toolbar::buttons::rule_color;
 use crate::ui::trading::widgets::{
     FIELD_HEIGHT, SECTION_TITLE_SIZE, chevron, dropdown, field, grouped, hit, info, muted, number,
     side_color, swap, text, time_in_force_menu, title, toggle, track,
@@ -388,11 +389,7 @@ impl OrderTicket {
         let (rect, _) =
             ui.allocate_exact_size(vec2(ui.available_width(), FIELD_HEIGHT), Sense::hover());
         let rail = Rect::from_min_max(rect.left_bottom() - vec2(0.0, 3.5), rect.right_bottom());
-        ui.painter().rect_filled(
-            rail,
-            0.0,
-            crate::ui::top_toolbar::buttons::rule_color(&theme),
-        );
+        ui.painter().rect_filled(rail, 0.0, rule_color(&theme));
         let width = rect.width() / kinds.len() as f32;
         for (index, (kind, label)) in kinds.into_iter().enumerate() {
             let cell = Rect::from_min_size(
