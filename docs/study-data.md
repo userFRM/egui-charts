@@ -1,10 +1,15 @@
 # Calendar and viewport studies
 
 `IndicatorFactory` includes Performance, Seasonality, Visible Average Price and Up/Down Volume.
-Performance uses the chart's own loaded bars. It compares the latest close with the last close
-on or before each calendar target in the instrument's trading calendar. Missing history and
-zero reference prices show N/A. An intraday chart needs enough loaded history to cover the
-requested period; the study does not obtain separate daily history.
+Performance compares the latest close with the last close on or before each calendar target in
+the instrument's trading calendar. On an interval shorter than a day it declares the chart
+symbol's daily bars in `data_requests` and reads each period's starting close from them, so the
+longer periods fill without scrolling back. Where the chart's own bars hold a later close on or
+before the target, as when the daily bars stop earlier, that close counts. Daily and longer
+charts, and hosts that supply no daily bars, use the chart's loaded bars. Missing history and
+zero reference prices show N/A. A connected feed loads as many daily bars as the chart holds,
+and at least 300, so on a symbol that trades every day a chart of fewer than 366 bars can leave
+1Y at N/A.
 
 The chart supplies Visible Average Price with its visible source range before autoscaling.
 Direct callers use `set_visible_range(start..end)` before `calculate`. The end is exclusive;
