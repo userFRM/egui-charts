@@ -364,33 +364,41 @@ impl IndicatorFactory {
 
     /// Register a named indicator constructor in the [`CUSTOM`](Self::CUSTOM) category.
     ///
-    /// If a constructor with the same name already exists it is replaced.
+    /// A constructor already registered under `name`, a built-in included, is replaced. Returns
+    /// `false`, registering nothing, when `name` is empty or only whitespace.
     ///
     /// # Arguments
     /// * `name` -- The lookup key (e.g. `"MySMA"`).
     /// * `constructor` -- A closure that returns a new boxed indicator.
-    pub fn register<F>(&mut self, name: impl Into<String>, constructor: F)
+    pub fn register<F>(&mut self, name: impl Into<String>, constructor: F) -> bool
     where
         F: Fn() -> Box<dyn Indicator> + Send + Sync + 'static,
     {
-        self.register_in(Self::CUSTOM, name, constructor);
+        self.register_in(Self::CUSTOM, name, constructor)
     }
 
     /// Register a named indicator constructor in `category`, such as [`PERSONAL`](Self::PERSONAL)
     /// for a script the user imported, [`COMMUNITY`](Self::COMMUNITY) or
     /// [`PROFILES`](Self::PROFILES).
     ///
-    /// If a constructor with the same name already exists it is replaced.
+    /// A constructor already registered under `name`, a built-in included, is replaced. Returns
+    /// `false`, registering nothing, when `name` is empty or only whitespace.
     pub fn register_in<F>(
         &mut self,
         category: &'static str,
         name: impl Into<String>,
         constructor: F,
-    ) where
+    ) -> bool
+    where
         F: Fn() -> Box<dyn Indicator> + Send + Sync + 'static,
     {
+        let name = name.into();
+        if name.trim().is_empty() {
+            return false;
+        }
         self.constructors
-            .insert(name.into(), (category, Box::new(constructor)));
+            .insert(name, (category, Box::new(constructor)));
+        true
     }
 
     /// Create an indicator by its registered name, or `None` if not found.

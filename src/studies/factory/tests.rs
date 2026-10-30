@@ -2,14 +2,28 @@ use super::*;
 use crate::model::Bar;
 use chrono::{TimeZone, Utc};
 
+/// A host registers a study under its name, replacing a study of that name, a built-in
+/// included; a blank name registers nothing.
 #[test]
 fn test_custom_indicator() {
     let mut factory = IndicatorFactory::new();
+    let names = |factory: &IndicatorFactory| {
+        let mut names = factory.list();
+        names.sort();
+        names
+    };
+    let before = names(&factory);
+    for blank in ["", " \t"] {
+        assert!(!factory.register(blank, || Box::new(SMA::new(10))));
+        assert!(factory.create(blank).is_none());
+    }
+    assert_eq!(names(&factory), before);
 
-    factory.register("Custom", || Box::new(SMA::new(10)));
-
+    assert!(factory.register("Custom", || Box::new(SMA::new(10))));
     assert!(factory.has("Custom"));
     assert!(factory.create("Custom").is_some());
+    assert!(factory.register("RSI", || Box::new(SMA::new(5))));
+    assert_eq!(factory.create("RSI").unwrap().name(), "SMA");
 }
 
 /// Every registered name must construct, and the produced indicator's
