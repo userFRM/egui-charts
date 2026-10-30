@@ -1,6 +1,8 @@
 //! Compare symbols dialog.
 
-use super::row::{SEARCH_RADIUS, paint_symbol_mark, search_backdrop};
+use super::row::{
+    SEARCH_RADIUS, SYMBOL_ROW_HEIGHT, paint_symbol_mark, paint_symbol_text, search_backdrop,
+};
 use super::service::Search;
 use crate::icons::icons;
 use crate::localization as l10n;
@@ -287,7 +289,11 @@ impl CompareSymbolsDialog {
             ui.add(icons::QUICK_SEARCH.as_image_tinted(Vec2::splat(24.0), config.muted_color));
             ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
-                    .hint_text(RichText::new(l10n::text(ui.ctx(), "Search symbols")).size(16.0))
+                    .hint_text(
+                        RichText::new(l10n::text(ui.ctx(), "Search symbols"))
+                            .size(16.0)
+                            .color(ui.active_theme().ui.text_disabled),
+                    )
                     .font(egui::FontId::proportional(16.0))
                     .frame(egui::Frame::NONE)
                     .desired_width((ui.available_width() - 40.0).max(0.0)),
@@ -363,7 +369,11 @@ impl CompareSymbolsDialog {
         let mut next_page = false;
         // Suggestions
         let heading = if recent { "Recent symbols" } else { "Symbols" };
-        ui.label(RichText::new(l10n::text(ui.ctx(), heading)).color(config.muted_color));
+        ui.label(
+            RichText::new(l10n::text(ui.ctx(), heading).to_uppercase())
+                .size(11.0)
+                .color(config.muted_color),
+        );
         ui.space_lg();
 
         if symbols.is_empty() {
@@ -414,7 +424,7 @@ impl CompareSymbolsDialog {
             .iter()
             .any(|s| s.symbol == symbol.symbol);
 
-        let desired_size = Vec2::new(ui.available_width(), 56.0);
+        let desired_size = Vec2::new(ui.available_width(), SYMBOL_ROW_HEIGHT);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
         response.widget_info(|| {
             egui::WidgetInfo::labeled(
@@ -560,57 +570,18 @@ impl CompareSymbolsDialog {
             }
         }
 
-        // Instrument, then its description and type badge
-        let width = (right - 12.0 - left).max(0.0);
-        let line = |text: &str, size: f32, color: Color32, width: f32| {
-            egui::WidgetText::from(RichText::new(text).size(size).color(color)).into_galley(
-                ui,
-                Some(egui::TextWrapMode::Truncate),
-                width,
-                egui::TextStyle::Body,
-            )
-        };
-        let name = line(&symbol.symbol, 16.0, config.text_color, width);
-        ui.painter().galley(
-            Pos2::new(left, rect.center().y - 1.0 - name.size().y),
-            name,
-            config.text_color,
+        paint_symbol_text(
+            ui,
+            symbol,
+            egui::Rect::from_min_max(
+                Pos2::new(left, rect.top()),
+                Pos2::new((right - 12.0).max(left), rect.bottom()),
+            ),
+            &self.search_query,
+            [config.text_color, config.muted_color],
+            true,
+            true,
         );
-        let kind = symbol
-            .symbol_type
-            .map(|kind| l10n::text(ui.ctx(), kind.to_string()).to_uppercase());
-        let badge = kind.map(|kind| {
-            ui.painter().layout_no_wrap(
-                kind,
-                egui::FontId::proportional(theme.text.micro),
-                config.muted_color,
-            )
-        });
-        let badge_width = badge.as_ref().map_or(0.0, |badge| badge.size().x + 14.0);
-        let description = line(
-            symbol.description.as_deref().unwrap_or(&symbol.symbol),
-            12.0,
-            config.muted_color,
-            (width - badge_width).max(0.0),
-        );
-        let top = rect.center().y + 3.0;
-        let badge_left = left + description.size().x + 6.0;
-        let description_height = description.size().y;
-        ui.painter()
-            .galley(Pos2::new(left, top), description, config.muted_color);
-        if let Some(badge) = badge {
-            let frame = egui::Rect::from_min_size(
-                Pos2::new(
-                    badge_left,
-                    top + (description_height - badge.size().y - 4.0) / 2.0,
-                ),
-                badge.size() + Vec2::new(8.0, 4.0),
-            );
-            ui.painter()
-                .rect_filled(frame, theme.radius.xs, theme.ui.btn_bg_hover);
-            ui.painter()
-                .galley(frame.min + Vec2::new(4.0, 2.0), badge, config.muted_color);
-        }
 
         if action.is_none() && response.clicked() && !is_compared {
             action = Some(CompareAction::AddSymbol(
@@ -641,8 +612,8 @@ mod tests {
             dialog.search.poll(&ctx);
             let config = dialog.config.resolved(&ctx.global_style().visuals);
             for (query, heading, listed, absent) in [
-                ("", "Recent symbols", "BTCUSDT", "TSLA"),
-                ("tsla", "Symbols", "TSLA", "BTCUSDT"),
+                ("", "RECENT SYMBOLS", "BTCUSDT", "TSLA"),
+                ("tsla", "SYMBOLS", "TSLA", "BTCUSDT"),
             ] {
                 dialog.search_query = query.into();
                 for frame in 0..2 {

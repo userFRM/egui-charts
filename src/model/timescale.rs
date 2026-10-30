@@ -306,10 +306,18 @@ impl TimeScale {
         self.base_idx() as f64 + (self.right_offset - delta_from_right)
     }
 
-    /// Fit fractional logical edges while retaining their sub-bar precision.
+    /// Fit fractional edges, centring spans that exceed the configured or fallback spacing cap.
     #[cfg(feature = "widget")]
-    pub(crate) fn fit_logical_range(&mut self, left: f64, right: f64) {
-        self.bar_spacing = self.clamp_spacing((self.width as f64 - 1.0) / (right - left));
+    pub(crate) fn fit_logical_range(&mut self, left: f64, right: f64, default_max: f64) {
+        let (min, max) = self.spacing_bounds();
+        let max = if max > 0.0 { max } else { default_max.max(min) };
+        let spacing = (self.width as f64 - 1.0) / (right - left);
+        self.bar_spacing = self.clamp_spacing(spacing.min(max));
+        let right = if spacing > max {
+            (left + right) / 2.0 + (self.width as f64 - 1.0) / (2.0 * self.bar_spacing)
+        } else {
+            right
+        };
         self.right_offset = right - self.base_idx() as f64 - 0.5;
         self.apply_constraints();
     }

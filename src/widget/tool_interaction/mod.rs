@@ -314,6 +314,7 @@ impl Chart {
 
         // Render existing drawings against the chart's bars
         let view = ChartView {
+            price_formatter: self.value_formatters().price,
             instrument: self.instrument(),
             bars: self.state.shown(),
             revision: self.state.revision(),

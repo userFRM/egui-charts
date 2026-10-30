@@ -16,7 +16,7 @@ use egui::Ui;
 
 use super::{
     actions::TopToolbarAction,
-    buttons::{IconTextButton, PillButton, TextIconButton, ToolbarIconButton, Trigger},
+    buttons::{IconTextButton, PillButton, TextButton, TextIconButton, ToolbarIconButton, Trigger},
     components::{
         chart_grid_selector::ChartGridSelector,
         chart_type_selector::{ChartTypeAction, ChartTypeSelector},
@@ -447,7 +447,10 @@ impl TopToolbar {
             for &control in group.iter().filter(|&&c| self.is_shown(c)) {
                 width += match control {
                     S::LayoutName => self.layout_menu.width(ui),
-                    S::Save => Self::save_button(&self.config).width(ui),
+                    S::Save => {
+                        Self::save_button(&self.config).width(ui)
+                            + Self::save_menu_button(&self.config).width(ui)
+                    }
                     S::Trade => Self::trade_button().width(ui),
                     _ => self.config.btn_size,
                 };
@@ -550,23 +553,7 @@ impl TopToolbar {
             }
             S::Save => {
                 let response = Self::save_button(&self.config).show(ui);
-                let arrow = ui.interact(
-                    egui::Rect::from_min_max(
-                        egui::pos2(response.rect.right() - 16.0, response.rect.top()),
-                        response.rect.max,
-                    ),
-                    response.id.with("save_menu"),
-                    egui::Sense::click(),
-                );
-                let translated_label = l10n::text(ui.ctx(), "Layout options");
-                arrow.widget_info(|| {
-                    egui::WidgetInfo::labeled(
-                        egui::Role::Button,
-                        arrow.enabled(),
-                        &translated_label,
-                    )
-                });
-                crate::styles::focus::draw_focus_ring(ui, &arrow, self.config.rounding);
+                let arrow = Self::save_menu_button(&self.config).show(ui);
                 egui::Popup::menu(&arrow)
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                     .align(egui::RectAlign::BOTTOM_START)
@@ -639,9 +626,14 @@ impl TopToolbar {
                 } else {
                     self.state.can_redo
                 };
-                ui.add_enabled(enabled, |ui: &mut Ui| {
-                    ToolbarIconButton::new(icon, label, &self.config).show(ui)
+                ui.scope(|ui| {
+                    // Disabled glyphs carry their own theme ink instead of egui's alpha fade.
+                    ui.visuals_mut().disabled_alpha = 1.0;
+                    ui.add_enabled(enabled, |ui: &mut Ui| {
+                        ToolbarIconButton::new(icon, label, &self.config).show(ui)
+                    })
                 })
+                .inner
                 .on_disabled_hover_text(l10n::text(
                     ui.ctx(),
                     if control == S::Undo {
@@ -741,8 +733,12 @@ impl TopToolbar {
         }
     }
 
-    fn save_button(config: &TopToolbarConfig) -> TextIconButton<'static> {
-        TextIconButton::new("Save", &embedded_icons::CHEVRON_DOWN, "Save chart", config)
+    fn save_button(config: &TopToolbarConfig) -> TextButton {
+        TextButton::new("Save".to_owned(), config).with_tooltip("Save chart")
+    }
+
+    fn save_menu_button(config: &TopToolbarConfig) -> TextIconButton<'static> {
+        TextIconButton::new("", &embedded_icons::CHEVRON_DOWN, "Layout options", config)
     }
 }
 
@@ -810,6 +806,107 @@ mod tests {
             }
         }
         actions
+    }
+
+    #[test]
+    fn disabled_history_icons_use_the_theme_ink_without_fading() {
+        for (_, mut theme) in crate::theme::presets() {
+            theme.ui.text_disabled = egui::Color32::from_rgb(123, 100, 90);
+            let ctx = egui::Context::default();
+            egui_extras::install_image_loaders(&ctx);
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut toolbar = TopToolbar::new();
+            toolbar.state.can_undo = false;
+            toolbar.state.can_redo = false;
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(Default::default(), |ui| {
+                    for slot in [S::Undo, S::Redo] {
+                        toolbar.show_control(ui, slot, "SAMPLE", &mut TopToolbarAction::None);
+                    }
+                });
+                output.textures_delta.clear();
+                let icons: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect) if rect.brush.is_some() => Some(rect.fill),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(icons, vec![theme.ui.text_disabled; 2]);
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    #[test]
+    fn save_and_layout_options_have_separate_hover_and_focus_targets() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for (_, theme) in crate::theme::presets() {
+            let context_theme = theme.clone();
+            let mut harness = Harness::builder()
+                .with_size(vec2(300.0, 100.0))
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &context_theme);
+                    l10n::set_translator(ctx, |english| {
+                        assert!(
+                            !english.is_empty(),
+                            "icon-only arrows have no text to translate"
+                        );
+                        None
+                    });
+                })
+                .build_ui_state(
+                    |ui, toolbar: &mut TopToolbar| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            toolbar.show_control(
+                                ui,
+                                S::Save,
+                                "SAMPLE",
+                                &mut TopToolbarAction::None,
+                            );
+                        });
+                    },
+                    TopToolbar::new(),
+                );
+            harness.run();
+            let save = harness
+                .get_by_role_and_label(egui::accesskit::Role::Button, "Save chart")
+                .rect();
+            let options = harness
+                .get_by_role_and_label(egui::accesskit::Role::Button, "Layout options")
+                .rect();
+            assert!(save.right() <= options.left());
+            for (label, rect) in [("Save chart", save), ("Layout options", options)] {
+                harness
+                    .get_by_role_and_label(egui::accesskit::Role::Button, label)
+                    .hover();
+                harness.run();
+                let tiles: Vec<_> = harness
+                    .output()
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(tile) if tile.fill == theme.ui.btn_bg_hover => {
+                            Some(tile.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(tiles, [rect], "{label} must hover independently");
+                harness
+                    .get_by_role_and_label(egui::accesskit::Role::Button, label)
+                    .focus();
+                harness.run();
+                assert!(
+                    harness
+                        .get_by_role_and_label(egui::accesskit::Role::Button, label)
+                        .is_focused()
+                );
+            }
+        }
     }
 
     #[test]
