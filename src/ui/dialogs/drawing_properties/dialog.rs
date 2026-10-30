@@ -708,10 +708,8 @@ mod tests {
                 dialog.props.line_width = width;
                 dialog.props.color = Color32::GREEN;
                 let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;
-                let mut colors = serde_json::to_value(&*settings).unwrap();
-                colors["position_target_color"] = serde_json::json!([40, 100, 220, 255]);
-                colors["position_stop_color"] = serde_json::json!([220, 140, 40, 255]);
-                *settings = serde_json::from_value(colors).unwrap();
+                settings.position_target_color = Some([40, 100, 220, 255]);
+                settings.position_stop_color = Some([220, 140, 40, 255]);
                 dialog.coordinates.points[1].price = "125".into();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
                 assert_eq!(
@@ -720,15 +718,9 @@ mod tests {
                     "{finish}: live preview"
                 );
                 assert_eq!(chart.drawings().drawings[1].stroke_width, width);
-                let preview = serde_json::to_value(&chart.drawings().drawings[0]).unwrap();
-                assert_eq!(
-                    preview["position_target_color"],
-                    serde_json::json!([40, 100, 220, 255])
-                );
-                assert_eq!(
-                    preview["position_stop_color"],
-                    serde_json::json!([220, 140, 40, 255])
-                );
+                let preview = &chart.drawings().drawings[0];
+                assert_eq!(preview.position_target_color, Some([40, 100, 220, 255]));
+                assert_eq!(preview.position_stop_color, Some([220, 140, 40, 255]));
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
                 assert!(!chart.can_undo());
                 assert!(chart.can_redo(), "preview must retain existing redo");
@@ -767,9 +759,9 @@ mod tests {
                 assert_eq!(chart.drawings().drawings[0].chart_points[1].price, 125.0);
                 assert!(chart.undo());
             }
-            let restored = serde_json::to_value(&chart.drawings().drawings[0]).unwrap();
-            assert!(restored["position_target_color"].is_null(), "{finish}");
-            assert!(restored["position_stop_color"].is_null(), "{finish}");
+            let restored = &chart.drawings().drawings[0];
+            assert_eq!(restored.position_target_color, None, "{finish}");
+            assert_eq!(restored.position_stop_color, None, "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0, "{finish}");
             assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0, "{finish}");
             assert_eq!(

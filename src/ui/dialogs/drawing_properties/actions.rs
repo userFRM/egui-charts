@@ -492,10 +492,8 @@ mod tests {
                 leverage: 5.0,
             };
             let sizing = settings.position_sizing;
-            let mut colors = serde_json::to_value(&*settings).unwrap();
-            colors["position_target_color"] = serde_json::json!([40, 100, 220, 255]);
-            colors["position_stop_color"] = serde_json::json!([220, 140, 40, 255]);
-            *settings = serde_json::from_value(colors).unwrap();
+            settings.position_target_color = Some([40, 100, 220, 255]);
+            settings.position_stop_color = Some([220, 140, 40, 255]);
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
@@ -513,15 +511,8 @@ mod tests {
             );
             assert_eq!(saved.volume_profile.unwrap().rows(), 48);
             assert_eq!(saved.position_sizing, sizing);
-            let settings = serde_json::to_value(saved).unwrap();
-            assert_eq!(
-                settings["position_target_color"],
-                serde_json::json!([40, 100, 220, 255])
-            );
-            assert_eq!(
-                settings["position_stop_color"],
-                serde_json::json!([220, 140, 40, 255])
-            );
+            assert_eq!(saved.position_target_color, Some([40, 100, 220, 255]));
+            assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
             assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);

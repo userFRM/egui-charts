@@ -434,11 +434,9 @@ mod tests {
                     ["Qty: 1e-25", "Closed P&L:", "Capital:"],
                 ),
             ] {
-                let drawing = Drawing::new(1, tool);
-                let mut settings = serde_json::to_value(&drawing).unwrap();
-                settings["position_target_color"] = serde_json::json!([40, 100, 220, 255]);
-                settings["position_stop_color"] = serde_json::json!([220, 140, 40, 255]);
-                let mut drawing: Drawing = serde_json::from_value(settings).unwrap();
+                let mut drawing = Drawing::new(1, tool);
+                drawing.position_target_color = Some([40, 100, 220, 255]);
+                drawing.position_stop_color = Some([220, 140, 40, 255]);
                 drawing.position_sizing = crate::drawings::PositionSizing {
                     point_value: 50.0,
                     lot_size: 10.0,
@@ -536,11 +534,17 @@ mod tests {
                         summary.visual_bounding_rect()
                     );
                     output.drop_without_applying_deltas();
-                    for hidden in [true, false] {
+                    // Hidden by the visibility flag, then by the timeframe filter alone.
+                    for (visible, timeframes) in [
+                        (false, crate::drawings::TimeframeVisibility::all()),
+                        (
+                            true,
+                            crate::drawings::TimeframeVisibility::specific(&["1h"]),
+                        ),
+                    ] {
                         let drawing = &mut chart.drawings_mut().drawings[0];
-                        drawing.visible = !hidden;
-                        drawing.timeframe_visibility =
-                            crate::drawings::TimeframeVisibility::specific(&["1h"]);
+                        drawing.visible = visible;
+                        drawing.timeframe_visibility = timeframes;
                         let output = render(&mut chart);
                         assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
                             egui::Shape::Text(text) if text.pos.x >= chart.get_rendered_price_rect().right()
