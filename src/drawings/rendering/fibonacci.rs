@@ -689,8 +689,10 @@ impl Drawing {
         let mut labels = Vec::<Rect>::new();
         for level in levels {
             let line_color = level_color(level);
-            let width = if self.fib_config.is_some() || level.value == 0.5 {
+            let width = if self.fib_config.is_some() {
                 self.stroke_width
+            } else if level.value == 0.5 {
+                stroke::MEDIUM
             } else {
                 stroke::HAIRLINE
             };
@@ -1500,6 +1502,19 @@ mod tests {
             opaque_origin,
             "legacy time zones keep their prominent lines opaque"
         );
+
+        // A fan saved without levels keeps its medium 50% ray.
+        let mut fan = Drawing::new(0, Tool::FibonacciSpeedFan);
+        fan.fib_config = None;
+        fan.points = vec![Pos2::new(100.0, 200.0), Pos2::new(200.0, 100.0)];
+        let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            fan.render_fibonacci_speed_fan(ui.painter(), rect);
+        });
+        let medium = output.shapes.iter().any(|s| {
+            matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if stroke.width == stroke::MEDIUM)
+        });
+        output.drop_without_applying_deltas();
+        assert!(medium, "legacy fans keep their medium 50% ray");
 
         // Golden spiral through the second anchor, its radius growing by phi
         // (1.618034) every quarter turn.
