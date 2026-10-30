@@ -809,7 +809,7 @@ mod tests {
                                         text.galley.rect.translate(text.pos.to_vec2()),
                                     )),
                                     egui::Shape::Rect(rect)
-                                        if rect.rect.size() == egui::vec2(22.0, 22.0)
+                                        if rect.rect.size() == egui::vec2(20.0, 20.0)
                                             && rect.stroke.width == 1.0
                                             && rect.stroke.color == theme.chart.candle_down =>
                                     {
@@ -1068,7 +1068,7 @@ mod tests {
                             match &shape.shape {
                                 egui::Shape::Rect(rect)
                                     if rect.stroke.color == theme.ui.accent
-                                        && rect.rect.height() == 22.0
+                                        && rect.rect.height() == 20.0
                                         && rect.rect.width() > 40.0 =>
                                 {
                                     label = rect.rect
