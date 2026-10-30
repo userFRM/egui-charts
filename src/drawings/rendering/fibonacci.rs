@@ -29,7 +29,7 @@ impl Drawing {
         let x_range = self.fib_level_x_range(&config, chart_rect);
 
         // Draw filled zones between levels if enabled
-        if config.show_background && visible_levels.len() > 1 {
+        if (config.show_background || self.fill_color.is_some()) && visible_levels.len() > 1 {
             for i in 0..visible_levels.len() - 1 {
                 let level1 = visible_levels[i];
 
@@ -112,7 +112,7 @@ impl Drawing {
         let x_range = self.fib_level_x_range(&config, chart_rect);
 
         // Draw filled zones between levels if enabled
-        if config.show_background && visible_levels.len() > 1 {
+        if (config.show_background || self.fill_color.is_some()) && visible_levels.len() > 1 {
             for i in 0..visible_levels.len() - 1 {
                 let level1 = visible_levels[i];
 
@@ -345,7 +345,7 @@ impl Drawing {
         );
 
         // Draw filled zones between levels
-        if config.show_background && visible_levels.len() > 1 {
+        if (config.show_background || self.fill_color.is_some()) && visible_levels.len() > 1 {
             for i in 0..visible_levels.len() - 1 {
                 let level1 = visible_levels[i];
                 let [p1_l1, p2_l1] = lines[i];
