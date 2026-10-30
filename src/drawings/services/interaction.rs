@@ -206,17 +206,21 @@ impl DrawingInteraction {
                 // Fibonacci tools
                 // The level lines the renderer draws, over the extent it draws them
                 DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension => {
-                    if let Some((config, _)) = drawing.fib_levels()
-                        && drawing.points.len() >= 2
-                        && drawing
+                    if drawing.points.len() >= 2 {
+                        let config = drawing.fibonacci_config();
+                        let on_level = drawing
                             .fib_level_x_range(&config, Rect::EVERYTHING)
                             .contains(point.x)
-                        && drawing
-                            .level_ys
-                            .iter()
-                            .any(|y| (point.y - y).abs() <= hit_distance)
-                    {
-                        return Some(drawing.id);
+                            && drawing.level_ys.iter().any(|y| {
+                                (point.y - y).abs() <= hit_distance.max(config.level_width / 2.0)
+                            });
+                        let on_trend = drawing
+                            .points
+                            .windows(2)
+                            .any(|p| point_to_line_distance(point, p[0], p[1]) <= hit_distance);
+                        if on_level || on_trend {
+                            return Some(drawing.id);
+                        }
                     }
                 }
                 DrawingToolType::FibonacciChannel => {
@@ -531,6 +535,7 @@ mod tests {
                 unlabelled.show_price = false;
                 fib.fib_config = Some(FibonacciConfig {
                     logarithmic,
+                    levels_as_percent: true,
                     show_background: true,
                     levels: vec![
                         unlabelled,
@@ -549,13 +554,21 @@ mod tests {
                     "{tool:?}, log levels {logarithmic}, log scale {log_scale}"
                 );
                 let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 500.0));
-                let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
-                    if tool == DrawingToolType::FibonacciRetracement {
-                        fib.render_fibonacci(ui.painter(), rect);
-                    } else {
-                        fib.render_fibonacci_extension(ui.painter(), rect);
-                    }
+                let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                    let view = crate::drawings::rendering::ChartView {
+                        price_formatter: None,
+                        instrument: None,
+                        bars: &[],
+                        revision: 0,
+                        bar_to_x: &|b| b * 30.0,
+                        price_to_y: &price_to_y,
+                        y_to_price: &f64::from,
+                        time_axis: true,
+                        executions: None,
+                    };
+                    fib.render_fibonacci(ui.painter(), rect, &view);
                 });
+                output.textures_delta.clear();
                 let line = output.shapes.iter().any(|s| matches!(&s.shape,
                     egui::Shape::LineSegment { points, .. } if (points[0].y-y).abs() < 1e-3 && (points[1].y-y).abs() < 1e-3));
                 let label = output.shapes.iter().any(|s| {
@@ -573,7 +586,7 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                assert!(labels.windows(2).all(|pair| !pair[0].intersects(pair[1])));
+                assert_eq!(labels.len(), 2, "nearby levels retain both labels");
                 output.drop_without_applying_deltas();
                 assert!(
                     line && label && band,
@@ -586,10 +599,10 @@ mod tests {
     /// Anchors at bars 0 and 10, prices 100 and 400, on x = 30 per bar and y = 500 - price: the
     /// first anchor is at (0, 400) and the second at (300, 100). A retracement level price is
     /// 400 - 300 * level, at y = 100 + 300 * level; with `extend_right` its lines run on past
-    /// x = 300. The point (90, 310) lies on the diagonal between the anchors, which is not drawn,
+    /// x = 300. The point (90, 310) selects the construction diagonal between the anchors,
     /// and 24.6 px from the nearest level (78.6% at 335.8 is 25.8 px away; 61.8% at 285.4).
-    /// A channel with its third anchor at bar 5, price 150, (150, 350), moves the base line
-    /// 100 px straight down: level 0.5 runs from (0, 450) to (300, 150), so y = 450 - x, and
+    /// A channel with its third anchor at bar 5, price 150, (150, 350), translates by (150,-50):
+    /// level 0.5 runs from (75,375) to (375,75), so y = 450 - x, and
     /// with `extend_right` on to x = 400 at y = 50. Its drawn levels cross x = 150 between
     /// y = 250 and 350, far from (150, 214.6), where the 61.8% level of a horizontal channel was.
     #[test]
@@ -619,13 +632,13 @@ mod tests {
                 DrawingToolType::FibonacciRetracement,
                 None,
                 (90.0, 310.0),
-                None,
+                Some(7),
             ),
             (
                 DrawingToolType::FibonacciExtension,
                 None,
                 (90.0, 310.0),
-                None,
+                Some(7),
             ),
             (
                 DrawingToolType::FibonacciChannel,

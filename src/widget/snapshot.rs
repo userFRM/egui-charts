@@ -208,7 +208,7 @@ impl Chart {
             studies,
             series: Some(series),
             main_annotations: Some(SavedAnnotations {
-                markers: self.marks.to_vec(),
+                markers: self.markers(super::SeriesId::MAIN).to_vec(),
                 options: self.marker_options,
                 price_lines: self
                     .price_lines

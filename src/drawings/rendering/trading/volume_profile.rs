@@ -437,6 +437,7 @@ mod tests {
                     config.show_value_area_lines = va_lines;
                     drawing.volume_profile = Some(config);
                     let view = ChartView {
+                        price_formatter: None,
                         instrument: None,
                         bars: &bars,
                         revision: 0,
@@ -582,6 +583,7 @@ mod tests {
     fn span_profile_follows_the_forming_bar() {
         let check = |bars: &[Bar], case: &str| {
             let view = ChartView {
+                price_formatter: None,
                 instrument: None,
                 bars,
                 revision: 0,
@@ -636,6 +638,7 @@ mod tests {
                 .unwrap();
         }
         let view = |executions| ChartView {
+            price_formatter: None,
             instrument: None,
             bars: &bars,
             revision: 0,

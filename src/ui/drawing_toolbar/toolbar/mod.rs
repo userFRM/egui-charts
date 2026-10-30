@@ -1216,9 +1216,13 @@ mod tests {
                                 origin + vec2(26.0, y),
                                 match i {
                                     1 => vec2(29.0, 29.0),
-                                    2 => vec2(34.0, 27.0),
-                                    8 => vec2(31.0, 31.0),
-                                    _ => vec2(24.0, 24.0),
+                                    2 => vec2(27.0, 27.0),
+                                    0 | 3 | 4 | 8..=11 => vec2(28.0, 28.0),
+                                    6 => vec2(24.0, 24.0),
+                                    5 => vec2(31.0, 31.0),
+                                    7 => vec2(25.0, 25.0),
+                                    12..=15 => vec2(26.0, 26.0),
+                                    _ => unreachable!(),
                                 }
                             )
                             .round_to_pixels(1.0),
@@ -1265,11 +1269,13 @@ mod tests {
                 } else {
                     Color32::from_gray(235)
                 };
-                assert!(shapes.iter().any(|s| matches!(
-                    &s.shape,
-                    Shape::Rect(r) if r.fill == separator
-                        && r.rect == Rect::from_min_size(origin + vec2(8.0, 316.0), vec2(36.0, 1.0))
-                )));
+                for y in [316.0, 409.0, 616.0] {
+                    assert!(shapes.iter().any(|s| matches!(
+                        &s.shape,
+                        Shape::Rect(r) if r.fill == separator
+                            && r.rect == Rect::from_min_size(origin + vec2(9.0, y), vec2(33.0, 1.0))
+                    )));
+                }
             }
         }
     }

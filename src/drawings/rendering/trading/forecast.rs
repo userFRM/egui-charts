@@ -219,6 +219,7 @@ mod tests {
                     drawing.render_forecast(
                         ui.painter(),
                         &ChartView {
+                            price_formatter: None,
                             instrument: Some(&instrument),
                             bars: &bars,
                             revision: 0,
