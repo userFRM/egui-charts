@@ -347,6 +347,29 @@ impl Terminal {
         if double_clicked {
             self.open_chart_settings();
         }
+        let drawing = self.chart_events.iter().find_map(|(slot, event)| {
+            if *slot == self.active
+                && let ChartEvent::DoubleClick { position } = event
+                && let Some(PointerTarget::Drawing(id)) = position.target
+                && self.chart().drawings().drawings.iter().any(|d| {
+                    d.id == id
+                        && (d.locked
+                            || !(d.tool_type.supports_text()
+                                || matches!(
+                                    d.tool_type,
+                                    egui_charts::drawings::DrawingToolType::Image
+                                        | egui_charts::drawings::DrawingToolType::PriceLabel
+                                )))
+                })
+            {
+                Some(id)
+            } else {
+                None
+            }
+        });
+        if let Some(id) = drawing {
+            self.open_drawing_properties(id);
+        }
     }
 
     fn show_study_dialogs(&mut self, ctx: &egui::Context) {

@@ -4,10 +4,14 @@
 
 use crate::icons::icons;
 use crate::localization as l10n;
+use crate::model::LineStyle;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui::context_menu::drawing::{DrawingContextMenu, DrawingContextMenuAction};
 use crate::ui_kit::buttons::{ButtonSize, IconButton};
 use crate::ui_kit::ext::UiExt;
+use crate::ui_kit::{ColorPicker, ColorPickerState};
+use crate::widget::Chart;
 use egui::{Color32, Pos2, Rect, Sense, Ui, Vec2};
 
 /// Action that can be triggered from the floating toolbar
@@ -16,6 +20,12 @@ use egui::{Color32, Pos2, Rect, Sense, Ui, Vec2};
 pub enum FloatingToolbarAction {
     /// Change a color slot (index, new color)
     ChangeColor(usize, Color32),
+    /// Change the stroke width in pixels.
+    ChangeWidth(f32),
+    /// Change the stroke pattern.
+    ChangeStyle(LineStyle),
+    /// An entry from the drawing context menu.
+    DrawingMenu(DrawingContextMenuAction),
     /// Open settings dialog
     OpenSettings,
     /// Add an alert on the selected object
@@ -48,10 +58,13 @@ pub struct FloatingSelectionToolbar {
     visible: bool,
     /// Current position
     position: Pos2,
-    /// Drag offset for dragging
-    drag_offset: Option<Vec2>,
     /// Color slots to display (mutable for color picker)
     color_slots: Vec<ColorSlot>,
+    pickers: Vec<ColorPickerState>,
+    stroke: Option<(f32, LineStyle)>,
+    selected: Option<(String, usize)>,
+    colour_drag: bool,
+    menu: DrawingContextMenu,
     /// Whether object is locked
     is_locked: bool,
     /// Whether object is visible
@@ -77,8 +90,12 @@ impl FloatingSelectionToolbar {
                 DESIGN_TOKENS.sizing.floating_toolbar.default_x,
                 DESIGN_TOKENS.sizing.floating_toolbar.default_y,
             ),
-            drag_offset: None,
             color_slots: Vec::new(),
+            pickers: Vec::new(),
+            stroke: None,
+            selected: None,
+            colour_drag: false,
+            menu: DrawingContextMenu::new(),
             is_locked: false,
             is_visible: true,
             alert_available: false,
@@ -95,6 +112,9 @@ impl FloatingSelectionToolbar {
     /// Hide the toolbar
     pub fn hide(&mut self) {
         self.visible = false;
+        self.selected = None;
+        self.pickers.clear();
+        self.menu.close();
     }
 
     /// Check if toolbar is visible
@@ -134,71 +154,150 @@ impl FloatingSelectionToolbar {
         self.alert_available = available;
     }
 
-    /// Render the toolbar
+    /// Follow the selected drawing, applying quick style edits as undoable chart actions.
+    /// Returns menu actions for the host's dialogs, clipboard and drawing commands.
+    /// Call each frame, including after deselection, to finish a continuous colour edit.
+    pub fn show_and_apply(
+        &mut self,
+        ui: &mut Ui,
+        chart: &mut Chart,
+    ) -> Option<DrawingContextMenuAction> {
+        if self.colour_drag && !ui.input(|i| i.pointer.any_down()) {
+            chart.user_action(|chart| chart.drawings_mut().end_drag_handle());
+            self.colour_drag = false;
+        }
+        let drawing = chart.drawings().sel_drawing().and_then(|id| {
+            chart
+                .drawings()
+                .drawings
+                .iter()
+                .find(|d| d.id == id && d.visible && d.completed)
+        });
+        let Some(drawing) = drawing else {
+            self.hide();
+            return None;
+        };
+        let id = drawing.id;
+        let selected = (chart.symbol().to_owned(), id);
+        if self.selected.as_ref() != Some(&selected) {
+            self.hide();
+            let anchor = drawing
+                .points
+                .first()
+                .copied()
+                .unwrap_or(chart.get_rendered_price_rect().center());
+            self.show_at(anchor + Vec2::new(12.0, -52.0));
+            self.selected = Some(selected);
+        }
+        self.set_locked(drawing.locked);
+        self.set_object_visible(drawing.visible);
+        self.set_colors(vec![ColorSlot {
+            label: if drawing.tool_type.supports_text() {
+                "Text color"
+            } else {
+                "Line color"
+            },
+            color: drawing.color32(),
+        }]);
+        if drawing.tool_type.supports_fill() {
+            self.color_slots.push(ColorSlot {
+                label: "Fill color",
+                color: drawing.fill_color32().unwrap_or(Color32::TRANSPARENT),
+            });
+        }
+        self.stroke = Some((drawing.stroke_width, drawing.line_style));
+        // Refresh context without reopening the menu or resetting its dismiss state.
+        if !self.menu.is_open() {
+            self.menu.open_on(chart, self.position, id);
+            self.menu.close();
+        }
+        let action = self.show_with_shortcuts(ui, chart.shortcuts())?;
+        match action {
+            FloatingToolbarAction::ChangeColor(slot, color) => {
+                let down = ui.input(|i| i.pointer.any_down());
+                chart.user_action(|chart| {
+                    let edit = |drawing: &mut crate::drawings::Drawing| {
+                        if slot == 0 {
+                            drawing.color = color.to_srgba_unmultiplied();
+                        } else {
+                            drawing.fill_color = Some(color.to_srgba_unmultiplied());
+                        }
+                    };
+                    if down {
+                        chart.drawings_mut().drag_edit_drawing(id, edit);
+                    } else {
+                        chart.drawings_mut().edit_drawing(id, edit);
+                    }
+                });
+                self.colour_drag = down;
+            }
+            FloatingToolbarAction::ChangeWidth(width) => chart.user_action(|chart| {
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |d| d.stroke_width = width);
+            }),
+            FloatingToolbarAction::ChangeStyle(style) => chart.user_action(|chart| {
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |d| d.line_style = style);
+            }),
+            FloatingToolbarAction::OpenSettings => return Some(DrawingContextMenuAction::Edit),
+            FloatingToolbarAction::Duplicate => return Some(DrawingContextMenuAction::Clone),
+            FloatingToolbarAction::ToggleLock => return Some(DrawingContextMenuAction::Lock),
+            FloatingToolbarAction::ToggleVisibility => return Some(DrawingContextMenuAction::Hide),
+            FloatingToolbarAction::Delete => return Some(DrawingContextMenuAction::Delete),
+            FloatingToolbarAction::AddAlert => {
+                return self
+                    .menu
+                    .alert
+                    .clone()
+                    .map(|alert| DrawingContextMenuAction::AddAlert(Box::new(alert)));
+            }
+            FloatingToolbarAction::DrawingMenu(action) => return Some(action),
+            _ => {}
+        }
+        ui.ctx().request_repaint();
+        None
+    }
+
+    /// Render the toolbar.
     pub fn show(&mut self, ui: &mut Ui) -> Option<FloatingToolbarAction> {
+        self.show_with_shortcuts(ui, &crate::widget::ShortcutMap::default())
+    }
+
+    fn show_with_shortcuts(
+        &mut self,
+        ui: &mut Ui,
+        shortcuts: &crate::widget::ShortcutMap,
+    ) -> Option<FloatingToolbarAction> {
         if !self.visible {
             return None;
         }
-
-        // Handle dragging
-        if let Some(pointer_pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
-            if ui.ctx().input(|i| i.pointer.any_pressed()) && self.drag_offset.is_none() {
-                // Check if clicking on drag handle area (first 24px)
-                let toolbar_rect = Rect::from_min_size(self.position, self.toolbar_size(ui));
-                let drag_handle_rect = Rect::from_min_size(
-                    toolbar_rect.min,
-                    Vec2::new(
-                        DESIGN_TOKENS.sizing.floating_toolbar.drag_handle_width,
-                        toolbar_rect.height(),
-                    ),
-                );
-                if drag_handle_rect.contains(pointer_pos) {
-                    self.drag_offset = Some(pointer_pos - self.position);
-                }
-            }
-
-            if ui.ctx().input(|i| i.pointer.any_down())
-                && let Some(offset) = self.drag_offset
-            {
-                self.position = pointer_pos - offset;
-            }
-
-            if ui.ctx().input(|i| i.pointer.any_released()) {
-                self.drag_offset = None;
-            }
-        }
-
-        // Clamp position to viewport bounds. `min` then `max` (not `f32::clamp`, which panics
-        // when min > max) places the toolbar at the viewport's min edge on an axis it does not fit.
-        let screen_rect = ui.ctx().input(|i| i.viewport_rect());
-        let toolbar_size = self.toolbar_size(ui);
+        let bounds = ui.ctx().content_rect();
+        let size = if self.last_rect.is_finite() {
+            self.last_rect.size()
+        } else {
+            Vec2::new(240.0, 40.0)
+        };
         self.position.x = self
             .position
             .x
-            .min(screen_rect.max.x - toolbar_size.x)
-            .max(screen_rect.min.x);
+            .min(bounds.right() - size.x)
+            .max(bounds.left());
         self.position.y = self
             .position
             .y
-            .min(screen_rect.max.y - toolbar_size.y)
-            .max(screen_rect.min.y);
-
-        // Clone data we need inside closures
-        let color_slots_len = self.color_slots.len();
-        let is_locked = self.is_locked;
-        let is_visible = self.is_visible;
-        let alert_available = self.alert_available;
-
-        // We need to track color changes
-        let mut color_changes: Vec<(usize, Color32)> = Vec::new();
-
-        // Take ownership of colors temporarily for mutation
-        let mut temp_colors: Vec<Color32> = self.color_slots.iter().map(|s| s.color).collect();
-
-        let area_response = egui::Area::new(egui::Id::unique("floating_selection_toolbar"))
+            .min(bounds.bottom() - size.y)
+            .max(bounds.top());
+        self.pickers
+            .resize_with(self.color_slots.len(), ColorPickerState::default);
+        let mut action = None;
+        let area = egui::Area::new(egui::Id::unique("floating_selection_toolbar"))
             .fixed_pos(self.position)
+            .default_size(size)
+            .movable(false)
+            .constrain_to(bounds)
             .order(egui::Order::Foreground)
-            .interactable(true)
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style())
                     .corner_radius(ui.active_theme().radius.md)
@@ -209,174 +308,158 @@ impl FloatingSelectionToolbar {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = ui.active_theme().spacing.sm;
-
-                            let mut inner_action: Option<FloatingToolbarAction> = None;
-
-                            // Drag handle (6-dot pattern)
-                            Self::render_drag_handle(ui);
-
-                            ui.space_xs();
-
-                            // Vertical separator
+                            let drag = Self::render_drag_handle(ui);
+                            if drag.dragged() {
+                                self.position += drag.drag_delta();
+                            }
                             Self::render_separator(ui);
-
-                            // Color pickers using egui's native color_edit
-                            for idx in 0..color_slots_len {
-                                if idx < temp_colors.len() {
-                                    let mut color = temp_colors[idx];
-                                    let original_color = color;
-
-                                    // Use egui's color picker button
-                                    if ui
-                                        .color_edit_button_srgba(&mut color)
-                                        .on_hover_text(l10n::text(
-                                            ui.ctx(),
-                                            "Click to change color",
-                                        ))
-                                        .changed()
-                                    {
-                                        color_changes.push((idx, color));
+                            ui.add_enabled_ui(!self.is_locked, |ui| {
+                                ui.horizontal(|ui| {
+                                    for (idx, slot) in self.color_slots.iter_mut().enumerate() {
+                                        let picker = &mut self.pickers[idx];
+                                        picker.sel_color = slot.color;
+                                        let custom = picker.custom_mode;
+                                        let picked =
+                                            ColorPicker::new(picker, ("selection_color", idx))
+                                                .show(ui);
+                                        picked
+                                            .response
+                                            .on_hover_text(l10n::text(ui.ctx(), slot.label));
+                                        if let Some(mut color) = picked.inner {
+                                            if slot.label == "Fill color"
+                                                && !custom
+                                                && !picker.custom_mode
+                                                && slot.color.a() > 0
+                                            {
+                                                let [r, g, b, _] = color.to_srgba_unmultiplied();
+                                                color = Color32::from_rgba_unmultiplied(
+                                                    r,
+                                                    g,
+                                                    b,
+                                                    slot.color.a(),
+                                                );
+                                            }
+                                            if color != slot.color {
+                                                slot.color = color;
+                                                action = Some(FloatingToolbarAction::ChangeColor(
+                                                    idx, color,
+                                                ));
+                                            }
+                                        }
                                     }
-
-                                    if color != original_color {
-                                        temp_colors[idx] = color;
+                                    if let Some((width, style)) = &mut self.stroke {
+                                        if ui.combo_select_width(
+                                            "selection_width",
+                                            width,
+                                            [1.0, 2.0, 3.0, 4.0],
+                                            |v| format!("{v} px"),
+                                            48.0,
+                                        ) {
+                                            action =
+                                                Some(FloatingToolbarAction::ChangeWidth(*width));
+                                        }
+                                        let ctx = ui.ctx().clone();
+                                        if ui.combo_select_width(
+                                            "selection_style",
+                                            style,
+                                            LineStyle::all().iter().copied(),
+                                            |v| l10n::text(&ctx, v.name()),
+                                            72.0,
+                                        ) {
+                                            action =
+                                                Some(FloatingToolbarAction::ChangeStyle(*style));
+                                        }
                                     }
-                                }
-                            }
-
-                            if !temp_colors.is_empty() {
-                                Self::render_separator(ui);
-                            }
-
-                            // Settings button (gear icon)
+                                });
+                            });
+                            Self::render_separator(ui);
                             if IconButton::new(&icons::SETTINGS)
                                 .size(ButtonSize::SM)
                                 .tooltip("Settings")
                                 .show(ui)
                                 .clicked()
                             {
-                                inner_action = Some(FloatingToolbarAction::OpenSettings);
+                                action = Some(FloatingToolbarAction::OpenSettings);
                             }
-
-                            if alert_available
+                            if self.alert_available
                                 && IconButton::new(&icons::ALERTS)
                                     .size(ButtonSize::SM)
                                     .tooltip("Add alert")
                                     .show(ui)
                                     .clicked()
                             {
-                                inner_action = Some(FloatingToolbarAction::AddAlert);
+                                action = Some(FloatingToolbarAction::AddAlert);
                             }
-
-                            // Duplicate button
-                            if IconButton::new(&icons::DUPLICATE)
-                                .size(ButtonSize::SM)
-                                .tooltip("Duplicate")
-                                .show(ui)
-                                .clicked()
-                            {
-                                inner_action = Some(FloatingToolbarAction::Duplicate);
-                            }
-
-                            Self::render_separator(ui);
-
-                            // Lock button
-                            let lock_icon = if is_locked {
+                            if IconButton::new(if self.is_locked {
                                 &icons::LOCK
                             } else {
                                 &icons::UNLOCK
-                            };
-                            let lock_tooltip = if is_locked { "Unlock" } else { "Lock" };
-                            if IconButton::new(lock_icon)
-                                .size(ButtonSize::SM)
-                                .tooltip(lock_tooltip)
-                                .show(ui)
+                            })
+                            .size(ButtonSize::SM)
+                            .tooltip(if self.is_locked { "Unlock" } else { "Lock" })
+                            .show(ui)
+                            .clicked()
+                            {
+                                action = Some(FloatingToolbarAction::ToggleLock);
+                            }
+                            if ui
+                                .add_enabled_ui(!self.is_locked, |ui| {
+                                    IconButton::new(&icons::TRASH)
+                                        .size(ButtonSize::SM)
+                                        .tooltip("Delete")
+                                        .show(ui)
+                                })
+                                .inner
                                 .clicked()
                             {
-                                inner_action = Some(FloatingToolbarAction::ToggleLock);
+                                action = Some(FloatingToolbarAction::Delete);
                             }
-
-                            // Visibility button
-                            let vis_icon = if is_visible {
-                                &icons::EYE
-                            } else {
-                                &icons::EYE_HIDE
-                            };
-                            let vis_tooltip = if is_visible { "Hide" } else { "Show" };
-                            if IconButton::new(vis_icon)
-                                .size(ButtonSize::SM)
-                                .tooltip(vis_tooltip)
-                                .show(ui)
-                                .clicked()
-                            {
-                                inner_action = Some(FloatingToolbarAction::ToggleVisibility);
-                            }
-
                             Self::render_separator(ui);
-
-                            // Delete button
-                            if IconButton::new(&icons::TRASH)
+                            let more = IconButton::new(&icons::UI_MORE_HORIZONTAL)
                                 .size(ButtonSize::SM)
-                                .tooltip("Delete")
-                                .show(ui)
-                                .clicked()
-                            {
-                                inner_action = Some(FloatingToolbarAction::Delete);
+                                .tooltip("More")
+                                .show(ui);
+                            if more.clicked() {
+                                self.menu.set_context(
+                                    self.menu.drawing_type.clone(),
+                                    self.is_locked,
+                                    self.is_visible,
+                                );
+                                self.menu.open(
+                                    more.rect.left_bottom(),
+                                    self.menu.drawing_id.unwrap_or_default(),
+                                );
                             }
-
-                            inner_action
-                        })
-                        .inner
-                    })
-                    .inner
+                        });
+                    });
             });
-
-        // Store the toolbar rect for hit testing
-        self.last_rect = area_response.response.rect;
-
-        // Apply color changes back to slots
-        for (idx, color) in &color_changes {
-            if *idx < self.color_slots.len() {
-                self.color_slots[*idx].color = *color;
-            }
+        self.last_rect = area.response.rect;
+        // Keep the next frame's anchor in step with egui's measured, constrained surface.
+        if !ui.input(|i| i.pointer.any_down()) {
+            self.position = self.last_rect.min;
         }
-
-        // Return the first color change action if any
-        if let Some((idx, color)) = color_changes.first() {
-            return Some(FloatingToolbarAction::ChangeColor(*idx, *color));
+        self.menu
+            .show_with_shortcuts(ui.ctx(), &ui.active_theme(), shortcuts);
+        let menu_action = self.menu.take_action();
+        if menu_action != DrawingContextMenuAction::None {
+            action = Some(match menu_action {
+                DrawingContextMenuAction::Edit => FloatingToolbarAction::OpenSettings,
+                DrawingContextMenuAction::Clone => FloatingToolbarAction::Duplicate,
+                DrawingContextMenuAction::Lock => FloatingToolbarAction::ToggleLock,
+                DrawingContextMenuAction::Hide => FloatingToolbarAction::ToggleVisibility,
+                DrawingContextMenuAction::Delete => FloatingToolbarAction::Delete,
+                action => FloatingToolbarAction::DrawingMenu(action),
+            });
         }
-
-        area_response.inner
+        action
     }
 
-    fn toolbar_size(&self, ui: &Ui) -> Vec2 {
-        // Approximate size based on content
-        let color_count = self.color_slots.len();
-        let button_size = DESIGN_TOKENS.sizing.floating_toolbar.button_size;
-        let color_size = DESIGN_TOKENS.sizing.floating_toolbar.color_size;
-        let sep_count = 4;
-        let sep_width = DESIGN_TOKENS.sizing.floating_toolbar.separator_width;
-        let drag_handle = DESIGN_TOKENS.sizing.floating_toolbar.drag_handle_height;
-        let padding = ui.active_theme().spacing.xl;
-        // Settings, duplicate, lock, visibility, delete and the optional alert.
-        let icon_buttons = 5 + usize::from(self.alert_available);
-
-        Vec2::new(
-            drag_handle
-                + (color_count as f32 * (color_size + ui.active_theme().spacing.sm))
-                + (icon_buttons as f32 * (button_size + ui.active_theme().spacing.sm))
-                + (sep_count as f32 * sep_width)
-                + padding,
-            DESIGN_TOKENS.sizing.floating_toolbar.height,
-        )
-    }
-
-    fn render_drag_handle(ui: &mut Ui) {
+    fn render_drag_handle(ui: &mut Ui) -> egui::Response {
         let size = Vec2::new(
             ui.active_theme().spacing.lg + ui.active_theme().spacing.md,
             DESIGN_TOKENS.sizing.floating_toolbar.drag_handle_height,
         );
-        let (rect, _response) = ui.allocate_exact_size(size, Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(size, Sense::DRAG);
 
         let painter = ui.painter();
         let dot_color = ui.style().visuals.text_color().gamma_multiply(0.4);
@@ -394,6 +477,7 @@ impl FloatingSelectionToolbar {
                 painter.circle_filled(Pos2::new(x, y), dot_size, dot_color);
             }
         }
+        response.on_hover_cursor(egui::CursorIcon::Grab)
     }
 
     fn render_separator(ui: &mut Ui) {
@@ -458,12 +542,13 @@ mod tests {
             frame(false).drop_without_applying_deltas();
             frame(false).drop_without_applying_deltas();
             let alert = locked.then_some("Add alert");
-            for label in ["Settings"].into_iter().chain(alert).chain([
-                "Duplicate",
-                if locked { "Unlock" } else { "Lock" },
-                if locked { "Show" } else { "Hide" },
-                "Delete",
-            ]) {
+            for label in ["Settings"]
+                .into_iter()
+                .chain(alert)
+                .chain([if locked { "Unlock" } else { "Lock" }])
+                .chain((!locked).then_some("Delete"))
+                .chain(["More"])
+            {
                 let mut output = frame(true);
                 let events = std::mem::take(&mut output.platform_output.events);
                 output.drop_without_applying_deltas();
