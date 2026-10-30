@@ -1,6 +1,8 @@
 //! Serializable inputs and presentation of one study.
 
-use crate::studies::{ConfiguredStudy, Indicator, IndicatorFactory, InputValue, StudySettings};
+use crate::studies::{
+    ConfiguredStudy, Indicator, IndicatorFactory, InputValue, StudyScale, StudySettings,
+};
 
 /// Serializable inputs and presentation of one study. Hosts may resolve `name` through their
 /// own study factory when they supply custom studies.
@@ -14,10 +16,14 @@ pub struct StudyTemplate {
     pub settings: StudySettings,
     /// Whether the study is visible.
     pub visible: bool,
+    /// The value scale, or `None` to keep the study's own, as templates saved before the scale
+    /// was kept do.
+    #[serde(default)]
+    pub scale: Option<StudyScale>,
 }
 
 impl StudyTemplate {
-    /// Capture the current calculation inputs and presentation, without computed values.
+    /// Capture the current calculation inputs, presentation and value scale, without computed values.
     /// Hosts remap chart-local study source ids when saving or restoring a set of studies.
     pub fn from_study(study: &dyn Indicator) -> Self {
         Self {
@@ -29,6 +35,7 @@ impl StudyTemplate {
                 .collect(),
             settings: study.settings(),
             visible: study.is_visible(),
+            scale: Some(study.scale()),
         }
     }
 
@@ -49,6 +56,9 @@ impl StudyTemplate {
             .apply_settings(&self.inputs, self.settings.clone())
             .map_err(str::to_owned)?;
         study.set_visible(self.visible);
+        if let Some(scale) = self.scale {
+            study.set_scale(scale);
+        }
         Ok(Box::new(study))
     }
 }
@@ -56,12 +66,12 @@ impl StudyTemplate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Bar, PriceSource};
+    use crate::model::{Bar, PriceSource, SeriesScale, Session, SessionWindow, TimezoneId};
     use crate::studies::{
         AverageLine, AverageType, CVD, CloseToCloseVol, EhlersFisher, HL2, HLC3, MACombination,
-        PriceChannel,
+        MARibbon, PriceChannel, RSI, TradingSessions, VolumeWeightedAvgPrice,
     };
-    use chrono::{TimeZone, Utc};
+    use chrono::{NaiveTime, TimeZone, Utc, Weekday};
     use egui::Color32;
 
     /// What a chart shows of a calculated study: its name, values, line names, crossing
@@ -97,6 +107,15 @@ mod tests {
             })
             .collect();
         let line = |kind, period| AverageLine::new(kind, period, Color32::RED);
+        let hour = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        let tokyo = TimezoneId::fixed_offset(9 * 3600).unwrap();
+        let weekdays = [
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+        ];
         let rows: Vec<Box<dyn Indicator>> = vec![
             // Exported studies outside the catalogue.
             Box::new(CVD::default()),
@@ -121,8 +140,51 @@ mod tests {
                 MACombination::new((1..=14).map(|i| line(AverageType::Simple, 3 * i)).collect())
                     .unwrap(),
             ),
+            // Settings made through builder methods.
+            Box::new(TradingSessions::new().with_session(
+                1,
+                "Night",
+                hour(1),
+                hour(5),
+                tokyo.clone(),
+            )),
+            Box::new(
+                VolumeWeightedAvgPrice::new()
+                    .with_time_zone(tokyo)
+                    .with_session(Session::new([SessionWindow::new(
+                        weekdays,
+                        hour(17),
+                        hour(16),
+                    )])),
+            ),
+            Box::new(MARibbon::muted()),
         ];
-        let studies: Vec<ConfiguredStudy> = rows.into_iter().map(ConfiguredStudy::new).collect();
+        let mut studies: Vec<ConfiguredStudy> =
+            rows.into_iter().map(ConfiguredStudy::new).collect();
+        #[cfg(feature = "drawings")]
+        studies.push(ConfiguredStudy::new({
+            use crate::drawings::{FibonacciConfig, FibonacciLevel};
+            use crate::studies::{AutoDrawing, AutoDrawingKind};
+            let mut fibonacci = FibonacciConfig::default();
+            fibonacci.reverse = true;
+            fibonacci.show_prices = Some(false);
+            fibonacci.show_levels = Some(true);
+            fibonacci.levels_as_percent = false;
+            fibonacci.labels_on_left = true;
+            fibonacci.show_background = true;
+            fibonacci.levels.truncate(2);
+            fibonacci.levels[0].show_price = false;
+            fibonacci
+                .levels
+                .push(FibonacciLevel::new(1.5, "150%", [10, 20, 30, 255]));
+            Box::new(
+                AutoDrawing::new(AutoDrawingKind::FibonacciRetracement, 2.0, 5)
+                    .with_fibonacci_config(fibonacci),
+            )
+        }));
+        let mut scaled = ConfiguredStudy::new(Box::new(RSI::new(14)));
+        scaled.set_scale(crate::studies::StudyScale::Shared(SeriesScale::Left));
+        studies.push(scaled);
 
         let mut differing = Vec::new();
         for (row, mut study) in studies.into_iter().enumerate() {

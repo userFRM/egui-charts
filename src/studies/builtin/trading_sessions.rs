@@ -93,7 +93,8 @@ impl TradingSessions {
     }
 
     /// Replaces session `slot` (0, 1 or 2; others are ignored) with `name`, open from `start`
-    /// to `end` in `zone`. Seconds are dropped.
+    /// to `end` in `zone`. Seconds are dropped, and the name is kept on one line, without control
+    /// characters or surrounding spaces, as the study inputs hold it.
     pub fn with_session(
         mut self,
         slot: usize,
@@ -104,7 +105,8 @@ impl TradingSessions {
     ) -> Self {
         if slot < 3 {
             let minutes = |time: NaiveTime| (time.hour() * 60 + time.minute()) as usize;
-            self.names[slot] = name.into();
+            let name: String = name.into();
+            self.names[slot] = name.replace(char::is_control, " ").trim().to_owned();
             self.start[slot] = minutes(start);
             self.end[slot] = minutes(end);
             self.zones[slot] = zone;
@@ -156,18 +158,96 @@ impl Default for TradingSessions {
     }
 }
 
+/// The ordinal of each session in input labels, in lower and upper case.
+const SLOTS: [(&str, &str); 3] = [("first", "First"), ("second", "Second"), ("third", "Third")];
+
 impl Indicator for TradingSessions {
-    crate::studies::inputs::study_inputs!(self;
-        show[0]: toggle("Show first session"),
-        start[0]: length("First session start, minutes after midnight", 0, 1439),
-        end[0]: length("First session end, minutes after midnight", 0, 1439),
-        show[1]: toggle("Show second session"),
-        start[1]: length("Second session start, minutes after midnight", 0, 1439),
-        end[1]: length("Second session end, minutes after midnight", 0, 1439),
-        show[2]: toggle("Show third session"),
-        start[2]: length("Third session start, minutes after midnight", 0, 1439),
-        end[2]: length("Third session end, minutes after midnight", 0, 1439)
-    ; {});
+    /// Each session shows or not, and has a name, a start and an end in minutes after midnight,
+    /// and a time zone that [`TimezoneId::named`] reads.
+    fn inputs(&self) -> Vec<crate::studies::StudyInput> {
+        use crate::studies::{InputKind, InputValue, StudyInput};
+        let defaults = Self::default();
+        let mut inputs = Vec::with_capacity(15);
+        for (slot, (lower, upper)) in SLOTS.into_iter().enumerate() {
+            let input = |field: &str, label: String, value, default, kind| {
+                StudyInput::new(format!("{field} [{slot}]"), label, value, kind)
+                    .with_default(default)
+            };
+            let minutes = InputKind::Length(0, 1439);
+            inputs.extend([
+                input(
+                    "show",
+                    format!("Show {lower} session"),
+                    InputValue::Toggle(self.show[slot]),
+                    InputValue::Toggle(defaults.show[slot]),
+                    InputKind::Toggle,
+                ),
+                input(
+                    "name",
+                    format!("{upper} session name"),
+                    InputValue::Text(self.names[slot].clone()),
+                    InputValue::Text(defaults.names[slot].clone()),
+                    InputKind::Text,
+                ),
+                input(
+                    "start",
+                    format!("{upper} session start, minutes after midnight"),
+                    InputValue::Length(self.start[slot]),
+                    InputValue::Length(defaults.start[slot]),
+                    minutes.clone(),
+                ),
+                input(
+                    "end",
+                    format!("{upper} session end, minutes after midnight"),
+                    InputValue::Length(self.end[slot]),
+                    InputValue::Length(defaults.end[slot]),
+                    minutes,
+                ),
+                input(
+                    "zone",
+                    format!("{upper} session time zone"),
+                    InputValue::Text(self.zones[slot].name().to_owned()),
+                    InputValue::Text(defaults.zones[slot].name().to_owned()),
+                    InputKind::Text,
+                ),
+            ]);
+        }
+        inputs
+    }
+
+    fn set_input(
+        &mut self,
+        id: &str,
+        value: crate::studies::InputValue,
+    ) -> Result<(), &'static str> {
+        use crate::studies::InputValue;
+        let schema = self
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .ok_or("unknown study input")?;
+        if !schema.accepts(&value) {
+            return Err("study input is outside its accepted values");
+        }
+        // Every id is `field [slot]`, as the schema lookup confirmed.
+        let (field, slot) = id.split_once(" [").ok_or("unknown study input")?;
+        let slot: usize = slot
+            .trim_end_matches(']')
+            .parse()
+            .map_err(|_| "unknown study input")?;
+        match (field, value) {
+            ("show", InputValue::Toggle(show)) => self.show[slot] = show,
+            ("name", InputValue::Text(name)) => self.names[slot] = name,
+            ("start", InputValue::Length(minutes)) => self.start[slot] = minutes,
+            ("end", InputValue::Length(minutes)) => self.end[slot] = minutes,
+            ("zone", InputValue::Text(zone)) => {
+                self.zones[slot] = TimezoneId::named(&zone).ok_or("unknown time zone")?;
+            }
+            _ => return Err("unknown study input"),
+        }
+        self.calculate(&[]);
+        Ok(())
+    }
 
     fn name(&self) -> &str {
         "Trading Sessions"

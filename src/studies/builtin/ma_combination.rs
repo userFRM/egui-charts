@@ -210,16 +210,15 @@ impl MACombination {
         }
     }
 
-    /// The inputs a preset offers: those of its averages. A preset keeps its number of averages,
-    /// its crossing pair and its colouring.
-    pub(super) fn preset_inputs(&self) -> Vec<StudyInput> {
+    /// The inputs a preset offers: those of its averages and, for a ribbon, its colouring by
+    /// direction. A preset keeps its number of averages and its crossing pair.
+    pub(super) fn preset_inputs(&self, ribbon: bool) -> Vec<StudyInput> {
         self.inputs()
             .into_iter()
-            .filter(|input| {
-                !matches!(
-                    input.id.as_str(),
-                    "average_count" | "directional" | "cross_first" | "cross_second"
-                )
+            .filter(|input| match input.id.as_str() {
+                "average_count" | "cross_first" | "cross_second" => false,
+                "directional" => ribbon,
+                _ => true,
             })
             .collect()
     }
@@ -542,7 +541,7 @@ macro_rules! impl_ma_preset {
     ($ty:ident, $name:literal, $description:literal $(, $marker:expr)?) => {
         impl crate::studies::Indicator for $ty {
             fn inputs(&self) -> Vec<crate::studies::StudyInput> {
-                self.inner.preset_inputs()
+                self.inner.preset_inputs(matches!($name, "MA Ribbon"))
             }
             fn set_input(
                 &mut self,

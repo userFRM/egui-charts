@@ -40,7 +40,9 @@ use crate::model::{Bar, Session, SessionWindow, Timeframe, TimezoneId};
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
+use chrono::{
+    DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike, Utc,
+};
 use egui::Color32;
 
 /// The period over which [`VolumeWeightedAvgPrice`] accumulates before it restarts.
@@ -82,6 +84,31 @@ const EVENT_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 /// The index in a slot input id such as `band_2`.
 fn slot(id: &str, prefix: &str) -> Option<usize> {
     id.strip_prefix(prefix)?.parse().ok()
+}
+
+/// Minutes after midnight of the earliest open of a window in `windows` that spans midnight,
+/// where [`trading_day`] starts the next trading day, or 0 for none: all it reads of them.
+fn day_start(windows: &[SessionWindow]) -> usize {
+    windows
+        .iter()
+        .filter(|w| w.close <= w.open && w.open > NaiveTime::MIN)
+        .map(|w| (w.open.hour() * 60 + w.open.minute()) as usize)
+        .min()
+        .unwrap_or(0)
+}
+
+/// The one window that starts each trading day `minutes` after midnight; none at midnight.
+fn day_start_windows(minutes: usize) -> Vec<SessionWindow> {
+    NaiveTime::from_hms_opt((minutes / 60) as u32, (minutes % 60) as u32, 0)
+        .filter(|open| *open > NaiveTime::MIN)
+        .map(|open| {
+            vec![SessionWindow::new(
+                Vec::<chrono::Weekday>::new(),
+                open,
+                open,
+            )]
+        })
+        .unwrap_or_default()
 }
 
 impl VwapAnchor {
@@ -200,10 +227,11 @@ impl VolumeWeightedAvgPrice {
         self
     }
 
-    /// The trading hours, in exchange time. A window that spans midnight starts the
-    /// next trading day at its open.
+    /// The trading hours, in exchange time. A window that spans midnight starts the next
+    /// trading day at its open. The study keeps the earliest such open, to the minute, as its
+    /// trading day start input, which is all the calculation reads of the session.
     pub fn with_session(mut self, session: Session) -> Self {
-        self.windows = session.windows;
+        self.windows = day_start_windows(day_start(&session.windows));
         self
     }
 
@@ -293,6 +321,20 @@ impl Indicator for VolumeWeightedAvgPrice {
             )
             .with_default(InputValue::Choice(0)),
             StudyInput::new(
+                "time_zone",
+                "Time zone",
+                InputValue::Text(self.time_zone.name().to_owned()),
+                InputKind::Text,
+            )
+            .with_default(InputValue::Text("UTC".to_owned())),
+            StudyInput::new(
+                "day_start",
+                "Trading day start, minutes after midnight",
+                InputValue::Length(day_start(&self.windows)),
+                InputKind::Length(0, 1439),
+            )
+            .with_default(InputValue::Length(0)),
+            StudyInput::new(
                 "percentage_bands",
                 "Percentage bands",
                 InputValue::Toggle(self.percentage_bands),
@@ -349,6 +391,9 @@ impl Indicator for VolumeWeightedAvgPrice {
     /// of an applied set of inputs; a slot past the end of its list has nothing to edit and is
     /// accepted unchanged. Times are read in the current "Event time zone", and a repeated
     /// local time takes its first occurrence. Events are applied sorted and deduplicated.
+    /// `time_zone` and `day_start` count trading days while the chart passes no instrument; an
+    /// instrument's time zone and session, given with
+    /// [`set_instrument`](Indicator::set_instrument), take their place.
     fn set_input(
         &mut self,
         id: &str,
@@ -375,6 +420,10 @@ impl Indicator for VolumeWeightedAvgPrice {
         }
         match (id, value) {
             ("anchor", InputValue::Choice(index)) => self.anchor = VWAP_ANCHORS[index],
+            ("time_zone", InputValue::Text(name)) => {
+                self.time_zone = TimezoneId::named(&name).ok_or("unknown time zone")?;
+            }
+            ("day_start", InputValue::Length(minutes)) => self.windows = day_start_windows(minutes),
             ("percentage_bands", InputValue::Toggle(value)) => self.percentage_bands = value,
             ("band_count", InputValue::Length(count)) => {
                 let mut next = self.bands.len();
