@@ -10,7 +10,7 @@ Builder API,Broker API,Executions shown on the chart,done,host,src/ui/trading/mo
 Builder API,Broker API,Instrument trading info and formatters,partial,host,src/model/trading.rs;src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs;src/ui/trading/format.rs;src/ui/trading/dom.rs
 Builder API,Broker API,Order and position lines on the chart,done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Builder API,Broker API,"Order placement, modification and cancellation",done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/trading/events.rs
-Builder API,Broker API,Order ticket and order or position dialogs,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs
+Builder API,Broker API,Order ticket and order or position dialogs,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs;src/ui/trading/widgets.rs
 Builder API,Broker API,"Order, position and execution queries",done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/history.rs;src/ui/trading/account_panel/view.rs
 Builder API,Broker API,Trading entry points in the UI,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs;src/ui/dialogs/chart_settings/tabs/trading.rs
 Builder API,Builder integration,Custom drawing tools from a downstream crate,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
@@ -890,12 +890,12 @@ Terminal,Trading panel,DOM / depth-of-market ladder with click-to-trade,done,hos
 Terminal,Trading panel,"Drag orders, take-profit and stop-loss on the chart to modify",done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs
 Terminal,Trading panel,Execution markers on the chart,done,library,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/trading/executions.rs
 Terminal,Trading panel,Order and position lines on the chart,done,library,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
-Terminal,Trading panel,Order ticket,done,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/ui/trading/mod.rs
+Terminal,Trading panel,Order ticket,done,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/ui/trading/mod.rs;src/ui/trading/widgets.rs
 Terminal,Trading panel,Paper trading account,done,library,src/services/paper.rs;src/model/trading.rs
 Terminal,Trading panel,Place an order from the chart context menu,done,host,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/context_menu/mod.rs
 Terminal,Trading panel,"Position line with P&L, close and reverse",done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Terminal,Trading panel,"Show/hide positions, orders and executions",done,library,src/ui/trading/mod.rs;src/ui/trading/view.rs
-Terminal,Trading panel,Time in force and order presets,done,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs
+Terminal,Trading panel,Time in force and order presets,done,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/ui/trading/widgets.rs
 Terminal,Trading panel,Trade button and broker / paper account picker,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/broker_picker.rs
 Terminal,Trading panel,Trading notifications,done,host,src/ui/trading/mod.rs;src/ui/trading/events.rs
 Terminal,Watchlists and screeners,Add to watchlist from the chart context menu,done,library,src/ui/context_menu/mod.rs;src/ui/widget_bar/panels/watchlist.rs
