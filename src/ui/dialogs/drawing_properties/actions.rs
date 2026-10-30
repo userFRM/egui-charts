@@ -446,24 +446,11 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            let line = matches!(
-                tool,
-                DrawingToolType::TrendLine
-                    | DrawingToolType::Ray
-                    | DrawingToolType::ExtendedLine
-                    | DrawingToolType::InfoLine
-                    | DrawingToolType::TrendAngle
-                    | DrawingToolType::Arrow
-                    | DrawingToolType::Path
-                    | DrawingToolType::Polyline
-            );
+            let line = tool.supports_line_ends();
             assert_eq!(labels.contains(&"Line start"), line, "{tool:?}");
             assert_eq!(labels.contains(&"Line end"), line, "{tool:?}");
-            assert_eq!(
-                labels.contains(&"Middle line"),
-                tool == DrawingToolType::Rect,
-                "{tool:?}"
-            );
+            let middle = tool.supports_middle_line();
+            assert_eq!(labels.contains(&"Middle line"), middle, "{tool:?}");
             output.drop_without_applying_deltas();
             let settings = &mut props.tool_settings.as_mut().unwrap().settings;
             settings.fib_config = Some(FibonacciConfig {

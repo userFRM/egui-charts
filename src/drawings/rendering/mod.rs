@@ -719,10 +719,12 @@ mod tests {
 
     /// The settings the properties dialog offers for a tool are the ones its renderer uses: a
     /// fill colour reaches a filled area, extension moves geometry (each flag flipped from the
-    /// tool's default, since an extended line starts extended) and the text is painted.
+    /// tool's default, since an extended line starts extended), the text is painted, each line
+    /// end style draws a marker and the middle line flag adds a line.
     /// Icons keep their glyph in the text field, which the glyph picker edits.
     #[test]
     fn tool_capabilities_match_their_renderers() {
+        use crate::drawings::ArrowStyle;
         fn found(shapes: &[Shape], hit: &impl Fn(&Shape) -> bool) -> bool {
             shapes.iter().any(|s| match s {
                 Shape::Vec(v) => found(v, hit),
@@ -775,6 +777,25 @@ mod tests {
             );
             let icon = matches!(tool, DrawingToolType::FontIcon | DrawingToolType::Sticker);
             assert_eq!(tool.supports_text(), text && !icon, "{tool:?} text");
+            let mut plain = drawing.clone();
+            plain.arrow_start_style = ArrowStyle::None;
+            plain.arrow_end_style = ArrowStyle::None;
+            let changes = |edit: &dyn Fn(&mut Drawing)| {
+                let mut edited = plain.clone();
+                edit(&mut edited);
+                format!("{:?}", paint(&edited)) != format!("{:?}", paint(&plain))
+            };
+            for (end, styled) in [
+                (
+                    "start",
+                    changes(&|d| d.arrow_start_style = ArrowStyle::Circle),
+                ),
+                ("end", changes(&|d| d.arrow_end_style = ArrowStyle::Circle)),
+            ] {
+                assert_eq!(tool.supports_line_ends(), styled, "{tool:?} line {end}");
+            }
+            let middle = changes(&|d| d.channel_midline = !d.channel_midline);
+            assert_eq!(tool.supports_middle_line(), middle, "{tool:?} middle line");
         }
     }
 

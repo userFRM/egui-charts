@@ -1,6 +1,6 @@
 //! Style tab - color, line width, line style.
 
-use crate::drawings::{ArrowStyle, DrawingToolType};
+use crate::drawings::ArrowStyle;
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use egui::{Color32, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
@@ -49,17 +49,7 @@ impl StyleTab {
 
             if let Some(template) = &mut props.tool_settings {
                 let settings = &mut template.settings;
-                if matches!(
-                    settings.tool_type,
-                    DrawingToolType::TrendLine
-                        | DrawingToolType::Ray
-                        | DrawingToolType::ExtendedLine
-                        | DrawingToolType::InfoLine
-                        | DrawingToolType::TrendAngle
-                        | DrawingToolType::Arrow
-                        | DrawingToolType::Path
-                        | DrawingToolType::Polyline
-                ) {
+                if settings.tool_type.supports_line_ends() {
                     for (label, style) in [
                         ("Line start", &mut settings.arrow_start_style),
                         ("Line end", &mut settings.arrow_end_style),
@@ -89,7 +79,7 @@ impl StyleTab {
                         ui.end_row();
                     }
                 }
-                if settings.tool_type == DrawingToolType::Rect {
+                if settings.tool_type.supports_middle_line() {
                     let label = ui.label(l10n::text(ui.ctx(), "Middle line"));
                     ui.checkbox(
                         &mut settings.channel_midline,

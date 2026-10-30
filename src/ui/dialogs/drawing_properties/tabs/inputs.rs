@@ -42,7 +42,6 @@ impl InputsTab {
                 | Tool::FixedRangeVolumeProfile
                 | Tool::AnchoredVolumeProfile
                 | Tool::RegressionTrend
-                | Tool::ParallelChannel
         )
     }
 
@@ -360,12 +359,6 @@ impl InputsTab {
                 if deviations != config.deviations() {
                     drawing.regression_trend = RegressionTrendConfig::new(deviations);
                 }
-            }
-            Tool::ParallelChannel => {
-                ui.checkbox(
-                    &mut drawing.channel_midline,
-                    l10n::text(ui.ctx(), "Show middle line"),
-                );
             }
             _ => {}
         }

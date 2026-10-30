@@ -111,6 +111,30 @@ impl DrawingToolType {
         )
     }
 
+    /// Whether the renderer draws the drawing's line start and line end styles.
+    pub fn supports_line_ends(&self) -> bool {
+        matches!(
+            self,
+            Self::TrendLine
+                | Self::Ray
+                | Self::ExtendedLine
+                | Self::InfoLine
+                | Self::TrendAngle
+                | Self::HorizontalLine
+                | Self::HorizontalRay
+                | Self::VerticalLine
+                | Self::Arrow
+                | Self::ArrowMarker
+                | Self::Path
+                | Self::Polyline
+        )
+    }
+
+    /// Whether the renderer draws a middle line when the drawing's middle line flag is on.
+    pub fn supports_middle_line(&self) -> bool {
+        matches!(self, Self::Rect | Self::ParallelChannel)
+    }
+
     /// Whether a double click edits the drawing's text in place instead of opening its settings.
     pub fn edits_text_inline(&self) -> bool {
         self.supports_text() || matches!(self, Self::Image | Self::PriceLabel)
