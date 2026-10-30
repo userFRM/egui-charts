@@ -366,6 +366,20 @@ impl Terminal {
                     .drawings_mut()
                     .start_icon_insertion(icon_name.to_string());
             }
+            DrawingToolbarAction::HideAll => {
+                chart.drawings_mut().set_visibility_all(false);
+                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+                for id in ids {
+                    chart.set_indicator_visible(id, false);
+                }
+            }
+            DrawingToolbarAction::RemoveDrawingsAndIndicators => {
+                chart.drawings_mut().clear_all();
+                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+                for id in ids {
+                    chart.remove_series(id);
+                }
+            }
             // Zoom and the actions of other groups never get here.
             _ => {}
         }
@@ -1027,6 +1041,64 @@ mod tests {
         assert!(!terminal.drawings.colour_drag);
         assert!(terminal.chart_mut().undo());
         assert_eq!(terminal.chart().drawings().drawings[0].color, original);
+    }
+
+    #[test]
+    fn hide_all_and_remove_both_reach_drawings_and_studies_in_one_step() {
+        let mut terminal = ready();
+        for id in 1..=2 {
+            terminal
+                .chart_mut()
+                .drawings_mut()
+                .add_synced_drawing(line(id));
+        }
+        for period in [3, 5] {
+            terminal
+                .chart_mut()
+                .add_indicator(Box::new(SMA::new(period)));
+        }
+        // Repeating Hide all must keep groups hidden rather than toggle them back on.
+        run(&mut terminal, DrawingToolbarAction::HideAll);
+        run(&mut terminal, DrawingToolbarAction::HideAll);
+        assert!(
+            terminal
+                .chart()
+                .drawings()
+                .drawings
+                .iter()
+                .all(|d| !d.visible)
+        );
+        assert!(
+            terminal
+                .chart()
+                .indicators()
+                .all(|(_, study)| !study.is_visible())
+        );
+        terminal.run(Action::TopToolbar(TopToolbarAction::Undo));
+        assert!(
+            terminal
+                .chart()
+                .drawings()
+                .drawings
+                .iter()
+                .all(|d| d.visible)
+        );
+        assert!(
+            terminal
+                .chart()
+                .indicators()
+                .all(|(_, study)| study.is_visible())
+        );
+
+        run(
+            &mut terminal,
+            DrawingToolbarAction::RemoveDrawingsAndIndicators,
+        );
+        assert!(terminal.chart().drawings().drawings.is_empty());
+        assert_eq!(terminal.chart().indicators().count(), 0);
+        terminal.run(Action::TopToolbar(TopToolbarAction::Undo));
+        assert_eq!(terminal.chart().drawings().drawings.len(), 2);
+        assert_eq!(terminal.chart().indicators().count(), 2);
     }
 
     #[test]

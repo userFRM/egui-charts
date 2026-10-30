@@ -53,6 +53,13 @@ pub enum DrawingToolbarAction {
     RemoveAllIndicators,
     /// Remove all studies (indicators + overlays)
     RemoveAllStudies,
+    /// Hide drawings, indicators, positions and orders at once. A host applies it as it
+    /// applies `HideAllDrawings`, `HideAllIndicators`, `HideAllPoss` and `HideAllOrders` with
+    /// everything hidden, in one undo step.
+    HideAll,
+    /// Remove all drawings and all indicators at once. A host applies it as it applies
+    /// `RemoveAllDrawings` and `RemoveAllIndicators`, in one undo step.
+    RemoveDrawingsAndIndicators,
     /// Change magnet type (Weak/Strong)
     SetMagnetType(MagnetType),
     /// Include or exclude visible study plots from drawing magnet targets.

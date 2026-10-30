@@ -1776,6 +1776,19 @@ impl DemoApp {
                 }
                 return;
             }
+            DrawingToolbarAction::HideAll => {
+                self.chart.drawings_mut().set_visibility_all(false);
+                let ids: Vec<SeriesId> = self.chart.indicators().map(|(id, _)| id).collect();
+                for id in ids {
+                    self.chart.set_indicator_visible(id, false);
+                }
+                return;
+            }
+            DrawingToolbarAction::RemoveDrawingsAndIndicators => {
+                self.chart.drawings_mut().clear_all();
+                self.remove_all_indicators();
+                return;
+            }
             _ => {}
         }
 

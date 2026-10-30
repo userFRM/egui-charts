@@ -718,6 +718,13 @@ impl DrawingToolbar {
             A::HideAllIndicators => self.state.hide_indicators = !self.state.hide_indicators,
             A::HideAllPoss => self.state.hide_positions = !self.state.hide_positions,
             A::HideAllOrders => self.state.hide_orders = !self.state.hide_orders,
+            A::HideAll => {
+                let state = &mut self.state;
+                state.hide_drawings = true;
+                state.hide_indicators = true;
+                state.hide_positions = true;
+                state.hide_orders = true;
+            }
             A::InsertEmoji { .. } => self.select_tool(DrawingToolType::FontIcon),
             A::InsertGlyph { icon_name, .. } => {
                 self.select_tool(if icon_name.starts_with("sticker:") {
