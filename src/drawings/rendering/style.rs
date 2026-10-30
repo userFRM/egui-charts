@@ -129,7 +129,9 @@ impl Drawing {
                 && !custom_fork
                 && !matches!(
                     self.tool_type,
-                    DrawingToolType::LongPos | DrawingToolType::ShortPos
+                    DrawingToolType::LongPos
+                        | DrawingToolType::ShortPos
+                        | DrawingToolType::TrendBasedFibTime
                 )
                 && let Some(configured) = self.fill_color32()
             {
@@ -466,6 +468,7 @@ mod tests {
                     revision: 0,
                     bar_to_x: &|b| b,
                     price_to_y: &|p| p as f32,
+                    y_to_price: &f64::from,
                     time_axis: true,
                     executions: None,
                 };

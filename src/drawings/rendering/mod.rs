@@ -49,6 +49,8 @@ pub struct ChartView<'a> {
     pub bar_to_x: &'a dyn Fn(f32) -> f32,
     /// Screen y of a price.
     pub price_to_y: &'a dyn Fn(f64) -> f32,
+    /// Price at a screen y, using the same scale and orientation as `price_to_y`.
+    pub y_to_price: &'a dyn Fn(f32) -> f64,
     /// Whether the bar times are times, so measurements show the time between anchors; `false`
     /// on a [horizontal scale](crate::scales::HorizontalScale) other than time.
     pub time_axis: bool,
@@ -301,11 +303,9 @@ impl Drawing {
                 outline.lines = vec![[first, second], [third, fourth]];
                 outline.areas.push(vec![first, second, fourth, third]);
             }
-            T::FibonacciTimeZones => {
-                outline.lines = fibonacci::time_zone_lines(first, second, rect)
-            }
+            T::FibonacciTimeZones => outline.lines = self.fibonacci_time_zone_lines(rect),
             T::FibonacciWedge => return self.fibonacci_wedge_outline(),
-            T::FibonacciSpeedFan => outline.lines = fibonacci::speed_fan_lines(first, second, rect),
+            T::FibonacciSpeedFan => outline.lines = self.fibonacci_speed_fan_lines(rect),
             _ => return None,
         }
         Some(outline)
@@ -376,7 +376,7 @@ impl Drawing {
             DrawingToolType::FibonacciExtension => self.render_fibonacci_extension(painter, rect),
             DrawingToolType::FibonacciSpeedResistanceArcs => self.render_fibonacci_arc(painter),
             DrawingToolType::FibonacciTimeZones => self.render_fibonacci_time_zones(painter, rect),
-            DrawingToolType::FibonacciChannel => self.render_fibonacci_channel(painter, rect),
+            DrawingToolType::FibonacciChannel => self.render_fibonacci_channel(painter, rect, view),
             DrawingToolType::FibonacciCircles => self.render_fibonacci_circles(painter),
             DrawingToolType::FibonacciSpeedFan => self.render_fibonacci_speed_fan(painter, rect),
             DrawingToolType::FibonacciSpiral => self.render_fibonacci_spiral(painter),
@@ -559,6 +559,32 @@ impl Drawing {
         );
         if !bounded || self.extend_left || self.extend_right {
             return None;
+        }
+        if matches!(
+            self.tool_type,
+            T::FibonacciCircles | T::FibonacciSpeedResistanceArcs
+        ) {
+            let &[start, end, ..] = self.points.as_slice() else {
+                return None;
+            };
+            let ratio = self
+                .fibonacci_config()
+                .visible_levels()
+                .map(|l| l.value)
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .fold(0.0_f32, f32::max);
+            let radius = start.distance(end) * ratio;
+            let center = if self.tool_type == T::FibonacciCircles {
+                start
+            } else {
+                end
+            };
+            let diameter = radius * 2.0;
+            return diameter.is_finite().then(|| {
+                Rect::from_center_size(center, egui::Vec2::splat(diameter))
+                    .union(Rect::from_two_pos(start, end))
+                    .expand(PAINT_MARGIN)
+            });
         }
         let hull = self.bounding_rect()?;
         let reach = 3.0 * hull.size().length() + PAINT_MARGIN;
@@ -824,6 +850,7 @@ mod tests {
                         revision: 0,
                         bar_to_x: &|b| b * 40.0,
                         price_to_y: &|p| 500.0 - p as f32,
+                        y_to_price: &|y| 500.0 - f64::from(y),
                         time_axis: true,
                         executions: None,
                     };
@@ -1091,6 +1118,7 @@ mod tests {
                 revision: 0,
                 bar_to_x: &|b| b * 10.0,
                 price_to_y: &|p| 500.0 - p as f32,
+                y_to_price: &|y| 500.0 - f64::from(y),
                 time_axis: true,
                 executions: None,
             };
@@ -1134,6 +1162,7 @@ mod tests {
                 revision: 0,
                 bar_to_x: &|x| x,
                 price_to_y: &|p| p as f32,
+                y_to_price: &f64::from,
                 time_axis: true,
                 executions: None,
             };

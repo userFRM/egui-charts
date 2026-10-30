@@ -263,6 +263,13 @@ impl DrawingProps {
             }) {
                 return Err("Pitchfork multiples must be between 0 and 100");
             }
+            if settings.pitchfork.as_ref().is_some_and(|c| {
+                c.levels
+                    .iter()
+                    .any(|l| l.width.is_some_and(|w| !(w > 0.0 && w <= MAX_STROKE_WIDTH)))
+            }) {
+                return Err("Pitchfork widths must be above 0 and at most 100");
+            }
             if settings.gann.as_ref().is_some_and(|c| {
                 c.price_levels
                     .iter()

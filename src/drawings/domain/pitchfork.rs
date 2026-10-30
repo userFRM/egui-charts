@@ -14,6 +14,9 @@ pub struct PitchforkLevel {
     pub color: [u8; 4],
     /// Stroke style of this level.
     pub line_style: LineStyle,
+    /// Stroke width in points. `None` inherits the drawing width, as older files do.
+    #[serde(default)]
+    pub width: Option<f32>,
 }
 
 /// The pitchfork's level lines and the fill between adjacent levels.
@@ -36,6 +39,7 @@ impl Default for PitchforkConfig {
                     visible: true,
                     color: [33, 150, 243, 255],
                     line_style: LineStyle::Solid,
+                    width: None,
                 })
                 .to_vec(),
             show_background: true,

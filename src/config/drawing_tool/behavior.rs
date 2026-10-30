@@ -38,6 +38,7 @@ impl DrawingToolType {
                 | Self::RegressionTrend
                 | Self::FibonacciRetracement
                 | Self::FibonacciExtension
+                | Self::FibonacciTimeZones
                 | Self::TrendBasedFibTime
                 | Self::FibonacciCircles
                 | Self::FibonacciSpiral

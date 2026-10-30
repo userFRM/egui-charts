@@ -193,13 +193,14 @@ impl Default for DrawingOptions {
 pub struct FibonacciLevel {
     /// The ratio value (e.g., 0.236, 0.382, 0.618)
     pub value: f32,
-    /// Display label (e.g., "23.6%", "61.8%")
+    /// Legacy custom percentage label. Empty derives the label from `value`.
+    #[serde(default)]
     pub label: String,
     /// Level color as RGBA
     pub color: [u8; 4],
     /// Whether this level is visible
     pub visible: bool,
-    /// Show price at this level
+    /// Legacy price visibility, used when the drawing leaves `show_prices` unset.
     pub show_price: bool,
 }
 
@@ -214,6 +215,28 @@ impl FibonacciLevel {
             color,
             visible: true,
             show_price: true,
+        }
+    }
+
+    /// Label derived from the current ratio. Saved nonnumeric custom labels remain in percentage mode.
+    pub fn label(&self, as_percent: bool) -> String {
+        let numeric = self
+            .label
+            .strip_suffix('%')
+            .is_some_and(|v| v.parse::<f32>().is_ok());
+        if as_percent && !self.label.is_empty() && !numeric {
+            return self.label.clone();
+        }
+        let text = if as_percent {
+            format!("{:.4}", f64::from(self.value) * 100.0)
+        } else {
+            format!("{:.6}", self.value)
+        };
+        let text = text.trim_end_matches('0').trim_end_matches('.');
+        if as_percent {
+            format!("{text}%")
+        } else {
+            text.to_owned()
         }
     }
 }
@@ -233,9 +256,26 @@ pub struct FibonacciConfig {
     pub extend_right: bool,
     /// Reverse the direction (flip vertically)
     pub reverse: bool,
+    /// Show prices in level labels. `None` retains the tool's legacy choice:
+    /// on for retracements and extensions, off for channels.
+    #[serde(default)]
+    pub show_prices: Option<bool>,
+    /// Show the level value in labels. `None` preserves legacy labels (off for wedges).
+    #[serde(default)]
+    pub show_levels: Option<bool>,
+    /// Format level values as percentages rather than ratios.
+    #[serde(default = "show_fibonacci_labels")]
+    pub levels_as_percent: bool,
+    /// Place labels at the left end of level lines instead of the right.
+    #[serde(default)]
+    pub labels_on_left: bool,
     /// Measure retracement and extension levels in logarithmic price when all anchors are positive.
     #[serde(default)]
     pub logarithmic: bool,
+}
+
+fn show_fibonacci_labels() -> bool {
+    true
 }
 
 impl Default for FibonacciConfig {
@@ -257,6 +297,10 @@ impl Default for FibonacciConfig {
             extend_right: false,
             reverse: false,
             logarithmic: false,
+            show_prices: None,
+            show_levels: None,
+            levels_as_percent: true,
+            labels_on_left: false,
         }
     }
 }
@@ -280,6 +324,103 @@ impl FibonacciConfig {
             extend_right: true,
             reverse: false,
             logarithmic: false,
+            show_prices: None,
+            show_levels: None,
+            levels_as_percent: true,
+            labels_on_left: false,
+        }
+    }
+
+    /// Initial levels for a tool. Existing drawings without a stored config keep their
+    /// original renderer defaults; new tools store this table when constructed.
+    pub fn for_tool(tool: super::DrawingToolType) -> Self {
+        use super::DrawingToolType as T;
+        let grey = [128, 128, 128, 255];
+        let blue = [41, 98, 255, 255];
+        let red = [242, 54, 69, 255];
+        let orange = [255, 152, 0, 255];
+        let green = [76, 175, 80, 255];
+        let teal = [8, 153, 129, 255];
+        let cyan = [0, 188, 212, 255];
+        let pink = [233, 30, 99, 255];
+        let purple = [156, 39, 176, 255];
+        let table = match tool {
+            T::FibonacciTimeZones => [0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0, 89.0]
+                .map(|value| (value, if value == 0.0 { grey } else { blue }))
+                .to_vec(),
+            T::TrendBasedFibTime => vec![
+                (0.0, grey),
+                (0.382, red),
+                (0.5, [129, 199, 132, 255]),
+                (0.618, green),
+                (1.0, teal),
+                (1.382, cyan),
+                (1.618, grey),
+                (2.0, blue),
+                (2.382, pink),
+                (2.618, purple),
+                (3.0, [103, 58, 183, 255]),
+            ],
+            T::FibonacciSpeedFan => vec![
+                (0.0, grey),
+                (0.25, orange),
+                (0.382, cyan),
+                (0.5, green),
+                (0.618, teal),
+                (0.75, blue),
+                (1.0, grey),
+            ],
+            T::FibonacciCircles | T::FibonacciSpeedResistanceArcs => vec![
+                (0.236, red),
+                (0.382, orange),
+                (0.5, teal),
+                (0.618, green),
+                (0.786, cyan),
+                (1.0, grey),
+                (1.618, blue),
+                (2.618, pink),
+                (3.618, blue),
+                (4.236, pink),
+                (4.618, red),
+            ],
+            T::FibonacciExtension => return Self::extension_default(),
+            _ => return Self::default(),
+        };
+        Self {
+            levels: table
+                .into_iter()
+                .map(|(value, color)| {
+                    let mut level = FibonacciLevel::new(value, "", color);
+                    level.visible = tool != T::TrendBasedFibTime || value != 0.5;
+                    level
+                })
+                .collect(),
+            show_background: tool != T::FibonacciTimeZones,
+            background_opacity: 51,
+            levels_as_percent: tool != T::FibonacciTimeZones,
+            ..Self::default()
+        }
+    }
+
+    /// Label content; a tool without a price passes `None`.
+    pub(crate) fn label_text(&self, level: &FibonacciLevel, price: Option<f64>) -> String {
+        if self.show_prices.is_none()
+            && self.show_levels.is_none()
+            && !level.show_price
+            && level.label.is_empty()
+        {
+            return String::new();
+        }
+        let value = self
+            .show_levels
+            .unwrap_or(true)
+            .then(|| level.label(self.levels_as_percent));
+        let price = price.filter(|_| self.show_prices.unwrap_or(level.show_price));
+        match (value, price) {
+            (Some(value), Some(price)) => format!("{value} ({price:.2})"),
+            (Some(value), None) => value,
+            (None, Some(price)) => format!("{price:.2}"),
+            (None, None) => String::new(),
         }
     }
 
