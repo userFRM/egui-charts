@@ -26,7 +26,7 @@ use crate::model::{
     Account, Capabilities, Instrument, Order, OrderPreview, OrderRequest, OrderSide, OrderType,
     Position, Quote, TradingRules,
 };
-use crate::services::{Broker, Listener};
+use crate::services::{Broker, HistoryKind, Listener};
 use crate::widget::settings::TradingSettings;
 use format::Numbers;
 use ticket::{OrderTicket, order_quantity};
@@ -229,7 +229,8 @@ impl Trading {
         self.positions.clear();
         self.placing.clear();
         self.account_panel.clear();
-        // Stream keys are even; symbol rules use odd keys, and order replies use zero.
+        // Stream keys are even; rules, previews and history pages use odd keys, and order
+        // replies use zero.
         self.generation += 2;
         let (listener, events) = Listener::new(&self.inbox, self.generation);
         self.listener = Some(listener);
@@ -304,6 +305,22 @@ impl Trading {
             }
         }
     }
+
+    /// Asks the broker for the page of `kind` before the oldest entry the account panel lists,
+    /// once the account arrived; see [`AccountPanel`].
+    fn load_older(&mut self, kind: HistoryKind) {
+        let Some(service) = &self.service else {
+            return;
+        };
+        if self.account.is_none() {
+            return;
+        }
+        let key = self.request_key + 2;
+        if let Some(request) = self.account_panel.ask(kind, key) {
+            self.request_key = key;
+            service.history(request, self.inbox.reply(key));
+        }
+    }
 }
 
 /// Whether every number of `rules` is positive and finite and a time in force is offered.
@@ -325,7 +342,7 @@ mod tests {
     use super::*;
     use crate::data::{FeedError, Reply};
     use crate::model::OrderId;
-    use crate::services::{AccountEvent, Events};
+    use crate::services::{AccountEvent, Events, HistoryPage, HistoryRequest};
     use crate::ui_kit::notifications::Toasts;
     use std::sync::Mutex;
 
@@ -338,6 +355,7 @@ mod tests {
         pub(super) modified: Mutex<Vec<(OrderId, OrderRequest)>>,
         pub(super) rules: Mutex<Vec<(String, Reply<TradingRules>)>>,
         pub(super) previews: Mutex<Vec<(OrderRequest, Reply<OrderPreview>)>>,
+        pub(super) histories: Mutex<Vec<(HistoryRequest, Reply<HistoryPage>)>>,
     }
 
     impl Broker for Recorder {
@@ -378,6 +396,9 @@ mod tests {
         fn cancel(&self, id: OrderId, reply: Reply<()>) {
             self.cancelled.lock().unwrap().push(id);
             reply.send(Ok(()));
+        }
+        fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            self.histories.lock().unwrap().push((request, reply));
         }
     }
 

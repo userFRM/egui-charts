@@ -18,9 +18,9 @@ pub(crate) fn finite_clip(painter: &egui::Painter) -> Option<Rect> {
 
 /// Draw a dashed line between two arbitrary points.
 ///
-/// Works for any angle. The segment is clipped to the painter's clip rect first and
-/// only the visible part is dashed, so the cost is bounded by the visible length
-/// however far off screen the endpoints are. The pattern stays anchored at `start`.
+/// Works for any angle. The segment is clipped to the painter's clip rect grown by half the
+/// stroke width first and only the visible part is dashed, so the cost is bounded by the visible
+/// length however far off screen the endpoints are. The pattern stays anchored at `start`.
 pub(crate) fn draw_dashed_line(
     painter: &egui::Painter,
     start: Pos2,
@@ -130,6 +130,7 @@ pub(crate) fn draw_dashed_segments(
         && gap_len >= 0.0
         && let Some(clip) = finite_clip(painter)
     {
+        let clip = clip.expand(stroke.width * 0.5);
         // Bound each clipped span before painting so batching never copies a growing mesh.
         let count: usize = segments
             .clone()
@@ -173,6 +174,7 @@ fn append_dashed_segment(
     let Some(clip) = finite_clip(painter) else {
         return;
     };
+    let clip = clip.expand(stroke.width * 0.5);
     let pixels_per_point = painter.pixels_per_point();
     // Callers reserve the mesh for the clipped spans, so adding dots never copies growing buffers.
     let square_dots =
@@ -194,7 +196,7 @@ fn append_dashed_segment(
     });
 }
 
-/// The dashes of a polyline that lie inside `clip`, as line segments, with the dash phase carried
+/// The dashes of a polyline whose strokes overlap `clip`, with the dash phase carried
 /// across its vertices, for restyling shapes that have no painter.
 ///
 /// Only the visible part of each segment is dashed, so the cost is bounded by the visible length
@@ -207,6 +209,7 @@ pub(crate) fn dashed_polyline_shapes(
     gap_len: f32,
     clip: Rect,
 ) -> Vec<egui::Shape> {
+    let clip = clip.expand(stroke.width * 0.5);
     let mut shapes = Vec::new();
     let mut phase = 0.0;
     let period = f64::from(dash_len) + f64::from(gap_len);
@@ -346,6 +349,63 @@ mod tests {
                 assert_eq!(individual_count, 3);
                 assert_eq!(batched.vertices, individual.vertices);
                 assert_eq!(batched.indices, individual.indices);
+            }
+        }
+    }
+
+    #[test]
+    fn dashes_keep_strokes_overlapping_the_clip_edge() {
+        let clip = Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 100.0));
+        let stroke = Stroke::new(4.0, Color32::WHITE);
+        for offset in [1.5, 2.5] {
+            for points in [
+                [Pos2::new(10.0, -offset), Pos2::new(26.0, -offset)],
+                [
+                    Pos2::new(10.0, 100.0 + offset),
+                    Pos2::new(26.0, 100.0 + offset),
+                ],
+                [Pos2::new(-offset, 10.0), Pos2::new(-offset, 26.0)],
+                [
+                    Pos2::new(100.0 + offset, 10.0),
+                    Pos2::new(100.0 + offset, 26.0),
+                ],
+            ] {
+                // A four-point stroke reaches two points from its centre; the period is ten.
+                let expected = if offset < 2.0 {
+                    let direction = (points[1] - points[0]).normalized();
+                    vec![
+                        egui::Shape::line_segment([points[0], points[0] + direction * 6.0], stroke),
+                        egui::Shape::line_segment(
+                            [points[0] + direction * 10.0, points[1]],
+                            stroke,
+                        ),
+                    ]
+                } else {
+                    Vec::new()
+                };
+                let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+                    draw_dashed_polyline(
+                        &ui.painter().with_clip_rect(clip),
+                        &points,
+                        stroke,
+                        6.0,
+                        4.0,
+                    );
+                });
+                let painted: Vec<_> = std::mem::take(&mut output.shapes)
+                    .into_iter()
+                    .map(|shape| {
+                        assert_eq!(shape.clip_rect, clip);
+                        shape.shape
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                assert_eq!(painted, expected, "stroke at {points:?}");
+                #[cfg(feature = "drawings")]
+                assert_eq!(
+                    dashed_polyline_shapes(&points, stroke, 6.0, 4.0, clip),
+                    expected
+                );
             }
         }
     }

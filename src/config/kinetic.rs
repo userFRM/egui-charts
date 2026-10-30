@@ -24,7 +24,9 @@ pub struct KineticScrollOptions {
     /// Default: 7.0
     pub max_scroll_speed: f32,
 
-    /// Damping coefficient: the share of scroll velocity kept per frame
+    /// Damping coefficient: the share of scroll velocity kept per frame.
+    /// Accepts finite values in `0.0..1.0` (zero stops immediately, one is excluded).
+    /// Invalid values are replaced by the default when chart options are applied.
     /// Default: 0.997 (~99.7% of speed retained each frame)
     pub damping_coeff: f32,
 

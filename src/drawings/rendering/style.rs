@@ -190,14 +190,6 @@ impl Drawing {
                 stroke
             }
             Shape::Circle(c) => {
-                // Anchor decorations keep their thin white rings when the body is restyled.
-                if c.stroke.color == Color32::WHITE
-                    && c.radius <= crate::tokens::DESIGN_TOKENS.rounding.lg
-                    && self.tool_type != DrawingToolType::Circle
-                {
-                    return;
-                }
-
                 if dash.is_none() || c.stroke.is_empty() {
                     return;
                 }
@@ -231,8 +223,6 @@ impl Drawing {
             && !stroke.is_empty()
         {
             let mut shapes = clip.map_or_else(Vec::new, |clip| {
-                // Widened by the stroke so an edge just outside the clip keeps its visible half.
-                let clip = clip.expand(stroke.width);
                 crate::painting::dashed_line::dashed_polyline_shapes(&path, stroke, dash, gap, clip)
             });
             if !matches!(shape, Shape::LineSegment { .. }) {
@@ -445,6 +435,120 @@ mod tests {
             .map(|p| crate::drawings::ChartPoint::new(p.x, f64::from(p.y)))
             .collect();
         drawing
+    }
+
+    /// Finished drawings leave swing points clear; small circles are reserved for previews,
+    /// selection handles and the flag's pole cap. Wave label backgrounds remain larger circles.
+    #[test]
+    fn finished_drawings_leave_anchors_clear() {
+        use DrawingToolType::*;
+        let marker = |shape: &Shape| match shape {
+            Shape::Circle(c) if c.radius <= 8.0 => Some((c.center, c.radius)),
+            Shape::Path(p) if p.closed && p.points.len() >= 8 => {
+                let bounds = egui::Rect::from_points(&p.points);
+                (bounds.width() <= 16.01 && bounds.height() <= 16.01)
+                    .then_some((bounds.center(), bounds.width() / 2.0))
+            }
+            _ => None,
+        };
+        for tool in [
+            Ray,
+            ExtendedLine,
+            HorizontalRay,
+            CrossLine,
+            TrendAngle,
+            PriceRange,
+            DateRange,
+            InfoLine,
+            RegressionTrend,
+            FlatTopBottom,
+            DisjointChannel,
+            Arc,
+            Polyline,
+            Path,
+            Curve,
+            Pitchfork,
+            SchiffPitchfork,
+            ModifiedSchiffPitchfork,
+            InsidePitchfork,
+            Pitchfan,
+            GannFan,
+            GannSquare,
+            GannBox,
+            GannFixed,
+            FibonacciTimeZones,
+            FibonacciChannel,
+            FibonacciCircles,
+            FibonacciSpeedFan,
+            XABCDPattern,
+            CypherPattern,
+            HeadAndShoulders,
+            ABCDPattern,
+            TrianglePattern,
+            ThreeDrivesPattern,
+            ElliottImpulse,
+            ElliottCorrection,
+            ElliottTriangle,
+            ElliottDoubleCombo,
+            ElliottTripleCombo,
+            CyclicLines,
+            TimeCycles,
+            SineLine,
+            AnchoredVWAP,
+            FixedRangeVolumeProfile,
+            AnchoredVolumeProfile,
+            BarsPattern,
+            GhostFeed,
+            ProjectionTool,
+            TextLabel,
+            AnchoredText,
+            Callout,
+            FlagNote,
+            Signpost,
+        ] {
+            let mut drawing = pattern(tool);
+            drawing.completed = true;
+            for shape in paint(&drawing) {
+                if let Some((center, radius)) = marker(&shape) {
+                    assert!(
+                        tool == FlagNote
+                            && center.distance(drawing.points[0]) < 0.01
+                            && radius <= crate::tokens::DESIGN_TOKENS.rounding.sm,
+                        "{tool:?} paints an anchor dot"
+                    );
+                }
+            }
+        }
+        for (tool, count) in [
+            (Ray, 1),
+            (ExtendedLine, 1),
+            (Arc, 1),
+            (Arc, 2),
+            (Polyline, 1),
+            (Path, 1),
+            (PriceRange, 1),
+            (DateRange, 1),
+            (Callout, 1),
+            (Pitchfork, 1),
+            (Pitchfork, 2),
+            (SchiffPitchfork, 1),
+            (ModifiedSchiffPitchfork, 1),
+            (InsidePitchfork, 1),
+            (XABCDPattern, 1),
+            (ElliottImpulse, 1),
+            (Curve, 2),
+            (FibonacciChannel, 2),
+            (BarsPattern, 2),
+            (ProjectionTool, 2),
+        ] {
+            let mut drawing = pattern(tool);
+            drawing.points.truncate(count);
+            drawing.chart_points.truncate(count);
+            assert!(
+                paint(&drawing).iter().any(|s| marker(s).is_some()),
+                "{tool:?} lost its {count}-anchor preview"
+            );
+        }
     }
 
     #[test]

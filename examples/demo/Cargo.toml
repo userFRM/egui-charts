@@ -44,8 +44,11 @@ opt-level = "s"
 lto = "fat"
 codegen-units = 1
 
-# The tests drive many frames through the chart. Optimised code runs them about three times
-# faster; the chart itself gets level 1 because it is rebuilt on every change.
+# Frame-driven tests also generate synthetic history in the demo itself.
+[profile.test]
+opt-level = 2
+
+# Keep dependencies optimised; the chart uses level 1 because it is rebuilt on every change.
 [profile.dev.package."*"]
 opt-level = 2
 

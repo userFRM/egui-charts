@@ -16,6 +16,7 @@ use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
 use egui_charts::ui::drawing_toolbar::{
     DrawingToolbar, DrawingToolbarAction, DrawingToolbarDomainState, MagnetType,
 };
+use egui_charts::ui::floating_toolbar::FloatingSelectionToolbar;
 use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem, show_data_window,
 };
@@ -45,6 +46,7 @@ fn study_from_tree_id(id: usize) -> Option<SeriesId> {
 #[derive(Default)]
 pub(super) struct State {
     toolbar: DrawingToolbar,
+    selection_toolbar: FloatingSelectionToolbar,
     object_tree: ObjectTreePanel,
     properties: DrawingPropertiesDialog,
     /// Whether the data window is folded in its own panel.
@@ -80,7 +82,17 @@ impl Terminal {
             Region::Left => self.show_drawing_toolbar(ui),
             Region::Right => self.show_drawings_panel(ui),
             Region::Chart => self.read_crosshair(ui.ctx()),
-            Region::Windows => self.show_drawing_properties(ui.ctx()),
+            Region::Windows => {
+                if !self.keyboard_dialog_open()
+                    && let Some(action) = self
+                        .drawings
+                        .selection_toolbar
+                        .show_and_apply(ui, &mut self.charts[self.active])
+                {
+                    self.emit(Action::ChartMenu(ChartContextAction::Drawing(action)));
+                }
+                self.show_drawing_properties(ui.ctx());
+            }
             Region::Top | Region::Bottom => {}
         }
     }
@@ -370,6 +382,25 @@ impl Terminal {
         match action {
             DrawingContextMenuAction::Edit => self.open_drawing_properties(id),
             DrawingContextMenuAction::Clone => self.clone_drawing(id),
+            DrawingContextMenuAction::Copy => match self.chart().copy_selected_drawings() {
+                Ok(Some(text)) => self.ctx().copy_text(text),
+                Ok(None) => {}
+                Err(error) => self
+                    .toasts
+                    .error(format!("Could not copy drawings: {error}")),
+            },
+            DrawingContextMenuAction::BringForward | DrawingContextMenuAction::SendBackward => {
+                let action = if action == DrawingContextMenuAction::BringForward {
+                    ObjectTreeAction::MoveUp(id)
+                } else {
+                    ObjectTreeAction::MoveDown(id)
+                };
+                self.drawings.object_tree.apply_to_chart(
+                    &mut self.charts[self.active],
+                    &action,
+                    &[],
+                );
+            }
             action => {
                 let chart = self.chart_mut();
                 let manager = chart.drawings_mut();
@@ -392,7 +423,7 @@ impl Terminal {
         }
     }
 
-    fn open_drawing_properties(&mut self, id: usize) {
+    pub(super) fn open_drawing_properties(&mut self, id: usize) {
         self.drawings
             .properties
             .open_for_chart(&self.charts[self.active], DrawingId(id));
@@ -611,6 +642,203 @@ mod tests {
 
     fn run(terminal: &mut Terminal, action: DrawingToolbarAction) {
         assert!(terminal.run(Action::DrawingToolbar(action)).is_none());
+    }
+
+    /// Selecting a drawing exposes current style values, and each quick edit is undoable.
+    #[test]
+    fn selected_toolbar_styles_and_more_menu_reach_the_chart() {
+        use super::super::test_support::click;
+        let mut terminal = ready();
+        let mut drawing = line(0);
+        drawing.chart_points = vec![ChartPoint::new(430.0, 180.0), ChartPoint::new(460.0, 182.0)];
+        terminal
+            .chart_mut()
+            .drawings_mut()
+            .add_synced_drawing(drawing);
+        let id = terminal.chart().drawings().drawings[0].id;
+        terminal.chart_mut().drawings_mut().select_drawings([id]);
+        frame(&mut terminal, SIZE, vec![]);
+        let rendered_text = |terminal: &mut Terminal, value: &str| {
+            let ctx = terminal.ctx().clone();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                    time: Some(ctx.input(|i| i.time) + 0.1),
+                    ..Default::default()
+                },
+                |ui| {
+                    terminal.show(ui);
+                },
+            );
+            let position = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == value => {
+                        Some(text.visual_bounding_rect().center())
+                    }
+                    _ => None,
+                })
+                .expect(value);
+            output.drop_without_applying_deltas();
+            position
+        };
+        let width = rendered_text(&mut terminal, "2 px");
+        click(&mut terminal, SIZE, width);
+        let menu = frame(&mut terminal, SIZE, vec![]);
+        click(
+            &mut terminal,
+            SIZE,
+            menu.text_at("4 px").expect("width choice"),
+        );
+        assert_eq!(terminal.chart().drawings().drawings[0].stroke_width, 4.0);
+        assert!(terminal.chart_mut().undo());
+        assert_eq!(terminal.chart().drawings().drawings[0].stroke_width, 2.0);
+        assert!(!terminal.chart().can_undo(), "one undo step for the width");
+        let style = rendered_text(&mut terminal, "Solid");
+        click(&mut terminal, SIZE, style);
+        let menu = frame(&mut terminal, SIZE, vec![]);
+        click(
+            &mut terminal,
+            SIZE,
+            menu.text_at("Dashed").expect("style choice"),
+        );
+        assert_eq!(
+            terminal.chart().drawings().drawings[0].line_style,
+            egui_charts::model::LineStyle::Dashed
+        );
+        assert!(terminal.chart_mut().undo());
+        assert_eq!(
+            terminal.chart().drawings().drawings[0].line_style,
+            egui_charts::model::LineStyle::Solid
+        );
+        assert!(!terminal.chart().can_undo(), "one undo step for the style");
+        let shown = frame(&mut terminal, SIZE, vec![]);
+        click(
+            &mut terminal,
+            SIZE,
+            shown.text_at("#F23645").expect("current line colour"),
+        );
+        let palette = frame(&mut terminal, SIZE, vec![]);
+        click(
+            &mut terminal,
+            SIZE,
+            palette.text_at("#2962FF").expect("palette colour"),
+        );
+        assert_eq!(
+            terminal.chart().drawings().drawings[0].color,
+            [41, 98, 255, 255]
+        );
+        assert!(terminal.chart_mut().undo());
+        assert_eq!(
+            terminal.chart().drawings().drawings[0].color,
+            [242, 54, 69, 255]
+        );
+        assert!(!terminal.chart().can_undo(), "one undo step for the colour");
+        for (tool, filled) in [
+            (DrawingToolType::TrendLine, false),
+            (DrawingToolType::Rect, true),
+            (DrawingToolType::TextLabel, true),
+        ] {
+            let drawing = &mut terminal.chart_mut().drawings_mut().drawings[0];
+            drawing.tool_type = tool;
+            drawing.fill_color = Some([0, 255, 0, 85]);
+            let shown = frame(&mut terminal, SIZE, vec![]);
+            assert!(
+                shown.text_at("#F23645").is_some(),
+                "current colour: {tool:?}"
+            );
+            assert_eq!(
+                shown.text_at("#00FF00").is_some(),
+                filled,
+                "fill swatch: {tool:?}"
+            );
+            if tool == DrawingToolType::Rect {
+                click(&mut terminal, SIZE, shown.text_at("#00FF00").unwrap());
+                let palette = frame(&mut terminal, SIZE, vec![]);
+                click(&mut terminal, SIZE, palette.text_at("#FFFFFF").unwrap());
+                assert_eq!(
+                    terminal.chart().drawings().drawings[0].fill_color,
+                    Some([255, 255, 255, 85]),
+                    "a palette change preserves the fill's opacity"
+                );
+                assert!(terminal.chart_mut().undo());
+                assert_eq!(
+                    terminal.chart().drawings().drawings[0].fill_color,
+                    Some([0, 255, 0, 85])
+                );
+                assert!(!terminal.chart().can_undo(), "one undo step for the fill");
+            }
+        }
+        let shown = frame(&mut terminal, SIZE, vec![]);
+        click(
+            &mut terminal,
+            SIZE,
+            shown.text_at("More").expect("drawing menu button"),
+        );
+        let menu = frame(&mut terminal, SIZE, vec![]);
+        for label in ["Bring forward", "Send backward", "Copy", "Clone", "Hide"] {
+            assert!(menu.text_at(label).is_some(), "missing {label}");
+        }
+        terminal.chart_mut().drawings_mut().deselect();
+        let shown = frame(&mut terminal, SIZE, vec![]);
+        assert!(shown.text_at("More").is_none());
+    }
+
+    /// A double click opens geometry settings, while text tools retain their inline editor.
+    #[test]
+    fn double_click_drawings_opens_settings_except_for_inline_text() {
+        use egui::{Modifiers, PointerButton};
+        for (tool, settings) in [
+            (DrawingToolType::TrendLine, true),
+            (DrawingToolType::TextLabel, false),
+        ] {
+            let mut terminal = ready();
+            let mut drawing = line(0);
+            drawing.tool_type = tool;
+            drawing.text = Some("Annotation".into());
+            drawing.chart_points =
+                vec![ChartPoint::new(430.0, 180.0), ChartPoint::new(460.0, 182.0)];
+            terminal
+                .chart_mut()
+                .drawings_mut()
+                .add_synced_drawing(drawing);
+            frame(&mut terminal, SIZE, vec![]);
+            let points = &terminal.chart().drawings().drawings[0].points;
+            let pos = if settings {
+                points[0].lerp(points[1], 0.5)
+            } else {
+                points[0] + egui::vec2(10.0, -5.0)
+            };
+            frame(&mut terminal, SIZE, vec![Event::PointerMoved(pos)]);
+            for _ in 0..2 {
+                // One frame per click keeps the second release within the double-click interval.
+                frame(
+                    &mut terminal,
+                    SIZE,
+                    [true, false]
+                        .map(|pressed| Event::PointerButton {
+                            pos,
+                            pressed,
+                            button: PointerButton::Primary,
+                            modifiers: Modifiers::NONE,
+                        })
+                        .to_vec(),
+                );
+            }
+            assert_eq!(terminal.drawings_modal(), settings, "{tool:?}");
+            assert!(
+                !terminal.studies_modal(),
+                "drawing must not open series settings"
+            );
+            if settings {
+                let shown = frame(&mut terminal, SIZE, vec![]);
+                assert!(
+                    shown.text_at("More").is_none(),
+                    "the selection toolbar must not cover the properties dialog"
+                );
+            }
+        }
     }
 
     #[test]
@@ -936,6 +1164,58 @@ mod tests {
         assert!(!terminal.chart().drawings().drawings[0].visible);
         assert!(terminal.chart_mut().undo());
         assert!(terminal.chart().drawings().drawings[0].visible);
+        // Equal layers still move across exactly one neighbour, and undo restores every layer.
+        for copy in 1..=2 {
+            terminal
+                .chart_mut()
+                .drawings_mut()
+                .add_synced_drawing(line(copy));
+        }
+        let ids: Vec<_> = terminal
+            .chart()
+            .drawings()
+            .drawings
+            .iter()
+            .map(|d| d.id)
+            .collect();
+        terminal
+            .chart_mut()
+            .drawings_mut()
+            .select_drawings([ids[1]]);
+        for drawing in &mut terminal.chart_mut().drawings_mut().drawings {
+            drawing.z_order = 0;
+        }
+        let original: Vec<_> = terminal
+            .chart()
+            .drawings()
+            .drawings
+            .iter()
+            .map(|d| d.z_order)
+            .collect();
+        for (action, expected) in [
+            (Draw::BringForward, vec![ids[0], ids[2], ids[1]]),
+            (Draw::SendBackward, vec![ids[1], ids[0], ids[2]]),
+        ] {
+            drawing_menu(&mut terminal, action);
+            let mut order: Vec<_> = terminal.chart().drawings().drawings.iter().collect();
+            order.sort_by_key(|d| d.z_order);
+            assert_eq!(order.iter().map(|d| d.id).collect::<Vec<_>>(), expected);
+            assert!(terminal.chart_mut().undo());
+            assert_eq!(
+                terminal
+                    .chart()
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| d.z_order)
+                    .collect::<Vec<_>>(),
+                original
+            );
+        }
+        terminal.chart_mut().drawings_mut().drawings.truncate(1);
+        terminal.chart_mut().drawings_mut().select_drawings([id]);
+        drawing_menu(&mut terminal, Draw::Copy);
+        assert!(terminal.ctx().output(|out| out.commands.iter().any(|command| matches!(command, egui::OutputCommand::CopyText(text) if text.starts_with(DRAWINGS_CLIPBOARD)))));
         // Clone duplicates the drawing; the properties dialog offers the same.
         drawing_menu(&mut terminal, Draw::Clone);
         assert_eq!(count(&terminal), 2);

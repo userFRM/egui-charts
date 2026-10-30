@@ -78,13 +78,15 @@ impl Drawing {
                 DESIGN_TOKENS.spacing.xxl + DESIGN_TOKENS.spacing.md
             };
 
-            // Draw anchor point
-            painter.circle_filled(point, DESIGN_TOKENS.rounding.lg, color);
-            painter.circle_stroke(
-                point,
-                DESIGN_TOKENS.rounding.lg,
-                Stroke::new(stroke::MEDIUM, Color32::WHITE),
-            );
+            // Placement anchor
+            if !self.completed {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.lg, color);
+                painter.circle_stroke(
+                    point,
+                    DESIGN_TOKENS.rounding.lg,
+                    Stroke::new(stroke::MEDIUM, Color32::WHITE),
+                );
+            }
 
             // Draw label with background
             if i < labels.len() {
@@ -196,12 +198,14 @@ impl Drawing {
                 DESIGN_TOKENS.spacing.xxl + DESIGN_TOKENS.spacing.md
             };
 
-            painter.circle_filled(point, DESIGN_TOKENS.rounding.lg, color);
-            painter.circle_stroke(
-                point,
-                DESIGN_TOKENS.rounding.lg,
-                Stroke::new(stroke::MEDIUM, Color32::WHITE),
-            );
+            if !self.completed {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.lg, color);
+                painter.circle_stroke(
+                    point,
+                    DESIGN_TOKENS.rounding.lg,
+                    Stroke::new(stroke::MEDIUM, Color32::WHITE),
+                );
+            }
 
             if i < labels.len() {
                 let label_pos = Pos2::new(point.x, point.y + label_offset);
@@ -368,12 +372,14 @@ impl Drawing {
                 DESIGN_TOKENS.spacing.xxl + DESIGN_TOKENS.spacing.sm
             };
 
-            painter.circle_filled(point, DESIGN_TOKENS.rounding.lg, color);
-            painter.circle_stroke(
-                point,
-                DESIGN_TOKENS.rounding.lg,
-                Stroke::new(stroke::MEDIUM, Color32::WHITE),
-            );
+            if !self.completed {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.lg, color);
+                painter.circle_stroke(
+                    point,
+                    DESIGN_TOKENS.rounding.lg,
+                    Stroke::new(stroke::MEDIUM, Color32::WHITE),
+                );
+            }
 
             if i < labels.len() {
                 let label_pos = Pos2::new(point.x, point.y + label_offset);
@@ -483,12 +489,14 @@ impl Drawing {
                 DESIGN_TOKENS.spacing.xxl + DESIGN_TOKENS.spacing.md
             };
 
-            painter.circle_filled(point, DESIGN_TOKENS.rounding.lg, color);
-            painter.circle_stroke(
-                point,
-                DESIGN_TOKENS.rounding.lg,
-                Stroke::new(stroke::MEDIUM, Color32::WHITE),
-            );
+            if !self.completed {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.lg, color);
+                painter.circle_stroke(
+                    point,
+                    DESIGN_TOKENS.rounding.lg,
+                    Stroke::new(stroke::MEDIUM, Color32::WHITE),
+                );
+            }
 
             if i < labels.len() {
                 let label_pos = Pos2::new(point.x, point.y + label_offset);
@@ -598,12 +606,14 @@ impl Drawing {
                 DESIGN_TOKENS.spacing.xxl + DESIGN_TOKENS.spacing.md
             };
 
-            painter.circle_filled(point, DESIGN_TOKENS.rounding.lg, color);
-            painter.circle_stroke(
-                point,
-                DESIGN_TOKENS.rounding.lg,
-                Stroke::new(stroke::MEDIUM, Color32::WHITE),
-            );
+            if !self.completed {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.lg, color);
+                painter.circle_stroke(
+                    point,
+                    DESIGN_TOKENS.rounding.lg,
+                    Stroke::new(stroke::MEDIUM, Color32::WHITE),
+                );
+            }
 
             if i < labels.len() {
                 let label_pos = Pos2::new(point.x, point.y + label_offset);

@@ -1,10 +1,34 @@
 //! Drawing studies anchored on the shared Zig Zag swings.
 
 use super::ZigZag;
-use crate::drawings::{ChartPoint, Drawing, DrawingToolType, FibonacciConfig};
+use crate::drawings::{ChartPoint, Drawing, DrawingToolType, FibonacciConfig, FibonacciLevel};
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues, InputValue, StudyInput};
+use crate::studies::{
+    Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, StudyInput,
+};
 use egui::Color32;
+
+/// The most Fibonacci levels that the study inputs can hold.
+const MAX_FIB_LEVELS: usize = 24;
+
+/// The fields of each Fibonacci level among the inputs, as in `fib_ratio_2`.
+const LEVEL_FIELDS: [&str; 5] = [
+    "fib_visible",
+    "fib_ratio",
+    "fib_label",
+    "fib_color",
+    "fib_price",
+];
+
+/// The level index of a per-level input id such as `fib_ratio_2`.
+fn level_slot(id: &str) -> Option<usize> {
+    let (field, index) = id.rsplit_once('_')?;
+    if LEVEL_FIELDS.contains(&field) {
+        index.parse().ok()
+    } else {
+        None
+    }
+}
 
 /// Construction to place on the latest Zig Zag pivots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +53,40 @@ impl AutoDrawingKind {
         Self::FibonacciExtension,
         Self::Pitchfork,
     ];
+
+    /// Whether the construction is a Fibonacci one, set up by a [`FibonacciConfig`].
+    fn fibonacci(self) -> bool {
+        matches!(self, Self::FibonacciRetracement | Self::FibonacciExtension)
+    }
+
+    /// The Fibonacci levels and options a study of this kind starts with.
+    fn default_fibonacci(self) -> FibonacciConfig {
+        let mut fibonacci = if self == Self::FibonacciExtension {
+            FibonacciConfig::extension_default()
+        } else {
+            FibonacciConfig::default()
+        };
+        for level in &mut fibonacci.levels {
+            let hex = match level.value {
+                0.0 | 1.0 => [120, 123, 134, 255],
+                0.236 | 2.618 => [244, 67, 54, 255],
+                0.382 => [129, 199, 132, 255],
+                0.5 => [76, 175, 80, 255],
+                0.618 => [0, 150, 136, 255],
+                0.786 => [100, 181, 246, 255],
+                1.618 => [41, 98, 255, 255],
+                _ => level.color,
+            };
+            level.color = hex;
+            if level.value == 1.272 || level.value == 2.0 {
+                level.visible = false;
+            }
+        }
+        fibonacci.show_background = true;
+        fibonacci.background_opacity = 38;
+        fibonacci.extend_right = true;
+        fibonacci
+    }
 
     fn tool(self) -> DrawingToolType {
         match self {
@@ -64,30 +122,6 @@ impl AutoDrawing {
     /// Construct with a Zig Zag deviation in percent and confirmation depth in bars.
     /// Parameters have the same bounds and skipped-bar policy as [`ZigZag::new`].
     pub fn new(kind: AutoDrawingKind, deviation_percent: f64, depth: usize) -> Self {
-        let mut fibonacci = if kind == AutoDrawingKind::FibonacciExtension {
-            FibonacciConfig::extension_default()
-        } else {
-            FibonacciConfig::default()
-        };
-        for level in &mut fibonacci.levels {
-            let hex = match level.value {
-                0.0 | 1.0 => [120, 123, 134, 255],
-                0.236 | 2.618 => [244, 67, 54, 255],
-                0.382 => [129, 199, 132, 255],
-                0.5 => [76, 175, 80, 255],
-                0.618 => [0, 150, 136, 255],
-                0.786 => [100, 181, 246, 255],
-                1.618 => [41, 98, 255, 255],
-                _ => level.color,
-            };
-            level.color = hex;
-            if level.value == 1.272 || level.value == 2.0 {
-                level.visible = false;
-            }
-        }
-        fibonacci.show_background = true;
-        fibonacci.background_opacity = 38;
-        fibonacci.extend_right = true;
         Self {
             kind,
             zigzag: ZigZag::new(deviation_percent, depth).with_color(
@@ -97,7 +131,7 @@ impl AutoDrawing {
                     crate::studies::palette::BLUE
                 },
             ),
-            fibonacci,
+            fibonacci: kind.default_fibonacci(),
             fork_colors: [
                 crate::studies::palette::GREEN,
                 crate::studies::palette::BLUE,
@@ -129,8 +163,15 @@ impl AutoDrawing {
         config
     }
 
-    /// Set the levels, orientation and price measurement of a Fibonacci construction.
-    pub fn with_fibonacci_config(mut self, config: FibonacciConfig) -> Self {
+    /// Set the levels, orientation and price measurement of a Fibonacci construction. As the
+    /// study inputs hold them, levels whose ratio is not finite are dropped, at most 24 are kept,
+    /// and each label is kept on one line, without control characters or surrounding spaces.
+    pub fn with_fibonacci_config(mut self, mut config: FibonacciConfig) -> Self {
+        config.levels.retain(|level| level.value.is_finite());
+        config.levels.truncate(MAX_FIB_LEVELS);
+        for level in &mut config.levels {
+            level.label = level.label.replace(char::is_control, " ").trim().to_owned();
+        }
         self.fibonacci = config;
         self
     }
@@ -151,19 +192,224 @@ impl Indicator for AutoDrawing {
         "Drawing anchored on Zig Zag swing extremes"
     }
 
+    /// The Zig Zag deviation and depth and, for a Fibonacci construction, its options, its number
+    /// of levels and each level's visibility, ratio, label, colour and price label.
     fn inputs(&self) -> Vec<StudyInput> {
-        self.zigzag
+        let mut inputs: Vec<StudyInput> = self
+            .zigzag
             .inputs()
             .into_iter()
             .filter(|input| input.id != "mode")
-            .collect()
+            .collect();
+        if !self.kind.fibonacci() {
+            return inputs;
+        }
+        let config = &self.fibonacci;
+        let defaults = self.kind.default_fibonacci();
+        let toggle = |id: String, label: String, value: bool, default: bool| {
+            StudyInput::new(id, label, InputValue::Toggle(value), InputKind::Toggle)
+                .with_default(InputValue::Toggle(default))
+        };
+        let colour = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let optional = |id, label, value: Option<bool>, default: Option<bool>| {
+            let index = |value| match value {
+                None => 0,
+                Some(false) => 1,
+                Some(true) => 2,
+            };
+            StudyInput::new(
+                id,
+                label,
+                InputValue::Choice(index(value)),
+                InputKind::Choice(["Default", "Hidden", "Shown"].map(str::to_owned).to_vec()),
+            )
+            .with_default(InputValue::Choice(index(default)))
+        };
+        inputs.extend([
+            optional(
+                "fib_show_prices",
+                "Price labels",
+                config.show_prices,
+                defaults.show_prices,
+            ),
+            optional(
+                "fib_show_levels",
+                "Level labels",
+                config.show_levels,
+                defaults.show_levels,
+            ),
+            toggle(
+                "fib_levels_as_percent".into(),
+                "Levels as percentages".into(),
+                config.levels_as_percent,
+                defaults.levels_as_percent,
+            ),
+            toggle(
+                "fib_labels_on_left".into(),
+                "Labels on left".into(),
+                config.labels_on_left,
+                defaults.labels_on_left,
+            ),
+            toggle(
+                "fib_reverse".into(),
+                "Reverse".into(),
+                config.reverse,
+                defaults.reverse,
+            ),
+            toggle(
+                "fib_extend_left".into(),
+                "Extend left".into(),
+                config.extend_left,
+                defaults.extend_left,
+            ),
+            toggle(
+                "fib_extend_right".into(),
+                "Extend right".into(),
+                config.extend_right,
+                defaults.extend_right,
+            ),
+            toggle(
+                "fib_background".into(),
+                "Background".into(),
+                config.show_background,
+                defaults.show_background,
+            ),
+            StudyInput::new(
+                "fib_background_opacity",
+                "Background opacity",
+                InputValue::Length(config.background_opacity.into()),
+                InputKind::Length(0, 255),
+            )
+            .with_default(InputValue::Length(defaults.background_opacity.into())),
+            toggle(
+                "fib_logarithmic".into(),
+                "Logarithmic levels".into(),
+                config.logarithmic,
+                defaults.logarithmic,
+            ),
+            StudyInput::new(
+                "fib_level_count",
+                "Levels",
+                InputValue::Length(config.levels.len()),
+                InputKind::Length(0, MAX_FIB_LEVELS),
+            )
+            .with_default(InputValue::Length(defaults.levels.len())),
+        ]);
+        for (i, level) in config.levels.iter().enumerate() {
+            // A level added after construction has no construction default; it is its own.
+            let default = defaults.levels.get(i).unwrap_or(level);
+            let n = i + 1;
+            inputs.extend([
+                toggle(
+                    format!("fib_visible_{i}"),
+                    format!("Level {n} visible"),
+                    level.visible,
+                    default.visible,
+                ),
+                StudyInput::new(
+                    format!("fib_ratio_{i}"),
+                    format!("Level {n} ratio"),
+                    InputValue::Number(level.value.into()),
+                    InputKind::Number((-f32::MAX).into(), f32::MAX.into()),
+                )
+                .with_default(InputValue::Number(default.value.into())),
+                StudyInput::new(
+                    format!("fib_label_{i}"),
+                    format!("Level {n} label"),
+                    InputValue::Text(level.label.clone()),
+                    InputKind::Text,
+                )
+                .with_default(InputValue::Text(default.label.clone())),
+                StudyInput::new(
+                    format!("fib_color_{i}"),
+                    format!("Level {n} colour"),
+                    InputValue::Color(colour(level.color)),
+                    InputKind::Color,
+                )
+                .with_default(InputValue::Color(colour(default.color))),
+                toggle(
+                    format!("fib_price_{i}"),
+                    format!("Level {n} price visible"),
+                    level.show_price,
+                    default.show_price,
+                ),
+            ]);
+        }
+        inputs
     }
 
+    /// `fib_level_count` resizes the Fibonacci levels, so it comes first among the level inputs of
+    /// an applied set; an input of a level past the last has nothing to edit and is accepted
+    /// unchanged. Levels added take the kind's default level at their place, or 100% in the
+    /// study's colour, as the drawing properties add one.
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
-        if id == "mode" {
-            return Err("unknown study input");
+        if !id.starts_with("fib_") {
+            if id == "mode" {
+                return Err("unknown study input");
+            }
+            return self.zigzag.set_input(id, value);
         }
-        self.zigzag.set_input(id, value)
+        if self.kind.fibonacci()
+            && level_slot(id)
+                .is_some_and(|i| (self.fibonacci.levels.len()..MAX_FIB_LEVELS).contains(&i))
+        {
+            return Ok(());
+        }
+        let schema = self
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .ok_or("unknown study input")?;
+        if !schema.accepts(&value) {
+            return Err("study input is outside its accepted values");
+        }
+        let config = &mut self.fibonacci;
+        match (id, value) {
+            ("fib_show_prices", InputValue::Choice(index)) => {
+                config.show_prices = [None, Some(false), Some(true)][index]
+            }
+            ("fib_show_levels", InputValue::Choice(index)) => {
+                config.show_levels = [None, Some(false), Some(true)][index]
+            }
+            ("fib_levels_as_percent", InputValue::Toggle(on)) => config.levels_as_percent = on,
+            ("fib_labels_on_left", InputValue::Toggle(on)) => config.labels_on_left = on,
+            ("fib_reverse", InputValue::Toggle(on)) => config.reverse = on,
+            ("fib_extend_left", InputValue::Toggle(on)) => config.extend_left = on,
+            ("fib_extend_right", InputValue::Toggle(on)) => config.extend_right = on,
+            ("fib_background", InputValue::Toggle(on)) => config.show_background = on,
+            // The input bounds the opacity to 0..=255.
+            ("fib_background_opacity", InputValue::Length(opacity)) => {
+                config.background_opacity = opacity as u8;
+            }
+            ("fib_logarithmic", InputValue::Toggle(on)) => config.logarithmic = on,
+            ("fib_level_count", InputValue::Length(count)) => {
+                let defaults = self.kind.default_fibonacci().levels;
+                let color = self.zigzag.colors()[0].to_srgba_unmultiplied();
+                config.levels.truncate(count);
+                while config.levels.len() < count {
+                    let level = defaults
+                        .get(config.levels.len())
+                        .cloned()
+                        .unwrap_or_else(|| FibonacciLevel::new(1.0, "100%", color));
+                    config.levels.push(level);
+                }
+            }
+            (id, value) => {
+                let level = &mut config.levels[level_slot(id).ok_or("unknown study input")?];
+                match (id.rsplit_once('_').map(|(field, _)| field), value) {
+                    (Some("fib_visible"), InputValue::Toggle(on)) => level.visible = on,
+                    (Some("fib_ratio"), InputValue::Number(ratio)) => level.value = ratio as f32,
+                    (Some("fib_label"), InputValue::Text(label)) => level.label = label,
+                    (Some("fib_color"), InputValue::Color(color)) => {
+                        level.color = color.to_srgba_unmultiplied();
+                    }
+                    (Some("fib_price"), InputValue::Toggle(on)) => level.show_price = on,
+                    _ => return Err("unknown study input"),
+                }
+            }
+        }
+        self.calculate(&[]);
+        Ok(())
     }
 
     fn calculate(&mut self, data: &[Bar]) {
@@ -216,10 +462,7 @@ impl Indicator for AutoDrawing {
                 ChartPoint::new(pivot.bar_index as f32, pivot.price)
             })
             .collect();
-        if matches!(
-            self.kind,
-            AutoDrawingKind::FibonacciRetracement | AutoDrawingKind::FibonacciExtension
-        ) {
+        if self.kind.fibonacci() {
             drawing.fib_config = Some(self.fibonacci.clone());
         }
         if self.kind == AutoDrawingKind::Pitchfork {

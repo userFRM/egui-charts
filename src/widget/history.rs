@@ -921,12 +921,20 @@ mod tests {
         for redo in [false, true, false, true] {
             assert!(if redo { chart.redo() } else { chart.undo() });
             let study = chart.indicators().next().unwrap().1;
+            let input = |id: &str| {
+                study
+                    .inputs()
+                    .into_iter()
+                    .find(|input| input.id == id)
+                    .unwrap()
+                    .value
+            };
             assert_eq!(
-                study.inputs()[0].value,
+                input("period_0"),
                 InputValue::Length(if redo { 2 } else { 1 })
             );
             assert_eq!(
-                study.inputs()[1].value,
+                input("kind_0"),
                 InputValue::Choice(if redo { 5 } else { 0 })
             );
             assert_eq!(

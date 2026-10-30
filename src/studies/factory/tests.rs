@@ -2,14 +2,28 @@ use super::*;
 use crate::model::Bar;
 use chrono::{TimeZone, Utc};
 
+/// A host registers a study under its name, replacing a study of that name, a built-in
+/// included; a blank name registers nothing.
 #[test]
 fn test_custom_indicator() {
     let mut factory = IndicatorFactory::new();
+    let names = |factory: &IndicatorFactory| {
+        let mut names = factory.list();
+        names.sort();
+        names
+    };
+    let before = names(&factory);
+    for blank in ["", " \t"] {
+        assert!(!factory.register(blank, || Box::new(SMA::new(10))));
+        assert!(factory.create(blank).is_none());
+    }
+    assert_eq!(names(&factory), before);
 
-    factory.register("Custom", || Box::new(SMA::new(10)));
-
+    assert!(factory.register("Custom", || Box::new(SMA::new(10))));
     assert!(factory.has("Custom"));
     assert!(factory.create("Custom").is_some());
+    assert!(factory.register("RSI", || Box::new(SMA::new(5))));
+    assert_eq!(factory.create("RSI").unwrap().name(), "SMA");
 }
 
 /// Every registered name must construct, and the produced indicator's
@@ -82,6 +96,34 @@ fn unchanged_settings_keep_every_colour() {
         study.calculate(&bars);
         assert_eq!(colours(&study), before, "{name}");
     }
+}
+
+/// Any line is accepted by `plot_style` and `line_style`: one past the last, which renderers
+/// do not draw, gets a style instead of a panic, through the study a template recreates.
+#[test]
+fn every_study_styles_a_line_past_its_last() {
+    use crate::studies::StudyTemplate;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let factory = IndicatorFactory::new();
+    let mut panicked: Vec<String> = factory
+        .list()
+        .into_iter()
+        .filter(|name| {
+            let study = StudyTemplate::from_study(factory.create(name).unwrap().as_ref())
+                .create()
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            [study.line_count(), usize::MAX].into_iter().any(|line| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    study.plot_style(line);
+                    study.line_style(line);
+                }))
+                .is_err()
+            })
+        })
+        .collect();
+    panicked.sort();
+    assert_eq!(panicked, Vec::<String>::new());
 }
 
 /// Catalogue studies have distinct values except ADX and DMI, which expose the same Wilder
