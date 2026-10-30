@@ -77,37 +77,6 @@ impl Drawing {
         }
     }
 
-    /// Render a ray with its configured extensions and its start anchor.
-    pub(crate) fn render_ray(
-        &self,
-        painter: &egui::Painter,
-        rect: Rect,
-        color: Color32,
-        stroke: Stroke,
-    ) {
-        self.render_trend_line(painter, rect, color, stroke);
-        if self.points.len() >= 2 {
-            painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.md, color);
-        }
-    }
-
-    /// Render an extended line with its configured extensions and its anchors.
-    pub(crate) fn render_extended_line(
-        &self,
-        painter: &egui::Painter,
-        rect: Rect,
-        color: Color32,
-        stroke: Stroke,
-    ) {
-        self.render_trend_line(painter, rect, color, stroke);
-        if self.points.len() >= 2 {
-            let p1 = self.points[0];
-            let p2 = self.points[1];
-            painter.circle_filled(p1, DESIGN_TOKENS.rounding.sm, color);
-            painter.circle_filled(p2, DESIGN_TOKENS.rounding.sm, color);
-        }
-    }
-
     /// Render horizontal line
     pub(crate) fn render_horizontal_line(
         &self,
@@ -127,13 +96,11 @@ impl Drawing {
         &self,
         painter: &egui::Painter,
         rect: Rect,
-        color: Color32,
         stroke: Stroke,
     ) {
         if !self.points.is_empty() {
             let start = self.points[0];
             self.styled_segment(painter, start, Pos2::new(rect.max.x, start.y), stroke);
-            painter.circle_filled(start, DESIGN_TOKENS.rounding.md, color);
         }
     }
 
@@ -147,13 +114,7 @@ impl Drawing {
     }
 
     /// Render cross line - horizontal and vertical lines intersecting
-    pub(crate) fn render_cross_line(
-        &self,
-        painter: &egui::Painter,
-        rect: Rect,
-        color: Color32,
-        stroke: Stroke,
-    ) {
+    pub(crate) fn render_cross_line(&self, painter: &egui::Painter, rect: Rect, stroke: Stroke) {
         if !self.points.is_empty() {
             let point = self.points[0];
             let (left, right) = (
@@ -166,7 +127,6 @@ impl Drawing {
             );
             self.styled_segment(painter, left, right, stroke);
             self.styled_segment(painter, top, bottom, stroke);
-            painter.circle_filled(point, DESIGN_TOKENS.rounding.md, color);
         }
     }
 
@@ -424,12 +384,12 @@ impl Drawing {
     /// Render arc - semicircle
     pub(crate) fn render_arc(&self, painter: &egui::Painter, color: Color32, stroke: Stroke) {
         if self.points.len() >= 2 {
-            let center = self.points[0];
             for pair in self.arc_path().windows(2) {
                 painter.line_segment([pair[0], pair[1]], stroke);
             }
-
-            painter.circle_filled(center, DESIGN_TOKENS.rounding.sm, color);
+            if !self.completed && self.points.len() == 2 {
+                painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
+            }
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
         }
@@ -475,7 +435,9 @@ impl Drawing {
             if i > 0 {
                 painter.line_segment([self.points[i - 1], point], stroke);
             }
-            painter.circle_filled(point, DESIGN_TOKENS.rounding.sm, color);
+            if !self.completed {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.sm, color);
+            }
         }
     }
 

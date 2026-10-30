@@ -52,18 +52,6 @@ impl Drawing {
 
         // Draw text
         painter.text(pos, egui::Align2::LEFT_TOP, text, font, color);
-
-        // Anchor indicator at corner
-        painter.circle_filled(
-            Pos2::new(box_rect.left(), box_rect.top()),
-            DESIGN_TOKENS.rounding.sm,
-            color,
-        );
-        painter.circle_stroke(
-            Pos2::new(box_rect.left(), box_rect.top()),
-            DESIGN_TOKENS.rounding.sm,
-            Stroke::new(stroke::HAIRLINE, Color32::WHITE),
-        );
     }
 
     /// Renders anchored text at its pane-relative screen position.
@@ -133,14 +121,6 @@ impl Drawing {
             text,
             font,
             color,
-        );
-
-        // Anchor point
-        painter.circle_filled(pos, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_stroke(
-            pos,
-            DESIGN_TOKENS.rounding.md,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
         );
     }
 }

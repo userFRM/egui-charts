@@ -308,17 +308,5 @@ impl Drawing {
                 color,
             );
         }
-
-        // Anchor point at base of pole
-        painter.circle_filled(
-            Pos2::new(pos.x, pos.y + pole_length),
-            DESIGN_TOKENS.rounding.md,
-            color,
-        );
-        painter.circle_stroke(
-            Pos2::new(pos.x, pos.y + pole_length),
-            DESIGN_TOKENS.rounding.md,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
     }
 }
