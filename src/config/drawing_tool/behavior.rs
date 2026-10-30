@@ -29,6 +29,7 @@ impl DrawingToolType {
                 | Self::ArrowCursor
                 | Self::Eraser
                 | Self::TrendLine
+                | Self::TrendAngle
                 | Self::Ray
                 | Self::ExtendedLine
                 | Self::HorizontalLine
