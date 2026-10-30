@@ -165,13 +165,15 @@ mod tests {
         studies.push(ConfiguredStudy::new({
             use crate::drawings::{FibonacciConfig, FibonacciLevel};
             use crate::studies::{AutoDrawing, AutoDrawingKind};
-            let mut fibonacci = FibonacciConfig::default();
-            fibonacci.reverse = true;
-            fibonacci.show_prices = Some(false);
-            fibonacci.show_levels = Some(true);
-            fibonacci.levels_as_percent = false;
-            fibonacci.labels_on_left = true;
-            fibonacci.show_background = true;
+            let mut fibonacci = FibonacciConfig {
+                reverse: true,
+                show_prices: Some(false),
+                show_levels: Some(true),
+                levels_as_percent: false,
+                labels_on_left: true,
+                show_background: true,
+                ..FibonacciConfig::default()
+            };
             fibonacci.levels.truncate(2);
             fibonacci.levels[0].show_price = false;
             fibonacci
