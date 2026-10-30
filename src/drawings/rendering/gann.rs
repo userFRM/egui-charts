@@ -7,7 +7,7 @@ use crate::drawings::domain::{
     Drawing, DrawingToolType, GANN_MAX_ARC, GANN_SQUARE_UNITS, GannConfig, GannFanDirection,
     GannLevel,
 };
-use crate::styles::{stroke, typography};
+use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 use std::f32::consts::FRAC_PI_2;
@@ -39,6 +39,20 @@ fn level_label(value: f32) -> String {
     trim(format!("{:.6}", value + 0.0))
 }
 
+/// A fan ratio as price by time units: 2 is "2×1", 0.5 "1×2", one third "1×3".
+fn ratio_label(ratio: f32) -> String {
+    let (price, time) = if ratio >= 1.0 {
+        (ratio, 1.0)
+    } else {
+        (1.0, 1.0 / ratio)
+    };
+    format!(
+        "{}×{}",
+        trim(format!("{price:.2}")),
+        trim(format!("{time:.2}"))
+    )
+}
+
 fn trim(text: String) -> String {
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
@@ -59,22 +73,22 @@ fn gann_fan_line_y(start: Pos2, end: Pos2, ratio: f32, x: f32) -> f32 {
     start.y + (x - start.x) * base_slope * ratio
 }
 
-/// Slopes of the Gann fan's lines as multiples of the 1x1 slope: an NxM line
-/// moves N price units per M time units.
-pub(super) const GANN_FAN_RATIOS: [f32; 9] = [8.0, 4.0, 3.0, 2.0, 1.0, 0.5, 1.0 / 3.0, 0.25, 0.125];
-
-/// The Gann fan's lines from `start` towards the edge on `end`'s side, then
-/// the line to `end`.
-pub(super) fn gann_fan_lines(start: Pos2, end: Pos2, rect: Rect) -> Vec<[Pos2; 2]> {
+/// The Gann fan's lines from `start` to the edge of `rect` on `end`'s side, one per valid ratio.
+pub(super) fn gann_fan_lines(
+    start: Pos2,
+    end: Pos2,
+    rect: Rect,
+    ratios: impl IntoIterator<Item = f32>,
+) -> Vec<[Pos2; 2]> {
     let x = if end.x < start.x {
         rect.min.x
     } else {
         rect.max.x
     };
-    GANN_FAN_RATIOS
-        .iter()
-        .map(|&ratio| [start, Pos2::new(x, gann_fan_line_y(start, end, ratio, x))])
-        .chain([[start, end]])
+    ratios
+        .into_iter()
+        .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+        .map(|ratio| [start, Pos2::new(x, gann_fan_line_y(start, end, ratio, x))])
         .collect()
 }
 
@@ -213,107 +227,80 @@ impl Drawing {
         })
     }
 
-    /// Render Gann Fan - Complete 9-angle Gann fan with bi-directional support
+    /// Render Gann Fan: its visible lines from the first anchor to the chart's edge, the bands
+    /// between neighbouring lines and each line's ratio at the edge.
     pub(crate) fn render_gann_fan(&self, painter: &egui::Painter, chart_rect: Rect) {
-        if self.points.len() < 2 {
+        let &[start, end, ..] = self.points.as_slice() else {
             return;
-        }
-
-        let start = self.points[0];
-        let end = self.points[1];
+        };
         let edge = if end.x < start.x {
             chart_rect.min.x
         } else {
             chart_rect.max.x
         };
         let painter = &painter.with_clip_rect(chart_rect);
+        let config = self.gann_config();
+        let lines: Vec<(GannLevel, Pos2)> = config
+            .fan_ratios
+            .iter()
+            .filter(|l| l.visible && l.value.is_finite() && l.value > 0.0)
+            .filter_map(|&level| {
+                let y = gann_fan_line_y(start, end, level.value, edge);
+                y.is_finite().then_some((level, Pos2::new(edge, y)))
+            })
+            .collect();
 
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        // Gann fan angles with colors - 9 standard Gann angles
-        // An NxM line moves N price units per M time units: N/M times the 1x1 slope
-        let styles: [(&str, Color32); 9] = [
-            ("8×1", DESIGN_TOKENS.semantic.extended.bearish), // Steepest resistance
-            ("4×1", DESIGN_TOKENS.semantic.indicators.ma),    // Strong resistance
-            ("3×1", DESIGN_TOKENS.semantic.extended.favorite_gold), // Moderate resistance
-            ("2×1", DESIGN_TOKENS.semantic.extended.caution), // Mild resistance
-            ("1×1", DESIGN_TOKENS.semantic.extended.purple),  // 45° balance line
-            ("1×2", DESIGN_TOKENS.semantic.indicators.ema),   // Mild support
-            ("1×3", DESIGN_TOKENS.semantic.drawings.fib_100), // Moderate support
-            ("1×4", DESIGN_TOKENS.semantic.extended.bullish), // Strong support
-            ("1×8", DESIGN_TOKENS.semantic.extended.bullish), // Strongest support
-        ];
-
-        let mut labels = Vec::<Rect>::new();
-        for (angle_ratio, (label, angle_color)) in GANN_FAN_RATIOS.iter().zip(&styles) {
-            let end_y = gann_fan_line_y(start, end, *angle_ratio, edge);
-
-            // Only draw if within reasonable bounds
-            if end_y.is_finite() {
-                let fan_end = Pos2::new(edge, end_y);
-
-                // Use color based on angle (1:1 is thicker)
-                let stroke_width = if (*angle_ratio - 1.0).abs() < 0.01 {
-                    stroke::THICK
-                } else {
-                    stroke::HAIRLINE
-                };
-                let stroke_color = if self.color[3] == 255 {
-                    *angle_color
-                } else {
-                    Color32::from_rgba_unmultiplied(
-                        angle_color.r(),
-                        angle_color.g(),
-                        angle_color.b(),
-                        180,
-                    )
-                };
-
-                painter.line_segment([start, fan_end], Stroke::new(stroke_width, stroke_color));
-
-                // Draw label at chart edge with background
-                if end_y >= chart_rect.min.y && end_y <= chart_rect.max.y {
-                    let label_bg = DESIGN_TOKENS
-                        .semantic
-                        .extended
-                        .chart_axis_bg
-                        .gamma_multiply(0.85);
-                    let gann_label_width = DESIGN_TOKENS.sizing.technical_labels.gann_label_width;
-                    let gann_label_height = DESIGN_TOKENS.sizing.technical_labels.gann_label_height;
-                    let label_rect = Rect::from_min_size(
-                        Pos2::new(
-                            if end.x < start.x {
-                                edge + DESIGN_TOKENS.spacing.xs
-                            } else {
-                                edge - gann_label_width - DESIGN_TOKENS.spacing.xs
-                            },
-                            end_y - gann_label_height / 2.0,
-                        ),
-                        egui::Vec2::new(gann_label_width, gann_label_height),
-                    );
-                    if labels.iter().any(|r| r.intersects(label_rect.expand(2.0))) {
-                        continue;
-                    }
-                    labels.push(label_rect);
-                    painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
-                    painter.text(
-                        label_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        *label,
-                        egui::FontId::proportional(typography::XS),
-                        stroke_color,
-                    );
-                }
+        if config.show_background && config.background_opacity > 0 {
+            let mut sorted = lines.clone();
+            sorted.sort_by(|a, b| a.0.value.total_cmp(&b.0.value));
+            for pair in sorted.windows(2) {
+                painter.add(egui::Shape::convex_polygon(
+                    vec![start, pair[0].1, pair[1].1],
+                    band_color(&pair[1].0, config.background_opacity),
+                    Stroke::NONE,
+                ));
             }
         }
 
-        // Draw the base trend line (connecting start to end)
-        painter.line_segment([start, end], Stroke::new(self.stroke_width, color));
+        let mut labels = Vec::<Rect>::new();
+        for (level, fan_end) in &lines {
+            let color = level_color(level);
+            painter.line_segment([start, *fan_end], Stroke::new(self.stroke_width, color));
+
+            // Draw label at chart edge with background
+            if fan_end.y >= chart_rect.min.y && fan_end.y <= chart_rect.max.y {
+                let label_bg = DESIGN_TOKENS
+                    .semantic
+                    .extended
+                    .chart_axis_bg
+                    .gamma_multiply(0.85);
+                let gann_label_width = DESIGN_TOKENS.sizing.technical_labels.gann_label_width;
+                let gann_label_height = DESIGN_TOKENS.sizing.technical_labels.gann_label_height;
+                let label_rect = Rect::from_min_size(
+                    Pos2::new(
+                        if end.x < start.x {
+                            edge + DESIGN_TOKENS.spacing.xs
+                        } else {
+                            edge - gann_label_width - DESIGN_TOKENS.spacing.xs
+                        },
+                        fan_end.y - gann_label_height / 2.0,
+                    ),
+                    egui::Vec2::new(gann_label_width, gann_label_height),
+                );
+                if labels.iter().any(|r| r.intersects(label_rect.expand(2.0))) {
+                    continue;
+                }
+                labels.push(label_rect);
+                painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
+                painter.text(
+                    label_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    ratio_label(level.value),
+                    egui::FontId::proportional(typography::XS),
+                    color,
+                );
+            }
+        }
     }
 
     /// Render a Gann square or fixed square: the rings between its arcs, its price and time
@@ -676,6 +663,119 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn gann_labels_read_as_values_and_ratios() {
+        for (value, want) in [
+            (0.0, "0"),
+            (0.25, "0.25"),
+            (0.382, "0.382"),
+            (1.0, "1"),
+            (5.0, "5"),
+            (5f32.sqrt(), "2.236068"),
+        ] {
+            assert_eq!(level_label(value), want);
+        }
+        for (ratio, want) in [
+            (8.0, "8×1"),
+            (2.0, "2×1"),
+            (1.0, "1×1"),
+            (0.5, "1×2"),
+            (1.0 / 3.0, "1×3"),
+            (0.125, "1×8"),
+            (1.5, "1.5×1"),
+        ] {
+            assert_eq!(ratio_label(ratio), want);
+        }
+    }
+
+    /// Anchors (0, 100) and (10, 90) put the line of ratio r at y = 100 - 100 r on the edge x = 100.
+    /// Every line is drawn once at the drawing's width, the hidden 1x2 line and the second anchor
+    /// get no segment, and each band takes the colour of its steeper line.
+    #[test]
+    fn gann_fan_draws_visible_lines_at_one_width_with_bands() {
+        const RED: [u8; 4] = [242, 54, 69, 255];
+        const CYAN: [u8; 4] = [0, 188, 212, 255];
+        const TEAL: [u8; 4] = [8, 153, 129, 255];
+        const GREEN: [u8; 4] = [76, 175, 80, 255];
+        let start = Pos2::new(0.0, 100.0);
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 200.0));
+        let shapes = |drawing: &Drawing| {
+            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                drawing.render_gann_fan(ui.painter(), pane)
+            });
+            let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        let segments = |shapes: &[egui::Shape]| {
+            shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::LineSegment { points, stroke } => Some((*points, *stroke)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut drawing = Drawing::new(1, DrawingToolType::GannFan);
+        drawing.stroke_width = 3.0;
+        drawing.points = vec![start, Pos2::new(10.0, 90.0)];
+        drawing.gann = Some(GannConfig {
+            fan_ratios: vec![
+                GannLevel::new(2.0, RED),
+                GannLevel::new(1.0, CYAN),
+                GannLevel {
+                    visible: false,
+                    ..GannLevel::new(0.5, TEAL)
+                },
+                GannLevel::new(0.25, GREEN),
+            ],
+            ..GannConfig::default()
+        });
+        let color = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let painted = shapes(&drawing);
+        assert_eq!(
+            segments(&painted),
+            [
+                (
+                    [start, Pos2::new(100.0, -100.0)],
+                    Stroke::new(3.0, color(RED))
+                ),
+                (
+                    [start, Pos2::new(100.0, 0.0)],
+                    Stroke::new(3.0, color(CYAN))
+                ),
+                (
+                    [start, Pos2::new(100.0, 75.0)],
+                    Stroke::new(3.0, color(GREEN))
+                ),
+            ]
+        );
+        let bands: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Path(path) => Some((path.points.clone(), path.fill)),
+                _ => None,
+            })
+            .collect();
+        let band = |[r, g, b, _]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, 51);
+        assert_eq!(
+            bands,
+            [
+                (
+                    vec![start, Pos2::new(100.0, 75.0), Pos2::new(100.0, 0.0)],
+                    band(CYAN)
+                ),
+                (
+                    vec![start, Pos2::new(100.0, 0.0), Pos2::new(100.0, -100.0)],
+                    band(RED)
+                ),
+            ]
+        );
+
+        drawing.gann = None;
+        assert_eq!(segments(&shapes(&drawing)).len(), 9);
+    }
+
     /// The second anchor is a square's corner, and five times the first unit from the first anchor
     /// is a fixed square's, at every zoom. Both figures below cover 20 price units over 10 bars.
     #[test]

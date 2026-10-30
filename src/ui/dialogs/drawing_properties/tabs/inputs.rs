@@ -37,6 +37,7 @@ impl InputsTab {
                 | Tool::GannBox
                 | Tool::GannSquare
                 | Tool::GannFixed
+                | Tool::GannFan
                 | Tool::GhostFeed
                 | Tool::LongPos
                 | Tool::ShortPos
@@ -70,7 +71,7 @@ impl InputsTab {
             | Tool::SchiffPitchfork
             | Tool::ModifiedSchiffPitchfork
             | Tool::InsidePitchfork => pitchfork(ui, drawing, grid_pickers(pickers, 0)),
-            Tool::GannBox | Tool::GannSquare | Tool::GannFixed => {
+            Tool::GannBox | Tool::GannSquare | Tool::GannFixed | Tool::GannFan => {
                 gann(ui, drawing, pickers, coordinates)
             }
             Tool::GhostFeed => {
@@ -756,76 +757,88 @@ fn gann(
     let square = matches!(tool, Tool::GannSquare | Tool::GannFixed);
     let max = if square { GANN_SQUARE_UNITS } else { 1.0 };
     let new = |value| GannLevel::new(value, drawing.color);
-    if square {
-        ui.checkbox(&mut config.show_grid, l10n::text(ui.ctx(), "Show grid"));
-    }
-    if !square || config.show_grid {
-        ui.strong(l10n::text(ui.ctx(), "Price levels"));
+    if tool == Tool::GannFan {
+        ui.strong(l10n::text(ui.ctx(), "Fan lines"));
         level_grid(
             ui,
-            "Price level",
-            &mut config.price_levels,
+            "Fan line",
+            &mut config.fan_ratios,
             grid_pickers(pickers, 0),
-            new(max / 2.0),
-            |level| gann_row(level, 0.0..=max),
+            new(1.0),
+            |level| gann_row(level, 0.01..=100.0),
         );
-        ui.strong(l10n::text(ui.ctx(), "Time levels"));
-        level_grid(
-            ui,
-            "Time level",
-            &mut config.time_levels,
-            grid_pickers(pickers, 1),
-            new(max / 2.0),
-            |level| gann_row(level, 0.0..=max),
-        );
-    }
-    if square {
-        ui.checkbox(&mut config.show_fan, l10n::text(ui.ctx(), "Show fan"));
-        if config.show_fan {
-            let ctx = ui.ctx().clone();
-            ui.combo_select(
-                "gann_fan_direction",
-                &mut config.fan_direction,
-                [
-                    GannFanDirection::Forward,
-                    GannFanDirection::Reverse,
-                    GannFanDirection::Both,
-                ],
-                |v| {
-                    l10n::text(
-                        &ctx,
-                        match v {
-                            GannFanDirection::Forward => "Forward",
-                            GannFanDirection::Reverse => "Reverse",
-                            GannFanDirection::Both => "Both",
-                        },
-                    )
-                },
-            );
-            ui.strong(l10n::text(ui.ctx(), "Fan lines"));
-            level_grid(
-                ui,
-                "Fan line",
-                &mut config.fan_ratios,
-                grid_pickers(pickers, 2),
-                new(1.0),
-                |level| gann_row(level, 0.01..=100.0),
-            );
-        }
-        ui.checkbox(&mut config.show_arcs, l10n::text(ui.ctx(), "Show arcs"));
-        if config.show_arcs {
-            ui.strong(l10n::text(ui.ctx(), "Arcs"));
-            level_grid(
-                ui,
-                "Arc",
-                &mut config.arc_ratios,
-                grid_pickers(pickers, 3),
-                new(1.0),
-                |level| gann_row(level, 0.01..=GANN_MAX_ARC),
-            );
-        }
     } else {
-        ui.checkbox(&mut config.show_angles, l10n::text(ui.ctx(), "Angles"));
+        if square {
+            ui.checkbox(&mut config.show_grid, l10n::text(ui.ctx(), "Show grid"));
+        }
+        if !square || config.show_grid {
+            ui.strong(l10n::text(ui.ctx(), "Price levels"));
+            level_grid(
+                ui,
+                "Price level",
+                &mut config.price_levels,
+                grid_pickers(pickers, 0),
+                new(max / 2.0),
+                |level| gann_row(level, 0.0..=max),
+            );
+            ui.strong(l10n::text(ui.ctx(), "Time levels"));
+            level_grid(
+                ui,
+                "Time level",
+                &mut config.time_levels,
+                grid_pickers(pickers, 1),
+                new(max / 2.0),
+                |level| gann_row(level, 0.0..=max),
+            );
+        }
+        if square {
+            ui.checkbox(&mut config.show_fan, l10n::text(ui.ctx(), "Show fan"));
+            if config.show_fan {
+                let ctx = ui.ctx().clone();
+                ui.combo_select(
+                    "gann_fan_direction",
+                    &mut config.fan_direction,
+                    [
+                        GannFanDirection::Forward,
+                        GannFanDirection::Reverse,
+                        GannFanDirection::Both,
+                    ],
+                    |v| {
+                        l10n::text(
+                            &ctx,
+                            match v {
+                                GannFanDirection::Forward => "Forward",
+                                GannFanDirection::Reverse => "Reverse",
+                                GannFanDirection::Both => "Both",
+                            },
+                        )
+                    },
+                );
+                ui.strong(l10n::text(ui.ctx(), "Fan lines"));
+                level_grid(
+                    ui,
+                    "Fan line",
+                    &mut config.fan_ratios,
+                    grid_pickers(pickers, 2),
+                    new(1.0),
+                    |level| gann_row(level, 0.01..=100.0),
+                );
+            }
+            ui.checkbox(&mut config.show_arcs, l10n::text(ui.ctx(), "Show arcs"));
+            if config.show_arcs {
+                ui.strong(l10n::text(ui.ctx(), "Arcs"));
+                level_grid(
+                    ui,
+                    "Arc",
+                    &mut config.arc_ratios,
+                    grid_pickers(pickers, 3),
+                    new(1.0),
+                    |level| gann_row(level, 0.01..=GANN_MAX_ARC),
+                );
+            }
+        } else {
+            ui.checkbox(&mut config.show_angles, l10n::text(ui.ctx(), "Angles"));
+        }
     }
     background(
         ui,

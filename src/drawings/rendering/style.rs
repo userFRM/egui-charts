@@ -599,7 +599,7 @@ mod tests {
                         Shape::LineSegment { points, stroke } => (
                             drawing.points.windows(2).any(|p| p == points)
                                 || tool == CyclicLines
-                                || matches!(tool, GannBox | GannSquare | GannFixed)
+                                || matches!(tool, GannFan | GannBox | GannSquare | GannFixed)
                                 || (tool == HeadAndShoulders && stroke.color.a() == 200),
                             *stroke,
                         ),

@@ -289,7 +289,11 @@ impl Drawing {
             T::Pitchfan => {
                 outline.lines = pitchfork::pitchfan_lines(first, second, *p.get(2)?, rect)
             }
-            T::GannFan => outline.lines = gann::gann_fan_lines(first, second, rect),
+            T::GannFan => {
+                let config = self.gann_config();
+                let visible = config.fan_ratios.iter().filter(|l| l.visible);
+                outline.lines = gann::gann_fan_lines(first, second, rect, visible.map(|l| l.value));
+            }
             T::FlatTopBottom | T::DisjointChannel => return self.wedge_channel_outline(rect),
             T::ParallelChannel => return self.parallel_channel_outline(rect),
             T::FibonacciTimeZones => outline.lines = self.fibonacci_time_zone_lines(rect),

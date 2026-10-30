@@ -134,6 +134,7 @@ mod tests {
             (Tool::GannBox, "Price levels"),
             (Tool::GannSquare, "Price levels"),
             (Tool::GannFixed, "Price levels"),
+            (Tool::GannFan, "Fan lines"),
             (Tool::LongPos, "Entry price"),
             (Tool::ShortPos, "Entry price"),
             (Tool::FixedRangeVolumeProfile, "Rows"),
