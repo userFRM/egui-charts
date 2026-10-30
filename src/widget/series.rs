@@ -1973,7 +1973,6 @@ mod tests {
     #[test]
     fn the_study_limit_refuses_additions_beyond_it() {
         let mut chart = super::super::test_frames::chart(&[100.0], &[110.0]);
-        #[cfg(feature = "drawings")]
         let copied = {
             let id = chart.add_indicator(Box::new(SMA::new(9)));
             let text = chart.copy_indicator(id).unwrap();
@@ -1986,7 +1985,6 @@ mod tests {
         }
         let undoable = chart.can_undo();
         assert!(chart.try_add_indicator(Box::new(SMA::new(7))).is_err());
-        #[cfg(feature = "drawings")]
         assert!(
             chart
                 .paste_indicator(&copied, &crate::studies::IndicatorFactory::new())

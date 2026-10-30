@@ -1472,7 +1472,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ui")]
     fn series_alert_styles_stay_distinct_through_undo_and_snapshot() {
         let mut chart = chart(&[1.0], &[2.0]);
         let other = chart.add_series(crate::widget::price_series::SeriesOptions::default());
