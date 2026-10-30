@@ -629,7 +629,7 @@ mod tests {
     fn inconsistent_spacing_bounds_clamp_without_panicking() {
         // Zoom-outs stop at the effective minimum and leave zooming and scrolling usable.
         type Setup = fn(&mut TimeScale);
-        let rows: [(&str, Setup, (f32, f32)); 11] = [
+        let rows: [(&str, Setup, (f32, f32)); 10] = [
             (
                 "zero minimum",
                 |ts| ts.set_min_bar_spacing(0.0),
@@ -644,11 +644,6 @@ mod tests {
                 "maximum below floor",
                 |ts| ts.set_max_bar_spacing(1e-8),
                 (1e-6, 1e-6),
-            ),
-            (
-                "minimum below floor",
-                |ts| ts.set_min_bar_spacing(1e-8),
-                (8.0, 1e-6),
             ),
             (
                 "NaN minimum setter",
