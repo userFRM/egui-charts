@@ -19,6 +19,7 @@ impl DrawingManager {
     /// Returns the [`HandlePos`] if a handle was hit, `None` otherwise.
     pub fn hit_test_handle(&self, drawing: &Drawing, point: Pos2) -> Option<HandlePos> {
         if !drawing.selectable
+            || drawing.locked
             || !drawing.is_visible_on_timeframe(&self.curr_timeframe)
             || (!self.pane_clips.is_empty()
                 && !self
@@ -52,6 +53,16 @@ impl DrawingManager {
                         .into_iter()
                         .find(|(h, _)| *h == handle)
                         .map(|(_, p)| p)
+                        .or_else(|| {
+                            (!drawing.points.is_empty()).then(|| {
+                                Pos2::ZERO
+                                    + drawing
+                                        .points
+                                        .iter()
+                                        .fold(egui::Vec2::ZERO, |sum, p| sum + p.to_vec2())
+                                        / drawing.points.len() as f32
+                            })
+                        })
                 })
                 .flatten();
         }
@@ -665,6 +676,7 @@ impl DrawingManager {
             self.history.push_add(drawing.clone());
             let id = drawing.id;
             self.drawings.push(drawing);
+            self.select(id);
             self.queue(DrawingSyncAction::SaveDrawing(id));
             if !self.stay_in_drawing_mode {
                 self.active_tool = None;
@@ -857,6 +869,7 @@ mod tests {
                 manager.add_point_with_coords(Pos2::new(300.0, 250.0), x_to_bar, y_to_price);
             }
             assert_eq!(manager.drawings.len(), 1);
+            assert!(manager.is_selected(manager.drawings[0].id));
             assert_eq!(
                 manager.drawings[0].points,
                 vec![Pos2::new(100.0, 200.0), Pos2::new(300.0, 200.0)]

@@ -7,13 +7,13 @@
 //! - Keyboard shortcuts (Delete, Escape)
 
 use crate::chart::cursor_modes::CursorModeState;
-use crate::drawings::DrawingManager;
+use crate::drawings::{DrawingManager, HandlePos};
 use egui::{Painter, Rect, Response, Stroke, Ui, epaint::StrokeKind};
 
 /// Handle drawing selection, handle dragging, and eraser-mode deletion.
 ///
 /// When no drawing tool is active, clicks are interpreted as selection attempts.
-/// If a drawing is already selected, its body and handles can be dragged. In eraser mode,
+/// An unlocked drawing can be selected and moved in one drag. In eraser mode,
 /// clicking on a drawing deletes it instead, whatever is selected, unless it is locked.
 pub fn handle_selection<F1, F2, F3>(
     ui: &Ui,
@@ -37,7 +37,9 @@ pub fn handle_selection<F1, F2, F3>(
     };
 
     // A handle drag follows the pointer, kept on the pane, until it is released anywhere.
-    if drawing_manager.dragging_handle.is_some() {
+    if let Some((id, handle)) = drawing_manager.dragging_handle {
+        ui.ctx()
+            .set_cursor_icon(handle_cursor(drawing_manager, id, handle));
         if (response.dragged() || response.drag_stopped())
             && let Some(pos) = response.interact_pointer_pos()
         {
@@ -90,20 +92,30 @@ pub fn handle_selection<F1, F2, F3>(
         }
         cursor_modes.eraser.set_hover(None);
 
+        let selected: Vec<_> = drawing_manager.selected_ids().collect();
+        let handle = (selected.len() == 1)
+            .then(|| drawing_manager.hit_test_handle_by_id(origin, selected[0]))
+            .flatten();
+        let hit = drawing_manager.hit_test(origin).filter(|&id| {
+            drawing_manager
+                .drawings
+                .iter()
+                .any(|d| d.id == id && !d.locked)
+        });
+        if let Some(handle) = handle {
+            ui.ctx().set_cursor_icon(if handle == HandlePos::Middle {
+                egui::CursorIcon::Grab
+            } else {
+                handle_cursor(drawing_manager, selected[0], handle)
+            });
+        } else if hit.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+
         if response.drag_started() {
-            let selected: Vec<_> = drawing_manager.selected_ids().collect();
-            if selected.len() == 1
-                && let Some(handle) = drawing_manager.hit_test_handle_by_id(origin, selected[0])
-            {
+            if let Some(handle) = handle {
                 drawing_manager.start_drag_handle(selected[0], handle);
-            } else if let Some(id) = drawing_manager.hit_test(origin)
-                && (drawing_manager.is_selected(id)
-                    || (ui.input(|i| i.modifiers.ctrl || i.modifiers.command)
-                        && drawing_manager
-                            .drawings
-                            .iter()
-                            .any(|d| d.id == id && !d.locked)))
-            {
+            } else if let Some(id) = hit {
                 if !drawing_manager.is_selected(id) {
                     drawing_manager.select(id);
                 }
@@ -111,6 +123,10 @@ pub fn handle_selection<F1, F2, F3>(
             }
             if ui.input(|i| i.modifiers.ctrl || i.modifiers.command) {
                 drawing_manager.copy_dragged_drawings();
+            }
+            if let Some((id, handle)) = drawing_manager.dragging_handle {
+                ui.ctx()
+                    .set_cursor_icon(handle_cursor(drawing_manager, id, handle));
             }
             drawing_manager.update_drag_handle_with_coords(
                 price_rect.clamp(pos),
@@ -129,6 +145,26 @@ pub fn handle_selection<F1, F2, F3>(
         }
     } else {
         cursor_modes.eraser.set_hover(None);
+    }
+}
+
+fn handle_cursor(manager: &DrawingManager, id: usize, handle: HandlePos) -> egui::CursorIcon {
+    use egui::CursorIcon;
+    let reversed = manager.drawings.iter().any(|d| {
+        d.id == id
+            && d.tool_type == crate::drawings::DrawingToolType::Rect
+            && d.points.len() >= 2
+            && (d.points[1].x - d.points[0].x) * (d.points[1].y - d.points[0].y) < 0.0
+    });
+    match handle {
+        HandlePos::TopLeft | HandlePos::BottomRight if reversed => CursorIcon::ResizeNeSw,
+        HandlePos::TopRight | HandlePos::BottomLeft if reversed => CursorIcon::ResizeNwSe,
+        HandlePos::Middle => CursorIcon::Grabbing,
+        HandlePos::TopLeft | HandlePos::BottomRight => CursorIcon::ResizeNwSe,
+        HandlePos::TopRight | HandlePos::BottomLeft => CursorIcon::ResizeNeSw,
+        HandlePos::Top | HandlePos::Bottom => CursorIcon::ResizeVertical,
+        HandlePos::Left | HandlePos::Right => CursorIcon::ResizeHorizontal,
+        HandlePos::Start | HandlePos::End | HandlePos::Point(_) => CursorIcon::ResizeNwSe,
     }
 }
 
@@ -356,15 +392,43 @@ mod tests {
     }
 
     #[test]
-    fn modifier_copy_drag_does_not_pan_the_chart() {
-        use crate::widget::test_frames::{chart, frame};
+    fn body_drag_selects_without_panning_and_copies_with_modifiers() {
+        use crate::widget::test_frames::chart;
         use egui::{Modifiers, vec2};
-        for selected in [false, true] {
-            for modifiers in [Modifiers::CTRL, Modifiers::COMMAND] {
+        let frame = |ctx: &Context, chart: &mut crate::widget::Chart, time, events| {
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| chart.show(ui));
+                },
+            );
+            let cursor = output.platform_output.cursor_icon;
+            output.drop_without_applying_deltas();
+            cursor
+        };
+        for (tool, selected) in [DrawingToolType::TrendLine, DrawingToolType::Rect]
+            .into_iter()
+            .flat_map(|tool| [false, true].map(|selected| (tool, selected)))
+        {
+            for (modifiers, locked) in [
+                (Modifiers::NONE, false),
+                (Modifiers::CTRL, false),
+                (Modifiers::COMMAND, false),
+                (Modifiers::NONE, true),
+                (Modifiers::CTRL, true),
+                (Modifiers::COMMAND, true),
+            ] {
                 let ctx = Context::default();
                 let mut chart = chart(&[10.0], &[20.0]);
-                let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+                chart.chart_options.crosshair.style = crate::config::CrosshairStyle::Arrow;
+                let mut drawing = Drawing::new(7, tool);
                 drawing.completed = true;
+                drawing.locked = locked;
                 drawing.chart_points =
                     vec![ChartPoint::new(30.0, 14.0), ChartPoint::new(70.0, 17.0)];
                 let before = drawing.chart_points.clone();
@@ -374,9 +438,42 @@ mod tests {
                 }
                 frame(&ctx, &mut chart, 0.0, vec![]);
                 let points = &chart.drawings().drawings[0].points;
+                let anchor = points[0];
                 let from = points[0].lerp(points[1], 0.25);
                 let to = from + vec2(40.0, 20.0);
                 let view = chart.get_time_scale_state();
+                assert_eq!(
+                    frame(&ctx, &mut chart, 0.05, vec![Event::PointerMoved(anchor)]),
+                    if locked {
+                        egui::CursorIcon::Default
+                    } else if selected {
+                        if tool == DrawingToolType::Rect {
+                            egui::CursorIcon::ResizeNeSw
+                        } else {
+                            egui::CursorIcon::ResizeNwSe
+                        }
+                    } else {
+                        egui::CursorIcon::PointingHand
+                    },
+                );
+                if tool == DrawingToolType::Rect && selected && !locked {
+                    let points = chart.drawings().drawings[0].points.clone();
+                    for (pos, cursor) in [
+                        (
+                            Pos2::new((points[0].x + points[1].x) / 2.0, points[0].y),
+                            egui::CursorIcon::ResizeVertical,
+                        ),
+                        (
+                            Pos2::new(points[0].x, (points[0].y + points[1].y) / 2.0),
+                            egui::CursorIcon::ResizeHorizontal,
+                        ),
+                    ] {
+                        assert_eq!(
+                            frame(&ctx, &mut chart, 0.06, vec![Event::PointerMoved(pos)]),
+                            cursor
+                        );
+                    }
+                }
                 let button = |pos, pressed| Event::PointerButton {
                     pos,
                     button: PointerButton::Primary,
@@ -393,7 +490,7 @@ mod tests {
                 .into_iter()
                 .enumerate()
                 {
-                    frame(
+                    let cursor = frame(
                         &ctx,
                         &mut chart,
                         0.1 + i as f64 * 0.1,
@@ -401,21 +498,45 @@ mod tests {
                             .chain(events)
                             .collect(),
                     );
+                    if i == 0 {
+                        assert_eq!(
+                            cursor,
+                            if locked {
+                                egui::CursorIcon::Default
+                            } else {
+                                egui::CursorIcon::PointingHand
+                            }
+                        );
+                    } else if (2..=3).contains(&i) && !locked {
+                        assert_eq!(cursor, egui::CursorIcon::Grabbing);
+                    }
+                }
+                if locked {
+                    assert_ne!(chart.get_time_scale_state(), view);
+                    assert_eq!(chart.drawings().drawings[0].chart_points, before);
+                    assert_eq!(chart.drawings().is_selected(7), selected);
+                    assert!(!chart.can_undo());
+                    continue;
                 }
                 assert_eq!(
                     chart.get_time_scale_state(),
                     view,
                     "selected {selected}, {modifiers:?}"
                 );
-                assert_eq!(chart.drawings().drawings.len(), 2);
-                assert_eq!(chart.drawings().drawings[0].chart_points, before);
-                assert_ne!(chart.drawings().drawings[1].chart_points, before);
+                let copying = modifiers != Modifiers::NONE;
+                assert_eq!(chart.drawings().drawings.len(), if copying { 2 } else { 1 });
+                if copying {
+                    assert_eq!(chart.drawings().drawings[0].chart_points, before);
+                }
+                let moved = chart.drawings().drawings.last().unwrap();
+                assert_ne!(moved.chart_points, before);
+                assert!(chart.drawings().is_selected(moved.id));
                 assert!(chart.undo());
                 assert_eq!(chart.drawings().drawings.len(), 1);
                 assert_eq!(chart.drawings().drawings[0].chart_points, before);
                 assert!(!chart.can_undo());
                 assert!(chart.redo());
-                assert_eq!(chart.drawings().drawings.len(), 2);
+                assert_eq!(chart.drawings().drawings.len(), if copying { 2 } else { 1 });
             }
         }
     }
@@ -704,9 +825,9 @@ mod tests {
         use egui::vec2;
         for mode in [Normal, Percentage, IndexedTo100, Logarithmic] {
             for (inverted, dy, grab) in [false, true].into_iter().flat_map(|inverted| {
-                [-60.0, 60.0].into_iter().flat_map(move |dy| {
-                    ["body", "centre", "group"].map(|grab| (inverted, dy, grab))
-                })
+                [-60.0, 60.0]
+                    .into_iter()
+                    .flat_map(move |dy| ["body", "group"].map(|grab| (inverted, dy, grab)))
             }) {
                 let ctx = Context::default();
                 let mut chart = chart(&[10.0], &[20.0]);
@@ -744,8 +865,7 @@ mod tests {
                     .iter()
                     .map(|d| d.points.clone())
                     .collect();
-                let from =
-                    before[0][0].lerp(before[0][1], if grab == "centre" { 0.5 } else { 0.4 });
+                let from = before[0][0].lerp(before[0][1], 0.4);
                 let to = from + vec2(0.0, dy);
                 let button = |pos, pressed| Event::PointerButton {
                     pos,
@@ -781,7 +901,7 @@ mod tests {
         }
     }
 
-    /// Body and centre grabs preserve scale offsets and horizontal drags preserve exact prices,
+    /// Body grabs preserve scale offsets and horizontal drags preserve exact prices,
     /// with one history step and one host update per drawing.
     #[test]
     fn body_drags_translate_every_anchor_once_unless_locked() {
@@ -791,20 +911,13 @@ mod tests {
             DrawingToolType::Rect,
             DrawingToolType::FibonacciChannel,
         ] {
-            for (locked, multi, centre, dy, tight) in
-                [(false, true, false, 0.0, true)].into_iter().chain(
-                    [
-                        (false, false, false),
-                        (true, false, false),
-                        (false, true, false),
-                        (false, false, true),
-                    ]
+            for (locked, multi, dy, tight) in [(false, true, 0.0, true)].into_iter().chain(
+                [(false, false), (true, false), (false, true)]
                     .into_iter()
-                    .flat_map(|(locked, multi, centre)| {
-                        [-30.0, 0.0, 30.0].map(move |dy| (locked, multi, centre, dy, false))
+                    .flat_map(|(locked, multi)| {
+                        [-30.0, 0.0, 30.0].map(move |dy| (locked, multi, dy, false))
                     }),
-                )
-            {
+            ) {
                 let ctx = Context::default();
                 let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 400.0));
                 let mut manager = DrawingManager::new();
@@ -871,21 +984,12 @@ mod tests {
                     .map(|d| d.chart_points.clone())
                     .collect();
                 let drawing = &manager.drawings[0];
-                let from = if centre {
-                    manager
-                        .get_handles(drawing)
-                        .into_iter()
-                        .find(|(handle, _)| *handle == crate::drawings::HandlePos::Middle)
-                        .unwrap()
-                        .1
+                let fraction = if tight {
+                    30.0 / (drawing.points[1].y - drawing.points[0].y).abs()
                 } else {
-                    let fraction = if tight {
-                        30.0 / (drawing.points[1].y - drawing.points[0].y).abs()
-                    } else {
-                        0.25
-                    };
-                    drawing.points[0].lerp(drawing.points[1], fraction)
+                    0.25
                 };
+                let from = drawing.points[0].lerp(drawing.points[1], fraction);
                 let to = from + egui::vec2(40.0, dy);
                 let button = |pos, pressed| Event::PointerButton {
                     pos,
