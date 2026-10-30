@@ -269,7 +269,7 @@ impl Chart {
         }
     }
 
-    fn value_formatters(&self) -> renderers::ValueFormatters<'_> {
+    pub(super) fn value_formatters(&self) -> renderers::ValueFormatters<'_> {
         renderers::ValueFormatters {
             price: self
                 .series_formatters

@@ -17,8 +17,6 @@ struct LevelLabelKey<'a> {
     config: &'a FibonacciConfig,
     level: &'a FibonacciLevel,
     price: Option<f64>,
-    pixels_per_point: u32,
-    font_cache: &'a std::sync::Arc<egui::Galley>,
     formatted_price: Option<&'a str>,
     precision: u8,
 }
@@ -33,11 +31,8 @@ impl Hash for LevelLabelKey<'_> {
             self.config.show_levels,
             self.config.levels_as_percent,
             self.price.map(f64::to_bits),
-            self.level.color,
-            self.precision,
             self.formatted_price,
-            self.pixels_per_point,
-            std::sync::Arc::as_ptr(self.font_cache),
+            self.precision,
         )
             .hash(state);
     }
@@ -46,14 +41,18 @@ impl Hash for LevelLabelKey<'_> {
 #[derive(Default)]
 struct LevelLabelFormatter;
 
-type CachedLevelLabel = std::sync::Arc<(
-    std::sync::Arc<egui::Galley>,
-    std::sync::OnceLock<std::sync::Arc<egui::Galley>>,
-)>;
-
-impl egui::cache::ComputerMut<LevelLabelKey<'_>, CachedLevelLabel> for LevelLabelFormatter {
-    fn compute(&mut self, key: LevelLabelKey<'_>) -> CachedLevelLabel {
-        std::sync::Arc::new((key.font_cache.clone(), std::sync::OnceLock::new()))
+impl egui::cache::ComputerMut<LevelLabelKey<'_>, String> for LevelLabelFormatter {
+    fn compute(&mut self, key: LevelLabelKey<'_>) -> String {
+        use crate::scales::PriceFormatter;
+        let price = key
+            .price
+            .filter(|_| key.formatted_price.is_none())
+            .map(|price| {
+                crate::scales::DefaultPriceFormatter::with_precision(usize::from(key.precision))
+                    .format(price)
+            });
+        key.config
+            .label_text(key.level, key.formatted_price.or(price.as_deref()))
     }
 }
 
@@ -64,56 +63,33 @@ fn level_galley(
     price: Option<f64>,
     view: Option<&ChartView>,
 ) -> std::sync::Arc<egui::Galley> {
-    use crate::scales::PriceFormatter;
     let price = price.filter(|_| config.show_prices.unwrap_or(level.show_price));
     let formatted_price = price
         .zip(view.and_then(|v| v.price_formatter))
         .map(|(price, formatter)| formatter.format(price));
-    // An empty layout follows egui's font-cache invalidations, including theme
-    // changes and atlas rollover, without copying label text each frame. Retain
-    // it with the label so its identity cannot be reused while the label is cached.
-    let font_cache = painter.layout_no_wrap(
-        String::new(),
-        egui::FontId::proportional(typography::SM),
-        Color32::TRANSPARENT,
-    );
     let key = LevelLabelKey {
-        font_cache: &font_cache,
         config,
         level,
         price,
-        pixels_per_point: painter.pixels_per_point().to_bits(),
         formatted_price: formatted_price.as_deref(),
         precision: view
             .and_then(|v| v.instrument)
             .and_then(crate::scales::instrument_price_precision)
             .unwrap_or(2),
     };
-    let cached = painter.ctx().memory_mut(|memory| {
+    // Labels survive pan/zoom; the frame cache evicts text no longer used by any drawing.
+    let text = painter.ctx().memory_mut(|memory| {
         memory
             .caches
-            .cache::<egui::cache::FrameCache<CachedLevelLabel, LevelLabelFormatter>>()
+            .cache::<egui::cache::FrameCache<String, LevelLabelFormatter>>()
             .get(key)
             .clone()
     });
-    // Layout outside the memory lock; reused labels share the galley without copying text.
-    cached
-        .1
-        .get_or_init(|| {
-            let price = key
-                .price
-                .filter(|_| key.formatted_price.is_none())
-                .map(|price| {
-                    crate::scales::DefaultPriceFormatter::with_precision(usize::from(key.precision))
-                        .format(price)
-                });
-            painter.layout_no_wrap(
-                config.label_text(level, key.formatted_price.or(price.as_deref())),
-                egui::FontId::proportional(typography::SM),
-                level_color(level),
-            )
-        })
-        .clone()
+    painter.layout_no_wrap(
+        text,
+        egui::FontId::proportional(typography::SM),
+        level_color(level),
+    )
 }
 
 impl Drawing {
@@ -1003,43 +979,6 @@ mod tests {
                     }
                 }
             }
-        }
-        // Cached labels must use the current atlas after a theme changes its
-        // font rasterization options, just like a fresh egui layout.
-        let config = FibonacciConfig {
-            levels_as_percent: true,
-            ..Default::default()
-        };
-        let level = FibonacciLevel::new(0.5, "atlas label", [255; 4]);
-        for visuals in [
-            egui::Visuals::dark(),
-            egui::Visuals::light(),
-            egui::Visuals::dark(),
-        ] {
-            ctx.set_visuals(visuals);
-            ctx.run_ui(egui::RawInput::default(), |ui| {
-                let cached = level_galley(ui.painter(), &config, &level, Some(123.45), None);
-                let fresh = ui.painter().layout_no_wrap(
-                    "atlas label (123.45)".into(),
-                    egui::FontId::proportional(typography::SM),
-                    Color32::WHITE,
-                );
-                assert_eq!(cached.text(), fresh.text());
-                let uvs = |galley: &egui::Galley| {
-                    galley
-                        .rows
-                        .iter()
-                        .flat_map(|r| &r.visuals.mesh.vertices)
-                        .map(|v| v.uv)
-                        .collect::<Vec<_>>()
-                };
-                assert_eq!(
-                    uvs(&cached),
-                    uvs(&fresh),
-                    "label uses the current font atlas"
-                );
-            })
-            .drop_without_applying_deltas();
         }
     }
 
