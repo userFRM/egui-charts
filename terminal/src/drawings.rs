@@ -206,13 +206,10 @@ impl Terminal {
         }
         toolbar.state.has_zoom_history = chart.state().has_zoom_history();
         let manager = chart.drawings();
-        let magnet_type = if !manager.options.strong_magnet {
-            MagnetType::Weak
-        } else if toolbar.state.magnet_type == MagnetType::OHLC {
-            // OHLC is an alias of strong snapping; retain the user's menu choice.
-            MagnetType::OHLC
-        } else {
+        let magnet_type = if manager.options.strong_magnet {
             MagnetType::Strong
+        } else {
+            MagnetType::Weak
         };
         toolbar.sync_from_domain_state(&DrawingToolbarDomainState {
             sel_tool: manager.active_tool,
@@ -848,7 +845,7 @@ mod tests {
             terminal.chart().chart_options().crosshair.style,
             CrosshairStyle::Full
         );
-        // Crosshair style, magnet strength and whether the user picked the OHLC alias.
+        // Crosshair style, magnet strength.
         for (style, cursor, magnet) in [
             (CrosshairStyle::Full, CursorType::Cross, MagnetType::Weak),
             (CrosshairStyle::Dot, CursorType::Dot, MagnetType::Strong),
@@ -858,7 +855,6 @@ mod tests {
                 CursorType::Demonstration,
                 MagnetType::Strong,
             ),
-            (CrosshairStyle::Dot, CursorType::Dot, MagnetType::OHLC),
         ] {
             terminal.drawings.toolbar.state.magnet_type = magnet;
             terminal.chart_mut().set_crosshair_style(style);

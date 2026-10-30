@@ -29,7 +29,7 @@ pub enum DrawingToolbarAction {
     SelectTool(DrawingToolType),
     /// Set cursor type (Cross, Dot, Arrow, Magic)
     SetCursorType(CursorType),
-    /// Magnet mode toggled
+    /// Magnet mode toggled, from a click on the magnet or its Off row
     ToggleMagnet,
     /// Stay-in-drawing mode toggled
     ToggleStayInDrawingMode,
@@ -53,7 +53,7 @@ pub enum DrawingToolbarAction {
     RemoveAllIndicators,
     /// Remove all studies (indicators + overlays)
     RemoveAllStudies,
-    /// Change magnet type (Weak/Strong/OHLC)
+    /// Change magnet type (Weak/Strong)
     SetMagnetType(MagnetType),
     /// Include or exclude visible study plots from drawing magnet targets.
     /// Hosts set `DrawingManagerOptions::snap_to_indicators` to this value.

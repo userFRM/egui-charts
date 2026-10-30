@@ -543,9 +543,18 @@ impl DrawingToolbar {
         // Separator
         draw_separator_styled(ui, width);
 
-        // Magnet button
+        // Magnet: a click switches snapping, a secondary click opens the strength menu.
         let response = MagnetButton::show(ui, self.state.magnet_mode);
-        self.menu_button(ui, "Magnet", &response);
+        if response.clicked() {
+            self.state.magnet_mode = !self.state.magnet_mode;
+            action = DrawingToolbarAction::ToggleMagnet;
+        }
+        if response.secondary_clicked() {
+            self.toggle_category(ui.ctx(), "Magnet", response.rect);
+        }
+        if self.state.expanded_category.as_deref() == Some("Magnet") {
+            self.expanded_category_rect = Some(response.rect);
+        }
 
         // Keep Drawing
         if let Some(a) = StayInDrawingButton::show(ui, self.state.stay_in_drawing_mode) {
@@ -943,7 +952,7 @@ mod tests {
                 false,
             ),
             (MagnetType::Strong, CursorType::Dot, false, None, false),
-            (MagnetType::OHLC, CursorType::Arrow, true, None, false),
+            (MagnetType::Strong, CursorType::Arrow, true, None, false),
             (MagnetType::Strong, CursorType::Arrow, false, None, true),
         ] {
             let mut source = DrawingToolbar::new();
@@ -1037,6 +1046,90 @@ mod tests {
         assert!(!labels.contains(&TrendLine.as_str()));
         assert!(labels.contains(&DrawingToolType::HorizontalLine.as_str()));
         output.drop_without_applying_deltas();
+    }
+
+    /// Primary clicks toggle snapping; secondary clicks expose each strength once.
+    #[test]
+    fn magnet_click_switches_it_and_secondary_click_opens_the_strengths() {
+        use egui::{PointerButton, Pos2, Shape, vec2};
+        let ctx = Context::default();
+        let mut toolbar = DrawingToolbar::new();
+        let frame = |toolbar: &mut DrawingToolbar, events| {
+            let mut action = DrawingToolbarAction::None;
+            let mut origin = Pos2::ZERO;
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(52.0, 1200.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                    origin = ui.cursor().min;
+                    action = toolbar.render_toolbar_content(ui);
+                },
+            )
+            .drop_without_applying_deltas();
+            (action, origin + vec2(26.0, 437.0))
+        };
+        let (_, pos) = frame(&mut toolbar, vec![]);
+        frame(&mut toolbar, vec![Event::PointerMoved(pos)]);
+        for (button, expected_action, expected_on) in [
+            (
+                PointerButton::Primary,
+                DrawingToolbarAction::ToggleMagnet,
+                true,
+            ),
+            (
+                PointerButton::Primary,
+                DrawingToolbarAction::ToggleMagnet,
+                false,
+            ),
+            (PointerButton::Secondary, DrawingToolbarAction::None, false),
+        ] {
+            for pressed in [true, false] {
+                let (action, _) = frame(
+                    &mut toolbar,
+                    vec![Event::PointerButton {
+                        pos,
+                        button,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    }],
+                );
+                if !pressed {
+                    assert_eq!(action, expected_action);
+                    assert_eq!(toolbar.state.magnet_mode, expected_on);
+                }
+            }
+        }
+        assert_eq!(toolbar.state.expanded_category.as_deref(), Some("Magnet"));
+        for pass in 0..2 {
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 1200.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    toolbar.draw_submenu(ui, "Magnet");
+                },
+            );
+            if pass == 1 {
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                for label in ["Weak magnet", "Strong magnet"] {
+                    assert_eq!(labels.iter().filter(|&&text| text == label).count(), 1);
+                }
+                assert!(!labels.contains(&"OHLC magnet"));
+            }
+            output.drop_without_applying_deltas();
+        }
     }
 
     /// The bar keeps its grid and utility order, with distinct selection and magnet fills.

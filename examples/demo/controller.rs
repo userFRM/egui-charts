@@ -1668,13 +1668,10 @@ impl DemoApp {
             DrawingToolbarDomainState, MagnetType, categories::cursors::CursorType,
         };
         let dm = self.chart.drawings();
-        let magnet_type = if !dm.options.strong_magnet {
-            MagnetType::Weak
-        } else if self.drawing_toolbar.state.magnet_type == MagnetType::OHLC {
-            // OHLC is an alias of strong snapping; retain the user's menu choice.
-            MagnetType::OHLC
-        } else {
+        let magnet_type = if dm.options.strong_magnet {
             MagnetType::Strong
+        } else {
+            MagnetType::Weak
         };
         self.drawing_toolbar
             .sync_from_domain_state(&DrawingToolbarDomainState {
@@ -5583,11 +5580,7 @@ mod tests {
                 MagnetType::Strong,
             ),
             (CrosshairStyle::Magic, CursorType::Magic, MagnetType::Strong),
-            (CrosshairStyle::Dot, CursorType::Dot, MagnetType::OHLC),
         ] {
-            if magnet == MagnetType::OHLC {
-                app.drawing_toolbar.state.magnet_type = magnet;
-            }
             app.chart.set_crosshair_style(style);
             let dm = app.chart.drawings_mut();
             dm.options.magnet_mode = true;
