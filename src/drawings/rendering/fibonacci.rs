@@ -1246,31 +1246,72 @@ mod tests {
                 );
                 // A->B spans 100 px in time and -100 px in price. A quarter level is
                 // x=125 (zones), x=325 (projection from C), or radius sqrt(20000)/4.
+                let red_segment = |hit: &dyn Fn(&[Pos2; 2]) -> bool| {
+                    output.shapes.iter().any(|s| match &s.shape {
+                        egui::Shape::LineSegment { points, stroke } => {
+                            stroke.color == red && hit(points)
+                        }
+                        _ => false,
+                    })
+                };
                 match tool {
                     Tool::FibonacciTimeZones | Tool::TrendBasedFibTime => {
-                        let x = if tool == Tool::FibonacciTimeZones {125.0} else {325.0};
-                        assert!(output.shapes.iter().any(|s| matches!(&s.shape,
-                            egui::Shape::LineSegment{points,stroke} if stroke.color==red && points[0].x==x && points[1].x==x)), "{tool:?}: quarter interval");
+                        let x = if tool == Tool::FibonacciTimeZones {
+                            125.0
+                        } else {
+                            325.0
+                        };
+                        assert!(
+                            red_segment(&|p| p[0].x == x && p[1].x == x),
+                            "{tool:?}: quarter interval"
+                        );
                         if tool == Tool::FibonacciTimeZones {
                             let lines = drawing.outline(rect).unwrap().lines;
-                            assert!(lines.iter().any(|l|l[0].x==225.0), "added 1.25 level is selectable");
-                            assert!(!lines.iter().any(|l|l[0].x==175.0), "hidden level has no hit line");
+                            assert!(
+                                lines.iter().any(|l| l[0].x == 225.0),
+                                "added 1.25 level is selectable"
+                            );
+                            assert!(
+                                !lines.iter().any(|l| l[0].x == 175.0),
+                                "hidden level has no hit line"
+                            );
                         }
                     }
-                    Tool::FibonacciCircles => assert!(output.shapes.iter().any(|s| matches!(&s.shape,
-                        egui::Shape::Circle(c) if c.stroke.color==red && (c.radius-35.35534).abs()<1e-3))),
+                    Tool::FibonacciCircles => {
+                        assert!(output.shapes.iter().any(|s| match &s.shape {
+                            egui::Shape::Circle(c) => {
+                                c.stroke.color == red && (c.radius - 35.35534).abs() < 1e-3
+                            }
+                            _ => false,
+                        }))
+                    }
                     Tool::FibonacciSpeedFan => {
                         let lines = drawing.outline(rect).unwrap().lines;
-                        assert!(lines.iter().any(|l| l[0]==Pos2::new(100.0,200.0) && l[1]==Pos2::new(500.0,100.0)), "quarter price ray");
-                        assert!(!lines.iter().any(|l| l[0]==Pos2::new(175.0,200.0) && l[1]==Pos2::new(175.0,100.0)), "hidden grid line");
+                        let line = |a: Pos2, b: Pos2| lines.iter().any(|l| l[0] == a && l[1] == b);
+                        assert!(
+                            line(Pos2::new(100.0, 200.0), Pos2::new(500.0, 100.0)),
+                            "quarter price ray"
+                        );
+                        assert!(
+                            !line(Pos2::new(175.0, 200.0), Pos2::new(175.0, 100.0)),
+                            "hidden grid line"
+                        );
                     }
                     Tool::FibonacciSpeedResistanceArcs | Tool::FibonacciWedge => {
-                        let want = if tool == Tool::FibonacciSpeedResistanceArcs {Pos2::new(235.35534,100.0)} else {Pos2::new(125.0,175.0)};
-                        assert!(output.shapes.iter().any(|s| match &s.shape {
-                            egui::Shape::Path(p) => p.points.iter().any(|p|p.distance(want)<1e-3),
-                            egui::Shape::LineSegment{points,stroke} => stroke.color==red && points.iter().any(|p|p.distance(want)<1e-3),
+                        let want = if tool == Tool::FibonacciSpeedResistanceArcs {
+                            Pos2::new(235.35534, 100.0)
+                        } else {
+                            Pos2::new(125.0, 175.0)
+                        };
+                        let near = |p: &Pos2| p.distance(want) < 1e-3;
+                        let on_path = output.shapes.iter().any(|s| match &s.shape {
+                            egui::Shape::Path(p) => p.points.iter().any(near),
                             _ => false,
-                        }), "{tool:?}: quarter radius");
+                        });
+                        assert!(
+                            on_path || red_segment(&|p| p.iter().any(near)),
+                            "{tool:?}: quarter radius"
+                        );
                     }
                     _ => unreachable!(),
                 }

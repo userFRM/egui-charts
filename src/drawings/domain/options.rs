@@ -264,7 +264,7 @@ pub struct FibonacciConfig {
     #[serde(default)]
     pub show_levels: Option<bool>,
     /// Format level values as percentages rather than ratios.
-    #[serde(default = "show_fibonacci_labels")]
+    #[serde(default = "percent_levels")]
     pub levels_as_percent: bool,
     /// Place labels at the left end of level lines instead of the right.
     #[serde(default)]
@@ -274,7 +274,7 @@ pub struct FibonacciConfig {
     pub logarithmic: bool,
 }
 
-fn show_fibonacci_labels() -> bool {
+fn percent_levels() -> bool {
     true
 }
 
