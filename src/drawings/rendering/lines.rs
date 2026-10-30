@@ -114,12 +114,7 @@ impl Drawing {
     }
 
     /// Render cross line - horizontal and vertical lines intersecting
-    pub(crate) fn render_cross_line(
-        &self,
-        painter: &egui::Painter,
-        rect: Rect,
-        stroke: Stroke,
-    ) {
+    pub(crate) fn render_cross_line(&self, painter: &egui::Painter, rect: Rect, stroke: Stroke) {
         if !self.points.is_empty() {
             let point = self.points[0];
             let (left, right) = (
