@@ -1724,6 +1724,7 @@ impl Chart {
                     self.state.revision(),
                     &price_map,
                     config,
+                    render_ctx.tick_size,
                     &bar_clock,
                     idx_to_coord,
                     chart_rect.min.x,
@@ -4161,6 +4162,44 @@ mod tests {
             })
             .count();
         assert_eq!(profiles, 2);
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn tpo_rows_follow_the_instrument_tick_in_the_chart_type_and_the_study() {
+        use crate::model::{Bar, BarData, ChartType, Instrument, Timeframe};
+        use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
+        // A spans 5000.00 to 5000.25 and B 5000.25 to 5000.50. On rows of one 0.25 tick, A alone
+        // holds 5000.00 and B alone 5000.50, so the profile highlights two single prints.
+        let start: chrono::DateTime<chrono::Utc> = "2024-01-02T14:30:00Z".parse().unwrap();
+        let single_print = crate::tokens::DESIGN_TOKENS.semantic.tpo.single_print;
+        for study in [false, true] {
+            let bars = [(5000.0, 5000.25), (5000.25, 5000.5)]
+                .into_iter()
+                .enumerate()
+                .map(|(i, (low, high))| {
+                    let time = start + chrono::Duration::minutes(30 * i as i64);
+                    Bar::new(time, low, high, low, high, 1.0)
+                })
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Min30);
+            chart.set_instrument(Some(Instrument::new("ES").with_tick_size(0.25)));
+            if study {
+                let mut tpo = TimePriceOpportunity::default();
+                tpo.set_input("single_prints", InputValue::Toggle(true))
+                    .unwrap();
+                chart.add_indicator(Box::new(tpo));
+            } else {
+                chart.set_chart_type(ChartType::TimePriceOpportunity);
+            }
+            let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
+            let highlighted = painted
+                .iter()
+                .filter(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == single_print))
+                .count();
+            assert_eq!(highlighted, 2, "study {study}");
+        }
     }
 
     #[cfg(feature = "timezones")]
