@@ -95,8 +95,8 @@ impl Drawing {
             end.x - arrow_size * (angle + arrow_angle).cos(),
             end.y - arrow_size * (angle + arrow_angle).sin(),
         );
-        painter.line_segment([end, p1], Stroke::new(stroke::THICK, color));
-        painter.line_segment([end, p2], Stroke::new(stroke::THICK, color));
+        painter.line_segment([end, p1], Stroke::new(self.stroke_width, color));
+        painter.line_segment([end, p2], Stroke::new(self.stroke_width, color));
     }
 
     fn draw_projection_target_zone(
@@ -108,8 +108,9 @@ impl Drawing {
     ) {
         let zone_width = 20.0;
         let zone_height = (dy.abs() * 0.2).max(20.0);
-        let zone_fill =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 30);
+        let zone_fill = self.fill_color32().unwrap_or_else(|| {
+            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 30)
+        });
         let zone_rect = Rect::from_center_size(proj_end, egui::vec2(zone_width, zone_height));
         painter.rect_filled(zone_rect, DESIGN_TOKENS.rounding.md, zone_fill);
         painter.rect_stroke(

@@ -39,12 +39,14 @@ impl Drawing {
             // Draw SEMI-TRANSPARENT RECTANGLE filling the area from start to cursor
             // Color changes based on direction: red down, blue up
             let rect = egui::Rect::from_two_pos(start, end);
-            let fill_color = Color32::from_rgba_unmultiplied(
-                base_color.r(),
-                base_color.g(),
-                base_color.b(),
-                30, // Very transparent
-            );
+            let fill_color = self.fill_color32().unwrap_or_else(|| {
+                Color32::from_rgba_unmultiplied(
+                    base_color.r(),
+                    base_color.g(),
+                    base_color.b(),
+                    30, // Very transparent
+                )
+            });
             painter.rect_filled(rect, 0.0, fill_color);
 
             // Draw thin border lines around the rect
@@ -70,7 +72,7 @@ impl Drawing {
                 base_color.b(),
                 150,
             );
-            let line_stroke = Stroke::new(stroke::MEDIUM, line_color);
+            let line_stroke = Stroke::new(self.stroke_width, line_color);
 
             // Vertical line (from top to bottom)
             painter.line_segment(
@@ -209,12 +211,12 @@ impl Drawing {
         painter.hline(
             chart_rect.x_range(),
             p1.y,
-            Stroke::new(stroke::HAIRLINE, color),
+            Stroke::new(self.stroke_width, color),
         );
         painter.hline(
             chart_rect.x_range(),
             p2.y,
-            Stroke::new(stroke::HAIRLINE, color),
+            Stroke::new(self.stroke_width, color),
         );
 
         // Vertical connector
@@ -222,7 +224,7 @@ impl Drawing {
         painter.vline(
             mid_x,
             p1.y.min(p2.y)..=p1.y.max(p2.y),
-            Stroke::new(stroke::HAIRLINE, color),
+            Stroke::new(self.stroke_width, color),
         );
 
         let info = self
@@ -276,12 +278,12 @@ impl Drawing {
         painter.vline(
             p1.x,
             chart_rect.y_range(),
-            Stroke::new(stroke::HAIRLINE, color),
+            Stroke::new(self.stroke_width, color),
         );
         painter.vline(
             p2.x,
             chart_rect.y_range(),
-            Stroke::new(stroke::HAIRLINE, color),
+            Stroke::new(self.stroke_width, color),
         );
 
         // Horizontal connector
@@ -289,7 +291,7 @@ impl Drawing {
         painter.hline(
             p1.x.min(p2.x)..=p1.x.max(p2.x),
             mid_y,
-            Stroke::new(stroke::HAIRLINE, color),
+            Stroke::new(self.stroke_width, color),
         );
 
         let info = self
@@ -305,8 +307,9 @@ impl Drawing {
         );
 
         // Fill the range area
-        let fill_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 20);
+        let fill_color = self.fill_color32().unwrap_or_else(|| {
+            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 20)
+        });
         let range_rect =
             Rect::from_x_y_ranges(p1.x.min(p2.x)..=p1.x.max(p2.x), chart_rect.y_range());
         painter.rect_filled(range_rect, 0.0, fill_color);
@@ -332,12 +335,14 @@ impl Drawing {
 
         // Draw rect covering both ranges
         let rect = Rect::from_two_pos(p1, p2);
-        let fill = Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 30);
+        let fill = self.fill_color32().unwrap_or_else(|| {
+            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 30)
+        });
         painter.rect_filled(rect, 0.0, fill);
         painter.rect_stroke(
             rect,
             0.0,
-            Stroke::new(stroke::HAIRLINE, color),
+            Stroke::new(self.stroke_width, color),
             StrokeKind::Outside,
         );
 

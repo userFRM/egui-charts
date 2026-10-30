@@ -36,12 +36,14 @@ impl Drawing {
                 let (y1, y2) = (ys[i], ys[i + 1]);
 
                 // Fill with semi-transparent color using config opacity
-                let fill_color = Color32::from_rgba_unmultiplied(
-                    level1.color[0],
-                    level1.color[1],
-                    level1.color[2],
-                    config.background_opacity,
-                );
+                let fill_color = self.fill_color32().unwrap_or_else(|| {
+                    Color32::from_rgba_unmultiplied(
+                        level1.color[0],
+                        level1.color[1],
+                        level1.color[2],
+                        config.background_opacity,
+                    )
+                });
                 let fill_rect = Rect::from_x_y_ranges(x_range, y1.min(y2)..=y1.max(y2));
                 painter.rect_filled(fill_rect, 0.0, fill_color);
             }
@@ -60,7 +62,11 @@ impl Drawing {
             );
 
             // Draw line with extend support
-            painter.hline(x_start..=x_end, y, Stroke::new(stroke::HAIRLINE, lvl_color));
+            painter.hline(
+                x_start..=x_end,
+                y,
+                Stroke::new(self.stroke_width, lvl_color),
+            );
 
             if (!level.show_price && level.label.is_empty())
                 || label_ys
@@ -120,12 +126,14 @@ impl Drawing {
                 if (y1 >= chart_rect.min.y || y2 >= chart_rect.min.y)
                     && (y1 <= chart_rect.max.y || y2 <= chart_rect.max.y)
                 {
-                    let fill_color = Color32::from_rgba_unmultiplied(
-                        level1.color[0],
-                        level1.color[1],
-                        level1.color[2],
-                        config.background_opacity,
-                    );
+                    let fill_color = self.fill_color32().unwrap_or_else(|| {
+                        Color32::from_rgba_unmultiplied(
+                            level1.color[0],
+                            level1.color[1],
+                            level1.color[2],
+                            config.background_opacity,
+                        )
+                    });
                     let fill_rect = Rect::from_x_y_ranges(x_range, y1.min(y2)..=y1.max(y2));
                     painter.rect_filled(fill_rect, 0.0, fill_color);
                 }
@@ -146,7 +154,11 @@ impl Drawing {
             // Only draw if within chart rect
             if y >= chart_rect.min.y && y <= chart_rect.max.y {
                 // Draw line with extend support
-                painter.hline(x_start..=x_end, y, Stroke::new(stroke::HAIRLINE, lvl_color));
+                painter.hline(
+                    x_start..=x_end,
+                    y,
+                    Stroke::new(self.stroke_width, lvl_color),
+                );
 
                 if (!level.show_price && level.label.is_empty())
                     || label_ys
@@ -213,7 +225,7 @@ impl Drawing {
                 let point = speed_arc_point(start, end, radius, angle);
 
                 if let Some(prev) = prev_point {
-                    painter.line_segment([prev, point], Stroke::new(stroke::HAIRLINE, color));
+                    painter.line_segment([prev, point], Stroke::new(self.stroke_width, color));
                 }
                 prev_point = Some(point);
             }
@@ -255,11 +267,7 @@ impl Drawing {
             zone_positions.push(curr_x);
 
             // Determine line style based on position
-            let (stroke_width, alpha) = if fib_num <= 2 {
-                (self.stroke_width, 255) // First few zones are prominent
-            } else {
-                (stroke::HAIRLINE, 180)
-            };
+            let alpha = if fib_num <= 2 { 255 } else { 180 };
 
             let line_color =
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], alpha);
@@ -268,7 +276,7 @@ impl Drawing {
             painter.vline(
                 curr_x,
                 chart_rect.y_range(),
-                Stroke::new(stroke_width, line_color),
+                Stroke::new(self.stroke_width, line_color),
             );
 
             // Draw label with background at top
@@ -293,8 +301,9 @@ impl Drawing {
         }
 
         // Draw alternating zone fills
-        let fill_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 15);
+        let fill_color = self.fill_color32().unwrap_or_else(|| {
+            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 15)
+        });
 
         for (i, window) in zone_positions.windows(2).enumerate() {
             if i % 2 == 0 {
@@ -340,18 +349,20 @@ impl Drawing {
         );
 
         // Draw filled zones between levels
-        if config.show_background && visible_levels.len() > 1 {
+        if (config.show_background || self.fill_color.is_some()) && visible_levels.len() > 1 {
             for i in 0..visible_levels.len() - 1 {
                 let level1 = visible_levels[i];
                 let [p1_l1, p2_l1] = lines[i];
                 let [p1_l2, p2_l2] = lines[i + 1];
 
-                let fill_color = Color32::from_rgba_unmultiplied(
-                    level1.color[0],
-                    level1.color[1],
-                    level1.color[2],
-                    config.background_opacity,
-                );
+                let fill_color = self.fill_color32().unwrap_or_else(|| {
+                    Color32::from_rgba_unmultiplied(
+                        level1.color[0],
+                        level1.color[1],
+                        level1.color[2],
+                        config.background_opacity,
+                    )
+                });
 
                 painter.add(egui::epaint::PathShape::convex_polygon(
                     vec![p1_l1, p2_l1, p2_l2, p1_l2],
@@ -370,12 +381,10 @@ impl Drawing {
                 level.color[3],
             );
 
-            let stroke_width = if level.value == 0.0 || level.value == 1.0 {
-                self.stroke_width
-            } else {
-                stroke::HAIRLINE
-            };
-            painter.line_segment([draw_start, draw_end], Stroke::new(stroke_width, lvl_color));
+            painter.line_segment(
+                [draw_start, draw_end],
+                Stroke::new(self.stroke_width, lvl_color),
+            );
 
             // Draw level label with background
             let label_bg = DESIGN_TOKENS
@@ -439,7 +448,7 @@ impl Drawing {
 
         for &ratio in &fib_ratios {
             let radius = base_radius * ratio;
-            painter.circle_stroke(center, radius, Stroke::new(stroke::HAIRLINE, color));
+            painter.circle_stroke(center, radius, Stroke::new(self.stroke_width, color));
 
             // Label
             painter.text(
@@ -504,14 +513,9 @@ impl Drawing {
             let fan_end_y = fan_end.y;
 
             let line_color = level_colors[i];
-            let stroke_width = if *ratio == 0.5 {
-                stroke::MEDIUM
-            } else {
-                stroke::HAIRLINE
-            };
 
             // Draw the fan line
-            painter.line_segment([start, fan_end], Stroke::new(stroke_width, line_color));
+            painter.line_segment([start, fan_end], Stroke::new(self.stroke_width, line_color));
 
             // Draw label with background, inside the edge the line runs to
             let label_x = if fan_end.x < start.x {
@@ -548,12 +552,14 @@ impl Drawing {
             let end1 = speed_fan_line_end(start, end, fib_ratios[i].0, chart_rect);
             let end2 = speed_fan_line_end(start, end, fib_ratios[i + 1].0, chart_rect);
 
-            let fill_color = Color32::from_rgba_unmultiplied(
-                level_colors[i].r(),
-                level_colors[i].g(),
-                level_colors[i].b(),
-                fill_alpha,
-            );
+            let fill_color = self.fill_color32().unwrap_or_else(|| {
+                Color32::from_rgba_unmultiplied(
+                    level_colors[i].r(),
+                    level_colors[i].g(),
+                    level_colors[i].b(),
+                    fill_alpha,
+                )
+            });
 
             painter.add(egui::epaint::PathShape::convex_polygon(
                 vec![start, end1, end2],
@@ -572,8 +578,8 @@ impl Drawing {
             );
         }
 
-        // Draw the main trend line (thicker)
-        painter.line_segment([start, end], Stroke::new(self.stroke_width + 0.5, color));
+        // Draw the main trend line
+        painter.line_segment([start, end], Stroke::new(self.stroke_width, color));
 
         // Draw anchor points
         painter.circle_filled(start, DESIGN_TOKENS.rounding.lg, color);
@@ -611,7 +617,7 @@ impl Drawing {
             .collect();
         painter.add(egui::Shape::line(
             points,
-            Stroke::new(stroke::HAIRLINE, color),
+            Stroke::new(self.stroke_width, color),
         ));
     }
 
@@ -677,7 +683,7 @@ impl Drawing {
             painter.vline(
                 x,
                 chart_rect.y_range(),
-                Stroke::new(stroke::HAIRLINE, color),
+                Stroke::new(self.stroke_width, color),
             );
             let galley = painter.layout_no_wrap(
                 format!("{:.1}%", ratio * 100.0),

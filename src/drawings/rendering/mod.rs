@@ -723,6 +723,8 @@ mod tests {
                 (200., 250.),
                 (350., 150.),
                 (400., 200.),
+                (450., 180.),
+                (500., 250.),
             ]
             .map(|(x, y)| Pos2::new(x, y))
             .to_vec();
@@ -849,22 +851,40 @@ mod tests {
     #[test]
     fn common_annotation_fonts_are_laid_out_at_the_configured_size() {
         use crate::drawings::FontWeight;
-        for tool in [
-            DrawingToolType::TextLabel,
-            DrawingToolType::AnchoredText,
-            DrawingToolType::Note,
-            DrawingToolType::AnchoredNote,
-            DrawingToolType::Callout,
-            DrawingToolType::PriceLabel,
-            DrawingToolType::FlagNote,
-            DrawingToolType::PriceNote,
-            DrawingToolType::Comment,
-            DrawingToolType::Signpost,
-            DrawingToolType::Table,
-            DrawingToolType::FontIcon,
+        for (tool, every_label) in [
+            (DrawingToolType::TextLabel, false),
+            (DrawingToolType::AnchoredText, false),
+            (DrawingToolType::Note, false),
+            (DrawingToolType::AnchoredNote, false),
+            (DrawingToolType::Callout, false),
+            (DrawingToolType::PriceLabel, false),
+            (DrawingToolType::FlagNote, false),
+            (DrawingToolType::PriceNote, false),
+            (DrawingToolType::Comment, false),
+            (DrawingToolType::Signpost, false),
+            (DrawingToolType::Table, false),
+            (DrawingToolType::FontIcon, false),
+            (DrawingToolType::XABCDPattern, true),
+            (DrawingToolType::CypherPattern, true),
+            (DrawingToolType::HeadAndShoulders, true),
+            (DrawingToolType::ABCDPattern, true),
+            (DrawingToolType::TrianglePattern, true),
+            (DrawingToolType::ThreeDrivesPattern, true),
+            (DrawingToolType::ElliottImpulse, true),
+            (DrawingToolType::ElliottCorrection, true),
+            (DrawingToolType::ElliottTriangle, true),
+            (DrawingToolType::ElliottDoubleCombo, true),
+            (DrawingToolType::ElliottTripleCombo, true),
         ] {
             let mut drawing = Drawing::new(7, tool);
-            drawing.points = vec![Pos2::new(50.0, 100.0), Pos2::new(150.0, 150.0)];
+            drawing.points = (0..tool.required_points().unwrap_or(2).max(2))
+                .map(|i| {
+                    Pos2::new(
+                        50.0 + i as f32 * 60.0,
+                        if i % 2 == 0 { 100.0 } else { 150.0 },
+                    )
+                })
+                .collect();
             drawing.text = Some("Sample".into());
             drawing.font_size = 48.0;
             drawing.font_weight = FontWeight::Bold;
@@ -895,13 +915,18 @@ mod tests {
                         .all(|t| table.contains_rect(t.visual_bounding_rect()))
                 );
             }
+            let matching = texts
+                .iter()
+                .filter(|t| {
+                    t.galley
+                        .job
+                        .sections
+                        .iter()
+                        .all(|s| s.format.font_id.size == 48.0)
+                })
+                .count();
             assert!(
-                texts.iter().any(|t| t
-                    .galley
-                    .job
-                    .sections
-                    .iter()
-                    .any(|s| s.format.font_id.size == 48.0)),
+                matching > 0 && (!every_label || matching == texts.len()),
                 "{tool:?} ignored font size"
             );
             let bold_text: Vec<_> = texts.iter().map(|t| (*t).clone()).collect();

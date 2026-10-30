@@ -717,8 +717,7 @@ mod v1 {
             .parse()
             .map_err(serde_json::Error::custom)?;
         let Color { r, g, b, a } = stored.color;
-        let mut drawing = Drawing::new(0, tool_type);
-        drawing.color = [r, g, b, a];
+        let mut drawing = Drawing::with_color(0, tool_type, [r, g, b, a]);
         drawing.stroke_width = stored.line_width;
         drawing.locked = stored.locked;
         drawing.visible = stored.visible;

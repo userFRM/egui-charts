@@ -270,8 +270,9 @@ impl Drawing {
         painter.line_segment([p1, p2], Stroke::new(self.stroke_width, color));
 
         // Create fill polygon between trend line and flat line
-        let fill_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 35);
+        let fill_color = self.fill_color32().unwrap_or_else(|| {
+            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 35)
+        });
 
         painter.add(egui::epaint::PathShape::convex_polygon(
             flat_top_bottom_fill(p1, p2, p3),
@@ -429,8 +430,9 @@ impl Drawing {
         let mid2 = Pos2::new((p3.x + p4.x) / 2.0, (p3.y + p4.y) / 2.0);
 
         // Fill between the two channel segments
-        let fill_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 25);
+        let fill_color = self.fill_color32().unwrap_or_else(|| {
+            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 25)
+        });
         painter.add(egui::epaint::PathShape::convex_polygon(
             vec![p1, p2, p4, p3],
             fill_color,

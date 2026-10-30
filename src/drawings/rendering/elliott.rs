@@ -21,57 +21,23 @@ impl Drawing {
         // Wave labels with degree notation (can be customized)
         let labels = ["0", "1", "2", "3", "4", "5"];
 
-        // Draw fill for motive waves (1, 3, 5) vs corrective waves (2, 4)
-        if self.points.len() >= 3 {
-            // Wave 1 fill (bullish - green tint)
-            let motive_fill = DESIGN_TOKENS
-                .semantic
-                .extended
-                .bullish
-                .gamma_multiply(20_f32 / 255.0);
-            // Wave 2 fill (corrective - red tint)
-            let corrective_fill = DESIGN_TOKENS
-                .semantic
-                .extended
-                .bearish
-                .gamma_multiply(15_f32 / 255.0);
-
-            for i in 1..self.points.len() {
-                let fill = if i % 2 == 1 {
-                    motive_fill
-                } else {
-                    corrective_fill
-                };
-
-                // Draw subtle highlight under each wave
-                if i >= 1 {
-                    let start = self.points[i - 1];
-                    let end = self.points[i];
-                    let mid_x = (start.x + end.x) / 2.0;
-                    let mid_y = (start.y + end.y) / 2.0;
-
-                    painter.add(egui::epaint::PathShape::convex_polygon(
-                        vec![start, end, Pos2::new(mid_x, mid_y + 5.0)],
-                        fill,
-                        Stroke::NONE,
-                    ));
-                }
+        // Highlight the wave legs only when fill is enabled.
+        if self.points.len() >= 3
+            && let Some(fill) = self.fill_color32()
+        {
+            for leg in self.points.windows(2) {
+                let [start, end] = [leg[0], leg[1]];
+                let mid = start.lerp(end, 0.5) + egui::vec2(0.0, 5.0);
+                painter.add(egui::epaint::PathShape::convex_polygon(
+                    vec![start, end, mid],
+                    fill,
+                    Stroke::NONE,
+                ));
             }
         }
 
-        // Draw connecting lines with varying thickness
-        for i in 1..self.points.len() {
-            // Motive waves (1, 3, 5) are drawn thicker
-            let thickness = if i % 2 == 1 {
-                self.stroke_width + 0.5
-            } else {
-                self.stroke_width
-            };
-
-            painter.line_segment(
-                [self.points[i - 1], self.points[i]],
-                Stroke::new(thickness, color),
-            );
+        for leg in self.points.windows(2) {
+            painter.line_segment([leg[0], leg[1]], self.stroke());
         }
 
         // Wave 3 target, projected from the wave 2 end in price
@@ -93,7 +59,7 @@ impl Drawing {
                 Pos2::new(wave2_end.x + 45.0, target_y),
                 egui::Align2::LEFT_CENTER,
                 "1.618",
-                egui::FontId::proportional(typography::XS),
+                self.annotation_font(),
                 fib_color,
             );
         }
@@ -132,12 +98,14 @@ impl Drawing {
                 // Circle background for wave numbers
                 painter.circle_filled(
                     label_pos,
-                    DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8,
+                    (DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8)
+                        .max(self.annotation_font().size * 0.8),
                     label_bg,
                 );
                 painter.circle_stroke(
                     label_pos,
-                    DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8,
+                    (DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8)
+                        .max(self.annotation_font().size * 0.8),
                     Stroke::new(stroke::HAIRLINE, color),
                 );
 
@@ -145,7 +113,7 @@ impl Drawing {
                     label_pos,
                     egui::Align2::CENTER_CENTER,
                     labels[i],
-                    egui::FontId::proportional(typography::SM),
+                    self.annotation_font(),
                     color,
                 );
             }
@@ -172,14 +140,14 @@ impl Drawing {
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_width
                         - DESIGN_TOKENS.spacing.xl,
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-                ),
+                ) * (self.annotation_font().size / typography::XS).max(1.0),
             );
             painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
             painter.text(
                 label_pos,
                 egui::Align2::CENTER_CENTER,
                 "Impulse",
-                egui::FontId::proportional(typography::XS),
+                self.annotation_font(),
                 color,
             );
         }
@@ -199,11 +167,7 @@ impl Drawing {
 
         // Draw fill for corrective waves
         if self.points.len() >= 3 {
-            let fill_color = DESIGN_TOKENS
-                .semantic
-                .extended
-                .bearish
-                .gamma_multiply(20_f32 / 255.0);
+            let fill_color = self.fill_color32().unwrap_or(Color32::TRANSPARENT);
             painter.add(egui::epaint::PathShape::convex_polygon(
                 self.points.clone(),
                 fill_color,
@@ -249,12 +213,14 @@ impl Drawing {
 
                 painter.circle_filled(
                     label_pos,
-                    DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8,
+                    (DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8)
+                        .max(self.annotation_font().size * 0.8),
                     label_bg,
                 );
                 painter.circle_stroke(
                     label_pos,
-                    DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8,
+                    (DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8)
+                        .max(self.annotation_font().size * 0.8),
                     Stroke::new(stroke::HAIRLINE, color),
                 );
 
@@ -262,7 +228,7 @@ impl Drawing {
                     label_pos,
                     egui::Align2::CENTER_CENTER,
                     labels[i],
-                    egui::FontId::proportional(typography::SM),
+                    self.annotation_font(),
                     color,
                 );
             }
@@ -289,14 +255,14 @@ impl Drawing {
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_width
                         - DESIGN_TOKENS.spacing.sm,
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-                ),
+                ) * (self.annotation_font().size / typography::XS).max(1.0),
             );
             painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
             painter.text(
                 label_pos,
                 egui::Align2::CENTER_CENTER,
                 "Correction",
-                egui::FontId::proportional(typography::XS),
+                self.annotation_font(),
                 color,
             );
         }
@@ -315,8 +281,7 @@ impl Drawing {
 
         // Draw fill between the waves, without the origin
         if self.points.len() >= 4 {
-            let fill_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 20);
+            let fill_color = self.fill_color32().unwrap_or(Color32::TRANSPARENT);
             painter.add(egui::epaint::PathShape::convex_polygon(
                 self.points[1..].to_vec(),
                 fill_color,
@@ -419,12 +384,14 @@ impl Drawing {
                     .gamma_multiply(0.9);
                 painter.circle_filled(
                     label_pos,
-                    DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8,
+                    (DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8)
+                        .max(self.annotation_font().size * 0.8),
                     label_bg,
                 );
                 painter.circle_stroke(
                     label_pos,
-                    DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8,
+                    (DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8)
+                        .max(self.annotation_font().size * 0.8),
                     Stroke::new(stroke::HAIRLINE, color),
                 );
 
@@ -432,7 +399,7 @@ impl Drawing {
                     label_pos,
                     egui::Align2::CENTER_CENTER,
                     labels[i],
-                    egui::FontId::proportional(typography::SM),
+                    self.annotation_font(),
                     color,
                 );
             }
@@ -459,14 +426,14 @@ impl Drawing {
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_width
                         - DESIGN_TOKENS.spacing.xl,
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-                ),
+                ) * (self.annotation_font().size / typography::XS).max(1.0),
             );
             painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
             painter.text(
                 label_pos,
                 egui::Align2::CENTER_CENTER,
                 "Triangle",
-                egui::FontId::proportional(typography::XS),
+                self.annotation_font(),
                 color,
             );
         }
@@ -532,12 +499,14 @@ impl Drawing {
                     .gamma_multiply(0.9);
                 painter.circle_filled(
                     label_pos,
-                    DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8,
+                    (DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8)
+                        .max(self.annotation_font().size * 0.8),
                     label_bg,
                 );
                 painter.circle_stroke(
                     label_pos,
-                    DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8,
+                    (DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8)
+                        .max(self.annotation_font().size * 0.8),
                     Stroke::new(stroke::HAIRLINE, color),
                 );
 
@@ -545,7 +514,7 @@ impl Drawing {
                     label_pos,
                     egui::Align2::CENTER_CENTER,
                     labels[i],
-                    egui::FontId::proportional(typography::SM),
+                    self.annotation_font(),
                     color,
                 );
             }
@@ -572,14 +541,14 @@ impl Drawing {
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_width
                         + DESIGN_TOKENS.spacing.lg,
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-                ),
+                ) * (self.annotation_font().size / typography::XS).max(1.0),
             );
             painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
             painter.text(
                 label_pos,
                 egui::Align2::CENTER_CENTER,
                 "Double Combo",
-                egui::FontId::proportional(typography::XS),
+                self.annotation_font(),
                 color,
             );
         }
@@ -645,12 +614,14 @@ impl Drawing {
                     .gamma_multiply(0.9);
                 painter.circle_filled(
                     label_pos,
-                    DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8,
+                    (DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8)
+                        .max(self.annotation_font().size * 0.8),
                     label_bg,
                 );
                 painter.circle_stroke(
                     label_pos,
-                    DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8,
+                    (DESIGN_TOKENS.sizing.technical_labels.elliott_label_size / 1.8)
+                        .max(self.annotation_font().size * 0.8),
                     Stroke::new(stroke::HAIRLINE, color),
                 );
 
@@ -661,11 +632,7 @@ impl Drawing {
                     label_pos,
                     egui::Align2::CENTER_CENTER,
                     display_label,
-                    egui::FontId::proportional(if i == 3 {
-                        typography::XS
-                    } else {
-                        typography::SM
-                    }),
+                    self.annotation_font(),
                     color,
                 );
             }
@@ -692,14 +659,14 @@ impl Drawing {
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_width
                         + DESIGN_TOKENS.spacing.lg,
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-                ),
+                ) * (self.annotation_font().size / typography::XS).max(1.0),
             );
             painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
             painter.text(
                 label_pos,
                 egui::Align2::CENTER_CENTER,
                 "Triple Combo",
-                egui::FontId::proportional(typography::XS),
+                self.annotation_font(),
                 color,
             );
         }
