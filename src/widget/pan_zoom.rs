@@ -426,10 +426,15 @@ impl Chart {
     ///
     /// Applies the current velocity to the right-offset, then damps the velocity
     /// using the configured damping coefficient. Stops when velocity drops below
-    /// the minimum threshold. Requests a repaint to keep the animation running.
+    /// the minimum threshold or motion becomes non-finite. Requests a repaint
+    /// while the animation is running.
     pub(crate) fn apply_kinetic_scroll(&mut self, ui: &Ui) {
         let options = self.chart_options.kinetic_scroll;
         if !(options.enabled || options.mouse) || !self.kinetic_scroll.is_active {
+            return;
+        }
+        if !self.kinetic_scroll.velocity.is_finite() {
+            self.kinetic_scroll = super::state::KineticScrollState::new();
             return;
         }
 
@@ -449,6 +454,10 @@ impl Chart {
             let curr_offset = self.state.time_scale().right_offset_precise();
             let new_offset = curr_offset - f64::from(delta_offset);
 
+            if !new_offset.is_finite() {
+                self.kinetic_scroll = super::state::KineticScrollState::new();
+                return;
+            }
             self.state.time_scale_mut().set_right_offset(new_offset);
 
             let frames = (dt * 60.0).max(0.0);
@@ -456,10 +465,11 @@ impl Chart {
             self.kinetic_scroll.velocity *= damping;
 
             let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
-            if self.kinetic_scroll.velocity.abs() < min_v_px_s {
-                self.kinetic_scroll.is_active = false;
-                self.kinetic_scroll.velocity = 0.0;
-                self.kinetic_scroll.anim_last_time = None;
+            if !self.kinetic_scroll.velocity.is_finite()
+                || self.kinetic_scroll.velocity.abs() < min_v_px_s
+            {
+                self.kinetic_scroll = super::state::KineticScrollState::new();
+                return;
             }
         }
 
@@ -715,6 +725,81 @@ mod tests {
     use crate::widget::Chart;
     use crate::widget::test_frames::{chart, frame};
     use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
+
+    /// Invalid damping falls back at both option entry points and the animation still ends.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn kinetic_damping_options_decay_to_a_stop() {
+        for runtime in [false, true] {
+            for (coefficient, expected) in [
+                (f32::NAN, 0.997),
+                (f32::INFINITY, 0.997),
+                (f32::NEG_INFINITY, 0.997),
+                (-0.5, 0.997),
+                (1.0, 0.997),
+                (1.5, 0.997),
+                (0.0, 0.0),
+                (0.5, 0.5),
+                (0.997, 0.997),
+            ] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[95.0], &[105.0]);
+                let mut options = chart.chart_options().clone();
+                options.kinetic_scroll.enabled = true;
+                options.kinetic_scroll.damping_coeff = coefficient;
+                if runtime {
+                    chart.set_chart_options(options);
+                } else {
+                    chart = chart.with_chart_options(options);
+                }
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                chart.kinetic_scroll.is_active = true;
+                chart.kinetic_scroll.velocity = 600.0;
+                // At the default damping, 600 * 0.997^(40 * 60) < 12 px/s.
+                for i in 1..=40 {
+                    chart.kinetic_scroll.anim_last_time =
+                        Some(web_time::Instant::now() - std::time::Duration::from_secs(1));
+                    frame(&ctx, &mut chart, f64::from(i), vec![]);
+                    assert!(chart.state.time_scale().right_offset_precise().is_finite());
+                }
+                assert!(
+                    !chart.kinetic_scroll.is_active,
+                    "runtime={runtime}, damping={coefficient}"
+                );
+                assert_eq!(chart.kinetic_scroll.velocity, 0.0);
+                assert_eq!(chart.chart_options().kinetic_scroll.damping_coeff, expected);
+            }
+        }
+    }
+
+    /// Non-finite velocity and overflowing motion stop without changing the viewport.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn kinetic_invalid_motion_stops_before_scrolling() {
+        for (velocity, elapsed) in [
+            (f32::NAN, None),
+            (f32::INFINITY, Some(0.05)),
+            (f32::NEG_INFINITY, Some(0.05)),
+            (f32::MAX, Some(0.05)),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[95.0], &[105.0]);
+            chart.chart_options.kinetic_scroll.enabled = true;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.state.time_scale_mut().set_bar_spacing(0.5);
+            let offset = chart.state.time_scale().right_offset_precise();
+            chart.kinetic_scroll.is_active = true;
+            chart.kinetic_scroll.velocity = velocity;
+            chart.kinetic_scroll.anim_last_time = elapsed.map(|seconds| {
+                web_time::Instant::now() - std::time::Duration::from_secs_f32(seconds)
+            });
+            frame(&ctx, &mut chart, 0.05, vec![]);
+            assert!(!chart.kinetic_scroll.is_active, "velocity={velocity}");
+            assert_eq!(chart.kinetic_scroll.velocity, 0.0);
+            assert!(chart.kinetic_scroll.anim_last_time.is_none());
+            assert_eq!(chart.state.time_scale().right_offset_precise(), offset);
+        }
+    }
 
     /// Native zoom and contact pinch each scale once, retaining the bar under the pointer.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
