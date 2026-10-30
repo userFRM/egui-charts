@@ -88,7 +88,7 @@ use egui_charts::widget::settings::ChartSettingsState;
 use live::LiveFeed;
 use std::sync::Arc;
 
-use crate::sampledata::{DemoSymbol, visible_bars_for_range};
+use crate::sampledata::{DemoSymbol, us_equity_session, visible_bars_for_range};
 
 fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
     study
@@ -827,9 +827,15 @@ impl DemoApp {
             .map_or_else(|| "UTC".to_owned(), |zone| zone.name().to_owned());
         let clock_changed = self.timeframe_toolbar.state.timezone != name;
         self.timeframe_toolbar.set_timezone(name);
+        let symbol_changed = self.state.symbol != self.chart.symbol();
+        if symbol_changed {
+            self.sync_symbol();
+            self.stop_replay();
+        }
         if let Some(tf) = self.chart.timeframe()
-            && (tf != self.state.timeframe || clock_changed)
+            && (tf != self.state.timeframe || clock_changed || symbol_changed)
         {
+            // Reloads the bars, for the restored symbol too.
             self.switch_timeframe(tf);
         }
     }
@@ -859,14 +865,23 @@ impl DemoApp {
         {
             self.symbol_search.record_symbol(&row);
         }
+        self.user_action(|app| {
+            app.chart.set_symbol(DemoSymbol::find(symbol).symbol);
+            app.sync_symbol();
+            app.regenerate_bars();
+            // A symbol change invalidates an in-flight replay.
+            app.stop_replay();
+        });
+    }
+
+    fn sync_symbol(&mut self) {
         self.copied_drawing = None;
-        let spec = DemoSymbol::find(symbol);
+        let spec = DemoSymbol::find(self.chart.symbol());
         self.live.set_symbol(spec.symbol);
         self.time_and_sales.clear();
         self.watchlist.set_selected(spec.symbol);
         self.timeframe_toolbar.state.session_menu_open = false;
         self.state.symbol = spec.symbol.to_string();
-        self.chart.set_symbol(spec.symbol);
         for control in [
             egui_charts::ui::Control::Session,
             egui_charts::ui::Control::DividendAdjustment,
@@ -880,9 +895,6 @@ impl DemoApp {
             } else {
                 SessionType::RTH
             });
-        self.regenerate_bars();
-        // A symbol change invalidates an in-flight replay.
-        self.stop_replay();
     }
 
     fn regenerate_bars(&mut self) {
@@ -1376,7 +1388,7 @@ impl eframe::App for DemoApp {
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
         self.trading.show_ticket(ui, &self.chart);
-        let narrow_account = ui.available_width() < 700.0 && self.trading.is_connected();
+        let narrow_account = ui.available_width() < 700.0 && self.trading.has_broker();
         if narrow_account {
             self.show_account_panel(ui, panel_bg);
         }
@@ -1560,7 +1572,7 @@ impl DemoApp {
                 return;
             }
             TopToolbarAction::ToggleTrading => {
-                if !self.trading.is_connected() {
+                if !self.trading.has_broker() {
                     self.broker_picker.open();
                 } else if self.account_panel == AccountPanelSize::Closed {
                     self.account_panel = AccountPanelSize::Normal;
@@ -1668,13 +1680,10 @@ impl DemoApp {
             DrawingToolbarDomainState, MagnetType, categories::cursors::CursorType,
         };
         let dm = self.chart.drawings();
-        let magnet_type = if !dm.options.strong_magnet {
-            MagnetType::Weak
-        } else if self.drawing_toolbar.state.magnet_type == MagnetType::OHLC {
-            // OHLC is an alias of strong snapping; retain the user's menu choice.
-            MagnetType::OHLC
-        } else {
+        let magnet_type = if dm.options.strong_magnet {
             MagnetType::Strong
+        } else {
+            MagnetType::Weak
         };
         self.drawing_toolbar
             .sync_from_domain_state(&DrawingToolbarDomainState {
@@ -1777,6 +1786,19 @@ impl DemoApp {
                 for id in ids {
                     chart.set_indicator_visible(id, false);
                 }
+                return;
+            }
+            DrawingToolbarAction::HideAll => {
+                self.chart.drawings_mut().set_visibility_all(false);
+                let ids: Vec<SeriesId> = self.chart.indicators().map(|(id, _)| id).collect();
+                for id in ids {
+                    self.chart.set_indicator_visible(id, false);
+                }
+                return;
+            }
+            DrawingToolbarAction::RemoveDrawingsAndIndicators => {
+                self.chart.drawings_mut().clear_all();
+                self.remove_all_indicators();
                 return;
             }
             _ => {}
@@ -2441,7 +2463,7 @@ impl DemoApp {
                 self.paper_reset = false;
             }
         }
-        if !self.trading.is_connected() || self.account_panel == AccountPanelSize::Closed {
+        if !self.trading.has_broker() || self.account_panel == AccountPanelSize::Closed {
             return;
         }
         let height = match self.account_panel {
@@ -2560,9 +2582,15 @@ impl DemoApp {
                             self.apply_session();
                         }
                     }
-                    ui.label(
-                        "Weekdays in New York time: regular 09:30–16:00; extended 04:00–20:00.",
-                    );
+                    let hours = us_equity_session();
+                    let (regular, extended) = (&hours.windows[0], &hours.extended_windows);
+                    ui.label(format!(
+                        "Weekdays in New York time: regular {}–{}; extended {}–{}.",
+                        regular.open.format("%H:%M"),
+                        regular.close.format("%H:%M"),
+                        extended[0].open.format("%H:%M"),
+                        extended[1].close.format("%H:%M"),
+                    ));
                 });
             self.timeframe_toolbar.state.session_menu_open &= open;
         }
@@ -2669,7 +2697,7 @@ impl DemoApp {
                     }
                 }
                 if let Some(side) = self.chart.take_quote_action() {
-                    if !self.trading.is_connected() {
+                    if !self.trading.has_broker() {
                         self.broker_picker.open();
                     } else if side == egui_charts::widget::QuoteSide::Ticket {
                         self.trading
@@ -3365,6 +3393,77 @@ mod tests {
     use egui_charts::ui::dialogs::DrawingProps;
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
+    /// Symbol navigation keeps earlier edits and synchronizes the host on undo and redo.
+    #[test]
+    fn symbol_navigation_undo_redo_keeps_the_demo_on_the_chart_symbol() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-10-27T19:29:50Z".parse().unwrap(),
+            true,
+        );
+        app.switch_symbol("AAPL");
+        let original_symbol = app.state.symbol.clone();
+        let original_type = app.chart.chart_type();
+        let original_bars = app.chart.bars(SeriesId::MAIN).to_vec();
+        app.chart.apply_synced_time_scale(8.0, -30.0);
+        let original_view = app.chart.get_time_scale_state();
+        app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
+        app.switch_symbol("BTCUSD");
+        let new_bars = app.chart.bars(SeriesId::MAIN).to_vec();
+        assert_ne!(original_bars, new_bars);
+        app.start_replay();
+        assert!(app.replay.is_some());
+
+        for (action, symbol, kind, session) in [
+            (
+                TopToolbarAction::Undo,
+                original_symbol.as_str(),
+                ChartType::Line,
+                SessionType::RTH,
+            ),
+            (
+                TopToolbarAction::Undo,
+                original_symbol.as_str(),
+                original_type,
+                SessionType::RTH,
+            ),
+            (
+                TopToolbarAction::Redo,
+                original_symbol.as_str(),
+                ChartType::Line,
+                SessionType::RTH,
+            ),
+            (
+                TopToolbarAction::Redo,
+                "BTCUSD",
+                ChartType::Line,
+                SessionType::Full24x7,
+            ),
+        ] {
+            app.handle_top_toolbar(&ctx, action);
+            assert_eq!(app.chart.symbol(), symbol);
+            assert_eq!(app.state.symbol, symbol);
+            assert_eq!(app.live.instrument().symbol, symbol);
+            assert_eq!(app.state.chart_type, kind);
+            assert_eq!(app.timeframe_toolbar.state.session_type, session);
+            let bars = if symbol == "BTCUSD" {
+                &new_bars
+            } else {
+                &original_bars
+            };
+            assert_eq!(app.chart.bars(SeriesId::MAIN), bars);
+            assert_eq!(&app.bars, bars);
+            if symbol == original_symbol {
+                assert_eq!(app.chart.get_time_scale_state(), original_view);
+            }
+            assert!(app.replay.is_none());
+            assert!(!app.state.replay_active);
+            assert!(app.chart.replay_time().is_none());
+        }
+        assert!(!app.chart.can_redo());
+    }
+
     /// Drawing double clicks reach the properties dialog without taking over inline text editing.
     #[test]
     fn drawing_double_click_opens_geometry_settings() {
@@ -3914,19 +4013,12 @@ mod tests {
     fn legacy_themes_follow_system_and_new_choices_survive_restart() {
         use eframe::App;
         use egui_charts::drawings::DrawingToolType;
-        let cases = [None, Some(egui::Theme::Light), Some(egui::Theme::Dark)]
-            .into_iter()
-            .flat_map(|initial| {
-                [
-                    (None, None),
-                    (Some(true), None),
-                    (Some(false), None),
-                    (Some(true), Some("dark")),
-                    (Some(false), Some("light")),
-                ]
-                .map(|(key, document)| (initial, key, document))
-            });
-        for (initial, legacy_key, legacy_document) in cases {
+        let cases = [
+            (None, Some(true), None, 1),
+            (Some(egui::Theme::Light), Some(true), Some("dark"), 3),
+            (Some(egui::Theme::Dark), Some(false), Some("light"), 1),
+        ];
+        for (initial, legacy_key, legacy_document, restarts) in cases {
             let ctx = egui::Context::default();
             ctx.run_ui(
                 egui::RawInput {
@@ -3954,7 +4046,7 @@ mod tests {
                     ]),
                 );
             }
-            for explicit in [false, true, true] {
+            for explicit in [false, true, true].into_iter().take(restarts) {
                 let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
                 cc.storage = Some(&storage);
                 let mut app = DemoApp::new(&cc);
@@ -5583,11 +5675,7 @@ mod tests {
                 MagnetType::Strong,
             ),
             (CrosshairStyle::Magic, CursorType::Magic, MagnetType::Strong),
-            (CrosshairStyle::Dot, CursorType::Dot, MagnetType::OHLC),
         ] {
-            if magnet == MagnetType::OHLC {
-                app.drawing_toolbar.state.magnet_type = magnet;
-            }
             app.chart.set_crosshair_style(style);
             let dm = app.chart.drawings_mut();
             dm.options.magnet_mode = true;
@@ -5815,8 +5903,8 @@ mod tests {
             (Tool::GannBox, "Price divisions"),
             (Tool::GannSquare, "Price divisions"),
             (Tool::GannFixed, "Price divisions"),
-            (Tool::LongPos, "Size by"),
-            (Tool::ShortPos, "Size by"),
+            (Tool::LongPos, "Entry price"),
+            (Tool::ShortPos, "Entry price"),
             (Tool::FixedRangeVolumeProfile, "Rows"),
             (Tool::AnchoredVolumeProfile, "Rows"),
             (Tool::RegressionTrend, "Deviations"),

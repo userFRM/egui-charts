@@ -37,7 +37,8 @@ producing when `Sink::is_active` becomes false. Symbol and interval changes end
 the old subscription; implement `unsubscribe` when the backend needs explicit
 cleanup. The sink wakes the chart when data arrives. `Chart::feed_state` exposes
 loading, failures and rejected updates. See `examples/live_feed.rs` for a complete
-paged feed with a cancellable producer.
+paged feed with a cancellable producer. `examples/network_feed.rs` answers the same
+requests from an HTTP backend after the call returns, natively and in the browser.
 
 Apply a `theme::Theme` to egui at startup with `theme::apply_to_egui`. Render with
 `chart.show(ui)` inside a host panel. Drain `Chart::drain_events` after showing the
@@ -143,6 +144,7 @@ public API and generated sample data.
 | Name | Workflow |
 |---|---|
 | `live_feed` | Paged historical bars and streaming executions |
+| `network_feed` | History and live trades from a local HTTP server, natively and in the browser |
 | `custom_indicator` | Ten-bar price change with explicit warm-up values |
 | `drawing_persistence` | Editable drawing JSON, save/load and error reporting |
 | `backtesting` | Host buy-and-hold run, fees, equity and strategy metrics |

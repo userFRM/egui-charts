@@ -54,9 +54,20 @@ impl StudyTemplate {
         let study = factory
             .create(&template.name)
             .ok_or_else(|| format!("Unknown study: {}", template.name))?;
+        // Automatic drawings saved before their swings could follow volatility used the fixed
+        // percentage they were saved with.
+        let saved = |id| template.inputs.iter().any(|(saved, _)| saved == id);
+        let percent_swings = (study.inputs().iter().any(|input| input.id == "swing_size")
+            && !saved("swing_size")
+            && saved("deviation_percent"))
+        .then(|| ("swing_size".to_owned(), InputValue::Choice(1)));
+        let inputs: Vec<_> = percent_swings
+            .into_iter()
+            .chain(template.inputs.iter().cloned())
+            .collect();
         let mut study = ConfiguredStudy::new(study);
         study
-            .apply_settings(&template.inputs, template.settings.clone())
+            .apply_settings(&inputs, template.settings.clone())
             .map_err(str::to_owned)?;
         study.set_visible(template.visible);
         if let Some(scale) = template.scale {
@@ -257,6 +268,42 @@ mod tests {
         restored.calculate(&bars);
         study.calculate(&bars);
         assert_eq!(shown(restored.as_ref()), shown(&study));
+
+        // Automatic drawings keep their swing inputs, and those saved before swings could be
+        // sized by volatility restore on the fixed percentage with their saved deviation.
+        #[cfg(feature = "drawings")]
+        {
+            let mut study =
+                ConfiguredStudy::new(IndicatorFactory::new().create("Auto Pitchfork").unwrap());
+            let edited = [
+                ("swing_size", InputValue::Choice(1)),
+                ("atr_multiple", InputValue::Number(2.5)),
+                ("atr_period", InputValue::Length(7)),
+                ("deviation_percent", InputValue::Number(1.5)),
+                ("depth", InputValue::Length(4)),
+            ];
+            for (id, value) in &edited {
+                study.set_input(id, value.clone()).unwrap();
+            }
+            let saved = StudyTemplate::from_study(&study);
+            let mut before_atr = saved.clone();
+            before_atr.inputs.retain(|(id, _)| {
+                !matches!(id.as_str(), "swing_size" | "atr_multiple" | "atr_period")
+            });
+            for (template, expected) in [
+                (saved, &edited[..]),
+                (
+                    before_atr,
+                    &[edited[0].clone(), edited[3].clone(), edited[4].clone()][..],
+                ),
+            ] {
+                let inputs = template.create().unwrap().inputs();
+                for (id, value) in expected {
+                    let restored = inputs.iter().find(|input| input.id == *id).unwrap();
+                    assert_eq!(&restored.value, value, "{id}");
+                }
+            }
+        }
     }
 
     /// Templates and layouts saved before the channel studies' inputs changed load and draw the
