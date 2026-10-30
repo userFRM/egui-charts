@@ -221,7 +221,11 @@ pub(super) fn field(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     let focused = ui
         .memory(|memory| memory.focused())
         .and_then(|id| ui.ctx().read_response(id))
-        .is_some_and(|response| response.has_focus() && rect.intersects(response.rect));
+        .is_some_and(|response| {
+            response.has_focus()
+                && response.layer_id == ui.layer_id()
+                && rect.intersects(response.rect)
+        });
     let border = if !enabled {
         theme.ui.border
     } else if focused {
@@ -411,10 +415,11 @@ mod tests {
     #[test]
     fn fields_show_hover_focus_and_disabled_states() {
         for theme in [Theme::dark(), Theme::light()] {
-            for state in ["rest", "hover", "focus", "disabled"] {
+            for state in ["rest", "hover", "focus", "popup-focus", "disabled"] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut value = 1.0;
+                let mut popup_value = 1.0;
                 let mut frame = |events| {
                     ctx.run_ui(
                         egui::RawInput {
@@ -435,6 +440,16 @@ mod tests {
                                     }
                                 });
                             });
+                            if state == "popup-focus" {
+                                egui::Area::new(egui::Id::new("field_popup"))
+                                    .order(egui::Order::Foreground)
+                                    .fixed_pos(pos2(4.0, 4.0))
+                                    .show(ui.ctx(), |ui| {
+                                        ui.set_width(100.0);
+                                        number(ui, "popup_value", &mut popup_value, 0)
+                                            .request_focus();
+                                    });
+                            }
                         },
                     )
                 };
@@ -499,6 +514,11 @@ mod tests {
                         crate::theme::contrast(outline, theme.ui.panel_bg)
                             > crate::theme::contrast(rest_outline, theme.ui.panel_bg),
                         "hover must strengthen the outline"
+                    );
+                } else if state == "popup-focus" {
+                    assert_ne!(
+                        outline, theme.ui.accent,
+                        "a popup must not focus the field beneath it"
                     );
                 } else if state == "rest" {
                     assert!(crate::theme::contrast(outline, theme.ui.panel_bg) >= 3.0);
