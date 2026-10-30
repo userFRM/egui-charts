@@ -18,9 +18,9 @@ pub(crate) fn finite_clip(painter: &egui::Painter) -> Option<Rect> {
 
 /// Draw a dashed line between two arbitrary points.
 ///
-/// Works for any angle. The segment is clipped to the painter's clip rect plus half its width
-/// first and only the visible part is dashed, so the cost is bounded by the visible length
-/// however far off screen the endpoints are. The pattern stays anchored at `start`.
+/// Works for any angle. The segment is clipped to the painter's clip rect grown by half the
+/// stroke width first and only the visible part is dashed, so the cost is bounded by the visible
+/// length however far off screen the endpoints are. The pattern stays anchored at `start`.
 pub(crate) fn draw_dashed_line(
     painter: &egui::Painter,
     start: Pos2,
