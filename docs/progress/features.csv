@@ -36,7 +36,7 @@ Builder API,Datafeed API,Datafeed configuration handshake,done,host,src/data/mod
 Builder API,Datafeed API,Depth of market feed,done,host,src/ui/trading/dom.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs
 Builder API,Datafeed API,End of history and gap signalling,done,host,src/data/mod.rs;src/widget/feed/mod.rs;src/widget/studies_data.rs
 Builder API,Datafeed API,Error and retry signalling,done,host,src/widget/series.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs
-Builder API,Datafeed API,Extended hours,done,host,src/model/instrument.rs;src/data/mod.rs;src/widget/frame.rs;examples/demo/sampledata.rs;examples/demo/live.rs;src/widget/feed/mod.rs
+Builder API,Datafeed API,Extended hours,done,host,src/model/instrument.rs;src/data/mod.rs;src/widget/frame.rs;examples/demo/sampledata.rs;examples/demo/live.rs;src/widget/feed/mod.rs;examples/demo/controller.rs
 Builder API,Datafeed API,HTTP history and streaming adapter,missing,host,
 Builder API,Datafeed API,History paging when scrolling back,done,host,src/widget/frame.rs;src/widget/feed/mod.rs;src/widget/studies_data.rs;src/data/merge.rs;src/widget/feed/pump.rs
 Builder API,Datafeed API,History request parameters,done,host,src/data/mod.rs;src/widget/feed/mod.rs
@@ -46,7 +46,7 @@ Builder API,Datafeed API,Live bar stream lifecycle,done,host,src/widget/feed/mod
 Builder API,Datafeed API,Paginated symbol search,done,host,src/services/search.rs;src/ui/dialogs/symbol_search/service.rs;src/ui/dialogs/symbol_search/mod.rs
 Builder API,Datafeed API,Per-symbol resolution capabilities,done,host,src/model/instrument.rs;src/widget/feed/mod.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs
 Builder API,Datafeed API,Price precision from symbol metadata,done,host,src/model/instrument.rs;src/scales/price_formatter.rs;src/widget/frame.rs;src/ui/trading/mod.rs;src/widget/feed/mod.rs
-Builder API,Datafeed API,Quotes for watchlist and details,done,host,src/services/quotes.rs;src/ui/widget_bar/panels/watchlist.rs;src/ui/trading/mod.rs;examples/demo/live.rs
+Builder API,Datafeed API,Quotes for watchlist and details,done,host,src/services/quotes.rs;src/ui/widget_bar/panels/watchlist.rs;src/ui/trading/mod.rs;examples/demo/live.rs;examples/demo/sampledata.rs
 Builder API,Datafeed API,Realtime bar updates,done,host,src/data/merge.rs;src/widget/series.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Builder API,Datafeed API,Resolve symbol to symbol metadata,done,host,src/data/mod.rs;src/model/instrument.rs;src/widget/feed/mod.rs
 Builder API,Datafeed API,Server time,done,host,src/widget/mod.rs;src/widget/frame.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
@@ -54,7 +54,7 @@ Builder API,Datafeed API,Session breaks on intraday charts,done,library,src/widg
 Builder API,Datafeed API,Symbol search,done,host,src/services/search.rs;src/ui/dialogs/symbol_search/mod.rs;src/ui/dialogs/symbol_search/service.rs
 Builder API,Datafeed API,Timescale marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs;src/widget/mod.rs;src/model/markers.rs
 Builder API,Datafeed API,Trade tick input,done,host,src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs
-Builder API,Datafeed API,Trading session definition from the feed,done,host,src/model/instrument.rs;src/model/session/mod.rs;examples/demo/sampledata.rs;examples/demo/live.rs;src/widget/feed/mod.rs
+Builder API,Datafeed API,Trading session definition from the feed,done,host,src/model/instrument.rs;src/model/session/mod.rs;examples/demo/sampledata.rs;examples/demo/live.rs;src/widget/feed/mod.rs;examples/demo/controller.rs
 Builder API,Datafeed API,Update cost and coalescing of fast streams,done,library,src/widget/series.rs;src/widget/studies.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs
 Builder API,Datafeed API,Validation of incoming bars,done,library,src/widget/builder.rs;src/widget/series.rs;src/data/merge.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs
 Builder API,Datafeed API,Volume precision,done,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/tooltip.rs;src/widget/frame.rs;src/scales/price_formatter.rs
