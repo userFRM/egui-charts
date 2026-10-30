@@ -358,7 +358,9 @@ impl Drawing {
             }
             DrawingToolType::VerticalLine => self.render_vertical_line(painter, rect, stroke),
             DrawingToolType::CrossLine => self.render_cross_line(painter, rect, color, stroke),
-            DrawingToolType::TrendAngle => self.render_trend_angle(painter, color, stroke, view),
+            DrawingToolType::TrendAngle => {
+                return self.render_trend_angle(painter, rect, color, stroke);
+            }
             DrawingToolType::InfoLine => self.render_info_line(painter, view),
 
             // Shapes (8 tools)

@@ -494,7 +494,6 @@ impl Drawing {
             }
             DrawingToolType::PriceRange => change,
             DrawingToolType::DateRange => format!("{span}{volume}"),
-            DrawingToolType::TrendAngle => format!("{change}, {span}"),
             DrawingToolType::InfoLine => {
                 let [start, end, ..] = self.points[..] else {
                     return None;
