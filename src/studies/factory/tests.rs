@@ -84,6 +84,34 @@ fn unchanged_settings_keep_every_colour() {
     }
 }
 
+/// Any line is accepted by `plot_style` and `line_style`: one past the last, which renderers
+/// do not draw, gets a style instead of a panic, through the study a template recreates.
+#[test]
+fn every_study_styles_a_line_past_its_last() {
+    use crate::studies::StudyTemplate;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let factory = IndicatorFactory::new();
+    let mut panicked: Vec<String> = factory
+        .list()
+        .into_iter()
+        .filter(|name| {
+            let study = StudyTemplate::from_study(factory.create(name).unwrap().as_ref())
+                .create()
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            [study.line_count(), usize::MAX].into_iter().any(|line| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    study.plot_style(line);
+                    study.line_style(line);
+                }))
+                .is_err()
+            })
+        })
+        .collect();
+    panicked.sort();
+    assert_eq!(panicked, Vec::<String>::new());
+}
+
 /// Catalogue studies have distinct values except ADX and DMI, which expose the same Wilder
 /// components in a different order. Fixed profiles use a saved end.
 #[test]

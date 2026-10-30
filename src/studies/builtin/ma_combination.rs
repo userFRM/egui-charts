@@ -394,22 +394,24 @@ impl Indicator for MACombination {
         &self.markers
     }
     fn line_style(&self, line: usize) -> IndicatorLineStyle {
-        let slowest = line + 1 == self.lines.len();
-        if self.ribbon == Ribbon::Directional {
-            IndicatorLineStyle {
-                width: if slowest { 3.0 } else { 1.0 },
-                rising: Some(self.lines[line].color),
-                falling: Some(Color32::from_rgb(38, 198, 218)),
-                fill: slowest.then_some(IndicatorFill {
-                    color: Color32::from_rgb(98, 55, 174),
-                    top_alpha: 38,
-                    bottom_alpha: 10,
-                }),
+        match self.lines.get(line) {
+            Some(average) if self.ribbon == Ribbon::Directional => {
+                let slowest = line + 1 == self.lines.len();
+                IndicatorLineStyle {
+                    width: if slowest { 3.0 } else { 1.0 },
+                    rising: Some(average.color),
+                    falling: Some(Color32::from_rgb(38, 198, 218)),
+                    fill: slowest.then_some(IndicatorFill {
+                        color: Color32::from_rgb(98, 55, 174),
+                        top_alpha: 38,
+                        bottom_alpha: 10,
+                    }),
+                }
             }
-        } else {
-            IndicatorLineStyle::default()
+            _ => IndicatorLineStyle::default(),
         }
     }
+
     fn is_visible(&self) -> bool {
         self.visible
     }
