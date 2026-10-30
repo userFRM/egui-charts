@@ -546,7 +546,7 @@ impl ChartLayout {
         }
     }
 
-    fn sync_view(&self, charts: &mut [&mut Chart], count: usize, sync_range: bool) {
+    fn sync_view(&mut self, charts: &mut [&mut Chart], count: usize, sync_range: bool) {
         let hovered = charts
             .iter()
             .take(count)
@@ -571,11 +571,16 @@ impl ChartLayout {
                 && self.same_group(index, self.active)
                 && self.sync.sync_time_axis
                 && self.pending_ranges[self.active].is_none()
-                && self.pending_ranges[index].is_none()
                 && sync_range
                 && let Some(range) = range
             {
-                chart.apply_synced_time_range(range);
+                // A chart awaiting its new interval's bars fits the latest range once they arrive.
+                match &mut self.pending_ranges[index] {
+                    Some(pending) => *pending = range,
+                    None => {
+                        chart.apply_synced_time_range(range);
+                    }
+                }
             }
         }
     }
@@ -1022,6 +1027,35 @@ mod tests {
             charts[2].set_data(super::super::SeriesId::MAIN, later);
             frame(&mut layout, &mut charts);
             assert!(layout.pending_ranges.iter().all(Option::is_none));
+
+            // A chart still loading a synced interval adopts the group's latest range, so its
+            // arrival does not pull the group back to the range from before the switch.
+            let mut layout = ChartLayout {
+                mode,
+                ..Default::default()
+            };
+            layout.sync.sync_timeframe = true;
+            let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+            frame(&mut layout, &mut charts);
+            charts[0].set_timeframe(Timeframe::Hour1);
+            for chart in &mut charts {
+                chart.set_data(super::super::SeriesId::MAIN, vec![]);
+            }
+            frame(&mut layout, &mut charts);
+            let hourly = chart(3600).state.shown().to_vec();
+            charts[0].set_data(super::super::SeriesId::MAIN, hourly.clone());
+            frame(&mut layout, &mut charts);
+            charts[0].set_visible_bars(40);
+            frame(&mut layout, &mut charts);
+            let latest = charts[0].visible_time_range().unwrap();
+            charts[1].set_data(super::super::SeriesId::MAIN, hourly);
+            layout.set_active(1);
+            frame(&mut layout, &mut charts);
+            for chart in &charts[..2] {
+                let actual = chart.visible_time_range().unwrap();
+                assert!((actual.from - latest.from).num_milliseconds().abs() < 1);
+                assert!((actual.to - latest.to).num_milliseconds().abs() < 1);
+            }
         }
     }
 
