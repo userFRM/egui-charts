@@ -38,6 +38,8 @@ struct Action {
     symbol: Option<String>,
     series: Option<SeriesSet>,
     config: Option<ChartConfig>,
+    /// The main series of the other state, when the action removed it.
+    main_series: Option<MainSeries>,
     main_series_visible: Option<bool>,
     price_targets_visible: Option<bool>,
     options: Option<ChartOptions>,
@@ -81,6 +83,17 @@ impl SeriesSet {
             && self.main_alerts == other.main_alerts
             && self.props == other.props
     }
+}
+
+/// Whether the main series is present in one state of the chart, with the price lines, price
+/// formatter and bar limit that the state without it lacks. Its bars and markers stay in the
+/// chart, which reads them only while the series is present.
+#[derive(Default)]
+struct MainSeries {
+    present: bool,
+    price_lines: Vec<(super::PriceLineId, crate::model::PriceLine)>,
+    formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    bar_limit: Option<std::num::NonZeroUsize>,
 }
 
 struct StudyChange {
@@ -370,6 +383,7 @@ impl Chart {
             && action.series.is_none()
             && action.view.is_none()
             && action.config.is_none()
+            && action.main_series.is_none()
             && action.main_series_visible.is_none()
             && action.price_targets_visible.is_none()
             && action.options.is_none()
@@ -435,6 +449,33 @@ impl Chart {
         if let Some(pending) = &mut self.history.pending {
             pending.removed_series.push(series);
         }
+    }
+
+    /// Takes the main series out of the chart and pauses its feed. The pending action keeps its
+    /// price lines, formatter and bar limit, so undo restores them.
+    pub(super) fn remove_main_series(&mut self) {
+        let mut removed = MainSeries::default();
+        self.swap_main_series(&mut removed);
+        if let Some(pending) = &mut self.history.pending {
+            pending.before.main_series = Some(removed);
+        }
+    }
+
+    /// Exchanges the main series' presence, price lines, formatter and bar limit with `main`,
+    /// so the exchange reverses itself, and pauses or resumes the feed to match.
+    fn swap_main_series(&mut self, main: &mut MainSeries) {
+        std::mem::swap(&mut self.main_series_present, &mut main.present);
+        std::mem::swap(&mut self.price_lines, &mut main.price_lines);
+        main.formatter = match main.formatter.take() {
+            Some(formatter) => self.series_formatters.insert(SeriesId::MAIN, formatter),
+            None => self.series_formatters.remove(&SeriesId::MAIN),
+        };
+        main.bar_limit = match main.bar_limit.take() {
+            Some(limit) => self.bar_limits.insert(SeriesId::MAIN, limit),
+            None => self.bar_limits.remove(&SeriesId::MAIN),
+        };
+        let paused = self.feed_link.as_ref().is_some_and(|link| link.host_paused);
+        self.set_feed_paused(paused);
     }
 
     pub(super) fn record_study(&mut self, id: SeriesId) {
@@ -634,6 +675,10 @@ impl Chart {
         }
         if let Some(visible) = &mut action.price_targets_visible {
             std::mem::swap(&mut self.show_price_targets, visible);
+        }
+        // Before the visibility, which an absent main series ignores.
+        if let Some(main) = &mut action.main_series {
+            self.swap_main_series(main);
         }
         if let Some(visible) = &mut action.main_series_visible {
             let current = self.main_series_visible;
@@ -1427,6 +1472,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ui")]
     fn series_alert_styles_stay_distinct_through_undo_and_snapshot() {
         let mut chart = chart(&[1.0], &[2.0]);
         let other = chart.add_series(crate::widget::price_series::SeriesOptions::default());
@@ -1461,5 +1507,81 @@ mod tests {
         assert!(chart.redo());
         assert_eq!(chart.series_settings().alerts, main_alerts);
         assert_eq!(chart.series_style(other).unwrap().alerts, other_alerts);
+    }
+
+    /// Undo of the main series' removal, as its legend row's Remove control records it, brings
+    /// back its 100 bars, its visibility, its marker, its price line, its formatter and its bar
+    /// limit, and the feed follows the host's pause again: running when the host left it
+    /// running, also after a replay that began while the series was removed, and paused when
+    /// the host paused it. Redo removes the series again, and a second undo restores it again.
+    #[test]
+    fn undoing_the_main_series_removal_restores_it_and_its_feed() {
+        struct Feed;
+        impl crate::data::Datafeed for Feed {
+            fn history(
+                &self,
+                _: crate::data::HistoryRequest,
+                _: crate::data::Reply<crate::data::HistoryPage>,
+            ) {
+            }
+        }
+        for (host_paused, replay) in [(false, false), (true, false), (false, true)] {
+            let mut chart = chart(&[10.0], &[20.0]);
+            chart.attach_feed(std::sync::Arc::new(Feed), 1);
+            chart.set_feed_paused(host_paused);
+            let first = chart.bars(SeriesId::MAIN)[0].time;
+            let cutoff = chart.bars(SeriesId::MAIN)[50].time;
+            chart.set_markers(SeriesId::MAIN, vec![crate::model::Marker::new(first)]);
+            let line = chart
+                .add_price_line(
+                    SeriesId::MAIN,
+                    crate::model::PriceLine::new(15.0, Color32::RED),
+                )
+                .unwrap();
+            let limit = std::num::NonZeroUsize::new(1000);
+            chart.set_bar_limit(SeriesId::MAIN, limit);
+            assert!(chart.set_series_formatter(
+                SeriesId::MAIN,
+                Some(std::sync::Arc::new(crate::scales::CurrencyFormatter::usd())),
+            ));
+            let state = |chart: &Chart| {
+                (
+                    chart.bars(SeriesId::MAIN).len(),
+                    chart.is_main_series_visible(),
+                    chart.markers(SeriesId::MAIN).len(),
+                    chart.price_line(line).is_some(),
+                    chart.bar_limit(SeriesId::MAIN),
+                    chart
+                        .series_label_formatter(
+                            SeriesId::MAIN,
+                            crate::scales::PriceScaleMode::Normal,
+                        )
+                        .is_some(),
+                    chart.feed_link.as_ref().unwrap().paused,
+                )
+            };
+            let restored = (100, true, 1, true, limit, true, host_paused);
+            let removed = (0, false, 0, false, None, false, true);
+            let case = format!("host paused {host_paused}, replay {replay}");
+            assert_eq!(state(&chart), restored, "{case}: before");
+            assert!(chart.user_action(|chart| chart.remove_series(SeriesId::MAIN)));
+            assert_eq!(state(&chart), removed, "{case}: removed");
+            if replay {
+                chart.set_replay_time(Some(cutoff));
+            }
+            assert!(chart.undo());
+            if replay {
+                assert!(
+                    chart.feed_link.as_ref().unwrap().paused,
+                    "{case}: in replay"
+                );
+                chart.set_replay_time(None);
+            }
+            assert_eq!(state(&chart), restored, "{case}: undone");
+            assert!(chart.redo());
+            assert_eq!(state(&chart), removed, "{case}: redone");
+            assert!(chart.undo());
+            assert_eq!(state(&chart), restored, "{case}: undone again");
+        }
     }
 }
