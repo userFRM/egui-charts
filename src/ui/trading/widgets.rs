@@ -453,6 +453,16 @@ mod tests {
                         },
                     )
                 };
+                let outline_of = |output: &egui::FullOutput, rect: Rect| {
+                    output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(shape)
+                            if shape.rect == rect && shape.stroke.width > 0.0 =>
+                        {
+                            Some(shape.stroke.color)
+                        }
+                        _ => None,
+                    })
+                };
                 let first = frame(vec![]);
                 let rect = first
                     .shapes
@@ -464,36 +474,14 @@ mod tests {
                         _ => None,
                     })
                     .unwrap();
-                let rest_outline = first
-                    .shapes
-                    .iter()
-                    .find_map(|shape| match &shape.shape {
-                        egui::Shape::Rect(shape)
-                            if shape.rect == rect && shape.stroke.width > 0.0 =>
-                        {
-                            Some(shape.stroke.color)
-                        }
-                        _ => None,
-                    })
-                    .unwrap();
+                let rest_outline = outline_of(&first, rect).unwrap();
                 first.drop_without_applying_deltas();
                 let output = frame(if state == "hover" {
                     vec![egui::Event::PointerMoved(rect.center())]
                 } else {
                     vec![]
                 });
-                let outline = output
-                    .shapes
-                    .iter()
-                    .find_map(|shape| match &shape.shape {
-                        egui::Shape::Rect(shape)
-                            if shape.rect == rect && shape.stroke.width > 0.0 =>
-                        {
-                            Some(shape.stroke.color)
-                        }
-                        _ => None,
-                    })
-                    .unwrap();
+                let outline = outline_of(&output, rect).unwrap();
                 let fill = output
                     .shapes
                     .iter()
