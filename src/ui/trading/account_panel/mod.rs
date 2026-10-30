@@ -154,9 +154,10 @@ pub enum AccountPanelAction {
 ///
 /// A tab named after the broker sits above the account selectors and the account's summary:
 /// balance, equity, realised and unrealised profit and loss, margin, available funds and the
-/// margin of working orders, each shown when the broker reports it. Below are the positions,
-/// working orders, finished orders, balance changes and trading journal the broker pushes, each
-/// with a column chooser and an export. Order History also lists individual executions. A
+/// margin of working orders, each shown when the broker reports it. The tab marks a broker that
+/// reports that it is connecting or disconnected, until it reports that it is live. Below are the
+/// positions, working orders, finished orders, balance changes and trading journal the broker pushes,
+/// each with a column chooser and an export. Order History also lists individual executions. A
 /// position offers close, and an order offers edit and cancel on hover; each waits for the
 /// user's confirmation like the chart's lines. Clicking
 /// a symbol asks the host to show it. Each history keeps the most recent 1,000 entries; active

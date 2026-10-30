@@ -1376,7 +1376,7 @@ impl eframe::App for DemoApp {
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
         self.trading.show_ticket(ui, &self.chart);
-        let narrow_account = ui.available_width() < 700.0 && self.trading.is_connected();
+        let narrow_account = ui.available_width() < 700.0 && self.trading.has_broker();
         if narrow_account {
             self.show_account_panel(ui, panel_bg);
         }
@@ -1560,7 +1560,7 @@ impl DemoApp {
                 return;
             }
             TopToolbarAction::ToggleTrading => {
-                if !self.trading.is_connected() {
+                if !self.trading.has_broker() {
                     self.broker_picker.open();
                 } else if self.account_panel == AccountPanelSize::Closed {
                     self.account_panel = AccountPanelSize::Normal;
@@ -2441,7 +2441,7 @@ impl DemoApp {
                 self.paper_reset = false;
             }
         }
-        if !self.trading.is_connected() || self.account_panel == AccountPanelSize::Closed {
+        if !self.trading.has_broker() || self.account_panel == AccountPanelSize::Closed {
             return;
         }
         let height = match self.account_panel {
@@ -2675,7 +2675,7 @@ impl DemoApp {
                     }
                 }
                 if let Some(side) = self.chart.take_quote_action() {
-                    if !self.trading.is_connected() {
+                    if !self.trading.has_broker() {
                         self.broker_picker.open();
                     } else if side == egui_charts::widget::QuoteSide::Ticket {
                         self.trading
