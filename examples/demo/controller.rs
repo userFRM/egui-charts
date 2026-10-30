@@ -1604,7 +1604,9 @@ impl DemoApp {
                 self.size_price_based_charts();
             }
             TopToolbarAction::IntervalSelected(tf) => self.switch_timeframe(tf),
-            TopToolbarAction::OpenSymbolSearch => self.symbol_search.open(),
+            TopToolbarAction::OpenSymbolSearch => self
+                .symbol_search
+                .open_with_selected_query(self.chart.symbol().to_owned()),
             TopToolbarAction::OpenCompare => self.compare_dialog.open(),
             TopToolbarAction::OpenQuickSearch => self.quick_search.open(),
             TopToolbarAction::OpenIndicators => {
@@ -3121,7 +3123,9 @@ impl DemoApp {
                     A::OpenIndicatorSearch => {
                         self.indicator_dialog.open_for_chart(&self.chart, None);
                     }
-                    A::OpenSymbolSearch => self.symbol_search.open(),
+                    A::OpenSymbolSearch => self
+                        .symbol_search
+                        .open_with_selected_query(self.chart.symbol().to_owned()),
                     A::OpenIntervalSearch => {
                         self.interval_entry = Some(String::new());
                         self.interval_focus = true;

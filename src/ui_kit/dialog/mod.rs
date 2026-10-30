@@ -195,6 +195,7 @@ pub(crate) fn title_row(ui: &mut Ui, title: &str, closable: bool) -> bool {
                 && ui
                     .with_layout(Layout::right_to_left(Align::Center), |ui| {
                         IconButton::new(&icons::CLOSE)
+                            .icon_scale(1.0)
                             .tooltip("Close")
                             .show(ui)
                             .clicked()

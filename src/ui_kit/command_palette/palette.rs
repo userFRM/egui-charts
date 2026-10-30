@@ -159,40 +159,46 @@ impl CommandPalette {
         }
 
         crate::ui_kit::modal::Modal::new("command_palette", "Search actions")
+            .dim_background(false)
             .width(480.0)
             .height(680.0)
             .rounding(ctx.active_theme().radius.lg)
             .show(ctx, open, |ui| {
                 ui.add_space(12.0);
                 ui.separator();
-                ui.horizontal(|ui| {
-                    ui.add(
-                        icons::QUICK_SEARCH
-                            .as_image_tinted(Vec2::splat(20.0), ui.visuals().text_color()),
-                    );
-                    if focus_search {
-                        ui.memory_mut(|memory| memory.request_focus(search_id));
-                    }
-                    let response = ui
-                        .add(
-                            TextEdit::singleline(&mut self.search_query)
-                                .id(search_id)
-                                .hint_text(l10n::text(ui.ctx(), "Search actions"))
-                                // Enter runs a match; without one the query stays focused.
-                                .return_key(None)
-                                .frame(egui::Frame::NONE)
-                                .desired_width(ui.available_width())
-                                .font(egui::FontId::proportional(14.0)),
-                        )
-                        .accessible_name(l10n::text(ui.ctx(), "Search actions"));
-                    // Sizing passes clear invisible widgets' focus while building the field.
-                    if focus_search {
-                        response.request_focus();
-                    }
-                    if response.changed() {
-                        self.update_filter();
-                    }
-                });
+                // The separators and item spacing add 14 px to the 41 px search row.
+                ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), 27.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        let theme = ui.active_theme();
+                        ui.add(icons::QUICK_SEARCH.as_image_tinted(
+                            Vec2::splat(18.0),
+                            theme.ui.panel_bg.lerp_to_gamma(theme.ui.text, 0.2),
+                        ));
+                        if focus_search {
+                            ui.memory_mut(|memory| memory.request_focus(search_id));
+                        }
+                        let response = ui
+                            .add(
+                                TextEdit::singleline(&mut self.search_query)
+                                    .id(search_id)
+                                    // Enter runs a match; without one the query stays focused.
+                                    .return_key(None)
+                                    .frame(egui::Frame::NONE)
+                                    .desired_width(ui.available_width())
+                                    .font(egui::FontId::proportional(14.0)),
+                            )
+                            .accessible_name(l10n::text(ui.ctx(), "Search actions"));
+                        // Sizing passes clear invisible widgets' focus while building the field.
+                        if focus_search {
+                            response.request_focus();
+                        }
+                        if response.changed() {
+                            self.update_filter();
+                        }
+                    },
+                );
                 ui.separator();
                 ui.add_space(12.0);
                 if self.filtered.is_empty() {
@@ -202,7 +208,10 @@ impl CommandPalette {
                         "No matching actions"
                     };
                     ui.centered_and_justified(|ui| {
-                        ui.label(RichText::new(l10n::text(ui.ctx(), message)).size(14.0));
+                        ui.label(
+                            RichText::new(l10n::text(ui.ctx(), message))
+                                .size(ui.active_theme().text.heading),
+                        );
                     });
                 } else {
                     ScrollArea::vertical()
@@ -440,6 +449,62 @@ mod tests {
         )
         .drop_without_applying_deltas();
         executed
+    }
+
+    #[test]
+    fn empty_palette_has_an_undimmed_backdrop_and_a_spacious_search_row() {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut palette = CommandPalette::new(vec![]);
+            frame(&ctx, &mut palette, None);
+            let mut open = true;
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    palette.show(ui.ctx(), &mut open);
+                },
+            );
+            let rules: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { points, .. } if points[0].y == points[1].y => {
+                        Some(points[0].y)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(rules.len(), 2, "{rules:?}");
+            assert_eq!(rules[1] - rules[0], 41.0);
+            for shape in &output.shapes {
+                match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.rect.contains(egui::pos2(10.0, 10.0)) => {
+                        assert_eq!(
+                            rect.fill.a(),
+                            0,
+                            "the backdrop must leave the plot undimmed"
+                        );
+                    }
+                    egui::Shape::Text(text)
+                        if text.galley.text() == "Type to search for actions" =>
+                    {
+                        assert_eq!(
+                            text.galley.job.sections[0].format.font_id.size,
+                            theme.text.heading
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            output.drop_without_applying_deltas();
+        }
     }
 
     #[test]
