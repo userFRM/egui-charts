@@ -1,10 +1,10 @@
-//! Magnet mode button with dropdown menu.
+//! Magnet button and its strength menu.
 //!
-//! Provides magnetic snapping functionality for drawing tools:
+//! A click switches snapping on in its last strength or off; a secondary click opens the menu:
 //! - Off: no snapping
-//! - Weak Magnet: Snap within a pixel threshold
-//! - Strong Magnet: Nearest OHLC of the bar under the pointer
-//! - OHLC Magnet: Snap to OHLC price values
+//! - Weak magnet: snap within a pixel threshold
+//! - Strong magnet: nearest OHLC of the bar under the pointer
+//! - Snap to indicators: include visible study values
 
 use crate::icons::icons;
 use crate::ui::drawing_toolbar::DrawingToolbarAction;
@@ -17,7 +17,8 @@ use egui::{Response, Ui};
 pub struct MagnetButton;
 
 impl MagnetButton {
-    /// Render the magnet button, filled while snapping is on. A click opens the dropdown.
+    /// Render the magnet button, filled while snapping is on. The toolbar switches
+    /// snapping on a click and opens the strength menu on a secondary click.
     pub fn show(ui: &mut Ui, is_active: bool) -> Response {
         draw_latched_button(ui, &icons::DRAWING_MAGNET, "Magnet mode", is_active)
     }
@@ -49,11 +50,6 @@ impl MagnetButton {
             )
             .icon(&icons::DRAWING_MAGNET)
             .checked(is_current(MagnetType::Strong))
-            .add_text_item_with_action("OHLC magnet", "Snap precisely to OHLC price values", || {
-                Some(DrawingToolbarAction::SetMagnetType(MagnetType::OHLC))
-            })
-            .icon(&icons::CHART_BARS)
-            .checked(is_current(MagnetType::OHLC))
             .add_text_item_with_action(
                 "Snap to indicators",
                 "Include visible study values",

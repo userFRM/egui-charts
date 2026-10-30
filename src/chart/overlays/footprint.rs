@@ -155,7 +155,8 @@ pub fn pullback_range(bar: &Bar, flow: &Footprint) -> Option<(i64, i64)> {
 /// never request a layout. Row bands extend half an instrument tick below their first
 /// tick and above their last tick, including grouped rows. Fractional volumes below 100 retain
 /// up to three decimals; nonzero magnitudes below 0.001 use scientific notation. Only display
-/// grouping runs during painting.
+/// grouping runs during painting. Below 0.5 points per bar, cells have no horizontal area
+/// and are skipped before looking up executions.
 pub fn render_footprint(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -166,7 +167,7 @@ pub fn render_footprint(
     if bars.is_empty()
         || config.modes.is_empty()
         || !mapping.bar_spacing.is_finite()
-        || mapping.bar_spacing <= 0.0
+        || mapping.bar_spacing < 0.5
     {
         return;
     }
@@ -694,17 +695,21 @@ mod tests {
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
 
-    /// Rows cover the nearest-tick band, including manual and automatic grouping.
+    /// Rows cover the nearest-tick band; spacing below 0.5 points produces no geometry.
     #[test]
     fn rendered_rows_surround_their_instrument_ticks() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
         // y(P) = (high - P) / (high - 99) * 160, calculated independently.
-        for (tick, ticks, auto, price, high, top, bottom) in [
-            (1.0, 1, None, 100.0, 102.0, 80.0, 133.33333),
-            (0.25, 1, None, 100.25, 102.0, 86.66667, 100.0),
-            (1.0, 4, None, 100.0, 106.0, 57.142857, 148.57143),
-            (1.0, 1, Some(75.0), 100.0, 106.0, 57.142857, 148.57143),
-        ] {
+        #[rustfmt::skip]
+        let cases = [
+            (0.49, 1.0, 1, None, 100.0, 102.0, None),
+            (0.5, 1.0, 1, None, 100.0, 102.0, Some((80.0, 133.33333))),
+            (100.0, 1.0, 1, None, 100.0, 102.0, Some((80.0, 133.33333))),
+            (100.0, 0.25, 1, None, 100.25, 102.0, Some((86.66667, 100.0))),
+            (100.0, 1.0, 4, None, 100.0, 106.0, Some((57.142857, 148.57143))),
+            (100.0, 1.0, 1, Some(75.0), 100.0, 106.0, Some((57.142857, 148.57143))),
+        ];
+        for (spacing, tick, ticks, auto, price, high, extent) in cases {
             let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), tick, ticks).unwrap();
             flow.push(&Tick::new(time, price, 3.0, Some(OrderSide::Buy)))
                 .unwrap();
@@ -712,7 +717,7 @@ mod tests {
             let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 160.0));
             let map = ChartMapping::new(
                 rect,
-                100.0,
+                spacing,
                 0,
                 0,
                 0.0,
@@ -738,6 +743,13 @@ mod tests {
                 |ui| render_footprint(ui.painter(), &map, &bars, &flow, &config),
             );
             output.textures_delta.clear();
+            let Some((top, bottom)) = extent else {
+                assert!(
+                    output.shapes.is_empty(),
+                    "spacing {spacing}: unreadable cells"
+                );
+                continue;
+            };
             let extent = output
                 .shapes
                 .iter()
@@ -751,7 +763,7 @@ mod tests {
                 });
             assert!(
                 (extent.0 - top).abs() < 0.01 && (extent.1 - bottom).abs() < 0.01,
-                "tick {tick}, ticks {ticks}, auto {auto:?}: {extent:?}, expected {top}..{bottom}"
+                "spacing {spacing}, tick {tick}, ticks {ticks}, auto {auto:?}: {extent:?}, expected {top}..{bottom}"
             );
         }
     }

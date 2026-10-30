@@ -29,9 +29,7 @@ impl Drawing {
         };
 
         let theme = painter.ctx().active_theme();
-        let muted = |color: Color32| color.lerp_to_gamma(Color32::from_gray(128), 0.35);
-        let profit_color = muted(DESIGN_TOKENS.semantic.extended.bullish);
-        let loss_color = muted(DESIGN_TOKENS.semantic.extended.bearish);
+        let [profit_color, loss_color] = self.position_colors();
         // Opaque, deeper label fills keep white text legible on a light chart too.
         let label_color = |color: Color32| {
             color.lerp_to_gamma(Color32::BLACK, if theme.dark { 0.08 } else { 0.18 })
@@ -237,6 +235,52 @@ impl Drawing {
         );
     }
 
+    /// Target and stop colours, preserving the presentation of saved drawings without overrides.
+    pub(crate) fn position_colors(&self) -> [Color32; 2] {
+        [
+            (
+                self.position_target_color,
+                DESIGN_TOKENS.semantic.extended.bullish,
+            ),
+            (
+                self.position_stop_color,
+                DESIGN_TOKENS.semantic.extended.bearish,
+            ),
+        ]
+        .map(|(saved, default)| {
+            saved.map_or_else(
+                || default.lerp_to_gamma(Color32::from_gray(128), 0.35),
+                |[r, g, b, a]| Color32::from_rgba_unmultiplied(r, g, b, a),
+            )
+        })
+    }
+
+    /// Entry, target and stop for the price axis, including the mirrored stop of older drawings.
+    pub(crate) fn position_price_tags(&self, entry_color: Color32) -> Vec<(f64, Color32)> {
+        if !matches!(
+            self.tool_type,
+            crate::drawings::DrawingToolType::LongPos | crate::drawings::DrawingToolType::ShortPos
+        ) {
+            return Vec::new();
+        }
+        let [entry, target, rest @ ..] = self.chart_points.as_slice() else {
+            return Vec::new();
+        };
+        let [profit, loss] = self.position_colors();
+        [
+            (entry.price, entry_color),
+            (target.price, profit),
+            (
+                rest.first()
+                    .map_or(2.0 * entry.price - target.price, |stop| stop.price),
+                loss,
+            ),
+        ]
+        .into_iter()
+        .filter(|(price, _)| price.is_finite())
+        .collect()
+    }
+
     /// Screen x of the right edge of a position's box: as far right of the entry as the target
     /// anchor is, and at least the minimum width.
     pub(crate) fn position_right(entry: Pos2, target: Pos2) -> f32 {
@@ -391,6 +435,8 @@ mod tests {
                 ),
             ] {
                 let mut drawing = Drawing::new(1, tool);
+                drawing.position_target_color = Some([40, 100, 220, 255]);
+                drawing.position_stop_color = Some([220, 140, 40, 255]);
                 drawing.position_sizing = crate::drawings::PositionSizing {
                     point_value: 50.0,
                     lot_size: 10.0,
@@ -408,6 +454,10 @@ mod tests {
                 {
                     let ctx = egui::Context::default();
                     let mut chart = chart(&[low], &[high]);
+                    chart.set_instrument(Some(
+                        crate::model::Instrument::new("TEST").with_price_decimals(5),
+                    ));
+                    chart.price_scale_mut().set_range(94.0, 106.0);
                     chart.set_theme(
                         &ctx,
                         &if dark {
@@ -437,6 +487,30 @@ mod tests {
                     });
                     chart.drawings_mut().drawings.push(drawing.clone());
                     let output = render(&mut chart);
+                    let plot = chart.get_rendered_price_rect();
+                    for price in [100.0, target, stop] {
+                        let label = format!("{price:.5}");
+                        assert!(
+                            output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::Shape::Text(text) if text.pos.x >= plot.right()
+                                && text.galley.text() == label)),
+                            "missing axis tag {label}"
+                        );
+                    }
+                    for fill in [
+                        Color32::from_rgb(40, 100, 220),
+                        Color32::from_rgb(220, 140, 40),
+                    ] {
+                        let alpha = if dark { 0.20 } else { 0.12 };
+                        assert!(
+                            output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::Shape::Rect(rect) if rect.fill == fill.gamma_multiply(alpha))),
+                            "configured zone colour {fill:?}"
+                        );
+                        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::Shape::Rect(rect) if rect.fill == fill && rect.rect.left() >= plot.right())),
+                            "configured axis colour {fill:?}");
+                    }
                     let summary = output
                         .shapes
                         .iter()
@@ -460,6 +534,26 @@ mod tests {
                         summary.visual_bounding_rect()
                     );
                     output.drop_without_applying_deltas();
+                    // Hidden by the visibility flag, then by the timeframe filter alone.
+                    for (visible, timeframes) in [
+                        (false, crate::drawings::TimeframeVisibility::all()),
+                        (
+                            true,
+                            crate::drawings::TimeframeVisibility::specific(&["1h"]),
+                        ),
+                    ] {
+                        let drawing = &mut chart.drawings_mut().drawings[0];
+                        drawing.visible = visible;
+                        drawing.timeframe_visibility = timeframes;
+                        let output = render(&mut chart);
+                        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::Shape::Text(text) if text.pos.x >= chart.get_rendered_price_rect().right()
+                                && text.galley.text() == format!("{target:.5}"))),
+                            "hidden position cannot contribute axis tags");
+                        output.drop_without_applying_deltas();
+                    }
+                    chart.drawings_mut().drawings[0].timeframe_visibility =
+                        crate::drawings::TimeframeVisibility::all();
                     // The tool ends at the plot's right edge: its target label stays inside.
                     chart.set_visible_logical_range(crate::model::LogicalRange {
                         left: 20.0,

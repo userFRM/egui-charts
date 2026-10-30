@@ -6,7 +6,7 @@ use super::{Trading, valid};
 use crate::chart::TradingLineAction;
 use crate::data::FeedError;
 use crate::model::{OrderId, OrderPreview, OrderRequest, OrderStatus, OrderType, TradingRules};
-use crate::services::AccountEvent;
+use crate::services::{AccountEvent, HistoryKind, HistoryPage};
 use crate::ui_kit::notifications::{Toast, ToastKind, Toasts};
 use crate::widget::settings::TradingNotifications;
 
@@ -70,6 +70,12 @@ impl Trading {
                 }
                 continue;
             }
+            if let Some(kind) = self.account_panel.loading(key) {
+                if let Ok(answer) = answer.downcast::<Result<HistoryPage, FeedError>>() {
+                    self.history_page(kind, *answer, toasts);
+                }
+                continue;
+            }
             if key == self.rules_key {
                 if let Ok(answer) = answer.downcast::<Result<TradingRules, FeedError>>() {
                     match *answer {
@@ -101,58 +107,7 @@ impl Trading {
     }
 
     pub(super) fn apply(&mut self, event: AccountEvent, toasts: &mut Toasts) {
-        let finite = |value: Option<f64>| value.is_none_or(f64::is_finite);
-        let positive = |value: f64| value.is_finite() && value > 0.0;
-        let valid = match &event {
-            AccountEvent::Account(account) => {
-                account.balance.is_finite()
-                    && [
-                        account.equity,
-                        account.realized_pnl,
-                        account.margin,
-                        account.orders_margin,
-                        account.available_funds,
-                    ]
-                    .into_iter()
-                    .all(finite)
-            }
-            AccountEvent::Order(order) => {
-                let request = &order.request;
-                positive(request.quantity)
-                    && order.filled.is_finite()
-                    && (0.0..=request.quantity).contains(&order.filled)
-                    && finite(order.fill_price)
-                    && finite(request.take_profit)
-                    && finite(request.stop_loss)
-                    && match request.order_type {
-                        OrderType::Market => true,
-                        OrderType::Limit(price) | OrderType::Stop(price) => price.is_finite(),
-                        OrderType::StopLimit { stop, limit } => {
-                            stop.is_finite() && limit.is_finite()
-                        }
-                    }
-            }
-            AccountEvent::Position(position) => {
-                position.quantity.is_finite()
-                    && position.average_price.is_finite()
-                    && [
-                        position.unrealized_pnl,
-                        position.last_price,
-                        position.trade_value,
-                        position.market_value,
-                        position.leverage,
-                        position.margin,
-                    ]
-                    .into_iter()
-                    .all(finite)
-            }
-            AccountEvent::Execution(fill) => positive(fill.quantity) && fill.price.is_finite(),
-            AccountEvent::Balance(change) => {
-                change.balance.is_finite() && change.amount.is_finite()
-            }
-            _ => true,
-        };
-        if !valid {
+        if !valid_event(&event) {
             return;
         }
         let first_order = match &event {
@@ -274,6 +229,27 @@ impl Trading {
         }
     }
 
+    /// Lists a page of older history the broker answered for `kind`, or stops paging there.
+    fn history_page(
+        &mut self,
+        kind: HistoryKind,
+        answer: Result<HistoryPage, FeedError>,
+        toasts: &mut Toasts,
+    ) {
+        match answer {
+            Ok(page) => {
+                let events = page.events.into_iter().filter(valid_event).collect();
+                self.account_panel.page(kind, events, page.next);
+            }
+            Err(error) => {
+                self.account_panel.end(kind);
+                if error != FeedError::NotSupported {
+                    toasts.error(format!("Account history unavailable: {error}"));
+                }
+            }
+        }
+    }
+
     /// The sound to play for the fills since the last call, when the user turned on
     /// [`TradingSettings::play_execution_sound`](crate::widget::settings::TradingSettings::play_execution_sound): the name the user chose, or empty for the
     /// host's first sound. The host plays it; call this after [`poll`](Self::poll).
@@ -291,6 +267,59 @@ impl Trading {
         if shown {
             toasts.add(toast);
         }
+    }
+}
+
+/// Whether every price and quantity of `event` is finite, quantities are positive and an
+/// order's filled quantity lies between 0 and its quantity, as [`Broker`](crate::services::Broker)
+/// requires; the terminal skips events that break this.
+fn valid_event(event: &AccountEvent) -> bool {
+    let finite = |value: Option<f64>| value.is_none_or(f64::is_finite);
+    let positive = |value: f64| value.is_finite() && value > 0.0;
+    match event {
+        AccountEvent::Account(account) => {
+            account.balance.is_finite()
+                && [
+                    account.equity,
+                    account.realized_pnl,
+                    account.margin,
+                    account.orders_margin,
+                    account.available_funds,
+                ]
+                .into_iter()
+                .all(finite)
+        }
+        AccountEvent::Order(order) => {
+            let request = &order.request;
+            positive(request.quantity)
+                && order.filled.is_finite()
+                && (0.0..=request.quantity).contains(&order.filled)
+                && finite(order.fill_price)
+                && finite(request.take_profit)
+                && finite(request.stop_loss)
+                && match request.order_type {
+                    OrderType::Market => true,
+                    OrderType::Limit(price) | OrderType::Stop(price) => price.is_finite(),
+                    OrderType::StopLimit { stop, limit } => stop.is_finite() && limit.is_finite(),
+                }
+        }
+        AccountEvent::Position(position) => {
+            position.quantity.is_finite()
+                && position.average_price.is_finite()
+                && [
+                    position.unrealized_pnl,
+                    position.last_price,
+                    position.trade_value,
+                    position.market_value,
+                    position.leverage,
+                    position.margin,
+                ]
+                .into_iter()
+                .all(finite)
+        }
+        AccountEvent::Execution(fill) => positive(fill.quantity) && fill.price.is_finite(),
+        AccountEvent::Balance(change) => change.balance.is_finite() && change.amount.is_finite(),
+        _ => true,
     }
 }
 

@@ -186,6 +186,9 @@ pub struct DrawingManager {
     pub curr_drawing: Option<Drawing>,
     /// Whether the last point of `curr_drawing` follows the pointer rather than a click.
     preview_point: bool,
+    /// The last finished measurement, shown until the next click on the chart. It is never
+    /// added to `drawings`, saved or recorded for undo.
+    pub(crate) measurement: Option<Drawing>,
     /// Next available drawing ID (monotonically increasing).
     next_id: usize,
 
@@ -220,8 +223,11 @@ pub struct DrawingManager {
     drag_copy: bool,
     /// Current chart input, separate from the toolbar magnet setting.
     pub(crate) interaction_modifiers: egui::Modifiers,
+    /// A line tool chosen by its shortcut this frame, placed by the pane under the pointer.
+    pub(crate) place_at_pointer: bool,
 
     /// Whether to stay in drawing mode after completing a drawing.
+    /// A finished measurement always returns to selection mode.
     pub stay_in_drawing_mode: bool,
     /// Current chart timeframe string (e.g., `"1D"`, `"1h"`): drawings hidden on it are
     /// neither drawn nor hit. [`Chart::set_timeframe`](crate::widget::Chart::set_timeframe)
@@ -271,6 +277,7 @@ impl DrawingManager {
             active_tool: None,
             curr_drawing: None,
             preview_point: false,
+            measurement: None,
             next_id: 0,
             pane_rect: Rect::NOTHING,
             pane: None,
@@ -289,6 +296,7 @@ impl DrawingManager {
             drag_group: Vec::new(),
             drag_copy: false,
             interaction_modifiers: egui::Modifiers::NONE,
+            place_at_pointer: false,
             stay_in_drawing_mode: false,
             curr_timeframe: String::from("1D"),
             eraser_mode: false,
@@ -592,6 +600,7 @@ impl DrawingManager {
             .drawings
             .iter_mut()
             .chain(&mut self.curr_drawing)
+            .chain(&mut self.measurement)
             .chain(&mut self.drag_old_state)
             .chain(&mut self.drag_group)
         {

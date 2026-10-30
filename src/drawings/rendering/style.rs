@@ -236,8 +236,6 @@ impl Drawing {
             && !stroke.is_empty()
         {
             let mut shapes = clip.map_or_else(Vec::new, |clip| {
-                // Widened by the stroke so an edge just outside the clip keeps its visible half.
-                let clip = clip.expand(stroke.width);
                 crate::painting::dashed_line::dashed_polyline_shapes(&path, stroke, dash, gap, clip)
             });
             if !matches!(shape, Shape::LineSegment { .. }) {

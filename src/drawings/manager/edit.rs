@@ -274,6 +274,9 @@ impl DrawingManager {
         if let Some(ref mut drawing) = self.curr_drawing {
             drawing.update_screen_coords(bar_to_x, price_to_y);
         }
+        if let Some(drawing) = &mut self.measurement {
+            drawing.update_screen_coords(bar_to_x, price_to_y);
+        }
     }
 
     /// Starts a widget pane pass. Standalone managers keep the default main-pane context.
@@ -303,7 +306,12 @@ impl DrawingManager {
         bar_to_x: impl Fn(f32) -> f32 + Copy,
         price_to_y: impl Fn(f64) -> f32 + Copy,
     ) {
-        for drawing in self.drawings.iter_mut().chain(&mut self.curr_drawing) {
+        for drawing in self
+            .drawings
+            .iter_mut()
+            .chain(&mut self.curr_drawing)
+            .chain(&mut self.measurement)
+        {
             if self.pane_members.contains(&drawing.pane) {
                 drawing.update_screen_coords(bar_to_x, price_to_y);
                 drawing.update_pane_coords(self.pane_rect);
@@ -315,7 +323,12 @@ impl DrawingManager {
     /// The chart calls this automatically; standalone managers call it before rendering.
     pub fn update_pane_anchors(&mut self, pane: Rect) {
         self.pane_rect = pane;
-        for drawing in self.drawings.iter_mut().chain(&mut self.curr_drawing) {
+        for drawing in self
+            .drawings
+            .iter_mut()
+            .chain(&mut self.curr_drawing)
+            .chain(&mut self.measurement)
+        {
             drawing.update_pane_coords(pane);
         }
     }
@@ -336,6 +349,9 @@ impl DrawingManager {
         }
         if let Some(ref mut curr) = self.curr_drawing {
             curr.shift_bar_indices(from, shift);
+        }
+        if let Some(drawing) = &mut self.measurement {
+            drawing.shift_bar_indices(from, shift);
         }
         if let Some(old) = &mut self.drag_old_state {
             old.shift_bar_indices(from, shift);
