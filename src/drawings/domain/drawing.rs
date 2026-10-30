@@ -247,8 +247,6 @@ impl Drawing {
                         .gamma_multiply(20.0 / 255.0)
                         .to_srgba_unmultiplied(),
                 ),
-                DrawingToolType::GannSquare => Some([242, 54, 69, 12]),
-                DrawingToolType::GannFixed => Some([242, 54, 69, 15]),
                 _ => None,
             },
             locked: false,

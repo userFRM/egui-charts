@@ -881,7 +881,7 @@ fn band_color(level: &FibonacciLevel, opacity: u8) -> Color32 {
 }
 
 /// One mesh avoids antialiased seams between adjoining ring segments.
-fn paint_band(painter: &egui::Painter, inner: &[Pos2], outer: &[Pos2], color: Color32) {
+pub(super) fn paint_band(painter: &egui::Painter, inner: &[Pos2], outer: &[Pos2], color: Color32) {
     if inner.len() != outer.len() || inner.iter().chain(outer).any(|p| !p.is_finite()) {
         return;
     }

@@ -2,10 +2,15 @@
 //!
 //! Includes: Gann fan, square, box, and fixed angle tools.
 
-use crate::drawings::domain::{Drawing, DrawingToolType, GannConfig, GannFanDirection, GannLevel};
+use super::ChartView;
+use crate::drawings::domain::{
+    Drawing, DrawingToolType, GANN_MAX_ARC, GANN_SQUARE_UNITS, GannConfig, GannFanDirection,
+    GannLevel,
+};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
+use egui::{Color32, Pos2, Rect, Stroke};
+use std::f32::consts::FRAC_PI_2;
 use std::sync::LazyLock;
 
 fn level_color(level: &GannLevel) -> Color32 {
@@ -73,15 +78,14 @@ pub(super) fn gann_fan_lines(start: Pos2, end: Pos2, rect: Rect) -> Vec<[Pos2; 2
         .collect()
 }
 
-/// The corner opposite `start` of a flexible Gann square: towards
-/// `end`, as wide and high as the larger of the two distances between them.
-pub(super) fn gann_square_corner(start: Pos2, end: Pos2) -> Pos2 {
-    let size = (end.x - start.x).abs().max((end.y - start.y).abs());
-    let sign = |a: f32, b: f32| if b >= a { 1.0 } else { -1.0 };
-    Pos2::new(
-        start.x + size * sign(start.x, end.x),
-        start.y + size * sign(start.y, end.y),
-    )
+/// The corner of a Gann square opposite its first anchor: the second anchor, or for a fixed
+/// square five times the first unit that the second anchor marks.
+pub(super) fn gann_square_corner(tool: DrawingToolType, first: Pos2, second: Pos2) -> Pos2 {
+    if tool == DrawingToolType::GannFixed {
+        first + (second - first) * GANN_SQUARE_UNITS
+    } else {
+        second
+    }
 }
 
 /// The visible fan lines of a Gann square whose first anchor is `start` and opposite corner
@@ -118,32 +122,55 @@ fn gann_square_fan_lines(
     lines
 }
 
-/// The arcs of a Gann square around its first anchor `start`, one per valid
-/// ratio of the square's side, cut to the part inside the square.
-fn gann_square_arcs(start: Pos2, corner: Pos2, ratios: &[GannLevel]) -> Vec<Vec<Pos2>> {
-    let (dx, dy) = (corner.x - start.x, corner.y - start.y);
-    ratios
-        .iter()
-        .filter(|l| l.visible && l.value.is_finite() && l.value > 0.0)
-        .filter_map(|&GannLevel { value: ratio, .. }| {
-            // Both coordinates of the arc stay within the side: cos and sin at most 1 / ratio.
-            let (from, to) = if ratio <= 1.0 {
-                (0.0, std::f32::consts::FRAC_PI_2)
-            } else {
-                ((1.0 / ratio).acos(), (1.0 / ratio).asin())
-            };
-            (from < to).then(|| {
-                (0..=64)
-                    .map(|i| {
-                        let angle = from + (to - from) * i as f32 / 64.0;
-                        start
-                            + Pos2::new(dx * ratio * angle.cos(), dy * ratio * angle.sin())
-                                .to_vec2()
-                    })
-                    .collect()
+/// The arc of `radius` units around `start` inside the square, `segments + 1` points from the
+/// edge at the first anchor's price to the edge at its time, cut where it leaves the square;
+/// `None` for an invalid radius or an arc wholly outside.
+fn gann_square_arc(start: Pos2, corner: Pos2, radius: f32, segments: usize) -> Option<Vec<Pos2>> {
+    if !(radius.is_finite() && radius > 0.0) {
+        return None;
+    }
+    let ratio = radius / GANN_SQUARE_UNITS;
+    // Both coordinates of the arc stay within the side: cos and sin at most 1 / ratio.
+    let (from, to) = if ratio <= 1.0 {
+        (0.0, FRAC_PI_2)
+    } else {
+        ((1.0 / ratio).acos(), (1.0 / ratio).asin())
+    };
+    (from < to).then(|| {
+        let (dx, dy) = (corner.x - start.x, corner.y - start.y);
+        (0..=segments)
+            .map(|i| {
+                let angle = from + (to - from) * i as f32 / segments as f32;
+                start + egui::vec2(dx * ratio * angle.cos(), dy * ratio * angle.sin())
             })
+            .collect()
+    })
+}
+
+/// The two edges of the band between arcs `inner` and `outer` (units) inside the square, sampled
+/// at the same `segments + 1` angles, each point cut at the square's edge, for `paint_band`.
+fn gann_square_ring(
+    start: Pos2,
+    corner: Pos2,
+    inner: f32,
+    outer: f32,
+    segments: usize,
+) -> (Vec<Pos2>, Vec<Pos2>) {
+    let (dx, dy) = (corner.x - start.x, corner.y - start.y);
+    (0..=segments)
+        .map(|i| {
+            let (s, c) = (FRAC_PI_2 * i as f32 / segments as f32).sin_cos();
+            // The square is convex and star-shaped from `start`, so the band along each ray ends
+            // at the edge. The far corner lies at half the sweep in units, whatever the square's
+            // proportions on screen, so an even `segments` samples it.
+            let reach = GANN_SQUARE_UNITS / c.max(s);
+            let point = |radius: f32| {
+                let r = radius.min(reach) / GANN_SQUARE_UNITS;
+                start + egui::vec2(dx * r * c, dy * r * s)
+            };
+            (point(inner), point(outer))
         })
-        .collect()
+        .unzip()
 }
 
 /// Rays of a Gann box from each corner to the level points on the two edges away from it: the
@@ -184,25 +211,6 @@ impl Drawing {
             DrawingToolType::GannFan => &FAN,
             _ => &BOX,
         })
-    }
-
-    fn draw_gann_grid(&self, painter: &egui::Painter, start: Pos2, end: Pos2) {
-        let config = self.gann_config();
-        let rect = Rect::from_two_pos(start, end);
-        for (vertical, levels) in [(true, &config.time_levels), (false, &config.price_levels)] {
-            for level in levels.iter().filter(|l| l.visible) {
-                let ratio = level.value;
-                if !(ratio.is_finite() && ratio > 0.0 && ratio < 1.0) {
-                    continue;
-                }
-                let stroke = Stroke::new(DESIGN_TOKENS.stroke.extra_thin, level_color(level));
-                if vertical {
-                    painter.vline(start.x + (end.x - start.x) * ratio, rect.y_range(), stroke);
-                } else {
-                    painter.hline(rect.x_range(), start.y + (end.y - start.y) * ratio, stroke);
-                }
-            }
-        }
     }
 
     /// Render Gann Fan - Complete 9-angle Gann fan with bi-directional support
@@ -308,64 +316,100 @@ impl Drawing {
         painter.line_segment([start, end], Stroke::new(self.stroke_width, color));
     }
 
-    /// Render Gann Square - Square of 9 / Wheel of 24 style with cardinal and diagonal lines
-    pub(crate) fn render_gann_square(&self, painter: &egui::Painter) {
-        if self.points.len() < 2 {
+    /// Render a Gann square or fixed square: the rings between its arcs, its price and time
+    /// levels, fan lines and arcs, over five units per side, and its range and ratio.
+    pub(crate) fn render_gann_square(&self, painter: &egui::Painter, view: &ChartView) {
+        let &[start, second, ..] = self.points.as_slice() else {
             return;
-        }
-
-        let start = self.points[0];
-        let end = self.points[1];
-
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        let square_rect = Rect::from_two_pos(start, gann_square_corner(start, end));
-
-        // Fill background
-        let fill_color = self.fill_color32().unwrap_or(Color32::TRANSPARENT);
-        painter.rect_filled(square_rect, 0.0, fill_color);
-
-        // Draw main square border
-        painter.rect_stroke(
-            square_rect,
-            0.0,
-            Stroke::new(self.stroke_width, color),
-            StrokeKind::Inside,
-        );
-
+        };
+        let corner = gann_square_corner(self.tool_type, start, second);
+        let rect = Rect::from_two_pos(start, corner);
         let config = self.gann_config();
-        let corner = gann_square_corner(start, end);
+        let at = |u: f32, v: f32| {
+            Pos2::new(
+                start.x + (corner.x - start.x) * u / GANN_SQUARE_UNITS,
+                start.y + (corner.y - start.y) * v / GANN_SQUARE_UNITS,
+            )
+        };
+        let stroke = |level: &GannLevel| Stroke::new(self.stroke_width, level_color(level));
+        let side =
+            (corner.x - start.x).abs().max((corner.y - start.y).abs()) * painter.pixels_per_point();
+        // A quarter of the circle's sides, even so that the far corner is a sample of the rings.
+        let segments = |radius: f32| {
+            super::style::circle_sides(radius / GANN_SQUARE_UNITS * side).div_ceil(8) * 2
+        };
+
+        let mut arcs = visible_levels(&config.arc_ratios, 0.0..=GANN_MAX_ARC);
+        arcs.retain(|arc| arc.value > 0.0);
+        if config.show_arcs && config.show_background && config.background_opacity > 0 {
+            for pair in arcs.windows(2) {
+                let (inner, outer) = gann_square_ring(
+                    start,
+                    corner,
+                    pair[0].value,
+                    pair[1].value,
+                    segments(pair[1].value),
+                );
+                super::fibonacci::paint_band(
+                    painter,
+                    &inner,
+                    &outer,
+                    band_color(&pair[1], config.background_opacity),
+                );
+            }
+        }
         if config.show_grid {
-            self.draw_gann_grid(painter, start, corner);
+            let drawn = |l: &&GannLevel| l.visible && (0.0..=GANN_SQUARE_UNITS).contains(&l.value);
+            for level in config.price_levels.iter().filter(drawn) {
+                painter.hline(rect.x_range(), at(0.0, level.value).y, stroke(level));
+            }
+            for level in config.time_levels.iter().filter(drawn) {
+                painter.vline(at(level.value, 0.0).x, rect.y_range(), stroke(level));
+            }
         }
-
         if config.show_fan {
-            let line_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 200);
             for (level, segment) in gann_square_fan_lines(start, corner, config) {
-                let width = if level.value == 1.0 {
-                    stroke::MEDIUM
-                } else {
-                    stroke::HAIRLINE
-                };
-                painter.line_segment(segment, Stroke::new(width, line_color));
+                painter.line_segment(segment, stroke(&level));
+            }
+        }
+        if config.show_arcs {
+            for arc in &arcs {
+                if let Some(points) = gann_square_arc(start, corner, arc.value, segments(arc.value))
+                {
+                    painter.add(egui::Shape::line(points, stroke(arc)));
+                }
             }
         }
 
-        if config.show_arcs {
-            let arc_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 100);
-            for arc in gann_square_arcs(start, corner, &config.arc_ratios) {
-                painter.add(egui::Shape::line(
-                    arc,
-                    Stroke::new(stroke::HAIRLINE, arc_color),
-                ));
+        let [a, b, ..] = self.chart_points.as_slice() else {
+            return;
+        };
+        let (far_price, units) = if self.tool_type == DrawingToolType::GannFixed {
+            ((view.y_to_price)(corner.y), f64::from(GANN_SQUARE_UNITS))
+        } else {
+            (b.price, 1.0)
+        };
+        let range = (far_price - a.price).abs();
+        let bars = f64::from((b.bar_idx - a.bar_idx).abs()) * units;
+        if range.is_finite() && bars.is_finite() {
+            let decimals = crate::scales::price_decimals(a.price);
+            let mut label = format!("{range:.decimals$}\n{} bars", bars.round() as i64);
+            if bars > 0.0 {
+                let ratio_decimals = decimals + 2;
+                label.push_str(&format!("\n{:.ratio_decimals$}/bar", range / bars));
             }
+            super::measurements::boxed_label(
+                painter,
+                egui::Align2::LEFT_TOP,
+                Pos2::new(rect.max.x + DESIGN_TOKENS.rounding.lg, rect.min.y),
+                label,
+                self.color32(),
+                DESIGN_TOKENS
+                    .semantic
+                    .extended
+                    .chart_axis_bg
+                    .gamma_multiply(0.8),
+            );
         }
     }
 
@@ -444,138 +488,6 @@ impl Drawing {
             placed.push(label);
             painter.galley(label.min, galley, color);
         }
-    }
-
-    /// Fixed price-per-bar range from its persistent chart anchors.
-    pub(crate) fn render_gann_fixed(&self, painter: &egui::Painter) {
-        if self.points.len() < 2 {
-            return;
-        }
-
-        let p1 = self.points[0];
-        let p2 = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        let corner = p2;
-        let rect = Rect::from_two_pos(p1, corner);
-        let center = rect.center();
-
-        // Fill background
-        let fill_color = self.fill_color32().unwrap_or(Color32::TRANSPARENT);
-        painter.rect_filled(rect, 0.0, fill_color);
-
-        // Draw outer square
-        painter.rect_stroke(
-            rect,
-            0.0,
-            Stroke::new(self.stroke_width, color),
-            StrokeKind::Inside,
-        );
-
-        self.draw_gann_grid(painter, p1, p2);
-
-        // Draw main diagonals (1:1 Gann angles)
-        let diag_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 200);
-        painter.line_segment(
-            [rect.left_top(), rect.right_bottom()],
-            Stroke::new(stroke::MEDIUM, diag_color),
-        );
-        painter.line_segment(
-            [rect.right_top(), rect.left_bottom()],
-            Stroke::new(stroke::MEDIUM, diag_color),
-        );
-
-        // Draw cardinal cross through center
-        painter.hline(
-            rect.x_range(),
-            center.y,
-            Stroke::new(stroke::HAIRLINE, diag_color),
-        );
-        painter.vline(
-            center.x,
-            rect.y_range(),
-            Stroke::new(stroke::HAIRLINE, diag_color),
-        );
-
-        // Draw 45° angle lines from each corner to opposite edges
-        let angle_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 100);
-
-        // From midpoints to corners (creating 45° angles)
-        let mid_top = Pos2::new(center.x, rect.min.y);
-        let mid_bottom = Pos2::new(center.x, rect.max.y);
-        let mid_left = Pos2::new(rect.min.x, center.y);
-        let mid_right = Pos2::new(rect.max.x, center.y);
-
-        painter.line_segment(
-            [mid_top, rect.left_bottom()],
-            Stroke::new(DESIGN_TOKENS.stroke.light, angle_color),
-        );
-        painter.line_segment(
-            [mid_top, rect.right_bottom()],
-            Stroke::new(DESIGN_TOKENS.stroke.light, angle_color),
-        );
-        painter.line_segment(
-            [mid_bottom, rect.left_top()],
-            Stroke::new(DESIGN_TOKENS.stroke.light, angle_color),
-        );
-        painter.line_segment(
-            [mid_bottom, rect.right_top()],
-            Stroke::new(DESIGN_TOKENS.stroke.light, angle_color),
-        );
-        painter.line_segment(
-            [mid_left, rect.right_top()],
-            Stroke::new(DESIGN_TOKENS.stroke.light, angle_color),
-        );
-        painter.line_segment(
-            [mid_left, rect.right_bottom()],
-            Stroke::new(DESIGN_TOKENS.stroke.light, angle_color),
-        );
-        painter.line_segment(
-            [mid_right, rect.left_top()],
-            Stroke::new(DESIGN_TOKENS.stroke.light, angle_color),
-        );
-        painter.line_segment(
-            [mid_right, rect.left_bottom()],
-            Stroke::new(DESIGN_TOKENS.stroke.light, angle_color),
-        );
-
-        // Draw aspect ratio label
-        let label_bg = DESIGN_TOKENS
-            .semantic
-            .extended
-            .chart_axis_bg
-            .gamma_multiply(0.8);
-        let label_pos = Pos2::new(rect.max.x + DESIGN_TOKENS.rounding.lg, rect.min.y);
-        let label = self
-            .chart_points
-            .first()
-            .zip(self.chart_points.get(1))
-            .map_or_else(
-                || "n/a".to_owned(),
-                |(a, b)| {
-                    let bars = (b.bar_idx - a.bar_idx).abs();
-                    if bars > 0.0 {
-                        format!("{:.4}/bar", (b.price - a.price).abs() / f64::from(bars))
-                    } else {
-                        "n/a".to_owned()
-                    }
-                },
-            );
-        super::measurements::boxed_label(
-            painter,
-            egui::Align2::LEFT_TOP,
-            label_pos,
-            label,
-            color,
-            label_bg,
-        );
     }
 }
 
@@ -764,36 +676,91 @@ mod tests {
             }
         }
     }
+    /// The second anchor is a square's corner, and five times the first unit from the first anchor
+    /// is a fixed square's, at every zoom. Both figures below cover 20 price units over 10 bars.
     #[test]
-    fn gann_grids_keep_chart_dimensions_and_custom_divisions() {
-        let mut drawing = Drawing::new(0, crate::drawings::DrawingToolType::GannFixed);
-        drawing.chart_points = vec![
-            crate::drawings::ChartPoint::new(2.0, 20.0),
-            crate::drawings::ChartPoint::new(12.0, 10.0),
+    fn gann_squares_keep_their_corner_at_every_zoom_and_label_their_scale() {
+        use crate::drawings::ChartPoint;
+        let cases = [
+            (
+                DrawingToolType::GannSquare,
+                [(120.0, 100.0), (240.0, 50.0), (60.0, 200.0)],
+            ),
+            (
+                DrawingToolType::GannFixed,
+                [(520.0, -300.0), (1040.0, -150.0), (260.0, -600.0)],
+            ),
         ];
-        for (x_scale, y_scale) in [(10.0, 10.0), (20.0, 5.0), (5.0, 20.0)] {
-            drawing.update_screen_coords(|x| x * x_scale, |y| y as f32 * y_scale);
-            let outline = drawing.outline(Rect::EVERYTHING).unwrap();
-            assert!(
-                outline
-                    .lines
-                    .iter()
-                    .flatten()
-                    .any(|p| p.distance(drawing.points[1]) < 1e-3)
-            );
+        for (tool, corners) in cases {
+            let mut drawing = Drawing::new(0, tool);
+            drawing.chart_points = vec![ChartPoint::new(2.0, 20.0), ChartPoint::new(12.0, 10.0)];
+            for ((xs, ys), corner) in [(10.0, 10.0), (20.0, 5.0), (5.0, 20.0)]
+                .into_iter()
+                .zip(corners)
+            {
+                drawing.update_screen_coords(|b| b * xs, |p| p as f32 * ys);
+                let outline = drawing.outline(Rect::EVERYTHING).unwrap();
+                let want = Rect::from_two_pos(drawing.points[0], Pos2::new(corner.0, corner.1));
+                assert_eq!(
+                    Rect::from_points(&outline.areas[0]),
+                    want,
+                    "{tool:?} at {xs}, {ys}"
+                );
+            }
+        }
+
+        for (tool, second) in [
+            (DrawingToolType::GannSquare, ChartPoint::new(10.0, 120.0)),
+            (DrawingToolType::GannFixed, ChartPoint::new(2.0, 104.0)),
+        ] {
+            let mut drawing = Drawing::new(0, tool);
+            drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), second];
+            drawing.update_screen_coords(|b| b * 10.0, |p| 300.0 - p as f32);
+            let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                drawing.render(
+                    ui.painter(),
+                    pane,
+                    &ChartView {
+                        price_formatter: None,
+                        instrument: None,
+                        bars: &[],
+                        revision: 0,
+                        bar_to_x: &|b| b * 10.0,
+                        price_to_y: &|p| 300.0 - p as f32,
+                        y_to_price: &|y| 300.0 - f64::from(y),
+                        time_axis: true,
+                        executions: None,
+                    },
+                )
+            });
+            let labelled = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text)
+                    if text.galley.text() == "20.00\n10 bars\n2.0000/bar")
+            });
+            output.drop_without_applying_deltas();
+            assert!(labelled, "{tool:?}");
         }
     }
 
     #[test]
     fn gann_square_fan_and_arcs_follow_their_settings() {
+        const GREY: [u8; 4] = [128, 128, 128, 255];
         // Square from (0, 0) to (100, 100): a fan line of ratio r leaves a corner at r times
         // the diagonal's slope and ends on the opposite side, at (100, 100 r) or (100 / r, 100).
-        let config = |fan_direction, fan_ratios: &[f32]| GannConfig {
+        let config = |fan_direction| GannConfig {
             fan_direction,
-            fan_ratios: fan_ratios
-                .iter()
-                .map(|&ratio| GannLevel::new(ratio, [128, 128, 128, 255]))
-                .collect(),
+            fan_ratios: vec![
+                GannLevel::new(0.5, GREY),
+                GannLevel::new(2.0, GREY),
+                GannLevel {
+                    visible: false,
+                    ..GannLevel::new(1.0, GREY)
+                },
+                GannLevel::new(0.0, GREY),
+                GannLevel::new(f32::NAN, GREY),
+                GannLevel::new(-1.0, GREY),
+            ],
             ..GannConfig::default()
         };
         let (start, corner) = (Pos2::new(0.0, 0.0), Pos2::new(100.0, 100.0));
@@ -803,40 +770,45 @@ mod tests {
                 .map(|(_, line)| line)
                 .collect::<Vec<_>>()
         };
-        let ratios = [0.5, 2.0, 0.0, f32::NAN, -1.0];
         assert_eq!(
-            ends(&config(GannFanDirection::Forward, &ratios)),
+            ends(&config(GannFanDirection::Forward)),
             [
                 [start, Pos2::new(100.0, 50.0)],
                 [start, Pos2::new(50.0, 100.0)]
             ]
         );
         assert_eq!(
-            ends(&config(GannFanDirection::Reverse, &ratios)),
+            ends(&config(GannFanDirection::Reverse)),
             [
                 [corner, Pos2::new(0.0, 50.0)],
                 [corner, Pos2::new(50.0, 0.0)]
             ]
         );
-        assert_eq!(ends(&config(GannFanDirection::Both, &ratios)).len(), 4);
+        assert_eq!(ends(&config(GannFanDirection::Both)).len(), 4);
 
-        // The arc of ratio 1 is a quarter circle through (70.7, 70.7); that of 1.2 is cut where
-        // it leaves the square, at (100, 66.3) and (66.3, 100); one beyond 1.42 is outside it.
-        let arcs = gann_square_arcs(
-            start,
-            corner,
-            &[1.0, 1.2, 1.5, 0.0, f32::NAN].map(|r| GannLevel::new(r, [128, 128, 128, 255])),
-        );
-        assert_eq!(arcs.len(), 2);
-        let near = |a: Pos2, b: Pos2| a.distance(b) < 0.1;
-        assert!(
-            near(arcs[0][0], Pos2::new(100.0, 0.0))
-                && near(*arcs[0].last().unwrap(), Pos2::new(0.0, 100.0))
-        );
-        assert!(arcs[0].iter().any(|&p| near(p, Pos2::new(70.71, 70.71))));
-        assert!(
-            near(arcs[1][0], Pos2::new(100.0, 66.33))
-                && near(*arcs[1].last().unwrap(), Pos2::new(66.33, 100.0))
-        );
+        // One unit is 20 px. The arc of 1 unit is a quarter circle through (14.142, 14.142); that
+        // of the square root of 26 leaves the square one unit along each far edge; 7.5 lies
+        // wholly outside, since the far corner is 5 * sqrt(2) = 7.07 units away.
+        let near = |a: Pos2, b: (f32, f32)| a.distance(Pos2::new(b.0, b.1)) < 1e-2;
+        let arc = |radius| gann_square_arc(start, corner, radius, 16);
+        let unit = arc(1.0).unwrap();
+        assert_eq!(unit.len(), 17);
+        assert!(near(unit[0], (20.0, 0.0)) && near(unit[16], (0.0, 20.0)));
+        assert!(near(unit[8], (14.142, 14.142)));
+        let cut = arc(26f32.sqrt()).unwrap();
+        assert!(near(cut[0], (100.0, 20.0)) && near(cut[16], (20.0, 100.0)));
+        for radius in [7.5, 0.0, f32::NAN] {
+            assert_eq!(arc(radius), None, "{radius}");
+        }
+
+        // Radius 5 at 45 degrees is 70.711 on each axis, the square root of 26 is 72.111, and
+        // both end on the square's edges at its two sides.
+        let (inner, outer) = gann_square_ring(start, corner, 5.0, 26f32.sqrt(), 16);
+        assert_eq!((inner.len(), outer.len()), (17, 17));
+        let square = Rect::from_two_pos(start, corner).expand(1e-3);
+        assert!(inner.iter().chain(&outer).all(|p| square.contains(*p)));
+        assert!(near(inner[8], (70.711, 70.711)) && near(outer[8], (72.111, 72.111)));
+        assert!(near(inner[0], (100.0, 0.0)) && near(outer[0], (100.0, 0.0)));
+        assert!(near(inner[16], (0.0, 100.0)) && near(outer[16], (0.0, 100.0)));
     }
 }

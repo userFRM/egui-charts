@@ -215,9 +215,8 @@ impl Drawing {
             T::Measure | T::DateAndPriceRange | T::GannBox => {
                 boxed(&mut outline, Rect::from_two_pos(first, second));
             }
-            T::GannFixed => boxed(&mut outline, Rect::from_two_pos(first, second)),
-            T::GannSquare => {
-                let corner = gann::gann_square_corner(first, second);
+            T::GannSquare | T::GannFixed => {
+                let corner = gann::gann_square_corner(self.tool_type, first, second);
                 boxed(&mut outline, Rect::from_two_pos(first, corner));
             }
             T::RotatedRect => {
@@ -375,9 +374,10 @@ impl Drawing {
 
             // Gann (4 tools)
             DrawingToolType::GannFan => self.render_gann_fan(painter, rect),
-            DrawingToolType::GannSquare => self.render_gann_square(painter),
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed => {
+                self.render_gann_square(painter, view)
+            }
             DrawingToolType::GannBox => self.render_gann_box(painter),
-            DrawingToolType::GannFixed => self.render_gann_fixed(painter),
 
             // Pitchforks (4 tools)
             DrawingToolType::Pitchfork => self.render_pitchfork(painter, rect),
@@ -573,6 +573,14 @@ impl Drawing {
                     .union(Rect::from_two_pos(start, end))
                     .expand(PAINT_MARGIN)
             });
+        }
+        if self.tool_type == T::GannFixed {
+            let &[first, second, ..] = self.points.as_slice() else {
+                return None;
+            };
+            // Five times the anchors' span can pass the reach below when the span is steep.
+            let corner = gann::gann_square_corner(T::GannFixed, first, second);
+            return Some(Rect::from_two_pos(first, corner).expand(PAINT_MARGIN));
         }
         let hull = self.bounding_rect()?;
         let reach = 3.0 * hull.size().length() + PAINT_MARGIN;

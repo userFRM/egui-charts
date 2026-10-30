@@ -70,7 +70,9 @@ impl InputsTab {
             | Tool::SchiffPitchfork
             | Tool::ModifiedSchiffPitchfork
             | Tool::InsidePitchfork => pitchfork(ui, drawing, grid_pickers(pickers, 0)),
-            Tool::GannBox | Tool::GannSquare | Tool::GannFixed => gann(ui, drawing, pickers),
+            Tool::GannBox | Tool::GannSquare | Tool::GannFixed => {
+                gann(ui, drawing, pickers, coordinates)
+            }
             Tool::GhostFeed => {
                 let mut config = drawing.ghost_feed.unwrap_or_default();
                 let original = config;
@@ -739,7 +741,12 @@ fn gann_row(level: &mut GannLevel, range: std::ops::RangeInclusive<f32>) -> Leve
     }
 }
 
-fn gann(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<Vec<ColorPickerState>>) {
+fn gann(
+    ui: &mut Ui,
+    drawing: &mut Drawing,
+    pickers: &mut Vec<Vec<ColorPickerState>>,
+    coordinates: &mut CoordinatesState,
+) {
     let tool = drawing.tool_type;
     let mut config = drawing
         .gann
@@ -825,9 +832,53 @@ fn gann(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<Vec<ColorPickerSta
         &mut config.show_background,
         &mut config.background_opacity,
     );
+    if square {
+        price_per_bar(ui, coordinates);
+    }
     if config != original {
         drawing.gann = Some(config);
     }
+}
+
+/// The price per bar between the first two staged anchors; typing one moves the second anchor's
+/// price, on its side of the first (above when they are equal). The anchors of a fixed square are
+/// its first unit, whose ratio is the whole square's.
+fn price_per_bar(ui: &mut Ui, coordinates: &mut CoordinatesState) {
+    let [first, second, ..] = coordinates.points.as_slice() else {
+        return;
+    };
+    let number = |text: &str| text.trim().parse::<f64>().ok().filter(|v| v.is_finite());
+    let (Some(from), Some(to), Some(start), Some(end)) = (
+        number(&first.price),
+        number(&second.price),
+        number(&first.bar_index),
+        number(&second.bar_index),
+    ) else {
+        return;
+    };
+    let bars = (end - start).abs();
+    if bars == 0.0 {
+        return;
+    }
+    let mut ratio = (to - from).abs() / bars;
+    let speed = (ratio * 0.01).max(1e-6);
+    FormGrid::new("gann_price_per_bar").show(ui, |ui| {
+        let label = ui.label(l10n::text(ui.ctx(), "Price per bar"));
+        let changed = ui
+            .add(
+                egui::DragValue::new(&mut ratio)
+                    .range(0.0..=f64::MAX)
+                    .speed(speed)
+                    .max_decimals(8),
+            )
+            .labelled_by(label.id)
+            .changed();
+        ui.end_row();
+        if changed {
+            let side = if to < from { -1.0 } else { 1.0 };
+            coordinates.points[1].price = (from + side * ratio * bars).to_string();
+        }
+    });
 }
 
 fn level_color(ui: &mut Ui, color: &mut [u8; 4], state: &mut ColorPickerState) -> bool {
@@ -934,6 +985,52 @@ mod tests {
                     modifiers: Modifiers::NONE,
                 }],
             );
+        }
+    }
+
+    /// Over 10 bars a ratio of 1.5 is 15 price units from the first anchor's 100: above it for a
+    /// second anchor above or level, below it for one below. A ratio of 0 is level.
+    #[test]
+    fn typing_a_price_per_bar_moves_the_second_anchor_on_its_side() {
+        for tool in [Tool::GannSquare, Tool::GannFixed] {
+            for (second, typed, want) in [
+                (120.0, "1.5", 115.0),
+                (80.0, "1.5", 85.0),
+                (100.0, "1.5", 115.0),
+                (80.0, "0", 100.0),
+            ] {
+                let ctx = Context::default();
+                let mut chart = Chart::new(BarData::new());
+                let mut drawing = Drawing::new(7, tool);
+                drawing.chart_points =
+                    vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, second)];
+                drawing.completed = true;
+                // Collapsed grids keep the field inside the dialog's scroll area.
+                drawing.gann = Some(GannConfig {
+                    show_grid: false,
+                    show_fan: false,
+                    show_arcs: false,
+                    ..GannConfig::for_tool(tool)
+                });
+                chart.drawings_mut().drawings.push(drawing);
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open_for_chart(&chart, DrawingId(7));
+                dialog.active_tab = PropertiesTab::Inputs;
+                frame(&mut dialog, &mut chart, &ctx, vec![]);
+                enter(&mut dialog, &mut chart, &ctx, "Price per bar", typed);
+                let points = &chart.drawings().drawings[0].chart_points;
+                assert_eq!(
+                    [
+                        points[0].price,
+                        points[1].price,
+                        f64::from(points[1].bar_idx)
+                    ],
+                    [100.0, want, 10.0],
+                    "{tool:?}, second anchor at {second}, typed {typed}"
+                );
+                dialog.close();
+                frame(&mut dialog, &mut chart, &ctx, vec![]);
+            }
         }
     }
 
