@@ -536,6 +536,7 @@ mod tests {
                                 ui.painter(),
                                 pane,
                                 &ChartView {
+                                    price_formatter: None,
                                     instrument: None,
                                     bars: &bars,
                                     revision: 0,

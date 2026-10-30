@@ -211,6 +211,13 @@ impl StoredDrawing {
         if size.into_iter().any(bad) {
             return Some("position_size".into());
         }
+        if d.fib_config.as_ref().is_some_and(|c| {
+            !c.level_width.is_finite()
+                || c.level_width <= 0.0
+                || c.level_width > super::validation::MAX_STROKE_WIDTH
+        }) {
+            return Some("fib_config.level_width".into());
+        }
         for (name, values) in [
             (
                 "fib_config.levels",
@@ -906,6 +913,8 @@ mod tests {
                 visible: false,
                 show_price: false,
             }],
+            level_width: 3.5,
+            level_style: LineStyle::Dashed,
             show_background: true,
             background_opacity: 77,
             extend_left: true,
@@ -1087,6 +1096,8 @@ mod tests {
         assert_eq!(v1.drawings().len(), tools.len());
         for (stored, (tool, text)) in v1.drawings().iter().zip(tools) {
             let mut want = Drawing::with_color(1, tool, [33, 150, 243, 255]);
+            // Old files without Fibonacci settings retain their absent config.
+            want.fib_config = None;
             want.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 110.0)];
             want.update_screen_coords(bar_to_x, price_to_y);
             want.stroke_width = 3.0;
@@ -1111,7 +1122,12 @@ mod tests {
             let mut want = non_default_drawing(tool);
             want.label = None; // Earlier files have no object name.
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
-            want.fib_config.as_mut().unwrap().logarithmic = false;
+            let config = want.fib_config.as_mut().unwrap();
+            config.logarithmic = false;
+            config.level_width = 2.0;
+            config.level_style = LineStyle::Solid;
+            config.levels_as_percent = true;
+            config.labels_on_left = false;
             assert_eq!(
                 format!("{:?}", restore(stored, want.id)),
                 format!("{want:?}")
@@ -1449,7 +1465,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 21] = [
+        let cases: [(Spoil, &str); 24] = [
             (
                 |s| {
                     first(s)
@@ -1513,6 +1529,18 @@ mod tests {
                     })
                 },
                 "invalid position_size",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().level_width = 0.0,
+                "invalid fib_config.level_width",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().level_width = f32::NAN,
+                "invalid fib_config.level_width",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().level_width = 101.0,
+                "invalid fib_config.level_width",
             ),
             (
                 |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].value = f32::NAN,
