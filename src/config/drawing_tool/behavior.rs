@@ -30,6 +30,10 @@ impl DrawingToolType {
                 | Self::Eraser
                 | Self::TrendLine
                 | Self::TrendAngle
+                | Self::InfoLine
+                | Self::ElliottDoubleCombo
+                | Self::ElliottTripleCombo
+                | Self::GannFan
                 | Self::Ray
                 | Self::ExtendedLine
                 | Self::HorizontalLine
