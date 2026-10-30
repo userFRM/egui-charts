@@ -9,14 +9,18 @@ use egui::{
 
 use crate::model::{OrderSide, TimeInForce, TradingRules};
 use crate::scales::{CurrencyFormatter, PriceFormatter};
-use crate::theme::{Theme, ThemeExt};
+use crate::theme::{Theme, ThemeExt, readable_color};
+use crate::ui::top_toolbar::buttons::rule_color;
 
 pub(super) use crate::theme::trading_side_color as side_color;
 
 /// Height shared by the ticket's fields, menus and order-type row.
 pub(super) const FIELD_HEIGHT: f32 = 34.0;
 
-/// The fill of a button that places an order on a side, under white text.
+/// Size of section titles between the body and heading text roles.
+pub(super) const SECTION_TITLE_SIZE: f32 = 15.0;
+
+/// The fill of a button that places an order on a side.
 pub(super) fn side_fill(theme: &Theme, side: OrderSide) -> Color32 {
     match side {
         OrderSide::Buy => theme.ui.accent,
@@ -28,7 +32,7 @@ pub(super) fn side_fill(theme: &Theme, side: OrderSide) -> Color32 {
 pub(super) fn track(ui: &Ui) -> (Color32, Color32) {
     let colors = ui.active_theme().ui;
     if ui.visuals().dark_mode {
-        (colors.panel_bg_floating, colors.panel_bg_secondary)
+        (colors.border, rule_color(&ui.active_theme()))
     } else {
         (colors.panel_bg_secondary, colors.panel_bg)
     }
@@ -61,33 +65,39 @@ pub(super) fn time_in_force_menu(
     rules: &TradingRules,
 ) {
     let theme = ui.active_theme();
-    ui.spacing_mut().interact_size.y = FIELD_HEIGHT;
-    // Drawn like the ticket's fields: the panel's fill in a rounded outline.
-    let widgets = &mut ui.visuals_mut().widgets;
-    for state in [
-        &mut widgets.inactive,
-        &mut widgets.hovered,
-        &mut widgets.active,
-    ] {
-        state.weak_bg_fill = theme.ui.panel_bg;
-        state.corner_radius = 6.into();
-    }
-    widgets.inactive.bg_stroke = Stroke::new(1.0, theme.ui.border_control);
-    egui::ComboBox::from_id_salt(id)
-        .width(ui.available_width())
-        .selected_text(l10n::text(ui.ctx(), time_in_force_name(*value)))
-        .icon(|ui, rect, visuals, open| {
-            chevron(ui, rect.center(), visuals.fg_stroke.color, open);
-        })
-        .show_ui(ui, |ui| {
-            for option in &rules.time_in_force {
-                ui.selectable_value(
-                    value,
-                    *option,
-                    l10n::text(ui.ctx(), time_in_force_name(*option)),
-                );
-            }
-        });
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = FIELD_HEIGHT;
+        // Keep the menu's field styling local to this control and its popup.
+        let widgets = &mut ui.visuals_mut().widgets;
+        for state in [
+            &mut widgets.inactive,
+            &mut widgets.hovered,
+            &mut widgets.active,
+            &mut widgets.open,
+        ] {
+            state.weak_bg_fill = theme.ui.panel_bg;
+            state.corner_radius = 6.into();
+        }
+        widgets.inactive.bg_stroke = Stroke::new(1.0, field_border(&theme));
+        widgets.hovered.bg_stroke = Stroke::new(1.0, field_hover_border(&theme));
+        widgets.active.bg_stroke = Stroke::new(1.0, theme.ui.accent);
+        widgets.open.bg_stroke = widgets.active.bg_stroke;
+        egui::ComboBox::from_id_salt(id)
+            .width(ui.available_width())
+            .selected_text(l10n::text(ui.ctx(), time_in_force_name(*value)))
+            .icon(|ui, rect, visuals, open| {
+                chevron(ui, rect.center(), visuals.fg_stroke.color, open);
+            })
+            .show_ui(ui, |ui| {
+                for option in &rules.time_in_force {
+                    ui.selectable_value(
+                        value,
+                        *option,
+                        l10n::text(ui.ctx(), time_in_force_name(*option)),
+                    );
+                }
+            });
+    });
 }
 
 /// A click area over `rect`, announced as `label`.
@@ -124,7 +134,7 @@ pub(super) fn muted(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(l10n::text(ui.ctx(), text))
             .color(color)
-            .size(13.0),
+            .size(ui.active_theme().text.body),
     );
 }
 
@@ -132,7 +142,7 @@ pub(super) fn title(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(l10n::text(ui.ctx(), text))
             .strong()
-            .size(15.0),
+            .size(SECTION_TITLE_SIZE),
     );
 }
 
@@ -141,7 +151,7 @@ pub(super) fn dropdown(ui: &mut Ui, label: String) -> Response {
     let color = ui.active_theme().ui.text_muted;
     let galley = ui.painter().layout_no_wrap(
         l10n::text(ui.ctx(), label),
-        FontId::proportional(13.0),
+        FontId::proportional(ui.active_theme().text.body),
         color,
     );
     let size = vec2(galley.size().x + 16.0, galley.size().y.max(18.0));
@@ -171,19 +181,58 @@ pub(super) fn chevron(ui: &Ui, center: egui::Pos2, color: Color32, up: bool) {
     );
 }
 
+/// The least prominent field outline that still reads on its background.
+fn field_border(theme: &Theme) -> Color32 {
+    readable_color(
+        theme.ui.border,
+        theme.ui.border_control,
+        &[theme.ui.panel_bg],
+        3.0,
+    )
+}
+
+/// Hover stays stronger than rest in both light and dark palettes.
+fn field_hover_border(theme: &Theme) -> Color32 {
+    let toward = if theme.dark {
+        theme.ui.panel_bg
+    } else {
+        theme.ui.text
+    };
+    theme.ui.border_control.lerp_to_gamma(toward, 0.175)
+}
+
 /// A bordered input box the width of `ui`, laid out from the left.
 pub(super) fn field(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     let theme = ui.active_theme();
     let (rect, _) =
         ui.allocate_exact_size(vec2(ui.available_width(), FIELD_HEIGHT), Sense::hover());
-    let stroke = Stroke::new(1.0, theme.ui.border_control);
-    ui.painter()
-        .rect(rect, 6.0, theme.ui.panel_bg, stroke, StrokeKind::Inside);
+    let enabled = ui.is_enabled();
+    let fill = if !enabled && !theme.dark {
+        theme.ui.panel_bg.lerp_to_gamma(theme.ui.text, 0.1)
+    } else {
+        theme.ui.panel_bg
+    };
+    ui.painter().rect_filled(rect, 6.0, fill);
     let inner = rect.shrink2(vec2(10.0, 0.0));
     let layout = Layout::left_to_right(Align::Center);
     ui.scope_builder(UiBuilder::new().max_rect(inner).layout(layout), |ui| {
         add(ui);
     });
+    let focused = ui
+        .memory(|memory| memory.focused())
+        .and_then(|id| ui.ctx().read_response(id))
+        .is_some_and(|response| response.has_focus() && rect.intersects(response.rect));
+    let border = if !enabled {
+        theme.ui.border
+    } else if focused {
+        theme.ui.accent
+    } else if ui.rect_contains_pointer(rect) {
+        field_hover_border(&theme)
+    } else {
+        field_border(&theme)
+    };
+    ui.painter()
+        .rect_stroke(rect, 6.0, Stroke::new(1.0, border), StrokeKind::Inside);
 }
 
 /// A number typed in place at `places` decimals. Invalid input invalidates the order until
@@ -206,7 +255,7 @@ pub(super) fn number(
             .id(id)
             .frame(egui::Frame::NONE)
             .desired_width(width)
-            .font(FontId::proportional(14.0)),
+            .font(FontId::proportional(ui.active_theme().text.title)),
     );
     if response.changed() {
         *value = text
@@ -279,8 +328,15 @@ pub(super) fn toggle(ui: &mut Ui, on: &mut bool, label: &str) {
         rect.left() + rect.height() / 2.0..=rect.right() - rect.height() / 2.0,
         t,
     );
-    ui.painter()
-        .circle_filled(pos2(x, rect.center().y), 7.0, theme.ui.panel_bg);
+    ui.painter().circle_filled(
+        pos2(x, rect.center().y),
+        7.0,
+        if *on {
+            theme.ui.btn_bg_active
+        } else {
+            theme.ui.panel_bg
+        },
+    );
 }
 
 /// A row of the order info: `label` at the left, `value` and `unit` at the right. Returns the
@@ -294,14 +350,18 @@ pub(super) fn info(ui: &mut Ui, label: &str, value: &str, unit: &str, color: Col
         left,
         Align2::LEFT_CENTER,
         label,
-        13.0,
-        theme.ui.text_muted,
+        theme.text.body,
+        if theme.dark {
+            theme.ui.text_muted
+        } else {
+            theme.ui.text
+        },
     );
     let mut right = rect.right_center();
     if !unit.is_empty() {
         let galley = ui.painter().layout_no_wrap(
             l10n::text(ui.ctx(), unit),
-            FontId::proportional(11.0),
+            FontId::proportional(theme.text.small),
             theme.ui.text_muted,
         );
         right.x -= galley.size().x;
@@ -314,7 +374,7 @@ pub(super) fn info(ui: &mut Ui, label: &str, value: &str, unit: &str, color: Col
     }
     let galley = ui.painter().layout_no_wrap(
         l10n::text(ui.ctx(), value),
-        FontId::proportional(13.0),
+        FontId::proportional(ui.active_theme().text.body),
         color,
     );
     let at = right - vec2(galley.size().x, galley.size().y / 2.0);
@@ -346,6 +406,113 @@ pub(super) fn semibold(text: &str, size: f32, color: Color32) -> egui::text::Lay
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Field outlines follow the pointer and keyboard focus; a disabled field is filled.
+    #[test]
+    fn fields_show_hover_focus_and_disabled_states() {
+        for theme in [Theme::dark(), Theme::light()] {
+            for state in ["rest", "hover", "focus", "disabled"] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut value = 1.0;
+                let mut frame = |events| {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(300.0, 200.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            ui.set_width(200.0);
+                            ui.add_enabled_ui(state != "disabled", |ui| {
+                                field(ui, |ui| {
+                                    let response = number(ui, "units", &mut value, 0);
+                                    if state == "focus" {
+                                        response.request_focus();
+                                    }
+                                });
+                            });
+                        },
+                    )
+                };
+                let first = frame(vec![]);
+                let rect = first
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect) if rect.rect.height() == FIELD_HEIGHT => {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let rest_outline = first
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(shape)
+                            if shape.rect == rect && shape.stroke.width > 0.0 =>
+                        {
+                            Some(shape.stroke.color)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                first.drop_without_applying_deltas();
+                let output = frame(if state == "hover" {
+                    vec![egui::Event::PointerMoved(rect.center())]
+                } else {
+                    vec![]
+                });
+                let outline = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(shape)
+                            if shape.rect == rect && shape.stroke.width > 0.0 =>
+                        {
+                            Some(shape.stroke.color)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let fill = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(shape)
+                            if shape.rect == rect && shape.fill != Color32::TRANSPARENT =>
+                        {
+                            Some(shape.fill)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                if state == "focus" {
+                    assert_eq!(outline, theme.ui.accent, "focused {state}");
+                } else if state == "hover" {
+                    assert!(crate::theme::contrast(outline, theme.ui.panel_bg) >= 3.0);
+                    assert!(
+                        crate::theme::contrast(outline, theme.ui.panel_bg)
+                            > crate::theme::contrast(rest_outline, theme.ui.panel_bg),
+                        "hover must strengthen the outline"
+                    );
+                } else if state == "rest" {
+                    assert!(crate::theme::contrast(outline, theme.ui.panel_bg) >= 3.0);
+                    assert!(
+                        crate::theme::contrast(outline, theme.ui.panel_bg)
+                            < crate::theme::contrast(theme.ui.border_control, theme.ui.panel_bg)
+                    );
+                } else if !theme.dark {
+                    assert_ne!(fill, theme.ui.panel_bg, "disabled fields must have a fill");
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
 
     #[test]
     fn figures_group_thousands_and_sign_only_what_they_show() {

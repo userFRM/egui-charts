@@ -8,10 +8,13 @@ use crate::localization as l10n;
 use crate::model::{OrderRequest, OrderSide};
 use crate::theme::ThemeExt;
 use crate::ui::trading::widgets::{
-    FIELD_HEIGHT, chevron, dropdown, field, grouped, hit, info, muted, number, side_color, swap,
-    text, time_in_force_menu, title, toggle, track,
+    FIELD_HEIGHT, SECTION_TITLE_SIZE, chevron, dropdown, field, grouped, hit, info, muted, number,
+    side_color, swap, text, time_in_force_menu, title, toggle, track,
 };
 use egui::{Align, Align2, FontId, Layout, Rect, Sense, Ui, pos2, vec2};
+
+/// Quote prices sit between the heading and dialog-title text roles.
+const QUOTE_PRICE_SIZE: f32 = 17.0;
 
 impl OrderTicket {
     /// The Order tab above the send button.
@@ -339,24 +342,27 @@ impl OrderTicket {
                         ..Default::default()
                     }
                 };
-                ui.painter()
-                    .rect_filled(half, corners, color.gamma_multiply(0.25));
+                ui.painter().rect_filled(
+                    half,
+                    corners,
+                    theme.ui.panel_bg.lerp_to_gamma(color, 0.45),
+                );
             }
-            let text_color = if selected { color } else { theme.ui.text };
+            let text_color = if selected { color } else { theme.ui.text_muted };
             let inner = half.shrink2(vec2(12.0, 8.0));
             let anchor = align.pos_in_rect(&inner);
-            text(ui, anchor, align, label, 13.0, text_color);
+            text(ui, anchor, align, label, theme.text.body, text_color);
             let price = price
                 .or(market.last)
                 .map_or("-".to_owned(), |price| market.numbers().price(price));
             let below = anchor + vec2(0.0, 18.0);
-            text(ui, below, align, &price, 17.0, text_color);
+            text(ui, below, align, &price, QUOTE_PRICE_SIZE, text_color);
         }
         if let (Some(bid), Some(ask)) = (market.bid, market.ask) {
             let spread = market.numbers().spread(ask - bid);
             let galley = ui.painter().layout_no_wrap(
                 l10n::text(ui.ctx(), spread),
-                FontId::proportional(11.0),
+                FontId::proportional(theme.text.small),
                 theme.ui.text,
             );
             let chip = Rect::from_center_size(
@@ -382,7 +388,11 @@ impl OrderTicket {
         let (rect, _) =
             ui.allocate_exact_size(vec2(ui.available_width(), FIELD_HEIGHT), Sense::hover());
         let rail = Rect::from_min_max(rect.left_bottom() - vec2(0.0, 3.5), rect.right_bottom());
-        ui.painter().rect_filled(rail, 0.0, theme.ui.border);
+        ui.painter().rect_filled(
+            rail,
+            0.0,
+            crate::ui::top_toolbar::buttons::rule_color(&theme),
+        );
         let width = rect.width() / kinds.len() as f32;
         for (index, (kind, label)) in kinds.into_iter().enumerate() {
             let cell = Rect::from_min_size(
@@ -409,7 +419,14 @@ impl OrderTicket {
             } else {
                 theme.ui.text_secondary
             };
-            text(ui, cell.center(), Align2::CENTER_CENTER, label, 14.0, color);
+            text(
+                ui,
+                cell.center(),
+                Align2::CENTER_CENTER,
+                label,
+                theme.text.title,
+                color,
+            );
             if selected {
                 let line = Rect::from_min_max(
                     pos2(cell.left() + 4.0, cell.bottom() - rail.height()),
@@ -446,7 +463,7 @@ impl OrderTicket {
         }
         let galley = ui.painter().layout_no_wrap(
             l10n::text(ui.ctx(), "Exits"),
-            FontId::proportional(15.0),
+            FontId::proportional(SECTION_TITLE_SIZE),
             theme.ui.text,
         );
         let width = galley.size().x;
@@ -469,7 +486,7 @@ impl OrderTicket {
                 at,
                 Align2::LEFT_CENTER,
                 &ratio,
-                13.0,
+                theme.text.body,
                 theme.ui.text_muted,
             );
         }
