@@ -48,8 +48,9 @@ impl Drawing {
     }
 
     fn draw_source_region(&self, painter: &egui::Painter, source_rect: Rect, color: Color32) {
-        let source_fill =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 20);
+        let source_fill = self.fill_color32().unwrap_or_else(|| {
+            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 20)
+        });
         painter.rect_filled(source_rect, 0.0, source_fill);
         painter.rect_stroke(
             source_rect,
@@ -89,8 +90,9 @@ impl Drawing {
         let proj_rect = bars_rect(view, start, projected);
 
         // Projected region (more transparent)
-        let proj_fill =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 40);
+        let proj_fill = self.fill_color32().unwrap_or_else(|| {
+            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 40)
+        });
         painter.rect_filled(proj_rect, 0.0, proj_fill);
 
         // Projected bars as OHLC bars: open tick left, close tick right

@@ -105,19 +105,21 @@ impl Drawing {
         let x_range = self.fib_level_x_range(&config, chart_rect);
 
         // Draw filled zones between levels if enabled
-        if config.show_background && visible_levels.len() > 1 {
+        if (config.show_background || self.fill_color.is_some()) && visible_levels.len() > 1 {
             for i in 0..visible_levels.len() - 1 {
                 let level1 = visible_levels[i];
 
                 let (y1, y2) = (ys[i], ys[i + 1]);
 
                 // Fill with semi-transparent color using config opacity
-                let fill_color = Color32::from_rgba_unmultiplied(
-                    level1.color[0],
-                    level1.color[1],
-                    level1.color[2],
-                    config.background_opacity,
-                );
+                let fill_color = self.fill_color32().unwrap_or_else(|| {
+                    Color32::from_rgba_unmultiplied(
+                        level1.color[0],
+                        level1.color[1],
+                        level1.color[2],
+                        config.background_opacity,
+                    )
+                });
                 let fill_rect = Rect::from_x_y_ranges(x_range, y1.min(y2)..=y1.max(y2));
                 painter.rect_filled(fill_rect, 0.0, fill_color);
             }
@@ -188,7 +190,7 @@ impl Drawing {
         let x_range = self.fib_level_x_range(&config, chart_rect);
 
         // Draw filled zones between levels if enabled
-        if config.show_background && visible_levels.len() > 1 {
+        if (config.show_background || self.fill_color.is_some()) && visible_levels.len() > 1 {
             for i in 0..visible_levels.len() - 1 {
                 let level1 = visible_levels[i];
 
@@ -198,12 +200,14 @@ impl Drawing {
                 if (y1 >= chart_rect.min.y || y2 >= chart_rect.min.y)
                     && (y1 <= chart_rect.max.y || y2 <= chart_rect.max.y)
                 {
-                    let fill_color = Color32::from_rgba_unmultiplied(
-                        level1.color[0],
-                        level1.color[1],
-                        level1.color[2],
-                        config.background_opacity,
-                    );
+                    let fill_color = self.fill_color32().unwrap_or_else(|| {
+                        Color32::from_rgba_unmultiplied(
+                            level1.color[0],
+                            level1.color[1],
+                            level1.color[2],
+                            config.background_opacity,
+                        )
+                    });
                     let fill_rect = Rect::from_x_y_ranges(x_range, y1.min(y2)..=y1.max(y2));
                     painter.rect_filled(fill_rect, 0.0, fill_color);
                 }
@@ -367,7 +371,7 @@ impl Drawing {
         if unit.abs() < 1.0 {
             return;
         }
-        if config.show_background {
+        if config.show_background || self.fill_color.is_some() {
             for (i, pair) in levels.windows(2).enumerate() {
                 if self.fib_config.is_none() && i % 2 != 0 {
                     continue;
@@ -380,7 +384,8 @@ impl Drawing {
                     painter.rect_filled(
                         Rect::from_x_y_ranges(a.min(b)..=a.max(b), chart_rect.y_range()),
                         0.0,
-                        band_color(pair[1], config.background_opacity),
+                        self.fill_color32()
+                            .unwrap_or_else(|| band_color(pair[1], config.background_opacity)),
                     );
                 }
             }
@@ -475,18 +480,20 @@ impl Drawing {
         );
 
         // Draw filled zones between levels
-        if config.show_background && visible_levels.len() > 1 {
+        if (config.show_background || self.fill_color.is_some()) && visible_levels.len() > 1 {
             for i in 0..visible_levels.len() - 1 {
                 let level1 = visible_levels[i];
                 let [p1_l1, p2_l1] = lines[i];
                 let [p1_l2, p2_l2] = lines[i + 1];
 
-                let fill_color = Color32::from_rgba_unmultiplied(
-                    level1.color[0],
-                    level1.color[1],
-                    level1.color[2],
-                    config.background_opacity,
-                );
+                let fill_color = self.fill_color32().unwrap_or_else(|| {
+                    Color32::from_rgba_unmultiplied(
+                        level1.color[0],
+                        level1.color[1],
+                        level1.color[2],
+                        config.background_opacity,
+                    )
+                });
 
                 painter.add(egui::epaint::PathShape::convex_polygon(
                     vec![p1_l1, p2_l1, p2_l2, p1_l2],
@@ -666,21 +673,23 @@ impl Drawing {
         let config = self.fibonacci_config();
         let mut levels: Vec<_> = config.visible_levels().collect();
         levels.sort_by(|a, b| a.value.total_cmp(&b.value));
-        if config.show_background {
+        if config.show_background || self.fill_color.is_some() {
             for pair in levels.windows(2) {
                 let a = speed_fan_line_end(start, end, pair[0].value, chart_rect);
                 let b = speed_fan_line_end(start, end, pair[1].value, chart_rect);
                 if a.is_finite() && b.is_finite() {
                     painter.add(egui::Shape::convex_polygon(
                         vec![start, a, b],
-                        band_color(
-                            if self.fib_config.is_none() {
-                                pair[0]
-                            } else {
-                                pair[1]
-                            },
-                            config.background_opacity,
-                        ),
+                        self.fill_color32().unwrap_or_else(|| {
+                            band_color(
+                                if self.fib_config.is_none() {
+                                    pair[0]
+                                } else {
+                                    pair[1]
+                                },
+                                config.background_opacity,
+                            )
+                        }),
                         Stroke::NONE,
                     ));
                 }

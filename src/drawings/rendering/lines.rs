@@ -3,7 +3,6 @@
 //! Includes: lines, rays, shapes (rect, circle, ellipse, triangle, arc),
 //! arrows, and polylines.
 
-use super::ChartView;
 use crate::drawings::domain::Drawing;
 use crate::styles::{stroke, typography};
 use crate::theme::ThemeExt;
@@ -171,163 +170,67 @@ impl Drawing {
         }
     }
 
-    /// Render trend angle - angle measurement with arc and info
+    /// Render a signed screen angle with plain text and dotted construction guides.
     pub(crate) fn render_trend_angle(
         &self,
         painter: &egui::Painter,
+        rect: Rect,
         color: Color32,
         stroke: Stroke,
-        view: &ChartView,
     ) {
-        if self.points.len() >= 2 {
-            let start = self.points[0];
-            let end = self.points[1];
-
-            // Draw main trend line
-            painter.line_segment([start, end], stroke);
-
-            // Draw horizontal reference line (dashed)
-            let ref_end = Pos2::new(end.x, start.y);
-            let dashed_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 100);
-
-            // Draw dashed reference line
-            let ref_segments = 20;
-            for i in 0..ref_segments {
-                let t1 = (i as f32 * 2.0) / (ref_segments as f32 * 2.0);
-                let t2 = ((i as f32 * 2.0) + 1.0) / (ref_segments as f32 * 2.0);
-                let p1 = Pos2::new(start.x + t1 * (ref_end.x - start.x), start.y);
-                let p2 = Pos2::new(start.x + t2 * (ref_end.x - start.x), start.y);
-                painter.line_segment([p1, p2], Stroke::new(stroke::HAIRLINE, dashed_color));
+        let &[start, end, ..] = self.points.as_slice() else {
+            if let Some(&point) = self.points.first() {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.md, color);
             }
+            return;
+        };
+        let first_shape = painter.ctx().graphics(|g| {
+            g.get(painter.layer_id())
+                .map_or(0, |list| list.next_idx().0)
+        });
+        painter.line_segment([start, end], stroke);
 
-            // Calculate angle
-            let dx = end.x - start.x;
-            let dy = end.y - start.y;
-            let angle_rad = dy.atan2(dx);
-            let angle_deg = angle_rad.to_degrees();
+        // Screen y grows downward, so a rising line has a positive angle.
+        let angle = (start.y - end.y).atan2(end.x - start.x);
+        let radius = DESIGN_TOKENS
+            .sizing
+            .technical_labels
+            .line_arc_radius
+            .min(start.distance(end));
+        let label_direction = egui::vec2((angle / 2.0).cos(), -(angle / 2.0).sin());
+        let galley = painter.layout_no_wrap(
+            format!("{:.1}°", angle.to_degrees()),
+            self.annotation_font(),
+            color,
+        );
+        let label_distance =
+            radius + DESIGN_TOKENS.spacing.sm + label_direction.abs().dot(galley.size()) / 2.0;
+        painter.galley(
+            start + label_direction * label_distance - galley.size() / 2.0,
+            galley,
+            color,
+        );
+        self.finish_style(painter, first_shape, rect);
 
-            // Determine arc direction and bounds
-            let arc_radius = DESIGN_TOKENS.sizing.technical_labels.line_arc_radius;
-            let segments = 32;
-            let start_angle = 0.0f32;
-            let end_angle_arc = angle_rad;
-
-            // Draw smooth arc using quadratic bezier approximation
-            let mut arc_points: Vec<Pos2> = Vec::with_capacity(segments + 1);
-            for i in 0..=segments {
-                let t = i as f32 / segments as f32;
-                let angle = start_angle + (end_angle_arc - start_angle) * t;
-                let x = start.x + arc_radius * angle.cos();
-                let y = start.y + arc_radius * angle.sin();
-                arc_points.push(Pos2::new(x, y));
-            }
-
-            // Draw arc with gradient-like effect (thicker in middle)
-            for i in 1..arc_points.len() {
-                let t = i as f32 / arc_points.len() as f32;
-                let thickness = 1.5 + 0.5 * (std::f32::consts::PI * t).sin();
-                painter.line_segment(
-                    [arc_points[i - 1], arc_points[i]],
-                    Stroke::new(thickness, color),
-                );
-            }
-
-            // Draw arc endpoints
-            if !arc_points.is_empty() {
-                painter.circle_filled(arc_points[0], DESIGN_TOKENS.rounding.sm, color);
-                painter.circle_filled(
-                    *arc_points.last().unwrap(),
-                    DESIGN_TOKENS.rounding.sm,
-                    color,
-                );
-            }
-
-            // Draw angle label with background box
-            let label_angle = angle_rad / 2.0;
-            let label_distance = arc_radius + DESIGN_TOKENS.spacing.section_lg;
-            let label_pos = Pos2::new(
-                start.x + label_distance * label_angle.cos(),
-                start.y + label_distance * label_angle.sin(),
+        // Construction guides stay thin and dotted regardless of the main line's style.
+        let (dash, gap) = crate::model::LineStyle::Dotted.hairline_pattern().unwrap();
+        let guide_stroke = Stroke::new(stroke::HAIRLINE, color);
+        let horizontal = [start + egui::vec2(radius, 0.0), start];
+        // Anchor the dash phase at the leg so even a short arc touches it.
+        let arc: Vec<_> = (0..=32)
+            .map(|i| {
+                let theta = -angle * (1.0 - i as f32 / 32.0);
+                start + radius * egui::vec2(theta.cos(), theta.sin())
+            })
+            .collect();
+        for path in [&horizontal[..], &arc] {
+            crate::painting::dashed_line::draw_dashed_polyline(
+                painter,
+                path,
+                guide_stroke,
+                dash,
+                gap,
             );
-
-            // Main angle text
-            let angle_text = format!("{:.1}°", angle_deg.abs());
-            let font = egui::FontId::proportional(typography::MD);
-
-            // Create info box
-            let box_padding = DESIGN_TOKENS.spacing.sm;
-            let text_width = DESIGN_TOKENS.sizing.technical_labels.line_label_width;
-            let text_height = DESIGN_TOKENS.sizing.technical_labels.line_label_height;
-            let box_rect = Rect::from_center_size(
-                label_pos,
-                egui::Vec2::new(
-                    text_width + box_padding * 2.0,
-                    text_height + box_padding * 2.0,
-                ),
-            );
-
-            // Box background
-            let box_bg = DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_axis_bg
-                .gamma_multiply(0.9);
-            painter.rect_filled(box_rect, DESIGN_TOKENS.rounding.sm, box_bg);
-            painter.rect_stroke(
-                box_rect,
-                DESIGN_TOKENS.rounding.sm,
-                Stroke::new(stroke::HAIRLINE, color),
-                egui::epaint::StrokeKind::Inside,
-            );
-
-            // Angle text
-            painter.text(
-                label_pos,
-                egui::Align2::CENTER_CENTER,
-                &angle_text,
-                font,
-                color,
-            );
-
-            // Draw secondary info (distance and slope) near the line
-            let mid_point = Pos2::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
-            let info_offset = DESIGN_TOKENS.sizing.position_tool.label_offset_y;
-            let perpendicular_angle = angle_rad + std::f32::consts::FRAC_PI_2;
-            let info_pos = Pos2::new(
-                mid_point.x + info_offset * perpendicular_angle.cos(),
-                mid_point.y + info_offset * perpendicular_angle.sin(),
-            );
-
-            let info_text = self
-                .measurement_label(view.bars, view.instrument, view.time_axis)
-                .unwrap_or_default();
-            let info_font = egui::FontId::proportional(typography::XS);
-            let muted_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180);
-            painter.text(
-                info_pos,
-                egui::Align2::CENTER_CENTER,
-                &info_text,
-                info_font,
-                muted_color,
-            );
-
-            // Draw anchor points
-            painter.circle_filled(start, DESIGN_TOKENS.rounding.lg, color);
-            painter.circle_stroke(
-                start,
-                DESIGN_TOKENS.rounding.lg,
-                Stroke::new(stroke::MEDIUM, Color32::WHITE),
-            );
-            painter.circle_filled(end, DESIGN_TOKENS.rounding.lg, color);
-            painter.circle_stroke(
-                end,
-                DESIGN_TOKENS.rounding.lg,
-                Stroke::new(stroke::MEDIUM, Color32::WHITE),
-            );
-        } else if self.points.len() == 1 {
-            painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.md, color);
         }
     }
 
@@ -720,6 +623,121 @@ pub(super) fn arc_points(center: Pos2, edge: Pos2) -> Vec<Pos2> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drawings::rendering::ChartView;
+
+    /// Screen y points down: equal rise and run give 45 degrees, and a 3-4-5
+    /// triangle gives atan(3/4) = 36.9 degrees. Guides share a radius capped by the leg.
+    #[test]
+    fn trend_angle_has_signed_plain_text_and_dotted_guides() {
+        use crate::{drawings::DrawingToolType, model::LineStyle};
+        let start = Pos2::new(250., 250.);
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(600., 600.));
+        for (delta, label) in [
+            (egui::vec2(100., -100.), "45.0°"),
+            (egui::vec2(100., 100.), "-45.0°"),
+            (egui::vec2(0., -100.), "90.0°"),
+            (egui::vec2(0., 100.), "-90.0°"),
+            (egui::vec2(-100., -100.), "135.0°"),
+            (egui::vec2(-100., 100.), "-135.0°"),
+            (egui::vec2(100., 0.), "0.0°"),
+            (egui::vec2(16., -12.), "36.9°"),
+        ] {
+            for (size, width, style) in [(12., 2., LineStyle::Solid), (24., 5., LineStyle::Dashed)]
+            {
+                let mut drawing = Drawing::new(1, DrawingToolType::TrendAngle);
+                drawing.points = vec![start, start + delta];
+                drawing.chart_points = drawing
+                    .points
+                    .iter()
+                    .map(|p| crate::drawings::ChartPoint::new(p.x, 600.0 - f64::from(p.y)))
+                    .collect();
+                drawing.font_size = size;
+                drawing.stroke_width = width;
+                drawing.line_style = style;
+                drawing.color = [40, 120, 200, 255];
+                let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
+                    let view = ChartView {
+                        instrument: None,
+                        bars: &[],
+                        executions: None,
+                        revision: 0,
+                        bar_to_x: &|x| x,
+                        price_to_y: &|p| p as f32,
+                        time_axis: true,
+                    };
+                    drawing.render(ui.painter(), pane, &view);
+                });
+                output.textures_delta.clear();
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Text(t) => Some(t),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(texts.len(), 1, "only the angle is labelled");
+                assert_eq!(texts[0].galley.job.text, label);
+                let format = &texts[0].galley.job.sections[0].format;
+                assert_eq!(format.font_id.size, size);
+                assert_eq!(format.color, drawing.color32());
+                assert!(
+                    !output
+                        .shapes
+                        .iter()
+                        .any(|s| matches!(s.shape, egui::Shape::Rect(_) | egui::Shape::Circle(_)))
+                );
+                let guides: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match s.shape {
+                        egui::Shape::LineSegment { points, stroke } if stroke.width == 1. => {
+                            Some(points)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(guides.is_empty(), delta.y == 0.0);
+                let radius = 40_f32.min(delta.length());
+                for points in &guides {
+                    assert!(points[0].distance(points[1]) <= 2.01, "dotted guides");
+                    for p in points {
+                        assert!(p.distance(start) <= radius + 0.01);
+                        assert!(
+                            (p.y - start.y).abs() < 0.01
+                                || (p.distance(start) - radius).abs() < 0.1
+                        );
+                    }
+                }
+                let on_line = start + delta.normalized() * radius;
+                if delta.y != 0.0 {
+                    assert!(
+                        guides.iter().flatten().any(|p| p.distance(on_line) < 0.01),
+                        "arc reaches the leg"
+                    );
+                }
+                let horizontal = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Mesh(m) => Some(m),
+                        _ => None,
+                    })
+                    .expect("horizontal uses visible square dots");
+                assert_eq!(horizontal.calc_bounds().right(), start.x + radius);
+                assert!(
+                    horizontal
+                        .vertices
+                        .iter()
+                        .all(|v| v.color == drawing.color32()
+                            && v.pos.x >= start.x
+                            && v.pos.x <= start.x + radius
+                            && (v.pos.y - start.y).abs() <= 1.0)
+                );
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
 
     #[test]
     fn rectangle_size_labels_use_the_active_theme_pair() {

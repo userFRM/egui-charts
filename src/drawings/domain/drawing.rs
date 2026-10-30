@@ -199,7 +199,27 @@ impl Drawing {
             text: (tool_type == DrawingToolType::Sticker).then(|| "sticker:bull".into()),
             // Styling defaults
             line_style: LineStyle::Solid,
-            fill_color: None,
+            fill_color: match tool_type {
+                DrawingToolType::XABCDPattern
+                | DrawingToolType::CypherPattern
+                | DrawingToolType::ABCDPattern
+                | DrawingToolType::TrianglePattern => Some([242, 54, 69, 25]),
+                DrawingToolType::HeadAndShoulders
+                | DrawingToolType::ThreeDrivesPattern
+                | DrawingToolType::ElliottImpulse
+                | DrawingToolType::ElliottTriangle => Some([242, 54, 69, 20]),
+                DrawingToolType::ElliottCorrection => Some(
+                    crate::tokens::DESIGN_TOKENS
+                        .semantic
+                        .extended
+                        .bearish
+                        .gamma_multiply(20.0 / 255.0)
+                        .to_srgba_unmultiplied(),
+                ),
+                DrawingToolType::GannSquare => Some([242, 54, 69, 12]),
+                DrawingToolType::GannBox | DrawingToolType::GannFixed => Some([242, 54, 69, 15]),
+                _ => None,
+            },
             locked: false,
             visible: true,
             font_size: if matches!(
@@ -260,6 +280,11 @@ impl Drawing {
     pub fn with_color(id: usize, tool_type: DrawingToolType, color: [u8; 4]) -> Self {
         let mut drawing = Self::new(id, tool_type);
         drawing.color = color;
+        if tool_type != DrawingToolType::ElliottCorrection
+            && let Some(fill) = &mut drawing.fill_color
+        {
+            fill[..3].copy_from_slice(&color[..3]);
+        }
         drawing
     }
 

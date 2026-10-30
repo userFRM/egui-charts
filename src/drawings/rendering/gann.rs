@@ -262,7 +262,7 @@ impl Drawing {
         }
 
         // Draw the base trend line (connecting start to end)
-        painter.line_segment([start, end], Stroke::new(self.stroke_width + 0.5, color));
+        painter.line_segment([start, end], Stroke::new(self.stroke_width, color));
 
         // Draw anchor points
         painter.circle_filled(start, DESIGN_TOKENS.rounding.lg, color);
@@ -298,8 +298,7 @@ impl Drawing {
         let square_rect = Rect::from_two_pos(start, gann_square_corner(start, end));
 
         // Fill background
-        let fill_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 12);
+        let fill_color = self.fill_color32().unwrap_or(Color32::TRANSPARENT);
         painter.rect_filled(square_rect, 0.0, fill_color);
 
         // Draw main square border
@@ -367,8 +366,7 @@ impl Drawing {
         let rect = Rect::from_two_pos(p1, p2);
 
         // Fill with subtle background
-        let fill_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 15);
+        let fill_color = self.fill_color32().unwrap_or(Color32::TRANSPARENT);
         painter.rect_filled(rect, 0.0, fill_color);
 
         // Draw main box border
@@ -482,8 +480,7 @@ impl Drawing {
         let center = rect.center();
 
         // Fill background
-        let fill_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 15);
+        let fill_color = self.fill_color32().unwrap_or(Color32::TRANSPARENT);
         painter.rect_filled(rect, 0.0, fill_color);
 
         // Draw outer square

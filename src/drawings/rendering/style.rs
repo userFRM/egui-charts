@@ -10,12 +10,10 @@ impl Drawing {
         egui::FontId::proportional(crate::styles::typography::font_size(self.font_size))
     }
 
-    /// Apply common styles to this drawing's paint range. Defaults retain the renderer's
-    /// hierarchy; custom fork levels and semantic position colours take precedence.
+    /// Apply line patterns and font weight without changing the renderer's widths or fills.
     pub(super) fn finish_style(&self, painter: &Painter, start: usize, rect: Rect) {
-        let styled = self.line_style != LineStyle::Solid
-            || self.stroke_width != 2.0
-            || self.fill_color.is_some()
+        let styled = self.fill_color.is_some()
+            || self.line_style != LineStyle::Solid
             || self.font_weight == FontWeight::Bold
             || self.extend_left
             || self.extend_right;
@@ -112,27 +110,34 @@ impl Drawing {
                 | DrawingToolType::InsidePitchfork
         );
         let custom_fork = fork && self.pitchfork.is_some();
-        let width = |stroke: &mut Stroke| {
-            if !stroke.is_empty()
-                && self.stroke_width != 2.0
-                && !fork
-                && !matches!(
-                    self.tool_type,
-                    DrawingToolType::Brush | DrawingToolType::Highlighter
-                )
-            {
-                stroke.width = self.stroke_width;
-            }
-        };
+        // Keep body fills of annotations and legacy forks; analysis labels keep their own fill.
         let fill = |color: &mut Color32| {
             if color.a() > 0
                 && !custom_fork
-                && !matches!(
+                && matches!(
                     self.tool_type,
-                    DrawingToolType::LongPos
-                        | DrawingToolType::ShortPos
-                        | DrawingToolType::RegressionTrend
-                        | DrawingToolType::TrendBasedFibTime
+                    DrawingToolType::Pitchfork
+                        | DrawingToolType::SchiffPitchfork
+                        | DrawingToolType::ModifiedSchiffPitchfork
+                        | DrawingToolType::InsidePitchfork
+                        | DrawingToolType::TextLabel
+                        | DrawingToolType::AnchoredText
+                        | DrawingToolType::Note
+                        | DrawingToolType::Callout
+                        | DrawingToolType::PriceLabel
+                        | DrawingToolType::FlagNote
+                        | DrawingToolType::PriceNote
+                        | DrawingToolType::Table
+                        | DrawingToolType::Comment
+                        | DrawingToolType::Signpost
+                        | DrawingToolType::Image
+                        | DrawingToolType::Tweet
+                        | DrawingToolType::Idea
+                        | DrawingToolType::Forecast
+                        | DrawingToolType::ArrowMarkUp
+                        | DrawingToolType::ArrowMarkDown
+                        | DrawingToolType::ArrowMarkLeft
+                        | DrawingToolType::ArrowMarkRight
                 )
                 && let Some(configured) = self.fill_color32()
             {
@@ -147,7 +152,6 @@ impl Drawing {
         let mut path = Vec::new();
         let stroke = match shape {
             Shape::LineSegment { points, stroke } => {
-                width(stroke);
                 path.extend(*points);
                 *stroke
             }
@@ -156,9 +160,7 @@ impl Drawing {
                 let ColorMode::Solid(color) = &p.stroke.color else {
                     return;
                 };
-                let mut stroke = Stroke::new(p.stroke.width, *color);
-                width(&mut stroke);
-                p.stroke.width = stroke.width;
+                let stroke = Stroke::new(p.stroke.width, *color);
                 if dash.is_none() || stroke.is_empty() {
                     return;
                 }
@@ -173,7 +175,6 @@ impl Drawing {
             }
             Shape::Rect(r) => {
                 fill(&mut r.fill);
-                width(&mut r.stroke);
                 if dash.is_none() || r.stroke.is_empty() {
                     return;
                 }
@@ -196,7 +197,7 @@ impl Drawing {
                 {
                     return;
                 }
-                width(&mut c.stroke);
+
                 if dash.is_none() || c.stroke.is_empty() {
                     return;
                 }
@@ -211,7 +212,6 @@ impl Drawing {
                 stroke
             }
             Shape::Ellipse(e) => {
-                width(&mut e.stroke);
                 if dash.is_none() || e.stroke.is_empty() {
                     return;
                 }
@@ -385,6 +385,226 @@ pub(super) fn circle_sides(radius: f32) -> usize {
 mod tests {
     use super::*;
     use egui::epaint::StrokeKind;
+
+    fn paint(drawing: &Drawing) -> Vec<Shape> {
+        let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(pane),
+                ..Default::default()
+            },
+            |ui| {
+                drawing.render_original(
+                    ui.painter(),
+                    pane,
+                    &crate::drawings::rendering::ChartView {
+                        instrument: None,
+                        bars: &[],
+                        revision: 0,
+                        bar_to_x: &|x| x,
+                        price_to_y: &|p| p as f32,
+                        time_axis: true,
+                        executions: None,
+                    },
+                );
+            },
+        );
+        fn collect(shape: &Shape, out: &mut Vec<Shape>) {
+            match shape {
+                Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+                _ => out.push(shape.clone()),
+            }
+        }
+        let mut shapes = Vec::new();
+        for s in &output.shapes {
+            collect(&s.shape, &mut shapes);
+        }
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    fn pattern(tool: DrawingToolType) -> Drawing {
+        let mut drawing = Drawing::new(1, tool);
+        drawing.points = [
+            (100., 300.),
+            (180., 100.),
+            (260., 250.),
+            (340., 150.),
+            (420., 220.),
+            (500., 180.),
+            (580., 300.),
+        ]
+        .map(|(x, y)| Pos2::new(x, y))
+        .to_vec();
+        drawing.points.truncate(tool.required_points().unwrap_or(7));
+        drawing.chart_points = drawing
+            .points
+            .iter()
+            .map(|p| crate::drawings::ChartPoint::new(p.x, f64::from(p.y)))
+            .collect();
+        drawing
+    }
+
+    #[test]
+    fn main_widths_are_exact_and_details_stay_thin() {
+        use DrawingToolType::*;
+        for tool in [
+            XABCDPattern,
+            CypherPattern,
+            HeadAndShoulders,
+            ABCDPattern,
+            TrianglePattern,
+            ThreeDrivesPattern,
+            ElliottImpulse,
+            ElliottCorrection,
+            ElliottTriangle,
+            ElliottDoubleCombo,
+            ElliottTripleCombo,
+            CyclicLines,
+            TimeCycles,
+            SineLine,
+            GannFan,
+            GannBox,
+            GannSquare,
+            GannFixed,
+        ] {
+            for width in [1.0, 2.0, 3.0] {
+                let mut drawing = pattern(tool);
+                drawing.stroke_width = width;
+                let shapes = paint(&drawing);
+                let mut main = 0;
+                let mut details = 0;
+                for shape in &shapes {
+                    let (is_main, stroke) = match shape {
+                        Shape::LineSegment { points, stroke } => (
+                            drawing.points.windows(2).any(|p| p == points)
+                                || tool == CyclicLines
+                                || (tool == HeadAndShoulders && stroke.color.a() == 200),
+                            *stroke,
+                        ),
+                        Shape::Path(p) => {
+                            let ColorMode::Solid(color) = p.stroke.color else {
+                                continue;
+                            };
+                            (
+                                p.points
+                                    .windows(2)
+                                    .any(|p| drawing.points.windows(2).any(|leg| leg == p))
+                                    || (tool == SineLine && p.points.len() > 100)
+                                    || (tool == TimeCycles
+                                        && p.points.len() > 4
+                                        && color == drawing.color32()),
+                                Stroke::new(p.stroke.width, color),
+                            )
+                        }
+                        Shape::Rect(r) => (
+                            matches!(tool, GannBox | GannSquare | GannFixed)
+                                && !r.stroke.is_empty(),
+                            r.stroke,
+                        ),
+                        _ => continue,
+                    };
+                    if stroke.is_empty() {
+                        continue;
+                    }
+                    if is_main {
+                        main += 1;
+                        assert_eq!(stroke.width, width, "{tool:?} main at {width}");
+                    } else if stroke.color != Color32::WHITE
+                        && (stroke.color.a() < 255
+                            || matches!(shape, Shape::Path(p) if p.closed && p.points.len() >= 8))
+                    {
+                        details += 1;
+                        assert!(
+                            stroke.width <= 2.0,
+                            "{tool:?} detail widened to {}",
+                            stroke.width
+                        );
+                    }
+                }
+                assert!(main > 0, "{tool:?} missing main line");
+                if matches!(
+                    tool,
+                    XABCDPattern
+                        | GannBox
+                        | GannSquare
+                        | ElliottTriangle
+                        | ElliottDoubleCombo
+                        | ElliottTripleCombo
+                ) {
+                    assert!(details > 0, "{tool:?} missing details");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pattern_fills_toggle_without_recolouring_labels() {
+        use DrawingToolType::*;
+        for tool in [
+            XABCDPattern,
+            CypherPattern,
+            HeadAndShoulders,
+            ABCDPattern,
+            TrianglePattern,
+            ThreeDrivesPattern,
+            ElliottImpulse,
+            ElliottCorrection,
+            ElliottTriangle,
+            GannBox,
+            GannSquare,
+            GannFixed,
+        ] {
+            let mut drawing = pattern(tool);
+            if tool != ElliottImpulse {
+                assert!(
+                    drawing.fill_color.is_some(),
+                    "{tool:?} lost its default tint"
+                );
+            }
+            let coloured = Drawing::with_color(1, tool, [67, 89, 123, 255]);
+            if tool != ElliottCorrection {
+                assert_eq!(
+                    &coloured.fill_color.unwrap()[..3],
+                    &[67, 89, 123],
+                    "{tool:?} default fill must follow its line colour"
+                );
+            }
+            let configured = Color32::from_rgba_unmultiplied(12, 34, 56, 80);
+            for fill in [None, Some([12, 34, 56, 80])] {
+                drawing.fill_color = fill;
+                let shapes = paint(&drawing);
+                let mut bodies = 0;
+                for shape in &shapes {
+                    match shape {
+                        Shape::Path(p) if p.closed && p.points.len() <= 7 => {
+                            bodies += usize::from(p.fill.a() > 0);
+                            assert_eq!(
+                                p.fill,
+                                fill.map_or(Color32::TRANSPARENT, |_| configured),
+                                "{tool:?} body"
+                            );
+                        }
+                        Shape::Rect(r) if r.fill.a() > 0 => {
+                            if (matches!(tool, GannBox | GannSquare | GannFixed)
+                                && r.rect.contains(drawing.points[0]))
+                                || (tool == ThreeDrivesPattern
+                                    && r.rect.left() == drawing.points[5].x)
+                            {
+                                bodies += 1;
+                                assert_eq!(r.fill, configured, "{tool:?} body");
+                            } else {
+                                assert_ne!(r.fill, configured, "{tool:?} label recoloured");
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                assert_eq!(bodies > 0, fill.is_some(), "{tool:?} fill toggle");
+            }
+        }
+    }
 
     /// Guards the circles of drawings at 1x and 2x: a circle with an outline, or too large for a
     /// textured quad, becomes a closed polygon whose corners lie on the circle and whose sides

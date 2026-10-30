@@ -79,6 +79,126 @@ impl DrawingManager {
         }
     }
 
+    pub(crate) fn copy_dragged_drawings(&mut self) {
+        let Some((_, handle)) = self.dragging_handle else {
+            return;
+        };
+        let Some(old) = self.drag_old_state.take() else {
+            return;
+        };
+        let primary_id = old.id;
+        let mut copies = std::mem::take(&mut self.drag_group);
+        copies.push(old);
+        copies.sort_by_key(|copy| {
+            (
+                copy.z_order,
+                self.drawings.iter().position(|d| d.id == copy.id),
+            )
+        });
+        let primary = copies.iter().position(|d| d.id == primary_id).unwrap();
+        for copy in &mut copies {
+            copy.id = self.take_id();
+            copy.stored_id = None;
+            copy.created_at = None;
+            copy.z_order = self.top_z_order();
+            self.drawings.push(copy.clone());
+        }
+        let old = copies.remove(primary);
+        self.dragging_handle = Some((old.id, handle));
+        self.drag_old_state = Some(old.clone());
+        self.drag_group = copies;
+        self.select_drawings(
+            self.drag_group
+                .iter()
+                .map(|d| d.id)
+                .chain([old.id])
+                .collect::<Vec<_>>(),
+        );
+        self.drag_copy = true;
+    }
+
+    pub(crate) fn constrains_angle(tool: DrawingToolType) -> bool {
+        use DrawingToolType as T;
+        matches!(
+            tool,
+            T::TrendLine
+                | T::Ray
+                | T::ExtendedLine
+                | T::InfoLine
+                | T::TrendAngle
+                | T::Arrow
+                | T::ParallelChannel
+                | T::DisjointChannel
+                | T::FlatTopBottom
+                | T::RegressionTrend
+                | T::FibonacciChannel
+        )
+    }
+
+    // Project onto the nearest 45-degree direction. Integer directions keep diagonals exact.
+    fn constrain_angle(&self, drawing: &Drawing, index: usize, point: Pos2) -> Pos2 {
+        if !self.interaction_modifiers.shift
+            || drawing.custom_tool.is_some()
+            || !Self::constrains_angle(drawing.tool_type)
+        {
+            return point;
+        }
+        let anchor_index = if index == 0 { 1 } else { index - 1 };
+        let Some(&anchor) = drawing.points.get(anchor_index) else {
+            return point;
+        };
+        let delta = point - anchor;
+        let angle =
+            (delta.angle() / std::f32::consts::FRAC_PI_4).round() * std::f32::consts::FRAC_PI_4;
+        let direction = egui::vec2(angle.cos().round(), angle.sin().round());
+        let mut offset = direction * (delta.dot(direction) / direction.length_sq());
+        // Clip along the ray so an off-pane anchor keeps the same angle at the pane edge.
+        if self.pane_rect.is_positive() {
+            let mut first = 0.0_f32;
+            let mut last = f32::INFINITY;
+            for (start, step, min, max) in [
+                (
+                    anchor.x,
+                    direction.x,
+                    self.pane_rect.left(),
+                    self.pane_rect.right(),
+                ),
+                (
+                    anchor.y,
+                    direction.y,
+                    self.pane_rect.top(),
+                    self.pane_rect.bottom(),
+                ),
+            ] {
+                if step == 0.0 {
+                    if start < min || start > max {
+                        last = f32::NEG_INFINITY;
+                    }
+                } else {
+                    let a = (min - start) / step;
+                    let b = (max - start) / step;
+                    first = first.max(a.min(b));
+                    last = last.min(a.max(b));
+                }
+            }
+            if first <= last {
+                let distance = delta.dot(direction) / direction.length_sq();
+                offset = direction * distance.clamp(first, last);
+            }
+        }
+        anchor + offset
+    }
+
+    fn constrain_preview(&self, point: Pos2) -> Pos2 {
+        self.curr_drawing.as_ref().map_or(point, |drawing| {
+            let index = drawing
+                .points
+                .len()
+                .saturating_sub(usize::from(self.preview_point));
+            self.constrain_angle(drawing, index, point)
+        })
+    }
+
     /// Updates the position of the currently dragged handle to `new_pos`,
     /// applying snap behavior and coordinate conversion.
     /// `translate_price(price, from_y, to_y)` shifts whole-drawing prices in scale units;
@@ -106,7 +226,46 @@ impl DrawingManager {
                 return;
             }
             // Compute snapped position before mutable borrow
-            let snapped = self.snap_point(new_pos, &self.drawings);
+            let mut snapped = self.snap_point(new_pos, &self.drawings);
+            let mut constrained_price = None;
+            if self.interaction_modifiers.shift
+                && let Some(origin) = self.drag_origin
+            {
+                let delta = snapped - origin;
+                if delta.x.abs() >= delta.y.abs() {
+                    snapped.y = origin.y;
+                } else {
+                    snapped.x = origin.x;
+                }
+            } else if let Some(drawing) = self.drawings.iter().find(|d| d.id == id) {
+                let index = match handle {
+                    HandlePos::Start => Some(0),
+                    HandlePos::End => Some(1),
+                    HandlePos::Point(index) => Some(index),
+                    _ => None,
+                };
+                if let Some(index) = index {
+                    snapped = self.constrain_angle(drawing, index, snapped);
+                    let anchor_index = if index == 0 { 1 } else { index - 1 };
+                    if self.interaction_modifiers.shift
+                        && Self::constrains_angle(drawing.tool_type)
+                        && drawing.custom_tool.is_none()
+                        && let Some((anchor, chart_anchor)) = drawing
+                            .points
+                            .get(anchor_index)
+                            .zip(drawing.chart_points.get(anchor_index))
+                    {
+                        // Use the fixed anchor's current projection, including after a view change.
+                        constrained_price = Some((chart_anchor.price, anchor.y));
+                    }
+                }
+            }
+            // Shift edits receive precise bars for the angle; other Shift edits keep whole bars.
+            let whole_bars = self.interaction_modifiers.shift && constrained_price.is_none();
+            let x_to_bar = |x| {
+                let bar = x_to_bar(x);
+                if whole_bars { bar.round() } else { bar }
+            };
             if let Some(origin) = self.drag_origin {
                 let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
                 for old in &self.drag_group {
@@ -153,8 +312,13 @@ impl DrawingManager {
                         handle,
                         snapped,
                         x_to_bar,
-                        y_to_price,
-                        translate_price,
+                        |y| {
+                            constrained_price.map_or_else(
+                                || y_to_price(y),
+                                |(price, from)| translate_price(price, from, y),
+                            )
+                        },
+                        &translate_price,
                     );
                 }
                 if drawing.screen_anchor.is_some()
@@ -171,8 +335,28 @@ impl DrawingManager {
 
     /// Ends the current handle drag or [`Self::drag_edit_drawing`] gesture, pushing one modify
     /// command to the undo history and queuing one update for the whole gesture.
+    /// A copy drag records the additions instead, so undo removes every copy.
     pub fn end_drag_handle(&mut self) {
         if let Some(old_state) = self.drag_old_state.take() {
+            if std::mem::take(&mut self.drag_copy) {
+                let mut ids: Vec<_> = std::mem::take(&mut self.drag_group)
+                    .iter()
+                    .map(|d| d.id)
+                    .collect();
+                ids.push(old_state.id);
+                ids.sort_by_key(|id| self.drawings.iter().position(|d| d.id == *id));
+                for &id in &ids {
+                    self.queue(DrawingSyncAction::SaveDrawing(id));
+                }
+                self.history
+                    .push_command(crate::drawings::services::DrawingCommand::Snapshot {
+                        drawings: Vec::new(),
+                        ids,
+                    });
+                self.dragging_handle = None;
+                self.drag_origin = None;
+                return;
+            }
             self.queue_edit(&old_state);
             if self.drag_group.is_empty() {
                 self.history.push_modify(old_state.id, old_state);
@@ -390,7 +574,7 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
-        let point = self.snap_point(point, &self.drawings);
+        let point = self.constrain_preview(self.snap_point(point, &self.drawings));
         if let Some(ref mut drawing) = self.curr_drawing {
             // The click takes the place of the pointer preview.
             if std::mem::take(&mut self.preview_point) {
@@ -420,7 +604,7 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
-        let point = self.snap_point(point, &self.drawings);
+        let point = self.constrain_preview(self.snap_point(point, &self.drawings));
         if let Some(ref mut drawing) = self.curr_drawing
             && !drawing.points.is_empty()
             && !drawing.completed
@@ -556,6 +740,96 @@ impl DrawingManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copied_groups_keep_their_layers_locally_and_when_synced() {
+        fn top_tool(manager: &DrawingManager) -> DrawingToolType {
+            let id = manager.hit_test(Pos2::new(75.0, 100.0)).unwrap();
+            manager
+                .drawings
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap()
+                .tool_type
+        }
+        for (background_layer, line_layer, expected) in [
+            (2, 5, DrawingToolType::TrendLine),
+            (5, 5, DrawingToolType::TrendLine),
+            (5, 2, DrawingToolType::Rect),
+        ] {
+            let mut manager = DrawingManager::new();
+            for (id, tool, layer, points) in [
+                (
+                    7,
+                    DrawingToolType::Rect,
+                    background_layer,
+                    [Pos2::new(50.0, 50.0), Pos2::new(150.0, 150.0)],
+                ),
+                (
+                    8,
+                    DrawingToolType::TrendLine,
+                    line_layer,
+                    [Pos2::new(50.0, 100.0), Pos2::new(150.0, 100.0)],
+                ),
+            ] {
+                let mut drawing = Drawing::new(id, tool);
+                drawing.z_order = layer;
+                drawing.completed = true;
+                drawing.fill_color = Some([30, 60, 95, 255]);
+                drawing.points = points.to_vec();
+                drawing.chart_points = points
+                    .iter()
+                    .map(|p| ChartPoint::new(p.x / 10.0, 200.0 - f64::from(p.y)))
+                    .collect();
+                manager.drawings.push(drawing);
+            }
+            manager.select_drawings([7, 8]);
+            manager.start_drag_body(7, Pos2::new(75.0, 75.0));
+            manager.copy_dragged_drawings();
+            manager.end_drag_handle();
+            manager.deselect();
+            assert_eq!(manager.drawings.len(), 4);
+            assert_eq!(top_tool(&manager), expected);
+            let mut peer = DrawingManager::new();
+            for action in manager.pending_sync.lock().unwrap().iter() {
+                if let DrawingSyncAction::SaveDrawing(id) = action {
+                    let mut copy = manager
+                        .drawings
+                        .iter()
+                        .find(|d| d.id == *id)
+                        .unwrap()
+                        .clone();
+                    copy.stored_id = Some(id.to_string());
+                    peer.add_synced_drawing(copy);
+                }
+            }
+            peer.update_all_screen_coords(|bar| bar * 10.0, |price| (200.0 - price) as f32);
+            assert_eq!(peer.drawings.len(), 2);
+            assert_eq!(top_tool(&peer), expected);
+            assert!(manager.undo());
+            assert_eq!(manager.drawings.len(), 2);
+            assert!(!manager.undo());
+            assert!(manager.redo());
+            assert_eq!(manager.drawings.len(), 4);
+            manager.update_all_screen_coords(|bar| bar * 10.0, |price| (200.0 - price) as f32);
+            assert_eq!(top_tool(&manager), expected);
+        }
+    }
+
+    #[test]
+    fn copy_drag_ignores_non_pointer_edits() {
+        let mut manager = DrawingManager::new();
+        manager
+            .drawings
+            .push(Drawing::new(7, DrawingToolType::TrendLine));
+        manager.drag_edit_drawing(7, |drawing| drawing.text = Some("Draft".into()));
+        manager.copy_dragged_drawings();
+        assert_eq!(manager.drawings.len(), 1);
+        manager.end_drag_handle();
+        assert!(manager.undo());
+        assert_eq!(manager.drawings[0].text, None);
+        assert!(!manager.undo());
+    }
 
     #[test]
     fn time_cycles_share_a_baseline_during_placement() {

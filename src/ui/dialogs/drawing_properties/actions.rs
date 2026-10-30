@@ -195,11 +195,12 @@ impl DrawingProps {
             drawing.extend_left = self.extend_left;
             drawing.extend_right = self.extend_right;
             drawing.text = (!self.label.is_empty()).then(|| self.label.clone());
-            drawing.fill_color = self.fill_enabled.then(|| {
-                self.fill_color
-                    .unwrap_or(self.color.gamma_multiply(0.2))
-                    .to_srgba_unmultiplied()
-            });
+            let fill = self
+                .fill_enabled
+                .then(|| self.fill_color.unwrap_or(self.color.gamma_multiply(0.2)));
+            if drawing.fill_color32() != fill {
+                drawing.fill_color = fill.map(|color| color.to_srgba_unmultiplied());
+            }
             drawing.font_size = self.font_size;
             drawing.timeframe_visibility = TimeframeVisibility {
                 show_on_all: self.visible_all_timeframes,
