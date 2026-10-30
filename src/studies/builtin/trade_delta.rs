@@ -8,6 +8,10 @@ use crate::model::Bar;
 pub struct TradeDeltaValue {
     /// Buy minus sell volume in this bar.
     pub delta: f64,
+    /// Highest running delta of this bar's executions, starting from zero: zero or more.
+    pub delta_high: f64,
+    /// Lowest running delta of this bar's executions, starting from zero: zero or less.
+    pub delta_low: f64,
     /// Cumulative delta before the first execution.
     pub open: f64,
     /// Maximum cumulative delta reached, including the open.
@@ -48,6 +52,7 @@ pub fn trade_delta(
         let flow = footprint.bar_at(bar.time);
         let delta = flow.map_or(0.0, |bar| bar.delta());
         let volume = flow.map_or(0.0, |bar| bar.volume());
+        let (delta_low, delta_high) = flow.map_or((0.0, 0.0), |bar| (bar.min_delta, bar.max_delta));
         if i >= rolling {
             let old = footprint.bar_at(bars[i - rolling].time);
             volume_sum -= old.map_or(0.0, |bar| bar.volume());
@@ -57,9 +62,11 @@ pub fn trade_delta(
         delta_sum += delta;
         let value = TradeDeltaValue {
             delta,
+            delta_high,
+            delta_low,
             open: cumulative,
-            high: cumulative + flow.map_or(0.0, |bar| bar.max_delta),
-            low: cumulative + flow.map_or(0.0, |bar| bar.min_delta),
+            high: cumulative + delta_high,
+            low: cumulative + delta_low,
             close: cumulative + delta,
             rolling_volume: volume_sum,
             rolling_delta: delta_sum,

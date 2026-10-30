@@ -316,6 +316,36 @@ impl ProfileStudy {
             .collect()
     }
 
+    /// The chart bar ranges of the profiles in `visible`: the clamped view for a visible
+    /// profile, the ranges overlapping it otherwise.
+    fn ranges_in(&self, visible: Range<usize>) -> Vec<Range<usize>> {
+        let visible = visible.start.min(self.data.len())..visible.end.min(self.data.len());
+        if visible.is_empty() {
+            Vec::new()
+        } else if self.kind == Kind::Visible {
+            vec![visible]
+        } else {
+            self.ranges
+                .iter()
+                .filter(|range| range.start < visible.end && range.end > visible.start)
+                .cloned()
+                .collect()
+        }
+    }
+
+    /// The open of the first chart bar a profile in view reads, from which its finer bars are
+    /// needed; the open of the newest bar with no profile in view, and `None` without bars.
+    fn data_start(&self) -> Option<DateTime<Utc>> {
+        let first = self
+            .ranges_in(self.view.clone())
+            .iter()
+            .map(|r| r.start)
+            .min();
+        first
+            .map_or(self.data.last(), |at| self.data.get(at))
+            .map(|bar| bar.time)
+    }
+
     /// Takes the finer bars, replacing all of them from bar 0 and from the first changed chart
     /// bar on otherwise, so a reply for another interval is dropped.
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
@@ -513,19 +543,10 @@ impl ProfileStudy {
     }
 
     fn profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
-        let visible = visible.start.min(self.data.len())..visible.end.min(self.data.len());
-        if visible.is_empty() {
+        let ranges = self.ranges_in(visible);
+        if ranges.is_empty() {
             return Vec::new();
         }
-        let ranges = if self.kind == Kind::Visible {
-            vec![visible]
-        } else {
-            self.ranges
-                .iter()
-                .filter(|range| range.start < visible.end && range.end > visible.start)
-                .cloned()
-                .collect()
-        };
         let Some(mut config) = VolumeProfileConfig::new(self.rows, self.value_area)
             .and_then(|c| c.with_row_size((self.row_size > 0.0).then_some(self.row_size)))
         else {
@@ -683,6 +704,9 @@ macro_rules! profile_study {
             }
             fn data_requests(&self) -> Vec<StudyDataRequest> {
                 self.profile.data_requests()
+            }
+            fn data_start(&self, _: &StudyDataRequest) -> Option<DateTime<Utc>> {
+                self.profile.data_start()
             }
             fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
                 self.profile.update_data(data, from, sources);
@@ -1009,6 +1033,11 @@ mod tests {
             ),
             (Box::new(VolProfileAutoAnchored::new(2)), vec![(3..4, 40.0)]),
         ];
+        let request = StudyDataRequest {
+            symbol: String::new(),
+            timeframe: None,
+            metric: None,
+        };
         for (mut study, expected) in cases {
             let defaults = crate::studies::IndicatorFactory::new()
                 .create(study.name())
@@ -1032,6 +1061,7 @@ mod tests {
             study.calculate(&bars);
             let got = study.volume_profiles(1..4);
             assert_eq!(got.len(), expected.len(), "{}", study.name());
+            let first = expected[0].0.start;
             for (got, (range, volume)) in got.iter().zip(expected) {
                 assert_eq!(got.bars, range, "{}", study.name());
                 assert_eq!(got.profile.volume(), [volume / 2.0, volume / 2.0]);
@@ -1041,6 +1071,17 @@ mod tests {
             }
             let cached = study.volume_profiles(1..4);
             assert!(Arc::ptr_eq(&got[0].profile, &cached[0].profile));
+            // Finer bars are needed from the first bar of the first profile in view, and with
+            // no profile in view from the newest bar on.
+            for (view, at) in [(1..4, first), (4..4, 3)] {
+                study.set_visible_range(view);
+                assert_eq!(
+                    study.data_start(&request),
+                    Some(bars[at].time),
+                    "{}",
+                    study.name()
+                );
+            }
             let mut live = bars.clone();
             for step in 0..3 {
                 let from = match step {

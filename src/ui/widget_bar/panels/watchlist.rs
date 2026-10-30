@@ -717,7 +717,7 @@ impl WatchlistPanel {
                 align,
                 l10n::text(ui.ctx(), label),
                 font.clone(),
-                theme.ui.text_secondary,
+                theme.ui.text_muted,
             );
             if let Some((sorted, descending)) = *sort
                 && sorted == column
@@ -736,7 +736,7 @@ impl WatchlistPanel {
                         pos2(x + 3.5, y + base),
                         pos2(x, y + tip),
                     ],
-                    theme.ui.text_secondary,
+                    theme.ui.text_muted,
                     Stroke::NONE,
                 ));
             }

@@ -168,6 +168,7 @@ mod tests {
                 ui.painter(),
                 ui.max_rect(),
                 &ChartView {
+                    price_formatter: None,
                     instrument: None,
                     bars: &[],
                     revision: 0,

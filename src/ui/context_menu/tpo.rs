@@ -26,12 +26,14 @@ impl TpoMenu {
         let clock = profile_clock(chart);
         let bars = chart.bars(SeriesId::MAIN);
         let (start, end) = chart.state().visible_range();
-        let config = params.tpo_config(chart.instrument().and_then(|i| i.tick_size));
+        let tick = chart.instrument().and_then(|i| i.tick_size);
+        let config = params.tpo_config(tick);
         let open = crate::chart::rendering::candles::tpo::profile_at(
             bars,
             start..end,
             chart.state().revision(),
             &config,
+            tick,
             &clock,
             &chart.get_chart_mapping(),
             pos,

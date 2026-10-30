@@ -357,6 +357,7 @@ mod tests {
                             ui.painter(),
                             pane,
                             &ChartView {
+                                price_formatter: None,
                                 instrument: None,
                                 bars,
                                 revision: 0,
@@ -487,8 +488,8 @@ mod tests {
             ),
             (
                 DrawingToolType::FibonacciCircles,
-                vec![(100., 100.), (200., 100.)],
-                (100., 200.),
+                vec![(100., 100.), (200., 200.)],
+                (150., 200.),
                 (580., 390.),
             ),
             (
@@ -515,6 +516,7 @@ mod tests {
             let render = |manager: &DrawingManager| {
                 ctx.run_ui(RawInput::default(), |ui| {
                     let view = ChartView {
+                        price_formatter: None,
                         instrument: None,
                         bars: &[],
                         revision: 0,
@@ -596,6 +598,7 @@ mod tests {
             let mut output = ctx.run_ui(RawInput::default(), |ui| {
                 ctx.set_transform_layer(ui.layer_id(), layer);
                 let view = ChartView {
+                    price_formatter: None,
                     instrument: None,
                     bars: &[],
                     revision: 0,

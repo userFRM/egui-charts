@@ -453,8 +453,6 @@ impl WidgetBar {
             self.config.hover_rounding
         };
         let icon_color = theme.ui.text;
-        let icon_hover_color = theme.ui.text;
-        let active_color = theme.ui.selection_text;
         let hover_bg = theme.ui.btn_bg_hover;
         let pressed_bg = theme.ui.btn_bg_active;
         let badge_color = theme.ui.danger_bg;
@@ -486,22 +484,19 @@ impl WidgetBar {
             if is_pressed {
                 painter.rect_filled(hover_rect, rounding, pressed_bg);
             } else if is_active {
-                painter.rect_filled(hover_rect, rounding, theme.ui.selection_bg);
+                painter.rect_filled(
+                    hover_rect,
+                    rounding,
+                    if theme.dark {
+                        theme.ui.btn_bg_active
+                    } else {
+                        theme.ui.panel_bg_secondary
+                    },
+                );
             } else if is_hovered {
                 painter.rect_filled(hover_rect, rounding, hover_bg);
             }
         }
-
-        // Icon color based on state
-        let curr_icon_color = if is_pressed {
-            icon_hover_color
-        } else if is_active {
-            active_color
-        } else if is_hovered {
-            icon_hover_color
-        } else {
-            icon_color
-        };
 
         // Render icon centered in button rect (with visibility check)
         let icon_rect =
@@ -509,10 +504,10 @@ impl WidgetBar {
         if ui.is_rect_visible(icon_rect) {
             let tint = if filled {
                 // A 34 px disc in the icon colour, the glyph in the bar's fill.
-                painter.circle_filled(btn_rect.center(), 17.0, curr_icon_color);
+                painter.circle_filled(btn_rect.center(), 17.0, icon_color);
                 ui.visuals().panel_fill
             } else {
-                curr_icon_color
+                icon_color
             };
             icon.as_image_tinted(Vec2::splat(self.config.icon_size), tint)
                 .paint_at(ui, icon_rect);
@@ -890,9 +885,14 @@ mod tests {
                 bar.active_icon = Some(RightBarIcon::Alerts);
                 bar.set_notification_cnt(RightBarIcon::Alerts, 3);
                 let pos = icons[1].center();
+                let selected_fill = if theme.dark {
+                    theme.ui.btn_bg_active
+                } else {
+                    theme.ui.panel_bg_secondary
+                };
                 for (events, fill) in [
-                    (vec![], theme.ui.selection_bg),
-                    (vec![Event::PointerMoved(pos)], theme.ui.selection_bg),
+                    (vec![], selected_fill),
+                    (vec![Event::PointerMoved(pos)], selected_fill),
                     (vec![button(pos, true)], theme.ui.btn_bg_active),
                 ] {
                     let (_, shapes, _) = frame(&mut bar, events);

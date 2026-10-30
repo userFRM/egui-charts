@@ -68,7 +68,9 @@ pub enum OrderFlowKind {
         bars: usize,
     },
     /// Buy minus sell volume per bar of executions whose size lies in the inclusive range,
-    /// which a study accumulates into a cumulative volume delta.
+    /// which a study accumulates into a cumulative volume delta. The sum starts at the oldest
+    /// bar with a retained value, so it starts again from a later bar after the input drops its
+    /// oldest bars (see [`OrderFlowInput`]).
     FilteredCvd {
         /// Smallest size counted.
         min: f64,
@@ -115,7 +117,7 @@ impl OrderFlowKind {
                 ranges: ranges.map(|[min, max]| [size_bound(min), size_bound(max)]),
             },
             Self::FlowSum { bars } => Self::FlowSum {
-                bars: bars.clamp(1, 10_000),
+                bars: bars.clamp(1, KEPT_BARS),
             },
             Self::FilteredCvd { min, max } => Self::FilteredCvd {
                 min: size_bound(min),
@@ -137,6 +139,12 @@ fn size_bound(size: f64) -> f64 {
         size.clamp(0.0, f64::MAX)
     }
 }
+
+/// Bars an input keeps when it drops its oldest: the longest span of a flow sum.
+const KEPT_BARS: usize = 10_000;
+/// Bars an input holds before it drops its oldest down to `KEPT_BARS`. A drop recalculates the
+/// studies on the input in full, so it comes once per 1,001 new bars rather than on every bar.
+const MAX_BARS: usize = 11_000;
 
 #[derive(Default)]
 struct Window {
@@ -273,9 +281,16 @@ struct State {
 ///
 /// The chart connects these automatically. Hosts without a feed can push validated historical
 /// and live events through the same handle, in chronological order, then recalculate the study.
-/// Clones share the source, including when a study is cloned for presentation or undo. At most
-/// 10,000 bars and 100,000 events per rolling window are retained; an overflowing window gives
-/// no value until the missing events have expired, rather than understating the rate.
+/// Clones share the source, including when a study is cloned for presentation or undo.
+///
+/// At most 11,000 bars are retained: the bar after that drops the oldest at once, down to the
+/// newest 10,000, which still cover the longest flow sum. A study recalculated after a drop has
+/// no values for the dropped bars, and a cumulative one, such as
+/// [`FilteredCvd`](OrderFlowKind::FilteredCvd), starts again from the oldest retained bar. The
+/// chart recalculates the studies on a source in full after each drop, once per 1,001 new bars,
+/// and otherwise updates them from the first changed bar. At most 100,000 events per rolling
+/// window are retained; an overflowing window gives no value until the missing events have
+/// expired, rather than understating the rate.
 #[derive(Clone)]
 pub struct OrderFlowInput(Arc<Mutex<State>>);
 
@@ -668,13 +683,14 @@ impl State {
         self.last = Some(time);
         self.revision = self.revision.wrapping_add(1);
         self.changes.insert(open, self.revision);
-        if self.changes.len() > 10_001 {
-            self.changes.pop_first();
-        }
-        if self.bars.len() > 10_000
-            && let Some((time, _)) = self.bars.pop_first()
-        {
-            self.changes.insert(time, self.revision);
+        if self.bars.len() > MAX_BARS {
+            while self.bars.len() > KEPT_BARS {
+                self.bars.pop_first();
+            }
+            // `changes` names only retained bars, so it shares their bound.
+            if let Some((&first, _)) = self.bars.first_key_value() {
+                self.changes.retain(|bar, _| *bar >= first);
+            }
             #[cfg(feature = "widget")]
             {
                 self.reset_revision = self.revision;

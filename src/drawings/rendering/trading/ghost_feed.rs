@@ -71,6 +71,7 @@ mod tests {
             drawing.update_screen_coords(bar_to_x, price_to_y);
             let instrument = crate::model::Instrument::new("TEST").with_tick_size(0.25);
             let view = ChartView {
+                price_formatter: None,
                 instrument: Some(&instrument),
                 bars: &[],
                 revision: 0,

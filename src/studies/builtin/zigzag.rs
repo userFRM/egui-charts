@@ -149,7 +149,15 @@ impl ZigZag {
     }
 
     /// Resume swing detection without interpolating lines that automatic drawings do not use.
-    pub(super) fn update_swings(&mut self, data: &[Bar], from: usize) -> usize {
+    /// `threshold` gives, for a source bar index, the percentage a reversal confirmed on that
+    /// bar must reach, in place of the fixed deviation; a threshold that is not a positive
+    /// number confirms no reversal.
+    pub(super) fn update_swings(
+        &mut self,
+        data: &[Bar],
+        from: usize,
+        threshold: Option<&dyn Fn(usize) -> f64>,
+    ) -> usize {
         let start = self.tail_from(data, from);
         if start == 0 {
             self.finite.clear();
@@ -165,28 +173,29 @@ impl ZigZag {
         }
         let fixed = self.completed.len();
         self.pivots.truncate(fixed);
-        if self.deviation_percent > 0.0 {
-            for (source, bar) in data.iter().enumerate().skip(start) {
-                if source + 1 == data.len() {
-                    self.before_last = Checkpoint {
-                        detector: self.detector,
-                        finite: self.finite.len(),
-                        prices: self.prices.len(),
-                        completed: self.completed.len(),
-                    };
-                }
-                let (high, low) = (self.get_price(bar, true), self.get_price(bar, false));
-                if !high.is_finite() || !low.is_finite() {
-                    continue;
-                }
-                let sequence = self.finite.len();
-                self.finite.push(source);
-                if high <= 0.0 || low <= 0.0 {
-                    continue;
-                }
-                self.prices.push((sequence, high, low));
-                self.process(self.prices.len() - 1);
+        let deviation = self.deviation_percent;
+        let fixed_threshold = move |_: usize| deviation;
+        let threshold = threshold.unwrap_or(&fixed_threshold);
+        for (source, bar) in data.iter().enumerate().skip(start) {
+            if source + 1 == data.len() {
+                self.before_last = Checkpoint {
+                    detector: self.detector,
+                    finite: self.finite.len(),
+                    prices: self.prices.len(),
+                    completed: self.completed.len(),
+                };
             }
+            let (high, low) = (self.get_price(bar, true), self.get_price(bar, false));
+            if !high.is_finite() || !low.is_finite() {
+                continue;
+            }
+            let sequence = self.finite.len();
+            self.finite.push(source);
+            if high <= 0.0 || low <= 0.0 {
+                continue;
+            }
+            self.prices.push((sequence, high, low));
+            self.process(self.prices.len() - 1, threshold);
         }
         self.pivots.extend(
             self.completed[fixed..]
@@ -208,20 +217,23 @@ impl ZigZag {
         fixed
     }
 
-    fn process(&mut self, mut p: usize) {
+    fn process(&mut self, mut p: usize, threshold: &dyn Fn(usize) -> f64) {
         let bars = &self.prices;
         let Some((mut top, mut bottom)) = self.detector.extremes else {
             self.detector.extremes = Some(((p, bars[p].1), (p, bars[p].2)));
             return;
         };
-        let (depth, deviation) = (self.depth, self.deviation_percent);
+        let depth = self.depth;
+        let finite = &self.finite;
+        let reaches = |p: usize, change: f64| {
+            let threshold = threshold(finite[bars[p].0]);
+            threshold > 0.0 && change >= threshold
+        };
         let rises = |from: (usize, f64), p: usize| {
-            bars[p].0 - bars[from.0].0 >= depth
-                && (bars[p].1 - from.1) / from.1 * 100.0 >= deviation
+            bars[p].0 - bars[from.0].0 >= depth && reaches(p, (bars[p].1 - from.1) / from.1 * 100.0)
         };
         let falls = |from: (usize, f64), p: usize| {
-            bars[p].0 - bars[from.0].0 >= depth
-                && (from.1 - bars[p].2) / from.1 * 100.0 >= deviation
+            bars[p].0 - bars[from.0].0 >= depth && reaches(p, (from.1 - bars[p].2) / from.1 * 100.0)
         };
         while p < bars.len() {
             let (_, high, low) = bars[p];
@@ -334,7 +346,7 @@ impl Indicator for ZigZag {
             }
             self.values.resize(data.len(), IndicatorValue::None);
         }
-        let fixed = self.update_swings(data, from);
+        let fixed = self.update_swings(data, from, None);
         for leg in self.pivots[fixed.saturating_sub(1)..].windows(2) {
             let first = self.finite.binary_search(&leg[0].bar_index).unwrap();
             let end = self.finite.binary_search(&leg[1].bar_index).unwrap();

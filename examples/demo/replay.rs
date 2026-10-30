@@ -80,7 +80,7 @@ impl DemoApp {
         let previous = self.chart.replay_time();
         if previous.is_none_or(|previous| time < previous) {
             self.paper.reset();
-            if self.trading.is_connected() {
+            if self.trading.has_broker() {
                 self.trading.set_service(self.paper.clone());
             }
         }

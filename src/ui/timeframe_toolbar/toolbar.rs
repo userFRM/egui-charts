@@ -68,11 +68,7 @@ impl TimeframeToolbarConfig {
             text_color: ui.text,
             hover_text_color: ui.text,
             active_text_color: ui.accent,
-            separator_color: if theme.dark {
-                ui.border
-            } else {
-                ui.panel_bg.lerp_to_gamma(ui.text, 0.085)
-            },
+            separator_color: crate::ui::top_toolbar::buttons::rule_color(theme),
             hover_bg: ui.btn_bg_hover,
             active_bg: ui.btn_bg_active,
             font_size: theme.text.bottom_bar,
