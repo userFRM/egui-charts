@@ -214,11 +214,22 @@ fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
 fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
     use crate::studies::{FillBoundary, InputValue};
 
-    let rows: [(&str, &[(&str, InputValue)], &[(usize, usize)]); 1] = [(
-        "Envelopes",
-        &[("percent", InputValue::Number(10.0))],
-        &[(0, 2)],
-    )];
+    let rows: [(&str, &[(&str, InputValue)], &[(usize, usize)]); 2] = [
+        (
+            "Envelopes",
+            &[("percent", InputValue::Number(10.0))],
+            &[(0, 2)],
+        ),
+        (
+            "LinReg Channel",
+            &[
+                ("period", InputValue::Length(100)),
+                ("upper_multiplier", InputValue::Number(2.0)),
+                ("lower_multiplier", InputValue::Number(2.0)),
+            ],
+            &[(0, 1), (1, 2)],
+        ),
+    ];
     for (name, inputs, bands) in rows {
         let study = IndicatorFactory::new().create(name).unwrap();
         let values = study.inputs();

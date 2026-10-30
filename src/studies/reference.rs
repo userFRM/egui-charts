@@ -48,7 +48,7 @@
 //! - The simple average of the source or the exponential average seeded with the mean of the first
 //!   values for the Keltner middle line, with bands of Wilder's average true range, the bar's true
 //!   range (high minus low on the first bar) or Wilder's average of the bar range over the middle
-//!   line's length.
+//!   line's length; separate upper and lower residual deviations for the regression channel.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
@@ -915,6 +915,19 @@ fn staple_studies_match_published_definitions() {
         (
             "LinRegChannel-hand",
             Box::new(crate::studies::LinearRegressionChannel::new(3, 2.0)) as Box<dyn Indicator>,
+            {
+                let mut series = ties.clone();
+                for (bar, c) in series.iter_mut().zip([1.0, 4.0, 2.0, 4.0]) {
+                    bar.close = c;
+                }
+                series
+            },
+        ),
+        (
+            "LinRegChannel-asym-hand",
+            Box::new(
+                crate::studies::LinearRegressionChannel::new(3, 2.0).with_multipliers(2.0, 1.0),
+            ) as Box<dyn Indicator>,
             {
                 let mut series = ties.clone();
                 for (bar, c) in series.iter_mut().zip([1.0, 4.0, 2.0, 4.0]) {

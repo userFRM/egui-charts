@@ -645,7 +645,7 @@ Studies,Indicators,Keltner Channels,done,library,src/studies/builtin/keltner.rs;
 Studies,Indicators,Klinger Oscillator,done,library,src/studies/builtin/klinger.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Know Sure Thing,done,library,src/studies/builtin/know_sure_thing.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Least Squares Moving Average,done,library,src/studies/builtin/lsma.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Linear Regression,done,library,src/studies/builtin/linear_regression_channel.rs;src/model/math.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Linear Regression,done,library,src/studies/builtin/linear_regression_channel.rs;src/model/math.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/template.rs
 Studies,Indicators,Linear Regression Curve,done,library,src/studies/builtin/linear_regression.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Linear Regression Slope,done,library,src/studies/builtin/linear_regression.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,MA Cross,done,library,src/studies/builtin/ma_combination.rs;src/studies/builtin/ma_presets.rs;src/studies/builtin/ma_multiple.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
