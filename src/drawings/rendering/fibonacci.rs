@@ -9,12 +9,65 @@ use crate::drawings::domain::{Drawing, DrawingToolType as Tool, FibonacciConfig,
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rangef, Rect, Stroke};
+use std::borrow::Cow;
+use std::hash::{Hash, Hasher};
+
+#[derive(Clone, Copy)]
+struct LevelLabelKey<'a> {
+    config: &'a FibonacciConfig,
+    level: &'a FibonacciLevel,
+    price: Option<f64>,
+}
+
+impl Hash for LevelLabelKey<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (
+            self.level.value.to_bits(),
+            &self.level.label,
+            self.level.show_price,
+            self.config.show_prices,
+            self.config.show_levels,
+            self.config.levels_as_percent,
+            self.price.map(f64::to_bits),
+        )
+            .hash(state);
+    }
+}
+
+#[derive(Default)]
+struct LevelLabelFormatter;
+
+impl egui::cache::ComputerMut<LevelLabelKey<'_>, String> for LevelLabelFormatter {
+    fn compute(&mut self, key: LevelLabelKey<'_>) -> String {
+        key.config.label_text(key.level, key.price)
+    }
+}
+
+fn level_label(
+    painter: &egui::Painter,
+    config: &FibonacciConfig,
+    level: &FibonacciLevel,
+    price: Option<f64>,
+) -> String {
+    // Labels survive pan/zoom; the frame cache evicts text no longer used by any drawing.
+    painter.ctx().memory_mut(|memory| {
+        memory
+            .caches
+            .cache::<egui::cache::FrameCache<String, LevelLabelFormatter>>()
+            .get(LevelLabelKey {
+                config,
+                level,
+                price,
+            })
+            .clone()
+    })
+}
 
 impl Drawing {
     /// Effective settings, including the fixed presentation of older drawings without a config.
-    pub(crate) fn fibonacci_config(&self) -> FibonacciConfig {
+    pub(crate) fn fibonacci_config(&self) -> Cow<'_, FibonacciConfig> {
         if let Some(config) = &self.fib_config {
-            return config.clone();
+            return Cow::Borrowed(config);
         }
         let values: &[f32] = match self.tool_type {
             Tool::FibonacciTimeZones => {
@@ -24,15 +77,15 @@ impl Drawing {
             Tool::TrendBasedFibTime => &[0.0, 0.382, 0.5, 0.618, 1.0, 1.618, 2.618],
             Tool::FibonacciCircles => &[0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.618, 2.618],
             Tool::FibonacciSpeedResistanceArcs => &[0.236, 0.382, 0.5, 0.618, 0.786, 1.0],
-            Tool::FibonacciExtension => return FibonacciConfig::extension_default(),
+            Tool::FibonacciExtension => return Cow::Owned(FibonacciConfig::extension_default()),
             Tool::FibonacciWedge => {
                 let mut config = FibonacciConfig::default();
                 for level in &mut config.levels {
                     level.color = self.color;
                 }
-                return config;
+                return Cow::Owned(config);
             }
-            _ => return FibonacciConfig::default(),
+            _ => return Cow::Owned(FibonacciConfig::default()),
         };
         let mut config = FibonacciConfig {
             levels: values
@@ -83,7 +136,7 @@ impl Drawing {
                 level.color = color.to_srgba_unmultiplied();
             }
         }
-        config
+        Cow::Owned(config)
     }
 
     pub(crate) fn render_fibonacci(&self, painter: &egui::Painter, chart_rect: Rect) {
@@ -140,7 +193,7 @@ impl Drawing {
             // Draw line with extend support
             painter.hline(x_start..=x_end, y, Stroke::new(stroke::HAIRLINE, lvl_color));
 
-            let label_text = config.label_text(level, Some(price_at_lvl));
+            let label_text = level_label(painter, &config, level, Some(price_at_lvl));
             if label_text.is_empty()
                 || label_ys
                     .iter()
@@ -230,7 +283,7 @@ impl Drawing {
                 // Draw line with extend support
                 painter.hline(x_start..=x_end, y, Stroke::new(stroke::HAIRLINE, lvl_color));
 
-                let label_text = config.label_text(level, Some(price_at_lvl));
+                let label_text = level_label(painter, &config, level, Some(price_at_lvl));
                 if label_text.is_empty()
                     || label_ys
                         .iter()
@@ -329,7 +382,7 @@ impl Drawing {
                     color,
                 ),
             ));
-            let text = config.label_text(level, None);
+            let text = level_label(painter, &config, level, None);
             if !text.is_empty() {
                 let side = if config.labels_on_left { -1.0 } else { 1.0 };
                 painter.text(
@@ -408,7 +461,7 @@ impl Drawing {
                 self.stroke_width
             };
             painter.vline(x, chart_rect.y_range(), Stroke::new(width, color));
-            let text = config.label_text(level, None);
+            let text = level_label(painter, &config, level, None);
             if !text.is_empty() && (!legacy || level.value > 0.0) {
                 let pos = Pos2::new(x, chart_rect.min.y + DESIGN_TOKENS.rounding.xl);
                 if legacy {
@@ -531,7 +584,7 @@ impl Drawing {
             } else {
                 None
             };
-            let label_text = config.label_text(level, price);
+            let label_text = level_label(painter, &config, level, price);
             if !label_text.is_empty() {
                 let galley = painter.layout_no_wrap(
                     label_text,
@@ -634,7 +687,7 @@ impl Drawing {
                     color,
                 ),
             );
-            let text = config.label_text(level, None);
+            let text = level_label(painter, &config, level, None);
             if !text.is_empty() {
                 let side = if config.labels_on_left { -1.0 } else { 1.0 };
                 painter.text(
@@ -713,7 +766,7 @@ impl Drawing {
                 continue;
             }
             painter.line_segment([start, fan_end], Stroke::new(width, line_color));
-            let text = config.label_text(level, None);
+            let text = level_label(painter, &config, level, None);
             let position =
                 if self.fib_config.is_none() || (fan_end.x < start.x) == config.labels_on_left {
                     fan_end
@@ -844,7 +897,7 @@ impl Drawing {
                     } else {
                         egui::Align2::LEFT_BOTTOM
                     },
-                    config.label_text(level, None),
+                    level_label(&painter, &config, level, None),
                     egui::FontId::proportional(typography::XS),
                     level_color(level),
                 );
@@ -930,7 +983,7 @@ impl Drawing {
                     color,
                 ),
             );
-            let text = config.label_text(level, None);
+            let text = level_label(painter, &config, level, None);
             if text.is_empty() {
                 continue;
             }
@@ -1170,6 +1223,44 @@ fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f32) -> Pos2 {
 mod tests {
     use super::*;
     use std::f32::consts::FRAC_PI_2;
+
+    #[test]
+    fn fibonacci_label_cache_tracks_text_inputs() {
+        let ctx = egui::Context::default();
+        let painter = ctx.debug_painter();
+        let mut config = FibonacciConfig::default();
+        let mut level = FibonacciLevel::new(0.0, "", [255; 4]);
+        for value in [0.0, -0.0, 0.236, 1.618, -0.5, 0.000001, f32::MAX, f32::NAN] {
+            level.value = value;
+            for percent in [true, false] {
+                config.levels_as_percent = percent;
+                for label in ["", "custom", "23.6%", "0%"] {
+                    level.label = label.into();
+                    for show_price in [true, false] {
+                        level.show_price = show_price;
+                        for show_prices in [None, Some(false), Some(true)] {
+                            config.show_prices = show_prices;
+                            for show_levels in [None, Some(false), Some(true)] {
+                                config.show_levels = show_levels;
+                                for price in [None, Some(123.45), Some(678.9)] {
+                                    let expected = config.label_text(&level, price);
+                                    for _ in 0..2 {
+                                        assert_eq!(
+                                            level_label(&painter, &config, &level, price),
+                                            expected,
+                                            "value={value}, percent={percent}, label={label:?}, \
+                                             show_price={show_price}, show_prices={show_prices:?}, \
+                                             show_levels={show_levels:?}, price={price:?}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn fibonacci_bands_keep_both_sampled_edges() {

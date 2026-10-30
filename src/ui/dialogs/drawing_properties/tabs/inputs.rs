@@ -461,7 +461,7 @@ fn level_grid<T>(
 }
 
 fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerState>) {
-    let mut config = drawing.fibonacci_config();
+    let mut config = drawing.fibonacci_config().into_owned();
     let original = config.clone();
     ui.strong(l10n::text(ui.ctx(), "Fibonacci levels"));
     level_grid(
