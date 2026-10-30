@@ -195,13 +195,16 @@ impl Chart {
         removed
     }
 
-    /// Limits the retained bars of `series` to the newest `limit`, evicting the oldest at once
-    /// and after history loads and updates. `None` (the default) keeps all bars. The limit
-    /// survives symbol and timeframe changes and also bounds retained replay history.
-    /// Removed data must be supplied again by the host to recover it. Feed scroll-back stops
-    /// while the limit is full; raising or clearing it allows paging again.
+    /// Keeps at most `limit` bars of `series`. When it holds more, at once and after history
+    /// loads and updates, the oldest are evicted down to `limit - limit / 8`, so a series that
+    /// has reached its limit holds between seven eighths of it and all of it. `None` (the
+    /// default) keeps all bars. The limit survives symbol and timeframe changes and also bounds
+    /// retained replay history. Removed data must be supplied again by the host to recover it.
+    /// Feed scroll-back stops once the main series holds `limit - limit / 8` bars, the number an
+    /// eviction keeps; raising or clearing the limit allows paging again.
     ///
-    /// Studies recalculate on the retained window, including their warm-up. Drawing timestamps
+    /// Each eviction restarts the studies on the retained window, including their warm-up, so a
+    /// stream of new bars restarts them once per `limit / 8 + 1` bars. Drawing timestamps
     /// are kept, even for evicted bars; markers and raw trades have independent lifetimes.
     /// Unknown ids and study ids are ignored with a warning.
     pub fn set_bar_limit(&mut self, series: SeriesId, limit: Option<NonZeroUsize>) {
@@ -305,9 +308,9 @@ impl Chart {
     }
 
     fn enforce_bar_limit(&mut self, series: SeriesId) -> usize {
-        let count = self.bar_limit(series).map_or(0, |limit| {
-            self.bars(series).len().saturating_sub(limit.get())
-        });
+        let count = self
+            .bar_limit(series)
+            .map_or(0, |limit| evicted_bars(self.bars(series).len(), limit));
         if count > 0 {
             self.take_oldest_bars(series, count);
         }
@@ -980,14 +983,32 @@ pub(super) fn clean(bars: Vec<Bar>, clock: &BarClock) -> (Vec<Bar>, u64) {
     (clean, merged.rejected)
 }
 
-/// Keeps the newest bars and releases excessive capacity after a large import.
+/// Keeps the newest bars `limit` allows, as [`evicted_bars`] counts them, and releases excessive
+/// capacity after a large import.
 pub(super) fn retain_bars(bars: &mut Vec<Bar>, limit: Option<NonZeroUsize>) {
     if let Some(limit) = limit {
-        let count = bars.len().saturating_sub(limit.get());
+        let count = evicted_bars(bars.len(), limit);
         if count > 0 {
             bars.drain(..count);
             shrink_bars(bars);
         }
+    }
+}
+
+/// The bars a series keeps when it exceeds `limit`: `limit - limit / 8`, seven eighths of it
+/// rounded up. Evicting an eighth of the limit at once moves the bars and restarts the studies
+/// once per `limit / 8 + 1` new bars instead of on every bar.
+pub(super) fn kept_bars(limit: NonZeroUsize) -> usize {
+    limit.get() - limit.get() / 8
+}
+
+/// How many of the oldest of `len` bars `limit` evicts: none within the limit, otherwise all
+/// but the newest [`kept_bars`].
+pub(super) fn evicted_bars(len: usize, limit: NonZeroUsize) -> usize {
+    if len > limit.get() {
+        len - kept_bars(limit)
+    } else {
+        0
     }
 }
 
@@ -1297,10 +1318,12 @@ mod tests {
                 got.push(chart.state.time_scale().right_offset());
             }
             assert_eq!(got, expected, "{name}");
-            if let Some(limit) = limit {
+            if limit.is_some() {
+                // The first new bar overflows the limit of 100 and evicts down to
+                // 100 - 100 / 8 = 88; the other two are kept.
                 assert_eq!(
                     chart.bars(SeriesId::MAIN).len(),
-                    limit,
+                    90,
                     "{name}: retained bars"
                 );
             }
@@ -1308,10 +1331,14 @@ mod tests {
     }
 
     /// Limits and explicit removal operate on retained replay history and independent series.
+    /// A limit of 8 evicts down to 8 - 8 / 8 = 7 bars whenever a series holds more:
+    /// `set_bar_limit` and `set_data` keep the newest 7 of 9 bars, the first update fills the
+    /// limit again and the second evicts down to the 7 bars from 10:04 to 10:10.
     #[test]
     fn bar_limits_cover_replay_and_added_series() {
         use crate::widget::SeriesOptions;
-        let initial: Vec<_> = (0..5).map(|i| bar(i * 60, i as f64 + 1.0)).collect();
+        let initial: Vec<_> = (0..9).map(|i| bar(i * 60, i as f64 + 1.0)).collect();
+        let kept: Vec<_> = (4..11).map(|i| bar(i * 60, i as f64 + 1.0)).collect();
         for replay in [false, true] {
             for main in [false, true] {
                 let mut chart = Chart::new(BarData::from_bars(initial.clone()));
@@ -1324,24 +1351,19 @@ mod tests {
                 if replay {
                     chart.set_replay_time(Some(bar(120, 0.0).time));
                 }
-                chart.set_bar_limit(id, NonZeroUsize::new(3));
+                chart.set_bar_limit(id, NonZeroUsize::new(8));
                 chart.set_data(id, initial.clone());
-                chart.update(id, bar(300, 6.0));
+                chart.update(id, bar(540, 10.0));
+                chart.update(id, bar(600, 11.0));
                 if replay {
                     chart.set_replay_time(None);
                 }
-                assert_eq!(
-                    chart.bars(id),
-                    &[bar(180, 4.0), bar(240, 5.0), bar(300, 6.0)]
-                );
+                assert_eq!(chart.bars(id), kept, "replay {replay}, main {main}");
                 assert_eq!(chart.remove_oldest_bars(id, 0), []);
                 if replay {
-                    chart.set_replay_time(Some(bar(301, 0.0).time));
+                    chart.set_replay_time(Some(bar(601, 0.0).time));
                 }
-                assert_eq!(
-                    chart.remove_oldest_bars(id, usize::MAX),
-                    [bar(180, 4.0), bar(240, 5.0), bar(300, 6.0)]
-                );
+                assert_eq!(chart.remove_oldest_bars(id, usize::MAX), kept);
                 if replay {
                     chart.set_replay_time(None);
                 }
