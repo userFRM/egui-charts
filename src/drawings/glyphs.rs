@@ -34,6 +34,11 @@ glyphs! {
 /// Draws original vector glyphs on a 24-unit grid, with no font or image-loader dependency.
 /// Emoji and legacy host strings return false so the caller can use the host font fallback.
 pub(crate) fn paint(painter: &Painter, id: &str, rect: Rect, color: Color32) -> bool {
+    let color = if id.starts_with("sticker:") {
+        Color32::from_rgb(35, 39, 47)
+    } else {
+        color
+    };
     let p = |x: f32, y: f32| rect.min + egui::vec2(x, y) * (rect.width() / 24.0);
     let stroke = Stroke::new(rect.width() / 16.0, color);
     let line = |coords: &[(f32, f32)], closed| {

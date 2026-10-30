@@ -360,7 +360,7 @@ impl Drawing {
     }
 
     /// Renders a font icon (emoji/sticker).
-    /// Features: scalable icon, optional background, anchor point.
+    /// Features: scalable icon and optional background.
     pub(crate) fn render_font_icon(&self, painter: &egui::Painter) {
         if self.points.is_empty() {
             return;
@@ -409,15 +409,6 @@ impl Drawing {
             egui::FontId::proportional(icon_size),
             color,
         );
-
-        // Small anchor indicator
-        if !has_bg {
-            painter.circle_filled(
-                Pos2::new(pos.x, pos.y + icon_size / 2.0 + 5.0),
-                DESIGN_TOKENS.rounding.sm,
-                color,
-            );
-        }
     }
 }
 
@@ -428,6 +419,63 @@ mod tests {
     use egui::load::{ImageLoadResult, ImageLoader, ImagePoll, LoadError};
     use egui::{ColorImage, Context, LayerId, Painter, RawInput, Shape, SizeHint};
     use std::sync::Arc;
+
+    /// Stickers retain their palette, while icons and emoji follow the drawing colour
+    /// and font glyphs have no extra anchor dot.
+    #[test]
+    fn glyph_colours_and_anchor_free_rendering() {
+        let mut results = Vec::new();
+        for id in [
+            "sticker:bull",
+            "sticker:bear",
+            "sticker:rocket",
+            "sticker:idea",
+            "icon:check",
+            "😀",
+            "*",
+        ] {
+            let mut drawing = Drawing::new(1, DrawingToolType::FontIcon);
+            drawing.text = Some(id.into());
+            drawing.points = vec![Pos2::new(100.0, 100.0)];
+            let ctx = Context::default();
+            let mut render = |color: Color32| {
+                drawing.color = color.to_srgba_unmultiplied();
+                let mut output = ctx.run_ui(RawInput::default(), |_| {
+                    drawing.render_font_icon(&Painter::new(
+                        ctx.clone(),
+                        LayerId::background(),
+                        Rect::EVERYTHING,
+                    ));
+                });
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                shapes
+            };
+            let red = render(Color32::RED);
+            let blue = render(Color32::BLUE);
+            let font_only = id == "😀" || id == "*";
+            results.push((
+                id,
+                red == blue,
+                !font_only
+                    || red
+                        .iter()
+                        .all(|s| matches!(s.shape, Shape::Text(_) | Shape::Noop)),
+            ));
+        }
+        assert_eq!(
+            results,
+            [
+                ("sticker:bull", true, true),
+                ("sticker:bear", true, true),
+                ("sticker:rocket", true, true),
+                ("sticker:idea", true, true),
+                ("icon:check", false, true),
+                ("😀", false, true),
+                ("*", false, true),
+            ]
+        );
+    }
 
     /// Serves a 50 x 50 picture at `test://square` and never finishes `test://pending`.
     struct Pictures;
