@@ -13,6 +13,9 @@ use crate::theme::{Theme, ThemeExt};
 
 pub(super) use crate::theme::trading_side_color as side_color;
 
+/// Height shared by the ticket's fields, menus and order-type row.
+pub(super) const FIELD_HEIGHT: f32 = 34.0;
+
 /// The fill of a button that places an order on a side, under white text.
 pub(super) fn side_fill(theme: &Theme, side: OrderSide) -> Color32 {
     match side {
@@ -58,7 +61,7 @@ pub(super) fn time_in_force_menu(
     rules: &TradingRules,
 ) {
     let theme = ui.active_theme();
-    ui.spacing_mut().interact_size.y = 36.0;
+    ui.spacing_mut().interact_size.y = FIELD_HEIGHT;
     // Drawn like the ticket's fields: the panel's fill in a rounded outline.
     let widgets = &mut ui.visuals_mut().widgets;
     for state in [
@@ -171,7 +174,8 @@ pub(super) fn chevron(ui: &Ui, center: egui::Pos2, color: Color32, up: bool) {
 /// A bordered input box the width of `ui`, laid out from the left.
 pub(super) fn field(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     let theme = ui.active_theme();
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
+    let (rect, _) =
+        ui.allocate_exact_size(vec2(ui.available_width(), FIELD_HEIGHT), Sense::hover());
     let stroke = Stroke::new(1.0, theme.ui.border_control);
     ui.painter()
         .rect(rect, 6.0, theme.ui.panel_bg, stroke, StrokeKind::Inside);
@@ -255,7 +259,7 @@ pub(super) fn swap(ui: &mut Ui, tooltip: &str) -> bool {
 /// An on and off switch.
 pub(super) fn toggle(ui: &mut Ui, on: &mut bool, label: &str) {
     let theme = ui.active_theme();
-    let (rect, mut response) = ui.allocate_exact_size(vec2(36.0, 20.0), Sense::click());
+    let (rect, mut response) = ui.allocate_exact_size(vec2(39.0, 21.0), Sense::click());
     if response.clicked() {
         *on = !*on;
         response.mark_changed();
@@ -271,7 +275,10 @@ pub(super) fn toggle(ui: &mut Ui, on: &mut bool, label: &str) {
         theme.ui.border_control
     };
     ui.painter().rect_filled(rect, rect.height() / 2.0, track);
-    let x = egui::lerp(rect.left() + 10.0..=rect.right() - 10.0, t);
+    let x = egui::lerp(
+        rect.left() + rect.height() / 2.0..=rect.right() - rect.height() / 2.0,
+        t,
+    );
     ui.painter()
         .circle_filled(pos2(x, rect.center().y), 7.0, theme.ui.panel_bg);
 }

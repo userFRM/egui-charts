@@ -8,10 +8,10 @@ use crate::localization as l10n;
 use crate::model::{OrderRequest, OrderSide};
 use crate::theme::ThemeExt;
 use crate::ui::trading::widgets::{
-    chevron, dropdown, field, grouped, hit, info, muted, number, side_color, swap, text,
-    time_in_force_menu, title, toggle, track,
+    FIELD_HEIGHT, chevron, dropdown, field, grouped, hit, info, muted, number, side_color, swap,
+    text, time_in_force_menu, title, toggle, track,
 };
-use egui::{Align, Align2, FontId, Layout, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align, Align2, FontId, Layout, Rect, Sense, Ui, pos2, vec2};
 
 impl OrderTicket {
     /// The Order tab above the send button.
@@ -300,7 +300,7 @@ impl OrderTicket {
     /// The Sell and Buy halves with the bid and ask, the chosen side filled, and the spread.
     fn quote(&mut self, ui: &mut Ui, market: &Market<'_>) {
         let theme = ui.active_theme();
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 56.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::hover());
         ui.painter().rect_filled(rect, 8.0, track(ui).0);
         let width = rect.width() / 2.0;
         let sides = [
@@ -379,12 +379,10 @@ impl OrderTicket {
         if kinds.is_empty() {
             return;
         }
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
-        ui.painter().hline(
-            rect.x_range(),
-            rect.bottom() - 1.0,
-            Stroke::new(2.0, theme.ui.border),
-        );
+        let (rect, _) =
+            ui.allocate_exact_size(vec2(ui.available_width(), FIELD_HEIGHT), Sense::hover());
+        let rail = Rect::from_min_max(rect.left_bottom() - vec2(0.0, 3.5), rect.right_bottom());
+        ui.painter().rect_filled(rail, 0.0, theme.ui.border);
         let width = rect.width() / kinds.len() as f32;
         for (index, (kind, label)) in kinds.into_iter().enumerate() {
             let cell = Rect::from_min_size(
@@ -414,7 +412,7 @@ impl OrderTicket {
             text(ui, cell.center(), Align2::CENTER_CENTER, label, 14.0, color);
             if selected {
                 let line = Rect::from_min_max(
-                    pos2(cell.left() + 4.0, cell.bottom() - 3.0),
+                    pos2(cell.left() + 4.0, cell.bottom() - rail.height()),
                     pos2(cell.right() - 4.0, cell.bottom()),
                 );
                 ui.painter().rect_filled(line, 1.5, theme.ui.text);

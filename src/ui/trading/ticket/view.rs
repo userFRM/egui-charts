@@ -150,6 +150,7 @@ impl OrderTicket {
             ui.label(RichText::new(&self.symbol).strong().size(15.0));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if IconButton::new(&icons::CLOSE)
+                    .icon_scale(1.0)
                     .tooltip("Close")
                     .show(ui)
                     .clicked()
@@ -157,6 +158,7 @@ impl OrderTicket {
                     self.open = false;
                 }
                 let more = IconButton::new(&icons::UI_MORE_HORIZONTAL)
+                    .icon_scale(1.0)
                     .tooltip("More")
                     .show(ui);
                 egui::Popup::menu(&more)
@@ -230,7 +232,7 @@ impl OrderTicket {
     fn switch(&mut self, ui: &mut Ui) {
         let theme = ui.active_theme();
         let (track, selected_fill) = track(ui);
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
         ui.painter().rect_filled(rect, 8.0, track);
         let width = rect.width() / 2.0;
         for (index, (tab, label)) in [(Tab::Order, "Order"), (Tab::Dom, "DOM")]
@@ -289,7 +291,7 @@ impl OrderTicket {
             preview = request.clone().ok().map(Action::Preview);
         }
         let (rect, response) =
-            ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::click());
+            ui.allocate_exact_size(vec2(ui.available_width(), 58.0), Sense::click());
         let name = side_name(self.side);
         let detail = request.as_ref().map_or(String::new(), |request| {
             summary(
