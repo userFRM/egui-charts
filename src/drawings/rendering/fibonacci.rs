@@ -1006,7 +1006,10 @@ mod tests {
         }
         // Cached labels must use the current atlas after a theme changes its
         // font rasterization options, just like a fresh egui layout.
-        let config = FibonacciConfig::default();
+        let config = FibonacciConfig {
+            levels_as_percent: true,
+            ..Default::default()
+        };
         let level = FibonacciLevel::new(0.5, "atlas label", [255; 4]);
         for visuals in [
             egui::Visuals::dark(),
@@ -1021,6 +1024,7 @@ mod tests {
                     egui::FontId::proportional(typography::SM),
                     Color32::WHITE,
                 );
+                assert_eq!(cached.text(), fresh.text());
                 let uvs = |galley: &egui::Galley| {
                     galley
                         .rows
