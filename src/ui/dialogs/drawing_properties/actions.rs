@@ -19,6 +19,8 @@ pub struct DrawingProps {
     pub symbol: Option<String>,
     /// Tool-specific settings, edited by the Inputs page.
     pub tool_settings: Option<Box<DrawingTemplate>>,
+    /// Instrument tick size for position level inputs; absent disables editing by ticks.
+    pub tick_size: Option<f64>,
     /// Staged anchor edits, applied only to the drawing whose dialog was opened.
     pub coordinates: CoordinatesState,
     /// Save these properties as the default for new drawings of this tool.
@@ -51,6 +53,7 @@ impl Default for DrawingProps {
     fn default() -> Self {
         Self {
             symbol: None,
+            tick_size: None,
             tool_settings: None,
             coordinates: CoordinatesState::default(),
             save_as_default: false,
@@ -90,6 +93,9 @@ impl DrawingProps {
     pub fn from_drawing(drawing: &Drawing, chart: &Chart) -> Self {
         Self {
             symbol: Some(chart.symbol().to_owned()),
+            tick_size: chart
+                .instrument()
+                .and_then(|instrument| instrument.tick_size),
             tool_settings: Some(Box::new(DrawingTemplate::from_drawing(drawing))),
             coordinates: CoordinatesState::from_drawing(drawing, chart),
             color: drawing.color32(),
@@ -170,7 +176,12 @@ impl DrawingProps {
         {
             return Err("Unlock the drawing before editing its properties");
         }
-        if !points.is_empty() && points.len() != target.chart_points.len() {
+        let adds_position_stop = matches!(
+            target.tool_type,
+            crate::drawings::DrawingToolType::LongPos | crate::drawings::DrawingToolType::ShortPos
+        ) && target.chart_points.len() == 2
+            && points.len() == 3;
+        if !points.is_empty() && points.len() != target.chart_points.len() && !adds_position_stop {
             return Err("Drawing anchors changed; reopen its properties");
         }
         let selected = chart.drawings().is_selected(id.0);
@@ -221,17 +232,20 @@ impl DrawingProps {
                 drawing.ghost_feed = settings.ghost_feed;
                 drawing.position_size = settings.position_size;
                 drawing.position_sizing = settings.position_sizing;
+                drawing.position_target_color = settings.position_target_color;
+                drawing.position_stop_color = settings.position_stop_color;
                 drawing.volume_profile = settings.volume_profile;
                 drawing.regression_trend = settings.regression_trend;
                 drawing.channel_midline = settings.channel_midline;
             }
             if drawing.id == id.0
                 && !points.is_empty()
-                && drawing
-                    .chart_points
-                    .iter()
-                    .zip(&points)
-                    .any(|(a, b)| a != b || a.time_anchor != b.time_anchor)
+                && (drawing.chart_points.len() != points.len()
+                    || drawing
+                        .chart_points
+                        .iter()
+                        .zip(&points)
+                        .any(|(a, b)| a != b || a.time_anchor != b.time_anchor))
             {
                 drawing.chart_points = points.clone();
                 drawing.screen_anchor = None;
@@ -478,6 +492,10 @@ mod tests {
                 leverage: 5.0,
             };
             let sizing = settings.position_sizing;
+            let mut colors = serde_json::to_value(&*settings).unwrap();
+            colors["position_target_color"] = serde_json::json!([40, 100, 220, 255]);
+            colors["position_stop_color"] = serde_json::json!([220, 140, 40, 255]);
+            *settings = serde_json::from_value(colors).unwrap();
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
@@ -495,6 +513,15 @@ mod tests {
             );
             assert_eq!(saved.volume_profile.unwrap().rows(), 48);
             assert_eq!(saved.position_sizing, sizing);
+            let settings = serde_json::to_value(saved).unwrap();
+            assert_eq!(
+                settings["position_target_color"],
+                serde_json::json!([40, 100, 220, 255])
+            );
+            assert_eq!(
+                settings["position_stop_color"],
+                serde_json::json!([220, 140, 40, 255])
+            );
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
             assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);

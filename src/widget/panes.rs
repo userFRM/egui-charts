@@ -1005,6 +1005,40 @@ impl Chart {
                     );
                 }
                 if !collapsed && let Some(axis_edge) = axis_edge {
+                    #[cfg(feature = "drawings")]
+                    for (value, fill) in self
+                        .drawings
+                        .drawings
+                        .iter()
+                        .filter(|drawing| {
+                            drawing.is_visible_on_timeframe(&self.drawings.curr_timeframe)
+                                && (drawing.pane == Some(pane_id.0)
+                                    || members.iter().any(|id| drawing.pane == Some(id.0)))
+                        })
+                        .flat_map(|drawing| {
+                            drawing.position_price_tags(ui.active_theme().chart.axis_text_secondary)
+                        })
+                        .filter(|(value, _)| map.range().contains(map.transform().to_scale(*value)))
+                    {
+                        let label = map.transform().label(
+                            map.transform().to_scale(value),
+                            crate::chart::rendering::axes::tag_decimals(
+                                &map,
+                                map.price_to_y(value),
+                            ),
+                            self.price_formatter.as_deref(),
+                        );
+                        axis_tags.push(crate::chart::rendering::axes::render_axis_value(
+                            &painter,
+                            chart_rect,
+                            axis_edge,
+                            map.price_to_y(value),
+                            label,
+                            (crate::chart::rendering::axes::tag_text_color(fill), fill),
+                            &axis_tags,
+                            self.config.price_axis.allow_label_overlap,
+                        ));
+                    }
                     for (item, (value, colors, last)) in items
                         .iter()
                         .flat_map(|item| {
