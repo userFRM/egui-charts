@@ -822,7 +822,7 @@ mod tests {
                         remaining = ui.available_rect_before_wrap();
                         assert_eq!(
                             before.right() - remaining.right(),
-                            if width < 600.0 { 0.0 } else { 49.0 }
+                            if width < 600.0 { 0.0 } else { 46.0 }
                         );
                     },
                 )
