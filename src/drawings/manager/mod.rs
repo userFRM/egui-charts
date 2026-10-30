@@ -223,6 +223,8 @@ pub struct DrawingManager {
     drag_copy: bool,
     /// Current chart input, separate from the toolbar magnet setting.
     pub(crate) interaction_modifiers: egui::Modifiers,
+    /// A line tool chosen by its shortcut this frame, placed by the pane under the pointer.
+    pub(crate) place_at_pointer: bool,
 
     /// Whether to stay in drawing mode after completing a drawing.
     /// A finished measurement always returns to selection mode.
@@ -294,6 +296,7 @@ impl DrawingManager {
             drag_group: Vec::new(),
             drag_copy: false,
             interaction_modifiers: egui::Modifiers::NONE,
+            place_at_pointer: false,
             stay_in_drawing_mode: false,
             curr_timeframe: String::from("1D"),
             eraser_mode: false,

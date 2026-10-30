@@ -163,7 +163,7 @@ Chart,Keyboard shortcuts,Copy and paste drawings,done,library,src/config/keyboar
 Chart,Keyboard shortcuts,Ctrl+Left/Right move further,done,library,src/config/keyboard.rs;src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Delete and Escape on a selected drawing,done,library,src/config/keyboard.rs;src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Digits or comma to change interval,done,library,src/widget/keyboard.rs;src/config/keyboard.rs
-Chart,Keyboard shortcuts,Drawing tool hotkeys,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/drawing_toolbar/shortcuts.rs
+Chart,Keyboard shortcuts,Drawing tool hotkeys,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/drawing_toolbar/shortcuts.rs;src/widget/tool_interaction/mod.rs
 Chart,Keyboard shortcuts,Go to date,done,library,src/config/keyboard.rs;src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Hide all drawings,done,library,src/config/keyboard.rs;src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Jump to latest bar,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/time_scale.rs

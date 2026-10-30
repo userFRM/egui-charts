@@ -229,6 +229,14 @@ impl Chart {
             drawing_manager.measurement = None;
         }
         let count_before = drawing_manager.drawings.len();
+        // A line shortcut places its line at the pointer, as a click there would.
+        if drawing_manager.place_at_pointer
+            && let Some(tool) = drawing_manager.active_tool
+            && let Some(pos) = response.hover_pos().filter(|pos| price_rect.contains(*pos))
+        {
+            drawing_manager.place_at_pointer = false;
+            drawing_manager.start_drawing_with_coords(tool, pos, x_to_bar_snapped, y_to_price);
+        }
         let owns_gesture = drawing_manager
             .curr_drawing
             .as_ref()
