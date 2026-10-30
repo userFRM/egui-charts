@@ -2039,3 +2039,61 @@ fn stream_studies_keep_every_quote_and_book_loss_between_frames() {
         "new sources retain the idle clock"
     );
 }
+
+/// Hand values: one buy of 1 in each of 11,000 one-minute bars. Each input holds all 11,000,
+/// so the CVD of bar 10,999 is 11,000 and a 10-bar flow sum is 10. Bar 11,000 is the 11,001st:
+/// the input drops its oldest 1,001 and the CVD starts again at bar 1,001, 9,999 at bar 10,999.
+/// Bar 11,001 crosses no boundary, so both studies update on its first frame and bar 10,999
+/// keeps 9,999 and 10.
+#[cfg(feature = "studies")]
+#[test]
+fn order_flow_studies_update_incrementally_between_input_drops() {
+    use crate::data::OrderFlowKind;
+    use crate::model::OrderSide;
+    use crate::studies::OrderFlowStudy;
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    let ids = [
+        OrderFlowKind::FilteredCvd {
+            min: 0.0,
+            max: f64::MAX,
+        },
+        OrderFlowKind::FlowSum { bars: 10 },
+    ]
+    .map(|kind| chart.add_indicator(Box::new(OrderFlowStudy::new(kind))));
+    let all = bars(11_002);
+    let buy = |bar: &Bar| Tick::new(bar.time, bar.close, 1.0, Some(OrderSide::Buy));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.page().send(page(all[..11_000].to_vec(), true));
+    feed.resolve().send(Ok(Instrument::new("A")));
+    frames.run(&mut chart);
+    let trades = TradePage::new(all[..11_000].iter().map(buy).collect(), true);
+    feed.trades.lock().unwrap().remove(0).send(Ok(trades));
+    let record = |chart: &Chart| {
+        ids.map(|id| {
+            let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+            (study.values().len(), study.values().value(0, 10_999))
+        })
+    };
+    for _ in 0..30 {
+        frames.run(&mut chart);
+    }
+    let before = record(&chart);
+    feed.sink().push_tick(buy(&all[11_000]));
+    for _ in 0..10 {
+        frames.run(&mut chart);
+    }
+    let dropped = record(&chart);
+    feed.sink().push_tick(buy(&all[11_001]));
+    frames.run(&mut chart);
+    let first = record(&chart);
+    assert_eq!(
+        [before, dropped, first],
+        [
+            [(11_000, Some(11_000.0)), (11_000, Some(10.0))],
+            [(11_001, Some(9_999.0)), (11_001, Some(10.0))],
+            [(11_002, Some(9_999.0)), (11_002, Some(10.0))],
+        ]
+    );
+}
