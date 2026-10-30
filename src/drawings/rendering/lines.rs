@@ -663,6 +663,7 @@ mod tests {
                         revision: 0,
                         bar_to_x: &|x| x,
                         price_to_y: &|p| p as f32,
+                        y_to_price: &f64::from,
                         time_axis: true,
                     };
                     drawing.render(ui.painter(), pane, &view);
