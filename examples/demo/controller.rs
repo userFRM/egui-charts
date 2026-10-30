@@ -6077,8 +6077,10 @@ mod tests {
         app.chart.drawings_mut().drawings.push(drawing);
         app.open_drawing_props_for(7);
         let props = app.drawing_props.props.clone();
-        assert!(!props.visible_all_timeframes);
-        assert_eq!(props.visible_timeframes, ["1h"]);
+        assert_eq!(
+            props.timeframe_visibility,
+            TimeframeVisibility::specific(&["1h"])
+        );
         assert!(props.fill_enabled);
         assert_eq!(
             props.fill_color.unwrap().to_srgba_unmultiplied(),
@@ -6104,9 +6106,10 @@ mod tests {
         second.id = 8;
         app.chart.drawings_mut().drawings.push(second);
         app.chart.drawings_mut().select_drawings([7, 8]);
+        let mut visibility = TimeframeVisibility::default();
+        visibility.set_range(egui_charts::model::TimeframeUnit::Hour, Some(2..=4));
         let changed = DrawingProps {
-            visible_all_timeframes: false,
-            visible_timeframes: vec!["4h".into()],
+            timeframe_visibility: visibility,
             font_size: 28.0,
             fill_enabled: false,
             ..app.drawing_props.props.clone()

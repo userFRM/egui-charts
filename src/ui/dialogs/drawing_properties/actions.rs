@@ -41,10 +41,8 @@ pub struct DrawingProps {
     pub label: String,
     /// Font size
     pub font_size: f32,
-    /// Visible on all timeframes
-    pub visible_all_timeframes: bool,
-    /// Specific timeframes (if not all)
-    pub visible_timeframes: Vec<String>,
+    /// The intervals the drawing shows on
+    pub timeframe_visibility: TimeframeVisibility,
 }
 
 impl Default for DrawingProps {
@@ -63,8 +61,7 @@ impl Default for DrawingProps {
             extend_right: false,
             label: String::new(),
             font_size: 12.0,
-            visible_all_timeframes: true,
-            visible_timeframes: Vec::new(),
+            timeframe_visibility: TimeframeVisibility::all(),
         }
     }
 }
@@ -100,13 +97,7 @@ impl DrawingProps {
             extend_left: drawing.extend_left,
             extend_right: drawing.extend_right,
             font_size: drawing.font_size,
-            visible_all_timeframes: drawing.timeframe_visibility.show_on_all,
-            visible_timeframes: drawing
-                .timeframe_visibility
-                .visible_timeframes
-                .iter()
-                .cloned()
-                .collect(),
+            timeframe_visibility: drawing.timeframe_visibility.clone(),
             label: drawing.text.clone().unwrap_or_default(),
             ..Self::default()
         }
@@ -202,10 +193,7 @@ impl DrawingProps {
                 drawing.fill_color = fill.map(|color| color.to_srgba_unmultiplied());
             }
             drawing.font_size = self.font_size;
-            drawing.timeframe_visibility = TimeframeVisibility {
-                show_on_all: self.visible_all_timeframes,
-                visible_timeframes: self.visible_timeframes.iter().cloned().collect(),
-            };
+            drawing.timeframe_visibility = self.timeframe_visibility.clone();
             if let Some(template) = &self.tool_settings
                 && template.settings.tool_type == drawing.tool_type
                 && template.settings.custom_tool == drawing.custom_tool
@@ -329,8 +317,10 @@ mod tests {
         drawing.locked = true;
         chart.drawings_mut().drawings.push(drawing);
         let props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
-        assert!(!props.visible_all_timeframes);
-        assert_eq!(props.visible_timeframes, ["1h"]);
+        assert_eq!(
+            props.timeframe_visibility,
+            TimeframeVisibility::specific(&["1h"])
+        );
         assert!(props.fill_enabled);
         assert_eq!(
             props.fill_color.unwrap().to_srgba_unmultiplied(),
@@ -363,9 +353,10 @@ mod tests {
         second.id = 8;
         chart.drawings_mut().drawings.push(second);
         chart.drawings_mut().select_drawings([7, 8]);
+        let mut visibility = TimeframeVisibility::default();
+        visibility.set_range(crate::model::TimeframeUnit::Hour, Some(2..=4));
         let changed = DrawingProps {
-            visible_all_timeframes: false,
-            visible_timeframes: vec!["4h".into()],
+            timeframe_visibility: visibility,
             font_size: 28.0,
             fill_enabled: false,
             ..props.clone()
