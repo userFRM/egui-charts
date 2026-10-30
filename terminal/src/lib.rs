@@ -451,6 +451,55 @@ mod tests {
         assert!(matches!(help.as_slice(), [Action::Shortcut(_)]));
     }
 
+    /// Guards #1100: two windows change the settings, the later write is refused, and the user's
+    /// choice in the dialog settles it.
+    #[test]
+    fn a_settings_conflict_asks_the_user_and_settles_it_as_chosen() {
+        use egui_charts::services::{StoreKind, UserSettings};
+        let name = |dark: bool| Some(if dark { "dark" } else { "light" }.to_owned());
+        for button in ["Keep both", "Reload", "Overwrite"] {
+            let storage = Arc::new(MemoryStorage::default());
+            let start = || {
+                let mut terminal = Terminal::new(Arc::new(TestFeed))
+                    .with_symbol("AAPL")
+                    .with_storage(storage.clone());
+                frame(&mut terminal, SIZE, vec![]);
+                terminal
+            };
+            let (mut mine, mut theirs) = (start(), start());
+            let dark = mine.theme.dark;
+            // The other window switches the theme and writes it a second later.
+            theirs.run(Action::TopToolbar(TopToolbarAction::ThemeToggle));
+            for _ in 0..12 {
+                frame(&mut theirs, SIZE, vec![]);
+            }
+            // This window chose its theme explicitly meanwhile, so its write is refused.
+            for _ in 0..2 {
+                mine.run(Action::TopToolbar(TopToolbarAction::ThemeToggle));
+            }
+            let at = (0..20)
+                .find_map(|_| frame(&mut mine, SIZE, vec![]).text_at(button))
+                .expect("the dialog asks");
+            click(&mut mine, SIZE, at);
+            for _ in 0..3 {
+                frame(&mut mine, SIZE, vec![]);
+            }
+            assert_eq!(frame(&mut mine, SIZE, vec![]).text_at(button), None);
+            let theme = |name: &str| {
+                let json = storage.get(StoreKind::Settings, name)?;
+                UserSettings::from_json(&json).unwrap().theme
+            };
+            let (stored, copy, shown) = match button {
+                "Keep both" => (name(!dark), name(dark), !dark),
+                "Reload" => (name(!dark), None, !dark),
+                _ => (name(dark), None, dark),
+            };
+            assert_eq!(theme("settings"), stored, "{button}");
+            assert_eq!(theme("settings (local copy)"), copy, "{button}");
+            assert_eq!(mine.theme.dark, shown, "{button}");
+        }
+    }
+
     #[test]
     fn theme_selection_survives_restart_and_initializes_the_chart() {
         let size = vec2(393.0, 852.0);

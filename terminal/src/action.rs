@@ -1,6 +1,7 @@
 //! What the terminal's controls emit: each component's own action, unchanged.
 
 use egui_charts::model::Instrument;
+use egui_charts::services::ConflictChoice;
 use egui_charts::ui::context_menu::ChartContextAction;
 use egui_charts::ui::dialogs::{AlertDialogAction, DrawingPropertiesAction};
 use egui_charts::ui::drawing_toolbar::DrawingToolbarAction;
@@ -85,4 +86,6 @@ pub enum Action {
     BrokerPicker(BrokerPickerAction),
     /// The strategy report panel.
     StrategyReport(StrategyReportAction),
+    /// The dialog that settles settings another window or device changed.
+    StorageConflict(ConflictChoice),
 }

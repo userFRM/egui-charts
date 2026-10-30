@@ -5,7 +5,7 @@ use chrono::{NaiveTime, TimeDelta, TimeZone, Utc, Weekday};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 use egui_charts::data::{Datafeed, HistoryPage, HistoryRequest, Reply};
 use egui_charts::model::{Bar, Instrument, Session, SessionWindow, TimezoneId};
-use egui_charts::services::{Storage, StoreKind};
+use egui_charts::services::{Revision, SaveOutcome, Storage, StoreKind, Versioned};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -96,9 +96,37 @@ impl Datafeed for TestFeed {
     }
 }
 
-/// Documents held in memory, answered at once.
+/// Documents held in memory with a revision each, answered at once.
 #[derive(Default)]
-pub(super) struct MemoryStorage(Mutex<HashMap<(StoreKind, String), String>>);
+pub(super) struct MemoryStorage(Mutex<HashMap<(StoreKind, String), Versioned>>);
+
+impl MemoryStorage {
+    /// The document `name` of `kind`.
+    pub(super) fn get(&self, kind: StoreKind, name: &str) -> Option<String> {
+        let documents = self.0.lock().unwrap();
+        documents
+            .get(&(kind, name.into()))
+            .map(|stored| stored.document.clone())
+    }
+
+    /// Stores `document` as `name` of `kind` at the next revision, and returns that revision.
+    fn put(&self, kind: StoreKind, name: &str, document: String) -> Revision {
+        let mut documents = self.0.lock().unwrap();
+        let key = (kind, name.to_owned());
+        let next = documents
+            .get(&key)
+            .map_or(1, |stored| stored.revision.0.parse::<u64>().unwrap() + 1);
+        let revision = Revision(next.to_string());
+        documents.insert(
+            key,
+            Versioned {
+                document,
+                revision: revision.clone(),
+            },
+        );
+        revision
+    }
+}
 
 impl Storage for MemoryStorage {
     fn list(&self, kind: StoreKind, reply: Reply<Vec<String>>) {
@@ -114,18 +142,37 @@ impl Storage for MemoryStorage {
     }
 
     fn load(&self, kind: StoreKind, name: &str, reply: Reply<Option<String>>) {
-        let document = self.0.lock().unwrap().get(&(kind, name.into())).cloned();
-        reply.send(Ok(document));
+        reply.send(Ok(self.get(kind, name)));
     }
 
     fn save(&self, kind: StoreKind, name: &str, document: String, reply: Reply<()>) {
-        self.0.lock().unwrap().insert((kind, name.into()), document);
+        self.put(kind, name, document);
         reply.send(Ok(()));
     }
 
     fn delete(&self, kind: StoreKind, name: &str, reply: Reply<()>) {
         self.0.lock().unwrap().remove(&(kind, name.into()));
         reply.send(Ok(()));
+    }
+
+    fn load_versioned(&self, kind: StoreKind, name: &str, reply: Reply<Option<Versioned>>) {
+        let stored = self.0.lock().unwrap().get(&(kind, name.into())).cloned();
+        reply.send(Ok(stored));
+    }
+
+    fn save_versioned(
+        &self,
+        kind: StoreKind,
+        name: &str,
+        document: String,
+        expected: Option<Revision>,
+        reply: Reply<SaveOutcome>,
+    ) {
+        let stored = self.0.lock().unwrap().get(&(kind, name.into())).cloned();
+        if stored.as_ref().map(|stored| &stored.revision) != expected.as_ref() {
+            return reply.send(Ok(SaveOutcome::Conflict(stored)));
+        }
+        reply.send(Ok(SaveOutcome::Saved(self.put(kind, name, document))));
     }
 }
 

@@ -91,13 +91,5 @@ impl Drawing {
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 150),
             );
         }
-
-        // Anchor point at position
-        painter.circle_filled(pos, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            pos,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
     }
 }

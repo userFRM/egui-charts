@@ -170,13 +170,14 @@ impl Drawing {
                 painter.line_segment([self.points[i - 1], point], stroke);
             }
             // Keep the endpoint clear for its arrowhead.
-            if i + 1 < self.points.len() || !self.arrow_end_style.is_visible() {
+            if !self.completed && (i + 1 < self.points.len() || !self.arrow_end_style.is_visible())
+            {
                 painter.circle_filled(point, DESIGN_TOKENS.rounding.sm, color);
             }
         }
 
-        // Larger circle at start point
-        if !self.points.is_empty() {
+        // Larger circle at start point during placement
+        if !self.completed {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.md, color);
         }
     }
@@ -202,15 +203,16 @@ impl Drawing {
             painter.line_segment([pair[0], pair[1]], stroke);
         }
 
-        // Draw anchor points
-        painter.circle_filled(p0, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_filled(p2, DESIGN_TOKENS.rounding.md, color);
-        // Draw control point (smaller, semi-transparent)
-        painter.circle_filled(
-            p1,
-            DESIGN_TOKENS.rounding.sm,
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 128),
-        );
+        if !self.completed {
+            painter.circle_filled(p0, DESIGN_TOKENS.rounding.md, color);
+            painter.circle_filled(p2, DESIGN_TOKENS.rounding.md, color);
+            // Draw control point (smaller, semi-transparent)
+            painter.circle_filled(
+                p1,
+                DESIGN_TOKENS.rounding.sm,
+                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 128),
+            );
+        }
     }
 
     /// The curve's start, control and end points: the control point is the

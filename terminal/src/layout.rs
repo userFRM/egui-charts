@@ -95,6 +95,7 @@ impl Terminal {
             self.emit(Action::ChartMenu(action));
         }
         self.show_region(ui, Region::Windows);
+        self.show_storage_conflict(&ctx);
 
         self.perform_emitted(&ctx);
         self.show_notice(ui);

@@ -25,12 +25,13 @@ pub struct TimeScaleOptions {
     /// Default: 6.0
     pub bar_spacing: f32,
 
-    /// The min space between bars in pixels.
+    /// The min space between bars in pixels, floored at 0.000001 even when set to zero.
+    /// Non-finite values use the default.
     /// Default: 0.5
     pub min_bar_spacing: f32,
 
     /// The max space between bars in pixels.
-    /// Has no effect if value is set to 0 (unlimited).
+    /// Non-positive or non-finite values are unlimited; positive limits have a 0.000001 floor.
     /// Default: 0.0
     pub max_bar_spacing: f32,
 

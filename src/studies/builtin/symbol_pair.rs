@@ -42,7 +42,8 @@ pub type Spread = SymbolPair<false, false>;
 pub type Correlation = SymbolPair<false, true>;
 
 /// A ratio, spread or correlation of two series, each a price source of a symbol. `RATIO` selects
-/// the ratio and `CORRELATION` the correlation; neither selects the spread.
+/// the ratio and `CORRELATION` the correlation; neither selects the spread. With both `true`,
+/// `CORRELATION` takes precedence and the study is the correlation.
 #[derive(Clone)]
 pub struct SymbolPair<const RATIO: bool, const CORRELATION: bool> {
     symbols: [String; 2],

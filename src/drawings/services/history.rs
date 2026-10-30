@@ -148,7 +148,8 @@ impl HistoryService {
         }
     }
 
-    /// Create with custom max stack size
+    /// Create a history that keeps at most `max_size` undo steps, dropping the oldest first;
+    /// `0` keeps every step.
     pub fn with_max_size(max_size: usize) -> Self {
         Self {
             undo_stack: Vec::with_capacity(max_size.min(100)),
