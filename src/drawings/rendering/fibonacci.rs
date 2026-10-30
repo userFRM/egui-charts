@@ -604,7 +604,12 @@ impl Drawing {
         }
         if let Some(ends) = ends {
             for end in ends {
-                painter.line_segment([start, end], Stroke::new(self.stroke_width, self.color32()));
+                self.styled_segment(
+                    &painter,
+                    start,
+                    end,
+                    Stroke::new(self.stroke_width, self.color32()),
+                );
             }
         }
     }
@@ -636,8 +641,8 @@ impl Drawing {
 
 impl Drawing {
     /// The x extent of a Fibonacci retracement's or extension's level lines:
-    /// between the anchors, or on to the edge of `chart_rect` on each side the
-    /// config extends.
+    /// between the anchors (the second and third of an extension), or on to the
+    /// edge of `chart_rect` on each side the config extends.
     pub(crate) fn fib_level_x_range(&self, config: &FibonacciConfig, chart_rect: Rect) -> Rangef {
         let (a, b) = if self.tool_type == Tool::FibonacciExtension && self.points.len() >= 3 {
             (self.points[1].x, self.points[2].x)
@@ -855,7 +860,11 @@ fn paint_price_label(
         point + egui::vec2(if config.labels_on_left { -4.0 } else { 4.0 }, -2.0),
         galley.size(),
     );
-    painter.galley(bounds.min, galley, level_color(level));
+    // Lines extended to the pane edge keep their labels inside the pane.
+    let clip = painter.clip_rect();
+    let shift = (clip.min - bounds.min).max(egui::Vec2::ZERO)
+        + (clip.max - bounds.max).min(egui::Vec2::ZERO);
+    painter.galley(bounds.min + shift, galley, level_color(level));
 }
 
 fn level_color(level: &FibonacciLevel) -> Color32 {
@@ -1260,7 +1269,7 @@ mod tests {
     #[test]
     fn fibonacci_label_content_and_side_follow_settings() {
         use crate::drawings::ChartPoint;
-        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 400.0));
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1400.0, 400.0));
         for (tool, log, ratio, price) in [
             (Tool::FibonacciRetracement, false, 0.25, 175.0),
             (Tool::FibonacciExtension, false, 0.25, 175.0),
@@ -1268,22 +1277,25 @@ mod tests {
             // Half the log translation from A=100 to C=150: B*sqrt(150/100).
             (Tool::FibonacciChannel, true, 0.5, 244.9489742784),
         ] {
-            for (show_prices, show_levels, percent, left, custom) in [
-                (true, true, false, true, false),
-                (false, true, true, false, false),
-                (true, false, true, false, false),
-                (false, false, false, true, false),
-                (true, true, false, true, true),
+            for (show_prices, show_levels, percent, left, custom, extend) in [
+                (true, true, false, true, false, false),
+                (false, true, true, false, false, false),
+                (true, false, true, false, false, false),
+                (false, false, false, true, false, false),
+                (true, true, false, true, true, false),
+                // Saved extensions run to the right edge with right-hand labels.
+                (true, true, false, false, false, true),
+                (true, true, false, true, false, true),
             ] {
                 let mut drawing = Drawing::new(0, tool);
                 drawing.chart_points = vec![
-                    ChartPoint::new(40.0, 100.0),
-                    ChartPoint::new(360.0, 200.0),
-                    ChartPoint::new(680.0, 150.0),
+                    ChartPoint::new(240.0, 100.0),
+                    ChartPoint::new(560.0, 200.0),
+                    ChartPoint::new(880.0, 150.0),
                 ];
                 drawing.fib_config=Some(serde_json::from_value(serde_json::json!({
                     "levels":[{"value":ratio,"label":"","color":[211,41,73,255],"visible":true,"show_price":false}],
-                    "show_background":false,"background_opacity":37,"extend_left":false,"extend_right":false,"reverse":false,
+                    "show_background":false,"background_opacity":37,"extend_left":extend && left,"extend_right":extend && !left,"reverse":false,
                     "show_prices":show_prices,"show_levels":show_levels,"levels_as_percent":percent,"labels_on_left":left
                 })).unwrap());
                 let mode = if log {
@@ -1321,7 +1333,7 @@ mod tests {
                     executions: None,
                 };
                 let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
-                    drawing.render_original(ui.painter(), rect, &view)
+                    drawing.render_original(&ui.painter().with_clip_rect(rect), rect, &view)
                 });
                 output.textures_delta.clear();
                 let texts: Vec<_> = output
@@ -1377,7 +1389,8 @@ mod tests {
                             formatted
                         };
                         assert_eq!(number.split('.').nth(1).unwrap().len(), 5);
-                        assert!((number.parse::<f64>().unwrap() - price).abs() < 1e-4);
+                        // An extended channel is labelled at the pane edge, at another price.
+                        assert!(extend || (number.parse::<f64>().unwrap() - price).abs() < 1e-4);
                     } else {
                         assert_eq!(
                             texts[0].galley.text(),
@@ -1386,19 +1399,22 @@ mod tests {
                         );
                     }
                     let edge = if tool == Tool::FibonacciRetracement {
-                        if left { 40.0 } else { 360.0 }
+                        if left { 240.0 } else { 560.0 }
                     } else if left {
-                        360.0
+                        560.0
                     } else {
-                        680.0
+                        880.0
                     };
+                    let label = Rect::from_min_size(texts[0].pos, texts[0].galley.size());
                     assert!(
-                        if left {
-                            texts[0].pos.x + texts[0].galley.size().x < edge
+                        if extend {
+                            rect.expand(0.01).contains_rect(label)
+                        } else if left {
+                            label.max.x < edge
                         } else {
-                            texts[0].pos.x > edge
+                            label.min.x > edge
                         },
-                        "{tool:?}: label outside the level endpoints"
+                        "{tool:?}, extend={extend}: label outside the level endpoints, in the pane"
                     );
                     assert!(
                         !output
