@@ -11,6 +11,7 @@
 //! - Series settings dialog
 //! - Series context menu
 //! - Study context menu
+//! - Storage conflict dialog
 
 pub mod alert_dialog;
 pub mod chart_settings;
@@ -19,6 +20,7 @@ pub mod drawing_properties;
 pub mod indicator_dialog;
 pub mod keyboard_shortcuts;
 pub mod series_settings;
+pub mod storage_conflict;
 pub mod symbol_search;
 pub mod templates;
 
@@ -39,3 +41,4 @@ pub use keyboard_shortcuts::{KeyboardShortcutsAction, KeyboardShortcutsDialog};
 pub use series_settings::{
     SeriesSettingsAction, SeriesSettingsConfig, SeriesSettingsDialog, SeriesSettingsTab,
 };
+pub use storage_conflict::StorageConflictDialog;

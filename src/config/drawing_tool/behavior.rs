@@ -135,6 +135,11 @@ impl DrawingToolType {
         matches!(self, Self::Rect | Self::ParallelChannel)
     }
 
+    /// Whether a double click edits the drawing's text in place instead of opening its settings.
+    pub fn edits_text_inline(&self) -> bool {
+        self.supports_text() || matches!(self, Self::Image | Self::PriceLabel)
+    }
+
     /// Returns the [`DrawingInteractionMode`] that governs how mouse input is
     /// captured when creating a drawing of this type.
     ///

@@ -263,20 +263,6 @@ impl Drawing {
 
         // Draw the base trend line (connecting start to end)
         painter.line_segment([start, end], Stroke::new(self.stroke_width, color));
-
-        // Draw anchor points
-        painter.circle_filled(start, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            start,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(end, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_stroke(
-            end,
-            DESIGN_TOKENS.rounding.md,
-            Stroke::new(stroke::HAIRLINE, Color32::WHITE),
-        );
     }
 
     /// Render Gann Square - Square of 9 / Wheel of 24 style with cardinal and diagonal lines
@@ -338,14 +324,6 @@ impl Drawing {
                 ));
             }
         }
-
-        // Draw anchor points
-        painter.circle_filled(start, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            start,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
     }
 
     /// Render Gann Box - Time/Price grid with diagonal angle lines
@@ -440,24 +418,6 @@ impl Drawing {
                 label_color,
             );
         }
-
-        // Draw anchor points
-        painter.circle_filled(p1, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            p1,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(p2, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            p2,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-
-        // Draw center point marker
-        let center = rect.center();
-        painter.circle_filled(center, DESIGN_TOKENS.rounding.sm, color);
     }
 
     /// Fixed price-per-bar range from its persistent chart anchors.
@@ -589,23 +549,6 @@ impl Drawing {
             label,
             color,
             label_bg,
-        );
-
-        // Draw center point
-        painter.circle_filled(center, DESIGN_TOKENS.rounding.sm, color);
-
-        // Draw anchor points
-        painter.circle_filled(p1, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            p1,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(corner, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_stroke(
-            corner,
-            DESIGN_TOKENS.rounding.md,
-            Stroke::new(stroke::HAIRLINE, Color32::WHITE),
         );
     }
 }

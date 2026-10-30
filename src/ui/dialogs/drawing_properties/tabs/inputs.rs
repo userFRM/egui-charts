@@ -12,6 +12,8 @@ use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid, buttons::Button};
 use egui::Ui;
 
+use super::{CoordinatePoint, CoordinatesState};
+
 pub(crate) struct InputsTab;
 
 impl InputsTab {
@@ -43,7 +45,13 @@ impl InputsTab {
         )
     }
 
-    pub(crate) fn show(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerState>) {
+    pub(crate) fn show(
+        ui: &mut Ui,
+        drawing: &mut Drawing,
+        pickers: &mut Vec<ColorPickerState>,
+        coordinates: &mut CoordinatesState,
+        tick_size: Option<f64>,
+    ) {
         ui.space_md();
         match drawing.tool_type {
             Tool::FibonacciRetracement
@@ -143,6 +151,40 @@ impl InputsTab {
                 }
             }
             Tool::LongPos | Tool::ShortPos => {
+                position_levels(ui, coordinates, drawing.tool_type, tick_size);
+                let colors = drawing.position_colors();
+                pickers.resize_with(2, ColorPickerState::default);
+                FormGrid::new("position_colors").show(ui, |ui| {
+                    let (target_picker, stop_picker) = pickers.split_at_mut(1);
+                    for (label, saved, color, picker) in [
+                        (
+                            "Target colour",
+                            &mut drawing.position_target_color,
+                            colors[0],
+                            &mut target_picker[0],
+                        ),
+                        (
+                            "Stop colour",
+                            &mut drawing.position_stop_color,
+                            colors[1],
+                            &mut stop_picker[0],
+                        ),
+                    ] {
+                        let label = ui.label(l10n::text(ui.ctx(), label));
+                        let mut color = color.to_srgba_unmultiplied();
+                        if ui
+                            .push_id(label.id, |ui| {
+                                ui.label_inputs_by(label.id, |ui| {
+                                    level_color(ui, &mut color, picker)
+                                })
+                            })
+                            .inner
+                        {
+                            *saved = Some(color);
+                        }
+                        ui.end_row();
+                    }
+                });
                 let mut size = drawing.position_size.unwrap_or_default();
                 let original = size;
                 let mut mode = match size {
@@ -321,6 +363,116 @@ impl InputsTab {
             _ => {}
         }
     }
+}
+
+/// Edit staged prices, leaving the anchors' times and bar indices intact.
+fn position_levels(
+    ui: &mut Ui,
+    coordinates: &mut CoordinatesState,
+    tool: Tool,
+    tick_size: Option<f64>,
+) {
+    let [entry, target, ..] = coordinates.points.as_slice() else {
+        return;
+    };
+    let mirrored = entry
+        .price
+        .parse::<f64>()
+        .ok()
+        .zip(target.price.parse::<f64>().ok())
+        .map(|(entry, target)| (2.0 * entry - target).to_string())
+        .unwrap_or_default();
+    let stop = coordinates
+        .points
+        .get(2)
+        .map_or(mirrored.as_str(), |stop| stop.price.as_str());
+    let prices = [entry.price.as_str(), target.price.as_str(), stop]
+        .map(|price| price.parse::<f64>().ok().filter(|price| price.is_finite()));
+    let [
+        Some(mut entry_price),
+        Some(mut target_price),
+        Some(mut stop_price),
+    ] = prices
+    else {
+        ui.label(l10n::text(ui.ctx(), "Enter finite prices in Coordinates"));
+        return;
+    };
+    let original = [entry_price, target_price, stop_price];
+    let tick = tick_size.filter(|tick| tick.is_finite() && *tick > 0.0);
+    let side = if tool == Tool::LongPos { 1.0 } else { -1.0 };
+    FormGrid::new("position_levels").show(ui, |ui| {
+        if position_number(
+            ui,
+            "Entry price",
+            &mut entry_price,
+            tick.unwrap_or(0.1),
+            false,
+            true,
+        ) {
+            let delta = entry_price - original[0];
+            target_price += delta;
+            stop_price += delta;
+        }
+        for (price_label, ticks_label, price, direction) in [
+            ("Target price", "Target (ticks)", &mut target_price, side),
+            ("Stop price", "Stop (ticks)", &mut stop_price, -side),
+        ] {
+            position_number(ui, price_label, price, tick.unwrap_or(0.1), false, true);
+            let mut ticks = tick.map_or(0.0, |tick| direction * (*price - entry_price) / tick);
+            let enabled = tick.is_some() && ticks.is_finite();
+            let changed = position_number(ui, ticks_label, &mut ticks, 1.0, true, enabled);
+            if changed && let Some(tick) = tick {
+                *price = entry_price + direction * ticks * tick;
+            }
+        }
+    });
+    let updated = [entry_price, target_price, stop_price];
+    if updated != original && updated.iter().all(|price| price.is_finite()) {
+        if coordinates.points.len() == 2 {
+            let target = &coordinates.points[1];
+            let mut stop = CoordinatePoint::default();
+            stop.date.clone_from(&target.date);
+            stop.time.clone_from(&target.time);
+            stop.bar_index.clone_from(&target.bar_index);
+            coordinates.points.push(stop);
+        }
+        for (point, price) in coordinates.points.iter_mut().zip(updated) {
+            point.price = price.to_string();
+        }
+    }
+    if tick.is_none() {
+        ui.label(l10n::text(ui.ctx(), "Tick size unavailable"));
+    }
+}
+
+fn position_number(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f64,
+    speed: f64,
+    ticks: bool,
+    enabled: bool,
+) -> bool {
+    let label = ui.label(l10n::text(ui.ctx(), label));
+    let changed = ui
+        .add_enabled(
+            enabled,
+            egui::DragValue::new(value)
+                .range(if ticks { 0.0 } else { -f64::MAX }..=f64::MAX)
+                .clamp_existing_to_range(false)
+                .speed(speed)
+                .custom_formatter(move |value, _| {
+                    if ticks {
+                        egui::emath::format_with_decimals_in_range(value, 0..=8)
+                    } else {
+                        value.to_string()
+                    }
+                }),
+        )
+        .labelled_by(label.id)
+        .changed();
+    ui.end_row();
+    changed
 }
 
 fn number(ui: &mut Ui, label: &str, value: &mut f64, range: std::ops::RangeInclusive<f64>) {
@@ -660,4 +812,227 @@ fn level_color(ui: &mut Ui, color: &mut [u8; 4], state: &mut ColorPickerState) -
         return true;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Chart;
+    use crate::drawings::ChartPoint;
+    use crate::model::{BarData, Instrument};
+    use crate::ui::dialogs::{DrawingId, DrawingPropertiesDialog, PropertiesTab};
+    use egui::{Context, Event, Key, Modifiers, Pos2, Rect, Shape};
+
+    fn frame(
+        dialog: &mut DrawingPropertiesDialog,
+        chart: &mut Chart,
+        ctx: &Context,
+        events: Vec<Event>,
+    ) -> Vec<(String, Rect)> {
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                dialog.show_and_apply(ui.ctx(), chart);
+            },
+        );
+        let texts = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Text(text) => {
+                    Some((text.galley.text().to_owned(), text.visual_bounding_rect()))
+                }
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        texts
+    }
+
+    fn click(dialog: &mut DrawingPropertiesDialog, chart: &mut Chart, ctx: &Context, pos: Pos2) {
+        frame(dialog, chart, ctx, vec![Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                dialog,
+                chart,
+                ctx,
+                vec![Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+        }
+    }
+
+    fn field(texts: &[(String, Rect)], label: &str) -> (String, Pos2) {
+        let label = texts.iter().find(|(text, _)| text == label).expect(label).1;
+        texts
+            .iter()
+            .find(|(text, rect)| {
+                rect.left() > label.right()
+                    && (rect.center().y - label.center().y).abs() < 4.0
+                    && text.parse::<f64>().is_ok()
+            })
+            .map(|(text, rect)| (text.clone(), rect.center()))
+            .expect("numeric field")
+    }
+
+    fn enter(
+        dialog: &mut DrawingPropertiesDialog,
+        chart: &mut Chart,
+        ctx: &Context,
+        label: &str,
+        value: &str,
+    ) {
+        let texts = frame(dialog, chart, ctx, vec![]);
+        click(dialog, chart, ctx, field(&texts, label).1);
+        frame(dialog, chart, ctx, vec![Event::Text(value.into())]);
+        for pressed in [true, false] {
+            frame(
+                dialog,
+                chart,
+                ctx,
+                vec![Event::Key {
+                    key: Key::Enter,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+        }
+    }
+
+    /// At a quarter-point tick, 12 target ticks are three points and six stop ticks are
+    /// 1.5 points. Moving entry from 100 to 110 keeps those distances in either direction.
+    #[test]
+    fn position_inputs_keep_prices_ticks_and_staged_anchors_in_sync() {
+        for (tool, side) in [(Tool::LongPos, 1.0), (Tool::ShortPos, -1.0)] {
+            for anchors in [2, 3] {
+                let ctx = Context::default();
+                let mut chart = Chart::new(BarData::new());
+                chart.set_instrument(Some(Instrument::new("TEST").with_tick_size(0.25)));
+                let mut drawing = Drawing::new(7, tool);
+                drawing.chart_points = vec![
+                    ChartPoint::new(2.0, 100.0),
+                    ChartPoint::new(8.0, 100.0 + side * 5.0),
+                    ChartPoint::new(8.0, 100.0 - side * 5.0),
+                ];
+                drawing.chart_points.truncate(anchors);
+                drawing.completed = true;
+                chart.drawings_mut().drawings.push(drawing);
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open_for_chart(&chart, DrawingId(7));
+                dialog.active_tab = PropertiesTab::Inputs;
+                frame(&mut dialog, &mut chart, &ctx, vec![]);
+                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                assert_eq!(field(&texts, "Target (ticks)").0, "20");
+                assert_eq!(chart.drawings().drawings[0].chart_points.len(), anchors);
+                if anchors == 2 {
+                    // Even a stop at the target's price is a new anchor, not an unchanged target.
+                    enter(
+                        &mut dialog,
+                        &mut chart,
+                        &ctx,
+                        "Stop price",
+                        &(100.0 + side * 5.0).to_string(),
+                    );
+                    assert_eq!(chart.drawings().drawings[0].chart_points.len(), 3);
+                    dialog.close();
+                    frame(&mut dialog, &mut chart, &ctx, vec![]);
+                    assert_eq!(chart.drawings().drawings[0].chart_points.len(), 2);
+                    dialog.open_for_chart(&chart, DrawingId(7));
+                    dialog.active_tab = PropertiesTab::Inputs;
+                }
+                enter(&mut dialog, &mut chart, &ctx, "Target (ticks)", "12");
+                enter(&mut dialog, &mut chart, &ctx, "Stop (ticks)", "6");
+                enter(&mut dialog, &mut chart, &ctx, "Entry price", "110");
+                let points = &chart.drawings().drawings[0].chart_points;
+                assert_eq!(
+                    points.iter().map(|p| p.price).collect::<Vec<_>>(),
+                    [110.0, 110.0 + side * 3.0, 110.0 - side * 1.5]
+                );
+                assert_eq!(
+                    points.iter().map(|p| p.bar_idx).collect::<Vec<_>>(),
+                    [2.0, 8.0, 8.0]
+                );
+                assert!(!chart.can_undo(), "preview retains history");
+                enter(
+                    &mut dialog,
+                    &mut chart,
+                    &ctx,
+                    "Target price",
+                    &(110.0 + side).to_string(),
+                );
+                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                assert_eq!(field(&texts, "Target (ticks)").0, "4");
+                assert_eq!(field(&texts, "Stop (ticks)").0, "6");
+                // A Coordinates edit is reflected when returning to Inputs.
+                dialog.coordinates.points[2].price = (110.0 - side * 1.25).to_string();
+                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                assert_eq!(field(&texts, "Stop (ticks)").0, "5");
+                let ok = texts
+                    .iter()
+                    .find(|(text, _)| text == "Ok")
+                    .unwrap()
+                    .1
+                    .center();
+                click(&mut dialog, &mut chart, &ctx, ok);
+                assert!(!dialog.is_open);
+                assert!(chart.undo());
+                assert_eq!(chart.drawings().drawings[0].chart_points[0].price, 100.0);
+                assert_eq!(chart.drawings().drawings[0].chart_points.len(), anchors);
+                assert!(chart.redo());
+                assert_eq!(
+                    chart.drawings().drawings[0].chart_points[1].price,
+                    110.0 + side
+                );
+                assert!(chart.undo());
+                assert!(!chart.can_undo());
+                for tick in [None, Some(0.0), Some(-0.25), Some(f64::NAN)] {
+                    let mut instrument = Instrument::new("TEST");
+                    instrument.tick_size = tick;
+                    chart.set_instrument(Some(instrument));
+                    dialog.open_for_chart(&chart, DrawingId(7));
+                    dialog.active_tab = PropertiesTab::Inputs;
+                    frame(&mut dialog, &mut chart, &ctx, vec![]);
+                    let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                    assert!(
+                        texts
+                            .iter()
+                            .any(|(text, _)| text == "Tick size unavailable")
+                    );
+                    enter(&mut dialog, &mut chart, &ctx, "Entry price", "105");
+                    assert_eq!(chart.drawings().drawings[0].chart_points[0].price, 105.0);
+                    dialog.close();
+                    frame(&mut dialog, &mut chart, &ctx, vec![]);
+                    assert_eq!(chart.drawings().drawings[0].chart_points[0].price, 100.0);
+                }
+                chart.set_instrument(Some(Instrument::new("TEST").with_tick_size(0.1)));
+                dialog.open_for_chart(&chart, DrawingId(7));
+                dialog.active_tab = PropertiesTab::Inputs;
+                enter(
+                    &mut dialog,
+                    &mut chart,
+                    &ctx,
+                    "Target price",
+                    &(100.0 + side * 0.3).to_string(),
+                );
+                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                assert_eq!(
+                    field(&texts, "Target (ticks)").0,
+                    "3",
+                    "decimal tick rounding"
+                );
+                dialog.close();
+                frame(&mut dialog, &mut chart, &ctx, vec![]);
+            }
+        }
+    }
 }

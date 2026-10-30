@@ -117,8 +117,9 @@ impl UserSettings {
 /// after they last changed. A failed write keeps the settings in memory and is reported once by
 /// [`take_error`](Self::take_error); a later poll or explicit flush retries it. Settings that
 /// could not be read are never written over. If the host keeps revisions of documents (see
-/// [`Storage`]), a change by another client is read while nothing is unsaved, and a write over a
-/// newer version is refused and left to [`resolve_conflict`](Self::resolve_conflict).
+/// [`Storage`]), a change by another client is read once nothing is unsaved and returned like the
+/// first read, and a write over a newer version is refused: [`conflict`](Self::conflict) then
+/// asks for the user's choice and [`resolve_conflict`](Self::resolve_conflict) applies it.
 pub struct SettingsStore {
     storage: Arc<dyn Storage>,
     document: StoredDocument,
@@ -126,6 +127,8 @@ pub struct SettingsStore {
     written: Option<UserSettings>,
     /// Settings that differ from `written`, with the input time they were first seen.
     changed: Option<(UserSettings, f64)>,
+    /// Stored settings read since the last poll, for the host to apply.
+    restored: Option<UserSettings>,
     error: Option<String>,
 }
 
@@ -142,36 +145,29 @@ impl SettingsStore {
             storage,
             written: None,
             changed: None,
+            restored: None,
             error: None,
         }
     }
 
-    /// Call every frame with the settings as they are. Returns the stored settings once, in the
-    /// frame they arrive, for the host to apply; until then nothing is written. Afterwards writes
-    /// `current` once it has stayed the same for [`DELAY`](Self::DELAY).
+    /// Call every frame with the settings as they are. Returns the stored settings in the frame
+    /// they arrive, for the host to apply: once read, and again after a change by another client
+    /// or a conflict settled by reloading; until the first read nothing is written. Writes
+    /// `current` once it has stayed the same for [`DELAY`](Self::DELAY), and at once while a
+    /// conflict is unsettled, so that the choice applies to the newest settings.
     pub fn poll(&mut self, ctx: &egui::Context, current: &UserSettings) -> Option<UserSettings> {
-        for received in self.document.poll(&*self.storage, ctx) {
-            match received {
-                Received::Loaded(document) => {
-                    match document.as_deref().map(UserSettings::from_json).transpose() {
-                        Ok(settings) => {
-                            self.written = Some(settings.clone().unwrap_or_default());
-                            if settings.is_some() {
-                                return settings;
-                            }
-                        }
-                        Err(error) => {
-                            self.document.refuse_writes();
-                            self.error = Some(format!("Could not read settings: {error}"));
-                        }
-                    }
-                }
-                Received::Failed(error) => self.error = Some(error),
-                Received::Saved(document) => {
-                    self.written =
-                        Some(UserSettings::from_json(&document).expect("saved settings"));
-                }
-            }
+        self.document.hold(
+            self.written
+                .as_ref()
+                .is_some_and(|written| written != current),
+        );
+        let received = self.document.poll(&*self.storage, ctx);
+        self.receive(received);
+        if let Some(settings) = self.restored.take() {
+            self.changed = None;
+            // Remote changes wait until the host has applied these.
+            ctx.request_repaint();
+            return Some(settings);
         }
         if self
             .written
@@ -190,7 +186,7 @@ impl SettingsStore {
             }
         };
         let wait = Self::DELAY.as_secs_f64() - (now - since);
-        if wait > 0.0 {
+        if wait > 0.0 && !self.document.conflicted() {
             ctx.request_repaint_after(Duration::from_secs_f64(wait));
         } else {
             self.document.save(&*self.storage, current.to_json());
@@ -199,8 +195,19 @@ impl SettingsStore {
     }
 
     /// Writes `current` now if it differs from the stored settings, such as when the
-    /// application exits.
+    /// application exits. Nothing is written while stored settings that [`poll`](Self::poll)
+    /// has not returned yet are pending, nor while a conflict is unsettled.
     pub fn flush(&mut self, current: &UserSettings) {
+        if self.written.is_none() {
+            return;
+        }
+        // `current` may hold changes made after the last poll.
+        self.document.hold(self.written.as_ref() != Some(current));
+        let received = self.document.receive(&*self.storage);
+        self.receive(received);
+        if self.restored.is_some() {
+            return;
+        }
         if self
             .written
             .as_ref()
@@ -209,30 +216,51 @@ impl SettingsStore {
             self.changed = None;
             self.document.save(&*self.storage, current.to_json());
         }
-        if self.written.is_some() {
-            for received in self.document.flush(&*self.storage) {
-                match received {
-                    Received::Failed(error) => self.error = Some(error),
-                    Received::Saved(document) => {
-                        self.written =
-                            Some(UserSettings::from_json(&document).expect("saved settings"));
+        let received = self.document.flush(&*self.storage);
+        self.receive(received);
+    }
+
+    /// Takes in what the settings document received.
+    fn receive(&mut self, received: Vec<Received>) {
+        for received in received {
+            match received {
+                Received::Loaded(document) => {
+                    match document.as_deref().map(UserSettings::from_json).transpose() {
+                        Ok(settings) => {
+                            // Before the first read, a missing document leaves the host's own.
+                            if settings.is_some() || self.written.is_some() {
+                                self.restored = Some(settings.clone().unwrap_or_default());
+                            }
+                            self.written = Some(settings.unwrap_or_default());
+                        }
+                        Err(error) => {
+                            self.document.refuse_writes();
+                            self.error = Some(format!("Could not read settings: {error}"));
+                        }
                     }
-                    Received::Loaded(_) => {}
+                }
+                Received::Failed(error) => self.error = Some(error),
+                // Reported by `conflict`.
+                Received::Conflict => {}
+                Received::Saved(document) => {
+                    self.written =
+                        Some(UserSettings::from_json(&document).expect("saved settings"));
                 }
             }
         }
     }
 
-    /// Whether the host refused to write the settings because another client changed them. The
-    /// settings stay in memory and nothing is written until
+    /// Whether the host refused to write the settings because another client changed them, and
+    /// the user's choice is awaited. The settings stay in memory and nothing is written until
     /// [`resolve_conflict`](Self::resolve_conflict) settles it.
     pub fn conflict(&self) -> bool {
-        self.document.conflicted()
+        self.document.conflicted() && !self.document.copying()
     }
 
     /// Settles a refused write with the user's choice. Reloading the stored settings returns them
     /// from the next [`poll`](Self::poll), like the first read; keeping a local copy saves the
-    /// unsaved settings as the document `settings (local copy)` first.
+    /// unsaved settings as a new document first, named `settings (local copy)`, or
+    /// `settings (local copy 2)` and so on if that name is taken.
     pub fn resolve_conflict(&mut self, choice: ConflictChoice) {
         self.document.resolve(&*self.storage, choice);
     }
@@ -247,7 +275,114 @@ impl SettingsStore {
 mod tests {
     use super::*;
     use crate::data::Reply;
+    use crate::services::document::tests::Revised;
     use std::sync::Mutex;
+
+    /// The default settings with the layout `name` open.
+    fn layout(name: &str) -> UserSettings {
+        UserSettings {
+            layout: Some(name.into()),
+            ..UserSettings::default()
+        }
+    }
+
+    /// Polls `store` at input time `time` with the host's settings `current`.
+    fn poll_at(
+        ctx: &egui::Context,
+        store: &mut SettingsStore,
+        time: f64,
+        current: &UserSettings,
+    ) -> Option<UserSettings> {
+        let input = egui::RawInput {
+            time: Some(time),
+            ..Default::default()
+        };
+        let mut restored = None;
+        ctx.run_ui(input, |ui| restored = store.poll(ui.ctx(), current))
+            .drop_without_applying_deltas();
+        restored
+    }
+
+    #[test]
+    fn remote_changes_are_returned_but_never_replace_unsaved_settings() {
+        // Whether this client's change is flushed before a poll has seen it.
+        for flush in [false, true] {
+            let ctx = egui::Context::default();
+            let host = Arc::new(Revised::default());
+            host.put("settings", &layout("base").to_json());
+            let mut store = SettingsStore::new(host.clone());
+            // Another client changes them before the first read is taken in.
+            host.put("settings", &layout("theirs").to_json());
+            assert_eq!(
+                poll_at(&ctx, &mut store, 0.0, &UserSettings::default()),
+                Some(layout("theirs"))
+            );
+            // And again while this client waits to write its own.
+            let mine = layout("mine");
+            if flush {
+                host.put("settings", &layout("newest").to_json());
+                store.flush(&mine);
+            } else {
+                assert_eq!(poll_at(&ctx, &mut store, 0.1, &mine), None);
+                host.put("settings", &layout("newest").to_json());
+            }
+            for time in [0.2, 1.2, 1.3] {
+                assert_eq!(poll_at(&ctx, &mut store, time, &mine), None, "{flush}");
+            }
+            assert!(store.conflict(), "{flush}");
+            let stored = UserSettings::from_json(&host.get("settings").unwrap()).unwrap();
+            assert_eq!(stored, layout("newest"), "{flush}");
+        }
+    }
+
+    #[test]
+    fn settings_read_before_the_next_poll_are_returned_and_not_written_over() {
+        // Whether another client deletes the settings rather than changing them, whether this
+        // client had unsaved settings and reloads, and whether it flushes before the next poll.
+        for (deleted, reload, flush) in [
+            (true, true, false),
+            (false, true, true),
+            (false, false, true),
+        ] {
+            let ctx = egui::Context::default();
+            let host = Arc::new(Revised::default());
+            host.put("settings", &layout("base").to_json());
+            let mut store = SettingsStore::new(host.clone());
+            poll_at(&ctx, &mut store, 0.0, &UserSettings::default());
+            let current = layout(if reload { "mine" } else { "base" });
+            if deleted {
+                host.remove("settings");
+            } else {
+                host.put("settings", &layout("theirs").to_json());
+            }
+            if reload {
+                for time in [0.1, 1.2, 1.3] {
+                    assert_eq!(poll_at(&ctx, &mut store, time, &current), None);
+                }
+                assert!(store.conflict());
+                store.resolve_conflict(ConflictChoice::ReloadRemote);
+            }
+            if flush {
+                store.flush(&current);
+            }
+            let theirs = if deleted {
+                UserSettings::default()
+            } else {
+                layout("theirs")
+            };
+            let case = (deleted, reload, flush);
+            assert_eq!(
+                poll_at(&ctx, &mut store, 1.4, &current),
+                Some(theirs.clone()),
+                "{case:?}"
+            );
+            assert_eq!(poll_at(&ctx, &mut store, 3.0, &theirs), None, "{case:?}");
+            let stored = host
+                .get("settings")
+                .map(|json| UserSettings::from_json(&json).unwrap());
+            assert_eq!(stored, (!deleted).then_some(theirs), "{case:?}");
+        }
+    }
 
     #[derive(Default)]
     struct Host(Mutex<Option<String>>);
