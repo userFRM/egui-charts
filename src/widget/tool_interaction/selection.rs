@@ -242,7 +242,7 @@ mod tests {
                     let to = if off_pane {
                         pos2(140.0, 0.0)
                     } else if body {
-                        pos2(210.0, 160.0)
+                        pos2(210.5, 160.0)
                     } else {
                         pos2(240.0, 200.0)
                     };
@@ -314,9 +314,9 @@ mod tests {
                         }
                     } else if body {
                         if copying {
-                            pos2(280.0, 230.0)
+                            pos2(280.5, 230.0)
                         } else {
-                            pos2(280.0, 180.0)
+                            pos2(280.5, 180.0)
                         }
                     } else if copying {
                         to
@@ -327,9 +327,15 @@ mod tests {
                         moved.points[1], expected,
                         "{tool:?}, body {body}, {modifiers:?}"
                     );
+                    // A Shift move keeps whole bars, though its converter is precise.
+                    let bar = if body && !copying {
+                        expected.x.round()
+                    } else {
+                        expected.x
+                    };
                     assert_eq!(
                         moved.chart_points[1],
-                        ChartPoint::new(expected.x - pan.x, f64::from(expected.y - pan.y))
+                        ChartPoint::new(bar - pan.x, f64::from(expected.y - pan.y))
                     );
                     if copying {
                         assert_eq!(moved.stored_id, None);

@@ -245,6 +245,12 @@ impl DrawingManager {
                     }
                 }
             }
+            // Shift edits receive precise bars for the angle; other Shift edits keep whole bars.
+            let whole_bars = self.interaction_modifiers.shift && constrained_price.is_none();
+            let x_to_bar = |x| {
+                let bar = x_to_bar(x);
+                if whole_bars { bar.round() } else { bar }
+            };
             if let Some(origin) = self.drag_origin {
                 let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
                 for old in &self.drag_group {
