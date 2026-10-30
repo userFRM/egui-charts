@@ -506,48 +506,15 @@ impl Drawing {
         })
     }
 
-    /// The size labels of the flat top/bottom and the disjoint channel (the price distance
-    /// between their two lines at the bar of the label) and of the rectangle (its width in bars,
-    /// then its height in price), from the anchors' bars and prices. The lines are straight on
-    /// screen, so their prices between the anchors come from the chart's `price_to_y`, which
-    /// on a logarithmic scale puts the trend line's midpoint at the geometric mean.
-    pub(crate) fn size_labels(&self, price_to_y: &dyn Fn(f64) -> f32) -> Vec<String> {
+    /// The rectangle's width in bars and height in price, from its stored anchors.
+    pub(crate) fn size_labels(&self) -> Vec<String> {
         let gap = |a: f64, b: f64| {
             let (low, gap) = (a.min(b), (a - b).abs());
             let pct = percent_change(low, low + gap);
             let decimals = price_decimals(low);
             format!("{gap:.decimals$} ({pct:.2}%)")
         };
-        let label = |a: Option<f64>, b: Option<f64>| a.zip(b).map(|(a, b)| gap(a, b));
         match (self.tool_type, &self.chart_points[..]) {
-            // Labelled halfway along the trend line.
-            (DrawingToolType::FlatTopBottom, [a, b, flat, ..]) => {
-                let mid = (price_to_y(a.price) + price_to_y(b.price)) / 2.0;
-                label(Some(flat.price), price_at_y(price_to_y, mid, a.price))
-                    .into_iter()
-                    .collect()
-            }
-            // Labelled at the bar halfway between the second anchor and the third.
-            (DrawingToolType::DisjointChannel, [a, b, c, ..]) => {
-                let (ya, yb) = (price_to_y(a.price), price_to_y(b.price));
-                let first_y = |bar: f32| {
-                    let run = b.bar_idx - a.bar_idx;
-                    let t = if run != 0.0 {
-                        (bar - a.bar_idx) / run
-                    } else {
-                        0.0
-                    };
-                    ya + (yb - ya) * t
-                };
-                let y = first_y((b.bar_idx + c.bar_idx) / 2.0);
-                let second_y = y + price_to_y(c.price) - first_y(c.bar_idx);
-                label(
-                    price_at_y(price_to_y, y, a.price),
-                    price_at_y(price_to_y, second_y, c.price),
-                )
-                .into_iter()
-                .collect()
-            }
             (DrawingToolType::Rect, [a, b, ..]) => vec![
                 format!("{} bars", (b.bar_idx - a.bar_idx).abs() as i64),
                 gap(a.price, b.price),
@@ -555,39 +522,6 @@ impl Drawing {
             _ => Vec::new(),
         }
     }
-}
-
-/// The price that `price_to_y`, which is monotone, puts at screen `y`: a
-/// bisection between `near` and a price on the other side of `y`, sought
-/// outward from `near` in doubling steps, added and multiplied so that a
-/// logarithmic scale is reached as well as a linear one.
-fn price_at_y(price_to_y: &dyn Fn(f64) -> f32, y: f32, near: f64) -> Option<f64> {
-    let off = |price: f64| {
-        let at = price_to_y(price);
-        (price.is_finite() && at.is_finite()).then_some(at - y)
-    };
-    let start = off(near)?;
-    let beyond = |price: f64| off(price).is_some_and(|d| d * start <= 0.0);
-    let far = (0..64).find_map(|k| {
-        let k = 2f64.powi(k);
-        let step = near.abs().max(1.0) * k;
-        [near + step, near - step, near * (1.0 + k), near / (1.0 + k)]
-            .into_iter()
-            .find(|&price| beyond(price))
-    })?;
-    let (mut lo, mut hi) = (near, far);
-    for _ in 0..100 {
-        let mid = (lo + hi) / 2.0;
-        if mid == lo || mid == hi {
-            break;
-        }
-        if beyond(mid) {
-            hi = mid;
-        } else {
-            lo = mid;
-        }
-    }
-    Some((lo + hi) / 2.0)
 }
 
 /// Paints `text` over a `bg` box sized to it, placed at `pos` by `align`, and returns its bounds.
@@ -763,67 +697,11 @@ mod tests {
         ));
     }
 
-    /// Flat top/bottom: trend line 100 at bar 0 to 104 at bar 10, flat line at 110; at bar 5 the
-    /// trend line is at 102, 8 below, 8 / 102 = 7.84%. Disjoint channel: the same first line, the
-    /// second starting at 108 at bar 0 and so at 110 at bar 5, also 8 above 102. Rectangle: 100 to
-    /// 110 over bars 0 to 20 is 10 (10 / 100 = 10%) high and 20 bars wide. Each is labelled the
-    /// same through two price maps with different ranges. On a logarithmic scale the lines are
-    /// straight in log price: the trend line from 100 at bar 0 to 200 at bar 10 is at
-    /// sqrt(100 * 200) = 141.42 at bar 5, 108.58 (76.78%) below a flat line at 250, and a
-    /// disjoint second line starting at 150 stays 1.5 times the first, 70.71 (50.00%) above it.
+    /// 100 to 110 over bars 0 to 20 is 10 (10%) high and 20 bars wide.
     #[test]
     fn size_labels_are_in_price_and_bars() {
-        let cases = [
-            (
-                DrawingToolType::FlatTopBottom,
-                vec![(0.0, 100.0), (10.0, 104.0), (5.0, 110.0)],
-                vec!["8.00 (7.84%)"],
-                false,
-            ),
-            (
-                DrawingToolType::DisjointChannel,
-                vec![(0.0, 100.0), (10.0, 104.0), (0.0, 108.0)],
-                vec!["8.00 (7.84%)"],
-                false,
-            ),
-            (
-                DrawingToolType::Rect,
-                vec![(0.0, 100.0), (20.0, 110.0)],
-                vec!["20 bars", "10.00 (10.00%)"],
-                false,
-            ),
-            (
-                DrawingToolType::FlatTopBottom,
-                vec![(0.0, 100.0), (10.0, 200.0), (5.0, 250.0)],
-                vec!["108.58 (76.78%)"],
-                true,
-            ),
-            (
-                DrawingToolType::DisjointChannel,
-                vec![(0.0, 100.0), (10.0, 200.0), (0.0, 150.0)],
-                vec!["70.71 (50.00%)"],
-                true,
-            ),
-        ];
-        let mut wrong = Vec::new();
-        for (tool, anchors, want, log) in cases {
-            let mut drawing = Drawing::new(1, tool);
-            drawing.chart_points = anchors
-                .into_iter()
-                .map(|(bar, price)| ChartPoint::new(bar, price))
-                .collect();
-            for (scale, top) in [(10.0, 120.0), (3.0, 300.0)] {
-                let value = |price: f64| if log { price.ln() * 100.0 } else { price };
-                let price_to_y = |price: f64| ((value(top) - value(price)) * scale) as f32;
-                drawing.update_screen_coords(|bar| bar * 10.0, price_to_y);
-                let got = drawing.size_labels(&price_to_y);
-                if got != want {
-                    wrong.push(format!(
-                        "{tool:?} at {scale} px per unit, log {log}: got {got:?}, want {want:?}"
-                    ));
-                }
-            }
-        }
-        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+        let mut drawing = Drawing::new(1, DrawingToolType::Rect);
+        drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(20.0, 110.0)];
+        assert_eq!(drawing.size_labels(), ["20 bars", "10.00 (10.00%)"]);
     }
 }
