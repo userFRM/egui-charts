@@ -88,8 +88,8 @@ Builder API,Widget API and customization,Price scale API,done,library,src/scales
 Builder API,Widget API and customization,Screenshots,done,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed/mod.rs
 Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/price_series.rs;src/widget/time_scale.rs;src/widget/series.rs
 Builder API,Widget API and customization,Style overrides,partial,library,src/widget/mod.rs;src/widget/builder.rs;src/widget/frame.rs;src/config/chart.rs
-Builder API,Widget API and customization,Themes and custom colour schemes,done,library,src/widget/mod.rs;src/theme/context.rs;src/widget/frame.rs;src/chart/renderers/markers.rs;src/config/chart.rs;src/widget/palette.rs;src/model/markers.rs
-Builder API,Widget API and customization,Toolbar customisation,done,library,src/ui/top_toolbar/host.rs;src/ui/top_toolbar/toolbar.rs
+Builder API,Widget API and customization,Themes and custom colour schemes,done,library,src/widget/mod.rs;src/theme/context.rs;src/widget/frame.rs;src/chart/renderers/markers.rs;src/config/chart.rs;src/widget/palette.rs;src/model/markers.rs;src/theme/presets.rs;src/theme/style.rs
+Builder API,Widget API and customization,Toolbar customisation,done,library,src/ui/top_toolbar/host.rs;src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/config.rs;src/ui/top_toolbar/buttons.rs
 Builder API,Widget API and customization,UI component visibility,done,library,src/ui/app_state.rs;src/ui/top_toolbar/toolbar.rs;src/config/interaction.rs;src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs
 Builder API,Widget API and customization,Visible range get and set,done,library,src/widget/sync.rs;src/widget/time_scale.rs;src/scales/pricescale.rs;src/model/bar/time.rs
 Builder API,Widget API and customization,Widget constructor options,partial,library,src/widget/builder.rs;src/widget/frame.rs;src/widget/stored_drawings.rs
@@ -100,8 +100,8 @@ Chart,Chart settings and themes,Canvas tab,done,library,src/ui/dialogs/chart_set
 Chart,Chart settings and themes,Chart settings dialog,done,library,src/ui/dialogs/chart_settings/mod.rs;src/widget/settings/apply.rs
 Chart,Chart settings and themes,Crosshair appearance,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/crosshair.rs;src/painting/dashed_line.rs
 Chart,Chart settings and themes,Events tab,done,host,src/model/time_scale_event.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/dialogs/chart_settings/tabs/trading.rs
-Chart,Chart settings and themes,Grid lines,done,library,src/widget/frame.rs;src/chart/rendering/grid.rs;src/widget/settings/apply.rs;src/widget/indicator_pane.rs;src/painting/dashed_line.rs
-Chart,Chart settings and themes,Light and dark themes,done,library,src/widget/mod.rs;src/widget/palette.rs;src/widget/frame.rs;src/config/chart.rs;src/model/markers.rs;src/chart/renderers/markers.rs
+Chart,Chart settings and themes,Grid lines,done,library,src/widget/frame.rs;src/chart/rendering/grid.rs;src/widget/settings/apply.rs;src/widget/indicator_pane.rs;src/painting/dashed_line.rs;src/theme/presets.rs
+Chart,Chart settings and themes,Light and dark themes,done,library,src/widget/mod.rs;src/widget/palette.rs;src/widget/frame.rs;src/config/chart.rs;src/model/markers.rs;src/chart/renderers/markers.rs;src/theme/presets.rs;src/theme/style.rs;examples/demo/controller.rs
 Chart,Chart settings and themes,Navigation and pane buttons,done,library,src/widget/navigation.rs;src/widget/frame.rs;src/widget/pane_layout.rs;src/widget/settings/data.rs
 Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/dialogs/chart_settings/tabs/scales.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
 Chart,Chart settings and themes,Scales text colour and size,done,library,src/widget/settings/data.rs;src/widget/settings/apply.rs;src/chart/rendering/axes.rs;src/chart/renderers/labels.rs
@@ -109,7 +109,7 @@ Chart,Chart settings and themes,Session background shading,done,library,src/widg
 Chart,Chart settings and themes,Status line tab,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs
 Chart,Chart settings and themes,Symbol tab,done,library,src/widget/settings/apply.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs
 Chart,Chart settings and themes,Trading tab,done,host,src/widget/settings/data.rs;src/ui/trading/mod.rs;src/ui/dialogs/chart_settings/tabs/trading.rs
-Chart,Chart settings and themes,Watermark,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/widget/mod.rs;src/chart/renderers/watermark.rs;src/config/chart.rs;src/widget/palette.rs
+Chart,Chart settings and themes,Watermark,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/widget/mod.rs;src/chart/renderers/watermark.rs;src/config/chart.rs;src/widget/palette.rs;src/theme/presets.rs
 Chart,Chart types,Area,done,library,src/widget/frame.rs;src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs
 Chart,Chart types,Bars,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/candlestick.rs;src/chart/renderers/bar.rs
 Chart,Chart types,Baseline,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs
@@ -181,10 +181,10 @@ Chart,Keyboard shortcuts,Snapshot,done,library,src/config/keyboard.rs;src/widget
 Chart,Keyboard shortcuts,Type to change symbol,done,host,src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Undo and redo,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/history.rs
 Chart,Legend and data window,Data window panel,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs
-Chart,Legend and data window,Indicator entries in the legend,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/widget/panes.rs;src/widget/indicator_pane.rs;src/config/chart.rs
+Chart,Legend and data window,Indicator entries in the legend,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/widget/panes.rs;src/widget/indicator_pane.rs;src/config/chart.rs;src/theme/presets.rs
 Chart,Legend and data window,Legend buttons,done,library,src/chart/renderers/legend/mod.rs;src/widget/crosshair.rs
 Chart,Legend and data window,Status line values follow the crosshair,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs
-Chart,Legend and data window,Symbol status line,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs
+Chart,Legend and data window,Symbol status line,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/theme/mod.rs
 Chart,Legend and data window,Volume in the status line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/scales/price_formatter.rs
 Chart,Multi-chart and sync,Grid layout presets,done,library,src/widget/layout.rs;src/ui/top_toolbar/toolbar.rs
 Chart,Multi-chart and sync,Multi-chart layout container,done,library,src/widget/layout.rs
@@ -854,12 +854,12 @@ Terminal,Templates and layouts,Indicator templates,done,library,src/studies/temp
 Terminal,Templates and layouts,Multi-chart layouts,done,library,src/widget/layout.rs
 Terminal,Templates and layouts,Open a saved layout; layout list with favourites and delete,done,library,src/ui/top_toolbar/components/layout_menu.rs;src/services/settings.rs
 Terminal,Templates and layouts,Persist preferences,done,library,src/services/settings.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs
-Terminal,Templates and layouts,Save chart layout,done,library,src/widget/snapshot.rs;src/ui/top_toolbar/components/layout_menu.rs
+Terminal,Templates and layouts,Save chart layout,done,library,src/widget/snapshot.rs;src/ui/top_toolbar/components/layout_menu.rs;src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs
 Terminal,Templates and layouts,Share a layout by link,done,host,src/services/sharing.rs;src/ui/share_controls.rs;src/ui/top_toolbar/components/layout_menu.rs
 Terminal,Templates and layouts,Snapshot: copy image to clipboard,done,library,src/ui/export.rs
 Terminal,Templates and layouts,Snapshot: download the chart image,done,library,src/widget/export.rs
 Terminal,Templates and layouts,Sync between charts,done,library,src/widget/layout.rs;src/widget/layout/drawings.rs
-Terminal,Toolbars and panels,Bottom time bar,done,library,src/ui/timeframe_toolbar/toolbar.rs
+Terminal,Toolbars and panels,Bottom time bar,done,library,src/ui/timeframe_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs;src/theme/mod.rs
 Terminal,Toolbars and panels,Chart settings button and applying the dialog,done,library,src/ui/top_toolbar/toolbar.rs;src/widget/settings/apply.rs
 Terminal,Toolbars and panels,Chart type menu,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/chart_type_selector.rs
 Terminal,Toolbars and panels,Compare / add symbol dialog,done,library,src/ui/dialogs/symbol_search/mod.rs;src/ui/dialogs/symbol_search/service.rs
@@ -875,12 +875,12 @@ Terminal,Toolbars and panels,Left drawing toolbar shell,done,library,src/ui/draw
 Terminal,Toolbars and panels,Notifications / toasts,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs
 Terminal,Toolbars and panels,Object tree panel,done,library,src/ui/widget_bar/panels/object_tree/chart_actions.rs;src/ui/widget_bar/panels/object_tree/panel.rs;terminal/src/drawings.rs
 Terminal,Toolbars and panels,Quick search / command palette,done,library,src/ui/top_toolbar/toolbar.rs
-Terminal,Toolbars and panels,Right widget bar icon strip,done,library,src/ui/widget_bar/toolbar.rs
+Terminal,Toolbars and panels,Right widget bar icon strip,done,library,src/ui/widget_bar/toolbar.rs;src/theme/presets.rs
 Terminal,Toolbars and panels,Selected drawing toolbar,done,library,src/ui/floating_toolbar/toolbar.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs
 Terminal,Toolbars and panels,Strategy Report panel,done,library,src/ui/strategy_report/mod.rs
 Terminal,Toolbars and panels,Symbol search dialog with asset tabs and filters,done,host,src/ui/dialogs/symbol_search/mod.rs;src/ui/dialogs/symbol_search/service.rs;terminal/src/studies.rs
 Terminal,Toolbars and panels,Top toolbar: symbol button,done,library,src/ui/top_toolbar/toolbar.rs
-Terminal,Toolbars and panels,Undo / redo,partial,library,src/widget/history.rs;src/widget/feed/mod.rs;src/widget/price_series.rs;terminal/src/core.rs
+Terminal,Toolbars and panels,Undo / redo,partial,library,src/widget/history.rs;src/widget/feed/mod.rs;src/widget/price_series.rs;terminal/src/core.rs;src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs
 Terminal,Toolbars and panels,Zoom in / zoom out buttons in the drawing toolbar,done,library,src/ui/drawing_toolbar/utilities/zoom.rs;src/widget/mod.rs;terminal/src/drawings.rs
 Terminal,Trading panel,Account manager,done,host,src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs
 Terminal,Trading panel,Bottom trading panel container,done,library,src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs
@@ -915,4 +915,4 @@ Terminal,Watchlists and screeners,Share a list by link,done,host,src/services/sh
 Terminal,Watchlists and screeners,Sort by column and drag to reorder,done,library,src/ui/widget_bar/panels/watchlist.rs
 Terminal,Watchlists and screeners,Stock screener,done,host,src/ui/widget_bar/panels/screener.rs;src/data/market.rs;src/services/storage.rs;src/ui/dialogs/templates/store.rs
 Terminal,Watchlists and screeners,Symbol details panel,done,host,src/ui/widget_bar/panels/symbol_details.rs;src/data/mod.rs;src/ui/widget_bar/panels/market_details.rs
-Terminal,Watchlists and screeners,Watchlist panel in the right toolbar,done,host,src/ui/widget_bar/toolbar.rs;src/ui/widget_bar/panels/watchlist.rs
+Terminal,Watchlists and screeners,Watchlist panel in the right toolbar,done,host,src/ui/widget_bar/toolbar.rs;src/ui/widget_bar/panels/watchlist.rs;src/theme/presets.rs
