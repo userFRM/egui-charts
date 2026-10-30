@@ -555,9 +555,10 @@ impl DrawingStorage {
                                 "{tool} needs {needed} anchors, has {anchors}"
                             )));
                         }
-                        // A filter naming no timeframe would show the drawing on none.
+                        // A filter naming no interval and holding no range would show the drawing on none.
                         let visibility = &mut drawing.drawing.timeframe_visibility;
-                        visibility.show_on_all |= visibility.visible_timeframes.is_empty();
+                        visibility.show_on_all |= visibility.visible_timeframes.is_empty()
+                            && visibility.ranges.is_empty();
                         if ids.insert(drawing.id.clone()) {
                             Ok(drawing)
                         } else {
@@ -1421,6 +1422,17 @@ mod tests {
                 .timeframe_visibility
                 .show_on_all
         );
+        // A filter holding only a range keeps it.
+        let ranged = current.replacen(
+            "\"show_on_all\": true",
+            "\"show_on_all\": false, \"ranges\": {\"Hour\": {\"start\": 1, \"end\": 4}}",
+            1,
+        );
+        let (storage, skipped) = DrawingStorage::from_json(&ranged).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let visibility = &storage.drawings()[0].drawing.timeframe_visibility;
+        assert!(!visibility.show_on_all);
+        assert!(visibility.is_visible_on("2h") && !visibility.is_visible_on("1D"));
 
         let got = DrawingStorage::from_json(&current.replace("\"version\": 3", "\"version\": 4"))
             .unwrap_err()
