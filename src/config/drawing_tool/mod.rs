@@ -78,8 +78,8 @@ pub enum DrawingToolType {
     RegressionTrend,
     /// A trend line through the first two anchors and a horizontal line at the third anchor's price.
     FlatTopBottom,
-    /// Two parallel trend lines: the first two anchors set the first line, and the third anchor sets
-    /// where the second line starts, at any time.
+    /// Two lines over the first two anchors' bars with opposite slopes; the third anchor
+    /// positions the mirrored line.
     DisjointChannel,
 
     // ============ PITCHFORKS (4 tools) ============

@@ -55,6 +55,7 @@ impl HandleService {
     /// - **Two-point tools** (TrendLine, Fibonacci, etc.): Start, End, and Middle handles
     /// - **Rectangle**: Four corner handles and a Middle handle
     /// - **Single-point tools** (HorizontalLine, VerticalLine): One Start handle
+    /// - **Three-anchor channels**: Four indexed handles, one at each line end
     /// - **Multi-point tools**: Indexed handles at each point plus a centroid Middle handle
     pub fn get_handles(drawing: &Drawing) -> Vec<(HandlePos, Pos2)> {
         let mut handles = Vec::new();
@@ -129,6 +130,18 @@ impl HandleService {
                     ));
                 } else if let Some(&entry) = drawing.points.first() {
                     handles.push((HandlePos::Start, entry));
+                }
+            }
+            DrawingToolType::ParallelChannel
+            | DrawingToolType::FlatTopBottom
+            | DrawingToolType::DisjointChannel => {
+                for (i, &point) in drawing.points.iter().take(2).enumerate() {
+                    handles.push((HandlePos::Point(i), point));
+                }
+                if let Some(ends) = drawing.channel_second_line() {
+                    for (i, point) in ends.into_iter().enumerate() {
+                        handles.push((HandlePos::Point(i + 2), point));
+                    }
                 }
             }
             DrawingToolType::RegressionTrend => {
@@ -230,6 +243,63 @@ impl HandleService {
                 if !drawing.points.is_empty() && !drawing.chart_points.is_empty() {
                     drawing.points[0].x = new_pos.x;
                     drawing.chart_points[0].bar_idx = x_to_bar(new_pos.x);
+                }
+            }
+            DrawingToolType::ParallelChannel
+            | DrawingToolType::FlatTopBottom
+            | DrawingToolType::DisjointChannel => {
+                let HandlePos::Point(index) = handle else {
+                    return;
+                };
+                if index < 2 {
+                    Self::update_multi_point_handle(
+                        drawing,
+                        handle,
+                        new_pos,
+                        &x_to_bar,
+                        &y_to_price,
+                    );
+                } else if index < 4 && drawing.chart_points.len() >= 3 {
+                    let Some(ends) = drawing.channel_second_line() else {
+                        return;
+                    };
+                    let delta = new_pos - ends[index - 2];
+                    match drawing.tool_type {
+                        DrawingToolType::DisjointChannel => {
+                            // Keep the opposite ends fixed and reflect this end's price move.
+                            let base = drawing.points[index - 2];
+                            drawing.points[index - 2] = Pos2::new(new_pos.x, base.y - delta.y);
+                            let anchor = &mut drawing.chart_points[index - 2];
+                            anchor.bar_idx = x_to_bar(new_pos.x);
+                            anchor.price = translate_price(anchor.price, base.y, base.y - delta.y);
+                            Self::update_multi_point_handle(
+                                drawing,
+                                HandlePos::Point(2),
+                                new_pos,
+                                &x_to_bar,
+                                &y_to_price,
+                            );
+                        }
+                        DrawingToolType::ParallelChannel
+                            if (drawing.points[1].x - drawing.points[0].x).abs() < 1e-3 =>
+                        {
+                            drawing.points[2].x += delta.x;
+                            drawing.chart_points[2].bar_idx = x_to_bar(drawing.points[2].x);
+                        }
+                        _ => {
+                            drawing.points[2].y += delta.y;
+                            drawing.chart_points[2].price =
+                                if drawing.tool_type == DrawingToolType::ParallelChannel {
+                                    translate_price(
+                                        drawing.chart_points[2].price,
+                                        ends[index - 2].y,
+                                        new_pos.y,
+                                    )
+                                } else {
+                                    y_to_price(new_pos.y)
+                                };
+                        }
+                    }
                 }
             }
             DrawingToolType::RegressionTrend => {
@@ -508,6 +578,36 @@ mod tests {
         use HandlePos::*;
         let cases = [
             (
+                DrawingToolType::ParallelChannel,
+                vec![pos2(100.0, 200.0), pos2(300.0, 400.0), pos2(200.0, 200.0)],
+                vec![
+                    (Point(0), pos2(100.0, 200.0)),
+                    (Point(1), pos2(300.0, 400.0)),
+                    (Point(2), pos2(100.0, 100.0)),
+                    (Point(3), pos2(300.0, 300.0)),
+                ],
+            ),
+            (
+                DrawingToolType::FlatTopBottom,
+                vec![pos2(100.0, 200.0), pos2(300.0, 400.0), pos2(200.0, 200.0)],
+                vec![
+                    (Point(0), pos2(100.0, 200.0)),
+                    (Point(1), pos2(300.0, 400.0)),
+                    (Point(2), pos2(100.0, 200.0)),
+                    (Point(3), pos2(300.0, 200.0)),
+                ],
+            ),
+            (
+                DrawingToolType::DisjointChannel,
+                vec![pos2(100.0, 200.0), pos2(300.0, 400.0), pos2(200.0, 200.0)],
+                vec![
+                    (Point(0), pos2(100.0, 200.0)),
+                    (Point(1), pos2(300.0, 400.0)),
+                    (Point(2), pos2(100.0, 300.0)),
+                    (Point(3), pos2(300.0, 100.0)),
+                ],
+            ),
+            (
                 DrawingToolType::TrendLine,
                 vec![pos2(100.0, 200.0), pos2(300.0, 400.0)],
                 vec![
@@ -665,9 +765,6 @@ mod tests {
             ),
             (
                 &[
-                    DrawingToolType::ParallelChannel,
-                    DrawingToolType::FlatTopBottom,
-                    DrawingToolType::DisjointChannel,
                     DrawingToolType::Pitchfork,
                     DrawingToolType::SchiffPitchfork,
                     DrawingToolType::ModifiedSchiffPitchfork,
@@ -764,6 +861,163 @@ mod tests {
     #[test]
     fn update_handle_moves_screen_and_chart_points() {
         let cases = [
+            // The width anchor can be off screen while both boundary handles are visible.
+            (
+                DrawingToolType::ParallelChannel,
+                vec![pos2(100.0, 100.0), pos2(200.0, 200.0), pos2(600.0, 700.0)],
+                HandlePos::Point(2),
+                pos2(150.0, 225.0),
+                vec![pos2(100.0, 100.0), pos2(200.0, 200.0), pos2(600.0, 725.0)],
+                vec![
+                    ChartPoint::new(10.0, 900.0),
+                    ChartPoint::new(20.0, 800.0),
+                    ChartPoint::new(60.0, 275.0),
+                ],
+            ),
+            (
+                DrawingToolType::ParallelChannel,
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                HandlePos::Point(0),
+                pos2(150.0, 250.0),
+                vec![pos2(150.0, 250.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                vec![
+                    ChartPoint::new(15.0, 750.0),
+                    ChartPoint::new(30.0, 700.0),
+                    ChartPoint::new(20.0, 900.0),
+                ],
+            ),
+            (
+                DrawingToolType::ParallelChannel,
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                HandlePos::Point(1),
+                pos2(350.0, 250.0),
+                vec![pos2(100.0, 200.0), pos2(350.0, 250.0), pos2(200.0, 100.0)],
+                vec![
+                    ChartPoint::new(10.0, 800.0),
+                    ChartPoint::new(35.0, 750.0),
+                    ChartPoint::new(20.0, 900.0),
+                ],
+            ),
+            (
+                DrawingToolType::ParallelChannel,
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                HandlePos::Point(2),
+                pos2(150.0, 75.0),
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 125.0)],
+                vec![
+                    ChartPoint::new(10.0, 800.0),
+                    ChartPoint::new(30.0, 700.0),
+                    ChartPoint::new(20.0, 875.0),
+                ],
+            ),
+            (
+                DrawingToolType::ParallelChannel,
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                HandlePos::Point(3),
+                pos2(350.0, 175.0),
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 125.0)],
+                vec![
+                    ChartPoint::new(10.0, 800.0),
+                    ChartPoint::new(30.0, 700.0),
+                    ChartPoint::new(20.0, 875.0),
+                ],
+            ),
+            (
+                DrawingToolType::FlatTopBottom,
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                HandlePos::Point(0),
+                pos2(150.0, 250.0),
+                vec![pos2(150.0, 250.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                vec![
+                    ChartPoint::new(15.0, 750.0),
+                    ChartPoint::new(30.0, 700.0),
+                    ChartPoint::new(20.0, 900.0),
+                ],
+            ),
+            (
+                DrawingToolType::FlatTopBottom,
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                HandlePos::Point(1),
+                pos2(350.0, 250.0),
+                vec![pos2(100.0, 200.0), pos2(350.0, 250.0), pos2(200.0, 100.0)],
+                vec![
+                    ChartPoint::new(10.0, 800.0),
+                    ChartPoint::new(35.0, 750.0),
+                    ChartPoint::new(20.0, 900.0),
+                ],
+            ),
+            (
+                DrawingToolType::FlatTopBottom,
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                HandlePos::Point(2),
+                pos2(150.0, 125.0),
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 125.0)],
+                vec![
+                    ChartPoint::new(10.0, 800.0),
+                    ChartPoint::new(30.0, 700.0),
+                    ChartPoint::new(20.0, 875.0),
+                ],
+            ),
+            (
+                DrawingToolType::FlatTopBottom,
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                HandlePos::Point(3),
+                pos2(350.0, 125.0),
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 125.0)],
+                vec![
+                    ChartPoint::new(10.0, 800.0),
+                    ChartPoint::new(30.0, 700.0),
+                    ChartPoint::new(20.0, 875.0),
+                ],
+            ),
+            (
+                DrawingToolType::DisjointChannel,
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                HandlePos::Point(0),
+                pos2(150.0, 250.0),
+                vec![pos2(150.0, 250.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                vec![
+                    ChartPoint::new(15.0, 750.0),
+                    ChartPoint::new(30.0, 700.0),
+                    ChartPoint::new(20.0, 900.0),
+                ],
+            ),
+            (
+                DrawingToolType::DisjointChannel,
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                HandlePos::Point(1),
+                pos2(350.0, 250.0),
+                vec![pos2(100.0, 200.0), pos2(350.0, 250.0), pos2(200.0, 100.0)],
+                vec![
+                    ChartPoint::new(10.0, 800.0),
+                    ChartPoint::new(35.0, 750.0),
+                    ChartPoint::new(20.0, 900.0),
+                ],
+            ),
+            (
+                DrawingToolType::DisjointChannel,
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                HandlePos::Point(2),
+                pos2(150.0, 175.0),
+                vec![pos2(150.0, 175.0), pos2(300.0, 300.0), pos2(150.0, 175.0)],
+                vec![
+                    ChartPoint::new(15.0, 825.0),
+                    ChartPoint::new(30.0, 700.0),
+                    ChartPoint::new(15.0, 825.0),
+                ],
+            ),
+            (
+                DrawingToolType::DisjointChannel,
+                vec![pos2(100.0, 200.0), pos2(300.0, 300.0), pos2(200.0, 100.0)],
+                HandlePos::Point(3),
+                pos2(350.0, 75.0),
+                vec![pos2(100.0, 200.0), pos2(350.0, 275.0), pos2(350.0, 75.0)],
+                vec![
+                    ChartPoint::new(10.0, 800.0),
+                    ChartPoint::new(35.0, 725.0),
+                    ChartPoint::new(35.0, 925.0),
+                ],
+            ),
             (
                 DrawingToolType::TimeCycles,
                 vec![pos2(100.0, 200.0), pos2(300.0, 200.0)],
@@ -861,7 +1115,7 @@ mod tests {
                 } else {
                     chart.clone()
                 };
-                if logarithmic && handle == HandlePos::Middle {
+                if logarithmic {
                     assert_eq!(drawing.chart_points.len(), expected.len());
                     for (got, want) in drawing.chart_points.iter().zip(&expected) {
                         assert_eq!(got.bar_idx, want.bar_idx, "{tool:?} {handle:?}");

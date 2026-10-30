@@ -289,20 +289,8 @@ impl Drawing {
                 outline.lines = pitchfork::pitchfan_lines(first, second, *p.get(2)?, rect)
             }
             T::GannFan => outline.lines = gann::gann_fan_lines(first, second, rect),
-            T::FlatTopBottom => {
-                let &third = p.get(2)?;
-                outline.lines = vec![[first, second], channels::flat_line(first, second, third)];
-                outline
-                    .areas
-                    .push(channels::flat_top_bottom_fill(first, second, third));
-            }
+            T::FlatTopBottom | T::DisjointChannel => return self.wedge_channel_outline(rect),
             T::ParallelChannel => return self.parallel_channel_outline(rect),
-            T::DisjointChannel => {
-                let &third = p.get(2)?;
-                let [_, fourth] = channels::disjoint_second_line(first, second, third);
-                outline.lines = vec![[first, second], [third, fourth]];
-                outline.areas.push(vec![first, second, fourth, third]);
-            }
             T::FibonacciTimeZones => outline.lines = self.fibonacci_time_zone_lines(rect),
             T::FibonacciWedge => return self.fibonacci_wedge_outline(),
             T::FibonacciSpeedFan => outline.lines = self.fibonacci_speed_fan_lines(rect),
@@ -400,10 +388,10 @@ impl Drawing {
             DrawingToolType::InsidePitchfork => self.render_inside_pitchfork(painter, rect),
 
             // Channels (4 tools)
-            DrawingToolType::ParallelChannel => self.render_parallel_channel(painter, rect),
+            DrawingToolType::ParallelChannel
+            | DrawingToolType::FlatTopBottom
+            | DrawingToolType::DisjointChannel => self.render_channel(painter, rect),
             DrawingToolType::RegressionTrend => self.render_regression_trend(painter, view),
-            DrawingToolType::FlatTopBottom => self.render_flat_top_bottom(painter, view),
-            DrawingToolType::DisjointChannel => self.render_disjoint_channel(painter, view),
 
             // Patterns (6 tools)
             DrawingToolType::XABCDPattern => self.render_xabcd_pattern(painter),
@@ -1134,6 +1122,87 @@ mod tests {
                             bounds.contains_rect(shape.visual_bounding_rect()),
                             "{id}: {shape:?}"
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    /// y = 250 - x/2 and either y = 150 or its reflection y = 50 + x/2.
+    /// Both cross at (200, 150); fills must cover both lobes without stroked ends.
+    #[test]
+    fn wedge_channels_share_clean_paint_fill_and_extended_hit_geometry() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        for tool in [
+            DrawingToolType::FlatTopBottom,
+            DrawingToolType::DisjointChannel,
+        ] {
+            for reverse in [false, true] {
+                for (left, right, xs) in [
+                    (false, false, [100.0, 300.0]),
+                    (true, false, [0.0, 300.0]),
+                    (false, true, [100.0, 500.0]),
+                    (true, true, [0.0, 500.0]),
+                ] {
+                    for filled in [false, true] {
+                        let mut drawing = Drawing::new(1, tool);
+                        drawing.chart_points = vec![
+                            crate::drawings::ChartPoint::new(10.0, 300.0),
+                            crate::drawings::ChartPoint::new(30.0, 400.0),
+                            crate::drawings::ChartPoint::new(20.0, 350.0),
+                        ];
+                        if reverse {
+                            drawing.chart_points.swap(0, 1);
+                        }
+                        drawing.extend_left = left;
+                        drawing.extend_right = right;
+                        drawing.fill_color = filled.then_some([12, 34, 56, 80]);
+                        drawing.update_screen_coords(|b| b * 10.0, |p| 500.0 - p as f32);
+                        let other_y = |x| {
+                            if tool == DrawingToolType::FlatTopBottom {
+                                150.0
+                            } else {
+                                50.0 + x / 2.0
+                            }
+                        };
+                        let lines = vec![
+                            xs.map(|x| Pos2::new(x, 250.0 - x / 2.0)),
+                            xs.map(|x| Pos2::new(x, other_y(x))),
+                        ];
+                        let outline = drawing.outline(rect).unwrap();
+                        assert_eq!(outline.lines, lines, "{tool:?}");
+                        assert_eq!(outline.areas.len(), if filled { 2 } else { 0 });
+                        let shapes = paint(&drawing);
+                        let mut painted_lines = Vec::new();
+                        let mut areas = Vec::new();
+                        for shape in shapes {
+                            match shape {
+                                Shape::LineSegment { points, .. } => painted_lines.push(points),
+                                Shape::Path(path) if path.fill.a() > 0 => {
+                                    assert!(path.stroke.is_empty());
+                                    assert_eq!(path.fill, drawing.fill_color32().unwrap());
+                                    areas.push(path.points);
+                                }
+                                Shape::Noop => {}
+                                other => panic!("unexpected channel decoration: {other:?}"),
+                            }
+                        }
+                        assert_eq!(painted_lines, lines);
+                        assert_eq!(areas, outline.areas);
+                        let hit = crate::drawings::services::DrawingInteraction::new();
+                        for x in [125.0, 275.0] {
+                            for y in [250.0 - x / 2.0, other_y(x)] {
+                                assert_eq!(
+                                    hit.hit_test(Pos2::new(x, y), &[drawing.clone()], "1m"),
+                                    Some(1)
+                                );
+                            }
+                            let y = (250.0 - x / 2.0 + other_y(x)) / 2.0;
+                            assert_eq!(
+                                hit.hit_test(Pos2::new(x, y), &[drawing.clone()], "1m"),
+                                filled.then_some(1)
+                            );
+                        }
                     }
                 }
             }
