@@ -205,8 +205,6 @@ fn main() {
         let name = args.get(at + 1).expect("a regression scenario");
         if matches!(name.as_str(), "tpo-400" | "tpo-1600") {
             tpo(std::slice::from_ref(name), frames);
-        } else if name == "footprint-host" {
-            footprint(std::slice::from_ref(name), frames);
         } else {
             regression::run(name, frames);
         }
