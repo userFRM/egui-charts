@@ -179,7 +179,7 @@ cargo run --manifest-path examples/demo/Cargo.toml
 
 For a feed-backed chart, implement `Datafeed` and pass it to `ChartBuilder::with_feed`. Only `history` is required. The chart requests older pages as the user scrolls back; `subscribe` supplies live updates through a `Sink`.
 
-Feed methods run on the UI thread and must return promptly. Fetch data elsewhere and answer through `Reply`, or respond inline when the data is already in memory. [`live_feed.rs`](examples/live_feed.rs) demonstrates paged history and a cancellable stream of sample trades.
+Feed methods run on the UI thread and must return promptly. Fetch data elsewhere and answer through `Reply`, or respond inline when the data is already in memory. [`live_feed.rs`](examples/live_feed.rs) demonstrates paged history and a cancellable stream of sample trades. [`network_feed.rs`](examples/network_feed.rs) loads them from a local HTTP server, natively and in the browser.
 
 | Your application supplies | The library consumes it through |
 |---|---|
