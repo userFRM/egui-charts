@@ -138,6 +138,7 @@ fn same_profiles(old: &TPOConfig, new: &TPOConfig) -> bool {
         && old.custom_letters == new.custom_letters
         && old.split_sessions == new.split_sessions
         && old.composites == new.composites
+        && old.instrument_tick.map(f64::to_bits) == new.instrument_tick.map(f64::to_bits)
 }
 
 /// The bars of the sessions that `visible` (or with `config.latest_session_only`, the last bar)
@@ -376,7 +377,8 @@ pub fn render_live_tpo(
 }
 
 /// `base_config` with a row height: its own, or about `TARGET_ROWS` rows over the visible
-/// range, in whole multiples of `instrument_tick` when one is given.
+/// range, in whole multiples of `instrument_tick` when one is given, and records
+/// `instrument_tick` so the profiles count whole ticks.
 fn row_config(
     base_config: &TPOConfig,
     instrument_tick: Option<f64>,
@@ -388,13 +390,12 @@ fn row_config(
         return None;
     }
     let mut config = base_config.clone();
+    config.instrument_tick = instrument_tick;
     if config.tick_size <= 0.0 || !config.tick_size.is_finite() {
         let step = derive_tick_size(price_range, TARGET_ROWS);
         config.tick_size = instrument_tick
             .filter(|tick| *tick > 0.0 && tick.is_finite())
-            // The fewest whole ticks that reach the step, within one part in a billion so that
-            // a step of exactly n ticks stays n ticks despite rounding
-            .map(|tick| (step / tick * (1.0 - 1e-9)).ceil().max(1.0) * tick)
+            .map(|tick| crate::model::tpo::whole_ticks(step, tick) * tick)
             // A subnormal tick overflows the tick count
             .filter(|row| row.is_finite())
             .unwrap_or(step);
@@ -518,7 +519,7 @@ pub(crate) fn profile_at(
         |profile, anchor, column, _| {
             let column = column.min(profile_row_height(profile, &mapping.price));
             let price = mapping.y_to_price(pos.y);
-            let row = (price / profile.tick_size).round() * profile.tick_size;
+            let row = profile.row_price(price);
             let count = if config.show_value_area && profile.is_in_value_area(row) {
                 profile.price_tpo_count.values().max().copied().unwrap_or(0)
             } else {
@@ -555,6 +556,11 @@ fn draw_session_profile(
     let chart = painter.ctx().active_theme().chart;
     let tick_size = profile.tick_size;
     let measured_height = profile_row_height(profile, coords);
+    // A row of several ticks spans from half a tick below its price, so its centre is not its price.
+    let row_y = |price: f64| {
+        let (low, high) = profile.row_span(price);
+        coords.price_to_y((low + high) * 0.5)
+    };
     let use_letters = column_width.min(measured_height) >= LETTER_MIN_COLUMN_PX
         && matches!(
             config.display_mode,
@@ -580,8 +586,9 @@ fn draw_session_profile(
     if config.show_single_prints {
         let decimals = (-tick_size.log10()).ceil().clamp(0.0, 8.0) as usize;
         for &price in &profile.single_prints {
-            let top = coords.price_to_y(price + tick_size * 0.5);
-            let bottom = coords.price_to_y(price - tick_size * 0.5);
+            let (low, high) = profile.row_span(price);
+            let top = coords.price_to_y(high);
+            let bottom = coords.price_to_y(low);
             let row = Rect::from_x_y_ranges(
                 anchor_x..=anchor_x + column_width,
                 top.min(bottom)..=top.max(bottom),
@@ -644,7 +651,7 @@ fn draw_session_profile(
     };
 
     for price in levels {
-        let y = coords.price_to_y(price);
+        let y = row_y(price);
         if y < price_rect.top() - row_height || y > price_rect.bottom() + row_height {
             continue;
         }
@@ -694,7 +701,7 @@ fn draw_session_profile(
 
     // Letters retain a fine POC underline; blocks carry the POC in the row itself.
     if config.show_poc && use_letters {
-        let y = coords.price_to_y(profile.poc_price) + row_height * 0.5;
+        let y = row_y(profile.poc_price) + row_height * 0.5;
         painter.line_segment(
             [Pos2::new(anchor_x, y), Pos2::new(max_right, y)],
             Stroke::new(render_config.poc_line_width, poc_color),
@@ -708,7 +715,7 @@ fn draw_session_profile(
             painter.ctx().active_theme().ui.text,
         );
         for edge in [profile.value_area_high, profile.value_area_low] {
-            let y = coords.price_to_y(edge);
+            let y = row_y(edge);
             if price_rect.y_range().contains(y) {
                 // Dashes of 2 px every 5 px, as single segments rather than a path each.
                 let end = max_right + 6.0;
@@ -724,28 +731,32 @@ fn draw_session_profile(
 
     if labels {
         let mut label_rows = Vec::new();
-        for (show, price, text, color) in [
-            (config.show_poc, profile.poc_price, "POC", chart.axis_text),
+        for (show, y, text, color) in [
+            (
+                config.show_poc,
+                row_y(profile.poc_price),
+                "POC",
+                chart.axis_text,
+            ),
             (
                 config.show_value_area,
-                profile.value_area_high,
+                row_y(profile.value_area_high),
                 "VAH",
                 guide_color,
             ),
             (
                 config.show_value_area,
-                profile.value_area_low,
+                row_y(profile.value_area_low),
                 "VAL",
                 guide_color,
             ),
             (
                 true,
-                (profile.profile_high + profile.profile_low) * 0.5,
+                coords.price_to_y((profile.profile_high + profile.profile_low) * 0.5),
                 "Mid",
                 readable_color(bearish_color, chart.axis_text, &[chart.bg], 4.5),
             ),
         ] {
-            let y = coords.price_to_y(price);
             if !labels
                 || !show
                 || !price_rect.y_range().contains(y)
@@ -837,10 +848,10 @@ fn draw_session_profile(
 
 /// Measure at the POC so logarithmic and inverted scales keep the same geometry.
 fn profile_row_height(profile: &TPOProfile, coords: &PriceMap) -> f32 {
-    (coords.price_to_y(profile.poc_price)
-        - coords.price_to_y(profile.poc_price + profile.tick_size))
-    .abs()
-    .max(1.0)
+    let (low, high) = profile.row_span(profile.poc_price);
+    (coords.price_to_y(low) - coords.price_to_y(high))
+        .abs()
+        .max(1.0)
 }
 
 /// Pick the color for one TPO entry, honouring the configured color mode.
@@ -1189,6 +1200,51 @@ mod tests {
         };
         assert_eq!(highlighted(true), profile.single_prints.len());
         assert_eq!(highlighted(false), 0);
+
+        // A row of four 0.25 ticks at 110 spans 109.875 to 110.875: y 66 to 82 at 16 px a point.
+        let config = TPOConfig {
+            tick_size: 1.0,
+            instrument_tick: Some(0.25),
+            show_single_prints: true,
+            ..model.clone()
+        };
+        let bar = Bar::new(
+            chrono::DateTime::UNIX_EPOCH,
+            110.0,
+            110.5,
+            110.0,
+            110.5,
+            1.0,
+        );
+        let profile = to_tpo_profiles(&[bar], &config, &Timeframe::Min1.into()).remove(0);
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput::default());
+        let painter = ctx.layer_painter(egui::LayerId::background());
+        draw_session_profile(
+            &painter,
+            rect,
+            &coords,
+            &profile,
+            &config,
+            &render_config,
+            10.0,
+            20.0,
+            false,
+            Color32::GREEN,
+            Color32::RED,
+        );
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        let print = output.shapes.iter().find_map(|s| match &s.shape {
+            Shape::Rect(r) if r.fill == render_config.single_print_color => Some(r.rect),
+            _ => None,
+        });
+        assert_eq!(print.map(|r| (r.top(), r.bottom())), Some((66.0, 82.0)));
+        let letter = output.shapes.iter().find_map(|s| match &s.shape {
+            Shape::Text(text) => Some(text.pos.y + text.galley.size().y / 2.0),
+            _ => None,
+        });
+        assert!(letter.is_some_and(|y| (y - 74.0).abs() < 1.0), "{letter:?}");
     }
 
     #[test]
@@ -1388,9 +1444,8 @@ mod tests {
                 (5000.25, 2),
             ),
             // 109.5 to 111 fits rows of 0.05, 3.2 ticks of 1/64, which round up to 4 (0.0625).
-            // A covers ticks 0 to 2 above 110, B ticks 1 to 3 and C tick 1. Ticks 0 and 1 are on
-            // the row of 110; ticks 2 and 3 on the row of 110.0625, tick 2 being its lower half-row
-            // edge.
+            // Rows start at a multiple of 4 ticks, so the row of 110 holds ticks 0 to 3 above it
+            // and every letter is on it.
             (
                 tick_64,
                 (109.5, 111.0),
@@ -1399,13 +1454,7 @@ mod tests {
                     (110.0 + tick_64, 110.0 + 3.0 * tick_64),
                     (110.0 + tick_64, 110.0 + tick_64),
                 ],
-                vec![
-                    (0, 110.0),
-                    (0, 110.0625),
-                    (1, 110.0),
-                    (1, 110.0625),
-                    (2, 110.0),
-                ],
+                vec![(0, 110.0), (1, 110.0), (2, 110.0)],
                 (110.0, 3),
             ),
         ];
