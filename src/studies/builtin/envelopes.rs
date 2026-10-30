@@ -26,7 +26,7 @@ impl EnvelopeAverage {
     }
 }
 
-/// Moving Average Envelopes
+/// Moving Average Envelopes. The band between the upper and lower lines is filled.
 #[derive(Clone)]
 pub struct Envelopes {
     period: usize,
@@ -55,9 +55,10 @@ impl Envelopes {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::BLUE,   // Upper
-                palette::ORANGE, // Middle
-                palette::BLUE,   // Lower
+                palette::BLUE,                       // Upper
+                palette::ORANGE,                     // Middle
+                palette::BLUE,                       // Lower
+                palette::BLUE.gamma_multiply_u8(13), // Fill
             ],
             visible: true,
         }
@@ -66,7 +67,7 @@ impl Envelopes {
 
 impl Default for Envelopes {
     fn default() -> Self {
-        Self::new(20, 2.5, EnvelopeAverage::Simple)
+        Self::new(20, 10.0, EnvelopeAverage::Simple)
     }
 }
 
@@ -82,6 +83,15 @@ impl Indicator for Envelopes {
         percent: number("Percent", 0.0, f64::MAX),
         ma_type: choice("Average", [EnvelopeAverage::Simple, EnvelopeAverage::Exponential])
     ; {});
+
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        vec![crate::studies::StudyFill {
+            first: crate::studies::FillBoundary::Plot(0),
+            second: crate::studies::FillBoundary::Plot(2),
+            color: self.colors[3],
+            inverted_color: None,
+        }]
+    }
 
     fn name(&self) -> &str {
         "Envelopes"
@@ -134,7 +144,8 @@ impl Indicator for Envelopes {
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if colors.len() >= 3 {
-            self.colors = colors;
+            let n = colors.len().min(self.colors.len());
+            self.colors[..n].copy_from_slice(&colors[..n]);
         }
     }
 

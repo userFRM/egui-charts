@@ -592,7 +592,10 @@ fn staple_studies_match_published_definitions() {
         ("Mass(9,25)", Box::new(MassIndex::default())),
         ("%B(20,2)", Box::new(PercentB::default())),
         ("BBW(20,2)", Box::new(BollingerBandsWidth::default())),
-        ("Env(20,2.5,SMA)", Box::new(Envelopes::default())),
+        (
+            "Env(20,2.5,SMA)",
+            Box::new(Envelopes::new(20, 2.5, EnvelopeAverage::Simple)),
+        ),
         (
             "Env(20,2.5,EMA)",
             Box::new(Envelopes::new(20, 2.5, EnvelopeAverage::Exponential)),

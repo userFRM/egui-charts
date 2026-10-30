@@ -207,3 +207,44 @@ fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
     }
     assert_eq!(duplicates, ["ADX and DMI"]);
 }
+
+/// The study browser opens the channel studies with their usual inputs, and every band they
+/// fill lies between two of their drawn plots in a colour that shows.
+#[test]
+fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
+    use crate::studies::{FillBoundary, InputValue};
+
+    let rows: [(&str, &[(&str, InputValue)], &[(usize, usize)]); 1] = [(
+        "Envelopes",
+        &[("percent", InputValue::Number(10.0))],
+        &[(0, 2)],
+    )];
+    for (name, inputs, bands) in rows {
+        let study = IndicatorFactory::new().create(name).unwrap();
+        let values = study.inputs();
+        for (id, value) in inputs {
+            let input = values.iter().find(|input| input.id == *id);
+            assert_eq!(input.map(|input| &input.value), Some(value), "{name} {id}");
+        }
+        let fills: Vec<_> = study
+            .fills()
+            .iter()
+            .map(|fill| {
+                let (FillBoundary::Plot(first), FillBoundary::Plot(second)) =
+                    (fill.first, fill.second)
+                else {
+                    panic!("{name}: {fill:?}")
+                };
+                for line in [first, second] {
+                    assert!(
+                        line < study.line_count() && study.plot_style(line).visible,
+                        "{name}: plot {line} is not drawn"
+                    );
+                }
+                assert_ne!(fill.color.a(), 0, "{name}: transparent fill");
+                (first, second)
+            })
+            .collect();
+        assert_eq!(fills, bands, "{name}");
+    }
+}
