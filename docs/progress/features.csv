@@ -842,7 +842,7 @@ Terminal,Replay,Tick replay,done,library,src/data/replay.rs
 Terminal,Replay,Update interval smaller than the chart interval,done,library,src/widget/replay.rs;src/ui/replay/floating.rs
 Terminal,Templates and layouts,Autosave,done,library,src/ui/top_toolbar/components/layout_menu.rs
 Terminal,Templates and layouts,Chart settings templates,done,library,src/ui/dialogs/chart_settings/mod.rs
-Terminal,Templates and layouts,Cloud sync of layouts and settings across devices,partial,host,src/services/storage.rs;src/ui/top_toolbar/components/layout_menu.rs;src/services/settings.rs
+Terminal,Templates and layouts,Cloud sync of layouts and settings across devices,partial,host,src/services/storage.rs;src/services/document.rs;src/ui/top_toolbar/components/layout_menu.rs;src/services/settings.rs;src/ui/dialogs/storage_conflict.rs;terminal/src/core.rs
 Terminal,Templates and layouts,"Create new, rename and make a copy of a layout",done,library,src/ui/top_toolbar/components/layout_menu.rs
 Terminal,Templates and layouts,Drawing serialisation for saved layouts,done,library,src/widget/anchors.rs;src/widget/snapshot.rs
 Terminal,Templates and layouts,Drawing templates,done,library,src/drawings/domain/template.rs;src/ui/dialogs/templates/dialog.rs;src/ui/dialogs/drawing_properties/dialog.rs
