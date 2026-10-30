@@ -100,7 +100,7 @@ impl Indicator for PercentageVolumeOscillator {
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
-            color: self.colors[line],
+            color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
             plot_type: if line == 2 {

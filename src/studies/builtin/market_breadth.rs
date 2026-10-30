@@ -20,9 +20,11 @@ pub type AdvanceDeclineLine = MarketBreadth<false, false>;
 /// Running total of advancing volume minus declining volume.
 pub type CumulativeVolumeIndex = MarketBreadth<false, true>;
 
-/// A ratio or cumulative difference of two market series. `VOLUME` chooses volume-series
-/// defaults and the volume-index name. Hosts map the default symbol keys to their own source,
-/// or replace them using the typed inputs. Calculations require [`Indicator::update_data`].
+/// A ratio or cumulative difference of two market series. `RATIO` selects the ratio and its name.
+/// `VOLUME` chooses volume-series default symbols and, without `RATIO`, the volume-index name, so
+/// with both `true` the study is the "Advance/Decline Ratio" of the volume series. Hosts map the
+/// default symbol keys to their own source, or replace them using the typed inputs. Calculations
+/// require [`Indicator::update_data`].
 #[derive(Clone)]
 pub struct MarketBreadth<const RATIO: bool, const VOLUME: bool> {
     advancing_symbol: String,
