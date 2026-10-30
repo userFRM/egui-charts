@@ -46,7 +46,6 @@ pub struct TPOProfile {
     /// Row height the profile's prices are keyed on: the configured tick size,
     /// widened to a whole number of ticks when the bars span more than 1,000
     /// ticks, or the span divided into 1,000 rows without a usable tick size.
-    /// Pass it to the methods that take a `tick_size`.
     pub tick_size: f64,
     /// All TPO letters in this profile
     pub letters: Vec<TPOLetter>,
@@ -196,17 +195,17 @@ impl TPOProfile {
     }
 
     /// Get the TPO count at a specific price level
-    pub fn tpo_count_at(&self, price: f64, tick_size: f64) -> usize {
-        let price_key = price_to_key(price, tick_size);
+    pub fn tpo_count_at(&self, price: f64) -> usize {
+        let price_key = price_to_key(price, self.tick_size);
         *self.price_tpo_count.get(&price_key).unwrap_or(&0)
     }
 
     /// Get all unique price levels with TPOs
-    pub fn price_levels(&self, tick_size: f64) -> Vec<f64> {
+    pub fn price_levels(&self) -> Vec<f64> {
         let mut levels: Vec<f64> = self
             .price_tpo_count
             .keys()
-            .map(|&k| key_to_price(k, tick_size))
+            .map(|&k| key_to_price(k, self.tick_size))
             .collect();
         levels.sort_by(|a, b| b.total_cmp(a));
         levels
@@ -239,11 +238,11 @@ impl TPOProfile {
     }
 
     /// Get the letters at a specific price level
-    pub fn letters_at(&self, price: f64, tick_size: f64) -> Vec<&TPOLetter> {
-        let price_key = price_to_key(price, tick_size);
+    pub fn letters_at(&self, price: f64) -> Vec<&TPOLetter> {
+        let price_key = price_to_key(price, self.tick_size);
         self.letters
             .iter()
-            .filter(|l| price_to_key(l.price, tick_size) == price_key)
+            .filter(|l| price_to_key(l.price, self.tick_size) == price_key)
             .collect()
     }
 }
@@ -639,8 +638,8 @@ pub enum ProfileShape {
 
 impl TPOProfile {
     /// Classify the profile shape
-    pub fn classify_shape(&self, tick_size: f64) -> ProfileShape {
-        let levels = self.price_levels(tick_size);
+    pub fn classify_shape(&self) -> ProfileShape {
+        let levels = self.price_levels();
         if levels.len() < 3 {
             return ProfileShape::Normal;
         }
@@ -649,14 +648,8 @@ impl TPOProfile {
         let upper_third = &levels[..levels.len() / 3];
         let lower_third = &levels[levels.len() * 2 / 3..];
 
-        let upper_tpos: usize = upper_third
-            .iter()
-            .map(|p| self.tpo_count_at(*p, tick_size))
-            .sum();
-        let lower_tpos: usize = lower_third
-            .iter()
-            .map(|p| self.tpo_count_at(*p, tick_size))
-            .sum();
+        let upper_tpos: usize = upper_third.iter().map(|p| self.tpo_count_at(*p)).sum();
+        let lower_tpos: usize = lower_third.iter().map(|p| self.tpo_count_at(*p)).sum();
 
         let upper_pct = upper_tpos as f64 / total_tpos as f64;
         let lower_pct = lower_tpos as f64 / total_tpos as f64;
@@ -946,7 +939,7 @@ mod tests {
                 .map(|profile| {
                     let open = (profile.session_date - start).num_minutes();
                     let letters: String = profile.letters.iter().map(|l| l.letter).collect();
-                    assert_eq!(profile.tpo_count_at(100.0, 1.0), letters.len(), "{case}");
+                    assert_eq!(profile.tpo_count_at(100.0), letters.len(), "{case}");
                     (open, letters)
                 })
                 .collect();

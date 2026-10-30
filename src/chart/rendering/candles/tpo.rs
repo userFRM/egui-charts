@@ -505,7 +505,7 @@ pub(crate) fn profile_at(
             let count = if config.show_value_area && profile.is_in_value_area(row) {
                 profile.price_tpo_count.values().max().copied().unwrap_or(0)
             } else {
-                profile.tpo_count_at(row, profile.tick_size)
+                profile.tpo_count_at(row)
             };
             if pos.x >= anchor && pos.x < anchor + count as f32 * column {
                 hit = Some(profile.session_date);
@@ -548,7 +548,7 @@ fn draw_session_profile(
     let column_width = column_width.min(row_height);
     let pixels_per_point = painter.ctx().pixels_per_point();
     let gap = 1.0 / pixels_per_point;
-    let levels = profile.price_levels(tick_size);
+    let levels = profile.price_levels();
     let max_right = anchor_x + widest as f32 * column_width;
     let block_width = (column_width - gap).max(gap);
     let block_height = (row_height - gap).max(gap);
@@ -647,7 +647,7 @@ fn draw_session_profile(
         let bottom = (y + block_height * 0.5).round_to_pixels(pixels_per_point);
 
         // Letters at this level, one per period of each session, left-justified in time order.
-        let mut letters_at_price: Vec<_> = profile.letters_at(price, tick_size);
+        let mut letters_at_price: Vec<_> = profile.letters_at(price);
         letters_at_price.sort_by_key(|l| l.ts);
 
         for (col, letter) in letters_at_price.iter().enumerate() {
@@ -1338,7 +1338,7 @@ mod tests {
                 &config,
                 &clock.sessions(),
                 |i| i as f32 * 10.0,
-                |profile, _, _, _| counts.push(profile.tpo_count_at(100.0, profile.tick_size)),
+                |profile, _, _, _| counts.push(profile.tpo_count_at(100.0)),
             );
             assert_eq!(counts, expected, "{range:?}, latest={latest_session_only}");
         }
