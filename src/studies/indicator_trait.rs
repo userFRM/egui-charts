@@ -353,8 +353,8 @@ pub trait Indicator: Send {
     /// [`data_requests`](Indicator::data_requests). A connected feed stops loading older
     /// history of that series once it holds a bar at or before the earliest such time of the
     /// studies reading it, and loads more when that time moves earlier. `None`, the default,
-    /// and any time before the chart's first bar load the series back to that bar, as on
-    /// price-based chart types such as Renko, where the times are not used.
+    /// and a time before the chart's first bar load the series back to that bar. Price-based
+    /// chart types such as Renko do not use the times and always load it back to that bar.
     fn data_start(
         &self,
         request: &super::StudyDataRequest,

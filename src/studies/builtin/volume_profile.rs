@@ -316,19 +316,31 @@ impl ProfileStudy {
             .collect()
     }
 
-    /// The open of the first chart bar a profile in view reads, from which its finer bars are
-    /// needed; the open of the newest bar with no profile in view, and `None` without bars.
-    fn data_start(&self) -> Option<DateTime<Utc>> {
-        let view = self.view.start.min(self.data.len())..self.view.end.min(self.data.len());
-        let first = if self.kind == Kind::Visible {
-            (!view.is_empty()).then_some(view.start)
+    /// The chart bar ranges of the profiles in `visible`: the clamped view for a visible
+    /// profile, the ranges overlapping it otherwise.
+    fn ranges_in(&self, visible: Range<usize>) -> Vec<Range<usize>> {
+        let visible = visible.start.min(self.data.len())..visible.end.min(self.data.len());
+        if visible.is_empty() {
+            Vec::new()
+        } else if self.kind == Kind::Visible {
+            vec![visible]
         } else {
             self.ranges
                 .iter()
-                .filter(|range| range.start < view.end && range.end > view.start)
-                .map(|range| range.start)
-                .min()
-        };
+                .filter(|range| range.start < visible.end && range.end > visible.start)
+                .cloned()
+                .collect()
+        }
+    }
+
+    /// The open of the first chart bar a profile in view reads, from which its finer bars are
+    /// needed; the open of the newest bar with no profile in view, and `None` without bars.
+    fn data_start(&self) -> Option<DateTime<Utc>> {
+        let first = self
+            .ranges_in(self.view.clone())
+            .iter()
+            .map(|r| r.start)
+            .min();
         first
             .map_or(self.data.last(), |at| self.data.get(at))
             .map(|bar| bar.time)
@@ -531,19 +543,10 @@ impl ProfileStudy {
     }
 
     fn profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
-        let visible = visible.start.min(self.data.len())..visible.end.min(self.data.len());
-        if visible.is_empty() {
+        let ranges = self.ranges_in(visible);
+        if ranges.is_empty() {
             return Vec::new();
         }
-        let ranges = if self.kind == Kind::Visible {
-            vec![visible]
-        } else {
-            self.ranges
-                .iter()
-                .filter(|range| range.start < visible.end && range.end > visible.start)
-                .cloned()
-                .collect()
-        };
         let Some(mut config) = VolumeProfileConfig::new(self.rows, self.value_area)
             .and_then(|c| c.with_row_size((self.row_size > 0.0).then_some(self.row_size)))
         else {
