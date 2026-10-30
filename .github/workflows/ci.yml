@@ -291,7 +291,7 @@ jobs:
         if: runner.os == 'Linux'
         env:
           WGPU_BACKEND: vulkan
-        run: xvfb-run -a examples/demo/smoke-native.sh examples/demo/target/debug/egui-charts-demo
+        run: xvfb-run -a -e /dev/stderr examples/demo/smoke-native.sh examples/demo/target/debug/egui-charts-demo
 
   terminal:
     if: github.event.pull_request.draft != true
