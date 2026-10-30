@@ -335,7 +335,7 @@ impl Drawing {
 
     /// The price levels an alert can follow at the fractional bar index `bar`, each with its
     /// level number, name and price: a line's price extended through its two anchors, the base and
-    /// parallel lines of a parallel or disjoint channel, the trend and flat lines of a flat
+    /// second lines of parallel or disjoint channels, the trend and flat lines of a flat
     /// top/bottom, a horizontal level, a rectangle's top and bottom, a position's entry, target
     /// and stop, and each visible Fibonacci retracement or extension level, numbered by its place
     /// in the level settings. Sloping lines are straight on the price axis `scale` paints, so
@@ -381,7 +381,7 @@ impl Drawing {
                 &["Line", "Flat line"],
                 &[from_axis(along(start, end, bar)), flat.price],
             ),
-            // The second line starts at the third anchor and runs as far as the first.
+            // The second line passes through the third anchor with the opposite slope.
             (T::DisjointChannel, [start, end, from, ..]) => {
                 let rise = to_axis(end.price) - to_axis(start.price);
                 let run = f64::from(end.bar_idx - start.bar_idx);
@@ -390,7 +390,7 @@ impl Drawing {
                     &[
                         from_axis(along(start, end, bar)),
                         from_axis(
-                            to_axis(from.price) + (bar - f64::from(from.bar_idx)) * rise / run,
+                            to_axis(from.price) - (bar - f64::from(from.bar_idx)) * rise / run,
                         ),
                     ],
                 )
@@ -794,8 +794,8 @@ mod tests {
                 Linear,
                 vec![(0, "Line", 130.0), (1, "Flat line", 90.0)],
             ),
-            // The second line starts at the third anchor, 50 at bar 12, and rises as the first:
-            // 2 a bar, or 4 times in 10 bars.
+            // Through 50 at bar 12, the mirrored line falls 2 per bar: 24 at bar 25.
+            // In log price it divides by 4 over 10 bars: 12.5 at bar 22.
             (
                 drawing(
                     T::DisjointChannel,
@@ -803,7 +803,7 @@ mod tests {
                 ),
                 25.0,
                 Linear,
-                vec![(0, "Line", 130.0), (1, "Second line", 76.0)],
+                vec![(0, "Line", 130.0), (1, "Second line", 24.0)],
             ),
             (
                 drawing(
@@ -814,7 +814,7 @@ mod tests {
                 Logarithmic,
                 vec![
                     (0, "Line", 100.0 * 4f64.powf(1.2)),
-                    (1, "Second line", 200.0),
+                    (1, "Second line", 12.5),
                 ],
             ),
             (

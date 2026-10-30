@@ -80,6 +80,8 @@ impl DrawingToolType {
                 | Self::Arrow
                 | Self::ArrowMarker
                 | Self::ParallelChannel
+                | Self::FlatTopBottom
+                | Self::DisjointChannel
                 | Self::RegressionTrend
         )
     }
@@ -374,9 +376,12 @@ mod tests {
             if required.is_none() {
                 assert_eq!(manager.drawings[0].chart_points.len(), count, "{tool:?}");
             }
-            // A position's level handles sit on the box's left edge, away from its anchors;
+            // Position and channel handles can sit away from their stored anchors;
             // `HandleService`'s `get_handles_by_tool` covers them.
-            if matches!(tool, LongPos | ShortPos) {
+            if matches!(
+                tool,
+                LongPos | ShortPos | ParallelChannel | FlatTopBottom | DisjointChannel
+            ) {
                 continue;
             }
             let drawing = &manager.drawings[0];
