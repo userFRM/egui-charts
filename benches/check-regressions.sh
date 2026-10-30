@@ -3,10 +3,18 @@
 # Usage: bash benches/check-regressions.sh <base-binary> <head-binary>
 set -euo pipefail
 [[ $# == 2 ]] || { echo "usage: $0 <base-binary> <head-binary>" >&2; exit 2; }
-base_bin=$(realpath "$1")
-head_bin=$(realpath "$2")
-log=$(mktemp)
-trap 'rm -f "$log"' EXIT
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+# The bench copies its own path, argv[0], to the heap, so the length of that path moves later
+# blocks and with them whether the tessellator's meshes grow in place. One binary counted 5% more
+# instructions on `events` from the checkout root than from `performance-base/`, so both
+# binaries run from paths of the same length.
+mkdir "$work/base" "$work/head"
+cp "$1" "$work/base/frame_time"
+cp "$2" "$work/head/frame_time"
+base_bin=$work/base/frame_time
+head_bin=$work/head/frame_time
+log=$work/log
 # glibc raises its mmap threshold as large blocks are freed, which changes whether growing a
 # vector copies it. That moved the tessellator's mesh growth by about 5% for unrelated changes,
 # so the threshold is fixed and counts follow the code.
