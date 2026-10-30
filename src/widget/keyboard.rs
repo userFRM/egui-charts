@@ -537,7 +537,7 @@ mod tests {
 
     #[cfg(feature = "drawings")]
     #[test]
-    fn modifier_arrows_nudge_selection_with_one_undo_per_press() {
+    fn arrows_nudge_selected_drawings_with_one_undo_per_press() {
         use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
         use crate::widget::test_frames::frame;
         for (locked, selected) in [(false, true), (true, true), (false, false)] {
