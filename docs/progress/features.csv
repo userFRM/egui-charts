@@ -2,7 +2,7 @@ area,group,feature,status,provided_by,source
 Builder API,Broker API,Account information and account manager,done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs
 Builder API,Broker API,Brackets,done,host,src/model/trading.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Broker capability flags,done,host,src/model/trading.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/services/broker.rs;src/ui/trading/dom.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs
-Builder API,Broker API,Broker connection contract,done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs
+Builder API,Broker API,Broker connection contract,done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs;src/ui/trading/account_panel/view.rs
 Builder API,Broker API,Broker host callbacks,done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs
 Builder API,Broker API,Buy and sell buttons on the chart,done,host,src/chart/renderers/legend/mod.rs;src/widget/mod.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs
 Builder API,Broker API,Depth of market trading ladder,done,host,src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs;src/ui/trading/dom.rs;src/ui/trading/mod.rs
