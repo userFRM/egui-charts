@@ -4730,6 +4730,64 @@ mod tests {
         }
     }
 
+    /// The whitespace after the last bar of a daily series is labelled only on weekdays the
+    /// series has bars on: after weekday bars ending on Thursday 30 or Friday 31 January 2025,
+    /// February is labelled on Monday 3, while a series with weekend bars labels Saturday 1.
+    #[test]
+    fn whitespace_time_labels_skip_days_without_bars() {
+        use crate::model::{Bar, BarData};
+        use crate::scales::CustomTimeFormatter;
+        use chrono::{Datelike, Duration, TimeZone, Utc};
+        use std::sync::Arc;
+        // (last day of January 2025, weekdays only, label of the February mark)
+        for (last_day, weekdays, february) in [
+            (30, true, "Mon 03"),
+            (31, true, "Mon 03"),
+            (30, false, "Sat 01"),
+        ] {
+            let start = Utc.with_ymd_and_hms(2024, 12, 2, 0, 0, 0).unwrap();
+            let last = Utc.with_ymd_and_hms(2025, 1, last_day, 0, 0, 0).unwrap();
+            let bars = (0..)
+                .map(|day| start + Duration::days(day))
+                .take_while(|time| *time <= last)
+                .filter(|time| !weekdays || time.weekday().number_from_monday() <= 5)
+                .map(|time| Bar::new(time, 100.0, 110.0, 100.0, 110.0, 1.0))
+                .collect();
+            let ctx = egui::Context::default();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.config.show_volume = false;
+            chart.set_time_formatter(Some(Arc::new(CustomTimeFormatter::new(|time, _| {
+                time.format("%a %d").to_string()
+            }))));
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            // 80 points per bar and six bars of whitespace after the last one.
+            let scale = chart.state.time_scale_mut();
+            scale.set_bar_spacing(80.0);
+            scale.set_right_offset(6.0);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let labels: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text)
+                        if text.pos.y > plot.bottom() && text.pos.x < plot.right() =>
+                    {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let weekend = labels
+                .iter()
+                .any(|label| label.starts_with("Sat") || label.starts_with("Sun"));
+            assert_eq!(weekend, !weekdays, "{last_day} January: {labels:?}");
+            assert!(
+                labels.iter().any(|label| label == february),
+                "{last_day} January: {labels:?}"
+            );
+        }
+    }
+
     /// Daily bars put bold day and month labels on the axis; 20 characters space them at
     /// least 200 points apart, which the default 8 (80 points) does not.
     #[test]
