@@ -54,6 +54,7 @@ pub fn handle_active_tool<F1, F2>(
     F1: Fn(f32) -> f32,
     F2: Fn(f32) -> f64,
 {
+    drawing_manager.interaction_modifiers = ui.input(|i| i.modifiers);
     let interaction_mode = active_tool.interaction_mode();
     let pointer_pos = response
         .interact_pointer_pos()
@@ -101,8 +102,10 @@ pub fn handle_active_tool<F1, F2>(
                     x_to_bar,
                     y_to_price,
                 );
-                if active_tool == DrawingToolType::Rect
-                    && ui.input(|i| i.modifiers.shift)
+                if matches!(
+                    active_tool,
+                    DrawingToolType::Rect | DrawingToolType::Ellipse
+                ) && ui.input(|i| i.modifiers.shift)
                     && let Some(drawing) = &mut drawing_manager.curr_drawing
                     && let [anchor, end] = drawing.points.as_slice()
                 {
@@ -226,6 +229,99 @@ mod tests {
     use super::*;
     use crate::drawings::ChartPoint;
     use egui::{Context, Event, Id, PointerButton, Pos2, RawInput, Sense};
+
+    #[test]
+    fn modifier_placement_constrains_shapes_and_temporarily_inverts_magnet() {
+        use egui::{Modifiers, pos2, vec2};
+        for (tool, modifiers, magnet, expected) in [
+            (
+                DrawingToolType::TrendLine,
+                Modifiers::SHIFT,
+                false,
+                pos2(210.0, 210.0),
+            ),
+            (
+                DrawingToolType::Ray,
+                Modifiers::SHIFT,
+                false,
+                pos2(210.0, 210.0),
+            ),
+            (
+                DrawingToolType::Ellipse,
+                Modifiers::SHIFT,
+                false,
+                pos2(250.0, 250.0),
+            ),
+            (
+                DrawingToolType::Rect,
+                Modifiers::SHIFT,
+                false,
+                pos2(250.0, 250.0),
+            ),
+            (
+                DrawingToolType::TrendLine,
+                Modifiers::CTRL,
+                false,
+                pos2(251.0, 172.0),
+            ),
+            (
+                DrawingToolType::TrendLine,
+                Modifiers::COMMAND,
+                true,
+                pos2(250.0, 170.0),
+            ),
+        ] {
+            let ctx = Context::default();
+            let pane = Rect::from_min_size(Pos2::ZERO, vec2(500.0, 400.0));
+            let mut manager = DrawingManager::new();
+            manager.options.magnet_mode = magnet;
+            manager.update_snap_options();
+            let from = pos2(100.0, 100.0);
+            let to = pos2(250.0, 170.0);
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            for events in [
+                vec![Event::PointerMoved(from)],
+                vec![button(from, true)],
+                vec![Event::PointerMoved(to)],
+                vec![button(to, false)],
+            ] {
+                manager.snap_targets = vec![pos2(251.0, 172.0)];
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(pane),
+                        events: std::iter::once(Event::ModifiersChanged(modifiers))
+                            .chain(events)
+                            .collect(),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let response =
+                            ui.interact(pane, Id::NULL.with("chart"), Sense::click_and_drag());
+                        handle_active_tool(
+                            ui,
+                            &mut manager,
+                            &response,
+                            pane,
+                            &|x| x,
+                            &f64::from,
+                            tool,
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+            assert_eq!(
+                manager.drawings[0].points[1], expected,
+                "{tool:?}, {modifiers:?}, magnet {magnet}"
+            );
+            assert_eq!(manager.options.magnet_mode, magnet);
+        }
+    }
 
     /// A drag that ends below the price pane, over the time axis, finishes the drawing with
     /// its last anchor on the pane's edge.

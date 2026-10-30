@@ -27,8 +27,7 @@ impl Drawing {
         // Draw pattern fill for completed pattern (PRZ - Potential Reversal Zone)
         if self.points.len() >= 5 {
             // Fill the ABCD portion
-            let fill_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 25);
+            let fill_color = self.fill_color32().unwrap_or(Color32::TRANSPARENT);
 
             // Fill XAB
             painter.add(egui::epaint::PathShape::convex_polygon(
@@ -91,14 +90,14 @@ impl Drawing {
                     egui::Vec2::new(
                         DESIGN_TOKENS.sizing.technical_labels.elliott_label_size,
                         DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-                    ),
+                    ) * (self.annotation_font().size / typography::XS).max(1.0),
                 );
                 painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
                 painter.text(
                     label_pos,
                     egui::Align2::CENTER_CENTER,
                     labels[i],
-                    egui::FontId::proportional(typography::MD),
+                    self.annotation_font(),
                     color,
                 );
             }
@@ -148,11 +147,7 @@ impl Drawing {
         let Some(ratio) = ratio else {
             return;
         };
-        let galley = painter.layout_no_wrap(
-            format!("{ratio:.3}"),
-            egui::FontId::proportional(typography::XS),
-            color,
-        );
+        let galley = painter.layout_no_wrap(format!("{ratio:.3}"), self.annotation_font(), color);
         let at = |t| egui::Align2::CENTER_BOTTOM.anchor_size(a.lerp(b, t), galley.size());
         let rect = [0.5, 0.4, 0.6, 0.3, 0.7]
             .into_iter()
@@ -197,14 +192,14 @@ impl Drawing {
                 egui::Vec2::new(
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_width,
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-                ),
+                ) * (self.annotation_font().size / typography::XS).max(1.0),
             );
             painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
             painter.text(
                 label_pos,
                 egui::Align2::CENTER_CENTER,
                 "Cypher",
-                egui::FontId::proportional(typography::XS),
+                self.annotation_font(),
                 color,
             );
         }
@@ -224,8 +219,7 @@ impl Drawing {
 
         // Draw pattern fill
         if self.points.len() >= 5 {
-            let fill_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 20);
+            let fill_color = self.fill_color32().unwrap_or(Color32::TRANSPARENT);
             painter.add(egui::epaint::PathShape::convex_polygon(
                 self.points.clone(),
                 fill_color,
@@ -273,14 +267,14 @@ impl Drawing {
                     egui::Vec2::new(
                         DESIGN_TOKENS.sizing.technical_labels.hs_label_width,
                         DESIGN_TOKENS.sizing.technical_labels.gann_label_height,
-                    ),
+                    ) * (self.annotation_font().size / typography::XS).max(1.0),
                 );
                 painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
                 painter.text(
                     label_pos,
                     egui::Align2::CENTER_CENTER,
                     labels[i],
-                    egui::FontId::proportional(typography::XS),
+                    self.annotation_font(),
                     color,
                 );
             }
@@ -292,7 +286,7 @@ impl Drawing {
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 200);
             let last_x = self.points[self.points.len() - 1].x;
 
-            painter.line_segment(neckline, Stroke::new(stroke::MEDIUM, neckline_color));
+            painter.line_segment(neckline, Stroke::new(self.stroke_width, neckline_color));
 
             // Draw target line (dashed)
             let target_color = DESIGN_TOKENS.semantic.indicators.ma.gamma_multiply(0.7); // Orange
@@ -326,14 +320,14 @@ impl Drawing {
                     DESIGN_TOKENS.sizing.technical_labels.line_label_width
                         + DESIGN_TOKENS.spacing.sm,
                     DESIGN_TOKENS.sizing.technical_labels.gann_label_height,
-                ),
+                ) * (self.annotation_font().size / typography::XS).max(1.0),
             );
             painter.rect_filled(target_rect, DESIGN_TOKENS.rounding.sm, label_bg);
             painter.text(
                 target_label_pos,
                 egui::Align2::CENTER_CENTER,
                 "Target",
-                egui::FontId::proportional(typography::XS),
+                self.annotation_font(),
                 target_color,
             );
         }
@@ -352,8 +346,7 @@ impl Drawing {
 
         // Draw fill for completed pattern
         if self.points.len() >= 4 {
-            let fill_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 25);
+            let fill_color = self.fill_color32().unwrap_or(Color32::TRANSPARENT);
             painter.add(egui::epaint::PathShape::convex_polygon(
                 self.points[0..4].to_vec(),
                 fill_color,
@@ -407,14 +400,14 @@ impl Drawing {
                     egui::Vec2::new(
                         DESIGN_TOKENS.sizing.technical_labels.elliott_label_size,
                         DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-                    ),
+                    ) * (self.annotation_font().size / typography::XS).max(1.0),
                 );
                 painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
                 painter.text(
                     label_pos,
                     egui::Align2::CENTER_CENTER,
                     labels[i],
-                    egui::FontId::proportional(typography::MD),
+                    self.annotation_font(),
                     color,
                 );
             }
@@ -454,14 +447,14 @@ impl Drawing {
                 egui::Vec2::new(
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_width,
                     DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-                ),
+                ) * (self.annotation_font().size / typography::XS).max(1.0),
             );
             painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
             painter.text(
                 ratio_pos,
                 egui::Align2::CENTER_CENTER,
                 format!("CD/AB: {ratio:.2}"),
-                egui::FontId::proportional(typography::XS),
+                self.annotation_font(),
                 ratio_color,
             );
         }
@@ -478,8 +471,7 @@ impl Drawing {
 
         // Four anchors zigzag between the two boundaries; fewer are a plain polygon.
         let boundaries = triangle_boundaries(&self.points, painter.clip_rect().right());
-        let fill_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 25);
+        let fill_color = self.fill_color32().unwrap_or(Color32::TRANSPARENT);
         if self.points.len() == 3 {
             painter.add(egui::epaint::PathShape::convex_polygon(
                 self.points.clone(),
@@ -556,14 +548,14 @@ impl Drawing {
                     egui::Vec2::new(
                         DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
                         DESIGN_TOKENS.sizing.technical_labels.gann_label_height,
-                    ),
+                    ) * (self.annotation_font().size / typography::XS).max(1.0),
                 );
                 painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
                 painter.text(
                     label_pos,
                     egui::Align2::CENTER_CENTER,
                     format!("{}", i + 1),
-                    egui::FontId::proportional(typography::XS),
+                    self.annotation_font(),
                     color,
                 );
             }
@@ -581,8 +573,7 @@ impl Drawing {
 
         // Draw fill for complete pattern
         if self.points.len() >= 7 {
-            let fill_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 20);
+            let fill_color = self.fill_color32().unwrap_or(Color32::TRANSPARENT);
             painter.add(egui::epaint::PathShape::convex_polygon(
                 self.points.clone(),
                 fill_color,
@@ -633,14 +624,14 @@ impl Drawing {
                     egui::Vec2::new(
                         DESIGN_TOKENS.sizing.technical_labels.elliott_label_size,
                         DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-                    ),
+                    ) * (self.annotation_font().size / typography::XS).max(1.0),
                 );
                 painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
                 painter.text(
                     label_pos,
                     egui::Align2::CENTER_CENTER,
                     labels[i],
-                    egui::FontId::proportional(typography::SM),
+                    self.annotation_font(),
                     color,
                 );
             }
@@ -674,7 +665,7 @@ impl Drawing {
                         drive_pos,
                         egui::Align2::CENTER_CENTER,
                         drive_labels[di],
-                        egui::FontId::proportional(typography::XS),
+                        self.annotation_font(),
                         drive_color,
                     );
                 }
@@ -686,11 +677,7 @@ impl Drawing {
         if self.points.len() >= 7
             && let Some(prices) = self.three_drives_zone()
         {
-            let reversal_color = DESIGN_TOKENS
-                .semantic
-                .extended
-                .bullish
-                .gamma_multiply(60_f32 / 255.0); // Teal with alpha
+            let reversal_color = self.fill_color32().unwrap_or(Color32::TRANSPARENT);
             let [y1, y2] = prices.map(|price| (view.price_to_y)(price));
             let (x1, x2) = (self.points[5].x, self.points[6].x);
             let zone_rect = Rect::from_x_y_ranges(x1.min(x2)..=x1.max(x2), y1.min(y2)..=y1.max(y2));
@@ -700,7 +687,7 @@ impl Drawing {
                 zone_rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "PRZ",
-                egui::FontId::proportional(typography::XS),
+                self.annotation_font(),
                 DESIGN_TOKENS.semantic.extended.bullish,
             );
         }
