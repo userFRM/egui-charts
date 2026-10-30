@@ -15,6 +15,7 @@ use egui::{Painter, Rect, Response, Stroke, Ui, epaint::StrokeKind};
 /// When no drawing tool is active, clicks are interpreted as selection attempts.
 /// An unlocked drawing can be selected and moved in one drag. In eraser mode,
 /// clicking on a drawing deletes it instead, whatever is selected, unless it is locked.
+/// Shift+click on empty space starts a measurement.
 pub fn handle_selection<F1, F2, F3>(
     ui: &Ui,
     drawing_manager: &mut DrawingManager,
@@ -138,6 +139,14 @@ pub fn handle_selection<F1, F2, F3>(
             if ui.input(|i| i.modifiers.shift) {
                 if let Some(id) = drawing_manager.hit_test(pos) {
                     drawing_manager.toggle_selection(id);
+                } else {
+                    drawing_manager.set_active_tool(Some(DrawingToolType::Measure));
+                    drawing_manager.start_drawing_with_coords(
+                        DrawingToolType::Measure,
+                        pos,
+                        |x| x_to_bar(x).round(),
+                        y_to_price,
+                    );
                 }
             } else {
                 drawing_manager.select_at(pos);
@@ -736,6 +745,7 @@ mod tests {
             step(&mut chart, vec![button(pos, false, modifiers)]);
         }
         // A context action targets the clicked member without dropping its peers.
+        assert!(chart.drawings().measurement.is_none());
         for pressed in [true, false] {
             step(
                 &mut chart,
