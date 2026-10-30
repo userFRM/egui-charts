@@ -188,17 +188,15 @@ impl HandleService {
     /// Returns `Some(HandlePos)` if `point` is within `handle_size * 1.5` pixels
     /// of a handle center, `None` otherwise.
     pub fn hit_test_handle(drawing: &Drawing, point: Pos2, handle_size: f32) -> Option<HandlePos> {
-        let handles = Self::get_handles(drawing);
         let hit_radius = handle_size * 1.5;
-
-        for (pos, handle_point) in handles {
-            let dist =
-                ((point.x - handle_point.x).powi(2) + (point.y - handle_point.y).powi(2)).sqrt();
-            if dist <= hit_radius {
-                return Some(pos);
-            }
-        }
-        None
+        // The nearest handle wins, so a small glyph's centre still moves it instead of
+        // grabbing a corner that lies within reach.
+        Self::get_handles(drawing)
+            .into_iter()
+            .map(|(pos, handle_point)| (pos, point.distance(handle_point)))
+            .filter(|&(_, dist)| dist <= hit_radius)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(pos, _)| pos)
     }
 
     /// Moves a handle to a new screen position, updating both screen coordinates
@@ -1006,6 +1004,19 @@ mod tests {
         // Test missing all handles
         let miss = HandleService::hit_test_handle(&drawing, Pos2::new(500.0, 500.0), 8.0);
         assert_eq!(miss, None);
+
+        // A 16 px glyph has its corners within reach of its centre: the centre still moves it.
+        let mut glyph = create_test_drawing(DrawingToolType::Sticker, vec![pos2(100.0, 200.0)]);
+        glyph.font_size = 16.0;
+        for (point, expected) in [
+            (pos2(100.0, 200.0), HandlePos::Middle),
+            (pos2(108.0, 208.0), HandlePos::BottomRight),
+        ] {
+            assert_eq!(
+                HandleService::hit_test_handle(&glyph, point, 8.0),
+                Some(expected)
+            );
+        }
     }
 
     /// A handle drag moves the screen points and the persisted chart points
