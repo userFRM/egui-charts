@@ -60,10 +60,15 @@ pub struct FloatingSelectionToolbar {
     position: Pos2,
     /// Color slots to display (mutable for color picker)
     color_slots: Vec<ColorSlot>,
+    /// Palette state per colour slot
     pickers: Vec<ColorPickerState>,
+    /// Line width and style of the selected drawing
     stroke: Option<(f32, LineStyle)>,
+    /// Symbol and id of the drawing the toolbar follows
     selected: Option<(String, usize)>,
+    /// Whether a custom colour gesture is still open as one undo step
     colour_drag: bool,
+    /// The "More" menu
     menu: DrawingContextMenu,
     /// Whether object is locked
     is_locked: bool,
@@ -186,6 +191,7 @@ impl FloatingSelectionToolbar {
                 .first()
                 .copied()
                 .unwrap_or(chart.get_rendered_price_rect().center());
+            // Sits just above and right of the first anchor, clear of the line it styles.
             self.show_at(anchor + Vec2::new(12.0, -52.0));
             self.selected = Some(selected);
         }
@@ -277,7 +283,8 @@ impl FloatingSelectionToolbar {
         let size = if self.last_rect.is_finite() {
             self.last_rect.size()
         } else {
-            Vec2::new(240.0, 40.0)
+            // Typical width until egui has measured the bar once.
+            Vec2::new(240.0, DESIGN_TOKENS.sizing.floating_toolbar.height)
         };
         self.position.x = self
             .position
@@ -326,7 +333,7 @@ impl FloatingSelectionToolbar {
                                             .response
                                             .on_hover_text(l10n::text(ui.ctx(), slot.label));
                                         if let Some(mut color) = picked.inner {
-                                            if slot.label == "Fill color"
+                                            if idx > 0
                                                 && !custom
                                                 && !picker.custom_mode
                                                 && slot.color.a() > 0

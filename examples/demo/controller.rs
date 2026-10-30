@@ -2764,16 +2764,12 @@ impl DemoApp {
         }
         if let Some(id) = drawing_settings
             && !self.replay_selecting
-            && self.chart.drawings().drawings.iter().any(|d| {
-                d.id == id
-                    && (d.locked
-                        || !(d.tool_type.supports_text()
-                            || matches!(
-                                d.tool_type,
-                                egui_charts::drawings::DrawingToolType::Image
-                                    | egui_charts::drawings::DrawingToolType::PriceLabel
-                            )))
-            })
+            && self
+                .chart
+                .drawings()
+                .drawings
+                .iter()
+                .any(|d| d.id == id && (d.locked || !d.tool_type.edits_text_inline()))
         {
             self.open_drawing_props_for(id);
         }

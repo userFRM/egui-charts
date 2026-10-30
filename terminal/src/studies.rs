@@ -351,16 +351,12 @@ impl Terminal {
             if *slot == self.active
                 && let ChartEvent::DoubleClick { position } = event
                 && let Some(PointerTarget::Drawing(id)) = position.target
-                && self.chart().drawings().drawings.iter().any(|d| {
-                    d.id == id
-                        && (d.locked
-                            || !(d.tool_type.supports_text()
-                                || matches!(
-                                    d.tool_type,
-                                    egui_charts::drawings::DrawingToolType::Image
-                                        | egui_charts::drawings::DrawingToolType::PriceLabel
-                                )))
-                })
+                && self
+                    .chart()
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .any(|d| d.id == id && (d.locked || !d.tool_type.edits_text_inline()))
             {
                 Some(id)
             } else {
