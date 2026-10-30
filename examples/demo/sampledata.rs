@@ -189,29 +189,33 @@ pub fn us_equity_hours() -> &'static egui_charts::model::ExchangeSessionProvider
 /// The latest open stretch before `time` ends here. Closed nights and weekends are skipped
 /// by local calendar arithmetic, so quote lookups can start at this bound.
 pub fn latest_open_end(time: DateTime<Utc>, extended_hours: bool) -> DateTime<Utc> {
-    use chrono::{Datelike, Duration, NaiveTime, TimeZone};
+    use chrono::{Datelike, Duration, TimeZone};
     let previous = time - Duration::nanoseconds(1);
     if us_equity_hours().is_open(previous, extended_hours) {
         return time;
     }
     let zone = us_equity_zone();
     let local = previous.with_timezone(&zone);
-    let open = if extended_hours { (4, 0) } else { (9, 30) };
-    let open = NaiveTime::from_hms_opt(open.0, open.1, 0).unwrap();
+    let session = us_equity_session();
     let mut day = local.date_naive();
-    if local.time() < open {
+    loop {
+        let close = session
+            .windows
+            .iter()
+            .chain(session.extended_windows.iter().filter(|_| extended_hours))
+            .filter(|window| window.days.contains(&day.weekday()))
+            .map(|window| day.and_time(window.close))
+            .filter(|close| *close <= local.naive_local())
+            .max();
+        if let Some(close) = close {
+            return zone
+                .from_local_datetime(&close)
+                .single()
+                .expect("the session close exists")
+                .to_utc();
+        }
         day -= Duration::days(1);
     }
-    while day.weekday().num_days_from_monday() >= 5 {
-        day -= Duration::days(1);
-    }
-    let close = day
-        .and_hms_opt(if extended_hours { 20 } else { 16 }, 0, 0)
-        .unwrap();
-    zone.from_local_datetime(&close)
-        .single()
-        .expect("the session close exists")
-        .to_utc()
 }
 
 /// An ex-dividend instant inside the live history: one to three trading days before the clock,
@@ -219,20 +223,22 @@ pub fn latest_open_end(time: DateTime<Utc>, extended_hours: bool) -> DateTime<Ut
 pub fn dividend_date(symbol: &str, now: DateTime<Utc>) -> DateTime<Utc> {
     use chrono::{Datelike, Duration, TimeZone};
     let seed = DemoSymbol::find(symbol).seed;
+    let session = us_equity_session();
+    let regular = &session.windows[0];
     let zone = us_equity_zone();
     let mut day = now.with_timezone(&zone).date_naive();
     let mut days = 1 + seed % 3;
     while days > 0 {
         day -= Duration::days(1);
-        if day.weekday().num_days_from_monday() < 5 {
+        if regular.days.contains(&day.weekday()) {
             days -= 1;
         }
     }
-    zone.from_local_datetime(&day.and_hms_opt(9, 30, 0).unwrap())
+    zone.from_local_datetime(&day.and_time(regular.open))
         .single()
         .expect("the regular open exists")
         .to_utc()
-        + Duration::minutes((seed % 390) as i64)
+        + Duration::minutes((seed % (regular.close - regular.open).num_minutes() as u64) as i64)
 }
 
 /// The synthetic dividend's price factor, taken from the symbol's seed.
