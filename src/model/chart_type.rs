@@ -402,7 +402,8 @@ pub struct ChartTypeParams {
     /// TPO: minutes per period, raised to the bar interval when shorter.
     pub tpo_period_minutes: u32,
     /// TPO: instrument ticks per price row. Zero, or an instrument without a tick size, fits
-    /// about 40 rows to the visible price range.
+    /// about 40 rows to the visible price range, each a whole number of the instrument's ticks
+    /// when it has a tick size.
     pub tpo_row_ticks: u32,
     /// TPO: share of the TPOs in the value area, in percent.
     pub tpo_value_area: f64,

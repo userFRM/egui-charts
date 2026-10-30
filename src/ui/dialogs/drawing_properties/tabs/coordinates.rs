@@ -1,6 +1,7 @@
-//! Coordinates tab - staged price (bars only for a regression trend) and UTC time points.
+//! Coordinates tab - staged price (bars only for a regression trend) and UTC time points;
+//! freehand strokes have none.
 
-use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+use crate::drawings::{ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType};
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -29,12 +30,16 @@ pub struct CoordinatePoint {
 /// Coordinates staged independently of the live drawing until Apply.
 #[derive(Clone, Debug, Default)]
 pub struct CoordinatesState {
-    /// One entry for every anchor of the selected drawing.
+    /// One entry for every anchor of the selected drawing; none for a freehand stroke, which
+    /// moves only as a whole.
     pub points: Vec<CoordinatePoint>,
 }
 
 impl CoordinatesState {
     pub(crate) fn from_drawing(drawing: &Drawing, chart: &Chart) -> Self {
+        if !CoordinatesTab::available(drawing.tool_type) {
+            return Self::default();
+        }
         Self {
             points: drawing
                 .chart_points
@@ -127,6 +132,12 @@ impl CoordinatesState {
 pub struct CoordinatesTab;
 
 impl CoordinatesTab {
+    /// Whether the tab lists `tool`'s anchors. A freehand stroke has none to edit: moving one
+    /// of its samples would break its shape, so it moves only as a whole.
+    pub(crate) fn available(tool: DrawingToolType) -> bool {
+        tool.interaction_mode() != DrawingInteractionMode::ContinuousDraw
+    }
+
     pub fn show(ui: &mut Ui, state: &mut CoordinatesState) {
         ui.space_md();
         if state.points.is_empty() {

@@ -257,6 +257,71 @@ impl Timeframe {
     }
 }
 
+/// Unit of an interval, as its label names it: `90min` is 90 [`Minute`](Self::Minute)s and
+/// `1D` one [`Day`](Self::Day). Units are ordered as declared, trade-based units first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum TimeframeUnit {
+    /// A fixed number of executions per bar.
+    Tick,
+    /// Traded volume in whole units, split exactly at the threshold.
+    Volume,
+    /// Price range in instrument ticks.
+    Range,
+    /// Absolute buy minus sell volume in whole units.
+    Delta,
+    /// One of the model's subsecond presets.
+    Millisecond,
+    /// Seconds.
+    Second,
+    /// Minutes.
+    Minute,
+    /// Hours.
+    Hour,
+    /// Days.
+    Day,
+    /// Weeks.
+    Week,
+    /// Months.
+    Month,
+}
+
+impl TimeframeUnit {
+    /// Abbreviated unit label.
+    pub fn short_name(&self) -> &'static str {
+        match self {
+            TimeframeUnit::Tick => "T",
+            TimeframeUnit::Volume => "V",
+            TimeframeUnit::Range => "R",
+            TimeframeUnit::Delta => "delta",
+            TimeframeUnit::Millisecond => "ms",
+            TimeframeUnit::Second => "S",
+            TimeframeUnit::Minute => "m",
+            TimeframeUnit::Hour => "h",
+            TimeframeUnit::Day => "D",
+            TimeframeUnit::Week => "W",
+            TimeframeUnit::Month => "M",
+        }
+    }
+
+    /// Display name for this value.
+    pub fn name(&self) -> &'static str {
+        match self {
+            TimeframeUnit::Tick => "ticks",
+            TimeframeUnit::Volume => "volume units",
+            TimeframeUnit::Range => "range ticks",
+            TimeframeUnit::Delta => "delta units",
+            TimeframeUnit::Millisecond => "milliseconds",
+            TimeframeUnit::Second => "seconds",
+            TimeframeUnit::Minute => "minutes",
+            TimeframeUnit::Hour => "hours",
+            TimeframeUnit::Day => "days",
+            TimeframeUnit::Week => "weeks",
+            TimeframeUnit::Month => "months",
+        }
+    }
+}
+
 /// Format a custom seconds value into a human-readable label.
 /// Chooses the largest clean unit: days > hours > minutes > seconds.
 fn format_custom_seconds(seconds: u64) -> String {
