@@ -42,8 +42,14 @@ pub enum DrawingContextMenuAction {
     Edit,
     /// Bring drawing to front of render order
     BringToFront,
+    /// Move drawing above its next neighbour in render order.
+    BringForward,
     /// Send drawing to back of render order
     SendToBack,
+    /// Move drawing below its previous neighbour in render order.
+    SendBackward,
+    /// Copy the selected drawings to the clipboard.
+    Copy,
     /// Move the drawing to this pane, for example with [`Chart::move_drawing_to_pane`].
     MoveTo(PaneId),
     /// Toggle drawing lock state
@@ -57,6 +63,7 @@ pub enum DrawingContextMenuAction {
 }
 
 /// Drawing context menu state
+#[derive(Clone, Debug)]
 pub struct DrawingContextMenu {
     is_open: bool,
     position: Pos2,
@@ -193,8 +200,16 @@ impl DrawingContextMenu {
                     DrawingContextMenuAction::BringToFront,
                 )),
                 MenuEntry::Item(MenuItem::new(
+                    "Bring forward",
+                    DrawingContextMenuAction::BringForward,
+                )),
+                MenuEntry::Item(MenuItem::new(
                     "Send to back",
                     DrawingContextMenuAction::SendToBack,
+                )),
+                MenuEntry::Item(MenuItem::new(
+                    "Send backward",
+                    DrawingContextMenuAction::SendBackward,
                 )),
             ])
             .chain((!self.panes.is_empty()).then(|| {
@@ -239,6 +254,10 @@ impl DrawingContextMenu {
                     }),
                 ),
                 MenuEntry::Separator,
+                MenuEntry::Item(
+                    MenuItem::new("Copy", DrawingContextMenuAction::Copy)
+                        .with_shortcut(shortcuts.shortcut(KeyboardAction::CopyDrawing)),
+                ),
                 MenuEntry::Item(MenuItem::new("Clone", DrawingContextMenuAction::Clone)),
                 MenuEntry::Separator,
                 // Delete (last item, potentially destructive)

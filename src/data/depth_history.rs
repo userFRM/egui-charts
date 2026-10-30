@@ -123,8 +123,9 @@ impl DepthHistory {
     }
 
     /// Merges a historical page, preserving every held column on overlap and keeping time gaps.
-    /// Older columns merge to the oldest tier's resolution; an adjacent page can complete its
-    /// short oldest column. Full columns merge only when their tier overflows.
+    /// Older columns merge to the oldest tier's resolution, and columns that fill a gap to the
+    /// resolution of the tier they join; either completes a short held column right after it.
+    /// Full columns merge only when their tier overflows.
     /// Columns must use this history's grid and sorted, unique rows, with finite non-negative
     /// sizes and at most `config.rows` per side. Invalid pages leave the history unchanged.
     /// Memory remains bounded by the configured tiers. Returns the number of input columns
@@ -181,38 +182,29 @@ impl DepthHistory {
         let mut older = 0;
         if let Some(k) = self.tiers.iter().rposition(|tier| !tier.is_empty()) {
             older = accepted.partition_point(|c| c.time < self.tiers[k][0].time);
-            let mut columns: VecDeque<_> = accepted[..older].iter().cloned().collect();
-            // Complete a short page boundary before it consumes a whole coarse-tier slot.
-            if let Some(span) = self.config.cadence.checked_mul(1 << k) {
-                while columns.back().is_some_and(|older| {
-                    let newer = &self.tiers[k][0];
-                    older.time + older.span == newer.time && older.span + newer.span <= span
-                }) {
-                    let older = columns.pop_back().expect("an older column");
-                    let newer = self.tiers[k].pop_front().expect("a held column");
-                    self.tiers[k].push_front(Arc::new(merge(&older, &newer, self.config.rows)));
-                }
-            }
-            // Work back from the held boundary, leaving a short column at the oldest end.
-            for _ in 0..k {
-                let mut merged = VecDeque::new();
-                while let Some(newer) = columns.pop_back() {
-                    let column = match columns.back() {
-                        Some(older) if older.time + older.span == newer.time => {
-                            let older = columns.pop_back().expect("an older column");
-                            Arc::new(merge(&older, &newer, self.config.rows))
-                        }
-                        _ => newer,
-                    };
-                    merged.push_front(column);
-                }
-                columns = merged;
-            }
-            columns.append(&mut self.tiers[k]);
-            self.tiers[k] = columns;
+            let held = std::mem::take(&mut self.tiers[k]);
+            self.tiers[k] = self.merge_run(k, accepted[..older].iter().cloned().collect(), held);
         }
-        for column in accepted[older..].iter().cloned() {
-            self.insert_column(column);
+        // Columns that fill a gap are placed by span and age, as live corrections are; runs of
+        // them finer than their tier then merge to its resolution, as older columns do above.
+        let placed: Vec<_> = accepted[older..]
+            .iter()
+            .map(|column| (self.insert_column(Arc::clone(column)), column))
+            .collect();
+        let cadence = self.config.cadence;
+        let finer =
+            |(tier, column): &(usize, &Arc<DepthColumn>)| resolution(cadence, column.span) < *tier;
+        for run in placed
+            .chunk_by(|a, b| a.0 == b.0 && finer(a) == finer(b) && a.1.time + a.1.span == b.1.time)
+        {
+            let (tier, first) = run[0];
+            if finer(&run[0]) {
+                let at = self.tiers[tier].partition_point(|c| c.time < first.time);
+                let mut after = self.tiers[tier].split_off(at);
+                let columns = after.drain(..run.len()).collect();
+                let mut merged = self.merge_run(tier, columns, after);
+                self.tiers[tier].append(&mut merged);
+            }
         }
         self.compact();
         let oldest = self.columns().next().expect("accepted columns").time;
@@ -244,22 +236,15 @@ impl DepthHistory {
         self.compact();
     }
 
-    /// Places a column by its span, constrained by the ages of the held tiers. Older live
-    /// corrections join the oldest occupied tier, leaving the newer resolutions intact.
-    fn insert_column(&mut self, column: Arc<DepthColumn>) {
+    /// Places a column by its span, constrained by the ages of the held tiers, and returns its
+    /// tier. Older live corrections join the oldest occupied tier, leaving the newer resolutions
+    /// intact.
+    fn insert_column(&mut self, column: Arc<DepthColumn>) -> usize {
         let tier = if let Some(k) = self.tiers.iter().rposition(|tier| !tier.is_empty())
             && column.time < self.tiers[k][0].time
         {
             k
         } else {
-            let resolution = (0..TIERS - 1)
-                .find(|&k| {
-                    self.config
-                        .cadence
-                        .checked_mul(1 << k)
-                        .is_none_or(|span| column.span <= span)
-                })
-                .unwrap_or(TIERS - 1);
             let lower = self
                 .tiers
                 .iter()
@@ -270,10 +255,54 @@ impl DepthHistory {
                 .iter()
                 .position(|tier| tier.front().is_some_and(|c| c.time < column.time))
                 .unwrap_or(TIERS - 1);
-            resolution.clamp(lower, upper)
+            resolution(self.config.cadence, column.span).clamp(lower, upper)
         };
         let at = self.tiers[tier].partition_point(|c| c.time < column.time);
         self.tiers[tier].insert(at, column);
+        tier
+    }
+
+    /// `columns`, new and oldest first, merged to the resolution of `tier` and followed by
+    /// `after`, the columns of that tier after them: the newest first complete a short column at
+    /// the front of `after`, then the rest merge in pairs `tier` times, working back from `after`
+    /// and leaving a short column at the oldest end.
+    fn merge_run(
+        &self,
+        tier: usize,
+        mut columns: VecDeque<Arc<DepthColumn>>,
+        mut after: VecDeque<Arc<DepthColumn>>,
+    ) -> VecDeque<Arc<DepthColumn>> {
+        // Complete a short boundary before it consumes a whole slot of the tier.
+        if let Some(span) = self.config.cadence.checked_mul(1 << tier) {
+            while columns
+                .back()
+                .zip(after.front())
+                .is_some_and(|(older, newer)| {
+                    older.time + older.span == newer.time && older.span + newer.span <= span
+                })
+            {
+                let older = columns.pop_back().expect("an older column");
+                let newer = after.pop_front().expect("a newer column");
+                after.push_front(Arc::new(merge(&older, &newer, self.config.rows)));
+            }
+        }
+        // Work back from the boundary, leaving a short column at the oldest end.
+        for _ in 0..tier {
+            let mut merged = VecDeque::new();
+            while let Some(newer) = columns.pop_back() {
+                let column = match columns.back() {
+                    Some(older) if older.time + older.span == newer.time => {
+                        let older = columns.pop_back().expect("an older column");
+                        Arc::new(merge(&older, &newer, self.config.rows))
+                    }
+                    _ => newer,
+                };
+                merged.push_front(column);
+            }
+            columns = merged;
+        }
+        columns.append(&mut after);
+        columns
     }
 
     /// Promotes only overflow, keeping columns in all other tiers at their held resolution.
@@ -342,6 +371,17 @@ impl Sampler {
             asks,
         })
     }
+}
+
+/// The finest tier whose resolution, `cadence` doubled once per tier, is at least `span`.
+fn resolution(cadence: TimeDelta, span: TimeDelta) -> usize {
+    (0..TIERS - 1)
+        .find(|&k| {
+            cadence
+                .checked_mul(1 << k)
+                .is_none_or(|limit| span <= limit)
+        })
+        .unwrap_or(TIERS - 1)
 }
 
 /// Start of the period of `cadence` that holds `ts`, counted from the Unix epoch.
@@ -537,7 +577,9 @@ mod tests {
     }
 
     /// Paging and live corrections must leave unrelated, already merged columns at their
-    /// resolution, including when a page fills a gap inside the held history.
+    /// resolution, including when a page fills a gap inside the held history. A page that fills
+    /// a gap must merge to the resolution of the tier it joins, so that pages merged out of order
+    /// hold the same columns as in order.
     #[test]
     fn history_updates_preserve_held_resolution() {
         let mut history = DepthHistory::new(config_columns(2)).unwrap();
@@ -599,6 +641,35 @@ mod tests {
                 columns
                     .windows(2)
                     .all(|w| w[0].time + w[0].span <= w[1].time)
+            );
+        }
+
+        // Pages of 24 samples behind a 16-second column, the third before the second: the second
+        // then fills a gap in the 16-second tier, completes the 8-second column the first left
+        // and merges the rest, as it does in order.
+        for order in [[1, 2, 3], [1, 3, 2]] {
+            let mut history = DepthHistory::new(DepthHistoryConfig::default()).unwrap();
+            history.merge_page(vec![column(0, 16, 1.0)]).unwrap();
+            for page in order {
+                let older = (-24 * page..-24 * (page - 1))
+                    .map(|s| column(s, 1, 1.0))
+                    .collect();
+                assert_eq!(history.merge_page(older).unwrap(), 24, "{order:?}");
+            }
+            assert_eq!(
+                history
+                    .columns()
+                    .map(|c| (c.time.timestamp(), c.span.num_seconds()))
+                    .collect::<Vec<_>>(),
+                [
+                    (-72, 8),
+                    (-64, 16),
+                    (-48, 16),
+                    (-32, 16),
+                    (-16, 16),
+                    (0, 16)
+                ],
+                "{order:?}"
             );
         }
     }

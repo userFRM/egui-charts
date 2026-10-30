@@ -646,7 +646,8 @@ impl DrawingManager {
         }
     }
 
-    /// Moves the completed current drawing to the drawing list and queues it to be saved.
+    /// Moves the completed current drawing to the drawing list and queues it to be saved,
+    /// or keeps the measurement until the next click.
     /// In keep-drawing mode the icon tool goes on placing the icon that was picked.
     fn finish_curr_drawing(&mut self) {
         if let Some(mut drawing) = self.curr_drawing.take() {
@@ -656,6 +657,12 @@ impl DrawingManager {
                 return;
             }
             drawing.update_pane_coords(self.pane_rect);
+            // A measurement is a ruler for the moment: kept until the next click, never stored.
+            if drawing.tool_type == DrawingToolType::Measure {
+                self.measurement = Some(drawing);
+                self.active_tool = None;
+                return;
+            }
             let icon = matches!(
                 drawing.tool_type,
                 DrawingToolType::FontIcon | DrawingToolType::Sticker
@@ -680,10 +687,12 @@ impl DrawingManager {
         }
     }
 
-    /// Cancels the in-progress drawing without adding it to the drawing list.
+    /// Cancels the in-progress drawing without adding it to the drawing list,
+    /// and clears a finished measurement.
     pub fn cancel_curr_drawing(&mut self) {
         self.curr_drawing = None;
         self.preview_point = false;
+        self.measurement = None;
     }
 
     // === Compatibility methods for old DrawingManager API ===

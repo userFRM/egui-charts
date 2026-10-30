@@ -5,6 +5,7 @@
 //! - Indicators
 //! - Positions
 //! - Orders
+//! - All of them
 
 use crate::icons::icons;
 use crate::ui::drawing_toolbar::DrawingToolbarAction;
@@ -23,7 +24,7 @@ impl HideMenu {
     }
 
     /// Render the hide dropdown rows, with the positions and orders rows when `trading`. A check
-    /// marks each group `state` has hidden.
+    /// marks each group `state` has hidden. "Hide all" hides every group.
     pub fn show_submenu(
         ui: &mut Ui,
         trading: bool,
@@ -51,6 +52,13 @@ impl HideMenu {
                 })
                 .checked(state.hide_orders);
         }
-        builder.show()
+        let tooltip = if trading {
+            "Hide drawings, indicators, positions and orders"
+        } else {
+            "Hide drawings and indicators"
+        };
+        builder
+            .add_text_item_with_action("Hide all", tooltip, || Some(DrawingToolbarAction::HideAll))
+            .show()
     }
 }

@@ -191,6 +191,11 @@ impl super::Chart {
             return;
         }
         self.keyboard.last_pass = Some(pass);
+        // A line shortcut places only in the frame of its key press.
+        #[cfg(feature = "drawings")]
+        {
+            self.drawings.place_at_pointer = false;
+        }
         ctx.data_mut(|data| {
             data.insert_temp(
                 egui::Id::NULL.with("chart_shortcuts"),
@@ -486,7 +491,16 @@ impl super::Chart {
             A::ToggleGrid => self.config.show_grid = !self.config.show_grid,
             A::ToggleVolume => self.config.show_volume = !self.config.show_volume,
             #[cfg(feature = "drawings")]
-            A::DrawingTool(tool) => self.drawings.set_active_tool(Some(tool)),
+            A::DrawingTool(tool) => {
+                self.drawings.set_active_tool(Some(tool));
+                self.drawings.place_at_pointer = self.drawings.active_tool == Some(tool)
+                    && matches!(
+                        tool,
+                        crate::drawings::DrawingToolType::HorizontalLine
+                            | crate::drawings::DrawingToolType::VerticalLine
+                            | crate::drawings::DrawingToolType::CrossLine
+                    );
+            }
             #[cfg(feature = "drawings")]
             A::ToggleDrawings => self.drawings.toggle_visibility_all(),
             #[cfg(feature = "drawings")]
@@ -534,6 +548,64 @@ mod tests {
     use crate::scales::PriceScaleMode;
     use crate::widget::test_frames::chart;
     use egui::{Key, Modifiers, RawInput};
+
+    /// Line shortcuts place once at the pointer; a missing pointer only arms the tool.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn line_shortcuts_place_their_line_at_the_pointer() {
+        use crate::drawings::DrawingToolType::{
+            CrossLine, HorizontalLine, HorizontalRay, VerticalLine,
+        };
+        use crate::widget::test_frames::frame;
+        for (key, over_chart, tool) in [
+            (Key::H, true, HorizontalLine),
+            (Key::V, true, VerticalLine),
+            (Key::C, true, CrossLine),
+            (Key::J, true, HorizontalRay),
+            (Key::H, false, HorizontalLine),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let a = egui::pos2(map.idx_to_x(30), map.price_to_y(16.0));
+            frame(
+                &ctx,
+                &mut chart,
+                0.1,
+                vec![
+                    if over_chart {
+                        Event::PointerMoved(a)
+                    } else {
+                        Event::PointerGone
+                    },
+                    Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::ALT,
+                    },
+                ],
+            );
+            if over_chart && tool != HorizontalRay {
+                assert_eq!(chart.drawings().drawings.len(), 1, "{key:?}");
+                let drawing = &chart.drawings().drawings[0];
+                assert_eq!(drawing.tool_type, tool);
+                assert_eq!(drawing.chart_points[0].bar_idx, 30.0);
+                assert!((drawing.chart_points[0].price - 16.0).abs() < 1e-3);
+                assert_eq!(chart.drawings().active_tool, None);
+                assert!(chart.undo());
+                assert!(chart.drawings().drawings.is_empty());
+                assert!(!chart.can_undo());
+            } else {
+                assert!(chart.drawings().drawings.is_empty());
+                assert_eq!(chart.drawings().active_tool, Some(tool));
+                frame(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(a)]);
+                assert!(chart.drawings().drawings.is_empty());
+            }
+        }
+    }
 
     #[cfg(feature = "drawings")]
     #[test]

@@ -224,7 +224,19 @@ impl Chart {
                 x_to_bar_snapped(x)
             }
         };
+        // A measurement lasts until the next click on the chart.
+        if response.clicked() {
+            drawing_manager.measurement = None;
+        }
         let count_before = drawing_manager.drawings.len();
+        // A line shortcut places its line at the pointer, as a click there would.
+        if drawing_manager.place_at_pointer
+            && let Some(tool) = drawing_manager.active_tool
+            && let Some(pos) = response.hover_pos().filter(|pos| price_rect.contains(*pos))
+        {
+            drawing_manager.place_at_pointer = false;
+            drawing_manager.start_drawing_with_coords(tool, pos, x_to_bar_snapped, y_to_price);
+        }
         let owns_gesture = drawing_manager
             .curr_drawing
             .as_ref()
@@ -478,17 +490,113 @@ mod tests {
                         frame(&ctx, &mut chart, 0.5, vec![button(b, true)]);
                         frame(&ctx, &mut chart, 0.6, vec![button(b, false)]);
                     }
-                    let drawing = &chart.drawings().drawings[0];
+                    let drawing = if tool == Measure {
+                        assert!(chart.drawings().drawings.is_empty());
+                        assert!(chart.drawings().pending_sync.lock().unwrap().is_empty());
+                        assert!(!chart.undo());
+                        assert_eq!(chart.drawings().active_tool, None);
+                        chart.drawings().measurement.as_ref().unwrap()
+                    } else {
+                        &chart.drawings().drawings[0]
+                    };
                     assert_eq!(drawing.chart_points.len(), 2, "{tool:?}");
                     assert_eq!(drawing.chart_points[0].bar_idx, 30.0, "{tool:?}");
                     assert_eq!(drawing.chart_points[1].bar_idx, 50.0, "{tool:?}");
-                    assert!(chart.undo());
-                    assert!(chart.drawings().drawings.is_empty());
-                    assert!(chart.redo());
-                    assert_eq!(chart.drawings().drawings.len(), 1);
+                    if tool == Measure {
+                        // The anchors span 50 - 30 = 20 bars, including after completion.
+                        assert!(shapes(&ctx, &mut chart, 0.7, vec![]).iter().any(|shape| {
+                            matches!(shape, Shape::Text(text) if text.galley.text().contains("20 bars"))
+                        }));
+                        frame(
+                            &ctx,
+                            &mut chart,
+                            0.8,
+                            vec![button(b, true), button(b, false)],
+                        );
+                        assert!(chart.drawings().measurement.is_none());
+                    } else {
+                        assert!(chart.undo());
+                        assert!(chart.drawings().drawings.is_empty());
+                        assert!(chart.redo());
+                        assert_eq!(chart.drawings().drawings.len(), 1);
+                    }
                 }
                 assert!(chart.drawings().curr_drawing.is_none(), "{tool:?}");
             }
+        }
+    }
+
+    /// Shift-click on empty space uses the ruler without persisting it or bypassing availability.
+    #[test]
+    fn shift_click_on_empty_space_measures_until_the_next_click() {
+        use crate::drawings::ToolAvailability;
+        use egui::pos2;
+        for enabled in [true, false] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.drawings_mut().registry.set_availability(
+                DrawingToolType::Measure,
+                ToolAvailability {
+                    visible: enabled,
+                    enabled,
+                },
+            );
+            let map = chart.get_chart_mapping();
+            let a = pos2(map.idx_to_x(30), map.price_to_y(16.0));
+            let b = pos2(map.idx_to_x(50), map.price_to_y(14.0));
+            let button = |pos, pressed, modifiers| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            for (i, events) in [
+                vec![
+                    Event::ModifiersChanged(Modifiers::SHIFT),
+                    Event::PointerMoved(a),
+                ],
+                vec![button(a, true, Modifiers::SHIFT)],
+                vec![button(a, false, Modifiers::SHIFT)],
+                vec![
+                    Event::ModifiersChanged(Modifiers::NONE),
+                    Event::PointerMoved(b),
+                ],
+                vec![button(b, true, Modifiers::NONE)],
+                vec![button(b, false, Modifiers::NONE)],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                frame(&ctx, &mut chart, (i + 1) as f64 * 0.1, events);
+            }
+            assert!(chart.drawings().drawings.is_empty());
+            assert!(chart.drawings().curr_drawing.is_none());
+            assert_eq!(chart.drawings().active_tool, None);
+            if enabled {
+                assert_eq!(
+                    chart
+                        .drawings()
+                        .measurement
+                        .as_ref()
+                        .unwrap()
+                        .chart_points
+                        .iter()
+                        .map(|p| p.bar_idx)
+                        .collect::<Vec<_>>(),
+                    [30.0, 50.0]
+                );
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.7,
+                    vec![
+                        button(b, true, Modifiers::NONE),
+                        button(b, false, Modifiers::NONE),
+                    ],
+                );
+            }
+            assert!(chart.drawings().measurement.is_none());
         }
     }
 

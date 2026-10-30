@@ -278,6 +278,12 @@ impl DrawingManager {
             }
         }
 
+        if let Some(drawing) = &self.measurement
+            && self.owns_pane(drawing)
+        {
+            self.render_drawing(drawing, painter, price_rect, view);
+        }
+
         // Render handles for every visible selected drawing.
         for drawing in self.drawings.iter().filter(|d| {
             d.selectable

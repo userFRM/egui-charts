@@ -738,10 +738,10 @@ mod tests {
                 }
             }
         }
-        // Periods 10 and 20 give 10 and 5 dashes; dots include centres on the clip edge.
+        // Periods 10 and 20 give 11 and 6 dashes including the border stroke; dots include edge centres.
         assert_eq!(
             counts,
-            [10, 5, 26, 13],
+            [11, 6, 26, 13],
             "shape counts must follow the visible length"
         );
     }

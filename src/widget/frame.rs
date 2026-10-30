@@ -2100,6 +2100,25 @@ impl Chart {
             )));
         }
         let mut pending_values = Vec::new();
+        #[cfg(feature = "drawings")]
+        for drawing in self.drawings.drawings.iter().filter(|drawing| {
+            drawing.is_visible_on_timeframe(&self.drawings.curr_timeframe)
+                && (drawing.pane.is_none()
+                    || self
+                        .study_ids
+                        .iter()
+                        .zip(self.rendered_studies().indicators())
+                        .any(|(id, study)| drawing.pane == Some(id.0) && study.is_overlay()))
+        }) {
+            pending_values.extend(
+                drawing
+                    .position_price_tags(ui.active_theme().chart.axis_text_secondary)
+                    .into_iter()
+                    .map(|(price, fill)| {
+                        (price, (rendering::axes::tag_text_color(fill), fill), false)
+                    }),
+            );
+        }
         for (_, line) in self.price_lines.iter().filter(|_| self.main_series_visible) {
             rendering::render_price_line(
                 &painter,
