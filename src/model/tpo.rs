@@ -46,15 +46,16 @@ pub struct TPOProfile {
     /// Row height the profile's prices are keyed on: the configured tick size,
     /// widened to a whole number of ticks when the bars span more than 1,000
     /// ticks, or the span divided into 1,000 rows without a usable tick size.
-    /// Pass it to the methods that take a `tick_size`.
     pub tick_size: f64,
     /// All TPO letters in this profile
     pub letters: Vec<TPOLetter>,
     /// TPO count at each price level
     pub price_tpo_count: HashMap<i64, usize>,
-    /// Point of Control - price with most TPOs
+    /// Point of control: the price of the row with the most TPOs. A tie takes the lower price.
     pub poc_price: f64,
-    /// Upper boundary of the configured TPO-count value area.
+    /// Upper boundary of the configured TPO-count value area. The area grows from the point of
+    /// control toward whichever of the next two rows above or the next two rows below holds more
+    /// TPOs; equal counts add one row on each side.
     pub value_area_high: f64,
     /// Lower boundary of the configured TPO-count value area.
     pub value_area_low: f64,
@@ -68,7 +69,7 @@ pub struct TPOProfile {
     pub profile_low: f64,
     /// Opening price
     pub opening_price: f64,
-    /// Single prints (price levels with only 1 TPO)
+    /// Single prints: the prices of the rows with exactly one TPO, in ascending order
     pub single_prints: Vec<f64>,
     /// Poor highs (multiple TPOs at high)
     pub has_poor_high: bool,
@@ -196,17 +197,17 @@ impl TPOProfile {
     }
 
     /// Get the TPO count at a specific price level
-    pub fn tpo_count_at(&self, price: f64, tick_size: f64) -> usize {
-        let price_key = price_to_key(price, tick_size);
+    pub fn tpo_count_at(&self, price: f64) -> usize {
+        let price_key = price_to_key(price, self.tick_size);
         *self.price_tpo_count.get(&price_key).unwrap_or(&0)
     }
 
     /// Get all unique price levels with TPOs
-    pub fn price_levels(&self, tick_size: f64) -> Vec<f64> {
+    pub fn price_levels(&self) -> Vec<f64> {
         let mut levels: Vec<f64> = self
             .price_tpo_count
             .keys()
-            .map(|&k| key_to_price(k, tick_size))
+            .map(|&k| key_to_price(k, self.tick_size))
             .collect();
         levels.sort_by(|a, b| b.total_cmp(a));
         levels
@@ -239,11 +240,11 @@ impl TPOProfile {
     }
 
     /// Get the letters at a specific price level
-    pub fn letters_at(&self, price: f64, tick_size: f64) -> Vec<&TPOLetter> {
-        let price_key = price_to_key(price, tick_size);
+    pub fn letters_at(&self, price: f64) -> Vec<&TPOLetter> {
+        let price_key = price_to_key(price, self.tick_size);
         self.letters
             .iter()
-            .filter(|l| price_to_key(l.price, tick_size) == price_key)
+            .filter(|l| price_to_key(l.price, self.tick_size) == price_key)
             .collect()
     }
 }
@@ -422,9 +423,13 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
             current_profile = Some(TPOProfile::new(bar.time, tick_size));
             current_session_start = Some(bar.time);
 
-            // Set opening price
+            // The opening price, and the initial balance from the session's first bar
             if let Some(ref mut profile) = current_profile {
                 profile.opening_price = bar.open;
+                if config.initial_balance_minutes > 0 {
+                    profile.initial_balance_high = bar.high;
+                    profile.initial_balance_low = bar.low;
+                }
             }
         }
 
@@ -444,14 +449,11 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
             // Update initial balance (first N minutes)
             if let Some(session_start) = current_session_start {
                 let elapsed = (bar.time - session_start).num_minutes();
-                if elapsed < config.initial_balance_minutes as i64 {
-                    if profile.initial_balance_high == 0.0 {
-                        profile.initial_balance_high = bar.high;
-                        profile.initial_balance_low = bar.low;
-                    } else {
-                        profile.initial_balance_high = profile.initial_balance_high.max(bar.high);
-                        profile.initial_balance_low = profile.initial_balance_low.min(bar.low);
-                    }
+                if config.initial_balance_minutes > 0
+                    && elapsed < config.initial_balance_minutes as i64
+                {
+                    profile.initial_balance_high = profile.initial_balance_high.max(bar.high);
+                    profile.initial_balance_low = profile.initial_balance_low.min(bar.low);
                 }
             }
         }
@@ -528,11 +530,11 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
         return;
     }
 
-    // Find POC (price with most TPOs)
+    // Find POC (price with most TPOs); a tie takes the lower price
     let (poc_key, _) = profile
         .price_tpo_count
         .iter()
-        .max_by_key(|(_, count)| *count)
+        .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
         .unwrap();
     profile.poc_price = key_to_price(*poc_key, profile.tick_size);
 
@@ -545,7 +547,8 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
     // POC, then repeatedly extend the contiguous range one row at a time,
     // always toward whichever adjacent side (the two rows immediately above
     // the current high, or the two rows immediately below the current low)
-    // holds more TPOs. Counts are accumulated until the running total reaches
+    // holds more TPOs; equal sums add one row on each side, as volume profiles
+    // do. Counts are accumulated until the running total reaches
     // `value_area_pct` of all TPOs. The result is guaranteed contiguous and
     // centered on the POC, the usual market-profile convention.
     let target_tpos = (total_tpos as f64 * config.value_area_pct).ceil() as usize;
@@ -575,9 +578,16 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
             0
         };
 
-        // Prefer the heavier side; when only one side remains, take it.
+        // Prefer the heavier side; equal sums add one row on each side, as volume profiles do;
+        // when only one side remains, take it.
         let go_up = match (up_avail, down_avail) {
-            (true, true) => up_pair >= down_pair,
+            (true, true) if up_pair == down_pair => {
+                va_low_key -= 1;
+                va_high_key += 1;
+                accumulated_tpos += count_at(va_low_key) + count_at(va_high_key);
+                continue;
+            }
+            (true, true) => up_pair > down_pair,
             (true, false) => true,
             (false, true) => false,
             (false, false) => break,
@@ -610,6 +620,7 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
         .filter(|(_, count)| **count == 1)
         .map(|(&key, _)| key_to_price(key, profile.tick_size))
         .collect();
+    profile.single_prints.sort_by(f64::total_cmp);
 
     // Check for poor high/low (multiple TPOs at extreme)
     let high_key = price_to_key(profile.profile_high, profile.tick_size);
@@ -639,8 +650,8 @@ pub enum ProfileShape {
 
 impl TPOProfile {
     /// Classify the profile shape
-    pub fn classify_shape(&self, tick_size: f64) -> ProfileShape {
-        let levels = self.price_levels(tick_size);
+    pub fn classify_shape(&self) -> ProfileShape {
+        let levels = self.price_levels();
         if levels.len() < 3 {
             return ProfileShape::Normal;
         }
@@ -649,14 +660,8 @@ impl TPOProfile {
         let upper_third = &levels[..levels.len() / 3];
         let lower_third = &levels[levels.len() * 2 / 3..];
 
-        let upper_tpos: usize = upper_third
-            .iter()
-            .map(|p| self.tpo_count_at(*p, tick_size))
-            .sum();
-        let lower_tpos: usize = lower_third
-            .iter()
-            .map(|p| self.tpo_count_at(*p, tick_size))
-            .sum();
+        let upper_tpos: usize = upper_third.iter().map(|p| self.tpo_count_at(*p)).sum();
+        let lower_tpos: usize = lower_third.iter().map(|p| self.tpo_count_at(*p)).sum();
 
         let upper_pct = upper_tpos as f64 / total_tpos as f64;
         let lower_pct = lower_tpos as f64 / total_tpos as f64;
@@ -681,68 +686,46 @@ mod tests {
     use crate::model::Timeframe;
     use chrono::{Duration, TimeZone};
 
-    fn create_test_bars() -> Vec<Bar> {
-        let start = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
-        vec![
-            Bar {
-                time: start,
-                open: 100.0,
-                high: 102.0,
-                low: 99.0,
-                close: 101.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: start + Duration::minutes(30),
-                open: 101.0,
-                high: 103.0,
-                low: 100.0,
-                close: 102.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: start + Duration::minutes(60),
-                open: 102.0,
-                high: 104.0,
-                low: 101.0,
-                close: 103.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: start + Duration::minutes(90),
-                open: 103.0,
-                high: 104.0,
-                low: 102.0,
-                close: 103.5,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-        ]
-    }
-
     #[test]
-    fn test_tpo_initial_balance() {
-        let bars = create_test_bars();
+    fn initial_balance_spans_its_bars_whatever_their_sign() {
+        // (minutes between bars, bars as (high, low), initial balance as (high, low)), tick 0.25
+        // and the default 60-minute balance from 14:30 UTC
+        type Case<'a> = (i64, &'a [(f64, f64)], (f64, f64));
+        let cases: [Case; 3] = [
+            // The first bar's high is zero
+            (30, &[(0.0, -1.0), (-0.25, -0.5)], (0.0, -1.0)),
+            // The running high reaches zero at the second bar
+            (1, &[(-1.0, -2.0), (0.0, -1.5), (-0.5, -0.75)], (0.0, -2.0)),
+            // Only the bars of the first hour count: not those at 60 and 90 minutes
+            (
+                30,
+                &[
+                    (102.0, 99.0),
+                    (103.0, 100.0),
+                    (104.0, 101.0),
+                    (104.0, 102.0),
+                ],
+                (103.0, 99.0),
+            ),
+        ];
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap();
         let config = TPOConfig {
-            tick_size: 1.0,
-            initial_balance_minutes: 60,
+            tick_size: 0.25,
             ..Default::default()
         };
-        let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min1.into());
-
-        let profile = &profiles[0];
-
-        // Initial balance should be set from first 60 minutes
-        assert!(profile.initial_balance_high > 0.0);
-        assert!(profile.initial_balance_low > 0.0);
-        assert!(profile.initial_balance_high >= profile.initial_balance_low);
+        for (spacing, bars, expected) in cases {
+            let bars: Vec<_> = bars
+                .iter()
+                .enumerate()
+                .map(|(i, &(high, low))| bar_at(start, spacing * i as i64, low, high, low, high))
+                .collect();
+            let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min1.into())[0];
+            assert_eq!(
+                (profile.initial_balance_high, profile.initial_balance_low),
+                expected,
+                "{bars:?}"
+            );
+        }
     }
 
     /// Build a single bar at a chosen offset from a fixed session start.
@@ -946,7 +929,7 @@ mod tests {
                 .map(|profile| {
                     let open = (profile.session_date - start).num_minutes();
                     let letters: String = profile.letters.iter().map(|l| l.letter).collect();
-                    assert_eq!(profile.tpo_count_at(100.0, 1.0), letters.len(), "{case}");
+                    assert_eq!(profile.tpo_count_at(100.0), letters.len(), "{case}");
                     (open, letters)
                 })
                 .collect();
@@ -995,16 +978,63 @@ mod tests {
             ..Default::default()
         };
         let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min1.into())[0];
-
-        // Independently find the heaviest level and confirm POC matches it.
-        let heaviest = profile
-            .price_tpo_count
-            .iter()
-            .max_by_key(|(_, c)| **c)
-            .map(|(&k, _)| key_to_price(k, 1.0))
-            .unwrap();
-        assert_eq!(profile.poc_price, heaviest);
         assert_eq!(profile.poc_price, 102.0);
+    }
+
+    #[test]
+    fn ties_give_one_point_of_control_and_value_area_on_every_build() {
+        // (case, half-hour periods from 14:30 UTC as (low, high), (POC, VAL, VAH), single prints)
+        type Case<'a> = (&'a str, Vec<(f64, f64)>, (f64, f64, f64), Vec<f64>);
+        let cases: [Case; 2] = [
+            // A spans 100 to 109, B to D print 100 and E to G 109. Rows 100 and 109 hold 4 TPOs
+            // and 101 to 108 one each, 16 in all, so the 70% value area needs 12. The tie takes
+            // 100, from which the area can only grow upward, one TPO per row, reaching 12 at 108.
+            (
+                "tied point of control",
+                [(100.0, 109.0)]
+                    .into_iter()
+                    .chain([(100.0, 100.0); 3])
+                    .chain([(109.0, 109.0); 3])
+                    .collect(),
+                (100.0, 100.0, 108.0),
+                (101..=108).map(f64::from).collect(),
+            ),
+            // A spans 100 to 104, B and C print 102: rows of 1, 1, 3, 1 and 1 TPOs, 7 in all, so
+            // the value area needs 5. From 102 the two rows above and the two below hold 2 each,
+            // so it adds 101 and 103 and stops at 5.
+            (
+                "tied value area expansion",
+                vec![(100.0, 104.0), (102.0, 102.0), (102.0, 102.0)],
+                (102.0, 101.0, 103.0),
+                vec![100.0, 101.0, 103.0, 104.0],
+            ),
+        ];
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap();
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        for (case, periods, levels, single_prints) in cases {
+            let bars: Vec<_> = periods
+                .iter()
+                .enumerate()
+                .map(|(i, &(low, high))| bar_at(start, 30 * i as i64, low, high, low, high))
+                .collect();
+            // Each build hashes its rows with a new seed, so an unbroken tie varies between builds.
+            for _ in 0..64 {
+                let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min30.into())[0];
+                assert_eq!(
+                    (
+                        profile.poc_price,
+                        profile.value_area_low,
+                        profile.value_area_high
+                    ),
+                    levels,
+                    "{case}"
+                );
+                assert_eq!(profile.single_prints, single_prints, "{case}");
+            }
+        }
     }
 
     #[test]
