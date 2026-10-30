@@ -62,11 +62,7 @@ impl Drawing {
             );
 
             // Draw line with extend support
-            painter.hline(
-                x_start..=x_end,
-                y,
-                Stroke::new(self.stroke_width, lvl_color),
-            );
+            painter.hline(x_start..=x_end, y, Stroke::new(stroke::HAIRLINE, lvl_color));
 
             if (!level.show_price && level.label.is_empty())
                 || label_ys
@@ -154,11 +150,7 @@ impl Drawing {
             // Only draw if within chart rect
             if y >= chart_rect.min.y && y <= chart_rect.max.y {
                 // Draw line with extend support
-                painter.hline(
-                    x_start..=x_end,
-                    y,
-                    Stroke::new(self.stroke_width, lvl_color),
-                );
+                painter.hline(x_start..=x_end, y, Stroke::new(stroke::HAIRLINE, lvl_color));
 
                 if (!level.show_price && level.label.is_empty())
                     || label_ys
@@ -225,7 +217,7 @@ impl Drawing {
                 let point = speed_arc_point(start, end, radius, angle);
 
                 if let Some(prev) = prev_point {
-                    painter.line_segment([prev, point], Stroke::new(self.stroke_width, color));
+                    painter.line_segment([prev, point], Stroke::new(stroke::HAIRLINE, color));
                 }
                 prev_point = Some(point);
             }
@@ -267,7 +259,11 @@ impl Drawing {
             zone_positions.push(curr_x);
 
             // Determine line style based on position
-            let alpha = if fib_num <= 2 { 255 } else { 180 };
+            let (stroke_width, alpha) = if fib_num <= 2 {
+                (self.stroke_width, 255) // First few zones are prominent
+            } else {
+                (stroke::HAIRLINE, 180)
+            };
 
             let line_color =
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], alpha);
@@ -276,7 +272,7 @@ impl Drawing {
             painter.vline(
                 curr_x,
                 chart_rect.y_range(),
-                Stroke::new(self.stroke_width, line_color),
+                Stroke::new(stroke_width, line_color),
             );
 
             // Draw label with background at top
@@ -349,7 +345,7 @@ impl Drawing {
         );
 
         // Draw filled zones between levels
-        if (config.show_background || self.fill_color.is_some()) && visible_levels.len() > 1 {
+        if config.show_background && visible_levels.len() > 1 {
             for i in 0..visible_levels.len() - 1 {
                 let level1 = visible_levels[i];
                 let [p1_l1, p2_l1] = lines[i];
@@ -381,10 +377,12 @@ impl Drawing {
                 level.color[3],
             );
 
-            painter.line_segment(
-                [draw_start, draw_end],
-                Stroke::new(self.stroke_width, lvl_color),
-            );
+            let stroke_width = if level.value == 0.0 || level.value == 1.0 {
+                self.stroke_width
+            } else {
+                stroke::HAIRLINE
+            };
+            painter.line_segment([draw_start, draw_end], Stroke::new(stroke_width, lvl_color));
 
             // Draw level label with background
             let label_bg = DESIGN_TOKENS
@@ -448,7 +446,7 @@ impl Drawing {
 
         for &ratio in &fib_ratios {
             let radius = base_radius * ratio;
-            painter.circle_stroke(center, radius, Stroke::new(self.stroke_width, color));
+            painter.circle_stroke(center, radius, Stroke::new(stroke::HAIRLINE, color));
 
             // Label
             painter.text(
@@ -513,9 +511,14 @@ impl Drawing {
             let fan_end_y = fan_end.y;
 
             let line_color = level_colors[i];
+            let stroke_width = if *ratio == 0.5 {
+                stroke::MEDIUM
+            } else {
+                stroke::HAIRLINE
+            };
 
             // Draw the fan line
-            painter.line_segment([start, fan_end], Stroke::new(self.stroke_width, line_color));
+            painter.line_segment([start, fan_end], Stroke::new(stroke_width, line_color));
 
             // Draw label with background, inside the edge the line runs to
             let label_x = if fan_end.x < start.x {
@@ -578,8 +581,8 @@ impl Drawing {
             );
         }
 
-        // Draw the main trend line
-        painter.line_segment([start, end], Stroke::new(self.stroke_width, color));
+        // Draw the main trend line (thicker)
+        painter.line_segment([start, end], Stroke::new(self.stroke_width + 0.5, color));
 
         // Draw anchor points
         painter.circle_filled(start, DESIGN_TOKENS.rounding.lg, color);
@@ -617,7 +620,7 @@ impl Drawing {
             .collect();
         painter.add(egui::Shape::line(
             points,
-            Stroke::new(self.stroke_width, color),
+            Stroke::new(stroke::HAIRLINE, color),
         ));
     }
 
@@ -683,7 +686,7 @@ impl Drawing {
             painter.vline(
                 x,
                 chart_rect.y_range(),
-                Stroke::new(self.stroke_width, color),
+                Stroke::new(stroke::HAIRLINE, color),
             );
             let galley = painter.layout_no_wrap(
                 format!("{:.1}%", ratio * 100.0),

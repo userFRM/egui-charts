@@ -98,7 +98,7 @@ impl Drawing {
         // Projected bars as OHLC bars: open tick left, close tick right
         let bar_color =
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 150);
-        let bar_stroke = Stroke::new(self.stroke_width, bar_color);
+        let bar_stroke = Stroke::new(stroke::MEDIUM, bar_color);
         let tick = ((view.bar_to_x)(1.0) - (view.bar_to_x)(0.0)).abs() * 0.3;
         for (i, bar) in projected.iter().enumerate() {
             let x = (view.bar_to_x)(start + i as f32);

@@ -72,7 +72,7 @@ impl Drawing {
                 base_color.b(),
                 150,
             );
-            let line_stroke = Stroke::new(self.stroke_width, line_color);
+            let line_stroke = Stroke::new(stroke::MEDIUM, line_color);
 
             // Vertical line (from top to bottom)
             painter.line_segment(
@@ -211,12 +211,12 @@ impl Drawing {
         painter.hline(
             chart_rect.x_range(),
             p1.y,
-            Stroke::new(self.stroke_width, color),
+            Stroke::new(stroke::HAIRLINE, color),
         );
         painter.hline(
             chart_rect.x_range(),
             p2.y,
-            Stroke::new(self.stroke_width, color),
+            Stroke::new(stroke::HAIRLINE, color),
         );
 
         // Vertical connector
@@ -224,7 +224,7 @@ impl Drawing {
         painter.vline(
             mid_x,
             p1.y.min(p2.y)..=p1.y.max(p2.y),
-            Stroke::new(self.stroke_width, color),
+            Stroke::new(stroke::HAIRLINE, color),
         );
 
         let info = self
@@ -278,12 +278,12 @@ impl Drawing {
         painter.vline(
             p1.x,
             chart_rect.y_range(),
-            Stroke::new(self.stroke_width, color),
+            Stroke::new(stroke::HAIRLINE, color),
         );
         painter.vline(
             p2.x,
             chart_rect.y_range(),
-            Stroke::new(self.stroke_width, color),
+            Stroke::new(stroke::HAIRLINE, color),
         );
 
         // Horizontal connector
@@ -291,7 +291,7 @@ impl Drawing {
         painter.hline(
             p1.x.min(p2.x)..=p1.x.max(p2.x),
             mid_y,
-            Stroke::new(self.stroke_width, color),
+            Stroke::new(stroke::HAIRLINE, color),
         );
 
         let info = self
@@ -342,7 +342,7 @@ impl Drawing {
         painter.rect_stroke(
             rect,
             0.0,
-            Stroke::new(self.stroke_width, color),
+            Stroke::new(stroke::HAIRLINE, color),
             StrokeKind::Outside,
         );
 
