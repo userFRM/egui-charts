@@ -439,7 +439,7 @@ pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
 pub(crate) use legend::{SeriesAction, study_controls};
 
 /// Formats text at weight 600 when the face has a weight axis.
-fn semibold(font: FontId, color: Color32) -> egui::text::TextFormat {
+pub(super) fn semibold(font: FontId, color: Color32) -> egui::text::TextFormat {
     let mut format = egui::text::TextFormat::simple(font, color);
     format.coords.push("wght", 600.0);
     format
