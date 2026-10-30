@@ -1,6 +1,7 @@
 //! The account panel: the connected account's summary, positions, working orders, order and
 //! balance history and trading journal, shown at the bottom of the terminal.
 
+mod history;
 mod view;
 
 use std::collections::{HashMap, HashSet};
@@ -8,12 +9,14 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Utc};
 use egui::Color32;
 
+use history::Paging;
+
 use super::Trading;
 use crate::model::{
     BalanceChange, Execution, JournalEntry, Order, OrderId, OrderRequest, OrderStatus, OrderType,
     Position,
 };
-use crate::services::AccountEvent;
+use crate::services::{AccountEvent, HistoryKind};
 
 const TAB_HEIGHT: f32 = 34.0;
 const HEADER_HEIGHT: f32 = 52.0;
@@ -28,6 +31,8 @@ pub(super) const HISTORY_LIMIT: usize = 1_000;
 pub(super) struct Fills {
     pub(super) orders: HashMap<OrderId, OrderRequest>,
     pub(super) executions: Vec<Execution>,
+    /// How many executions at the front came from pages that the stream has not repeated.
+    paged: usize,
     working: HashSet<OrderId>,
     filled: HashMap<OrderId, f64>,
     /// Latest fill for each symbol, independent of execution-history eviction.
@@ -54,14 +59,16 @@ impl Fills {
     }
 
     pub(super) fn execution(&mut self, fill: &Execution) {
-        *self.filled.entry(fill.order.clone()).or_default() += fill.quantity;
+        let (repeated, dropped) = push_live(&mut self.executions, &mut self.paged, fill);
+        // A fill that a page brought first was counted then.
+        if !repeated {
+            *self.filled.entry(fill.order.clone()).or_default() += fill.quantity;
+        }
         if let Some(order) = self.orders.get(&fill.order) {
             let symbol = order.symbol.clone();
             self.remember(&symbol, fill);
         }
-        self.executions.push(fill.clone());
-        if self.executions.len() > HISTORY_LIMIT {
-            let old = self.executions.remove(0);
+        if let Some(old) = dropped {
             self.forget(&old.order);
         }
     }
@@ -90,6 +97,30 @@ impl Fills {
     pub(super) fn filled_quantity(&self, id: &OrderId) -> f64 {
         self.filled.get(id).copied().unwrap_or_default()
     }
+}
+
+/// Appends `entry` from the stream to `list`, whose first `paged` entries came from pages, in
+/// place of the equal page entry when a page brought it first, then drops the oldest entry
+/// beyond [`HISTORY_LIMIT`]. Returns whether `entry` repeated a page entry, and the entry
+/// dropped.
+fn push_live<T: PartialEq + Clone>(
+    list: &mut Vec<T>,
+    paged: &mut usize,
+    entry: &T,
+) -> (bool, Option<T>) {
+    let repeated = list[..*paged].iter().position(|listed| listed == entry);
+    if let Some(at) = repeated {
+        list.remove(at);
+        *paged -= 1;
+    }
+    list.push(entry.clone());
+    let dropped = if list.len() > HISTORY_LIMIT {
+        *paged = paged.saturating_sub(1);
+        Some(list.remove(0))
+    } else {
+        None
+    };
+    (repeated.is_some(), dropped)
 }
 
 /// What the user asked for in the [`AccountPanel`] that the host carries out. Cancelling or
@@ -123,13 +154,18 @@ pub enum AccountPanelAction {
 ///
 /// A tab named after the broker sits above the account selectors and the account's summary:
 /// balance, equity, realised and unrealised profit and loss, margin, available funds and the
-/// margin of working orders, each shown when the broker reports it. Below are the positions,
-/// working orders, finished orders, balance changes and trading journal the broker pushes, each
-/// with a column chooser and an export. Order History also lists individual executions. A
-/// position offers close, and an order offers edit and cancel on hover; each waits for the
-/// user's confirmation like the chart's lines. Clicking
-/// a symbol asks the host to show it. Each history keeps the most recent 1,000 entries in
-/// arrival order; active orders are retained independently. Older history remains host-owned.
+/// margin of working orders, each shown when the broker reports it. The tab marks a broker that
+/// reports that it is connecting or disconnected, until it reports that it is live. Below are the
+/// positions, working orders, finished orders, balance changes and trading journal the broker
+/// pushes, each with a column chooser and an export. Order History also lists individual
+/// executions. A position offers close, and an order offers edit and cancel on hover; each waits
+/// for the user's confirmation like the chart's lines. Clicking
+/// a symbol asks the host to show it. Each history keeps the most recent 1,000 entries; active
+/// orders are retained independently. Scrolling to the end of a history asks
+/// [`Broker::history`](crate::services::Broker::history) for the entries before its oldest
+/// one, a page at a time, until the broker has nothing older or the history lists 1,000
+/// entries. Each entry is listed once, whether a page or the broker's stream brings it first,
+/// and pages change no working order or position.
 #[derive(Default)]
 pub struct AccountPanel {
     /// The broker's name, shown on the tab and in the account selector.
@@ -145,7 +181,13 @@ pub struct AccountPanel {
     pub(super) fills: Fills,
     show_executions: bool,
     balance: Vec<BalanceChange>,
+    /// How many balance changes at the front came from pages that the stream has not repeated.
+    balance_paged: usize,
     journal: Vec<JournalEntry>,
+    /// The same for `journal`.
+    journal_paged: usize,
+    /// Paging through the broker's older history, by kind, since the stream started.
+    paging: HashMap<HistoryKind, Paging>,
     /// The order whose edit dialog is open, and its changed request.
     pub(super) editing: Option<(Order, OrderRequest)>,
 }
@@ -178,6 +220,17 @@ impl Tab {
             Tab::Balance => "Balance History",
             Tab::Journal => "Trading Journal",
             Tab::Executions => "Executions",
+        }
+    }
+
+    /// The broker history this tab lists and pages through.
+    fn history(self) -> Option<HistoryKind> {
+        match self {
+            Tab::History => Some(HistoryKind::Orders),
+            Tab::Executions => Some(HistoryKind::Executions),
+            Tab::Balance => Some(HistoryKind::Balance),
+            Tab::Journal => Some(HistoryKind::Journal),
+            Tab::Positions | Tab::Orders => None,
         }
     }
 
@@ -370,15 +423,13 @@ impl AccountPanel {
                 }
             }
             AccountEvent::Execution(fill) => self.fills.execution(fill),
-            AccountEvent::Balance(change) => self.balance.push(change.clone()),
-            AccountEvent::Journal(entry) => self.journal.push(entry.clone()),
+            AccountEvent::Balance(change) => {
+                push_live(&mut self.balance, &mut self.balance_paged, change);
+            }
+            AccountEvent::Journal(entry) => {
+                push_live(&mut self.journal, &mut self.journal_paged, entry);
+            }
             _ => {}
-        }
-        if self.balance.len() > HISTORY_LIMIT {
-            self.balance.remove(0);
-        }
-        if self.journal.len() > HISTORY_LIMIT {
-            self.journal.remove(0);
         }
     }
 
@@ -387,7 +438,10 @@ impl AccountPanel {
         self.history.clear();
         self.fills = Fills::default();
         self.balance.clear();
+        self.balance_paged = 0;
         self.journal.clear();
+        self.journal_paged = 0;
+        self.paging.clear();
         self.editing = None;
     }
 }

@@ -144,7 +144,20 @@ impl Drawing {
                 *color = configured;
             }
         };
-        let dash = if custom_fork || self.tool_type == DrawingToolType::RegressionTrend {
+        let dash = if custom_fork
+            || matches!(
+                self.tool_type,
+                DrawingToolType::RegressionTrend
+                    | DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciExtension
+                    | DrawingToolType::FibonacciChannel
+                    | DrawingToolType::FibonacciTimeZones
+                    | DrawingToolType::TrendBasedFibTime
+                    | DrawingToolType::FibonacciSpeedFan
+                    | DrawingToolType::FibonacciCircles
+                    | DrawingToolType::FibonacciSpeedResistanceArcs
+                    | DrawingToolType::FibonacciWedge
+            ) {
             None
         } else {
             self.line_style.dash_pattern()
@@ -223,8 +236,6 @@ impl Drawing {
             && !stroke.is_empty()
         {
             let mut shapes = clip.map_or_else(Vec::new, |clip| {
-                // Widened by the stroke so an edge just outside the clip keeps its visible half.
-                let clip = clip.expand(stroke.width);
                 crate::painting::dashed_line::dashed_polyline_shapes(&path, stroke, dash, gap, clip)
             });
             if !matches!(shape, Shape::LineSegment { .. }) {
@@ -391,6 +402,7 @@ mod tests {
                     ui.painter(),
                     pane,
                     &crate::drawings::rendering::ChartView {
+                        price_formatter: None,
                         instrument: None,
                         bars: &[],
                         revision: 0,
@@ -791,6 +803,7 @@ mod tests {
             };
             let output = ctx.run_ui(input, |ui| {
                 let view = ChartView {
+                    price_formatter: None,
                     instrument: None,
                     bars: &[],
                     revision: 0,

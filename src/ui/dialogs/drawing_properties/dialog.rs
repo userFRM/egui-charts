@@ -242,6 +242,8 @@ impl DrawingPropertiesDialog {
                 drawing.ghost_feed = old.ghost_feed;
                 drawing.position_size = old.position_size;
                 drawing.position_sizing = old.position_sizing;
+                drawing.position_target_color = old.position_target_color;
+                drawing.position_stop_color = old.position_stop_color;
                 drawing.volume_profile = old.volume_profile;
                 drawing.regression_trend = old.regression_trend;
                 drawing.channel_midline = old.channel_midline;
@@ -306,10 +308,7 @@ impl DrawingPropertiesDialog {
         d.extend_right = self.props.extend_right;
         d.text = (!self.props.label.is_empty()).then(|| self.props.label.clone());
         d.font_size = self.props.font_size;
-        d.timeframe_visibility = crate::drawings::TimeframeVisibility {
-            show_on_all: self.props.visible_all_timeframes,
-            visible_timeframes: self.props.visible_timeframes.iter().cloned().collect(),
-        };
+        d.timeframe_visibility = self.props.timeframe_visibility.clone();
         Some(template)
     }
 
@@ -330,13 +329,7 @@ impl DrawingPropertiesDialog {
         self.props.extend_right = d.extend_right;
         self.props.label = d.text.clone().unwrap_or_default();
         self.props.font_size = d.font_size;
-        self.props.visible_all_timeframes = d.timeframe_visibility.show_on_all;
-        self.props.visible_timeframes = d
-            .timeframe_visibility
-            .visible_timeframes
-            .iter()
-            .cloned()
-            .collect();
+        self.props.timeframe_visibility = d.timeframe_visibility.clone();
         self.props.tool_settings = Some(Box::new(template));
     }
 
@@ -450,6 +443,11 @@ impl DrawingPropertiesDialog {
                     .tool_settings
                     .as_ref()
                     .is_some_and(|t| t.settings.tool_type.supports_text()),
+                PropertiesTab::Coordinates => self
+                    .props
+                    .tool_settings
+                    .as_ref()
+                    .is_none_or(|t| CoordinatesTab::available(t.settings.tool_type)),
                 _ => true,
             })
             .collect();
@@ -477,7 +475,13 @@ impl DrawingPropertiesDialog {
                     let color = self.props.color.to_srgba_unmultiplied();
                     if let Some(template) = &mut self.props.tool_settings {
                         template.settings.color = color;
-                        InputsTab::show(ui, &mut template.settings, &mut state.level_pickers);
+                        InputsTab::show(
+                            ui,
+                            &mut template.settings,
+                            &mut state.level_pickers,
+                            &mut self.coordinates,
+                            self.props.tick_size,
+                        );
                     }
                 }
                 PropertiesTab::Coordinates => CoordinatesTab::show(ui, &mut self.coordinates),
@@ -529,7 +533,7 @@ impl DrawingPropertiesDialog {
         let action = match self.drawing_id {
             Some(id) if apply => {
                 self.props.coordinates = self.coordinates.clone();
-                DrawingPropertiesAction::Apply(id, self.props.clone())
+                DrawingPropertiesAction::Apply(id, Box::new(self.props.clone()))
             }
             _ if cancel => DrawingPropertiesAction::Cancel,
             _ => DrawingPropertiesAction::None,
@@ -642,14 +646,23 @@ mod tests {
                 (Tool::TextLabel, true, false, true),
                 (Tool::Highlighter, false, false, false),
             ] {
-                chart.drawings_mut().drawings = vec![Drawing::new(7, tool)];
+                let mut drawing = Drawing::new(7, tool);
+                drawing.chart_points = vec![ChartPoint::new(1.0, 100.0); 3];
+                chart.drawings_mut().drawings = vec![drawing];
                 dialog.open_for_chart(&chart, DrawingId(7));
+                let freehand = matches!(tool, Tool::Brush | Tool::Highlighter);
+                assert_eq!(
+                    dialog.coordinates.points.len(),
+                    if freehand { 0 } else { 3 },
+                    "{tool:?}: staged anchors"
+                );
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
                 let labels = frame(&mut dialog, &mut chart, &ctx, vec![]);
                 for (label, present) in [
                     ("Fill", fill),
                     ("Extend", extend),
                     ("Text", text),
+                    ("Coordinates", !freehand),
                     ("Template", true),
                     ("Ok", true),
                     ("Delete", false),
@@ -665,6 +678,29 @@ mod tests {
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
             }
         }
+    }
+
+    /// The Visibility tab writes only the unit row the user edits, so labels saved before
+    /// interval ranges keep their exact visibility.
+    #[test]
+    fn visibility_rows_keep_saved_interval_labels_until_edited() {
+        use crate::drawings::TimeframeVisibility;
+        use crate::model::TimeframeUnit;
+        let ctx = Context::default();
+        let mut chart = Chart::new(BarData::new());
+        let mut drawing = Drawing::new(7, Tool::TrendLine);
+        drawing.timeframe_visibility = TimeframeVisibility::specific(&["1h", "4h"]);
+        chart.drawings_mut().drawings = vec![drawing];
+        let mut dialog = DrawingPropertiesDialog::new();
+        dialog.open_for_chart(&chart, DrawingId(7));
+        dialog.active_tab = PropertiesTab::Visibility;
+        frame(&mut dialog, &mut chart, &ctx, vec![]);
+        frame(&mut dialog, &mut chart, &ctx, vec![]);
+        let mut want = TimeframeVisibility::specific(&["1h", "4h"]);
+        assert_eq!(chart.drawings().drawings[0].timeframe_visibility, want);
+        click(&mut dialog, &mut chart, &ctx, "Ticks");
+        want.ranges.insert(TimeframeUnit::Tick, 1..=1_000_000);
+        assert_eq!(chart.drawings().drawings[0].timeframe_visibility, want);
     }
 
     /// Preview edits leave both histories alone; accepting a sequence commits one bulk edit.
@@ -699,6 +735,9 @@ mod tests {
             for width in [3.0, 5.0] {
                 dialog.props.line_width = width;
                 dialog.props.color = Color32::GREEN;
+                let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;
+                settings.position_target_color = Some([40, 100, 220, 255]);
+                settings.position_stop_color = Some([220, 140, 40, 255]);
                 dialog.coordinates.points[1].price = "125".into();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
                 assert_eq!(
@@ -707,6 +746,9 @@ mod tests {
                     "{finish}: live preview"
                 );
                 assert_eq!(chart.drawings().drawings[1].stroke_width, width);
+                let preview = &chart.drawings().drawings[0];
+                assert_eq!(preview.position_target_color, Some([40, 100, 220, 255]));
+                assert_eq!(preview.position_stop_color, Some([220, 140, 40, 255]));
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
                 assert!(!chart.can_undo());
                 assert!(chart.can_redo(), "preview must retain existing redo");
@@ -745,6 +787,9 @@ mod tests {
                 assert_eq!(chart.drawings().drawings[0].chart_points[1].price, 125.0);
                 assert!(chart.undo());
             }
+            let restored = &chart.drawings().drawings[0];
+            assert_eq!(restored.position_target_color, None, "{finish}");
+            assert_eq!(restored.position_stop_color, None, "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0, "{finish}");
             assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0, "{finish}");
             assert_eq!(

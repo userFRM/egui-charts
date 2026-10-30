@@ -619,6 +619,7 @@ mod tests {
                 drawing.color = [40, 120, 200, 255];
                 let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
                     let view = ChartView {
+                        price_formatter: None,
                         instrument: None,
                         bars: &[],
                         executions: None,
@@ -823,6 +824,7 @@ mod tests {
                     }
                     let output = egui::Context::default().run_ui(Default::default(), |ui| {
                         let view = ChartView {
+                            price_formatter: None,
                             instrument: None,
                             bars: &[],
                             executions: None,
@@ -883,6 +885,7 @@ mod tests {
                 }
                 let output = egui::Context::default().run_ui(Default::default(), |ui| {
                     let view = ChartView {
+                        price_formatter: None,
                         instrument: None,
                         bars: &[],
                         executions: None,
@@ -936,6 +939,7 @@ mod tests {
             let ctx = egui::Context::default();
             let output = ctx.run_ui(Default::default(), |ui| {
                 let view = ChartView {
+                    price_formatter: None,
                     instrument: None,
                     bars: &[],
                     executions: None,

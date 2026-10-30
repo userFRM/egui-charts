@@ -6,7 +6,7 @@ use super::{Trading, valid};
 use crate::chart::TradingLineAction;
 use crate::data::FeedError;
 use crate::model::{OrderId, OrderPreview, OrderRequest, OrderStatus, OrderType, TradingRules};
-use crate::services::AccountEvent;
+use crate::services::{AccountEvent, HistoryKind, HistoryPage};
 use crate::ui_kit::notifications::{Toast, ToastKind, Toasts};
 use crate::widget::settings::TradingNotifications;
 
@@ -70,6 +70,12 @@ impl Trading {
                 }
                 continue;
             }
+            if let Some(kind) = self.account_panel.loading(key) {
+                if let Ok(answer) = answer.downcast::<Result<HistoryPage, FeedError>>() {
+                    self.history_page(kind, *answer, toasts);
+                }
+                continue;
+            }
             if key == self.rules_key {
                 if let Ok(answer) = answer.downcast::<Result<TradingRules, FeedError>>() {
                     match *answer {
@@ -101,58 +107,7 @@ impl Trading {
     }
 
     pub(super) fn apply(&mut self, event: AccountEvent, toasts: &mut Toasts) {
-        let finite = |value: Option<f64>| value.is_none_or(f64::is_finite);
-        let positive = |value: f64| value.is_finite() && value > 0.0;
-        let valid = match &event {
-            AccountEvent::Account(account) => {
-                account.balance.is_finite()
-                    && [
-                        account.equity,
-                        account.realized_pnl,
-                        account.margin,
-                        account.orders_margin,
-                        account.available_funds,
-                    ]
-                    .into_iter()
-                    .all(finite)
-            }
-            AccountEvent::Order(order) => {
-                let request = &order.request;
-                positive(request.quantity)
-                    && order.filled.is_finite()
-                    && (0.0..=request.quantity).contains(&order.filled)
-                    && finite(order.fill_price)
-                    && finite(request.take_profit)
-                    && finite(request.stop_loss)
-                    && match request.order_type {
-                        OrderType::Market => true,
-                        OrderType::Limit(price) | OrderType::Stop(price) => price.is_finite(),
-                        OrderType::StopLimit { stop, limit } => {
-                            stop.is_finite() && limit.is_finite()
-                        }
-                    }
-            }
-            AccountEvent::Position(position) => {
-                position.quantity.is_finite()
-                    && position.average_price.is_finite()
-                    && [
-                        position.unrealized_pnl,
-                        position.last_price,
-                        position.trade_value,
-                        position.market_value,
-                        position.leverage,
-                        position.margin,
-                    ]
-                    .into_iter()
-                    .all(finite)
-            }
-            AccountEvent::Execution(fill) => positive(fill.quantity) && fill.price.is_finite(),
-            AccountEvent::Balance(change) => {
-                change.balance.is_finite() && change.amount.is_finite()
-            }
-            _ => true,
-        };
-        if !valid {
+        if !valid_event(&event) {
             return;
         }
         let first_order = match &event {
@@ -270,7 +225,29 @@ impl Trading {
                     self.sound = Some(self.display.execution_sound.clone());
                 }
             }
+            AccountEvent::Status(status) => self.connection = Some(status),
             _ => {}
+        }
+    }
+
+    /// Lists a page of older history the broker answered for `kind`, or stops paging there.
+    fn history_page(
+        &mut self,
+        kind: HistoryKind,
+        answer: Result<HistoryPage, FeedError>,
+        toasts: &mut Toasts,
+    ) {
+        match answer {
+            Ok(page) => {
+                let events = page.events.into_iter().filter(valid_event).collect();
+                self.account_panel.page(kind, events, page.next);
+            }
+            Err(error) => {
+                self.account_panel.end(kind);
+                if error != FeedError::NotSupported {
+                    toasts.error(format!("Account history unavailable: {error}"));
+                }
+            }
         }
     }
 
@@ -291,6 +268,59 @@ impl Trading {
         if shown {
             toasts.add(toast);
         }
+    }
+}
+
+/// Whether every price and quantity of `event` is finite, quantities are positive and an
+/// order's filled quantity lies between 0 and its quantity, as [`Broker`](crate::services::Broker)
+/// requires; the terminal skips events that break this.
+fn valid_event(event: &AccountEvent) -> bool {
+    let finite = |value: Option<f64>| value.is_none_or(f64::is_finite);
+    let positive = |value: f64| value.is_finite() && value > 0.0;
+    match event {
+        AccountEvent::Account(account) => {
+            account.balance.is_finite()
+                && [
+                    account.equity,
+                    account.realized_pnl,
+                    account.margin,
+                    account.orders_margin,
+                    account.available_funds,
+                ]
+                .into_iter()
+                .all(finite)
+        }
+        AccountEvent::Order(order) => {
+            let request = &order.request;
+            positive(request.quantity)
+                && order.filled.is_finite()
+                && (0.0..=request.quantity).contains(&order.filled)
+                && finite(order.fill_price)
+                && finite(request.take_profit)
+                && finite(request.stop_loss)
+                && match request.order_type {
+                    OrderType::Market => true,
+                    OrderType::Limit(price) | OrderType::Stop(price) => price.is_finite(),
+                    OrderType::StopLimit { stop, limit } => stop.is_finite() && limit.is_finite(),
+                }
+        }
+        AccountEvent::Position(position) => {
+            position.quantity.is_finite()
+                && position.average_price.is_finite()
+                && [
+                    position.unrealized_pnl,
+                    position.last_price,
+                    position.trade_value,
+                    position.market_value,
+                    position.leverage,
+                    position.margin,
+                ]
+                .into_iter()
+                .all(finite)
+        }
+        AccountEvent::Execution(fill) => positive(fill.quantity) && fill.price.is_finite(),
+        AccountEvent::Balance(change) => change.balance.is_finite() && change.amount.is_finite(),
+        _ => true,
     }
 }
 
@@ -735,5 +765,81 @@ mod tests {
         trading.set_service(Arc::new(Recorder::default()));
         assert_eq!(trading.take_execution_sound(), None);
         assert!(trading.calculator.is_none());
+    }
+
+    /// The account panel's tab marks a broker that reports that it is connecting or
+    /// disconnected until it reports that it is live, also at the demo's minimized panel height,
+    /// and `is_connected` is false meanwhile. A broker that never reports a status counts as
+    /// connected, and a new stream starts without the old one's status. A regression keeps
+    /// dropping the status, keeps reporting a dropped broker as connected, carries a status into
+    /// the next stream or hides the mark in a minimized panel.
+    #[test]
+    fn the_account_panel_and_is_connected_follow_the_brokers_status() {
+        use crate::data::FeedStatus;
+        // The connection labels the account panel draws in a panel `height` points high.
+        let marks = |trading: &mut Trading, height: f32| {
+            let ctx = egui::Context::default();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, height),
+                )),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                trading.show_account_panel(ui, "SYM");
+            });
+            let marks: Vec<String> = (output.shapes.iter())
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text)
+                        if ["Live", "Connecting...", "Offline"].contains(&text.galley.text()) =>
+                    {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            marks
+        };
+        let check = |trading: &mut Trading,
+                     step: &str,
+                     broker: bool,
+                     connected: bool,
+                     mark: Option<&str>| {
+            assert_eq!(
+                (trading.has_broker(), trading.is_connected()),
+                (broker, connected),
+                "{step}"
+            );
+            // 42 points is the demo's minimized panel, which draws only the tab strip.
+            for height in [42.0, 320.0] {
+                assert_eq!(
+                    marks(trading, height),
+                    Vec::from_iter(mark),
+                    "{step} at {height}"
+                );
+            }
+        };
+        let mut trading = Trading::default();
+        check(&mut trading, "no broker", false, false, None);
+        trading.set_service(Arc::new(Recorder::default()));
+        trading.poll(&egui::Context::default(), &mut Toasts::new());
+        check(&mut trading, "no status", true, true, None);
+        for (status, connected, mark) in [
+            (FeedStatus::Connecting, false, Some("Connecting...")),
+            (FeedStatus::Live, true, None),
+            (FeedStatus::Disconnected, false, Some("Offline")),
+            (FeedStatus::Live, true, None),
+            (FeedStatus::Disconnected, false, Some("Offline")),
+        ] {
+            trading.apply(AccountEvent::Status(status), &mut Toasts::new());
+            check(&mut trading, &format!("{status:?}"), true, connected, mark);
+        }
+        // A new stream, as after a lag, starts without the old stream's status.
+        trading.connect();
+        check(&mut trading, "new stream", true, true, None);
+        trading.disconnect();
+        check(&mut trading, "disconnected", false, false, None);
     }
 }

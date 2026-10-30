@@ -1,12 +1,16 @@
 //! Drawing studies anchored on the shared Zig Zag swings.
 
-use super::ZigZag;
+use super::{ATR, ZigZag};
 use crate::drawings::{ChartPoint, Drawing, DrawingToolType, FibonacciConfig, FibonacciLevel};
 use crate::model::Bar;
 use crate::studies::{
     Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, StudyInput,
 };
 use egui::Color32;
+
+/// The study catalogue's swing size: a multiple of the average true range over a period.
+const ATR_MULTIPLE: f64 = 3.0;
+const ATR_PERIOD: usize = 10;
 
 /// The most Fibonacci levels that the study inputs can hold.
 const MAX_FIB_LEVELS: usize = 24;
@@ -99,7 +103,9 @@ impl AutoDrawingKind {
     }
 }
 
-/// A drawing recalculated from host bars with the same pivots as [`ZigZag`].
+/// A drawing recalculated from host bars with the same pivots as [`ZigZag`]. Swings use the
+/// fixed Zig Zag percentage unless [`with_atr`](Self::with_atr) sizes them by the average true
+/// range.
 ///
 /// Add through the normal study API or calculate directly and read [`Indicator::drawings`].
 /// No drawing is emitted until enough pivots exist. A trend line and channel include the moving
@@ -112,6 +118,11 @@ impl AutoDrawingKind {
 pub struct AutoDrawing {
     kind: AutoDrawingKind,
     zigzag: ZigZag,
+    /// Size swings by the average true range instead of the Zig Zag's fixed percentage.
+    atr_swings: bool,
+    atr_multiple: f64,
+    atr_period: usize,
+    atr: ATR,
     fibonacci: FibonacciConfig,
     fork_colors: [Color32; 2],
     drawings: Vec<Drawing>,
@@ -119,8 +130,10 @@ pub struct AutoDrawing {
 }
 
 impl AutoDrawing {
-    /// Construct with a Zig Zag deviation in percent and confirmation depth in bars.
+    /// Construct with a fixed Zig Zag deviation in percent and confirmation depth in bars.
     /// Parameters have the same bounds and skipped-bar policy as [`ZigZag::new`].
+    /// [`with_atr`](Self::with_atr) sizes swings by volatility instead, as the study
+    /// catalogue's automatic drawings do.
     pub fn new(kind: AutoDrawingKind, deviation_percent: f64, depth: usize) -> Self {
         Self {
             kind,
@@ -131,6 +144,10 @@ impl AutoDrawing {
                     crate::studies::palette::BLUE
                 },
             ),
+            atr_swings: false,
+            atr_multiple: ATR_MULTIPLE,
+            atr_period: ATR_PERIOD,
+            atr: ATR::new(ATR_PERIOD),
             fibonacci: kind.default_fibonacci(),
             fork_colors: [
                 crate::studies::palette::GREEN,
@@ -139,6 +156,20 @@ impl AutoDrawing {
             drawings: Vec::new(),
             values: IndicatorValues::new(),
         }
+    }
+
+    /// Size swings by recent volatility instead of the fixed percentage: a reversal counts when
+    /// it moves from the last extreme by at least `multiple` times the average true range over
+    /// `period` bars ([`ATR`]), taken as a percentage of the confirming bar's close. Bars before
+    /// the average is defined, and bars without a finite positive close, confirm no reversal.
+    /// `multiple` is clamped into 0 to `f64::MAX`, NaN to 0, where no swing is found; `period`
+    /// is at least 1.
+    pub fn with_atr(mut self, multiple: f64, period: usize) -> Self {
+        self.atr_swings = true;
+        self.atr_multiple = super::clamp_param(multiple, 0.0, f64::MAX);
+        self.atr_period = period.max(1);
+        self.atr = ATR::new(self.atr_period);
+        self
     }
 
     fn fork_config(&self) -> crate::drawings::PitchforkConfig {
@@ -192,15 +223,39 @@ impl Indicator for AutoDrawing {
         "Drawing anchored on Zig Zag swing extremes"
     }
 
-    /// The Zig Zag deviation and depth and, for a Fibonacci construction, its options, its number
-    /// of levels and each level's visibility, ratio, label, colour and price label.
+    /// The swing size, ATR multiple and period, the Zig Zag deviation and depth and, for a
+    /// Fibonacci construction, its options, its number of levels and each level's visibility,
+    /// ratio, label, colour and price label.
     fn inputs(&self) -> Vec<StudyInput> {
-        let mut inputs: Vec<StudyInput> = self
-            .zigzag
-            .inputs()
-            .into_iter()
-            .filter(|input| input.id != "mode")
-            .collect();
+        let mut inputs = vec![
+            StudyInput::new(
+                "swing_size",
+                "Swing size",
+                InputValue::Choice(usize::from(!self.atr_swings)),
+                InputKind::Choice(["ATR multiple", "Percent"].map(str::to_owned).to_vec()),
+            )
+            .with_default(InputValue::Choice(0)),
+            StudyInput::new(
+                "atr_multiple",
+                "ATR multiple",
+                InputValue::Number(self.atr_multiple),
+                InputKind::Number(0.0, f64::MAX),
+            )
+            .with_default(InputValue::Number(ATR_MULTIPLE)),
+            StudyInput::new(
+                "atr_period",
+                "ATR period",
+                InputValue::Length(self.atr_period),
+                InputKind::Length(1, usize::MAX),
+            )
+            .with_default(InputValue::Length(ATR_PERIOD)),
+        ];
+        inputs.extend(
+            self.zigzag
+                .inputs()
+                .into_iter()
+                .filter(|input| matches!(input.id.as_str(), "deviation_percent" | "depth")),
+        );
         if !self.kind.fibonacci() {
             return inputs;
         }
@@ -343,11 +398,10 @@ impl Indicator for AutoDrawing {
     /// unchanged. Levels added take the kind's default level at their place, or 100% in the
     /// study's colour, as the drawing properties add one.
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
-        if !id.starts_with("fib_") {
-            if id == "mode" {
-                return Err("unknown study input");
-            }
-            return self.zigzag.set_input(id, value);
+        if matches!(id, "deviation_percent" | "depth") {
+            self.zigzag.set_input(id, value)?;
+            self.calculate(&[]);
+            return Ok(());
         }
         if self.kind.fibonacci()
             && level_slot(id)
@@ -365,6 +419,12 @@ impl Indicator for AutoDrawing {
         }
         let config = &mut self.fibonacci;
         match (id, value) {
+            ("swing_size", InputValue::Choice(index)) => self.atr_swings = index == 0,
+            ("atr_multiple", InputValue::Number(multiple)) => self.atr_multiple = multiple,
+            ("atr_period", InputValue::Length(period)) => {
+                self.atr_period = period;
+                self.atr = ATR::new(period);
+            }
             ("fib_show_prices", InputValue::Choice(index)) => {
                 config.show_prices = [None, Some(false), Some(true)][index]
             }
@@ -428,7 +488,20 @@ impl Indicator for AutoDrawing {
             }
             self.values.resize(data.len(), IndicatorValue::None);
         }
-        self.zigzag.update_swings(data, from);
+        if self.atr_swings {
+            self.atr.update(data, from);
+        }
+        let (atr, multiple) = (&self.atr, self.atr_multiple);
+        let by_atr = |source: usize| {
+            atr.values()
+                .value(0, source)
+                .map_or(f64::NAN, |atr| 100.0 * multiple * atr / data[source].close)
+        };
+        self.zigzag.update_swings(
+            data,
+            from,
+            self.atr_swings.then_some(&by_atr as &dyn Fn(usize) -> f64),
+        );
         self.drawings.clear();
         let pivots = self.zigzag.pivots();
         let pivots = if self.kind == AutoDrawingKind::FibonacciRetracement {
@@ -597,6 +670,9 @@ mod tests {
             let mut data = bars();
             let name = AutoDrawing::new(kind, 5.0, 3).name().to_owned();
             let mut study = ConfiguredStudy::new(IndicatorFactory::new().create(&name).unwrap());
+            study
+                .set_input("swing_size", InputValue::Choice(1))
+                .unwrap();
             study.set_input("depth", InputValue::Length(3)).unwrap();
             let check = |study: &ConfiguredStudy, expected: &[(usize, f64)]| {
                 assert_eq!(study.drawings().len(), 1, "{name}");
@@ -656,6 +732,80 @@ mod tests {
             assert!(study.drawings().is_empty());
             study.calculate(&[]);
             assert!(study.drawings().is_empty() && study.values().is_empty());
+        }
+    }
+
+    /// The catalogue sizes swings by 3 times the 10-bar average true range as a percentage of
+    /// the confirming close, so 0.3% minute swings draw and daily anchors match a hand count,
+    /// calculated at once or bar by bar.
+    #[test]
+    fn automatic_drawings_size_swings_by_average_true_range() {
+        let series = |count: usize, seconds: i64, h: f64, mid: &dyn Fn(usize) -> f64| {
+            (0..count)
+                .map(|i| {
+                    let mid = mid(i);
+                    let time = chrono::DateTime::from_timestamp(i as i64 * seconds, 0).unwrap();
+                    Bar::new(time, mid, mid + h, mid - h, mid, 1.0)
+                })
+                .collect::<Vec<_>>()
+        };
+        // Lows of 99.984375 at bars 0, 20 and 40, highs of 100.328125 at 10 and 30: 0.34%
+        // swings against a threshold near 300 * 0.0469 / 100.2 = 0.14%.
+        let minute = series(50, 60, 1.0 / 64.0, &|i| {
+            let t = if i % 20 < 10 { i % 20 } else { 20 - i % 20 };
+            100.0 + t as f64 / 32.0
+        });
+        // Every true range is 2, so a reversal needs 600 / close percent: the fall from 111 at
+        // bar 40 reaches 5.518% at bar 51 against 5.667%, and the last pivot stays provisional.
+        let daily = series(52, 86_400, 1.0, &|i| match i {
+            0..=11 => 100.0 + i as f64,
+            12..=26 => 111.0 - (i - 11) as f64,
+            27..=40 => 96.0 + (i - 26) as f64,
+            _ => 110.0 - 0.375 * (i - 40) as f64,
+        });
+        let (low, high) = (99.984375, 100.328125);
+        for (label, bars, split, expected) in [
+            (
+                "minute",
+                minute,
+                25,
+                [
+                    vec![(20, low), (40, low)],
+                    vec![(20, low), (40, low), (30, high)],
+                    vec![(20, low), (30, high)],
+                    vec![(20, low), (30, high), (40, low)],
+                    vec![(20, low), (30, high), (40, low)],
+                ],
+            ),
+            (
+                "daily",
+                daily,
+                45,
+                [
+                    vec![(11, 112.0), (40, 111.0)],
+                    vec![(11, 112.0), (40, 111.0), (26, 95.0)],
+                    vec![(11, 112.0), (26, 95.0)],
+                    vec![(11, 112.0), (26, 95.0), (40, 111.0)],
+                    vec![(11, 112.0), (26, 95.0), (40, 111.0)],
+                ],
+            ),
+        ] {
+            for (kind, expected) in AutoDrawingKind::ALL.into_iter().zip(expected) {
+                let name = AutoDrawing::new(kind, 5.0, 10).name().to_owned();
+                let mut study = IndicatorFactory::new().create(&name).unwrap();
+                let points = |study: &dyn Indicator| -> Vec<(usize, f64)> {
+                    study.drawings()[0]
+                        .chart_points
+                        .iter()
+                        .map(|p| (p.bar_idx as usize, p.price))
+                        .collect()
+                };
+                study.calculate(&bars);
+                assert_eq!(points(study.as_ref()), expected, "{label} {name}");
+                study.calculate(&bars[..split]);
+                study.update(&bars, split);
+                assert_eq!(points(study.as_ref()), expected, "{label} {name} updated");
+            }
         }
     }
 

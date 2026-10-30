@@ -61,6 +61,11 @@ path = "examples/live_feed.rs"
 required-features = ["widget"]
 
 [[example]]
+name = "network_feed"
+path = "examples/network_feed.rs"
+required-features = ["widget"]
+
+[[example]]
 name = "bare_chart"
 path = "examples/bare_chart.rs"
 required-features = ["widget"]
@@ -206,6 +211,8 @@ rand = "0.10.0"
 # `examples/bare_chart.rs` starts its web runner from the page.
 wasm-bindgen-futures = "0.4.79"
 wasm-bindgen-test = "0.3.79"
+# `examples/network_feed.rs` fetches history and streams trades in the browser.
+web-sys = { version = "0.3.106", features = ["EventSource", "Headers", "MessageEvent", "Response", "Window"] }
 
 [dependencies]
 # theme::apply_to_egui installs the bundled Roboto face.

@@ -25,69 +25,7 @@ const ROW_H: f32 = 32.0;
 /// Width reserved while the custom interval form is expanded.
 const CUSTOM_FORM_W: f32 = 232.0;
 
-/// Timeframe unit
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[non_exhaustive]
-pub enum TimeframeUnit {
-    /// A fixed number of executions per bar.
-    Tick,
-    /// Traded volume in whole units, split exactly at the threshold.
-    Volume,
-    /// Price range in instrument ticks.
-    Range,
-    /// Absolute buy minus sell volume in whole units.
-    Delta,
-    /// One of the model's subsecond presets.
-    Millisecond,
-    /// Seconds.
-    Second,
-    /// Minutes.
-    Minute,
-    /// Hours.
-    Hour,
-    /// Days.
-    Day,
-    /// Weeks.
-    Week,
-    /// Months.
-    Month,
-}
-
-impl TimeframeUnit {
-    /// Abbreviated unit label.
-    pub fn short_name(&self) -> &'static str {
-        match self {
-            TimeframeUnit::Tick => "T",
-            TimeframeUnit::Volume => "V",
-            TimeframeUnit::Range => "R",
-            TimeframeUnit::Delta => "delta",
-            TimeframeUnit::Millisecond => "ms",
-            TimeframeUnit::Second => "S",
-            TimeframeUnit::Minute => "m",
-            TimeframeUnit::Hour => "h",
-            TimeframeUnit::Day => "D",
-            TimeframeUnit::Week => "W",
-            TimeframeUnit::Month => "M",
-        }
-    }
-
-    /// Display name for this value.
-    pub fn name(&self) -> &'static str {
-        match self {
-            TimeframeUnit::Tick => "ticks",
-            TimeframeUnit::Volume => "volume units",
-            TimeframeUnit::Range => "range ticks",
-            TimeframeUnit::Delta => "delta units",
-            TimeframeUnit::Millisecond => "milliseconds",
-            TimeframeUnit::Second => "seconds",
-            TimeframeUnit::Minute => "minutes",
-            TimeframeUnit::Hour => "hours",
-            TimeframeUnit::Day => "days",
-            TimeframeUnit::Week => "weeks",
-            TimeframeUnit::Month => "months",
-        }
-    }
-}
+pub use crate::model::TimeframeUnit;
 
 fn interval(value: u32, unit: TimeframeUnit) -> Timeframe {
     let count = std::num::NonZeroU64::new(u64::from(value)).expect("validated interval");

@@ -9,9 +9,12 @@ use super::{
     TAB_HEIGHT, Tab, Trading, csv, kind, pnl_color, quantity_decimals, status, time,
 };
 use crate::chart::TradingLineAction;
+use crate::data::FeedStatus;
 use crate::icons::icons;
 use crate::model::{Order, OrderSide, OrderType};
 use crate::theme::ThemeExt;
+use crate::ui::connection_status::show_connection_status_with_label;
+use crate::ui::model::ConnectionState;
 use crate::ui::trading::widgets::{grouped, semibold, side_color};
 use crate::ui_kit::buttons::ButtonSize;
 use crate::ui_kit::{EmptyState, IconButton};
@@ -32,6 +35,13 @@ impl Trading {
             .as_ref()
             .map_or(String::new(), |account| account.currency.clone());
 
+        // On the tab, which every panel height shows, until the broker reports it is live.
+        let mark = match self.connection {
+            Some(FeedStatus::Connecting) => Some(ConnectionState::Connecting),
+            Some(FeedStatus::Disconnected) => Some(ConnectionState::Disconnected),
+            Some(FeedStatus::Live) | None => None,
+        };
+
         ui.painter().rect_filled(
             Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), TAB_HEIGHT)),
             0.0,
@@ -50,6 +60,9 @@ impl Trading {
                     RichText::new(l10n::text(ui.ctx(), &self.account_panel.broker))
                         .color(theme.ui.text),
                 );
+                if let Some(mark) = &mark {
+                    show_connection_status_with_label(ui, mark);
+                }
                 if ui
                     .add(
                         egui::Button::new(l10n::text(ui.ctx(), "Trade"))
@@ -538,6 +551,7 @@ impl Trading {
         };
 
         let mut row_action = None;
+        let mut at_end = false;
         egui::ScrollArea::horizontal()
             .id_salt("account_panel_columns")
             .auto_shrink([false, false])
@@ -617,12 +631,14 @@ impl Trading {
                     })
                     .fill_height()
                     .show(&mut empty);
+                    at_end = true;
                     return;
                 }
                 egui::ScrollArea::vertical()
                     .id_salt(("account_panel_rows", tab))
                     .auto_shrink([false, false])
                     .show_rows(ui, ROW_HEIGHT, rows.len(), |ui, range| {
+                        at_end |= range.end == rows.len();
                         for row in &rows[range] {
                             let (rect, _) =
                                 ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
@@ -747,6 +763,10 @@ impl Trading {
                     });
             });
 
+        // A history shown to its end asks the broker for the page before it.
+        if at_end && let Some(kind) = tab.history() {
+            self.load_older(kind);
+        }
         match row_action {
             Some((RowAction::Position(position), _)) => {
                 self.pending = Some(TradingLineAction::Close(position.clone()));

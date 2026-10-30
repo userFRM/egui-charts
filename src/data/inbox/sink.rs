@@ -244,10 +244,12 @@ impl Sink {
     }
 
     /// Advances a time-based stream through `now`, opening an empty forming candle at the
-    /// current clock boundary when there has been no execution. Empty candles carry the last
-    /// close with zero volume; their first trade sets the real open, high and low. Count bars
-    /// never advance without trades. Call from a trusted feed heartbeat, after seeding a bar or
-    /// execution; invalid or future clock values obey the same rule as trade timestamps.
+    /// current clock boundary when there has been no execution. Empty candles have zero volume
+    /// and carry the close of the newest bar before them that is not whitespace, whether this
+    /// stream or a history page delivered it, before or after the heartbeat; their first trade
+    /// sets the real open, high and low. Count bars never advance without trades. Call from a
+    /// trusted feed heartbeat, after seeding a bar or execution; invalid or future clock values
+    /// obey the same rule as trade timestamps.
     pub fn advance_time(&self, now: DateTime<Utc>) {
         let system = Utc::now();
         self.inbox.push(|state| {

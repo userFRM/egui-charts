@@ -19,6 +19,8 @@ pub struct DrawingProps {
     pub symbol: Option<String>,
     /// Tool-specific settings, edited by the Inputs page.
     pub tool_settings: Option<Box<DrawingTemplate>>,
+    /// Instrument tick size for position level inputs; absent disables editing by ticks.
+    pub tick_size: Option<f64>,
     /// Staged anchor edits, applied only to the drawing whose dialog was opened.
     pub coordinates: CoordinatesState,
     /// Save these properties as the default for new drawings of this tool.
@@ -41,16 +43,15 @@ pub struct DrawingProps {
     pub label: String,
     /// Font size
     pub font_size: f32,
-    /// Visible on all timeframes
-    pub visible_all_timeframes: bool,
-    /// Specific timeframes (if not all)
-    pub visible_timeframes: Vec<String>,
+    /// The intervals the drawing shows on
+    pub timeframe_visibility: TimeframeVisibility,
 }
 
 impl Default for DrawingProps {
     fn default() -> Self {
         Self {
             symbol: None,
+            tick_size: None,
             tool_settings: None,
             coordinates: CoordinatesState::default(),
             save_as_default: false,
@@ -63,8 +64,7 @@ impl Default for DrawingProps {
             extend_right: false,
             label: String::new(),
             font_size: 12.0,
-            visible_all_timeframes: true,
-            visible_timeframes: Vec::new(),
+            timeframe_visibility: TimeframeVisibility::all(),
         }
     }
 }
@@ -78,7 +78,7 @@ pub enum DrawingPropertiesAction {
     /// Cancel the current interaction.
     Cancel,
     /// Apply the supplied properties to the drawing.
-    Apply(DrawingId, DrawingProps),
+    Apply(DrawingId, Box<DrawingProps>),
     /// Delete the identified drawing.
     Delete(DrawingId),
     /// Duplicate the identified drawing.
@@ -90,6 +90,9 @@ impl DrawingProps {
     pub fn from_drawing(drawing: &Drawing, chart: &Chart) -> Self {
         Self {
             symbol: Some(chart.symbol().to_owned()),
+            tick_size: chart
+                .instrument()
+                .and_then(|instrument| instrument.tick_size),
             tool_settings: Some(Box::new(DrawingTemplate::from_drawing(drawing))),
             coordinates: CoordinatesState::from_drawing(drawing, chart),
             color: drawing.color32(),
@@ -100,13 +103,7 @@ impl DrawingProps {
             extend_left: drawing.extend_left,
             extend_right: drawing.extend_right,
             font_size: drawing.font_size,
-            visible_all_timeframes: drawing.timeframe_visibility.show_on_all,
-            visible_timeframes: drawing
-                .timeframe_visibility
-                .visible_timeframes
-                .iter()
-                .cloned()
-                .collect(),
+            timeframe_visibility: drawing.timeframe_visibility.clone(),
             label: drawing.text.clone().unwrap_or_default(),
             ..Self::default()
         }
@@ -170,7 +167,12 @@ impl DrawingProps {
         {
             return Err("Unlock the drawing before editing its properties");
         }
-        if !points.is_empty() && points.len() != target.chart_points.len() {
+        let adds_position_stop = matches!(
+            target.tool_type,
+            crate::drawings::DrawingToolType::LongPos | crate::drawings::DrawingToolType::ShortPos
+        ) && target.chart_points.len() == 2
+            && points.len() == 3;
+        if !points.is_empty() && points.len() != target.chart_points.len() && !adds_position_stop {
             return Err("Drawing anchors changed; reopen its properties");
         }
         let selected = chart.drawings().is_selected(id.0);
@@ -202,10 +204,7 @@ impl DrawingProps {
                 drawing.fill_color = fill.map(|color| color.to_srgba_unmultiplied());
             }
             drawing.font_size = self.font_size;
-            drawing.timeframe_visibility = TimeframeVisibility {
-                show_on_all: self.visible_all_timeframes,
-                visible_timeframes: self.visible_timeframes.iter().cloned().collect(),
-            };
+            drawing.timeframe_visibility = self.timeframe_visibility.clone();
             if let Some(template) = &self.tool_settings
                 && template.settings.tool_type == drawing.tool_type
                 && template.settings.custom_tool == drawing.custom_tool
@@ -221,17 +220,20 @@ impl DrawingProps {
                 drawing.ghost_feed = settings.ghost_feed;
                 drawing.position_size = settings.position_size;
                 drawing.position_sizing = settings.position_sizing;
+                drawing.position_target_color = settings.position_target_color;
+                drawing.position_stop_color = settings.position_stop_color;
                 drawing.volume_profile = settings.volume_profile;
                 drawing.regression_trend = settings.regression_trend;
                 drawing.channel_midline = settings.channel_midline;
             }
             if drawing.id == id.0
                 && !points.is_empty()
-                && drawing
-                    .chart_points
-                    .iter()
-                    .zip(&points)
-                    .any(|(a, b)| a != b || a.time_anchor != b.time_anchor)
+                && (drawing.chart_points.len() != points.len()
+                    || drawing
+                        .chart_points
+                        .iter()
+                        .zip(&points)
+                        .any(|(a, b)| a != b || a.time_anchor != b.time_anchor))
             {
                 drawing.chart_points = points.clone();
                 drawing.screen_anchor = None;
@@ -256,6 +258,13 @@ impl DrawingProps {
                 .is_some_and(|c| c.levels.iter().any(|l| !l.value.is_finite()))
             {
                 return Err("Fibonacci ratios must be finite");
+            }
+            if settings
+                .fib_config
+                .as_ref()
+                .is_some_and(|c| !(c.level_width > 0.0 && c.level_width <= MAX_STROKE_WIDTH))
+            {
+                return Err("Fibonacci widths must be above 0 and at most 100");
             }
             if settings.pitchfork.as_ref().is_some_and(|c| {
                 c.levels
@@ -329,8 +338,10 @@ mod tests {
         drawing.locked = true;
         chart.drawings_mut().drawings.push(drawing);
         let props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
-        assert!(!props.visible_all_timeframes);
-        assert_eq!(props.visible_timeframes, ["1h"]);
+        assert_eq!(
+            props.timeframe_visibility,
+            TimeframeVisibility::specific(&["1h"])
+        );
         assert!(props.fill_enabled);
         assert_eq!(
             props.fill_color.unwrap().to_srgba_unmultiplied(),
@@ -363,9 +374,10 @@ mod tests {
         second.id = 8;
         chart.drawings_mut().drawings.push(second);
         chart.drawings_mut().select_drawings([7, 8]);
+        let mut visibility = TimeframeVisibility::default();
+        visibility.set_range(crate::model::TimeframeUnit::Hour, Some(2..=4));
         let changed = DrawingProps {
-            visible_all_timeframes: false,
-            visible_timeframes: vec!["4h".into()],
+            timeframe_visibility: visibility,
             font_size: 28.0,
             fill_enabled: false,
             ..props.clone()
@@ -478,6 +490,8 @@ mod tests {
                 leverage: 5.0,
             };
             let sizing = settings.position_sizing;
+            settings.position_target_color = Some([40, 100, 220, 255]);
+            settings.position_stop_color = Some([220, 140, 40, 255]);
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
@@ -495,6 +509,8 @@ mod tests {
             );
             assert_eq!(saved.volume_profile.unwrap().rows(), 48);
             assert_eq!(saved.position_sizing, sizing);
+            assert_eq!(saved.position_target_color, Some([40, 100, 220, 255]));
+            assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
             assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);
@@ -502,28 +518,39 @@ mod tests {
             assert!(chart.drawings().drawings[1].fib_config.is_none());
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
-            assert!(chart.drawings().drawings[0].fib_config.is_none());
+            assert_eq!(
+                format!("{:?}", chart.drawings().drawings[0].fib_config),
+                format!("{:?}", Drawing::new(7, tool).fib_config)
+            );
             assert!(chart.redo());
             chart.drawings_mut().edit_drawing(7, |d| d.locked = true);
             props.font_size = 18.0;
             props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
             assert_eq!(chart.drawings().drawings[0].font_size, 12.0);
             assert_eq!(chart.drawings().drawings[1].font_size, 18.0);
-            // A malformed ratio cannot partially change common style or another selected tool.
-            props
-                .tool_settings
-                .as_mut()
-                .unwrap()
-                .settings
-                .fib_config
-                .as_mut()
-                .unwrap()
-                .levels[0]
-                .value = f32::NAN;
-            props.line_width = 9.0;
-            assert!(props.apply_to_chart(DrawingId(7), &mut chart).is_err());
-            assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0);
-            assert_eq!(chart.drawings().drawings[1].stroke_width, 2.0);
+            // Malformed ratios or widths cannot partly change another selected drawing.
+            for (ratio, width) in [(f32::NAN, 2.0), (1.0, 0.0), (1.0, 100.01), (1.0, f32::NAN)] {
+                let config = props
+                    .tool_settings
+                    .as_mut()
+                    .unwrap()
+                    .settings
+                    .fib_config
+                    .as_mut()
+                    .unwrap();
+                config.levels[0].value = ratio;
+                config.level_width = width;
+                props.line_width = 9.0;
+                assert!(props.apply_to_chart(DrawingId(7), &mut chart).is_err());
+                assert_eq!(
+                    chart.drawings().drawings[0].stroke_width,
+                    Drawing::new(7, tool).stroke_width
+                );
+                assert_eq!(
+                    chart.drawings().drawings[1].stroke_width,
+                    Drawing::new(7, tool).stroke_width
+                );
+            }
         }
     }
 }

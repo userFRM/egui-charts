@@ -3,6 +3,7 @@
 //! Provides options to permanently remove chart elements:
 //! - All Drawings
 //! - All Indicators
+//! - All drawings and indicators
 
 use crate::icons::icons;
 use crate::ui::drawing_toolbar::DrawingToolbarAction;
@@ -32,6 +33,12 @@ impl RemoveMenu {
                 "Remove all indicators",
                 "Remove all indicators from chart",
                 || Some(DrawingToolbarAction::RemoveAllIndicators),
+            )
+            .danger(&icons::TRASH)
+            .add_text_item_with_action(
+                "Remove drawings and indicators",
+                "Permanently delete all drawing tools and remove all indicators from chart",
+                || Some(DrawingToolbarAction::RemoveDrawingsAndIndicators),
             )
             .danger(&icons::TRASH)
             .show()

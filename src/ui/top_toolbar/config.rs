@@ -11,7 +11,7 @@
 pub const TOOLBAR_HEIGHT: f32 = 38.0;
 
 /// Default button side length in egui logical points.
-pub const BUTTON_SIZE: f32 = 32.0;
+pub const BUTTON_SIZE: f32 = 34.0;
 
 /// Default icon side length in egui logical points.
 pub const ICON_SIZE: f32 = 24.0;

@@ -97,6 +97,14 @@ pub trait Broker: MaybeSend + 'static {
     /// The terminal calls it when it starts and again, with a new stream, after the stream lagged;
     /// each stream starts from nothing, so push the whole current state again. The old stream is
     /// inactive from then on: push into the newest one only.
+    ///
+    /// A stream starts as connected. While the connection to the broker is not live, push
+    /// [`AccountEvent::Status`] with [`FeedStatus::Connecting`] or [`FeedStatus::Disconnected`],
+    /// on each new stream too, and [`FeedStatus::Live`] once it is live again; until then the
+    /// account panel marks the broker and the terminal reports it as not connected. A broker
+    /// that never pushes a status counts as connected. The terminal still sends the orders,
+    /// cancellations and changes the user confirms meanwhile: refuse with a
+    /// [`FeedError`](crate::data::FeedError) what cannot reach the broker.
     fn connect(&self, events: Events<AccountEvent>);
 
     /// Sends `order` to the broker. The terminal calls this only after the user confirmed the
@@ -149,9 +157,17 @@ pub trait Broker: MaybeSend + 'static {
     /// [`HistoryKind`] says, oldest first, and never working orders or positions: those come only
     /// from the pushed stream. The first page of a request holds the newest entries of its range
     /// and each page after it, asked for with the [`next`](HistoryPage::next) cursor, the entries
-    /// before the previous one. Entries that were pushed live may appear again in a page: events
-    /// are compared by value, so repeat them unchanged. Answer for the account `connect` last
-    /// served; a consumer drops an answer that arrives after the account changed.
+    /// before the previous one. Entries that were pushed live may appear again in a page: an order
+    /// is matched by its id and other events by value, so repeat them unchanged. Answer for the
+    /// account `connect` last served; a consumer drops an answer that arrives after the account
+    /// changed.
+    ///
+    /// The account panel asks once the account arrived and the user scrolls to the end of a
+    /// history: first for the range that ends one second after the oldest entry it lists (for an
+    /// order, when it closed), so that entries sharing that time are not skipped, then for each
+    /// `next` until it is `None` or the history lists 1,000 entries. After an error other than
+    /// `NotSupported`, which it shows, it asks for that history again only after the next
+    /// `connect`.
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
         let _ = request;
         reply.send(Err(FeedError::NotSupported));
@@ -231,7 +247,8 @@ pub enum AccountEvent {
     Position(Position),
     /// One fill, drawn on charts of its order's symbol: push the order first.
     Execution(Execution),
-    /// The connection to the broker.
+    /// The connection to the broker; a stream starts as [`FeedStatus::Live`]. See
+    /// [`Broker::connect`].
     Status(FeedStatus),
     /// A change of the cash balance, for the balance history.
     Balance(BalanceChange),

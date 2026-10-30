@@ -21,12 +21,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::chart::TradingLineAction;
+use crate::data::FeedStatus;
 use crate::data::inbox::Inbox;
 use crate::model::{
     Account, Capabilities, Instrument, Order, OrderPreview, OrderRequest, OrderSide, OrderType,
     Position, Quote, TradingRules,
 };
-use crate::services::{Broker, Listener};
+use crate::services::{Broker, HistoryKind, Listener};
 use crate::widget::settings::TradingSettings;
 use format::Numbers;
 use ticket::{OrderTicket, order_quantity};
@@ -69,6 +70,9 @@ pub struct Trading {
     inbox: Arc<Inbox>,
     listener: Option<Listener>,
     generation: u64,
+    /// The connection status the broker last pushed on the current stream; `None`, which counts
+    /// as connected, until it pushes one.
+    connection: Option<FeedStatus>,
     account: Option<Account>,
     orders: Vec<Order>,
     positions: Vec<Position>,
@@ -125,6 +129,7 @@ impl Default for Trading {
             inbox: Arc::default(),
             listener: None,
             generation: 0,
+            connection: None,
             account: None,
             orders: Vec::new(),
             positions: Vec::new(),
@@ -211,8 +216,20 @@ impl Trading {
         self.connect();
     }
 
-    /// Whether a broker is connected.
+    /// Whether a broker is set and connected: the last status it pushed on the current stream is
+    /// [`FeedStatus::Live`], or it pushed none. False while it reports that it is
+    /// [`Connecting`](FeedStatus::Connecting) or [`Disconnected`](FeedStatus::Disconnected), and
+    /// without a broker; [`has_broker`](Self::has_broker) tells whether one is set.
     pub fn is_connected(&self) -> bool {
+        self.service.is_some()
+            && self
+                .connection
+                .is_none_or(|status| status == FeedStatus::Live)
+    }
+
+    /// Whether a broker is set, from [`set_service`](Self::set_service) until
+    /// [`disconnect`](Self::disconnect), connected or not.
+    pub fn has_broker(&self) -> bool {
         self.service.is_some()
     }
 
@@ -225,11 +242,13 @@ impl Trading {
         self.rules = TradingRules::new("");
         self.rules_ready = false;
         self.account = None;
+        self.connection = None;
         self.orders.clear();
         self.positions.clear();
         self.placing.clear();
         self.account_panel.clear();
-        // Stream keys are even; symbol rules use odd keys, and order replies use zero.
+        // Stream keys are even; rules, previews and history pages use odd keys, and order
+        // replies use zero.
         self.generation += 2;
         let (listener, events) = Listener::new(&self.inbox, self.generation);
         self.listener = Some(listener);
@@ -304,6 +323,22 @@ impl Trading {
             }
         }
     }
+
+    /// Asks the broker for the page of `kind` before the oldest entry the account panel lists,
+    /// once the account arrived; see [`AccountPanel`].
+    fn load_older(&mut self, kind: HistoryKind) {
+        let Some(service) = &self.service else {
+            return;
+        };
+        if self.account.is_none() {
+            return;
+        }
+        let key = self.request_key + 2;
+        if let Some(request) = self.account_panel.ask(kind, key) {
+            self.request_key = key;
+            service.history(request, self.inbox.reply(key));
+        }
+    }
 }
 
 /// Whether every number of `rules` is positive and finite and a time in force is offered.
@@ -325,7 +360,7 @@ mod tests {
     use super::*;
     use crate::data::{FeedError, Reply};
     use crate::model::OrderId;
-    use crate::services::{AccountEvent, Events};
+    use crate::services::{AccountEvent, Events, HistoryPage, HistoryRequest};
     use crate::ui_kit::notifications::Toasts;
     use std::sync::Mutex;
 
@@ -338,6 +373,7 @@ mod tests {
         pub(super) modified: Mutex<Vec<(OrderId, OrderRequest)>>,
         pub(super) rules: Mutex<Vec<(String, Reply<TradingRules>)>>,
         pub(super) previews: Mutex<Vec<(OrderRequest, Reply<OrderPreview>)>>,
+        pub(super) histories: Mutex<Vec<(HistoryRequest, Reply<HistoryPage>)>>,
     }
 
     impl Broker for Recorder {
@@ -378,6 +414,9 @@ mod tests {
         fn cancel(&self, id: OrderId, reply: Reply<()>) {
             self.cancelled.lock().unwrap().push(id);
             reply.send(Ok(()));
+        }
+        fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            self.histories.lock().unwrap().push((request, reply));
         }
     }
 

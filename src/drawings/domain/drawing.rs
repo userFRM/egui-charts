@@ -142,6 +142,12 @@ pub struct Drawing {
     /// Instrument economics for long and short position sizing. Older drawings use unit sizing.
     #[serde(default)]
     pub position_sizing: PositionSizing,
+    /// Target zone and level colour of position tools; `None` keeps the default green.
+    #[serde(default)]
+    pub position_target_color: Option<[u8; 4]>,
+    /// Stop zone and level colour of position tools; `None` keeps the default red.
+    #[serde(default)]
+    pub position_stop_color: Option<[u8; 4]>,
     /// Customizable Fibonacci levels for Fib tools
     pub fib_config: Option<FibonacciConfig>,
     /// Rows and value area of the volume profile tools
@@ -194,11 +200,35 @@ impl Drawing {
             screen_anchor: None,
             pane: None,
             color: [242, 54, 69, 255], // Default red (#F23645)
-            stroke_width: 2.0,
+            stroke_width: if matches!(
+                tool_type,
+                DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciExtension
+                    | DrawingToolType::FibonacciTimeZones
+                    | DrawingToolType::TrendBasedFibTime
+                    | DrawingToolType::FibonacciCircles
+                    | DrawingToolType::FibonacciSpeedResistanceArcs
+            ) {
+                1.0
+            } else {
+                2.0
+            },
             completed: false,
             text: (tool_type == DrawingToolType::Sticker).then(|| "sticker:bull".into()),
             // Styling defaults
-            line_style: LineStyle::Solid,
+            line_style: if matches!(
+                tool_type,
+                DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciExtension
+                    | DrawingToolType::FibonacciTimeZones
+                    | DrawingToolType::TrendBasedFibTime
+                    | DrawingToolType::FibonacciCircles
+                    | DrawingToolType::FibonacciSpeedResistanceArcs
+            ) {
+                LineStyle::Dashed
+            } else {
+                LineStyle::Solid
+            },
             fill_color: match tool_type {
                 DrawingToolType::XABCDPattern
                 | DrawingToolType::CypherPattern
@@ -248,9 +278,15 @@ impl Drawing {
             timeframe_visibility: TimeframeVisibility::all(),
             position_size: None,
             position_sizing: PositionSizing::default(),
+            position_target_color: None,
+            position_stop_color: None,
             fib_config: matches!(
                 tool_type,
-                DrawingToolType::FibonacciTimeZones
+                DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciExtension
+                    | DrawingToolType::FibonacciChannel
+                    | DrawingToolType::FibonacciWedge
+                    | DrawingToolType::FibonacciTimeZones
                     | DrawingToolType::FibonacciSpeedFan
                     | DrawingToolType::TrendBasedFibTime
                     | DrawingToolType::FibonacciCircles
@@ -343,7 +379,7 @@ impl Drawing {
 
     /// The Fibonacci config in use and the price of each of its visible levels, for a retracement
     /// or an extension projected from its third anchor (the first anchor for legacy two-point drawings).
-    pub(crate) fn fib_levels(&self) -> Option<(FibonacciConfig, Vec<f64>)> {
+    pub(crate) fn fib_levels(&self) -> Option<(std::borrow::Cow<'_, FibonacciConfig>, Vec<f64>)> {
         let extension = match self.tool_type {
             DrawingToolType::FibonacciRetracement => false,
             DrawingToolType::FibonacciExtension => true,
@@ -352,13 +388,7 @@ impl Drawing {
         let [start, end, ..] = &self.chart_points[..] else {
             return None;
         };
-        let config = self.fib_config.clone().unwrap_or_else(|| {
-            if extension {
-                FibonacciConfig::extension_default()
-            } else {
-                FibonacciConfig::default()
-            }
-        });
+        let config = self.fibonacci_config();
         let origin = self.chart_points.get(2).unwrap_or(start).price;
         let prices = config
             .level_prices(start.price, end.price, extension, origin)
@@ -715,7 +745,10 @@ mod tests {
             drawing
         };
         let mut fib = drawing(T::FibonacciRetracement, &[(0.0, 100.0), (10.0, 200.0)]);
-        let mut config = FibonacciConfig::default();
+        let mut config = FibonacciConfig {
+            levels_as_percent: true,
+            ..Default::default()
+        };
         config.levels[1].visible = false;
         config.levels[2].label = "100%".into();
         config.levels[3].label.clear();
