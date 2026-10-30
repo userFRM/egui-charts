@@ -53,12 +53,12 @@ impl HandleService {
     /// Returns the selection handles for a drawing based on its tool type.
     ///
     /// Handle layouts vary by tool type:
-    /// - **Two-point tools** (TrendLine, Fibonacci, etc.): Start, End, and Middle handles
-    /// - **Rectangle**: Four corner handles and a Middle handle
+    /// - **Two-point tools** (TrendLine, Fibonacci, etc.): Start and End handles
+    /// - **Rectangle**: Four corner handles and four edge handles
     /// - **Single-point tools** (HorizontalLine, VerticalLine): One Start handle
     /// - **Glyphs**: Four resize corners around the centre and a Middle move handle
     /// - **Three-anchor channels**: Four indexed handles, one at each line end
-    /// - **Multi-point tools**: Indexed handles at each point plus a centroid Middle handle
+    /// - **Multi-point tools**: Indexed handles at each anchor
     pub fn get_handles(drawing: &Drawing) -> Vec<(HandlePos, Pos2)> {
         let mut handles = Vec::new();
 
@@ -69,12 +69,6 @@ impl HandleService {
                 }
                 if drawing.points.len() >= 2 {
                     handles.push((HandlePos::End, drawing.points[1]));
-                    // Middle handle for moving entire drawing
-                    let mid = Pos2::new(
-                        (drawing.points[0].x + drawing.points[1].x) / 2.0,
-                        (drawing.points[0].y + drawing.points[1].y) / 2.0,
-                    );
-                    handles.push((HandlePos::Middle, mid));
                 }
             }
             DrawingToolType::Rect => {
@@ -85,7 +79,11 @@ impl HandleService {
                     handles.push((HandlePos::TopRight, Pos2::new(p2.x, p1.y)));
                     handles.push((HandlePos::BottomLeft, Pos2::new(p1.x, p2.y)));
                     handles.push((HandlePos::BottomRight, p2));
-                    handles.push((HandlePos::Middle, p1 + (p2 - p1) / 2.0));
+                    let mid = p1 + (p2 - p1) / 2.0;
+                    handles.push((HandlePos::Top, Pos2::new(mid.x, p1.y)));
+                    handles.push((HandlePos::Bottom, Pos2::new(mid.x, p2.y)));
+                    handles.push((HandlePos::Left, Pos2::new(p1.x, mid.y)));
+                    handles.push((HandlePos::Right, Pos2::new(p2.x, mid.y)));
                 }
             }
             DrawingToolType::FontIcon | DrawingToolType::Sticker => {
@@ -121,11 +119,6 @@ impl HandleService {
                 }
                 if drawing.points.len() >= 2 {
                     handles.push((HandlePos::End, drawing.points[1]));
-                    let mid = Pos2::new(
-                        (drawing.points[0].x + drawing.points[1].x) / 2.0,
-                        (drawing.points[0].y + drawing.points[1].y) / 2.0,
-                    );
-                    handles.push((HandlePos::Middle, mid));
                 }
             }
             // A position: the entry and the width on the entry line, the target and the stop
@@ -169,14 +162,6 @@ impl HandleService {
                 for (i, &point) in drawing.points.iter().enumerate() {
                     handles.push((HandlePos::Point(i), point));
                 }
-                // Add middle handle for moving if we have points
-                if drawing.points.len() >= 2 {
-                    let cx: f32 = drawing.points.iter().map(|p| p.x).sum::<f32>()
-                        / drawing.points.len() as f32;
-                    let cy: f32 = drawing.points.iter().map(|p| p.y).sum::<f32>()
-                        / drawing.points.len() as f32;
-                    handles.push((HandlePos::Middle, Pos2::new(cx, cy)));
-                }
             }
         }
 
@@ -219,10 +204,17 @@ impl HandleService {
         H: Fn(f64, f32, f32) -> f64,
     {
         if handle == HandlePos::Middle {
-            if let Some((_, center)) = Self::get_handles(drawing)
+            let count = drawing.points.len().max(1) as f32;
+            let centroid = drawing
+                .points
+                .iter()
+                .fold(egui::Vec2::ZERO, |sum, p| sum + p.to_vec2())
+                / count;
+            let center = Self::get_handles(drawing)
                 .into_iter()
                 .find(|(h, _)| *h == handle)
-            {
+                .map_or(Pos2::ZERO + centroid, |(_, p)| p);
+            if !drawing.points.is_empty() {
                 let bars = x_to_bar(new_pos.x) - x_to_bar(center.x);
                 for point in &mut drawing.chart_points {
                     point.bar_idx += bars;
@@ -460,6 +452,16 @@ impl HandleService {
                 drawing.chart_points[1].bar_idx = x_to_bar(new_pos.x);
                 drawing.chart_points[1].price = y_to_price(new_pos.y);
             }
+            HandlePos::Top | HandlePos::Bottom => {
+                let index = usize::from(handle == HandlePos::Bottom);
+                drawing.points[index].y = new_pos.y;
+                drawing.chart_points[index].price = y_to_price(new_pos.y);
+            }
+            HandlePos::Left | HandlePos::Right => {
+                let index = usize::from(handle == HandlePos::Right);
+                drawing.points[index].x = new_pos.x;
+                drawing.chart_points[index].bar_idx = x_to_bar(new_pos.x);
+            }
             _ => {}
         }
     }
@@ -675,11 +677,7 @@ mod tests {
             (
                 DrawingToolType::TrendLine,
                 vec![pos2(100.0, 200.0), pos2(300.0, 400.0)],
-                vec![
-                    (Start, pos2(100.0, 200.0)),
-                    (End, pos2(300.0, 400.0)),
-                    (Middle, pos2(200.0, 300.0)),
-                ],
+                vec![(Start, pos2(100.0, 200.0)), (End, pos2(300.0, 400.0))],
             ),
             (
                 DrawingToolType::Rect,
@@ -689,7 +687,10 @@ mod tests {
                     (TopRight, pos2(200.0, 100.0)),
                     (BottomLeft, pos2(100.0, 300.0)),
                     (BottomRight, pos2(200.0, 300.0)),
-                    (Middle, pos2(150.0, 200.0)),
+                    (Top, pos2(150.0, 100.0)),
+                    (Bottom, pos2(150.0, 300.0)),
+                    (Left, pos2(100.0, 200.0)),
+                    (Right, pos2(200.0, 200.0)),
                 ],
             ),
             (
@@ -723,11 +724,7 @@ mod tests {
             (
                 DrawingToolType::FibonacciRetracement,
                 vec![pos2(0.0, 0.0), pos2(100.0, 50.0)],
-                vec![
-                    (Start, pos2(0.0, 0.0)),
-                    (End, pos2(100.0, 50.0)),
-                    (Middle, pos2(50.0, 25.0)),
-                ],
+                vec![(Start, pos2(0.0, 0.0)), (End, pos2(100.0, 50.0))],
             ),
             (
                 DrawingToolType::FibonacciChannel,
@@ -736,7 +733,6 @@ mod tests {
                     (Point(0), pos2(0.0, 0.0)),
                     (Point(1), pos2(30.0, 0.0)),
                     (Point(2), pos2(0.0, 60.0)),
-                    (Middle, pos2(10.0, 20.0)),
                 ],
             ),
             (
@@ -746,7 +742,6 @@ mod tests {
                     (Point(0), pos2(0.0, 0.0)),
                     (Point(1), pos2(30.0, 0.0)),
                     (Point(2), pos2(0.0, 60.0)),
-                    (Middle, pos2(10.0, 20.0)),
                 ],
             ),
         ];
@@ -1025,7 +1020,72 @@ mod tests {
     /// or multi-point tool.
     #[test]
     fn update_handle_moves_screen_and_chart_points() {
+        // Edges ignore the pointer's other coordinate, including reversed and crossed sides.
         let cases = [
+            (
+                DrawingToolType::Rect,
+                vec![pos2(100.0, 100.0), pos2(200.0, 300.0)],
+                HandlePos::Top,
+                pos2(250.0, 80.0),
+                vec![pos2(100.0, 80.0), pos2(200.0, 300.0)],
+                vec![ChartPoint::new(10.0, 920.0), ChartPoint::new(20.0, 700.0)],
+            ),
+            (
+                DrawingToolType::Rect,
+                vec![pos2(200.0, 300.0), pos2(100.0, 100.0)],
+                HandlePos::Top,
+                pos2(250.0, 80.0),
+                vec![pos2(200.0, 80.0), pos2(100.0, 100.0)],
+                vec![ChartPoint::new(20.0, 920.0), ChartPoint::new(10.0, 900.0)],
+            ),
+            (
+                DrawingToolType::Rect,
+                vec![pos2(100.0, 100.0), pos2(200.0, 300.0)],
+                HandlePos::Bottom,
+                pos2(250.0, 80.0),
+                vec![pos2(100.0, 100.0), pos2(200.0, 80.0)],
+                vec![ChartPoint::new(10.0, 900.0), ChartPoint::new(20.0, 920.0)],
+            ),
+            (
+                DrawingToolType::Rect,
+                vec![pos2(200.0, 300.0), pos2(100.0, 100.0)],
+                HandlePos::Bottom,
+                pos2(250.0, 80.0),
+                vec![pos2(200.0, 300.0), pos2(100.0, 80.0)],
+                vec![ChartPoint::new(20.0, 700.0), ChartPoint::new(10.0, 920.0)],
+            ),
+            (
+                DrawingToolType::Rect,
+                vec![pos2(100.0, 100.0), pos2(200.0, 300.0)],
+                HandlePos::Left,
+                pos2(250.0, 80.0),
+                vec![pos2(250.0, 100.0), pos2(200.0, 300.0)],
+                vec![ChartPoint::new(25.0, 900.0), ChartPoint::new(20.0, 700.0)],
+            ),
+            (
+                DrawingToolType::Rect,
+                vec![pos2(200.0, 300.0), pos2(100.0, 100.0)],
+                HandlePos::Left,
+                pos2(250.0, 80.0),
+                vec![pos2(250.0, 300.0), pos2(100.0, 100.0)],
+                vec![ChartPoint::new(25.0, 700.0), ChartPoint::new(10.0, 900.0)],
+            ),
+            (
+                DrawingToolType::Rect,
+                vec![pos2(100.0, 100.0), pos2(200.0, 300.0)],
+                HandlePos::Right,
+                pos2(250.0, 80.0),
+                vec![pos2(100.0, 100.0), pos2(250.0, 300.0)],
+                vec![ChartPoint::new(10.0, 900.0), ChartPoint::new(25.0, 700.0)],
+            ),
+            (
+                DrawingToolType::Rect,
+                vec![pos2(200.0, 300.0), pos2(100.0, 100.0)],
+                HandlePos::Right,
+                pos2(250.0, 80.0),
+                vec![pos2(200.0, 300.0), pos2(250.0, 100.0)],
+                vec![ChartPoint::new(20.0, 700.0), ChartPoint::new(25.0, 900.0)],
+            ),
             // The width anchor can be off screen while both boundary handles are visible.
             (
                 DrawingToolType::ParallelChannel,

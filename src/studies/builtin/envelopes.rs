@@ -6,12 +6,32 @@ use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
+/// The moving average in the middle of [`Envelopes`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EnvelopeAverage {
+    /// Arithmetic mean of a complete window, named `SMA`.
+    Simple,
+    /// Exponential smoothing with alpha 2/(period+1), seeded by the first price, named `EMA`.
+    Exponential,
+}
+
+impl EnvelopeAverage {
+    /// The abbreviation in the middle line's name.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Simple => "SMA",
+            Self::Exponential => "EMA",
+        }
+    }
+}
+
 /// Moving Average Envelopes
 #[derive(Clone)]
 pub struct Envelopes {
     period: usize,
     percent: f64,
-    ma_type: String,
+    ma_type: EnvelopeAverage,
     values: IndicatorValues,
     stepper: Stepper<State>,
     colors: Vec<Color32>,
@@ -25,12 +45,13 @@ struct State {
 }
 
 impl Envelopes {
-    /// `percent` is clamped into 0 to `f64::MAX`, NaN to 0.
-    pub fn new(period: usize, percent: f64, ma_type: &str) -> Self {
+    /// Bands `percent` above and below a `ma_type` average of `period` closes. `percent` is
+    /// clamped into 0 to `f64::MAX`, NaN to 0.
+    pub fn new(period: usize, percent: f64, ma_type: EnvelopeAverage) -> Self {
         Self {
             period: period.max(1),
             percent: clamp_param(percent, 0.0, f64::MAX),
-            ma_type: ma_type.to_string(),
+            ma_type,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
@@ -45,7 +66,7 @@ impl Envelopes {
 
 impl Default for Envelopes {
     fn default() -> Self {
-        Self::new(20, 2.5, "SMA")
+        Self::new(20, 2.5, EnvelopeAverage::Simple)
     }
 }
 
@@ -59,7 +80,7 @@ impl Indicator for Envelopes {
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
         percent: number("Percent", 0.0, f64::MAX),
-        ma_type: choice("Average", ["SMA".to_owned(), "EMA".to_owned()])
+        ma_type: choice("Average", [EnvelopeAverage::Simple, EnvelopeAverage::Exponential])
     ; {});
 
     fn name(&self) -> &str {
@@ -77,7 +98,7 @@ impl Indicator for Envelopes {
     fn update(&mut self, data: &[Bar], from: usize) {
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                let ma = if self.ma_type == "EMA" {
+                let ma = if self.ma_type == EnvelopeAverage::Exponential {
                     state
                         .ema
                         .next(bar.close, 1, 2.0 / (self.period as f64 + 1.0))
@@ -140,7 +161,7 @@ impl Indicator for Envelopes {
     fn line_names(&self) -> Vec<String> {
         vec![
             format!("Upper(+{}%)", self.percent),
-            format!("{}({})", self.ma_type, self.period),
+            format!("{}({})", self.ma_type.label(), self.period),
             format!("Lower(-{}%)", self.percent),
         ]
     }

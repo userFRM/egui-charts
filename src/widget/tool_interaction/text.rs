@@ -13,23 +13,7 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize) {
     else {
         return;
     };
-    if !matches!(
-        drawing.tool_type,
-        DrawingToolType::TextLabel
-            | DrawingToolType::AnchoredText
-            | DrawingToolType::Note
-            | DrawingToolType::AnchoredNote
-            | DrawingToolType::Callout
-            | DrawingToolType::Comment
-            | DrawingToolType::FlagNote
-            | DrawingToolType::Signpost
-            | DrawingToolType::PriceLabel
-            | DrawingToolType::PriceNote
-            | DrawingToolType::Table
-            | DrawingToolType::Image
-            | DrawingToolType::Tweet
-            | DrawingToolType::Idea
-    ) {
+    if !drawing.tool_type.edits_text_inline() {
         return;
     }
     manager.text_editor = Some(TextEditState {

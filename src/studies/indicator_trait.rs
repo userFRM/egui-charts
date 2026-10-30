@@ -183,7 +183,11 @@ pub trait Indicator: Send {
         Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 16)
     }
 
-    /// Presentation defaults for a zero-based output line.
+    /// Presentation defaults for a zero-based output line. Any line is accepted: one at or past
+    /// [`line_count`](Self::line_count), which renderers do not draw, still gets a style, so an
+    /// implementation must not panic on it. The default takes the line's colour from
+    /// [`colors`](Self::colors), white for a line without one, and its width from
+    /// [`line_style`](Self::line_style).
     fn plot_style(&self, line: usize) -> super::PlotStyle {
         super::PlotStyle {
             color: self.colors().get(line).copied().unwrap_or(Color32::WHITE),
@@ -453,6 +457,7 @@ pub trait Indicator: Send {
     fn values(&self) -> &IndicatorValues;
 
     /// Rendering style of an overlay line. Defaults to a 1 px line in its configured colour.
+    /// Any line is accepted, as for [`plot_style`](Self::plot_style).
     fn line_style(&self, line: usize) -> IndicatorLineStyle {
         let _ = line;
         IndicatorLineStyle::default()

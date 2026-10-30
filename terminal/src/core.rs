@@ -4,10 +4,11 @@ use super::{Action, ExportContents, ExportFile, Terminal};
 use egui_charts::Chart;
 use egui_charts::data::FeedStatus;
 use egui_charts::model::{ChartType, Timeframe};
-use egui_charts::services::{Notification, UserSettings};
+use egui_charts::services::{Notification, SettingsStore, UserSettings};
 use egui_charts::theme::Theme;
 use egui_charts::ui::Control;
 use egui_charts::ui::app_state::ChartAppState;
+use egui_charts::ui::dialogs::StorageConflictDialog;
 use egui_charts::ui::floating_replay_control::ReplayControlAction;
 use egui_charts::ui::top_toolbar::TopToolbarAction;
 use egui_charts::widget::SeriesId;
@@ -70,6 +71,12 @@ impl ChartAppState for ActiveChart<'_> {
 
 impl Terminal {
     pub(super) fn core_perform(&mut self, action: Action) -> Option<Action> {
+        if let Action::StorageConflict(choice) = action {
+            if let Some(settings) = &mut self.settings {
+                settings.resolve_conflict(choice);
+            }
+            return None;
+        }
         let Action::TopToolbar(top) = action else {
             return Some(action);
         };
@@ -217,6 +224,7 @@ impl Terminal {
             || self.layouts_modal()
             || self.compare_modal()
             || self.commands_modal()
+            || self.settings.as_ref().is_some_and(SettingsStore::conflict)
     }
 
     /// Shows the top toolbar in line with the active chart and queues what it emitted.
@@ -305,6 +313,22 @@ impl Terminal {
         }
         if let Some(settings) = loaded {
             self.apply_user_settings(settings);
+        }
+    }
+
+    /// Asks how to settle settings that another window or device changed while these had
+    /// unsaved changes.
+    pub(super) fn show_storage_conflict(&mut self, ctx: &egui::Context) {
+        if !self.settings.as_ref().is_some_and(SettingsStore::conflict) {
+            return;
+        }
+        let dialog = StorageConflictDialog::new(
+            "Settings changed elsewhere",
+            "Another window or device saved the settings while this window had unsaved \
+             changes. Nothing is saved until you choose.",
+        );
+        if let Some(choice) = dialog.show(ctx) {
+            self.emit(Action::StorageConflict(choice));
         }
     }
 }

@@ -1207,7 +1207,12 @@ mod tests {
     use crate::widget::test_frames::chart;
     use egui::{Context, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
-    fn pointer(ctx: &Context, chart: &mut crate::widget::Chart, pos: Pos2, pressed: Option<bool>) {
+    fn pointer(
+        ctx: &Context,
+        chart: &mut crate::widget::Chart,
+        pos: Pos2,
+        pressed: Option<bool>,
+    ) -> egui::CursorIcon {
         let mut events = vec![Event::PointerMoved(pos)];
         if let Some(pressed) = pressed {
             events.push(Event::PointerButton {
@@ -1218,7 +1223,7 @@ mod tests {
             });
         }
         let time = ctx.input(|input| input.time) + 0.1;
-        crate::widget::test_frames::frame(ctx, chart, time, events);
+        crate::widget::test_frames::frame(ctx, chart, time, events)
     }
 
     fn click(ctx: &Context, chart: &mut crate::widget::Chart, pos: Pos2) {
@@ -1417,7 +1422,28 @@ mod tests {
                         .hit_test(chart.get_rendered_price_rect().center()),
                     None
                 );
-                chart.drawings_mut().select(id);
+                assert!(chart.drawings().is_selected(id));
+                chart.drawings_mut().deselect();
+                let body = first.lerp(second, 0.25);
+                assert_eq!(
+                    pointer(&ctx, &mut chart, body, None),
+                    egui::CursorIcon::PointingHand
+                );
+                pointer(&ctx, &mut chart, body, Some(true));
+                let body_to = body + egui::vec2(24.0, 10.0);
+                assert_eq!(
+                    pointer(&ctx, &mut chart, body_to, None),
+                    egui::CursorIcon::Grabbing
+                );
+                pointer(&ctx, &mut chart, body_to, Some(false));
+                assert!(chart.drawings().is_selected(id));
+                assert_eq!(chart.get_time_scale_state(), viewport);
+                assert!(chart.undo());
+                pointer(&ctx, &mut chart, first, None);
+                assert_eq!(
+                    pointer(&ctx, &mut chart, first, None),
+                    egui::CursorIcon::ResizeNwSe
+                );
                 let to = first + egui::vec2(0.0, 15.0);
                 drag(&ctx, &mut chart, first, to);
                 let moved = chart.drawings().drawings[0].chart_points[0].price;
