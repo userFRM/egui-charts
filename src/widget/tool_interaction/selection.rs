@@ -162,7 +162,10 @@ fn handle_cursor(manager: &DrawingManager, id: usize, handle: HandlePos) -> egui
     use egui::CursorIcon;
     let reversed = manager.drawings.iter().any(|d| {
         d.id == id
-            && d.tool_type == DrawingToolType::Rect
+            && matches!(
+                d.tool_type,
+                DrawingToolType::Rect | DrawingToolType::GannBox
+            )
             && d.points.len() >= 2
             && (d.points[1].x - d.points[0].x) * (d.points[1].y - d.points[0].y) < 0.0
     });

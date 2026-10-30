@@ -1,7 +1,8 @@
 //! Inputs that correspond to the selected tool's saved drawing configuration.
 
+use crate::drawings::domain::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
 use crate::drawings::{
-    Drawing, DrawingToolType as Tool, FibonacciLevel, GannConfig, GannFanDirection,
+    Drawing, DrawingToolType as Tool, FibonacciLevel, GannConfig, GannFanDirection, GannLevel,
     PitchforkConfig, PitchforkLevel, PositionSize, RegressionTrendConfig,
 };
 
@@ -48,7 +49,7 @@ impl InputsTab {
     pub(crate) fn show(
         ui: &mut Ui,
         drawing: &mut Drawing,
-        pickers: &mut Vec<ColorPickerState>,
+        pickers: &mut Vec<Vec<ColorPickerState>>,
         coordinates: &mut CoordinatesState,
         tick_size: Option<f64>,
     ) {
@@ -62,78 +63,14 @@ impl InputsTab {
             | Tool::FibonacciSpeedFan
             | Tool::TrendBasedFibTime
             | Tool::FibonacciCircles
-            | Tool::FibonacciSpeedResistanceArcs => fibonacci(ui, drawing, pickers),
+            | Tool::FibonacciSpeedResistanceArcs => {
+                fibonacci(ui, drawing, grid_pickers(pickers, 0))
+            }
             Tool::Pitchfork
             | Tool::SchiffPitchfork
             | Tool::ModifiedSchiffPitchfork
-            | Tool::InsidePitchfork => pitchfork(ui, drawing, pickers),
-            Tool::GannBox | Tool::GannSquare | Tool::GannFixed => {
-                let mut config = drawing.gann.clone().unwrap_or_else(|| {
-                    if drawing.tool_type == Tool::GannFixed {
-                        GannConfig {
-                            price_levels: vec![0.0, 0.25, 0.5, 0.75, 1.0],
-                            time_levels: vec![0.0, 0.25, 0.5, 0.75, 1.0],
-                            ..GannConfig::default()
-                        }
-                    } else {
-                        GannConfig::default()
-                    }
-                });
-                let original = config.clone();
-                let square = drawing.tool_type == Tool::GannSquare;
-                if square {
-                    ui.checkbox(&mut config.show_grid, l10n::text(ui.ctx(), "Show grid"));
-                }
-                if !square || config.show_grid {
-                    fractions(
-                        ui,
-                        "Price divisions",
-                        &mut config.price_levels,
-                        0.0..=1.0,
-                        0.5,
-                    );
-                    fractions(
-                        ui,
-                        "Time divisions",
-                        &mut config.time_levels,
-                        0.0..=1.0,
-                        0.5,
-                    );
-                }
-                if square {
-                    ui.checkbox(&mut config.show_fan, l10n::text(ui.ctx(), "Show fan"));
-                    if config.show_fan {
-                        let ctx = ui.ctx().clone();
-                        ui.combo_select(
-                            "gann_fan_direction",
-                            &mut config.fan_direction,
-                            [
-                                GannFanDirection::Forward,
-                                GannFanDirection::Reverse,
-                                GannFanDirection::Both,
-                            ],
-                            |v| {
-                                l10n::text(
-                                    &ctx,
-                                    match v {
-                                        GannFanDirection::Forward => "Forward",
-                                        GannFanDirection::Reverse => "Reverse",
-                                        GannFanDirection::Both => "Both",
-                                    },
-                                )
-                            },
-                        );
-                        fractions(ui, "Fan ratios", &mut config.fan_ratios, 0.01..=100.0, 1.0);
-                    }
-                    ui.checkbox(&mut config.show_arcs, l10n::text(ui.ctx(), "Show arcs"));
-                    if config.show_arcs {
-                        fractions(ui, "Arc ratios", &mut config.arc_ratios, 0.01..=1.41, 0.5);
-                    }
-                }
-                if config != original {
-                    drawing.gann = Some(config);
-                }
-            }
+            | Tool::InsidePitchfork => pitchfork(ui, drawing, grid_pickers(pickers, 0)),
+            Tool::GannBox | Tool::GannSquare | Tool::GannFixed => gann(ui, drawing, pickers),
             Tool::GhostFeed => {
                 let mut config = drawing.ghost_feed.unwrap_or_default();
                 let original = config;
@@ -153,6 +90,7 @@ impl InputsTab {
             Tool::LongPos | Tool::ShortPos => {
                 position_levels(ui, coordinates, drawing.tool_type, tick_size);
                 let colors = drawing.position_colors();
+                let pickers = grid_pickers(pickers, 0);
                 pickers.resize_with(2, ColorPickerState::default);
                 FormGrid::new("position_colors").show(ui, |ui| {
                     let (target_picker, stop_picker) = pickers.split_at_mut(1);
@@ -326,6 +264,7 @@ impl InputsTab {
                     });
                     ui.end_row();
                     if config.display != ProfileDisplay::Total {
+                        let pickers = grid_pickers(pickers, 0);
                         pickers.resize_with(2, ColorPickerState::default);
                         let label = ui.label(l10n::text(ui.ctx(), "Up colour"));
                         ui.label_inputs_by(label.id, |ui| {
@@ -513,96 +452,115 @@ struct LevelRow<'a> {
     range: std::ops::RangeInclusive<f32>,
 }
 
+/// The colour pickers of the tab's `index`th level grid.
+fn grid_pickers(
+    pickers: &mut Vec<Vec<ColorPickerState>>,
+    index: usize,
+) -> &mut Vec<ColorPickerState> {
+    if pickers.len() <= index {
+        pickers.resize_with(index + 1, Vec::new);
+    }
+    &mut pickers[index]
+}
+
+/// `item` is the English noun of one row, which names its controls and scopes their ids.
 fn level_grid<T>(
     ui: &mut Ui,
+    item: &str,
     levels: &mut Vec<T>,
     pickers: &mut Vec<ColorPickerState>,
     new_level: T,
     row: impl Fn(&mut T) -> LevelRow<'_>,
 ) {
-    pickers.resize_with(levels.len() + 1, ColorPickerState::default);
-    ui.horizontal(|ui| {
-        ui.label(l10n::text(ui.ctx(), "One colour for all levels"));
-        let mut color = levels
-            .first_mut()
-            .map_or([128, 128, 128, 255], |l| *row(l).color);
-        if level_color(ui, &mut color, &mut pickers[0]) {
-            for level in levels.iter_mut() {
-                *row(level).color = color;
+    ui.push_id(item, |ui| {
+        pickers.resize_with(levels.len() + 1, ColorPickerState::default);
+        ui.horizontal(|ui| {
+            ui.label(l10n::text(ui.ctx(), "One colour for all levels"));
+            let mut color = levels
+                .first_mut()
+                .map_or([128, 128, 128, 255], |l| *row(l).color);
+            if level_color(ui, &mut color, &mut pickers[0]) {
+                for level in levels.iter_mut() {
+                    *row(level).color = color;
+                }
             }
-        }
-    });
-    let mut remove = None;
-    for (i, level) in levels.iter_mut().enumerate() {
-        ui.push_id(i, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                let fields = row(level);
-                let name = |ui: &Ui, property| {
-                    l10n::format_text(ui.ctx(), property, &[("0", (i + 1).to_string())])
-                };
-                ui.checkbox(fields.visible, "")
-                    .accessible_name(name(ui, "Level {0} visible"));
-                if ui
-                    .add(
-                        egui::DragValue::new(fields.value)
-                            .range(fields.range)
-                            .speed(0.001)
-                            .max_decimals(6),
-                    )
-                    .accessible_name(name(ui, "Level {0} ratio"))
-                    .changed()
-                    && let Some(label) = fields.legacy_label
-                {
-                    label.clear();
-                }
-                level_color(ui, fields.color, &mut pickers[i + 1]);
-                if let Some(style) = fields.line_style {
-                    egui::ComboBox::from_id_salt("level_style")
-                        .icon(crate::ui_kit::buttons::combo_chevron)
-                        .selected_text(l10n::text(ui.ctx(), style.name()))
-                        .show_ui(ui, |ui| {
-                            for choice in LineStyle::all() {
-                                ui.selectable_value(
-                                    style,
-                                    *choice,
-                                    l10n::text(ui.ctx(), choice.name()),
-                                );
-                            }
-                        })
-                        .response
-                        .accessible_name(name(ui, "Level {0} line style"));
-                }
-                if let Some((width, inherited)) = fields.width {
-                    let mut value = width.unwrap_or(inherited);
+        });
+        let mut remove = None;
+        for (i, level) in levels.iter_mut().enumerate() {
+            ui.push_id(i, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let fields = row(level);
+                    let name = |ui: &Ui, property: &str| {
+                        l10n::format_text(
+                            ui.ctx(),
+                            &format!("{item} {{0}} {property}"),
+                            &[("0", (i + 1).to_string())],
+                        )
+                    };
+                    ui.checkbox(fields.visible, "")
+                        .accessible_name(name(ui, "visible"));
                     if ui
                         .add(
-                            egui::DragValue::new(&mut value)
-                                .range(
-                                    f32::MIN_POSITIVE
-                                        ..=crate::drawings::validation::MAX_STROKE_WIDTH,
-                                )
-                                .speed(0.1)
-                                .suffix(" px"),
+                            egui::DragValue::new(fields.value)
+                                .range(fields.range)
+                                .speed(0.001)
+                                .max_decimals(6),
                         )
-                        .accessible_name(name(ui, "Level {0} width"))
+                        .accessible_name(name(ui, "ratio"))
                         .changed()
+                        && let Some(label) = fields.legacy_label
                     {
-                        *width = Some(value);
+                        label.clear();
                     }
-                }
-                if Button::new("Remove").ghost().show(ui).clicked() {
-                    remove = Some(i);
-                }
+                    level_color(ui, fields.color, &mut pickers[i + 1]);
+                    if let Some(style) = fields.line_style {
+                        egui::ComboBox::from_id_salt("level_style")
+                            .icon(crate::ui_kit::buttons::combo_chevron)
+                            .selected_text(l10n::text(ui.ctx(), style.name()))
+                            .show_ui(ui, |ui| {
+                                for choice in LineStyle::all() {
+                                    ui.selectable_value(
+                                        style,
+                                        *choice,
+                                        l10n::text(ui.ctx(), choice.name()),
+                                    );
+                                }
+                            })
+                            .response
+                            .accessible_name(name(ui, "line style"));
+                    }
+                    if let Some((width, inherited)) = fields.width {
+                        let mut value = width.unwrap_or(inherited);
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut value)
+                                    .range(
+                                        f32::MIN_POSITIVE
+                                            ..=crate::drawings::validation::MAX_STROKE_WIDTH,
+                                    )
+                                    .speed(0.1)
+                                    .suffix(" px"),
+                            )
+                            .accessible_name(name(ui, "width"))
+                            .changed()
+                        {
+                            *width = Some(value);
+                        }
+                    }
+                    if Button::new("Remove").ghost().show(ui).clicked() {
+                        remove = Some(i);
+                    }
+                });
             });
-        });
-    }
-    if let Some(i) = remove {
-        levels.remove(i);
-        pickers.remove(i + 1);
-    }
-    if Button::new("Add level").secondary().show(ui).clicked() {
-        levels.push(new_level);
-    }
+        }
+        if let Some(i) = remove {
+            levels.remove(i);
+            pickers.remove(i + 1);
+        }
+        if Button::new("Add level").secondary().show(ui).clicked() {
+            levels.push(new_level);
+        }
+    });
 }
 
 fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerState>) {
@@ -631,6 +589,7 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
     });
     level_grid(
         ui,
+        "Level",
         &mut config.levels,
         pickers,
         FibonacciLevel::new(1.0, "", drawing.color),
@@ -738,6 +697,7 @@ fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
     ));
     level_grid(
         ui,
+        "Level",
         &mut config.levels,
         pickers,
         PitchforkLevel {
@@ -767,58 +727,107 @@ fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
     }
 }
 
-fn fractions(
-    ui: &mut Ui,
-    title: &str,
-    levels: &mut Vec<f32>,
-    range: std::ops::RangeInclusive<f32>,
-    new: f32,
-) {
-    ui.strong(l10n::text(ui.ctx(), title));
-    let mut remove = None;
-    let columns = ((ui.available_width() / 96.0) as usize).clamp(1, 3);
-    egui::Grid::new(title)
-        .num_columns(columns * 2)
-        .show(ui, |ui| {
-            for (i, value) in levels.iter_mut().enumerate() {
-                let speed = (range.end() - range.start()) / 1000.0;
-                ui.add(
-                    egui::DragValue::new(value)
-                        .range(range.clone())
-                        .speed(speed),
-                )
-                .accessible_name(l10n::format_text(
-                    ui.ctx(),
-                    "{title} {index}",
-                    &[
-                        ("title", l10n::text(ui.ctx(), title)),
-                        ("index", (i + 1).to_string()),
-                    ],
-                ));
-                if Button::icon(&crate::icons::icons::TRASH)
-                    .ghost()
-                    .tooltip("Remove division")
-                    .show(ui)
-                    .clicked()
-                {
-                    remove = Some(i);
-                }
-                if (i + 1) % columns == 0 {
-                    ui.end_row();
-                }
-            }
-        });
-    if let Some(i) = remove {
-        levels.remove(i);
+fn gann_row(level: &mut GannLevel, range: std::ops::RangeInclusive<f32>) -> LevelRow<'_> {
+    LevelRow {
+        visible: &mut level.visible,
+        value: &mut level.value,
+        legacy_label: None,
+        color: &mut level.color,
+        line_style: None,
+        width: None,
+        range,
     }
-    if Button::new(format!("Add {}", title.to_lowercase()))
-        .secondary()
-        .show(ui)
-        .clicked()
-    {
-        levels.push(new);
+}
+
+fn gann(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<Vec<ColorPickerState>>) {
+    let tool = drawing.tool_type;
+    let mut config = drawing
+        .gann
+        .clone()
+        .unwrap_or_else(|| GannConfig::for_tool(tool));
+    let original = config.clone();
+    let square = matches!(tool, Tool::GannSquare | Tool::GannFixed);
+    let max = if square { GANN_SQUARE_UNITS } else { 1.0 };
+    let new = |value| GannLevel::new(value, drawing.color);
+    if square {
+        ui.checkbox(&mut config.show_grid, l10n::text(ui.ctx(), "Show grid"));
     }
-    ui.space_sm();
+    if !square || config.show_grid {
+        ui.strong(l10n::text(ui.ctx(), "Price levels"));
+        level_grid(
+            ui,
+            "Price level",
+            &mut config.price_levels,
+            grid_pickers(pickers, 0),
+            new(max / 2.0),
+            |level| gann_row(level, 0.0..=max),
+        );
+        ui.strong(l10n::text(ui.ctx(), "Time levels"));
+        level_grid(
+            ui,
+            "Time level",
+            &mut config.time_levels,
+            grid_pickers(pickers, 1),
+            new(max / 2.0),
+            |level| gann_row(level, 0.0..=max),
+        );
+    }
+    if square {
+        ui.checkbox(&mut config.show_fan, l10n::text(ui.ctx(), "Show fan"));
+        if config.show_fan {
+            let ctx = ui.ctx().clone();
+            ui.combo_select(
+                "gann_fan_direction",
+                &mut config.fan_direction,
+                [
+                    GannFanDirection::Forward,
+                    GannFanDirection::Reverse,
+                    GannFanDirection::Both,
+                ],
+                |v| {
+                    l10n::text(
+                        &ctx,
+                        match v {
+                            GannFanDirection::Forward => "Forward",
+                            GannFanDirection::Reverse => "Reverse",
+                            GannFanDirection::Both => "Both",
+                        },
+                    )
+                },
+            );
+            ui.strong(l10n::text(ui.ctx(), "Fan lines"));
+            level_grid(
+                ui,
+                "Fan line",
+                &mut config.fan_ratios,
+                grid_pickers(pickers, 2),
+                new(1.0),
+                |level| gann_row(level, 0.01..=100.0),
+            );
+        }
+        ui.checkbox(&mut config.show_arcs, l10n::text(ui.ctx(), "Show arcs"));
+        if config.show_arcs {
+            ui.strong(l10n::text(ui.ctx(), "Arcs"));
+            level_grid(
+                ui,
+                "Arc",
+                &mut config.arc_ratios,
+                grid_pickers(pickers, 3),
+                new(1.0),
+                |level| gann_row(level, 0.01..=GANN_MAX_ARC),
+            );
+        }
+    } else {
+        ui.checkbox(&mut config.show_angles, l10n::text(ui.ctx(), "Angles"));
+    }
+    background(
+        ui,
+        &mut config.show_background,
+        &mut config.background_opacity,
+    );
+    if config != original {
+        drawing.gann = Some(config);
+    }
 }
 
 fn level_color(ui: &mut Ui, color: &mut [u8; 4], state: &mut ColorPickerState) -> bool {

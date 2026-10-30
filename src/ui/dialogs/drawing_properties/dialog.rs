@@ -514,14 +514,14 @@ impl DrawingPropertiesDialog {
         if state
             .pickers
             .iter()
-            .chain(&state.level_pickers)
+            .chain(state.level_pickers.iter().flatten())
             .any(|p| p.is_open)
         {
             if consume(Key::Escape) {
                 state
                     .pickers
                     .iter_mut()
-                    .chain(&mut state.level_pickers)
+                    .chain(state.level_pickers.iter_mut().flatten())
                     .for_each(|p| p.is_open = false);
             }
         } else if !popup_open && !state.had_focus {
@@ -558,8 +558,8 @@ const FOOTER_HEIGHT: f32 = 60.0;
 struct UiState {
     /// Colour and fill colour pickers of the Style tab.
     pickers: [ColorPickerState; 2],
-    /// Pickers for the current tool's editable levels.
-    level_pickers: Vec<ColorPickerState>,
+    /// One list of colour pickers per level grid of the current tool.
+    level_pickers: Vec<Vec<ColorPickerState>>,
     /// Whether a widget had keyboard focus at the end of the previous frame.
     had_focus: bool,
 }

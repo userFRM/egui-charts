@@ -15,7 +15,8 @@ mod template;
 pub use crate::config::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
 pub use coordinates::ChartPoint;
 pub use drawing::Drawing;
-pub use gann::{GannConfig, GannFanDirection};
+pub(crate) use gann::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
+pub use gann::{GannConfig, GannFanDirection, GannLevel};
 pub use ghost_feed::{GhostCandle, GhostFeedConfig, MAX_GHOST_CANDLES};
 pub use options::{
     ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos,

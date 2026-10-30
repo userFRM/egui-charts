@@ -599,6 +599,7 @@ mod tests {
                         Shape::LineSegment { points, stroke } => (
                             drawing.points.windows(2).any(|p| p == points)
                                 || tool == CyclicLines
+                                || tool == GannBox
                                 || (tool == HeadAndShoulders && stroke.color.a() == 200),
                             *stroke,
                         ),
@@ -618,8 +619,7 @@ mod tests {
                             )
                         }
                         Shape::Rect(r) => (
-                            matches!(tool, GannBox | GannSquare | GannFixed)
-                                && !r.stroke.is_empty(),
+                            matches!(tool, GannSquare | GannFixed) && !r.stroke.is_empty(),
                             r.stroke,
                         ),
                         _ => continue,
@@ -646,7 +646,6 @@ mod tests {
                 if matches!(
                     tool,
                     XABCDPattern
-                        | GannBox
                         | GannSquare
                         | ElliottTriangle
                         | ElliottDoubleCombo
@@ -671,7 +670,6 @@ mod tests {
             ElliottImpulse,
             ElliottCorrection,
             ElliottTriangle,
-            GannBox,
             GannSquare,
             GannFixed,
         ] {
@@ -706,7 +704,7 @@ mod tests {
                             );
                         }
                         Shape::Rect(r) if r.fill.a() > 0 => {
-                            if (matches!(tool, GannBox | GannSquare | GannFixed)
+                            if (matches!(tool, GannSquare | GannFixed)
                                 && r.rect.contains(drawing.points[0]))
                                 || (tool == ThreeDrivesPattern
                                     && r.rect.left() == drawing.points[5].x)

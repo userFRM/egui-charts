@@ -155,7 +155,8 @@ pub struct Drawing {
     /// Band width of the regression trend tool
     pub regression_trend: Option<RegressionTrendConfig>,
 
-    /// Price and time divisions of Gann boxes and squares.
+    /// Levels, fan lines, arcs and background of the Gann tools; `None` draws
+    /// [`GannConfig::for_tool`].
     #[serde(default)]
     pub gann: Option<GannConfig>,
     /// Average range and noise, in ticks, of the candles a Ghost Feed projects.
@@ -247,7 +248,7 @@ impl Drawing {
                         .to_srgba_unmultiplied(),
                 ),
                 DrawingToolType::GannSquare => Some([242, 54, 69, 12]),
-                DrawingToolType::GannBox | DrawingToolType::GannFixed => Some([242, 54, 69, 15]),
+                DrawingToolType::GannFixed => Some([242, 54, 69, 15]),
                 _ => None,
             },
             locked: false,
