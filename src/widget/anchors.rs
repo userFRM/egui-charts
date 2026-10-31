@@ -2,7 +2,7 @@
 
 use super::Chart;
 use crate::drawings::persistence::{
-    DrawingStorage, SaveError, SkippedDrawing, StoredCoord, drawing_to_stored_with,
+    DrawingStorage, SaveError, SkippedDrawing, StoredCoord, StoredDrawing, drawing_to_stored_with,
     stored_to_drawing_with,
 };
 use crate::drawings::{ChartPoint, Drawing, DrawingManager};
@@ -190,30 +190,37 @@ impl Chart {
         manager.eraser_mode = self.drawings.eraser_mode;
         manager.curr_timeframe = self.drawings.curr_timeframe.clone();
         for stored in storage.drawings() {
-            let mut drawing = stored_to_drawing_with(
-                stored,
-                |point| {
-                    point
-                        .time()
-                        .and_then(|time| self.time_to_index(time))
-                        .unwrap_or(0.0) as f32
-                },
-                0,
-            );
-            if let Some(id) = drawing
-                .pane
-                .filter(|_| remap)
-                .and_then(|pane| self.restored_studies.get(&pane))
-            {
-                drawing.pane = Some(*id);
-            } else if let Some(pane) = &stored.pane {
-                drawing.pane = self.stored_pane_owner(pane);
-            }
-            manager.add_synced_drawing(drawing);
+            manager.add_synced_drawing(self.restored_drawing(stored, remap));
         }
         self.drawings = manager;
         self.history.clear();
         Ok(skipped)
+    }
+
+    /// `stored` as a drawing of this chart: anchors at the bars of their times, exact once bars
+    /// load, and in the pane of its study when the chart shows that study, else in the price pane.
+    /// With `remap`, see [`Self::load_drawings_remapped`].
+    pub(super) fn restored_drawing(&self, stored: &StoredDrawing, remap: bool) -> Drawing {
+        let mut drawing = stored_to_drawing_with(
+            stored,
+            |point| {
+                point
+                    .time()
+                    .and_then(|time| self.time_to_index(time))
+                    .unwrap_or(0.0) as f32
+            },
+            0,
+        );
+        if let Some(id) = drawing
+            .pane
+            .filter(|_| remap)
+            .and_then(|pane| self.restored_studies.get(&pane))
+        {
+            drawing.pane = Some(*id);
+        } else if let Some(pane) = &stored.pane {
+            drawing.pane = self.stored_pane_owner(pane);
+        }
+        drawing
     }
 }
 

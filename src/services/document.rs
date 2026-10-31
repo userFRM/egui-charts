@@ -33,6 +33,36 @@ const RELOAD: u64 = 7;
 /// before it is reported as failed.
 const COPY_NAMES: u32 = 100;
 
+/// The name of kept copy `number` of the document `name`: `<name> (local copy)` for the first,
+/// `<name> (local copy 2)` and so on after it.
+fn copy_name(name: &str, number: u32) -> String {
+    match number {
+        1 => format!("{name} (local copy)"),
+        number => format!("{name} (local copy {number})"),
+    }
+}
+
+/// The number of `candidate` if it is a name [`StoredDocument`] gives a kept copy of `name`:
+/// `<name> (local copy)` is 1, `<name> (local copy 2)` up to `<name> (local copy 100)` are their
+/// number. Any other spelling, such as `(local copy 02)` or `(local copy 1)`, is not a copy.
+#[cfg(feature = "drawings")]
+pub(crate) fn copy_number(name: &str, candidate: &str) -> Option<u32> {
+    let rest = candidate
+        .strip_prefix(name)?
+        .strip_prefix(" (local copy")?
+        .strip_suffix(')')?;
+    let number = match rest {
+        "" => 1,
+        rest => rest
+            .strip_prefix(' ')?
+            .parse()
+            .ok()
+            .filter(|number| (2..=COPY_NAMES).contains(number))?,
+    };
+    // `parse` takes "+5" and "05"; only the name the writer gives is a copy.
+    (copy_name(name, number) == candidate).then_some(number)
+}
+
 /// The unsaved document being written as a separate copy for [`ConflictChoice::KeepLocalCopy`].
 struct LocalCopy {
     /// 1 for the name `<name> (local copy)`, 2 for `<name> (local copy 2)` and so on.
@@ -240,10 +270,7 @@ impl StoredDocument {
     /// document of that name is never replaced; a later one replaces only this copy.
     fn write_copy(&self, storage: &dyn Storage) {
         let copy = self.copy.as_ref().expect("copy in progress");
-        let name = match copy.number {
-            1 => format!("{} (local copy)", self.name),
-            number => format!("{} (local copy {number})", self.name),
-        };
+        let name = copy_name(&self.name, copy.number);
         storage.save_versioned(
             self.kind,
             &name,
@@ -665,18 +692,19 @@ pub(crate) mod tests {
     }
 
     impl Storage for Revised {
-        fn list(&self, _: StoreKind, _: Reply<Vec<String>>) {
-            unreachable!()
+        fn list(&self, _: StoreKind, reply: Reply<Vec<String>>) {
+            reply.send(Ok(self.0.lock().unwrap().0.keys().cloned().collect()));
         }
-        fn load(&self, _: StoreKind, _: &str, _: Reply<Option<String>>) {
-            unreachable!()
+        fn load(&self, _: StoreKind, name: &str, reply: Reply<Option<String>>) {
+            reply.send(Ok(self.get(name)));
         }
         fn save(&self, _: StoreKind, name: &str, document: String, reply: Reply<()>) {
             self.put(name, &document);
             reply.send(Ok(()));
         }
-        fn delete(&self, _: StoreKind, _: &str, _: Reply<()>) {
-            unreachable!()
+        fn delete(&self, _: StoreKind, name: &str, reply: Reply<()>) {
+            self.remove(name);
+            reply.send(Ok(()));
         }
         fn load_versioned(&self, _: StoreKind, name: &str, reply: Reply<Option<Versioned>>) {
             let state = self.0.lock().unwrap();
