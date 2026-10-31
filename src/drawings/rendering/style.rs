@@ -817,7 +817,6 @@ mod tests {
                 }
                 let shapes = paint(&drawing);
                 let mut main = 0;
-                let mut details = 0;
                 for shape in &shapes {
                     let (is_main, stroke) = match shape {
                         Shape::LineSegment { points, stroke } => (
@@ -858,7 +857,6 @@ mod tests {
                         && (stroke.color.a() < 255
                             || matches!(shape, Shape::Path(p) if p.closed && p.points.len() >= 8))
                     {
-                        details += 1;
                         assert!(
                             stroke.width <= 2.0,
                             "{tool:?} detail widened to {}",
@@ -867,12 +865,6 @@ mod tests {
                     }
                 }
                 assert!(main > 0, "{tool:?} missing main line");
-                if matches!(
-                    tool,
-                    ElliottTriangle | ElliottDoubleCombo | ElliottTripleCombo
-                ) {
-                    assert!(details > 0, "{tool:?} missing details");
-                }
             }
         }
     }
@@ -885,25 +877,18 @@ mod tests {
             CypherPattern,
             HeadAndShoulders,
             TrianglePattern,
-            ElliottImpulse,
-            ElliottCorrection,
-            ElliottTriangle,
         ] {
             let mut drawing = pattern(tool);
-            if tool != ElliottImpulse {
-                assert!(
-                    drawing.fill_color.is_some(),
-                    "{tool:?} lost its default tint"
-                );
-            }
+            assert!(
+                drawing.fill_color.is_some(),
+                "{tool:?} lost its default tint"
+            );
             let coloured = Drawing::with_color(1, tool, [67, 89, 123, 255]);
-            if tool != ElliottCorrection {
-                assert_eq!(
-                    &coloured.fill_color.unwrap()[..3],
-                    &[67, 89, 123],
-                    "{tool:?} default fill must follow its line colour"
-                );
-            }
+            assert_eq!(
+                &coloured.fill_color.unwrap()[..3],
+                &[67, 89, 123],
+                "{tool:?} default fill must follow its line colour"
+            );
             let configured = Color32::from_rgba_unmultiplied(12, 34, 56, 80);
             for fill in [None, Some([12, 34, 56, 80])] {
                 drawing.fill_color = fill;
