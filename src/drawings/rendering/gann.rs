@@ -93,16 +93,6 @@ pub(super) fn gann_fan_lines(
         .collect()
 }
 
-/// The corner of a Gann square opposite its first anchor: the second anchor, or for a fixed
-/// square five times the first unit that the second anchor marks.
-pub(super) fn gann_square_corner(tool: DrawingToolType, first: Pos2, second: Pos2) -> Pos2 {
-    if tool == DrawingToolType::GannFixed {
-        first + (second - first) * GANN_SQUARE_UNITS
-    } else {
-        second
-    }
-}
-
 /// The visible fan lines of a Gann square whose first anchor is `start` and opposite corner
 /// `corner`, each with its level: from `start` towards the opposite corner and from the opposite
 /// corner back, as the direction selects, up to the square's edge. Invalid ratios are skipped.
@@ -189,7 +179,8 @@ fn gann_square_ring_angles(segments: usize) -> Vec<(f32, f32)> {
 
 /// Rays of a Gann box from each corner to the level points on the two edges away from it: the
 /// price levels on the far side and the time levels on the far top or bottom. A point on the
-/// corner's own edges is skipped, and the opposite corner is reached once.
+/// corner's own edges is skipped, and the opposite corner is reached once, by its price level
+/// or, when that is hidden, by its time level.
 pub(super) fn gann_box_angle_lines(
     p1: Pos2,
     p2: Pos2,
@@ -204,7 +195,11 @@ pub(super) fn gann_box_angle_lines(
         for &f in prices.iter().filter(|&&f| f != fy) {
             lines.push([corner, at(1.0 - fx, f)]);
         }
-        for &t in times.iter().filter(|&&t| t != fx && t != 1.0 - fx) {
+        let far_price = prices.contains(&(1.0 - fy));
+        for &t in times
+            .iter()
+            .filter(|&&t| t != fx && !(t == 1.0 - fx && far_price))
+        {
             lines.push([corner, at(t, 1.0 - fy)]);
         }
     }
@@ -212,6 +207,21 @@ pub(super) fn gann_box_angle_lines(
 }
 
 impl Drawing {
+    /// The corner of a Gann square opposite its first anchor `first`: the second anchor `second`,
+    /// or for a fixed square five of the first units that the second anchor marks, in bars and in
+    /// price, at the screen y of that price from [`Drawing::update_screen_coords`].
+    pub(super) fn gann_square_corner(&self, first: Pos2, second: Pos2) -> Pos2 {
+        if self.tool_type != DrawingToolType::GannFixed {
+            return second;
+        }
+        let corner = first + (second - first) * GANN_SQUARE_UNITS;
+        // Five units of price are not five times the first unit's height on a logarithmic scale.
+        match self.level_ys[..] {
+            [y] => Pos2::new(corner.x, y),
+            _ => corner,
+        }
+    }
+
     /// The stored configuration, or the tool's defaults without building them each frame.
     pub(super) fn gann_config(&self) -> &GannConfig {
         static BOX: LazyLock<GannConfig> =
@@ -305,7 +315,7 @@ impl Drawing {
         let &[start, second, ..] = self.points.as_slice() else {
             return;
         };
-        let corner = gann_square_corner(self.tool_type, start, second);
+        let corner = self.gann_square_corner(start, second);
         let rect = Rect::from_two_pos(start, corner);
         let config = self.gann_config();
         let at = |u: f32, v: f32| {
@@ -355,8 +365,16 @@ impl Drawing {
         }
         if config.show_grid {
             let drawn = |l: &&GannLevel| l.visible && (0.0..=GANN_SQUARE_UNITS).contains(&l.value);
+            // A fixed square's price levels lie at whole first units of price, which a
+            // logarithmic scale spaces unevenly.
+            let level_y = |units: f32| match (self.tool_type, &self.chart_points[..]) {
+                (DrawingToolType::GannFixed, [a, b, ..]) => {
+                    (view.price_to_y)(a.price + (b.price - a.price) * f64::from(units))
+                }
+                _ => at(0.0, units).y,
+            };
             for level in config.price_levels.iter().filter(drawn) {
-                painter.hline(rect.x_range(), at(0.0, level.value).y, stroke(level));
+                painter.hline(rect.x_range(), level_y(level.value), stroke(level));
             }
             for level in config.time_levels.iter().filter(drawn) {
                 painter.vline(at(level.value, 0.0).x, rect.y_range(), stroke(level));
@@ -379,16 +397,20 @@ impl Drawing {
         let [a, b, ..] = self.chart_points.as_slice() else {
             return;
         };
-        let (far_price, units) = if self.tool_type == DrawingToolType::GannFixed {
-            ((view.y_to_price)(corner.y), f64::from(GANN_SQUARE_UNITS))
+        let units = if self.tool_type == DrawingToolType::GannFixed {
+            f64::from(GANN_SQUARE_UNITS)
         } else {
-            (b.price, 1.0)
+            1.0
         };
-        let range = (far_price - a.price).abs();
+        let range = (b.price - a.price).abs() * units;
         let bars = f64::from((b.bar_idx - a.bar_idx).abs()) * units;
         if range.is_finite() && bars.is_finite() {
-            let decimals = crate::scales::price_decimals(a.price);
-            let mut label = format!("{range:.decimals$}\n{} bars", bars.round() as i64);
+            let decimals = super::measurements::change_decimals(view.instrument, a.price, range);
+            let range_text = view.price_formatter.map_or_else(
+                || format!("{range:.decimals$}"),
+                |formatter| formatter.format(range),
+            );
+            let mut label = format!("{range_text}\n{} bars", bars.round() as i64);
             if bars > 0.0 {
                 let ratio_decimals = decimals + 2;
                 label.push_str(&format!("\n{:.ratio_decimals$}/bar", range / bars));
@@ -465,7 +487,9 @@ impl Drawing {
             let pos = Pos2::new(x(level.value), rect.max.y + gap);
             (level, pos, egui::Align2::CENTER_TOP)
         });
-        let mut placed = Vec::<Rect>::new();
+        // A label gives way only to labels of its own kind, so the price and time labels at the
+        // bottom left corner both show.
+        let mut placed = Vec::<(egui::Align2, Rect)>::new();
         for (level, pos, align) in price_labels.chain(time_labels) {
             let color = level_color(level);
             let galley = painter.layout_no_wrap(
@@ -474,10 +498,13 @@ impl Drawing {
                 color,
             );
             let label = align.anchor_size(pos, galley.size());
-            if placed.iter().any(|r| r.intersects(label.expand(2.0))) {
+            if placed
+                .iter()
+                .any(|&(kind, r)| kind == align && r.intersects(label.expand(2.0)))
+            {
                 continue;
             }
-            placed.push(label);
+            placed.push((align, label));
             painter.galley(label.min, galley, color);
         }
     }
@@ -490,34 +517,59 @@ mod tests {
     /// A box started at its top-right corner (100, 0) and dragged to (0, 80), so x(t) = 100 - 100 t
     /// and y(f) = 80 f: each corner reaches the visible price levels on its far side and the time
     /// level 0.25 on its far top or bottom. Times 0 and 1 are on a corner's own edges or at the far
-    /// corner, which the price level 1 or 0 already reaches.
+    /// corner, which the price level 1 or 0 already reaches. With the price level 1 hidden, the
+    /// corners at y = 0 reach the far corner by the time level there instead.
     #[test]
     fn gann_box_angle_lines_run_from_each_corner_to_the_far_level_points() {
         let (p1, p2) = (Pos2::new(100.0, 0.0), Pos2::new(0.0, 80.0));
-        let want = [
-            ((100.0, 0.0), (0.0, 40.0)),
-            ((100.0, 0.0), (0.0, 80.0)),
-            ((100.0, 0.0), (75.0, 80.0)),
-            ((0.0, 0.0), (100.0, 40.0)),
-            ((0.0, 0.0), (100.0, 80.0)),
-            ((0.0, 0.0), (75.0, 80.0)),
-            ((100.0, 80.0), (0.0, 0.0)),
-            ((100.0, 80.0), (0.0, 40.0)),
-            ((100.0, 80.0), (75.0, 0.0)),
-            ((0.0, 80.0), (100.0, 0.0)),
-            ((0.0, 80.0), (100.0, 40.0)),
-            ((0.0, 80.0), (75.0, 0.0)),
-        ]
-        .map(|(a, b): ((f32, f32), (f32, f32))| [Pos2::new(a.0, a.1), Pos2::new(b.0, b.1)]);
-        let got = gann_box_angle_lines(p1, p2, &[0.0, 0.5, 1.0], &[0.0, 0.25, 1.0]);
-        assert!(
-            got.len() == want.len()
-                && got
-                    .iter()
-                    .zip(&want)
-                    .all(|(g, w)| g[0].distance(w[0]) < 1e-3 && g[1].distance(w[1]) < 1e-3),
-            "got {got:?}, want {want:?}"
-        );
+        let cases = [
+            (
+                &[0.0, 0.5, 1.0][..],
+                [
+                    ((100.0, 0.0), (0.0, 40.0)),
+                    ((100.0, 0.0), (0.0, 80.0)),
+                    ((100.0, 0.0), (75.0, 80.0)),
+                    ((0.0, 0.0), (100.0, 40.0)),
+                    ((0.0, 0.0), (100.0, 80.0)),
+                    ((0.0, 0.0), (75.0, 80.0)),
+                    ((100.0, 80.0), (0.0, 0.0)),
+                    ((100.0, 80.0), (0.0, 40.0)),
+                    ((100.0, 80.0), (75.0, 0.0)),
+                    ((0.0, 80.0), (100.0, 0.0)),
+                    ((0.0, 80.0), (100.0, 40.0)),
+                    ((0.0, 80.0), (75.0, 0.0)),
+                ],
+            ),
+            (
+                &[0.0, 0.5][..],
+                [
+                    ((100.0, 0.0), (0.0, 40.0)),
+                    ((100.0, 0.0), (75.0, 80.0)),
+                    ((100.0, 0.0), (0.0, 80.0)),
+                    ((0.0, 0.0), (100.0, 40.0)),
+                    ((0.0, 0.0), (100.0, 80.0)),
+                    ((0.0, 0.0), (75.0, 80.0)),
+                    ((100.0, 80.0), (0.0, 0.0)),
+                    ((100.0, 80.0), (0.0, 40.0)),
+                    ((100.0, 80.0), (75.0, 0.0)),
+                    ((0.0, 80.0), (100.0, 0.0)),
+                    ((0.0, 80.0), (100.0, 40.0)),
+                    ((0.0, 80.0), (75.0, 0.0)),
+                ],
+            ),
+        ];
+        for (prices, want) in cases {
+            let want = want.map(|(a, b)| [Pos2::new(a.0, a.1), Pos2::new(b.0, b.1)]);
+            let got = gann_box_angle_lines(p1, p2, prices, &[0.0, 0.25, 1.0]);
+            assert!(
+                got.len() == want.len()
+                    && got
+                        .iter()
+                        .zip(&want)
+                        .all(|(g, w)| g[0].distance(w[0]) < 1e-3 && g[1].distance(w[1]) < 1e-3),
+                "prices {prices:?}: got {got:?}, want {want:?}"
+            );
+        }
     }
 
     fn box_shapes(drawing: &Drawing) -> Vec<egui::Shape> {
@@ -630,6 +682,26 @@ mod tests {
             rays.iter()
                 .all(|(_, stroke)| *stroke == Stroke::new(2.0, drawing.color32()))
         );
+
+        // A new box from (0, 200) to (400, 0) labels all seven levels at its side and below it,
+        // the price and time labels at its bottom left corner included.
+        drawing.gann = None;
+        drawing.points = vec![Pos2::new(0.0, 200.0), Pos2::new(400.0, 0.0)];
+        let shapes = box_shapes(&drawing);
+        let labels = |at: fn(Rect) -> bool| {
+            shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(t) if at(t.visual_bounding_rect()) => {
+                        Some(t.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let levels = ["0", "0.25", "0.382", "0.5", "0.618", "0.75", "1"];
+        assert_eq!(labels(|r| r.top() >= 200.0), levels);
+        assert_eq!(labels(|r| r.right() <= 0.0), levels);
 
         let saved: GannConfig =
             serde_json::from_value(serde_json::json!({"price_levels":[0.3],"time_levels":[0.7]}))
@@ -814,18 +886,98 @@ mod tests {
             }
         }
 
-        for (tool, second) in [
-            (DrawingToolType::GannSquare, ChartPoint::new(10.0, 120.0)),
-            (DrawingToolType::GannFixed, ChartPoint::new(2.0, 104.0)),
-        ] {
+        // On a logarithmic scale a fixed square still spans five units of price: from 100 with a
+        // first unit of 10 over 2 bars its far corner is at 150, not 100 * 1.1^5 = 161.05. With 8
+        // price decimals, 0.0000003 over 100 bars reads in full.
+        let linear = |p: f64| 300.0 - p as f32;
+        let log = |p: f64| 300.0 - 100.0 * p.ln() as f32;
+        let eight = crate::model::Instrument::new("TEST").with_price_decimals(8);
+        let cases = [
+            (
+                DrawingToolType::GannSquare,
+                [(0.0, 100.0), (10.0, 120.0)],
+                None,
+                false,
+                "20.00\n10 bars\n2.0000/bar",
+            ),
+            (
+                DrawingToolType::GannFixed,
+                [(0.0, 100.0), (2.0, 104.0)],
+                None,
+                false,
+                "20.00\n10 bars\n2.0000/bar",
+            ),
+            (
+                DrawingToolType::GannFixed,
+                [(0.0, 100.0), (2.0, 110.0)],
+                None,
+                true,
+                "50.00\n10 bars\n5.0000/bar",
+            ),
+            (
+                DrawingToolType::GannSquare,
+                [(0.0, 0.0000120), (100.0, 0.0000123)],
+                Some(&eight),
+                false,
+                "0.00000030\n100 bars\n0.0000000030/bar",
+            ),
+        ];
+        for (tool, [(b0, p0), (b1, p1)], instrument, logarithmic, want) in cases {
+            let price_to_y: &dyn Fn(f64) -> f32 = if logarithmic { &log } else { &linear };
             let mut drawing = Drawing::new(0, tool);
-            drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), second];
-            drawing.update_screen_coords(|b| b * 10.0, |p| 300.0 - p as f32);
+            drawing.chart_points = vec![ChartPoint::new(b0, p0), ChartPoint::new(b1, p1)];
+            drawing.update_screen_coords(|b| b * 10.0, price_to_y);
+            let units = if tool == DrawingToolType::GannFixed {
+                5.0
+            } else {
+                1.0
+            };
+            let corner = Pos2::new(
+                (b0 + (b1 - b0) * units) * 10.0,
+                price_to_y(p0 + (p1 - p0) * f64::from(units)),
+            );
+            let want_rect = Rect::from_two_pos(drawing.points[0], corner);
+            let outline = drawing.outline(Rect::EVERYTHING).unwrap();
+            assert_eq!(Rect::from_points(&outline.areas[0]), want_rect, "{want}");
+            let bounds = drawing.paint_bounds().unwrap();
+            assert!(bounds.contains_rect(want_rect), "{want}: {bounds:?}");
             let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
             let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                 drawing.render(
                     ui.painter(),
                     pane,
+                    &ChartView {
+                        price_formatter: None,
+                        instrument,
+                        bars: &[],
+                        revision: 0,
+                        bar_to_x: &|b| b * 10.0,
+                        price_to_y,
+                        y_to_price: &|_| f64::NAN,
+                        time_axis: true,
+                        executions: None,
+                    },
+                )
+            });
+            let labelled = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == want)
+            });
+            output.drop_without_applying_deltas();
+            assert!(labelled, "{tool:?}: {want}");
+        }
+    }
+
+    /// A saved `gann` object without fields draws what no `gann` draws, for every Gann tool: the
+    /// fan's nine lines, and the square's six levels at whole units rather than the box's seven
+    /// fractions.
+    #[test]
+    fn an_empty_gann_object_draws_the_tool_defaults() {
+        use crate::drawings::ChartPoint;
+        let shapes = |drawing: &Drawing| {
+            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                drawing.render(
+                    ui.painter(),
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)),
                     &ChartView {
                         price_formatter: None,
                         instrument: None,
@@ -839,13 +991,39 @@ mod tests {
                     },
                 )
             });
-            let labelled = output.shapes.iter().any(|shape| {
-                matches!(&shape.shape, egui::Shape::Text(text)
-                    if text.galley.text() == "20.00\n10 bars\n2.0000/bar")
-            });
+            let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
             output.drop_without_applying_deltas();
-            assert!(labelled, "{tool:?}");
+            shapes
+        };
+        for tool in [
+            DrawingToolType::GannBox,
+            DrawingToolType::GannSquare,
+            DrawingToolType::GannFixed,
+            DrawingToolType::GannFan,
+        ] {
+            let mut drawing = Drawing::new(0, tool);
+            drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(4.0, 140.0)];
+            let mut saved = serde_json::to_value(&drawing).unwrap();
+            saved["gann"] = serde_json::json!({});
+            let mut loaded: Drawing = serde_json::from_value(saved).unwrap();
+            loaded.chart_points = drawing.chart_points.clone();
+            for d in [&mut drawing, &mut loaded] {
+                d.update_screen_coords(|b| b * 10.0, |p| 300.0 - p as f32);
+            }
+            assert_eq!(shapes(&loaded), shapes(&drawing), "{tool:?}");
         }
+
+        // A field the object holds keeps its value; only the ones it leaves out take the tool's.
+        let mut saved = serde_json::to_value(Drawing::new(0, DrawingToolType::GannSquare)).unwrap();
+        saved["gann"] = serde_json::json!({"price_levels": [2.0]});
+        let gann = serde_json::from_value::<Drawing>(saved)
+            .unwrap()
+            .gann
+            .unwrap();
+        let defaults = GannConfig::for_tool(DrawingToolType::GannSquare);
+        assert_eq!(gann.price_levels.len(), 1);
+        assert_eq!(gann.price_levels[0].value, 2.0);
+        assert_eq!(gann.time_levels, defaults.time_levels);
     }
 
     #[test]

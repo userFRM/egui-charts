@@ -2,6 +2,7 @@
 
 use super::DrawingToolType;
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::f32::consts::SQRT_2;
 
 /// Units per side of a Gann square and of a fixed Gann square.
@@ -87,13 +88,19 @@ impl From<SavedGannLevel> for GannLevel {
 }
 
 /// Levels, fan lines and arcs of the Gann tools, and the background between them.
+///
+/// A field missing from a saved object takes the value of [`GannConfig::for_tool`] for the tool
+/// of the [`Drawing`](crate::drawings::Drawing) that holds it, or of [`GannConfig::default`]
+/// when the object is read on its own.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GannConfig {
     /// Price levels counted from the first anchor: for a Gann box a fraction of its height from
     /// 0 to 1, for a Gann square or fixed square units from 0 to 5. Others are not drawn.
+    #[serde(default = "left_out_price_levels")]
     pub price_levels: Vec<GannLevel>,
     /// Time levels counted from the first anchor, read as `price_levels` are.
+    #[serde(default = "left_out_time_levels")]
     pub time_levels: Vec<GannLevel>,
     /// Whether a Gann square draws its price and time levels.
     pub show_grid: bool,
@@ -101,6 +108,7 @@ pub struct GannConfig {
     pub show_fan: bool,
     /// Fan lines of a Gann square, and the lines of a Gann fan: price units per time unit, where
     /// 1 is the 1x1 line. Values must be positive and finite.
+    #[serde(default = "left_out_fan_ratios")]
     pub fan_ratios: Vec<GannLevel>,
     /// The corners the fan lines of a Gann square start from.
     pub fan_direction: GannFanDirection,
@@ -118,6 +126,34 @@ pub struct GannConfig {
     pub show_angles: bool,
 }
 
+thread_local! {
+    /// The fields whose default differs between the Gann tools that the last [`GannConfig`] read
+    /// on this thread left out: its price levels, time levels and fan lines.
+    static LEFT_OUT: Cell<[bool; 3]> = const { Cell::new([false; 3]) };
+}
+
+/// Notes that the configuration being read left out `field`, and gives its [`Default`] value.
+fn left_out<T>(field: usize, value: fn(GannConfig) -> T) -> T {
+    LEFT_OUT.with(|left_out| {
+        let mut fields = left_out.get();
+        fields[field] = true;
+        left_out.set(fields);
+    });
+    value(GannConfig::default())
+}
+
+fn left_out_price_levels() -> Vec<GannLevel> {
+    left_out(0, |config| config.price_levels)
+}
+
+fn left_out_time_levels() -> Vec<GannLevel> {
+    left_out(1, |config| config.time_levels)
+}
+
+fn left_out_fan_ratios() -> Vec<GannLevel> {
+    left_out(2, |config| config.fan_ratios)
+}
+
 fn levels(entries: &[(f32, [u8; 4])]) -> Vec<GannLevel> {
     entries
         .iter()
@@ -126,6 +162,9 @@ fn levels(entries: &[(f32, [u8; 4])]) -> Vec<GannLevel> {
 }
 
 impl Default for GannConfig {
+    /// The Gann box's configuration, as [`GannConfig::for_tool`] gives it. A Gann square, fixed
+    /// square or fan reads its levels or fan lines differently and starts from `for_tool` of its
+    /// own tool.
     fn default() -> Self {
         let box_levels = levels(&[
             (0.0, GREY),
@@ -180,7 +219,9 @@ impl Default for GannConfig {
 
 impl GannConfig {
     /// The levels, fan lines and arcs a new Gann box, square, fixed square or fan starts from,
-    /// which a drawing without [`Drawing::gann`](crate::drawings::Drawing::gann) draws.
+    /// which a drawing without [`Drawing::gann`](crate::drawings::Drawing::gann) draws. Start a
+    /// configuration from the drawing's own tool here rather than from
+    /// [`GannConfig::default`], which is the Gann box's.
     pub fn for_tool(tool: DrawingToolType) -> Self {
         match tool {
             DrawingToolType::GannSquare | DrawingToolType::GannFixed => {
@@ -213,6 +254,31 @@ impl GannConfig {
                 ..Self::default()
             },
             _ => Self::default(),
+        }
+    }
+
+    /// Forgets the fields an earlier configuration read on this thread left out, before a
+    /// drawing that may hold one is read.
+    pub(crate) fn forget_left_out() {
+        LEFT_OUT.with(|left_out| left_out.set([false; 3]));
+    }
+
+    /// Takes the fields that this configuration, the last one read on this thread, left out from
+    /// [`GannConfig::for_tool`] of `tool` instead of [`GannConfig::default`].
+    pub(crate) fn fill_left_out(&mut self, tool: DrawingToolType) {
+        let [price_levels, time_levels, fan_ratios] = LEFT_OUT.with(|l| l.replace([false; 3]));
+        if !(price_levels || time_levels || fan_ratios) {
+            return;
+        }
+        let defaults = Self::for_tool(tool);
+        if price_levels {
+            self.price_levels = defaults.price_levels;
+        }
+        if time_levels {
+            self.time_levels = defaults.time_levels;
+        }
+        if fan_ratios {
+            self.fan_ratios = defaults.fan_ratios;
         }
     }
 }

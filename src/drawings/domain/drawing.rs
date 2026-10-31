@@ -9,9 +9,9 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig,
-    GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing, RegressionTrendConfig,
-    TimeframeVisibility,
+    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS,
+    GannConfig, GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing,
+    RegressionTrendConfig, TimeframeVisibility,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -40,6 +40,8 @@ use serde::{Deserialize, Serialize};
 /// timestamps by [`persistence`](crate::drawings::persistence). A field added
 /// later needs `#[serde(default)]`, so that saved version 2 files still load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// The trait impls below wrap the derived ones.
+#[serde(remote = "Self")]
 pub struct Drawing {
     /// Unique identifier for this drawing
     #[serde(skip)]
@@ -92,8 +94,9 @@ pub struct Drawing {
     /// Persistent chart coordinates (bar_idx, price) - stable across pan/zoom
     #[serde(skip)]
     pub chart_points: Vec<ChartPoint>,
-    /// Screen y of each visible level of a Fibonacci retracement or extension, in config order
-    /// (empty for other tools); rebuilt with `points` by [`Self::update_screen_coords`]
+    /// Screen y of each visible level of a Fibonacci retracement or extension, in config order,
+    /// or of the far corner of a fixed Gann square (empty for other tools); rebuilt with `points`
+    /// by [`Self::update_screen_coords`]
     #[serde(skip)]
     pub level_ys: Vec<f32>,
     /// Position as fractions of the pane width and height for anchored text.
@@ -370,10 +373,18 @@ impl Drawing {
             let y = price_to_y(cp.price);
             self.points.push(egui::Pos2::new(x, y));
         }
-        self.level_ys = self
-            .fib_levels()
-            .map(|(_, prices)| prices.into_iter().map(&price_to_y).collect())
-            .unwrap_or_default();
+        self.level_ys = match (self.tool_type, &self.chart_points[..]) {
+            // Five of the first units in price, which a logarithmic scale does not keep linear.
+            (DrawingToolType::GannFixed, [a, b, ..]) => {
+                vec![price_to_y(
+                    a.price + (b.price - a.price) * f64::from(GANN_SQUARE_UNITS),
+                )]
+            }
+            _ => self
+                .fib_levels()
+                .map(|(_, prices)| prices.into_iter().map(&price_to_y).collect())
+                .unwrap_or_default(),
+        };
     }
 
     /// Rebuilds anchored text coordinates relative to the pane. Call after
@@ -720,6 +731,25 @@ impl Drawing {
 impl Default for Drawing {
     fn default() -> Self {
         Self::new(0, DrawingToolType::TrendLine)
+    }
+}
+
+impl Serialize for Drawing {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Drawing {
+    /// A saved `gann` object takes the fields it leaves out from [`GannConfig::for_tool`] of the
+    /// drawing's tool, which a drawing without one draws.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        GannConfig::forget_left_out();
+        let mut drawing = Self::deserialize(deserializer)?;
+        if let Some(gann) = &mut drawing.gann {
+            gann.fill_left_out(drawing.tool_type);
+        }
+        Ok(drawing)
     }
 }
 

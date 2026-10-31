@@ -226,7 +226,7 @@ impl Drawing {
                 boxed(&mut outline, Rect::from_two_pos(first, second));
             }
             T::GannSquare | T::GannFixed => {
-                let corner = gann::gann_square_corner(self.tool_type, first, second);
+                let corner = self.gann_square_corner(first, second);
                 boxed(&mut outline, Rect::from_two_pos(first, corner));
             }
             T::RotatedRect => {
@@ -592,7 +592,7 @@ impl Drawing {
                 return None;
             };
             // Five times the anchors' span can pass the reach below when the span is steep.
-            let corner = gann::gann_square_corner(T::GannFixed, first, second);
+            let corner = self.gann_square_corner(first, second);
             return Some(Rect::from_two_pos(first, corner).expand(PAINT_MARGIN));
         }
         let hull = self.bounding_rect()?;
