@@ -218,9 +218,10 @@ impl StoredDocument {
             self.waiting = None;
             self.retry_at = None;
             // This write replaces what other charts wrote before it, which a read now would only
-            // bring back.
+            // bring back, and ends a run of failed reads.
             self.rewritten = false;
             self.reread_at = None;
+            self.reread_failing = false;
             self.writing = Some(document.clone());
             if self.versioned == Some(true) {
                 storage.save_versioned(

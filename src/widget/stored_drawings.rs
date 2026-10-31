@@ -1534,6 +1534,15 @@ mod tests {
         draw_line(&mut b, line_at(4.0, 11.0));
         show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
         assert_eq!(stored_prices(&host), [10.0, 11.0]);
+        // A write of B ends a run of failed reads, so the next failure is reported again.
+        host.fail_loads.store(true, Ordering::Relaxed);
+        draw_line(&mut a, line_at(4.0, 12.0));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert!(b.take_storage_error().is_some());
+        draw_line(&mut b, line_at(4.0, 13.0));
+        draw_line(&mut a, line_at(4.0, 14.0));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert!(b.take_storage_error().is_some(), "a new run is reported");
     }
 
     /// Guards #1619 and #1650: with drawing sync on, a chart outside the charts' shared storage
