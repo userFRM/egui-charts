@@ -534,16 +534,28 @@ impl Trading {
         let heading = FontId::proportional(theme.text.body);
         let unit_font = FontId::proportional(theme.text.tiny);
         // Columns take their smallest width, at least their title's, and share what is left; a
-        // narrow panel scrolls.
+        // narrow panel scrolls. Several take-profit levels share a cell, whose prices must not
+        // lose digits.
         let widths: Vec<f32> = columns
             .iter()
-            .map(|(_, column)| {
+            .map(|&(index, column)| {
                 let title = ui.painter().layout_no_wrap(
                     l10n::text(ui.ctx(), column.title),
                     heading.clone(),
                     theme.ui.text,
                 );
-                column.width.max(title.size().x + 16.0)
+                let cells = rows
+                    .iter()
+                    .filter(|_| column.title == "Take Profit")
+                    .map(|row| {
+                        let text = row.cells[index].text.clone();
+                        let cell = ui
+                            .painter()
+                            .layout_no_wrap(text, font.clone(), theme.ui.text);
+                        cell.size().x + 16.0
+                    })
+                    .fold(0.0, f32::max);
+                column.width.max(title.size().x + 16.0).max(cells)
             })
             .collect();
         let least: f32 = widths.iter().sum();
