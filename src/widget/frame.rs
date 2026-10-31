@@ -23,8 +23,9 @@ impl Chart {
         }
     }
 
-    /// Formats a timestamp with the chart's zone, clock visibility and bar duration, or a key
-    /// as the crosshair label of the [horizontal scale](Self::set_horizontal_scale) reads.
+    /// Formats a timestamp with the chart's zone, clock visibility and the duration of the bars
+    /// in view (of the two bars nearest the view when fewer than two are in it), or a key as the
+    /// crosshair label of the [horizontal scale](Self::set_horizontal_scale) reads.
     /// Hosts can use this for data windows and other readouts beside the chart.
     pub fn format_time(&self, time: chrono::DateTime<chrono::Utc>) -> String {
         let bar_seconds = self.time_label_seconds();
@@ -102,22 +103,27 @@ impl Chart {
         crate::scales::bar_countdown(last.time, timeframe, now, self.bar_close_time.or(close))
     }
 
-    // Source-bar cadence sets precision even when many elements share one time.
+    // Source-bar cadence sets precision even when many elements share one time. With fewer
+    // than two bars in view, the two bars nearest the view set it.
     fn time_label_seconds(&self) -> i64 {
         let bars = &self.state.data().bars;
-        let visible = self.state.visible_data();
-        let Some((first, last)) = visible.first().zip(visible.last()) else {
+        let shown = self.state.shown();
+        // An empty range starts at 0 before the first bar and at the bar count after the last.
+        let (start, end) = self.state.visible_range();
+        let nearest = |index: usize| shown.get(index.min(shown.len().saturating_sub(1)));
+        let Some((first, last)) = nearest(start).zip(nearest(end.saturating_sub(1).max(start)))
+        else {
             return 1;
         };
         let end = bars.partition_point(|bar| bar.time <= last.time);
         let at = bars
             .partition_point(|bar| bar.time < first.time)
             .min(end.saturating_sub(2));
-        if end >= 2 {
-            (bars[at + 1].time - bars[at].time).num_seconds().abs()
-        } else {
-            1
-        }
+        bars.get(at)
+            .zip(bars.get(at + 1))
+            .map_or(1, |(left, right)| {
+                (right.time - left.time).num_seconds().abs()
+            })
     }
 
     pub(super) fn display_timezone(&self) -> crate::scales::TimezoneMode {
@@ -1231,19 +1237,6 @@ impl Chart {
 
         // Get visible data
         let visible_data = self.state.visible_data();
-
-        if visible_data.is_empty()
-            && !self
-                .price_series
-                .iter()
-                .any(|item| item.visible && !item.bars.is_empty())
-        {
-            if let Some((nav, buttons)) = navigation {
-                self.paint_navigation(ui, nav, buttons);
-            }
-            self.show_realtime_button(ui, realtime_rect, shown.id);
-            return shown;
-        }
 
         let groups = (factor > 1).then(|| {
             let covering = self
@@ -4730,6 +4723,64 @@ mod tests {
         }
     }
 
+    /// The whitespace after the last bar of a daily series is labelled only on weekdays the
+    /// series has bars on: after weekday bars ending on Thursday 30 or Friday 31 January 2025,
+    /// February is labelled on Monday 3, while a series with weekend bars labels Saturday 1.
+    #[test]
+    fn whitespace_time_labels_skip_days_without_bars() {
+        use crate::model::{Bar, BarData};
+        use crate::scales::CustomTimeFormatter;
+        use chrono::{Datelike, Duration, TimeZone, Utc};
+        use std::sync::Arc;
+        // (last day of January 2025, weekdays only, label of the February mark)
+        for (last_day, weekdays, february) in [
+            (30, true, "Mon 03"),
+            (31, true, "Mon 03"),
+            (30, false, "Sat 01"),
+        ] {
+            let start = Utc.with_ymd_and_hms(2024, 12, 2, 0, 0, 0).unwrap();
+            let last = Utc.with_ymd_and_hms(2025, 1, last_day, 0, 0, 0).unwrap();
+            let bars = (0..)
+                .map(|day| start + Duration::days(day))
+                .take_while(|time| *time <= last)
+                .filter(|time| !weekdays || time.weekday().number_from_monday() <= 5)
+                .map(|time| Bar::new(time, 100.0, 110.0, 100.0, 110.0, 1.0))
+                .collect();
+            let ctx = egui::Context::default();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.config.show_volume = false;
+            chart.set_time_formatter(Some(Arc::new(CustomTimeFormatter::new(|time, _| {
+                time.format("%a %d").to_string()
+            }))));
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            // 80 points per bar and six bars of whitespace after the last one.
+            let scale = chart.state.time_scale_mut();
+            scale.set_bar_spacing(80.0);
+            scale.set_right_offset(6.0);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let labels: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text)
+                        if text.pos.y > plot.bottom() && text.pos.x < plot.right() =>
+                    {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let weekend = labels
+                .iter()
+                .any(|label| label.starts_with("Sat") || label.starts_with("Sun"));
+            assert_eq!(weekend, !weekdays, "{last_day} January: {labels:?}");
+            assert!(
+                labels.iter().any(|label| label == february),
+                "{last_day} January: {labels:?}"
+            );
+        }
+    }
+
     /// Daily bars put bold day and month labels on the axis; 20 characters space them at
     /// least 200 points apart, which the default 8 (80 points) does not.
     #[test]
@@ -5157,6 +5208,107 @@ mod tests {
             assert_eq!(labels, [expected], "{case:?}");
             let time = chart.state.shown()[index + 1].time;
             assert_eq!(chart.format_time(time), expected, "host readout: {case:?}");
+        }
+    }
+
+    /// With fewer than two bars in view, on either side of the bars, time labels keep the daily
+    /// precision of the bars, and the legend, the price axis at its fitted range, the grid and
+    /// the scale settings button stay; after the last bar the whitespace keeps its time labels.
+    #[test]
+    fn views_past_the_bars_keep_the_chart_readable() {
+        use crate::model::{LineStyle, LogicalRange};
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        // Solid grid lines in a colour nothing else uses are line segments the test can find.
+        chart.config.grid_line_style = LineStyle::Solid;
+        chart.config.grid_color = egui::Color32::from_rgb(1, 2, 3);
+        let grid_color = chart.config.grid_color;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let fitted = chart.get_chart_mapping().price.range();
+        // The first bar opens at 2023-11-14 22:13:20 UTC, and the bars are a day apart.
+        let first = chart.state.data().bars[0].time;
+        // (left, right, bars in view, time axis labelled in view)
+        for (row, (left, right, in_view, labelled)) in [
+            (40.5, 80.5, 42, true),
+            (-30.25, -0.25, 1, false),
+            (-60.0, -20.0, 0, false),
+            (110.0, 150.0, 0, true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let view = format!("{left}..{right}");
+            assert!(chart.set_visible_logical_range(LogicalRange::new(left, right)));
+            assert_eq!(chart.state.visible_data().len(), in_view, "{view}");
+            assert_eq!(chart.format_time(first), "Nov 14, 2023", "{view}");
+            let time = 1.0 + row as f64;
+            let painted = shapes(&ctx, &mut chart, time, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let texts: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) => Some((text.pos, text.galley.text().to_owned())),
+                    _ => None,
+                })
+                .collect();
+            let grid = |vertical: bool| {
+                painted.iter().any(|shape| {
+                    matches!(shape,
+                    Shape::LineSegment { points, stroke }
+                        if stroke.color == grid_color && (points[0].x == points[1].x) == vertical)
+                })
+            };
+            assert!(
+                texts.iter().any(|(pos, text)| pos.x < plot.right()
+                    && pos.y < plot.bottom()
+                    && text.starts_with("O ")),
+                "legend: {view}"
+            );
+            assert!(
+                texts
+                    .iter()
+                    .any(|(pos, _)| pos.x >= plot.right() && pos.y < plot.bottom()),
+                "price axis: {view}"
+            );
+            assert_eq!(chart.get_chart_mapping().price.range(), fitted, "{view}");
+            assert!(grid(false), "price grid: {view}");
+            if labelled {
+                assert!(
+                    texts
+                        .iter()
+                        .any(|(pos, _)| pos.x < plot.right() && pos.y > plot.bottom()),
+                    "time axis: {view}"
+                );
+                assert!(grid(true), "time grid: {view}");
+            }
+            #[cfg(feature = "icons")]
+            {
+                let corner = Pos2::new(
+                    plot.right() + chart.config.right_axis_width / 2.0,
+                    plot.bottom() + 14.0,
+                );
+                for (step, event) in [
+                    Event::PointerMoved(corner),
+                    navigation_press(corner, true),
+                    navigation_press(corner, false),
+                    Event::PointerGone,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    frame(
+                        &ctx,
+                        &mut chart,
+                        time + 0.1 * (step + 1) as f64,
+                        vec![event],
+                    );
+                }
+                assert!(
+                    chart.take_scale_settings_request(),
+                    "settings button: {view}"
+                );
+            }
         }
     }
 
