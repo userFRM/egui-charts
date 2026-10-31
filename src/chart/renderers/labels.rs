@@ -966,7 +966,7 @@ mod tests {
                 );
                 if shown && side.is_some() {
                     for tag in &tags {
-                        assert_eq!(tag.height(), 15.0);
+                        assert_eq!(tag.height(), 17.0);
                         if side == Some(true) {
                             assert!((plot.left() - tag.right() - 5.0).abs() < 0.1);
                         } else {

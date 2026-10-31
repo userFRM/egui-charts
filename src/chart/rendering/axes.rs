@@ -11,7 +11,7 @@ use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, V
 pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;
 
 /// Padding between an axis tag's text and its edge.
-const TAG_PADDING: Vec2 = Vec2::new(6.0, 0.5);
+const TAG_PADDING: Vec2 = Vec2::new(6.0, 1.5);
 
 /// The font of every axis label and tag: the theme's label text.
 pub(crate) fn axis_font(ctx: &egui::Context) -> FontId {
