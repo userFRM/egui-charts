@@ -179,7 +179,8 @@ fn gann_square_ring_angles(segments: usize) -> Vec<(f32, f32)> {
 
 /// Rays of a Gann box from each corner to the level points on the two edges away from it: the
 /// price levels on the far side and the time levels on the far top or bottom. A point on the
-/// corner's own edges is skipped, and the opposite corner is reached once.
+/// corner's own edges is skipped, and the opposite corner is reached once, by its price level
+/// or, when that is hidden, by its time level.
 pub(super) fn gann_box_angle_lines(
     p1: Pos2,
     p2: Pos2,
@@ -194,7 +195,11 @@ pub(super) fn gann_box_angle_lines(
         for &f in prices.iter().filter(|&&f| f != fy) {
             lines.push([corner, at(1.0 - fx, f)]);
         }
-        for &t in times.iter().filter(|&&t| t != fx && t != 1.0 - fx) {
+        let far_price = prices.contains(&(1.0 - fy));
+        for &t in times
+            .iter()
+            .filter(|&&t| t != fx && !(t == 1.0 - fx && far_price))
+        {
             lines.push([corner, at(t, 1.0 - fy)]);
         }
     }
@@ -503,34 +508,59 @@ mod tests {
     /// A box started at its top-right corner (100, 0) and dragged to (0, 80), so x(t) = 100 - 100 t
     /// and y(f) = 80 f: each corner reaches the visible price levels on its far side and the time
     /// level 0.25 on its far top or bottom. Times 0 and 1 are on a corner's own edges or at the far
-    /// corner, which the price level 1 or 0 already reaches.
+    /// corner, which the price level 1 or 0 already reaches. With the price level 1 hidden, the
+    /// corners at y = 0 reach the far corner by the time level there instead.
     #[test]
     fn gann_box_angle_lines_run_from_each_corner_to_the_far_level_points() {
         let (p1, p2) = (Pos2::new(100.0, 0.0), Pos2::new(0.0, 80.0));
-        let want = [
-            ((100.0, 0.0), (0.0, 40.0)),
-            ((100.0, 0.0), (0.0, 80.0)),
-            ((100.0, 0.0), (75.0, 80.0)),
-            ((0.0, 0.0), (100.0, 40.0)),
-            ((0.0, 0.0), (100.0, 80.0)),
-            ((0.0, 0.0), (75.0, 80.0)),
-            ((100.0, 80.0), (0.0, 0.0)),
-            ((100.0, 80.0), (0.0, 40.0)),
-            ((100.0, 80.0), (75.0, 0.0)),
-            ((0.0, 80.0), (100.0, 0.0)),
-            ((0.0, 80.0), (100.0, 40.0)),
-            ((0.0, 80.0), (75.0, 0.0)),
-        ]
-        .map(|(a, b): ((f32, f32), (f32, f32))| [Pos2::new(a.0, a.1), Pos2::new(b.0, b.1)]);
-        let got = gann_box_angle_lines(p1, p2, &[0.0, 0.5, 1.0], &[0.0, 0.25, 1.0]);
-        assert!(
-            got.len() == want.len()
-                && got
-                    .iter()
-                    .zip(&want)
-                    .all(|(g, w)| g[0].distance(w[0]) < 1e-3 && g[1].distance(w[1]) < 1e-3),
-            "got {got:?}, want {want:?}"
-        );
+        let cases: [(&[f32], [((f32, f32), (f32, f32)); 12]); 2] = [
+            (
+                &[0.0, 0.5, 1.0],
+                [
+                    ((100.0, 0.0), (0.0, 40.0)),
+                    ((100.0, 0.0), (0.0, 80.0)),
+                    ((100.0, 0.0), (75.0, 80.0)),
+                    ((0.0, 0.0), (100.0, 40.0)),
+                    ((0.0, 0.0), (100.0, 80.0)),
+                    ((0.0, 0.0), (75.0, 80.0)),
+                    ((100.0, 80.0), (0.0, 0.0)),
+                    ((100.0, 80.0), (0.0, 40.0)),
+                    ((100.0, 80.0), (75.0, 0.0)),
+                    ((0.0, 80.0), (100.0, 0.0)),
+                    ((0.0, 80.0), (100.0, 40.0)),
+                    ((0.0, 80.0), (75.0, 0.0)),
+                ],
+            ),
+            (
+                &[0.0, 0.5],
+                [
+                    ((100.0, 0.0), (0.0, 40.0)),
+                    ((100.0, 0.0), (75.0, 80.0)),
+                    ((100.0, 0.0), (0.0, 80.0)),
+                    ((0.0, 0.0), (100.0, 40.0)),
+                    ((0.0, 0.0), (100.0, 80.0)),
+                    ((0.0, 0.0), (75.0, 80.0)),
+                    ((100.0, 80.0), (0.0, 0.0)),
+                    ((100.0, 80.0), (0.0, 40.0)),
+                    ((100.0, 80.0), (75.0, 0.0)),
+                    ((0.0, 80.0), (100.0, 0.0)),
+                    ((0.0, 80.0), (100.0, 40.0)),
+                    ((0.0, 80.0), (75.0, 0.0)),
+                ],
+            ),
+        ];
+        for (prices, want) in cases {
+            let want = want.map(|(a, b)| [Pos2::new(a.0, a.1), Pos2::new(b.0, b.1)]);
+            let got = gann_box_angle_lines(p1, p2, prices, &[0.0, 0.25, 1.0]);
+            assert!(
+                got.len() == want.len()
+                    && got
+                        .iter()
+                        .zip(&want)
+                        .all(|(g, w)| g[0].distance(w[0]) < 1e-3 && g[1].distance(w[1]) < 1e-3),
+                "prices {prices:?}: got {got:?}, want {want:?}"
+            );
+        }
     }
 
     fn box_shapes(drawing: &Drawing) -> Vec<egui::Shape> {
