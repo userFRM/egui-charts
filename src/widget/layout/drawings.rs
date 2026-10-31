@@ -1,6 +1,7 @@
 //! Propagate drawing changes without consuming the host's persistence queue.
 
-use crate::drawings::{ChartPoint, Drawing};
+use crate::drawings::Drawing;
+use crate::drawings::manager::sync_id;
 use crate::widget::{Chart, PaneId};
 use std::collections::{HashMap, HashSet};
 
@@ -9,9 +10,23 @@ type Key = (usize, usize);
 #[derive(Clone)]
 struct Snapshot {
     style: String,
-    points: Vec<ChartPoint>,
+    /// See [`timed_points`].
+    points: Vec<(Option<chrono::DateTime<chrono::Utc>>, f64)>,
     notes: Option<String>,
     symbol: String,
+}
+
+/// The time and price of each point, which is what a linked copy follows: bars evicted or loaded
+/// in front renumber the points but keep their times.
+fn timed_points(
+    chart: &Chart,
+    drawing: &Drawing,
+) -> Vec<(Option<chrono::DateTime<chrono::Utc>>, f64)> {
+    drawing
+        .chart_points
+        .iter()
+        .map(|point| (chart.drawing_point_time(point), point.price))
+        .collect()
 }
 
 #[derive(Clone, Default)]
@@ -40,10 +55,9 @@ impl DrawingLinks {
                 let key = (slot, drawing.id);
                 let old = self.previous.get(&key);
                 let retry = self.retry.remove(&key);
+                let points = timed_points(chart, drawing);
                 if (old.is_none_or(|old| {
-                    old.style != style
-                        || old.points != drawing.chart_points
-                        || old.notes != drawing.notes
+                    old.style != style || old.points != points || old.notes != drawing.notes
                 }) || retry)
                     && old.is_none_or(|old| old.symbol == chart.symbol())
                 {
@@ -57,7 +71,11 @@ impl DrawingLinks {
                 changes.push((key, None));
             }
         }
+        let joined = self.join_read_drawings(charts, count, groups, &changes);
         for (key, drawing) in changes {
+            if joined.contains(&key) {
+                continue;
+            }
             let origin = *self.origins.entry(key).or_insert(key);
             let symbol = charts[key.0].symbol().to_owned();
             for slot in 0..count {
@@ -91,11 +109,15 @@ impl DrawingLinks {
                             copy.id = target.id;
                             copy.stored_id.clone_from(&target.stored_id);
                             copy.created_at = target.created_at;
+                            copy.saveable = target.saveable;
                             *target = copy;
                         });
                     } else {
                         copy.stored_id = None;
                         copy.created_at = None;
+                        // Not saved where it is mirrored: the chart it was drawn on keeps it, and
+                        // a drawing that is not saveable stays when this chart reads its storage.
+                        copy.saveable &= !charts[slot].keeps_stored_drawings();
                         charts[slot].drawings_mut().add_synced_drawing(copy);
                         if let Some(added) = charts[slot].drawings().drawings.last() {
                             self.origins.insert((slot, added.id), origin);
@@ -122,7 +144,7 @@ impl DrawingLinks {
                         (slot, drawing.id),
                         Snapshot {
                             style,
-                            points: drawing.chart_points.clone(),
+                            points: timed_points(chart, drawing),
                             notes: drawing.notes.clone(),
                             symbol: chart.symbol().to_owned(),
                         },
@@ -134,6 +156,50 @@ impl DrawingLinks {
             .retain(|key, _| self.previous.contains_key(key));
         self.retry.retain(|key| self.previous.contains_key(key));
         changed
+    }
+
+    /// Links each drawing that a chart has just read from storage to the drawing stored under the
+    /// same id on another chart of that storage, group and symbol, and returns their keys: the
+    /// read drawing is that drawing, whose copies exist or are made from it. A read drawing
+    /// without such a drawing starts a link, which the same drawing read on another chart joins.
+    fn join_read_drawings(
+        &mut self,
+        charts: &[&mut Chart],
+        count: usize,
+        groups: &[Option<String>; 16],
+        changes: &[(Key, Option<Drawing>)],
+    ) -> HashSet<Key> {
+        let mut joined = HashSet::new();
+        for (key, drawing) in changes {
+            let Some(drawing) = drawing else { continue };
+            if !drawing.saveable || drawing.stored_id.is_none() || self.origins.contains_key(key) {
+                continue;
+            }
+            let record = sync_id(drawing);
+            let origin = (0..count)
+                .filter(|&slot| {
+                    slot != key.0
+                        && groups[slot] == groups[key.0]
+                        && charts[slot].symbol() == charts[key.0].symbol()
+                        && charts[slot].shares_stored_drawings(charts[key.0])
+                })
+                .find_map(|slot| {
+                    let other = charts[slot]
+                        .drawings()
+                        .drawings
+                        .iter()
+                        .find(|d| d.saveable && sync_id(d) == record)?;
+                    // Not linked yet if it appeared this frame too: it starts its link below.
+                    let other = (slot, other.id);
+                    Some(self.origins.get(&other).copied().unwrap_or(other))
+                })
+                .unwrap_or(*key);
+            if origin != *key {
+                joined.insert(*key);
+            }
+            self.origins.insert(*key, origin);
+        }
+        joined
     }
 }
 
@@ -175,7 +241,7 @@ fn map_drawing(drawing: &Drawing, source: &Chart, target: &Chart) -> Option<Draw
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::drawings::DrawingToolType;
+    use crate::drawings::{ChartPoint, DrawingToolType};
     use crate::model::{Bar, BarData};
     use crate::widget::SeriesId;
     use chrono::DateTime;
@@ -423,5 +489,56 @@ mod tests {
         a.drawings_mut().delete_drawing(source);
         sync(&mut a, &mut b);
         assert!(copy(&b).is_none(), "a deletion reaches a locked copy");
+    }
+
+    /// Guards #1622: bars evicted from a chart or loaded in front of its bars renumber its
+    /// drawings but keep their times, which is no edit to mirror: the copy queues nothing and its
+    /// first undo step is still its addition.
+    #[test]
+    fn bars_evicted_or_loaded_in_front_are_not_a_drawing_edit() {
+        let bar = |minute: i64| {
+            Bar::new(
+                DateTime::from_timestamp(minute * 60, 0).unwrap(),
+                10.0,
+                11.0,
+                9.0,
+                10.0,
+                1.0,
+            )
+        };
+        for evict in [true, false] {
+            // Minutes 1 to 8 with room for 9 bars, linked to minutes 0 to 11.
+            let mut source = Chart::new(BarData::from_bars((1..9).map(bar).collect()));
+            let mut target = Chart::new(BarData::from_bars((0..12).map(bar).collect()));
+            source.set_symbol("SAMPLE");
+            target.set_symbol("SAMPLE");
+            source.set_bar_limit(SeriesId::MAIN, std::num::NonZeroUsize::new(9));
+            let groups = std::array::from_fn(|_| None);
+            let mut links = DrawingLinks::default();
+            let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+            drawing.chart_points = vec![ChartPoint::new(4.0, 10.0), ChartPoint::new(6.0, 12.0)];
+            drawing.completed = true;
+            source.drawings_mut().add_synced_drawing(drawing);
+            links.sync(&mut [&mut source, &mut target], 2, &groups, false);
+            target.drawings().pending_sync.lock().unwrap().clear();
+            if evict {
+                // Ten bars exceed the limit: the oldest two go, and minute 5 moves from index 4
+                // to 2.
+                source.update(SeriesId::MAIN, bar(9));
+                source.update(SeriesId::MAIN, bar(10));
+                assert_eq!(source.bars(SeriesId::MAIN).len(), 8);
+            } else {
+                // An older bar in front moves minute 5 from index 4 to 5.
+                source.set_bar_limit(SeriesId::MAIN, None);
+                source.set_data(SeriesId::MAIN, (0..10).map(bar).collect());
+            }
+            links.sync(&mut [&mut source, &mut target], 2, &groups, false);
+            assert!(
+                target.drawings().pending_sync.lock().unwrap().is_empty(),
+                "evict {evict}"
+            );
+            assert!(target.drawings_mut().undo(), "evict {evict}");
+            assert!(target.drawings().drawings.is_empty(), "evict {evict}");
+        }
     }
 }
