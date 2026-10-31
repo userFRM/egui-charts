@@ -70,8 +70,12 @@ pub(crate) struct FeedLink {
     /// The order book over time, when the host turned it on.
     depth_history: Option<DepthHistory>,
     depth_complete: bool,
-    /// Where older history continues after an empty page, by source: bars, trades, depth.
-    bar_cursor: Option<chrono::DateTime<chrono::Utc>>,
+    /// Where older history continues after an empty page, by source: bars, trades, depth. The
+    /// bar cursor keeps the oldest bar held when the feed named it and lapses once that bar goes.
+    bar_cursor: Option<(
+        chrono::DateTime<chrono::Utc>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )>,
     trade_cursor: Option<chrono::DateTime<chrono::Utc>>,
     depth_cursor: Option<chrono::DateTime<chrono::Utc>>,
     /// No older trades remain to be loaded.
