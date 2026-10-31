@@ -1080,7 +1080,7 @@ mod tests {
             let bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0);
             let bars = vec![bar; last + 1];
             let coords = ChartMapping::new(rect, spacing, 0, last, 0.0, map);
-            let output = egui::Context::default().run_ui(Default::default(), |ui| {
+            let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
                 render_tooltip_with_options(
                     &RenderContext::new(ui.painter(), rect),
                     Pos2::new(pointer.0, pointer.1),
@@ -1098,7 +1098,7 @@ mod tests {
                     ValueFormatters::default(),
                 );
             });
-            let shapes = output.shapes.clone();
+            let shapes = std::mem::take(&mut output.shapes);
             output.drop_without_applying_deltas();
             let card = shapes
                 .iter()
