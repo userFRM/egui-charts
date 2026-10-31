@@ -16,6 +16,7 @@ use crate::data::{
     Reply, SubscriptionId, TradeRequest,
 };
 use crate::model::{BarClock, Instrument, OrderBook, Tick, Timeframe};
+use crate::theme::ThemeExt;
 use egui::ViewportId;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -69,8 +70,12 @@ pub(crate) struct FeedLink {
     /// The order book over time, when the host turned it on.
     depth_history: Option<DepthHistory>,
     depth_complete: bool,
-    /// Where older history continues after an empty page, by source: bars, trades, depth.
-    bar_cursor: Option<chrono::DateTime<chrono::Utc>>,
+    /// Where older history continues after an empty page, by source: bars, trades, depth. The
+    /// bar cursor keeps the oldest bar held when the feed named it and lapses once that bar goes.
+    bar_cursor: Option<(
+        chrono::DateTime<chrono::Utc>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )>,
     trade_cursor: Option<chrono::DateTime<chrono::Utc>>,
     depth_cursor: Option<chrono::DateTime<chrono::Utc>>,
     /// No older trades remain to be loaded.
@@ -655,7 +660,7 @@ impl Chart {
                     )],
                 ),
                 egui::FontId::proportional(11.0),
-                crate::tokens::DESIGN_TOKENS.semantic.status.caution,
+                painter.ctx().active_theme().ui.warning,
             );
         }
     }

@@ -64,6 +64,9 @@ struct ProfileStudy {
     adaptive: bool,
     tick_size: Option<f64>,
     resolutions: Vec<ProfileResolution>,
+    /// The finer interval and data start stated before the chart emptied the profile to wait
+    /// for its full recompute, still stated until it has bars again.
+    held: Option<(Option<Timeframe>, Option<DateTime<Utc>>)>,
     /// Chart bars in view, from `set_visible_range`.
     view: Range<usize>,
     days: ExchangeDays,
@@ -131,6 +134,7 @@ impl ProfileStudy {
             adaptive: false,
             tick_size: None,
             resolutions: Vec::new(),
+            held: None,
             view: 0..0,
             days: ExchangeDays::default(),
             data: Vec::new(),
@@ -262,6 +266,7 @@ impl ProfileStudy {
         }
         self.values.clear();
         self.data.clear();
+        self.held = None;
         self.fine.clear();
         self.ranges.clear();
         self.cache.get_mut().clear();
@@ -269,12 +274,17 @@ impl ProfileStudy {
     }
 
     /// An explicit interval shorter than the chart's, or the shortest suggested interval
-    /// that serves the profile length while the source follows the chart.
+    /// that serves the profile length while the source follows the chart; the held one while
+    /// emptied for a recompute.
     fn finer(&self) -> Option<Timeframe> {
         let shorter = |source: &Timeframe| {
             !matches!(source, Timeframe::Ticks(_))
                 && source.duration_ms() < self.interval.duration_ms()
         };
+        // The chart interval may have changed since.
+        if let Some((timeframe, _)) = self.held.filter(|_| self.data.is_empty()) {
+            return timeframe.filter(shorter);
+        }
         if self.source.is_some() || !self.feed_source || self.resolutions.is_empty() {
             return self.source.filter(shorter);
         }
@@ -320,30 +330,26 @@ impl ProfileStudy {
 
     /// The chart bar ranges of the profiles in `visible`: the clamped view for a visible
     /// profile, the ranges overlapping it otherwise.
-    fn ranges_in(&self, visible: Range<usize>) -> Vec<Range<usize>> {
+    fn ranges_in(&self, visible: Range<usize>) -> impl Iterator<Item = Range<usize>> + '_ {
         let visible = visible.start.min(self.data.len())..visible.end.min(self.data.len());
-        if visible.is_empty() {
-            Vec::new()
-        } else if self.kind == Kind::Visible {
-            vec![visible]
-        } else {
-            self.ranges
-                .iter()
-                .filter(|range| range.start < visible.end && range.end > visible.start)
-                .cloned()
-                .collect()
-        }
+        let own = (self.kind == Kind::Visible && !visible.is_empty()).then(|| visible.clone());
+        // A visible profile has no ranges of its own.
+        let overlapping = self.ranges.iter().filter(move |range| {
+            !visible.is_empty() && range.start < visible.end && range.end > visible.start
+        });
+        own.into_iter().chain(overlapping.cloned())
     }
 
     /// The open of the first chart bar a profile in view reads, from which its finer bars are
-    /// needed; the open of the newest bar with no profile in view, and `None` without bars.
+    /// needed; the open of the newest bar with no profile in view, the held start while emptied
+    /// for a recompute, and `None` without bars otherwise.
     fn data_start(&self) -> Option<DateTime<Utc>> {
-        let first = self
-            .ranges_in(self.view.clone())
-            .iter()
-            .map(|r| r.start)
-            .min();
-        first
+        if self.data.is_empty() {
+            return self.held.and_then(|(_, start)| start);
+        }
+        self.ranges_in(self.view.clone())
+            .map(|range| range.start)
+            .min()
             .map_or(self.data.last(), |at| self.data.get(at))
             .map(|bar| bar.time)
     }
@@ -435,6 +441,10 @@ impl ProfileStudy {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
+        if data.is_empty() && !self.data.is_empty() {
+            // Keeps requesting what it read, so the chart keeps those bars for the recompute.
+            self.held = Some((self.finer(), self.data_start()));
+        }
         let from = from.min(data.len()).min(self.data.len());
         let times_changed = self.data.len() != data.len()
             || self.data[from..]
@@ -545,7 +555,7 @@ impl ProfileStudy {
     }
 
     fn profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
-        let ranges = self.ranges_in(visible);
+        let ranges: Vec<_> = self.ranges_in(visible).collect();
         if ranges.is_empty() {
             return Vec::new();
         }
@@ -916,7 +926,8 @@ mod tests {
         assert_eq!(profiles[0].profile.volume(), [10.0]);
     }
 
-    /// Suggestions serve an inclusive profile length; explicit choices and the opt-out win.
+    /// Suggestions serve an inclusive profile length; explicit choices and the opt-out win. A
+    /// profile emptied to wait for its recompute drops a held interval the chart has reached.
     #[test]
     fn feed_suggested_interval_follows_the_profile_length() {
         let start: DateTime<Utc> = "2026-03-02T09:00:00Z".parse().unwrap();
@@ -942,7 +953,7 @@ mod tests {
                 None,
             ),
         ]);
-        for case in 0..10 {
+        for case in 0..11 {
             let mut study: Box<dyn Indicator> = match case {
                 1 => Box::new(VolProfileFixed::new(4).with_range(bars[0].time, bars[1].time)),
                 2..=4 => Box::new(VolProfileVisible::new(4)),
@@ -976,6 +987,11 @@ mod tests {
                 4 => 4..9,
                 _ => 0..4,
             });
+            if case == 10 {
+                // Emptied to wait for a recompute, then the chart moves to the held interval.
+                study.update(&[], 0);
+                study.set_timeframe(Timeframe::Min5);
+            }
             let expected = match case {
                 0 | 3 => Some(Timeframe::Min5),
                 1 | 2 => Some(Timeframe::Min1),

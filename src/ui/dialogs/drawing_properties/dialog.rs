@@ -248,6 +248,11 @@ impl DrawingPropertiesDialog {
                 drawing.regression_trend = old.regression_trend;
                 drawing.channel_midline = old.channel_midline;
                 drawing.font_weight = old.font_weight;
+                drawing.italic = old.italic;
+                drawing.text_color = old.text_color;
+                drawing.background = old.background;
+                drawing.border = old.border;
+                drawing.border_color = old.border_color;
                 drawing.arrow_start_style = old.arrow_start_style;
                 drawing.arrow_end_style = old.arrow_end_style;
                 drawing.custom_settings = old.custom_settings;
@@ -486,7 +491,7 @@ impl DrawingPropertiesDialog {
                 }
                 PropertiesTab::Coordinates => CoordinatesTab::show(ui, &mut self.coordinates),
                 PropertiesTab::Visibility => VisibilityTab::show(ui, &mut self.props),
-                PropertiesTab::Text => TextTab::show(ui, &mut self.props),
+                PropertiesTab::Text => TextTab::show(ui, &mut self.props, &mut state.text_pickers),
             });
 
         if let Some(error) = &self.error {
@@ -514,6 +519,7 @@ impl DrawingPropertiesDialog {
         if state
             .pickers
             .iter()
+            .chain(&state.text_pickers)
             .chain(state.level_pickers.iter().flatten())
             .any(|p| p.is_open)
         {
@@ -521,6 +527,7 @@ impl DrawingPropertiesDialog {
                 state
                     .pickers
                     .iter_mut()
+                    .chain(&mut state.text_pickers)
                     .chain(state.level_pickers.iter_mut().flatten())
                     .for_each(|p| p.is_open = false);
             }
@@ -558,6 +565,8 @@ const FOOTER_HEIGHT: f32 = 60.0;
 struct UiState {
     /// Colour and fill colour pickers of the Style tab.
     pickers: [ColorPickerState; 2],
+    /// Text colour, background and border pickers of the Text tab.
+    text_pickers: [ColorPickerState; 3],
     /// One list of colour pickers per level grid of the current tool.
     level_pickers: Vec<Vec<ColorPickerState>>,
     /// Whether a widget had keyboard focus at the end of the previous frame.
@@ -743,6 +752,8 @@ mod tests {
                 let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;
                 settings.position_target_color = Some([40, 100, 220, 255]);
                 settings.position_stop_color = Some([220, 140, 40, 255]);
+                settings.italic = true;
+                settings.text_color = Some([1, 2, 3, 255]);
                 dialog.coordinates.points[1].price = "125".into();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
                 assert_eq!(
@@ -754,6 +765,8 @@ mod tests {
                 let preview = &chart.drawings().drawings[0];
                 assert_eq!(preview.position_target_color, Some([40, 100, 220, 255]));
                 assert_eq!(preview.position_stop_color, Some([220, 140, 40, 255]));
+                assert!(preview.italic);
+                assert_eq!(preview.text_color, Some([1, 2, 3, 255]));
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
                 assert!(!chart.can_undo());
                 assert!(chart.can_redo(), "preview must retain existing redo");
@@ -795,6 +808,8 @@ mod tests {
             let restored = &chart.drawings().drawings[0];
             assert_eq!(restored.position_target_color, None, "{finish}");
             assert_eq!(restored.position_stop_color, None, "{finish}");
+            assert!(!restored.italic, "{finish}");
+            assert_eq!(restored.text_color, None, "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");
             assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0, "{finish}");
             assert_eq!(

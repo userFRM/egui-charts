@@ -302,7 +302,7 @@ fn visible_dashes(
 }
 
 /// Liang-Barsky: the parameter interval of the segment inside `clip`.
-fn clip_segment(start: Pos2, end: Pos2, clip: Rect) -> Option<(f64, f64)> {
+pub(crate) fn clip_segment(start: Pos2, end: Pos2, clip: Rect) -> Option<(f64, f64)> {
     let (x0, y0) = (f64::from(start.x), f64::from(start.y));
     let (dx, dy) = (f64::from(end.x) - x0, f64::from(end.y) - y0);
     let (mut t0, mut t1) = (0.0_f64, 1.0_f64);

@@ -1,7 +1,7 @@
 //! Price label and price note rendering
 
 use crate::drawings::domain::Drawing;
-use crate::drawings::rendering::ChartView;
+use crate::drawings::rendering::{ChartView, style::label_text_color};
 use crate::scales::{
     DefaultPriceFormatter, PriceFormatter, instrument_price_precision, price_decimals,
 };
@@ -9,7 +9,7 @@ use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{
     Color32, Pos2, Rect, Stroke,
-    epaint::{PathShape, RoundedRect},
+    epaint::{PathShape, RoundedRect, StrokeKind},
 };
 use std::f32::consts::{PI, TAU};
 
@@ -27,16 +27,6 @@ pub(super) fn facing_point(rect: Rect, target: Pos2) -> Pos2 {
         rect.center_bottom()
     } else {
         rect.center_top()
-    }
-}
-
-/// White or black, whichever reads on `fill`, by the rule the price axis tags use. The chart
-/// behind a translucent fill is not known here, so the colour the user picked decides.
-pub(super) fn label_text_color(fill: Color32) -> Color32 {
-    if crate::theme::contrast(Color32::WHITE, fill.to_opaque()) >= 2.0 {
-        Color32::WHITE
-    } else {
-        Color32::BLACK
     }
 }
 
@@ -166,9 +156,8 @@ impl Drawing {
             return;
         }
         let color = self.color32();
-        let fill = self.fill_color32().unwrap_or(color);
-        let text_color = label_text_color(fill);
-        let galley = painter.layout_no_wrap(text, self.annotation_font(), text_color);
+        let colors = self.text_box_colors(painter.ctx());
+        let galley = self.annotation_galley(painter, text, colors.text);
         let padding = egui::vec2(
             DESIGN_TOKENS.sizing.annotation.label_padding_x,
             DESIGN_TOKENS.sizing.annotation.label_padding_y,
@@ -176,8 +165,14 @@ impl Drawing {
         let corner = self.points.get(1).copied().unwrap_or(anchor);
         let label = Rect::from_min_size(corner, galley.size() + padding * 2.0);
         paint_anchor_line(painter, label, anchor, color);
-        painter.rect_filled(label, DESIGN_TOKENS.rounding.sm, fill);
-        painter.galley(label.min + padding, galley, text_color);
+        painter.rect(
+            label,
+            DESIGN_TOKENS.rounding.sm,
+            colors.fill,
+            colors.border,
+            StrokeKind::Inside,
+        );
+        painter.galley(label.min + padding, galley, colors.text);
     }
 }
 

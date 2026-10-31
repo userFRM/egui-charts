@@ -40,9 +40,13 @@ mod feeds;
 mod live;
 #[path = "market.rs"]
 mod market;
+#[path = "orders.rs"]
+mod orders;
 
 use eframe::egui;
 use egui_charts::Chart;
+use egui_charts::chart::overlays::{BookProfile, OrderBookView};
+use egui_charts::data::{DepthHistory, DepthHistoryConfig, OrderFilter, OrderSizeTiers};
 use egui_charts::model::{Alert, AlertCondition};
 use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
@@ -116,6 +120,37 @@ const MAIN_SERIES_ID: usize = usize::MAX;
 /// Local tones offered by the settings dialog.
 const DEMO_SOUNDS: [&str; 3] = ["Chime", "Bell", "Beep"];
 const INDICATOR_ID_BASE: usize = usize::MAX / 2;
+
+/// Resting order sizes the demo marks: the block orders of the order-level instrument reach them,
+/// its ordinary orders do not.
+const ORDER_TIERS: OrderSizeTiers = OrderSizeTiers {
+    notable: 100.0,
+    large: 250.0,
+};
+
+/// The heatmap's history of `symbol`'s book: of its individual orders when its feed sends them, so
+/// the cells mark the large ones, otherwise of the aggregate depth.
+fn depth_history(symbol: &str) -> DepthHistory {
+    DepthHistory::new(DepthHistoryConfig {
+        orders: (symbol == live::ORDER_LEVEL_SYMBOL).then(OrderFilter::default),
+        ..Default::default()
+    })
+    .expect("default depth history")
+}
+
+/// How the live book is shown: highlighted at [`ORDER_TIERS`], with the heatmap's profile of the
+/// largest order at each price or of the total there.
+fn book_view(largest_order_profile: bool) -> OrderBookView {
+    OrderBookView {
+        profile: if largest_order_profile {
+            BookProfile::LargestOrder
+        } else {
+            BookProfile::Total
+        },
+        tiers: Some(ORDER_TIERS),
+        ..Default::default()
+    }
+}
 
 fn indicator_tree_id(id: SeriesId) -> usize {
     INDICATOR_ID_BASE + id.0
@@ -313,6 +348,8 @@ pub struct DemoApp {
     /// Whether an object tree colour picker is editing a drawing, as one undo step.
     colour_drag: bool,
     liquidity_heatmap: bool,
+    /// Whether the heatmap's profile shows the largest order at each price.
+    largest_order_profile: bool,
     menus: ChartMenus,
     last_chart_click: Option<egui_charts::widget::ChartPointer>,
     /// The latest crosshair payload of the active chart, from which the data window reads.
@@ -509,6 +546,7 @@ impl DemoApp {
         chart.config_mut().candle_width = 0.75;
         chart.config_mut().right_axis_width = 59.0;
         chart.config_mut().skip_background = true;
+        chart.set_order_book_view(book_view(false));
         chart.set_symbol(symbol);
         chart.set_timeframe(timeframe);
         let storage = Arc::new(storage::DemoStorage::restore(cc.storage));
@@ -574,6 +612,7 @@ impl DemoApp {
             layout_tab: 0,
             colour_drag: false,
             liquidity_heatmap: false,
+            largest_order_profile: false,
             menus,
             last_chart_click: None,
             crosshair: None,
@@ -895,6 +934,10 @@ impl DemoApp {
             } else {
                 SessionType::RTH
             });
+        if self.liquidity_heatmap {
+            self.chart
+                .set_depth_history(Some(depth_history(spec.symbol)));
+        }
     }
 
     fn regenerate_bars(&mut self) {
@@ -1451,6 +1494,7 @@ impl DemoApp {
                 let mut widget_action = None;
                 let mut show_help = false;
                 let mut heatmap_enabled = self.liquidity_heatmap;
+                let mut largest_profile = self.largest_order_profile;
                 let mut paused = self.live.paused();
                 let action = self.top_toolbar.show_with_slots(
                     ui,
@@ -1463,6 +1507,9 @@ impl DemoApp {
                                 .show(ui);
                         egui::Popup::menu(&response).show(|ui| {
                             ui.checkbox(&mut heatmap_enabled, "Liquidity heatmap");
+                            ui.add_enabled(heatmap_enabled, |ui: &mut egui::Ui| {
+                                ui.checkbox(&mut largest_profile, "Largest order profile")
+                            });
                             ui.add_enabled(self.replay.is_none(), |ui: &mut egui::Ui| {
                                 ui.checkbox(&mut paused, "Pause synthetic feed")
                             });
@@ -1530,9 +1577,17 @@ impl DemoApp {
                 self.live.set_paused(paused);
                 if heatmap_enabled != self.liquidity_heatmap {
                     self.liquidity_heatmap = heatmap_enabled;
+                    if heatmap_enabled {
+                        self.chart
+                            .set_depth_history(Some(depth_history(self.chart.symbol())));
+                    }
                     self.chart.set_liquidity_heatmap(heatmap_enabled);
                     self.chart
                         .set_volume_bubbles(heatmap_enabled.then(Default::default));
+                }
+                if largest_profile != self.largest_order_profile {
+                    self.largest_order_profile = largest_profile;
+                    self.chart.set_order_book_view(book_view(largest_profile));
                 }
                 self.handle_top_toolbar(ui.ctx(), action);
                 self.handle_top_toolbar(ui.ctx(), menu_action);

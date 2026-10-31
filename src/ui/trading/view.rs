@@ -15,8 +15,9 @@ use crate::ui_kit::modal::dialogs::ConfirmDialog;
 use crate::widget::Chart;
 
 impl Trading {
-    /// What the order ticket needs from `chart` and the account this frame.
-    fn market<'a>(&'a self, chart: &'a Chart) -> Market<'a> {
+    /// What the order ticket needs from `chart` and the account this frame. Order tiers take
+    /// `colors` unless the chart's book view sets its own.
+    fn market<'a>(&'a self, chart: &'a Chart, colors: &crate::theme::ChartColors) -> Market<'a> {
         let symbol = chart.symbol();
         let instrument = chart
             .instrument()
@@ -50,7 +51,11 @@ impl Trading {
                 (queue.largest_orders(&view.filter).into_iter())
                     .filter_map(|o| {
                         let tier = tiers.tier(o.size)?;
-                        Some((o.side == OrderSide::Buy, o.price, view.tier_color(tier)))
+                        Some((
+                            o.side == OrderSide::Buy,
+                            o.price,
+                            view.tier_color(tier, colors),
+                        ))
                     })
                     .collect()
             })
@@ -116,13 +121,13 @@ impl Trading {
         } else {
             chart.trades(SeriesId::MAIN).collect()
         };
-        let mut market = self.market(chart);
+        let theme = ui.active_theme();
+        let mut market = self.market(chart, &theme.chart);
         market.last = trades.last().map(|trade| trade.price).or(market.last);
         market.trades = &trades;
         market.session_open = trades
             .last()
             .and_then(|trade| session_open(chart, trade.ts));
-        let theme = ui.active_theme();
         let action = egui::Panel::right("order_ticket")
             .resizable(false)
             .exact_size(ui.available_width().min(340.0))
@@ -174,7 +179,7 @@ impl Trading {
 
     fn draw_overlays(&self, ui: &mut egui::Ui, chart: &Chart) -> crate::chart::TradingLines {
         let symbol = chart.symbol();
-        let market = self.market(chart);
+        let market = self.market(chart, &ui.active_theme().chart);
         let (decimals, tick, last) = (market.decimals, market.tick, market.last);
         let capabilities = self.capabilities();
         let mapping = chart.get_chart_mapping();
@@ -299,13 +304,14 @@ impl Trading {
     }
 
     /// Draws the chart symbol's working orders, brackets, positions and execution marks,
-    /// respecting [`display`](Self::display). Hovering a mark lists every fill grouped in it.
+    /// respecting [`display`](Self::display). Hovering a mark lists the fills of its bar.
     /// Asks the user to confirm a change made on a line or in the depth ladder before sending it.
     pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
         chart.trading_bid_ask = self.display.bid_ask_labels;
+        let colors = ui.active_theme().chart;
         let symbol = chart.symbol().to_owned();
         let symbol = symbol.as_str();
-        let market = self.market(chart);
+        let market = self.market(chart, &colors);
         let (decimals, tick, last) = (market.decimals, market.tick, market.last);
         self.decimals = decimals;
         if self.account_panel.editing.is_none() {
@@ -401,7 +407,7 @@ impl Trading {
         if !self.ticket.open {
             return;
         }
-        let market = self.market(chart);
+        let market = self.market(chart, &colors);
         if let Ok(request) = self.ticket.request(&market)
             && request.order_type != OrderType::Market
         {
@@ -711,12 +717,13 @@ mod tests {
         chart.set_symbol("USDJPY");
         trading.rules = TradingRules::new("USDJPY");
         trading.rules.point_value = 1000.0;
-        assert_eq!(trading.market(&chart).pip_value, Some(10.0));
+        let colors = crate::theme::Theme::dark().chart;
+        assert_eq!(trading.market(&chart, &colors).pip_value, Some(10.0));
         trading.rules.pip_value = Some(0.5);
-        assert_eq!(trading.market(&chart).pip_value, Some(0.5));
+        assert_eq!(trading.market(&chart, &colors).pip_value, Some(0.5));
         chart.set_symbol("UNKNOWN");
         trading.rules = TradingRules::new("UNKNOWN");
-        assert_eq!(trading.market(&chart).pip_value, None);
+        assert_eq!(trading.market(&chart, &colors).pip_value, None);
     }
 
     #[test]

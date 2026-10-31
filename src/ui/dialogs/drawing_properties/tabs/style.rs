@@ -127,7 +127,7 @@ impl StyleTab {
 }
 
 /// Kit colour swatch for `color`; returns the colour picked this frame.
-fn color_swatch(
+pub(super) fn color_swatch(
     ui: &mut Ui,
     state: &mut ColorPickerState,
     color: Color32,

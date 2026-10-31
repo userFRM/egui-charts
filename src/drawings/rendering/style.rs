@@ -2,12 +2,96 @@
 
 use crate::drawings::{ArrowStyle, Drawing, DrawingToolType, FontWeight};
 use crate::model::LineStyle;
+use crate::theme::ThemeExt;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, epaint::ColorMode, layers::ShapeIdx};
+
+/// Colours of the box around an annotation's text, from [`Drawing::text_box_colors`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TextBoxColors {
+    /// Colour of the text.
+    pub(crate) text: Color32,
+    /// Fill of the box; transparent when the background is off.
+    pub(crate) fill: Color32,
+    /// Border of the box, 1 px; `Stroke::NONE` when the border is off.
+    pub(crate) border: Stroke,
+}
+
+/// White or black, whichever reads on `fill`, by the rule the price axis tags use. The chart
+/// behind a translucent fill is not known here, so the colour the user picked decides.
+pub(super) fn label_text_color(fill: Color32) -> Color32 {
+    if crate::theme::contrast(Color32::WHITE, fill.to_opaque()) >= 2.0 {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
+}
 
 impl Drawing {
     /// Size annotations before laying out both the text and its surrounding box.
     pub(super) fn annotation_font(&self) -> egui::FontId {
         egui::FontId::proportional(crate::styles::typography::font_size(self.font_size))
+    }
+
+    /// Whether the tool's text sits on a solid label in the drawing colour rather than on a card
+    /// in the theme's panel colour.
+    pub(crate) fn solid_label(&self) -> bool {
+        matches!(
+            self.tool_type,
+            DrawingToolType::PriceNote | DrawingToolType::Comment | DrawingToolType::Signpost
+        )
+    }
+
+    /// Colours of the box around an annotation's text. Unset colours follow the tool: a card
+    /// takes the active theme's panel colour with its text and border in the drawing colour, and
+    /// a solid label takes the drawing colour with white or black text, whichever reads on it.
+    /// Text without a background takes the drawing colour.
+    pub(crate) fn text_box_colors(&self, ctx: &egui::Context) -> TextBoxColors {
+        let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let (fill, text) = if self.background {
+            // The theme is read only for a card without a fill colour.
+            let fill = self.fill_color32().unwrap_or_else(|| {
+                if self.solid_label() {
+                    self.color32()
+                } else {
+                    ctx.active_theme().ui.panel_bg
+                }
+            });
+            let text = if self.solid_label() {
+                label_text_color(fill)
+            } else {
+                self.color32()
+            };
+            (fill, text)
+        } else {
+            (Color32::TRANSPARENT, self.color32())
+        };
+        TextBoxColors {
+            text: self.text_color.map_or(text, rgba),
+            fill,
+            border: if self.border {
+                Stroke::new(
+                    crate::styles::stroke::HAIRLINE,
+                    self.border_color.map_or(self.color32(), rgba),
+                )
+            } else {
+                Stroke::NONE
+            },
+        }
+    }
+
+    /// Lays annotation text out once, at the drawing's font size and slant, for both sizing its
+    /// box and painting it.
+    pub(super) fn annotation_galley(
+        &self,
+        painter: &Painter,
+        text: String,
+        color: Color32,
+    ) -> std::sync::Arc<egui::Galley> {
+        let format = egui::TextFormat {
+            italics: self.italic,
+            ..egui::TextFormat::simple(self.annotation_font(), color)
+        };
+        painter.layout_job(egui::text::LayoutJob::simple_format(text, format))
     }
 
     /// Apply line patterns and font weight without changing the renderer's widths or fills.
@@ -95,9 +179,10 @@ impl Drawing {
         }
         if let Shape::Text(t) = shape {
             if self.font_weight == FontWeight::Bold {
-                // Synthetic weight keeps host font families and fallback glyphs intact.
+                // Synthetic weight keeps host font families and fallback glyphs intact. The copy
+                // moves along the baseline, which text turned along a line turns with it.
                 let mut weighted = t.clone();
-                weighted.pos.x += 0.6;
+                weighted.pos += egui::Vec2::angled(t.angle) * 0.6;
                 *shape = Shape::Vec(vec![Shape::Text(t.clone()), Shape::Text(weighted)]);
             }
             return;
@@ -390,15 +475,18 @@ mod tests {
     use egui::epaint::StrokeKind;
 
     fn paint(drawing: &Drawing) -> Vec<Shape> {
+        paint_on(&egui::Context::default(), drawing, false)
+    }
+
+    fn paint_on(ctx: &egui::Context, drawing: &Drawing, selected: bool) -> Vec<Shape> {
         let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
-        let ctx = egui::Context::default();
         let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(pane),
                 ..Default::default()
             },
             |ui| {
-                drawing.render_original(
+                drawing.render_with_selection(
                     ui.painter(),
                     pane,
                     &crate::drawings::rendering::ChartView {
@@ -412,6 +500,7 @@ mod tests {
                         time_axis: true,
                         executions: None,
                     },
+                    selected,
                 );
             },
         );
@@ -449,6 +538,137 @@ mod tests {
             .map(|p| crate::drawings::ChartPoint::new(p.x, f64::from(p.y)))
             .collect();
         drawing
+    }
+
+    /// Text boxes take the theme's card, or a solid label in the drawing colour, unless their
+    /// text, background and border settings say otherwise. Contrast of white on the red is
+    /// 1.05 / 0.269 = 3.90 and on the yellow 1.05 / 0.860 = 1.22, so black reads on the yellow.
+    #[test]
+    fn text_boxes_follow_the_theme_and_their_settings() {
+        use DrawingToolType::*;
+        let red = Color32::from_rgb(242, 54, 69);
+        let yellow = Color32::from_rgb(255, 235, 59);
+        let blue = Color32::from_rgb(0, 0, 255);
+        let green = Color32::from_rgb(0, 128, 0);
+        for (theme, panel) in [
+            (crate::theme::Theme::light(), Color32::WHITE),
+            (crate::theme::Theme::dark(), Color32::BLACK),
+        ] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            for tool in [
+                TextLabel,
+                AnchoredText,
+                Note,
+                AnchoredNote,
+                FlagNote,
+                Callout,
+                Comment,
+                PriceNote,
+                Signpost,
+            ] {
+                let solid = matches!(tool, Comment | PriceNote | Signpost);
+                let border = |color| vec![Stroke::new(1.0, color)];
+                // Settings, text colour, box fills, box strokes and italics.
+                type Case = (
+                    &'static str,
+                    fn(&mut Drawing),
+                    Color32,
+                    Vec<Color32>,
+                    Vec<Stroke>,
+                    bool,
+                );
+                let cases: [Case; 4] = [
+                    (
+                        "defaults",
+                        |_| {},
+                        if solid { Color32::WHITE } else { red },
+                        vec![if solid { red } else { panel }],
+                        border(red),
+                        false,
+                    ),
+                    (
+                        "all set",
+                        |d| {
+                            d.text_color = Some([0, 0, 255, 255]);
+                            d.fill_color = Some([255, 235, 59, 255]);
+                            d.border_color = Some([0, 128, 0, 255]);
+                            d.italic = true;
+                        },
+                        blue,
+                        vec![yellow],
+                        border(green),
+                        true,
+                    ),
+                    (
+                        "fill only",
+                        |d| d.fill_color = Some([255, 235, 59, 255]),
+                        if solid { Color32::BLACK } else { red },
+                        vec![yellow],
+                        border(red),
+                        false,
+                    ),
+                    (
+                        "switched off",
+                        |d| {
+                            d.background = false;
+                            d.border = false;
+                        },
+                        red,
+                        vec![],
+                        vec![],
+                        false,
+                    ),
+                ];
+                for (case, setup, text_color, fills, strokes, italics) in cases {
+                    let mut drawing = pattern(tool);
+                    drawing.points = vec![Pos2::new(100.0, 300.0), Pos2::new(200.0, 100.0)];
+                    drawing.chart_points = (drawing.points.iter())
+                        .map(|p| crate::drawings::ChartPoint::new(p.x, f64::from(p.y)))
+                        .collect();
+                    drawing.text = Some("Hi".into());
+                    setup(&mut drawing);
+                    let shapes = paint_on(&ctx, &drawing, true);
+                    let texts: Vec<_> = (shapes.iter())
+                        .filter_map(|s| match s {
+                            Shape::Text(t) if t.galley.text().ends_with("Hi") => Some(t),
+                            _ => None,
+                        })
+                        .collect();
+                    let [text] = texts[..] else {
+                        panic!("{tool:?} {case}: {} texts", texts.len());
+                    };
+                    let format = &text.galley.job.sections[0].format;
+                    let label = text.visual_bounding_rect();
+                    let (mut painted_fills, mut painted_strokes) = (vec![], vec![]);
+                    for shape in &shapes {
+                        let (bounds, fill, stroke) = match shape {
+                            Shape::Rect(r) => (r.rect, r.fill, r.stroke),
+                            Shape::Path(p) if p.closed => {
+                                let ColorMode::Solid(color) = p.stroke.color else {
+                                    continue;
+                                };
+                                (
+                                    egui::Rect::from_points(&p.points),
+                                    p.fill,
+                                    Stroke::new(p.stroke.width, color),
+                                )
+                            }
+                            _ => continue,
+                        };
+                        if bounds.expand(1.0).contains_rect(label) {
+                            painted_fills.extend((fill.a() > 0).then_some(fill));
+                            painted_strokes.extend((!stroke.is_empty()).then_some(stroke));
+                        }
+                    }
+                    let name = format!("{tool:?} {case}, dark {}", theme.dark);
+                    assert_eq!(format.color, text_color, "{name}");
+                    assert_eq!(format.italics, italics, "{name}");
+                    assert_eq!(painted_fills, fills, "{name}");
+                    assert_eq!(painted_strokes, strokes, "{name}");
+                }
+            }
+        }
     }
 
     /// Finished drawings leave swing points clear; small circles are reserved for previews,
@@ -804,6 +1024,33 @@ mod tests {
             let shapes: usize = output.shapes.iter().map(|s| leaves(&s.shape)).sum();
             output.drop_without_applying_deltas();
             assert!((1..1_000).contains(&shapes), "{tool:?}: {shapes} shapes");
+        }
+    }
+
+    /// Bold text paints a second copy 0.6 pt along its own baseline, so text turned along a
+    /// horizontal, a 45 degree and a vertical line thickens its stems alike.
+    #[test]
+    fn bold_text_thickens_along_its_baseline() {
+        for end in [(300.0, 300.0), (300.0, 100.0), (100.0, 100.0)] {
+            let mut drawing = Drawing::new(1, DrawingToolType::TrendLine);
+            drawing.points = vec![Pos2::new(100.0, 300.0), Pos2::new(end.0, end.1)];
+            drawing.text = Some("Weekly support".into());
+            drawing.font_weight = FontWeight::Bold;
+            let texts: Vec<_> = paint(&drawing)
+                .into_iter()
+                .filter_map(|s| match s {
+                    Shape::Text(t) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            let [text, copy] = texts.as_slice() else {
+                panic!("{end:?}: {} texts", texts.len());
+            };
+            let offset = egui::emath::Rot2::from_angle(-text.angle) * (copy.pos - text.pos);
+            assert!(
+                (offset - egui::vec2(0.6, 0.0)).length() < 1e-4,
+                "{end:?}: {offset:?}"
+            );
         }
     }
 }

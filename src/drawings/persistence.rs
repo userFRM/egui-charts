@@ -948,6 +948,11 @@ mod tests {
                 ChartPoint::new(16.0, 112.0),
             ]);
         }
+        d.italic = true;
+        d.text_color = Some([13, 14, 15, 16]);
+        d.background = false;
+        d.border = false;
+        d.border_color = Some([17, 18, 19, 20]);
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d
@@ -1147,6 +1152,12 @@ mod tests {
             let mut want = non_default_drawing(tool);
             want.label = None; // Earlier files have no object name.
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
+            // Earlier files draw text and borders in the drawing colour, boxed and upright.
+            want.italic = false;
+            want.text_color = None;
+            want.background = true;
+            want.border = true;
+            want.border_color = None;
             let config = want.fib_config.as_mut().unwrap();
             config.logarithmic = false;
             config.level_width = 2.0;

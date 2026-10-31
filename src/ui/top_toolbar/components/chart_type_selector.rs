@@ -11,7 +11,7 @@ use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::top_toolbar::buttons::Trigger;
 use crate::ui::top_toolbar::components::timeframe_selector::{
-    STAR_SLOT_W, favorite_star, favorite_strip, menu_list_height, menu_row_focus,
+    favorite_star, favorite_strip, menu_frame, menu_list_height, menu_row_focus,
     retain_non_favorite,
 };
 use crate::ui_kit::list_item::{ContentContext, ListItem, ListItemContent};
@@ -199,7 +199,7 @@ impl ChartTypeSelector {
             .id(id)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .align_alternatives(&[])
-            .frame(egui::Frame::popup(ui.style()).fill(theme.ui.panel_bg))
+            .frame(menu_frame(ui, &theme))
             .gap(theme.spacing.xs)
             .show(|ui| self.menu_ui(ui, &theme, max_height))
             .map_or(ChartTypeAction::None, |menu| menu.inner);
@@ -225,11 +225,8 @@ impl ChartTypeSelector {
     fn menu_ui(&mut self, ui: &mut Ui, theme: &Theme, max_height: f32) -> ChartTypeAction {
         let mut action = ChartTypeAction::None;
         // Rows sit edge to edge, and the scroll bar is visible whenever the list overflows.
-        let spacing = ui.spacing_mut();
-        spacing.item_spacing.y = 0.0;
-        spacing.scroll.floating = false;
-        spacing.scroll.bar_width = 3.0;
-        spacing.scroll.fade.strength = 0.0;
+        ui.spacing_mut().item_spacing.y = 0.0;
+        crate::styles::menu_scroll_bar(ui);
 
         ui.set_width(256.0_f32.max(self.config.dropdown_width));
         ui.visuals_mut().selection.bg_fill = theme.ui.text;
@@ -285,7 +282,7 @@ impl ChartTypeSelector {
     }
 }
 
-/// One chart type row: icon, name, a check on the current type, and a favourite star.
+/// One chart type row: icon, name and a favourite star. The current type is marked by its tile.
 struct ChartTypeRow<'a> {
     chart_type: ChartType,
     favorite: bool,
@@ -325,25 +322,11 @@ impl ListItemContent for ChartTypeRow<'_> {
             pos2(icon_rect.max.x + theme.spacing.lg, rect.center().y),
             egui::Align2::LEFT_CENTER,
             l10n::text(ui.ctx(), self.chart_type.name()),
-            egui::FontId::proportional(14.0),
+            egui::FontId::proportional(16.0),
             color,
         );
 
         *self.toggle_favorite = favorite_star(ui, context, self.favorite, true, color);
-
-        if context.selected {
-            // Left of the star's slot.
-            let check = Rect::from_min_size(
-                pos2(
-                    rect.max.x - STAR_SLOT_W - icon_sizes::SM,
-                    rect.center().y - icon_sizes::SM / 2.0,
-                ),
-                vec2(icon_sizes::SM, icon_sizes::SM),
-            );
-            embedded_icons::CHECK
-                .as_image_tinted(check.size(), color)
-                .paint_at(ui, check);
-        }
         menu_row_focus(ui, context.response);
         context.response.clone()
     }

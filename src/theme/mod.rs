@@ -136,6 +136,15 @@ fn default_take_profit() -> Color32 {
 fn default_stop_loss() -> Color32 {
     Color32::from_rgb(255, 166, 0)
 }
+/// The light theme's, which also reads at 3:1 or more on black, for a theme saved without it.
+#[cfg(feature = "serde")]
+fn default_order_notable() -> Color32 {
+    Theme::light().chart.order_notable
+}
+#[cfg(feature = "serde")]
+fn default_order_large() -> Color32 {
+    Theme::light().chart.order_large
+}
 
 impl Default for UiColors {
     fn default() -> Self {
@@ -171,6 +180,14 @@ pub struct ChartColors {
     pub candle_up: Color32,
     /// Falling candles and bars: body, border and wick.
     pub candle_down: Color32,
+    /// Resting orders that reach the notable size tier of an
+    /// [`OrderBookView`](crate::chart::overlays::OrderBookView): heatmap cells, book profile bars
+    /// and depth ladder cells.
+    #[cfg_attr(feature = "serde", serde(default = "default_order_notable"))]
+    pub order_notable: Color32,
+    /// Resting orders that reach the large size tier.
+    #[cfg_attr(feature = "serde", serde(default = "default_order_large"))]
+    pub order_large: Color32,
     /// Opacity of the volume colours returned by [`Self::volume_up`] and [`Self::volume_down`].
     pub volume_alpha: u8,
 }

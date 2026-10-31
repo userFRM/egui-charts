@@ -627,6 +627,93 @@ fn a_full_bar_limit_evicts_in_chunks_and_keeps_paging_paused() {
     );
 }
 
+/// A scroll-back page asked for before the main series lost its oldest bars is dropped rather
+/// than merged in front of the bars that remain, whether a lowered limit, live bars past the
+/// limit or the host evicted them, and paging asks again before the oldest bar held once the
+/// limit allows it. A continuation named before an eviction lapses with the bar it continued.
+#[test]
+fn an_eviction_drops_the_scroll_back_page_in_flight_and_its_continuation() {
+    use std::num::NonZeroUsize;
+    let asked = |feed: &Script, from: DateTime<Utc>| -> Vec<i64> {
+        feed.calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::History(request) => request.before,
+                _ => None,
+            })
+            .map(|before| (before - from).num_minutes())
+            .collect()
+    };
+    let all = bars(40);
+    for (name, limit, loaded, asked_again) in [
+        ("lowered limit", None, 10..40, None),
+        ("live bars", NonZeroUsize::new(16), 10..23, None),
+        ("removed", None, 10..40, Some(13)),
+    ] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_bar_limit(SeriesId::MAIN, limit);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve().send(Ok(Instrument::new("A")));
+        feed.page().send(page(all[loaded].to_vec(), false));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert_eq!(feed.pages.lock().unwrap().len(), 1, "{name}: in flight");
+        feed.calls();
+        match name {
+            "lowered limit" => chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(16)),
+            "live bars" => {
+                let sink = feed.sink();
+                for minute in 23..27 {
+                    let time = all[0].time + TimeDelta::minutes(minute);
+                    sink.push_tick(Tick::new(time, 200.0, 1.0, None));
+                }
+                frames.run(&mut chart);
+            }
+            _ => drop(chart.remove_oldest_bars(SeriesId::MAIN, 3)),
+        }
+        let held = chart.bars(SeriesId::MAIN).to_vec();
+        assert!(held[0].time > all[10].time, "{name}: evicted");
+        feed.page().send(page(all[8..10].to_vec(), false));
+        frames.run(&mut chart);
+        assert_eq!(chart.bars(SeriesId::MAIN), &held[..], "{name}");
+        let expected: Vec<_> = asked_again.into_iter().collect();
+        assert_eq!(asked(&feed, all[0].time), expected, "{name}");
+    }
+
+    let all = bars(600);
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve().send(Ok(Instrument::new("A")));
+    feed.page().send(page(all[200..].to_vec(), false));
+    frames.run(&mut chart);
+    chart.set_start_idx(0);
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    assert_eq!(feed.pages.lock().unwrap().len(), 1, "scroll-back asked");
+    // The view leaves the oldest bar before the feed names where older bars continue.
+    chart.set_start_idx(350);
+    frames.run(&mut chart);
+    let window = HistoryPage::new(Vec::new(), false).with_continue_before(all[50].time);
+    feed.page().send(Ok(window));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    assert!(feed.pages.lock().unwrap().is_empty(), "the view is far");
+    chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(16));
+    let oldest = chart.bars(SeriesId::MAIN)[0].time;
+    chart.set_bar_limit(SeriesId::MAIN, None);
+    feed.calls();
+    frames.run(&mut chart);
+    assert_eq!(
+        asked(&feed, all[0].time),
+        [(oldest - all[0].time).num_minutes()],
+        "the continuation lapsed with the evicted bar"
+    );
+}
+
 /// Evicted trades leave the footprint: its bars equal those summed from the held trades, delta
 /// extrema included, and the bar the eviction cut is not offered as complete.
 #[test]
