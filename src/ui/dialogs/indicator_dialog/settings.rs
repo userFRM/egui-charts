@@ -24,7 +24,7 @@ pub struct StudyEdit {
     pub id: SeriesId,
     /// Calculation input ids and their new values.
     pub inputs: Vec<(String, InputValue)>,
-    /// Per-plot styles, precision and interval visibility.
+    /// Per-plot styles, levels, precision and interval visibility.
     pub settings: StudySettings,
 }
 
@@ -36,6 +36,7 @@ pub struct IndicatorSettingsDialog {
     inputs: Vec<StudyInput>,
     title: String,
     line_names: Vec<String>,
+    levels: Vec<(f64, &'static str)>,
     tab: Tab,
     current_interval: Option<Timeframe>,
     sources: Vec<(crate::studies::StudySource, String)>,
@@ -53,6 +54,19 @@ impl crate::ui_kit::tab_bar::TabLabel for Tab {
     }
 }
 
+/// A line pattern picker named for screen readers.
+fn pattern_combo(ui: &mut egui::Ui, pattern: &mut LineStyle) {
+    egui::ComboBox::from_id_salt("pattern")
+        .selected_text(l10n::text(ui.ctx(), pattern.name()))
+        .show_ui(ui, |ui| {
+            for choice in LineStyle::all() {
+                ui.selectable_value(pattern, *choice, l10n::text(ui.ctx(), choice.name()));
+            }
+        })
+        .response
+        .accessible_name(l10n::text(ui.ctx(), "Line pattern"));
+}
+
 impl IndicatorSettingsDialog {
     /// Open on the current values of the study identified by `id`.
     pub fn open(&mut self, id: SeriesId, study: &dyn Indicator, interval: Option<Timeframe>) {
@@ -64,6 +78,12 @@ impl IndicatorSettingsDialog {
         self.inputs = study.inputs();
         self.title = format!("{} settings", study.name());
         self.line_names = study.line_names();
+        self.levels = study
+            .pane()
+            .levels
+            .into_iter()
+            .map(|(value, _, caption)| (value, caption))
+            .collect();
         self.overlay = study.is_overlay();
         self.price_scale = study.scale() == StudyScale::Main;
         self.current_interval = interval;
@@ -345,31 +365,7 @@ impl IndicatorSettingsDialog {
                                         .accessible_name(l10n::text(ui.ctx(), "Line width"));
                                     });
                                     ui.horizontal_wrapped(|ui| {
-                                        egui::ComboBox::from_id_salt("pattern")
-                                            .selected_text(l10n::text(
-                                                ui.ctx(),
-                                                format!("{:?}", plot.pattern),
-                                            ))
-                                            .show_ui(ui, |ui| {
-                                                for pattern in [
-                                                    LineStyle::Solid,
-                                                    LineStyle::Dashed,
-                                                    LineStyle::Dotted,
-                                                    LineStyle::LargeDashed,
-                                                    LineStyle::SparseDotted,
-                                                ] {
-                                                    ui.selectable_value(
-                                                        &mut plot.pattern,
-                                                        pattern,
-                                                        l10n::text(
-                                                            ui.ctx(),
-                                                            format!("{pattern:?}"),
-                                                        ),
-                                                    );
-                                                }
-                                            })
-                                            .response
-                                            .accessible_name(l10n::text(ui.ctx(), "Line pattern"));
+                                        pattern_combo(ui, &mut plot.pattern);
                                         egui::ComboBox::from_id_salt("plot_type")
                                             .selected_text(l10n::text(
                                                 ui.ctx(),
@@ -413,6 +409,45 @@ impl IndicatorSettingsDialog {
                                     });
                                     ui.separator();
                                 });
+                            }
+                            for (index, level) in edit.settings.levels.iter_mut().enumerate() {
+                                let (drawn, caption) = self
+                                    .levels
+                                    .get(index)
+                                    .copied()
+                                    .unwrap_or((f64::NAN, "Level"));
+                                ui.push_id(("level", index), |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.checkbox(
+                                            &mut level.visible,
+                                            l10n::text(ui.ctx(), caption),
+                                        );
+                                        let mut value = level.value.unwrap_or(drawn);
+                                        if ui
+                                            .add(egui::DragValue::new(&mut value).speed(0.1))
+                                            .accessible_name(l10n::text(ui.ctx(), "Level value"))
+                                            .changed()
+                                        {
+                                            level.value = Some(value);
+                                        }
+                                        ui.color_edit_button_srgba(&mut level.color)
+                                            .accessible_name(l10n::text(ui.ctx(), "Level colour"));
+                                        pattern_combo(ui, &mut level.pattern);
+                                    });
+                                });
+                            }
+                            if edit.settings.levels.len() >= 2 {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.checkbox(
+                                        &mut edit.settings.fill_between_levels,
+                                        l10n::text(ui.ctx(), "Fill between levels"),
+                                    );
+                                    ui.color_edit_button_srgba(&mut edit.settings.level_fill_color)
+                                        .accessible_name(l10n::text(ui.ctx(), "Fill colour"));
+                                });
+                            }
+                            if !edit.settings.levels.is_empty() {
+                                ui.separator();
                             }
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(l10n::text(ui.ctx(), "Precision"));
@@ -466,7 +501,12 @@ impl IndicatorSettingsDialog {
                             });
                         }
                     });
-                let valid = self.inputs.iter().all(|input| input.accepts(&input.value));
+                let valid = self.inputs.iter().all(|input| input.accepts(&input.value))
+                    && edit
+                        .settings
+                        .levels
+                        .iter()
+                        .all(|level| level.value.is_none_or(f64::is_finite));
                 (apply, cancel) = DialogFooter::new("Apply")
                     .primary_enabled(valid)
                     .secondary("Cancel")
