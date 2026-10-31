@@ -47,6 +47,9 @@ pub(crate) struct FeedLink {
     /// The symbol or timeframe changed: the next `pump` reloads.
     reload_pending: bool,
     pub(super) paused: bool,
+    /// The pause last set with [`Chart::set_feed_paused`]. `paused` also holds while the main
+    /// series is removed or a replay runs.
+    pub(super) host_paused: bool,
     next_key: u64,
     /// Requests not answered yet; an answer under any other key is stale and dropped.
     pending: Vec<(u64, Request, u32)>,
@@ -126,6 +129,7 @@ impl FeedLink {
             wake: Arc::default(),
             reload_pending: false,
             paused: true,
+            host_paused: true,
             next_key: 0,
             pending: Vec::new(),
             retries: Vec::new(),
@@ -198,6 +202,7 @@ impl Chart {
             wake: Arc::default(),
             reload_pending: true,
             paused: false,
+            host_paused: false,
             next_key: 0,
             pending: Vec::new(),
             retries: Vec::new(),
@@ -233,8 +238,12 @@ impl Chart {
     /// Suspends feed requests and unsubscribes while the host supplies replay bars by hand.
     /// Resuming reloads the current symbol and interval, including any trades retained by the
     /// host. Bars supplied while paused are matched by exact opening time.
-    /// A removed main series stays paused.
+    /// The feed also stays paused while the main series is removed, and follows this setting
+    /// again once undo restores the series.
     pub fn set_feed_paused(&mut self, paused: bool) {
+        if let Some(link) = &mut self.feed_link {
+            link.host_paused = paused;
+        }
         let paused = paused || !self.main_series_present || self.replay.is_some();
         if paused {
             self.study_data.pause();

@@ -10,6 +10,7 @@ pub(super) struct ReplayWindow {
     pub(super) time: DateTime<Utc>,
     bars: HashMap<SeriesId, Vec<Bar>>,
     source: Option<(Vec<Bar>, BarClock)>,
+    /// The pause last set with `set_feed_paused` before the replay, which its exit sets again.
     feed_paused: bool,
     pub quote: Option<crate::model::Level1Quote>,
     pub session_quote: Option<crate::model::quote::SessionQuote>,
@@ -86,7 +87,7 @@ impl Chart {
                 .map(|s| (s.id, s.bars.clone()))
                 .collect();
             bars.insert(SeriesId::MAIN, self.state.data().bars.clone());
-            let feed_paused = self.feed_link.as_ref().is_some_and(|link| link.paused);
+            let feed_paused = self.feed_link.as_ref().is_some_and(|link| link.host_paused);
             self.replay = Some(ReplayWindow {
                 time,
                 bars,
@@ -149,7 +150,7 @@ impl Chart {
             let count = replay
                 .bars
                 .get(&id)
-                .map_or(0, |bars| bars.len().saturating_sub(limit.get()));
+                .map_or(0, |bars| super::series::evicted_bars(bars.len(), limit));
             if count > 0 {
                 replay.remove_oldest_bars(id, count, &clock);
                 if id == SeriesId::MAIN {

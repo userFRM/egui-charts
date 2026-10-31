@@ -1,8 +1,9 @@
 //! Actions from the drawing properties dialog.
 
 use super::tabs::CoordinatesState;
+use crate::drawings::domain::GANN_SQUARE_UNITS;
 use crate::drawings::validation::{MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH};
-use crate::drawings::{Drawing, DrawingTemplate, TimeframeVisibility};
+use crate::drawings::{Drawing, DrawingTemplate, DrawingToolType, TimeframeVisibility};
 use crate::model::LineStyle;
 use crate::styles::typography::FONT_SIZES;
 use crate::widget::Chart;
@@ -259,6 +260,13 @@ impl DrawingProps {
             {
                 return Err("Fibonacci ratios must be finite");
             }
+            if settings
+                .fib_config
+                .as_ref()
+                .is_some_and(|c| !(c.level_width > 0.0 && c.level_width <= MAX_STROKE_WIDTH))
+            {
+                return Err("Fibonacci widths must be above 0 and at most 100");
+            }
             if settings.pitchfork.as_ref().is_some_and(|c| {
                 c.levels
                     .iter()
@@ -273,21 +281,30 @@ impl DrawingProps {
             }) {
                 return Err("Pitchfork widths must be above 0 and at most 100");
             }
-            if settings.gann.as_ref().is_some_and(|c| {
-                c.price_levels
+            if let Some(c) = settings.gann.as_ref() {
+                let square = matches!(
+                    settings.tool_type,
+                    DrawingToolType::GannSquare | DrawingToolType::GannFixed
+                );
+                let max = if square { GANN_SQUARE_UNITS } else { 1.0 };
+                if c.price_levels
                     .iter()
                     .chain(&c.time_levels)
-                    .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
-            }) {
-                return Err("Gann divisions must be between 0 and 1");
-            }
-            if settings.gann.as_ref().is_some_and(|c| {
-                c.fan_ratios
+                    .any(|l| !(0.0..=max).contains(&l.value))
+                {
+                    return Err(if square {
+                        "Gann square levels must be between 0 and 5"
+                    } else {
+                        "Gann levels must be between 0 and 1"
+                    });
+                }
+                if c.fan_ratios
                     .iter()
                     .chain(&c.arc_ratios)
-                    .any(|v| !v.is_finite() || *v <= 0.0)
-            }) {
-                return Err("Gann fan and arc ratios must be positive and finite");
+                    .any(|l| !(l.value.is_finite() && l.value > 0.0))
+                {
+                    return Err("Gann fan and arc ratios must be positive and finite");
+                }
             }
             if settings.ghost_feed.is_some_and(|c| !c.is_valid()) {
                 return Err(
@@ -394,7 +411,7 @@ mod tests {
 
         use crate::data::VolumeProfileConfig;
         use crate::drawings::{
-            FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, PositionSizing,
+            FibonacciConfig, GannConfig, GannLevel, PitchforkConfig, PositionSize, PositionSizing,
             RegressionTrendConfig,
         };
         for tool in [
@@ -439,24 +456,11 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            let line = matches!(
-                tool,
-                DrawingToolType::TrendLine
-                    | DrawingToolType::Ray
-                    | DrawingToolType::ExtendedLine
-                    | DrawingToolType::InfoLine
-                    | DrawingToolType::TrendAngle
-                    | DrawingToolType::Arrow
-                    | DrawingToolType::Path
-                    | DrawingToolType::Polyline
-            );
+            let line = tool.supports_line_ends();
             assert_eq!(labels.contains(&"Line start"), line, "{tool:?}");
             assert_eq!(labels.contains(&"Line end"), line, "{tool:?}");
-            assert_eq!(
-                labels.contains(&"Middle line"),
-                tool == DrawingToolType::Rect,
-                "{tool:?}"
-            );
+            let middle = tool.supports_middle_line();
+            assert_eq!(labels.contains(&"Middle line"), middle, "{tool:?}");
             output.drop_without_applying_deltas();
             let settings = &mut props.tool_settings.as_mut().unwrap().settings;
             settings.fib_config = Some(FibonacciConfig {
@@ -468,8 +472,12 @@ mod tests {
                 ..Default::default()
             });
             settings.gann = Some(GannConfig {
-                price_levels: vec![0.0, 0.5, 1.0],
-                time_levels: vec![0.25, 0.75],
+                price_levels: [0.0, 0.5, 1.0]
+                    .map(|v| GannLevel::new(v, [128, 128, 128, 255]))
+                    .to_vec(),
+                time_levels: [0.25, 0.75]
+                    .map(|v| GannLevel::new(v, [128, 128, 128, 255]))
+                    .to_vec(),
                 ..Default::default()
             });
             settings.position_size = Some(PositionSize::RiskPercent {
@@ -495,7 +503,17 @@ mod tests {
             let saved = &chart.drawings().drawings[0];
             assert_eq!(format!("{:?}", saved.fib_config), expected);
             assert_eq!(saved.pitchfork.as_ref().unwrap().background_opacity, 75);
-            assert_eq!(saved.gann.as_ref().unwrap().time_levels, [0.25, 0.75]);
+            assert_eq!(
+                saved
+                    .gann
+                    .as_ref()
+                    .unwrap()
+                    .time_levels
+                    .iter()
+                    .map(|l| l.value)
+                    .collect::<Vec<_>>(),
+                [0.25, 0.75]
+            );
             assert_eq!(
                 saved.position_size.unwrap().quantity(100.0, 98.0),
                 Some(50.0)
@@ -511,28 +529,39 @@ mod tests {
             assert!(chart.drawings().drawings[1].fib_config.is_none());
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
-            assert!(chart.drawings().drawings[0].fib_config.is_none());
+            assert_eq!(
+                format!("{:?}", chart.drawings().drawings[0].fib_config),
+                format!("{:?}", Drawing::new(7, tool).fib_config)
+            );
             assert!(chart.redo());
             chart.drawings_mut().edit_drawing(7, |d| d.locked = true);
             props.font_size = 18.0;
             props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
             assert_eq!(chart.drawings().drawings[0].font_size, 12.0);
             assert_eq!(chart.drawings().drawings[1].font_size, 18.0);
-            // A malformed ratio cannot partially change common style or another selected tool.
-            props
-                .tool_settings
-                .as_mut()
-                .unwrap()
-                .settings
-                .fib_config
-                .as_mut()
-                .unwrap()
-                .levels[0]
-                .value = f32::NAN;
-            props.line_width = 9.0;
-            assert!(props.apply_to_chart(DrawingId(7), &mut chart).is_err());
-            assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0);
-            assert_eq!(chart.drawings().drawings[1].stroke_width, 2.0);
+            // Malformed ratios or widths cannot partly change another selected drawing.
+            for (ratio, width) in [(f32::NAN, 2.0), (1.0, 0.0), (1.0, 100.01), (1.0, f32::NAN)] {
+                let config = props
+                    .tool_settings
+                    .as_mut()
+                    .unwrap()
+                    .settings
+                    .fib_config
+                    .as_mut()
+                    .unwrap();
+                config.levels[0].value = ratio;
+                config.level_width = width;
+                props.line_width = 9.0;
+                assert!(props.apply_to_chart(DrawingId(7), &mut chart).is_err());
+                assert_eq!(
+                    chart.drawings().drawings[0].stroke_width,
+                    Drawing::new(7, tool).stroke_width
+                );
+                assert_eq!(
+                    chart.drawings().drawings[1].stroke_width,
+                    Drawing::new(7, tool).stroke_width
+                );
+            }
         }
     }
 }

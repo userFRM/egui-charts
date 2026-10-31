@@ -107,10 +107,6 @@ impl SeriesSettingsDialog {
 
         // Main content: sidebar + content area
         let sidebar_width = DESIGN_TOKENS.sizing.dialog.series_sidebar_width;
-        let seam_top = ui.cursor().top();
-        let seam_x = ui.cursor().left()
-            + sidebar_width.min(ui.available_width() * 0.4)
-            + ui.spacing().item_spacing.x;
         let active_tab = self.active_tab;
         let active_tab_mut = &mut self.active_tab;
         let settings = &mut self.settings;
@@ -153,11 +149,6 @@ impl SeriesSettingsDialog {
             );
         });
 
-        ui.painter().vline(
-            seam_x,
-            seam_top..=ui.cursor().top() + 8.0,
-            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
-        );
         // Footer
         let (ok, cancel) = DialogFooter::new("Ok")
             .secondary("Cancel")

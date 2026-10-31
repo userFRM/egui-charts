@@ -49,29 +49,66 @@ impl StudyTemplate {
     /// Reconstruct a study through `factory`, which resolves [`name`](Self::name) to a built-in
     /// or host-registered study. Fails like [`create`](Self::create).
     pub fn create_with(&self, factory: &IndicatorFactory) -> Result<Box<dyn Indicator>, String> {
+        let upgraded = self.upgraded();
+        let template = upgraded.as_ref().unwrap_or(self);
         let study = factory
-            .create(&self.name)
-            .ok_or_else(|| format!("Unknown study: {}", self.name))?;
+            .create(&template.name)
+            .ok_or_else(|| format!("Unknown study: {}", template.name))?;
         // Automatic drawings saved before their swings could follow volatility used the fixed
         // percentage they were saved with.
-        let saved = |id| self.inputs.iter().any(|(saved, _)| saved == id);
+        let saved = |id| template.inputs.iter().any(|(saved, _)| saved == id);
         let percent_swings = (study.inputs().iter().any(|input| input.id == "swing_size")
             && !saved("swing_size")
             && saved("deviation_percent"))
         .then(|| ("swing_size".to_owned(), InputValue::Choice(1)));
         let inputs: Vec<_> = percent_swings
             .into_iter()
-            .chain(self.inputs.iter().cloned())
+            .chain(template.inputs.iter().cloned())
             .collect();
         let mut study = ConfiguredStudy::new(study);
         study
-            .apply_settings(&inputs, self.settings.clone())
+            .apply_settings(&inputs, template.settings.clone())
             .map_err(str::to_owned)?;
-        study.set_visible(self.visible);
-        if let Some(scale) = self.scale {
+        study.set_visible(template.visible);
+        if let Some(scale) = template.scale {
             study.set_scale(scale);
         }
         Ok(Box::new(study))
+    }
+
+    /// This template under the current input ids of a built-in study whose inputs changed after
+    /// it was saved, or `None` when it needs no change.
+    fn upgraded(&self) -> Option<Self> {
+        let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
+        let mut template = self.clone();
+        match self.name.as_str() {
+            // One multiplier set both bands before each had its own.
+            "LinReg Channel" if has("multiplier") => {
+                template.inputs = self
+                    .inputs
+                    .iter()
+                    .flat_map(|(id, value)| match id.as_str() {
+                        "multiplier" => vec![
+                            ("upper_multiplier".to_owned(), value.clone()),
+                            ("lower_multiplier".to_owned(), value.clone()),
+                        ],
+                        _ => vec![(id.clone(), value.clone())],
+                    })
+                    .collect();
+            }
+            // Before it averaged highs and lows, MA Channel drew the close average with percentage
+            // bands, which Envelopes draws with a simple average.
+            "MA Channel" if has("offset_percent") => {
+                template.name = "Envelopes".to_owned();
+                for (id, _) in &mut template.inputs {
+                    if id == "offset_percent" {
+                        *id = "percent".to_owned();
+                    }
+                }
+            }
+            _ => return None,
+        }
+        Some(template)
     }
 }
 
@@ -264,6 +301,88 @@ mod tests {
                 for (id, value) in expected {
                     let restored = inputs.iter().find(|input| input.id == *id).unwrap();
                     assert_eq!(&restored.value, value, "{id}");
+                }
+            }
+        }
+    }
+
+    /// Templates and layouts saved before the channel studies' inputs changed load and draw the
+    /// lines they drew.
+    #[test]
+    fn templates_saved_before_the_channel_inputs_changed_keep_their_lines() {
+        use crate::studies::{IndicatorValue, StudySource};
+
+        let bars: Vec<Bar> = [1.0, 4.0, 2.0, 4.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), c, c, c, c, 1.0))
+            .collect();
+        let configured = [
+            (
+                "source",
+                InputValue::Source(StudySource::Price(PriceSource::Close)),
+            ),
+            ("plot_offset", InputValue::Integer(0)),
+            ("calculation_symbol", InputValue::Symbol(String::new())),
+            ("calculation_timeframe", InputValue::Timeframe(None)),
+            ("wait_for_close", InputValue::Toggle(true)),
+        ];
+        let deviation = 2.0 / 3.0_f64.sqrt();
+        // Upper, middle and lower line on bars 1 to 3; bar 0 has no value.
+        let rows = [
+            // A residual deviation of 2/sqrt(3) around the flat fit 10/3 of the last three closes.
+            (
+                "LinReg Channel",
+                vec![
+                    ("period", InputValue::Length(3)),
+                    ("multiplier", InputValue::Number(1.0)),
+                    ("extend", InputValue::Toggle(false)),
+                ],
+                "LinReg Channel",
+                [[10.0 / 3.0 + deviation, 10.0 / 3.0, 10.0 / 3.0 - deviation]; 3],
+            ),
+            // The two-bar simple average of the closes, 2.5, 3 and 3, times 1.5 and 0.5.
+            (
+                "MA Channel",
+                vec![
+                    ("period", InputValue::Length(2)),
+                    ("offset_percent", InputValue::Number(50.0)),
+                ],
+                "Envelopes",
+                [[3.75, 2.5, 1.25], [4.5, 3.0, 1.5], [4.5, 3.0, 1.5]],
+            ),
+        ];
+        let factory = IndicatorFactory::new();
+        for (name, inputs, restored_name, expected) in rows {
+            // Saved with the three plot styles of a study drawing the restored lines.
+            let settings = ConfiguredStudy::new(factory.create(restored_name).unwrap()).settings();
+            let template = StudyTemplate {
+                name: name.to_owned(),
+                inputs: inputs
+                    .iter()
+                    .chain(&configured)
+                    .map(|(id, value)| ((*id).to_owned(), value.clone()))
+                    .collect(),
+                settings,
+                visible: true,
+                scale: None,
+            };
+            let mut study = template
+                .create()
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            study.calculate(&bars);
+            assert_eq!(study.name(), restored_name);
+            assert!(
+                matches!(study.values().to_rows()[0], IndicatorValue::None),
+                "{name}"
+            );
+            for (bar, lines) in (1..).zip(expected) {
+                for (line, want) in lines.into_iter().enumerate() {
+                    let got = study.values().value(line, bar).unwrap();
+                    assert!(
+                        (got - want).abs() < 1e-12,
+                        "{name} bar {bar} line {line}: {got}"
+                    );
                 }
             }
         }

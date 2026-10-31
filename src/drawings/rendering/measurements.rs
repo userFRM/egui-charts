@@ -367,6 +367,8 @@ impl Drawing {
 
         // Draw the main line with proper stroke
         painter.line_segment([start, end], Stroke::new(self.stroke_width, color));
+        // On the side away from the measurement box, which is painted over it.
+        self.render_line_text(painter, start, end, end.y >= start.y);
 
         let Some(info_text) = self.measurement_label(view.bars, view.instrument, view.time_axis)
         else {

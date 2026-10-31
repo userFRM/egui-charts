@@ -211,6 +211,13 @@ impl StoredDrawing {
         if size.into_iter().any(bad) {
             return Some("position_size".into());
         }
+        if d.fib_config.as_ref().is_some_and(|c| {
+            !c.level_width.is_finite()
+                || c.level_width <= 0.0
+                || c.level_width > super::validation::MAX_STROKE_WIDTH
+        }) {
+            return Some("fib_config.level_width".into());
+        }
         for (name, values) in [
             (
                 "fib_config.levels",
@@ -230,28 +237,28 @@ impl StoredDrawing {
                 "gann.price_levels",
                 d.gann
                     .iter()
-                    .flat_map(|c| c.price_levels.iter().copied())
+                    .flat_map(|c| c.price_levels.iter().map(|l| l.value))
                     .collect(),
             ),
             (
                 "gann.time_levels",
                 d.gann
                     .iter()
-                    .flat_map(|c| c.time_levels.iter().copied())
+                    .flat_map(|c| c.time_levels.iter().map(|l| l.value))
                     .collect(),
             ),
             (
                 "gann.fan_ratios",
                 d.gann
                     .iter()
-                    .flat_map(|c| c.fan_ratios.iter().copied())
+                    .flat_map(|c| c.fan_ratios.iter().map(|l| l.value))
                     .collect(),
             ),
             (
                 "gann.arc_ratios",
                 d.gann
                     .iter()
-                    .flat_map(|c| c.arc_ratios.iter().copied())
+                    .flat_map(|c| c.arc_ratios.iter().map(|l| l.value))
                     .collect(),
             ),
         ] {
@@ -262,12 +269,7 @@ impl StoredDrawing {
                 f32::MAX
             };
             if let Some(i) = values.iter().position(|v| !(-limit..=limit).contains(v)) {
-                let suffix = if name.ends_with(".levels") {
-                    ".value"
-                } else {
-                    ""
-                };
-                return Some(format!("{name}[{i}]{suffix}"));
+                return Some(format!("{name}[{i}].value"));
             }
         }
         None
@@ -906,6 +908,8 @@ mod tests {
                 visible: false,
                 show_price: false,
             }],
+            level_width: 3.5,
+            level_style: LineStyle::Dashed,
             show_background: true,
             background_opacity: 77,
             extend_left: true,
@@ -949,14 +953,26 @@ mod tests {
                 drawing.update_screen_coords(bar_to_x, price_to_y);
             }
             drawing.gann = Some(crate::drawings::GannConfig {
-                price_levels: vec![0.25, 0.75],
-                time_levels: vec![0.5],
+                price_levels: vec![
+                    GannLevel::new(0.25, [1, 2, 3, 255]),
+                    GannLevel::new(0.75, [4, 5, 6, 255]),
+                ],
+                time_levels: vec![GannLevel::new(0.5, [7, 8, 9, 255])],
                 show_grid: false,
                 show_fan: false,
-                fan_ratios: vec![0.5, 2.0],
+                fan_ratios: vec![
+                    GannLevel::new(0.5, [10, 11, 12, 255]),
+                    GannLevel {
+                        visible: false,
+                        ..GannLevel::new(2.0, [13, 14, 15, 255])
+                    },
+                ],
                 fan_direction: crate::drawings::GannFanDirection::Reverse,
                 show_arcs: false,
-                arc_ratios: vec![0.75],
+                arc_ratios: vec![GannLevel::new(0.75, [16, 17, 18, 255])],
+                show_background: false,
+                background_opacity: 7,
+                show_angles: true,
             });
             drawing.ghost_feed = Some(crate::drawings::GhostFeedConfig {
                 average_range_ticks: 2.5,
@@ -1087,6 +1103,8 @@ mod tests {
         assert_eq!(v1.drawings().len(), tools.len());
         for (stored, (tool, text)) in v1.drawings().iter().zip(tools) {
             let mut want = Drawing::with_color(1, tool, [33, 150, 243, 255]);
+            // Old files without Fibonacci settings retain their absent config.
+            want.fib_config = None;
             want.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 110.0)];
             want.update_screen_coords(bar_to_x, price_to_y);
             want.stroke_width = 3.0;
@@ -1111,7 +1129,12 @@ mod tests {
             let mut want = non_default_drawing(tool);
             want.label = None; // Earlier files have no object name.
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
-            want.fib_config.as_mut().unwrap().logarithmic = false;
+            let config = want.fib_config.as_mut().unwrap();
+            config.logarithmic = false;
+            config.level_width = 2.0;
+            config.level_style = LineStyle::Solid;
+            config.levels_as_percent = true;
+            config.labels_on_left = false;
             assert_eq!(
                 format!("{:?}", restore(stored, want.id)),
                 format!("{want:?}")
@@ -1449,7 +1472,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 21] = [
+        let cases: [(Spoil, &str); 24] = [
             (
                 |s| {
                     first(s)
@@ -1515,6 +1538,18 @@ mod tests {
                 "invalid position_size",
             ),
             (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().level_width = 0.0,
+                "invalid fib_config.level_width",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().level_width = f32::NAN,
+                "invalid fib_config.level_width",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().level_width = 101.0,
+                "invalid fib_config.level_width",
+            ),
+            (
                 |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].value = f32::NAN,
                 "invalid fib_config.levels[0].value",
             ),
@@ -1546,9 +1581,10 @@ mod tests {
                         .drawing
                         .gann
                         .get_or_insert_with(Default::default)
-                        .price_levels[0] = f32::INFINITY
+                        .price_levels[0]
+                        .value = f32::INFINITY
                 },
-                "invalid gann.price_levels[0]",
+                "invalid gann.price_levels[0].value",
             ),
             (
                 |s| {
@@ -1556,9 +1592,10 @@ mod tests {
                         .drawing
                         .gann
                         .get_or_insert_with(Default::default)
-                        .time_levels[0] = f32::NAN
+                        .time_levels[0]
+                        .value = f32::NAN
                 },
-                "invalid gann.time_levels[0]",
+                "invalid gann.time_levels[0].value",
             ),
             (
                 |s| {

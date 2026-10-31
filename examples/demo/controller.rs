@@ -1604,7 +1604,9 @@ impl DemoApp {
                 self.size_price_based_charts();
             }
             TopToolbarAction::IntervalSelected(tf) => self.switch_timeframe(tf),
-            TopToolbarAction::OpenSymbolSearch => self.symbol_search.open(),
+            TopToolbarAction::OpenSymbolSearch => self
+                .symbol_search
+                .open_with_selected_query(self.chart.symbol().to_owned()),
             TopToolbarAction::OpenCompare => self.compare_dialog.open(),
             TopToolbarAction::OpenQuickSearch => self.quick_search.open(),
             TopToolbarAction::OpenIndicators => {
@@ -3121,7 +3123,9 @@ impl DemoApp {
                     A::OpenIndicatorSearch => {
                         self.indicator_dialog.open_for_chart(&self.chart, None);
                     }
-                    A::OpenSymbolSearch => self.symbol_search.open(),
+                    A::OpenSymbolSearch => self
+                        .symbol_search
+                        .open_with_selected_query(self.chart.symbol().to_owned()),
                     A::OpenIntervalSearch => {
                         self.interval_entry = Some(String::new());
                         self.interval_focus = true;
@@ -3640,7 +3644,6 @@ mod tests {
                 .any(|t| t.message == format!("Filled: Sell 1 {symbol} at 110.00"))
         );
         assert!(Arc::ptr_eq(&paper, &app.paper));
-        app.trading.display.show_execution_labels = true;
         app.chart.fit_content();
         for toast in app.toasts.toasts_mut() {
             toast.duration = 0.0;
@@ -3689,12 +3692,22 @@ mod tests {
                     })
                 };
                 value |= has_text("Trade value") && has_text("110.00");
-                marked |= has_text("1 @ 100.00") && has_text("1 @ 110.00");
+                // The notices write the sides too, so look for the triangles rather than a label.
+                let has_mark = |color| {
+                    output.shapes.iter().any(|shape| {
+                        matches!(&shape.shape, egui::Shape::Path(path)
+                        if path.closed && path.points.len() == 3 && path.fill == color)
+                    })
+                };
+                marked |= has_mark(app.theme.ui.accent) && has_mark(app.theme.chart.candle_down);
                 if pass == 2 {
-                    for toast in app.toasts.toasts().iter().rev().take(5) {
-                        let rect = ctx
-                            .memory(|m| m.area_rect(egui::Id::unique("toast").with(toast.id)))
-                            .expect("trade notice");
+                    // The fills queue several notices, so the stack shows the newest and its controls.
+                    let newest = app.toasts.toasts().last().expect("trade notice").id;
+                    for id in [
+                        egui::Id::unique("toast").with(newest),
+                        egui::Id::unique("toast_stack").with(egui::Align2::LEFT_BOTTOM),
+                    ] {
+                        let rect = ctx.memory(|m| m.area_rect(id)).expect("trade notice");
                         assert!(
                             rect.right() <= ticket_left,
                             "notice covers ticket at {width}"
@@ -5380,7 +5393,7 @@ mod tests {
         state.trading.show_positions = false;
         state.trading.show_orders = false;
         state.trading.show_executions = false;
-        state.trading.show_execution_labels = true;
+        state.trading.show_execution_labels = false;
         app.apply_chart_settings(state.clone());
         assert_eq!(app.trading.display, state.trading);
         assert_eq!(
@@ -5918,15 +5931,15 @@ mod tests {
             (Tool::SchiffPitchfork, "Pitchfork levels"),
             (Tool::ModifiedSchiffPitchfork, "Pitchfork levels"),
             (Tool::InsidePitchfork, "Pitchfork levels"),
-            (Tool::GannBox, "Price divisions"),
-            (Tool::GannSquare, "Price divisions"),
-            (Tool::GannFixed, "Price divisions"),
+            (Tool::GannBox, "Price levels"),
+            (Tool::GannSquare, "Price levels"),
+            (Tool::GannFixed, "Price levels"),
+            (Tool::GannFan, "Fan lines"),
             (Tool::LongPos, "Entry price"),
             (Tool::ShortPos, "Entry price"),
             (Tool::FixedRangeVolumeProfile, "Rows"),
             (Tool::AnchoredVolumeProfile, "Rows"),
             (Tool::RegressionTrend, "Deviations"),
-            (Tool::ParallelChannel, "Show middle line"),
         ] {
             app.chart.drawings_mut().drawings.clear();
             let mut drawing = Drawing::new(7, tool);
@@ -6264,7 +6277,7 @@ mod tests {
         assert!(!app.drawing_toolbar.state.lock_all);
         use egui_charts::data::VolumeProfileConfig;
         use egui_charts::drawings::{
-            FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, PositionSizing,
+            FibonacciConfig, GannConfig, GannLevel, PitchforkConfig, PositionSize, PositionSizing,
             RegressionTrendConfig,
         };
         for tool in [
@@ -6299,8 +6312,12 @@ mod tests {
                 ..Default::default()
             });
             settings.gann = Some(GannConfig {
-                price_levels: vec![0.0, 0.5, 1.0],
-                time_levels: vec![0.25, 0.75],
+                price_levels: [0.0, 0.5, 1.0]
+                    .map(|v| GannLevel::new(v, [128, 128, 128, 255]))
+                    .to_vec(),
+                time_levels: [0.25, 0.75]
+                    .map(|v| GannLevel::new(v, [128, 128, 128, 255]))
+                    .to_vec(),
                 ..Default::default()
             });
             settings.position_size = Some(PositionSize::RiskPercent {
@@ -6322,7 +6339,17 @@ mod tests {
             let saved = &app.chart.drawings().drawings[0];
             assert_eq!(format!("{:?}", saved.fib_config), expected);
             assert_eq!(saved.pitchfork.as_ref().unwrap().background_opacity, 75);
-            assert_eq!(saved.gann.as_ref().unwrap().time_levels, [0.25, 0.75]);
+            assert_eq!(
+                saved
+                    .gann
+                    .as_ref()
+                    .unwrap()
+                    .time_levels
+                    .iter()
+                    .map(|l| l.value)
+                    .collect::<Vec<_>>(),
+                [0.25, 0.75]
+            );
             assert_eq!(
                 saved.position_size.unwrap().quantity(100.0, 98.0),
                 Some(50.0)
@@ -6334,7 +6361,10 @@ mod tests {
             assert!(app.chart.drawings().drawings[1].fib_config.is_none());
             assert_eq!(app.chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(app.chart.undo());
-            assert!(app.chart.drawings().drawings[0].fib_config.is_none());
+            assert_eq!(
+                format!("{:?}", app.chart.drawings().drawings[0].fib_config),
+                format!("{:?}", Drawing::new(7, tool).fib_config)
+            );
             assert!(app.chart.redo());
             app.chart
                 .drawings_mut()
@@ -6356,8 +6386,14 @@ mod tests {
                 .value = f32::NAN;
             props.line_width = 9.0;
             assert!(props.apply_to_chart(DrawingId(7), &mut app.chart).is_err());
-            assert_eq!(app.chart.drawings().drawings[0].stroke_width, 2.0);
-            assert_eq!(app.chart.drawings().drawings[1].stroke_width, 2.0);
+            assert_eq!(
+                app.chart.drawings().drawings[0].stroke_width,
+                Drawing::new(7, tool).stroke_width
+            );
+            assert_eq!(
+                app.chart.drawings().drawings[1].stroke_width,
+                Drawing::new(7, tool).stroke_width
+            );
         }
     }
 

@@ -34,6 +34,9 @@ impl DrawingToolType {
                 | Self::ElliottDoubleCombo
                 | Self::ElliottTripleCombo
                 | Self::GannFan
+                | Self::GannBox
+                | Self::GannSquare
+                | Self::GannFixed
                 | Self::Ray
                 | Self::ExtendedLine
                 | Self::HorizontalLine
@@ -92,8 +95,9 @@ impl DrawingToolType {
         )
     }
 
-    /// Whether the renderer displays the drawing's editable text.
-    pub fn supports_text(&self) -> bool {
+    /// Whether the drawing is a text annotation: its text is its content and its colour is the
+    /// text's.
+    pub(crate) fn is_text_annotation(&self) -> bool {
         matches!(
             self,
             Self::TextLabel
@@ -111,9 +115,62 @@ impl DrawingToolType {
         )
     }
 
+    /// Whether the renderer displays the drawing's editable text.
+    pub fn supports_text(&self) -> bool {
+        self.is_text_annotation()
+            || matches!(
+                self,
+                Self::TrendLine
+                    | Self::Ray
+                    | Self::InfoLine
+                    | Self::ExtendedLine
+                    | Self::HorizontalLine
+                    | Self::HorizontalRay
+                    | Self::VerticalLine
+                    | Self::CrossLine
+                    | Self::ParallelChannel
+                    | Self::RegressionTrend
+                    | Self::FlatTopBottom
+                    | Self::DisjointChannel
+                    | Self::Rect
+                    | Self::Circle
+                    | Self::Ellipse
+                    | Self::Arrow
+                    | Self::ArrowMarker
+                    | Self::ArrowMarkUp
+                    | Self::ArrowMarkDown
+                    | Self::ArrowMarkLeft
+                    | Self::ArrowMarkRight
+            )
+    }
+
+    /// Whether the renderer draws the drawing's line start and line end styles.
+    pub fn supports_line_ends(&self) -> bool {
+        matches!(
+            self,
+            Self::TrendLine
+                | Self::Ray
+                | Self::ExtendedLine
+                | Self::InfoLine
+                | Self::TrendAngle
+                | Self::HorizontalLine
+                | Self::HorizontalRay
+                | Self::VerticalLine
+                | Self::Arrow
+                | Self::ArrowMarker
+                | Self::Path
+                | Self::Polyline
+        )
+    }
+
+    /// Whether the renderer draws a middle line when the drawing's middle line flag is on.
+    pub fn supports_middle_line(&self) -> bool {
+        matches!(self, Self::Rect | Self::ParallelChannel)
+    }
+
     /// Whether a double click edits the drawing's text in place instead of opening its settings.
     pub fn edits_text_inline(&self) -> bool {
-        self.supports_text() || matches!(self, Self::Image | Self::PriceLabel)
+        self.is_text_annotation() || matches!(self, Self::Image | Self::PriceLabel)
     }
 
     /// Returns the [`DrawingInteractionMode`] that governs how mouse input is

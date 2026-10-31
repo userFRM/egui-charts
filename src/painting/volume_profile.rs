@@ -1,7 +1,7 @@
 //! Price-row profile painting shared by studies and drawing tools.
 
-use crate::data::{ProfileDisplay, VolumeProfile, VolumeProfileConfig};
-use crate::styles::stroke;
+use crate::data::{ProfileDisplay, ProfileSource, VolumeProfile, VolumeProfileConfig};
+use crate::styles::{stroke, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
@@ -152,19 +152,60 @@ pub(crate) fn paint_profile(
         config.show_value_area_lines,
         drawing,
     );
-    if drawing {
+    if !drawing {
+        painter.rect_stroke(
+            rect,
+            0.0,
+            Stroke::new(
+                stroke::HAIRLINE,
+                Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
+            ),
+            StrokeKind::Outside,
+        );
+    }
+    // A study box often starts at the pane's left edge, under the chart legend, so a study whose
+    // rows start at the left notes its source at the right.
+    let note_right = !drawing && !right_aligned;
+    paint_source_note(painter, profile.source(), rect, note_right, color);
+}
+
+/// Notes at the top of `rect`, in the colour of the value area lines, a profile that does not hold
+/// every execution of its span, when the note fits inside `rect`. It takes the left corner, or
+/// with `right` the room left of the POC badge and the value area labels.
+fn paint_source_note(
+    painter: &egui::Painter,
+    source: ProfileSource,
+    rect: Rect,
+    right: bool,
+    color: [u8; 4],
+) {
+    let note = match source {
+        ProfileSource::Estimated => "Estimated from bars",
+        ProfileSource::Executions { complete: false } => "Partial executions",
+        ProfileSource::Executions { complete: true } | ProfileSource::Options => return,
+    };
+    // No narrower profile has room for a note, so its text is never laid out.
+    if rect.width() < 60.0 {
         return;
     }
-    painter.rect_stroke(
-        rect,
-        0.0,
-        Stroke::new(
-            stroke::HAIRLINE,
-            Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
-        ),
-        StrokeKind::Outside,
+    let color = Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 200);
+    let galley = painter.layout_no_wrap(
+        crate::localization::text(painter.ctx(), note),
+        egui::FontId::proportional(typography::XS),
+        color,
     );
+    let size = galley.size();
+    if rect.is_finite() && size.x + 6.0 <= rect.width() && size.y <= rect.height() {
+        let left = rect.left() + 3.0;
+        let x = if right {
+            (rect.right() - 50.0 - size.x).max(left)
+        } else {
+            left
+        };
+        painter.galley(Pos2::new(x, rect.top()), galley, color);
+    }
 }
+
 fn draw_volume_profile_lines(
     painter: &egui::Painter,
     rect: &Rect,

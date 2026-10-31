@@ -131,15 +131,15 @@ mod tests {
             (Tool::SchiffPitchfork, "Pitchfork levels"),
             (Tool::ModifiedSchiffPitchfork, "Pitchfork levels"),
             (Tool::InsidePitchfork, "Pitchfork levels"),
-            (Tool::GannBox, "Price divisions"),
-            (Tool::GannSquare, "Price divisions"),
-            (Tool::GannFixed, "Price divisions"),
+            (Tool::GannBox, "Price levels"),
+            (Tool::GannSquare, "Price levels"),
+            (Tool::GannFixed, "Price levels"),
+            (Tool::GannFan, "Fan lines"),
             (Tool::LongPos, "Entry price"),
             (Tool::ShortPos, "Entry price"),
             (Tool::FixedRangeVolumeProfile, "Rows"),
             (Tool::AnchoredVolumeProfile, "Rows"),
             (Tool::RegressionTrend, "Deviations"),
-            (Tool::ParallelChannel, "Show middle line"),
         ] {
             chart.drawings_mut().drawings.clear();
             let mut drawing = Drawing::new(7, tool);

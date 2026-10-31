@@ -9,7 +9,7 @@ use crate::localization as l10n;
 use crate::model::{
     LineStyle, Order, OrderRequest, OrderSide, OrderType, Position, PositionBracket, PriceLine,
 };
-use crate::theme::ThemeExt;
+use crate::theme::{Theme, ThemeExt};
 
 /// What the user asked for on a trading line. Confirm it with the user, then send it to the
 /// broker.
@@ -109,7 +109,8 @@ pub struct TradingLineOptions<'a> {
     pub extend_lines: bool,
     /// Horizontal placement of order and position labels.
     pub label_alignment: TradingLabelAlignment,
-    /// Offer a Buy or Sell submit button beside projected orders.
+    /// Treat the orders as projected, not yet placed: their entry lines are dashed and they offer
+    /// a Buy or Sell submit button.
     pub submit: bool,
     /// Order and bracket lines can be dragged, and brackets removed.
     pub modify: bool,
@@ -151,7 +152,7 @@ enum Button {
     Submit,
 }
 
-const HEIGHT: f32 = 22.0;
+const HEIGHT: f32 = 20.0;
 const LABEL_INSET: f32 = 84.0;
 const NODE_INSET: f32 = 42.0;
 const PADDING: f32 = 6.0;
@@ -257,11 +258,13 @@ pub fn render_trading_lines<'a>(
                 }
                 _ => name.clone(),
             };
-            let line = PriceLine::new(price, color).with_style(if appearance == Level::Entry {
-                LineStyle::Dashed
-            } else {
-                LineStyle::Solid
-            });
+            let line = PriceLine::new(price, color).with_style(
+                if appearance == Level::Entry && options.submit {
+                    LineStyle::Dashed
+                } else {
+                    LineStyle::Solid
+                },
+            );
             // Removing a bracket changes the order, so it needs the same support as a drag.
             let cancel = level == Level::Entry || options.modify;
             let label = Label {
@@ -426,7 +429,7 @@ fn show_position(
         return None;
     }
     let painter = ui.painter().with_clip_rect(mapping.rect);
-    let line = PriceLine::new(entry, color).with_style(LineStyle::Dotted);
+    let line = PriceLine::new(entry, color).with_style(LineStyle::Solid);
     tags.push((entry, color));
 
     let key = ui.scope_id().with(("trading_position", &position.symbol));
@@ -553,7 +556,13 @@ fn show_position(
                 Sense::click(),
             )
             .on_hover_text(l10n::text(ui.ctx(), "Reverse position"));
-        painter.rect(rect, 4.0, theme.chart.bg, stroke, egui::StrokeKind::Inside);
+        painter.rect(
+            rect,
+            4.0,
+            label_fill(&theme, color),
+            stroke,
+            egui::StrokeKind::Inside,
+        );
         if response.hovered() {
             painter.rect_filled(rect.shrink(1.0), 1.0, color.gamma_multiply(0.2));
         }
@@ -586,7 +595,6 @@ fn show_position(
         if response.hovered() || response.dragged() {
             ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
         }
-        painter.rect_filled(rect, 2.0, theme.chart.bg);
         let r = rect.shrink(0.5);
         let left_radius = if name == "SL" && options.take_profit {
             0.0
@@ -598,6 +606,16 @@ fn show_position(
         } else {
             4.0
         };
+        painter.rect_filled(
+            r,
+            egui::CornerRadius {
+                nw: left_radius as u8,
+                sw: left_radius as u8,
+                ne: right_radius as u8,
+                se: right_radius as u8,
+            },
+            label_fill(&theme, exit_color),
+        );
         draw_dashed_polyline(
             &painter,
             &[
@@ -690,7 +708,7 @@ fn show_position(
         painter.rect(
             preview,
             2.0,
-            theme.chart.bg,
+            label_fill(&theme, exit_color),
             Stroke::new(1.0, exit_color),
             egui::StrokeKind::Inside,
         );
@@ -708,7 +726,7 @@ fn show_position(
     painter.rect(
         group_rect,
         4.0,
-        theme.chart.bg,
+        label_fill(&theme, color),
         stroke,
         egui::StrokeKind::Inside,
     );
@@ -922,7 +940,7 @@ impl Label<'_> {
         clipped.rect(
             rect,
             4.0,
-            ui.active_theme().chart.bg,
+            label_fill(&ui.active_theme(), line.color),
             stroke,
             egui::StrokeKind::Inside,
         );
@@ -991,7 +1009,8 @@ impl Label<'_> {
                         ))
                         .color(Color32::WHITE),
                     )
-                    .fill(line.color),
+                    .fill(line.color)
+                    .stroke(Stroke::NONE),
                 )
                 .clicked()
             {
@@ -1000,6 +1019,12 @@ impl Label<'_> {
         }
         (dragged, pressed)
     }
+}
+
+/// The body of a label in `color`: the colour's tint over the chart, opaque so that the line and
+/// the bars behind the label do not show through its text.
+fn label_fill(theme: &Theme, color: Color32) -> Color32 {
+    theme.chart.bg.blend(color.gamma_multiply(0.2))
 }
 
 /// A cross for cancel and close, two opposed arrows for reverse.
@@ -1040,4 +1065,104 @@ fn connector(ui: &Ui, mapping: &ChartMapping, entry: f64, exit: f64, color: Colo
     painter.circle(b, 3.5, ui.active_theme().chart.bg, Stroke::new(1.0, color));
     painter.circle_filled(a, 7.0, color.gamma_multiply(0.2));
     painter.circle_filled(a, 3.0, color);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{OrderId, OrderStatus};
+
+    /// Only a projected order's line is dashed, a label's body is an opaque tint, and the submit
+    /// button has no outline.
+    #[test]
+    fn working_lines_are_solid_and_labels_are_opaque_tints() {
+        for theme in [Theme::light(), Theme::dark()] {
+            let accent = theme.ui.accent;
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+            let order = Order::new(
+                OrderId::new("order"),
+                OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(95.0)),
+                OrderStatus::Working,
+            );
+            let position = Position::new("SYM", 1.0, 95.0);
+            for (submit, is_position) in [(false, false), (true, false), (false, true)] {
+                let options = TradingLineOptions {
+                    show_orders: true,
+                    show_positions: true,
+                    extend_lines: true,
+                    label_alignment: TradingLabelAlignment::Right,
+                    submit,
+                    modify: false,
+                    close: false,
+                    reverse: false,
+                    take_profit: false,
+                    stop_loss: false,
+                    pnl: None,
+                    bracket_pnl: None,
+                    last_price: None,
+                    point_value: 1.0,
+                    currency: "USD",
+                    tick_size: 0.01,
+                };
+                for frame in 0..3 {
+                    let mut y = 0.0;
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                            let mapping = chart.get_chart_mapping();
+                            y = mapping.price_to_y(95.0);
+                            let (orders, positions) = if is_position {
+                                (vec![], vec![&position])
+                            } else {
+                                (vec![&order], vec![])
+                            };
+                            render_trading_lines(ui, &mapping, orders, positions, &options);
+                        },
+                    );
+                    if frame == 2 {
+                        let segments = output
+                            .shapes
+                            .iter()
+                            .filter(|shape| {
+                                matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
+                                    if stroke.color == accent
+                                        && (points[0].y - y).abs() < 0.1
+                                        && (points[1].y - y).abs() < 0.1)
+                            })
+                            .count();
+                        assert_eq!(segments > 1, submit, "{segments} segments");
+                        let rects: Vec<_> = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::Shape::Rect(rect) => Some(rect),
+                                _ => None,
+                            })
+                            .collect();
+                        let body = rects
+                            .iter()
+                            .find(|rect| rect.stroke.color == accent && rect.stroke.width == 1.0)
+                            .expect("label body");
+                        assert!((19.0..=20.0).contains(&body.rect.height()));
+                        assert_ne!(body.fill, theme.chart.bg);
+                        assert_eq!(body.fill.a(), 255);
+                        if submit {
+                            let button = rects
+                                .iter()
+                                .find(|rect| rect.fill == accent)
+                                .expect("submit button");
+                            assert_eq!(button.stroke.width, 0.0);
+                        }
+                    }
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
+    }
 }

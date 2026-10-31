@@ -21,12 +21,14 @@ pub(crate) fn current_time_seconds() -> f64 {
 #[derive(Default)]
 pub struct Toasts {
     toasts: Vec<Toast>,
+    /// Whether the user expanded the stack; a new burst starts collapsed.
+    pub(super) expanded: bool,
 }
 
 impl Toasts {
     /// Create a new toasts container
     pub fn new() -> Self {
-        Self { toasts: Vec::new() }
+        Self::default()
     }
 
     /// Add a toast
@@ -63,6 +65,7 @@ impl Toasts {
     /// Clear all toasts
     pub fn clear(&mut self) {
         self.toasts.clear();
+        self.expanded = false;
     }
 
     /// Get the toasts

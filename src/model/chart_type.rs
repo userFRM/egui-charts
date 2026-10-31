@@ -459,6 +459,7 @@ impl ChartTypeParams {
             split_sessions: self.tpo_split_sessions,
             show_single_prints: self.tpo_single_prints,
             composites: self.tpo_composites.clone(),
+            instrument_tick: tick_size,
             ..Default::default()
         }
     }

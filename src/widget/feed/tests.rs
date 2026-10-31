@@ -571,6 +571,62 @@ fn bar_limits_bound_feed_history_and_ticks() {
     }
 }
 
+/// A full limit of 16 bars evicts down to 16 - 16 / 8 = 14 when a new bar overflows it, so a
+/// stream restarts the studies on one new bar in three instead of on every one. Between those
+/// evictions every study follows a new bar in the bar's frame, and after them scroll-back stays
+/// paused although the series holds fewer bars than the limit.
+#[cfg(feature = "studies")]
+#[test]
+fn a_full_bar_limit_evicts_in_chunks_and_keeps_paging_paused() {
+    use std::num::NonZeroUsize;
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(16));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve().send(Ok(Instrument::new("A")));
+    feed.page().send(page(bars(16), false));
+    chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
+    chart.add_indicator(Box::new(crate::studies::EMA::new(2)));
+    // Restarted studies return one per frame: volume, SMA and EMA take three.
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    let sink = feed.sink();
+    let start = bars(1)[0].time;
+    let mut held = Vec::new();
+    let mut previous = chart.bars(SeriesId::MAIN).len();
+    for minute in 16..22 {
+        sink.push_tick(Tick::new(
+            start + TimeDelta::minutes(minute),
+            200.0,
+            1.0,
+            None,
+        ));
+        frames.run(&mut chart);
+        let len = chart.bars(SeriesId::MAIN).len();
+        // Only an eviction, which shrinks the series, restarts the studies.
+        if len >= previous {
+            assert!(
+                chart
+                    .indicators()
+                    .all(|(_, study)| study.values().len() == len),
+                "minute {minute}: a study without values"
+            );
+        }
+        held.push(len);
+        previous = len;
+        for _ in 0..3 {
+            frames.run(&mut chart);
+        }
+    }
+    assert_eq!(held, [14, 15, 16, 14, 15, 16]);
+    assert!(
+        feed.pages.lock().unwrap().is_empty(),
+        "an eviction must not resume paging"
+    );
+}
+
 /// Evicted trades leave the footprint: its bars equal those summed from the held trades, delta
 /// extrema included, and the bar the eviction cut is not offered as complete.
 #[test]

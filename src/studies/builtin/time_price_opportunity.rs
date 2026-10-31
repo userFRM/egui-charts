@@ -41,6 +41,7 @@ impl TimePriceOpportunity {
         self.config.tick_size = self
             .instrument_tick
             .map_or(0.0, |tick| tick * self.row_ticks as f64);
+        self.config.instrument_tick = self.instrument_tick;
     }
 }
 

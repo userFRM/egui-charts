@@ -356,7 +356,7 @@ impl Default for ScalesAndLinesSettings {
 /// Trading tab settings: the Buy and Sell buttons' behaviour, notifications and the layers
 /// `ui::trading::Trading::show` draws through `Trading::display` with the `ui` feature.
 /// The Buy and Sell buttons themselves are [`StatusLineOptions::show_quote_boxes`].
-/// Saved settings without a field take its default.
+/// Saved settings without a field take its default, unless the field says otherwise.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct TradingSettings {
@@ -397,7 +397,9 @@ pub struct TradingSettings {
     pub bracket_pnl_unit: PnlUnit,
     /// Draw the fills on their bars.
     pub show_executions: bool,
-    /// Write the quantity and average price beside each fill's mark.
+    /// Write the side and total quantity beside each fill's mark. On for new settings; settings
+    /// saved without this field keep labels off, as they were drawn when saved.
+    #[serde(default)]
     pub show_execution_labels: bool,
 }
 
@@ -421,7 +423,7 @@ impl Default for TradingSettings {
             bracket_pnl: true,
             bracket_pnl_unit: PnlUnit::Money,
             show_executions: true,
-            show_execution_labels: false,
+            show_execution_labels: true,
         }
     }
 }

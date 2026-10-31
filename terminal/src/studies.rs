@@ -101,7 +101,8 @@ impl Terminal {
     pub(super) fn studies_perform(&mut self, action: Action) -> Option<Action> {
         match action {
             Action::TopToolbar(TopToolbarAction::OpenSymbolSearch) => {
-                self.studies.symbol_search.open();
+                let symbol = self.chart().symbol().to_owned();
+                self.studies.symbol_search.open_with_selected_query(symbol);
             }
             Action::TopToolbar(TopToolbarAction::OpenIndicators) => self.open_indicators(None),
             Action::TopToolbar(TopToolbarAction::AddIndicator(name)) => {
@@ -189,7 +190,8 @@ impl Terminal {
             ContextMenuAction::None
             | ContextMenuAction::MergeTpoPrevious
             | ContextMenuAction::MergeTpoNext
-            | ContextMenuAction::SplitTpoProfile => {}
+            | ContextMenuAction::SplitTpoProfile
+            | ContextMenuAction::DrawHorizontalLine(_) => {}
             menu => return Some(Action::ChartMenu(ChartContextAction::Chart(menu))),
         }
         None

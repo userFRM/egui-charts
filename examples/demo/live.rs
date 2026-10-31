@@ -215,6 +215,7 @@ impl LiveFeed {
         let mut instrument = Instrument::new(&sim.symbol)
             .with_description(format!("{} (synthetic)", spec.company_name))
             .with_exchange(spec.exchange)
+            .with_currency("USD")
             .with_price_decimals(if sim.tick_size < 0.01 { 4 } else { 2 })
             .with_tick_size(sim.tick_size)
             .with_native_timeframes([Timeframe::Min1]);

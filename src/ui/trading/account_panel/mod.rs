@@ -18,9 +18,9 @@ use crate::model::{
 };
 use crate::services::{AccountEvent, HistoryKind};
 
-const TAB_HEIGHT: f32 = 34.0;
+const TAB_HEIGHT: f32 = 38.0;
 const HEADER_HEIGHT: f32 = 52.0;
-const ROW_HEIGHT: f32 = 36.0;
+const ROW_HEIGHT: f32 = 48.0;
 /// Room at the end of each row for its edit and close buttons and the column chooser.
 const ACTIONS_WIDTH: f32 = 64.0;
 /// Maximum entries retained in each completed account history.
@@ -447,7 +447,7 @@ impl AccountPanel {
 }
 
 /// Decimals that show `quantity` without rounding, up to 8.
-fn quantity_decimals(quantity: f64) -> usize {
+pub(super) fn quantity_decimals(quantity: f64) -> usize {
     (0..8)
         .find(|&decimals| {
             let scaled = quantity * 10f64.powi(decimals as i32);
@@ -492,8 +492,38 @@ fn csv(columns: &[(usize, &Column)], rows: &[Row]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use egui_kittest::{Harness, kittest::Queryable};
+
     use super::*;
     use crate::model::OrderSide;
+    use crate::ui::trading::tests::Recorder;
+    use crate::ui_kit::notifications::Toasts;
+
+    /// A position's close button can be found by scanning the rows, without the pointer on one.
+    #[test]
+    fn row_actions_show_at_rest() {
+        let broker = Arc::new(Recorder {
+            state: vec![AccountEvent::Position(Position::new("SYM", 1.0, 100.0))],
+            ..Default::default()
+        });
+        let mut trading = Trading::default();
+        trading.set_service(broker);
+        trading.poll(&egui::Context::default(), &mut Toasts::new());
+        trading.account_panel.broker = "Broker".into();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 400.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, trading: &mut Trading| {
+                    trading.show_account_panel(ui, "SYM");
+                },
+                trading,
+            );
+        harness.run();
+        harness.get_by_label("Close position");
+    }
 
     #[test]
     fn history_keeps_each_partial_fill_and_discards_stale_edits() {

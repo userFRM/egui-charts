@@ -77,6 +77,9 @@ pub enum ContextMenuAction {
     MergeTpoNext,
     /// Restore the sessions of the clicked composite TPO profile. Already applied by [`ChartMenus`].
     SplitTpoProfile,
+    /// Draw a horizontal line at this price in the clicked pane, with the line tool's default
+    /// style, and select it. Already applied by [`ChartMenus`].
+    DrawHorizontalLine(f64),
 }
 
 /// Format a price with two decimals (more below 1) and thousands separators.
@@ -164,6 +167,8 @@ pub struct ChartContextMenu {
     just_opened: bool,
     /// Controls the host hid, set through [`ChartMenus::set_control_visible`].
     pub(crate) hidden: HashSet<Control>,
+    /// Offer the horizontal line row; [`ChartMenus`] sets it from the drawing tool registry.
+    pub(crate) horizontal_line: bool,
 }
 
 impl Default for ChartContextMenu {
@@ -193,6 +198,7 @@ impl ChartContextMenu {
             last_action: ContextMenuAction::None,
             just_opened: false,
             hidden: HashSet::new(),
+            horizontal_line: false,
         }
     }
 
@@ -252,7 +258,7 @@ impl ChartContextMenu {
             )),
             MenuEntry::Separator,
         ];
-        // Trading items need an instrument, so they are offered only with a symbol.
+        // Trading items need an instrument, so they are offered only with a symbol, but the line row.
         let mut trading = Vec::new();
         if !symbol.is_empty() && !self.hidden.contains(&Control::Alerts) {
             trading.push(MenuEntry::Item(
@@ -265,6 +271,18 @@ impl ChartContextMenu {
                 )
                 .with_icon(&embedded_icons::ALERTS)
                 .with_shortcut(shortcuts.shortcut(KeyboardAction::CreateAlert)),
+            ));
+        }
+        if self.horizontal_line && self.click_price.is_finite() {
+            trading.push(MenuEntry::Item(
+                MenuItem::new(
+                    format!("Draw horizontal line at {price_str}"),
+                    ContextMenuAction::DrawHorizontalLine(self.click_price),
+                )
+                .with_icon(&embedded_icons::HORIZONTAL_LINE)
+                .with_shortcut(shortcuts.shortcut(KeyboardAction::DrawingTool(
+                    crate::config::DrawingToolType::HorizontalLine,
+                ))),
             ));
         }
         if !symbol.is_empty() && !self.watchlists.is_empty() {

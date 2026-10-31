@@ -11,7 +11,7 @@ use egui::{Align2, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use super::ticket::{Action, Market, order_quantity};
 use super::widgets::{
-    chevron, field, grouped, muted, number, side_color, side_fill, side_name, text,
+    FIELD_HEIGHT, chevron, field, grouped, muted, number, side_color, side_fill, side_name, text,
     time_in_force_menu,
 };
 use crate::chart::{TradingLineAction, decimals, to_step};
@@ -20,7 +20,7 @@ use crate::model::{Order, OrderId, OrderRequest, OrderSide, OrderType, Tick, Tim
 use crate::theme::ThemeExt;
 
 /// Height of a price row.
-const ROW: f32 = 22.0;
+const ROW: f32 = 20.0;
 
 /// What the price column's profile draws from the traded volume at each price.
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -303,7 +303,8 @@ impl Ladder {
             }
         });
 
-        let footer = 28.0 + 32.0 + 32.0 + 36.0 + 24.0 + if self.details { 64.0 } else { 0.0 };
+        let footer =
+            28.0 + 28.0 + 28.0 + FIELD_HEIGHT + 24.0 + if self.details { 64.0 } else { 0.0 };
         let spacing = ui.spacing().item_spacing.y;
         let height = ui.available_height() - footer - 6.0 * spacing;
         let rows = ((height / ROW).floor() as i64).max(3);
@@ -470,7 +471,7 @@ impl Ladder {
                         at,
                         Align2::CENTER_CENTER,
                         &format_size(*size),
-                        12.0,
+                        theme.text.body,
                         theme.ui.text,
                     );
                 }
@@ -553,7 +554,7 @@ impl Ladder {
                 cell.center(),
                 Align2::CENTER_CENTER,
                 &label,
-                12.0,
+                theme.text.body,
                 color,
             );
             if market
@@ -675,14 +676,15 @@ impl Ladder {
                     } else {
                         sell_margin
                     };
-                    let at = row_rect(pointer_row(pos), margin).center();
+                    let tag_box = row_rect(pointer_row(pos), margin);
+                    painter.rect_filled(tag_box, 2.0, theme.ui.border);
                     text(
                         ui,
-                        at,
+                        tag_box.center(),
                         Align2::CENTER_CENTER,
                         tag(&request.order_type),
-                        10.0,
-                        color,
+                        theme.text.tiny,
+                        theme.ui.text_muted,
                     );
                     if response.clicked() {
                         action = Some(Action::Place(request));
@@ -828,7 +830,7 @@ impl Ladder {
                 cell.center(),
                 Align2::CENTER_CENTER,
                 &format_size(total),
-                12.0,
+                theme.text.body,
                 theme.ui.text,
             );
             let ids: Vec<_> = (orders.iter())
@@ -958,9 +960,9 @@ impl Ladder {
             let outlined = |ui: &mut Ui, enabled: bool, label: &str, why: &str| {
                 let button = egui::Button::new(l10n::text(ui.ctx(), label))
                     .fill(Color32::TRANSPARENT)
-                    .stroke(Stroke::new(1.0, theme.ui.border_control))
+                    .stroke(Stroke::new(1.0, theme.ui.border))
                     .corner_radius(ui.active_theme().radius.md);
-                let size = [ui.available_width(), 32.0];
+                let size = [ui.available_width(), 28.0];
                 ui.add_enabled_ui(enabled, |ui| ui.add_sized(size, button))
                     .inner
                     .on_disabled_hover_text(l10n::text(ui.ctx(), why))
@@ -1017,13 +1019,17 @@ impl Ladder {
                 let ui = &mut thirds[index];
                 let label = format!("{} Mkt", side_name(side));
                 let button = egui::Button::new(
-                    egui::RichText::new(l10n::text(ui.ctx(), label)).color(Color32::WHITE),
+                    egui::RichText::new(l10n::text(ui.ctx(), label)).color(match side {
+                        OrderSide::Buy => theme.ui.accent_text,
+                        OrderSide::Sell => theme.ui.danger_text,
+                    }),
                 )
                 .fill(side_fill(&theme, side))
+                .stroke(Stroke::NONE)
                 .corner_radius(ui.active_theme().radius.md);
                 let request = order(side, OrderType::Market);
                 let enabled = market.capabilities.market && request.is_ok();
-                let size = [ui.available_width(), 36.0];
+                let size = [ui.available_width(), 29.0];
                 let response = ui
                     .add_enabled_ui(enabled, |ui| ui.add_sized(size, button))
                     .inner;
@@ -1089,14 +1095,21 @@ impl Ladder {
 /// `label` centred in a bordered box the width of `ui`.
 fn boxed(ui: &mut Ui, label: &str, color: Color32) {
     let theme = ui.active_theme();
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
     ui.painter().rect_stroke(
         rect,
         6.0,
-        Stroke::new(1.0, theme.ui.border_control),
+        Stroke::new(1.0, theme.ui.border),
         egui::StrokeKind::Inside,
     );
-    text(ui, rect.center(), Align2::CENTER_CENTER, label, 13.0, color);
+    text(
+        ui,
+        rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        theme.text.body,
+        color,
+    );
 }
 
 #[cfg(test)]
@@ -1244,6 +1257,11 @@ mod tests {
                         (action, labels)
                     };
                     let (_, labels) = frame(vec![], 100.0);
+                    assert_eq!(
+                        (labels["99.50"].y - labels["99.75"].y).abs(),
+                        20.0,
+                        "price rows must stay 20 points apart"
+                    );
                     assert!(labels.contains_key("2.00 USD"), "mark an unpriced position");
                     let start = if gesture.starts_with("place") {
                         pos2(labels["Bid size"].x, labels["99.50"].y)
