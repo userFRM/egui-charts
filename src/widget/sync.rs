@@ -18,44 +18,86 @@ pub struct VisibleTimeRange {
 impl Chart {
     /// The time of the nearest hovered bar or price-based element, or `None` outside the data.
     pub fn hover_time(&self) -> Option<DateTime<Utc>> {
+        self.hover_period().map(|(open, _)| open)
+    }
+
+    /// The hovered bar's period, from its open until the next bar of its interval opens.
+    pub(crate) fn hover_period(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
         let index = self.last_hover_bar_idx?.round();
         (index >= 0.0 && index < self.state.shown().len() as f64)
-            .then(|| self.state.shown()[index as usize].time)
+            .then(|| self.bar_period(index as usize))
     }
 
-    /// Shows a crosshair at the nearest local bar to `time`; ties choose the earlier bar.
-    /// Times outside the local data and `None` clear it. Repeated element times choose the
-    /// first element. Each receiver resolves the timestamp against its own series.
-    pub fn set_synced_crosshair_time(&mut self, time: Option<DateTime<Utc>>) {
-        self.synced_crosshair_price = None;
+    // Until the next bar opens if that comes sooner, as after a repeated element time.
+    fn bar_period(&self, index: usize) -> (DateTime<Utc>, DateTime<Utc>) {
         let bars = self.state.shown();
-        self.synced_crosshair_bar_idx = time.and_then(|time| {
-            if time < bars.first()?.time || time > bars.last()?.time {
-                return None;
-            }
-            let after = bars.partition_point(|bar| bar.time < time);
-            let index = if after > 0
-                && after < bars.len()
-                && time - bars[after - 1].time <= bars[after].time - time
-            {
-                after - 1
-            } else {
-                after
-            };
-            Some(bars.partition_point(|bar| bar.time < bars[index].time) as f64)
-        });
+        let open = bars[index].time;
+        // Without an interval, the first bar takes the spacing after the second.
+        let at = match self.timeframe() {
+            Some(_) => index,
+            None => index.max(1).min(bars.len() - 1),
+        };
+        // One slot past the bar as if it were the last, so a session gap after it is no interval.
+        let step = crate::model::time_at_with_timeframe(
+            &bars[..=at],
+            at as f64 + 1.0,
+            self.timeframe(),
+            self.calendar_timezone().as_ref(),
+        )
+        .map_or(chrono::TimeDelta::zero(), |end| end - bars[at].time);
+        let end = open.checked_add_signed(step).unwrap_or(open);
+        let end = bars.get(index + 1).map_or(end, |next| end.min(next.time));
+        (open, end.max(open))
     }
 
-    /// Shows a crosshair at the nearest local bar to `time`, as
-    /// [`Self::set_synced_crosshair_time`] does, with its horizontal line and price label at
-    /// `price` on the main price scale. `None`, a time outside the data or a non-finite price
-    /// clears it. The pointer's own crosshair takes its place while the pointer is over the plots.
+    /// Shows a crosshair at the local bar whose period holds `time`, from its open until the
+    /// next bar of its interval opens. Between bars it marks the nearest one; ties choose the
+    /// earlier bar. Times before the first bar or after the last bar's period, and `None`, clear
+    /// it. Repeated element times choose the first element. Each receiver resolves the timestamp
+    /// against its own series.
+    pub fn set_synced_crosshair_time(&mut self, time: Option<DateTime<Utc>>) {
+        self.set_synced_crosshair(time.map(|time| (time, time)), None);
+    }
+
+    /// Shows a crosshair at the local bar for `time`, as [`Self::set_synced_crosshair_time`]
+    /// does, with its horizontal line and price label at `price` on the main price scale.
+    /// `None`, a time outside the data or a non-finite price clears it. The pointer's own
+    /// crosshair takes its place while the pointer is over the plots.
     pub fn set_crosshair_position(&mut self, position: Option<(DateTime<Utc>, f64)>) {
-        let position = position.filter(|(_, price)| price.is_finite());
-        self.set_synced_crosshair_time(position.map(|(time, _)| time));
-        self.synced_crosshair_price = position
-            .filter(|_| self.synced_crosshair_bar_idx.is_some())
-            .map(|(_, price)| price);
+        self.set_synced_crosshair(
+            position.map(|(time, _)| (time, time)),
+            position.map(|(_, price)| price),
+        );
+    }
+
+    /// As [`Self::set_crosshair_position`] for a source bar's `period`: when no local bar's
+    /// period holds its start, the first local bar opening inside it is marked, so a coarse bar
+    /// marks the first bar of its period on a finer chart closed at its open.
+    pub(crate) fn set_synced_crosshair(
+        &mut self,
+        period: Option<(DateTime<Utc>, DateTime<Utc>)>,
+        price: Option<f64>,
+    ) {
+        let period = period.filter(|_| price.is_none_or(f64::is_finite));
+        self.synced_crosshair_bar_idx = period.and_then(|(from, to)| self.synced_index(from, to));
+        self.synced_crosshair_price = price.filter(|_| self.synced_crosshair_bar_idx.is_some());
+    }
+
+    fn synced_index(&self, from: DateTime<Utc>, to: DateTime<Utc>) -> Option<f64> {
+        let bars = self.state.shown();
+        let after = bars.partition_point(|bar| bar.time <= from);
+        let index = if after > 0 && from < self.bar_period(after - 1).1 {
+            after - 1
+        } else if after < bars.len() && bars[after].time < to {
+            after
+        } else if after == 0 || after == bars.len() {
+            return None;
+        } else if from - bars[after - 1].time <= bars[after].time - from {
+            after - 1
+        } else {
+            after
+        };
+        Some(bars.partition_point(|bar| bar.time < bars[index].time) as f64)
     }
 
     /// The visible UTC range, including whitespace mapped by [`Self::index_to_time`].
@@ -266,21 +308,40 @@ mod tests {
 
     #[test]
     fn sync_resolves_receiver_times_and_fractional_edges() {
+        const H: i64 = 3600;
+        const D: i64 = 86_400;
+        let minutes = vec![0, 60, 120, 180, 240, 300];
+        let (gap, doubled) = (vec![60, 120, 240, 300], vec![60, 120, 120, 300]);
+        let days: Vec<_> = (0..30).map(|i| i * D).collect();
+        let four_hours: Vec<_> = (0..6).map(|i| i * 4 * H).collect();
+        // Sessions from 13:30 to 19:59 on days 0 and 1.
+        let sessions: Vec<_> = (0..2)
+            .flat_map(|day| (0..390).map(move |i| day * D + 13 * H + 1800 + i * 60))
+            .collect();
+        // A source of one bar has a period of one second.
+        let one = |time| vec![time];
         // 120 seconds is source bar 2, receiver bar 1; 180 is halfway across its session gap.
-        for (times, hovered, expected) in [
-            (vec![60, 120, 240, 300], Some(120), Some(1.0)),
-            (vec![60, 120, 240, 300], Some(180), Some(1.0)),
-            (vec![60, 120, 120, 300], Some(120), Some(1.0)),
-            (vec![60, 120, 120, 300], Some(180), Some(1.0)),
-            (vec![60, 120, 240, 300], Some(0), None),
-            (vec![60, 120, 240, 300], Some(360), None),
-            (vec![], Some(120), None),
-            (vec![120], None, None),
+        for (source, hovered, times, expected) in [
+            (&minutes, Some(2.0), &gap, Some(1.0)),
+            (&minutes, Some(3.0), &gap, Some(1.0)),
+            (&minutes, Some(2.0), &doubled, Some(1.0)),
+            (&minutes, Some(3.0), &doubled, Some(1.0)),
+            (&minutes, Some(0.0), &gap, None),
+            (&minutes, Some(6.0), &gap, None),
+            (&minutes, Some(2.0), &Vec::new(), None),
+            (&minutes, None, &one(120), None),
+            // A time inside a coarser bar's period marks that bar, the latest one included.
+            (&one(10 * D + 14 * H + 1800), Some(0.0), &days, Some(10.0)),
+            (&one(29 * D + 14 * H + 1800), Some(0.0), &days, Some(29.0)),
+            (&one(30 * D + 1800), Some(0.0), &days, None),
+            (&one(3 * H), Some(0.0), &four_hours, Some(0.0)),
+            // The daily bar of day 1 marks its first minute, not the last minute of day 0.
+            (&days, Some(1.0), &sessions, Some(390.0)),
         ] {
-            let mut source = chart(&[0, 60, 120, 180, 240, 300], 1000.0);
-            source.last_hover_bar_idx = hovered.map(|t| t as f64 / 60.0);
-            let mut receiver = chart(&times, 501.0);
-            receiver.set_synced_crosshair_time(source.hover_time());
+            let mut source = chart(source, 1000.0);
+            source.last_hover_bar_idx = hovered;
+            let mut receiver = chart(times, 501.0);
+            receiver.set_synced_crosshair(source.hover_period(), None);
             assert_eq!(
                 receiver.synced_crosshair_bar_idx, expected,
                 "{times:?} {hovered:?}"

@@ -699,22 +699,19 @@ impl ChartLayout {
             .iter()
             .take(count)
             .position(|c| c.hover_time().is_some());
-        let time = hovered.and_then(|source| charts[source].hover_time());
+        let period = hovered.and_then(|source| charts[source].hover_period());
         // The source's main-pane price, or `None` over volume and indicator panes.
         let price = hovered.and_then(|source| charts[source].last_crosshair?.1);
         let range = charts[self.active].visible_time_range();
         let source = charts[self.active].sync_source();
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
-            chart.set_synced_crosshair_time(None);
+            chart.set_synced_crosshair(None, None);
             if self.sync.sync_crosshair
                 && let Some(source) = hovered
                 && index != source
                 && self.same_group(index, source)
             {
-                match time.zip(price) {
-                    Some(position) => chart.set_crosshair_position(Some(position)),
-                    None => chart.set_synced_crosshair_time(time),
-                }
+                chart.set_synced_crosshair(period, price);
             }
             if index != self.active
                 && self.same_group(index, self.active)
