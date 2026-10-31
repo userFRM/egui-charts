@@ -68,7 +68,11 @@ pub(super) fn pointed_outline(
         .filter(|&(d, _)| span + 1e-4 < d && d < TAU - 1e-4)
         .collect();
     kept.sort_by(|a, b| a.0.total_cmp(&b.0));
-    [start, tip, end]
+    // A stroke's join at a sharp point runs past it, far past on a long pointer, so the point is
+    // blunt by a pixel.
+    let across = (tip - start.lerp(end, 0.5)).normalized().rot90();
+    let blunt = across * (start - end).dot(across).signum() * 0.5;
+    [start, tip + blunt, tip, tip - blunt, end]
         .into_iter()
         .chain(kept.into_iter().map(|(_, p)| p))
         .collect()
@@ -200,9 +204,8 @@ mod tests {
             (badge, 4.0, at(16.0, -8.0), at(0.0, 0.0), at(8.0, -16.0)),
         ] {
             let points = pointed_outline(rect, radius, from, tip, to);
-            assert_eq!(points[1], tip);
-            let mut mesh = egui::Mesh::default();
-            egui::epaint::Tessellator::new(
+            assert!(points.contains(&tip));
+            let mut tessellator = egui::epaint::Tessellator::new(
                 1.0,
                 egui::epaint::TessellationOptions {
                     feathering: false,
@@ -210,16 +213,15 @@ mod tests {
                 },
                 [1, 1],
                 vec![],
-            )
-            .tessellate_path(
-                &PathShape {
-                    points: points.clone(),
-                    closed: true,
-                    fill: Color32::WHITE,
-                    stroke: Stroke::NONE.into(),
-                },
-                &mut mesh,
             );
+            let path = PathShape {
+                points: points.clone(),
+                closed: true,
+                fill: Color32::WHITE,
+                stroke: Stroke::NONE.into(),
+            };
+            let mut mesh = egui::Mesh::default();
+            tessellator.tessellate_path(&path, &mut mesh);
             let mut filled = 0.0;
             for triangle in mesh.indices.chunks(3) {
                 let [a, b, c] = [0, 1, 2].map(|i| mesh.vertices[triangle[i] as usize].pos);
@@ -237,6 +239,25 @@ mod tests {
             assert!(
                 shoelace > 0.0 && (filled - shoelace).abs() < 1e-2,
                 "{tip:?}: {filled} {shoelace}"
+            );
+            // A 1 px outline stays on the shape: its join does not run past the tip.
+            let mut outlined = egui::Mesh::default();
+            tessellator.tessellate_path(
+                &PathShape {
+                    stroke: Stroke::new(1.0, Color32::WHITE).into(),
+                    ..path
+                },
+                &mut outlined,
+            );
+            let reach = Rect::from_points(&points).expand(1.0);
+            assert!(
+                outlined.vertices.iter().all(|v| reach.contains(v.pos)),
+                "{tip:?}: {:?}",
+                outlined
+                    .vertices
+                    .iter()
+                    .map(|v| v.pos)
+                    .find(|&p| !reach.contains(p))
             );
         }
     }
