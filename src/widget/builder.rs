@@ -160,7 +160,6 @@ impl Chart {
             currency_choice: None,
             legend_badge: None,
             watermark: None,
-            symbol_watermark: Default::default(),
             legend_statuses: Vec::new(),
             quote: None,
             quote_action: None,

@@ -318,8 +318,6 @@ pub struct Chart {
     currency_choice: Option<String>,
     legend_badge: Option<egui::ImageSource<'static>>,
     watermark: Option<Watermark>,
-    /// The symbol watermark's lines, formatted again only when their text changes.
-    symbol_watermark: std::cell::RefCell<frame::SymbolWatermark>,
     legend_statuses: Vec<(String, egui::Color32, egui::Color32)>,
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,

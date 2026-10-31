@@ -13,57 +13,6 @@ use crate::scales::TimeFormatterBuilder;
 use crate::theme::ThemeExt;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
 
-/// The lines of the symbol watermark and the text they were built from, so that they are
-/// formatted again only when the symbol, the interval, the description or the custom text
-/// changes.
-#[derive(Default)]
-pub(super) struct SymbolWatermark {
-    symbol: String,
-    timeframe: Option<crate::model::Timeframe>,
-    description: Option<String>,
-    custom: Option<String>,
-    watermark: renderers::Watermark,
-}
-
-impl SymbolWatermark {
-    /// Builds the lines again when their text changed: each line of `custom`, else the symbol
-    /// and the interval, then `description`. Without custom text an empty symbol shows nothing.
-    fn refresh(
-        &mut self,
-        symbol: &str,
-        timeframe: Option<crate::model::Timeframe>,
-        description: Option<&str>,
-        custom: Option<&str>,
-    ) {
-        if self.symbol == symbol
-            && self.timeframe == timeframe
-            && self.description.as_deref() == description
-            && self.custom.as_deref() == custom
-        {
-            return;
-        }
-        self.symbol = symbol.to_owned();
-        self.timeframe = timeframe;
-        self.description = description.map(str::to_owned);
-        self.custom = custom.map(str::to_owned);
-        let line =
-            |text: String| renderers::WatermarkLine::new(text, 0.0, egui::Color32::TRANSPARENT);
-        let lines = &mut self.watermark.lines;
-        lines.clear();
-        if let Some(custom) = custom {
-            lines.extend(custom.lines().map(|text| line(text.to_owned())));
-        } else if !symbol.is_empty() {
-            lines.push(line(match timeframe {
-                Some(timeframe) => format!("{symbol}, {timeframe}"),
-                None => symbol.to_owned(),
-            }));
-            if let Some(description) = description.filter(|text| !text.is_empty()) {
-                lines.push(line(description.to_owned()));
-            }
-        }
-    }
-}
-
 impl Chart {
     fn show_realtime_button(&mut self, ui: &Ui, rect: Option<Rect>, chart_id: egui::Id) {
         if let Some(rect) = rect
@@ -433,36 +382,47 @@ impl Chart {
         if !self.config.show_watermark {
             return;
         }
-        let description = self
-            .config
-            .watermark_description
-            .then(|| {
-                self.instrument()
-                    .and_then(|instrument| instrument.description.as_deref())
-            })
-            .flatten();
-        let custom = self.config.watermark_text.as_deref();
-        let mut cache = self.symbol_watermark.borrow_mut();
-        cache.refresh(&self.symbol, self.timeframe, description, custom);
         let size = self.config.watermark_font_size;
-        let watermark = &mut cache.watermark;
-        for (at, line) in watermark.lines.iter_mut().enumerate() {
-            line.size = crate::styles::typography::font_size(match (custom, at) {
-                (Some(_), _) => size,
-                (None, 0) => size * 2.0,
-                (None, _) => size * 11.0 / 12.0,
-            });
-            line.color = self.config.watermark_color;
-        }
-        watermark.align = match self.config.watermark_pos {
+        let line = |text: &str, size: f32| {
+            renderers::WatermarkLine::new(
+                text,
+                crate::styles::typography::font_size(size),
+                self.config.watermark_color,
+            )
+        };
+        let lines = if let Some(custom) = &self.config.watermark_text {
+            custom.lines().map(|text| line(text, size)).collect()
+        } else if self.symbol.is_empty() {
+            Vec::new()
+        } else {
+            let title = match self.timeframe {
+                Some(timeframe) => format!("{}, {timeframe}", self.symbol),
+                None => self.symbol.clone(),
+            };
+            let description = self
+                .config
+                .watermark_description
+                .then(|| self.instrument()?.description.as_deref())
+                .flatten()
+                .filter(|text| !text.is_empty());
+            std::iter::once(line(&title, size * 2.0))
+                .chain(description.map(|text| line(text, size * 11.0 / 12.0)))
+                .collect()
+        };
+        let align = match self.config.watermark_pos {
             WatermarkPos::Center => egui::Align2::CENTER_CENTER,
             WatermarkPos::TopLeft => egui::Align2::LEFT_TOP,
             WatermarkPos::TopRight => egui::Align2::RIGHT_TOP,
             WatermarkPos::BottomLeft => egui::Align2::LEFT_BOTTOM,
             WatermarkPos::BottomRight => egui::Align2::RIGHT_BOTTOM,
         };
-        watermark.padding = 20.0;
-        renderers::render_watermark(ui, painter, rect, watermark);
+        let watermark = renderers::Watermark {
+            lines,
+            align,
+            padding: 20.0,
+            ..Default::default()
+        };
+        renderers::render_watermark(ui, painter, rect, &watermark);
     }
 
     /// Renders the chart with its studies and drawings, and handles pan, zoom,
