@@ -90,7 +90,7 @@ impl Terminal {
             self.chart_events
                 .extend(chart.drain_events().map(|event| (index, event)));
             if let Some(error) = chart.take_storage_error() {
-                self.toasts.error(error);
+                self.toasts.error(error.to_string());
             }
         }
         self.show_region(ui, Region::Chart);

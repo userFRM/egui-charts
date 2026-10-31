@@ -760,12 +760,14 @@ impl DemoApp {
         let mut errors = vec![
             self.settings.take_error(),
             self.top_toolbar.layout_menu.take_error(),
-            self.chart.take_storage_error(),
+            self.chart
+                .take_storage_error()
+                .map(|error| error.to_string()),
         ];
         errors.extend(
             self.extra_charts
                 .iter_mut()
-                .map(|c| c.chart.take_storage_error()),
+                .map(|c| c.chart.take_storage_error().map(|error| error.to_string())),
         );
         for error in errors.into_iter().flatten() {
             self.toasts.error(error);

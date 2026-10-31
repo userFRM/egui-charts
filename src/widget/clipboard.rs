@@ -1,7 +1,7 @@
 //! Drawing clipboard uses the existing validated, timestamp-based storage format; the study
 //! clipboard holds a study's name, inputs and presentation.
 
-use crate::drawings::persistence::{DrawingStorage, SaveError, stored_to_drawing_with};
+use crate::drawings::persistence::{DrawingStorage, LoadError, SaveError, stored_to_drawing_with};
 use crate::studies::{InputValue, StudyScale, StudySettings};
 use crate::widget::{Chart, SeriesId};
 
@@ -36,18 +36,20 @@ impl Chart {
     }
 
     /// Paste drawing clipboard text as one undoable addition, with new identities and a
-    /// three-bar offset. Selects the copies. Rejects invalid or partially unreadable data,
-    /// another symbol, or a chart without a time mapping before changing any drawing.
-    /// The host handles the system clipboard and forwards its paste event here.
-    pub fn paste_drawings(&mut self, text: &str) -> Result<(), serde_json::Error> {
-        let json = text
-            .strip_prefix(PREFIX)
-            .ok_or_else(|| serde::de::Error::custom("not a drawing clipboard"))?;
+    /// three-bar offset. Selects the copies. Before changing any drawing, rejects text that is
+    /// not drawing clipboard text ([`LoadError::NotClipboard`]), invalid data or a version from
+    /// a newer release, drawings of another symbol ([`LoadError::OtherSymbol`]), drawings that
+    /// could not all be read ([`LoadError::Skipped`]) and a chart without the history to place
+    /// them ([`LoadError::NeedsHistory`]). The host handles the system clipboard and forwards
+    /// its paste event here.
+    pub fn paste_drawings(&mut self, text: &str) -> Result<(), LoadError> {
+        let json = text.strip_prefix(PREFIX).ok_or(LoadError::NotClipboard)?;
         let (storage, skipped) = DrawingStorage::from_json(json)?;
-        if storage.symbol != self.symbol() || !skipped.is_empty() {
-            return Err(serde::de::Error::custom(
-                "clipboard has another symbol or unreadable drawings",
-            ));
+        if storage.symbol != self.symbol() {
+            return Err(LoadError::OtherSymbol);
+        }
+        if !skipped.is_empty() {
+            return Err(LoadError::Skipped(skipped));
         }
         let mut copies = Vec::new();
         for stored in storage.drawings() {
@@ -57,9 +59,7 @@ impl Chart {
                     .and_then(|time| self.time_to_index(time))
                     .is_none()
                 {
-                    return Err(serde::de::Error::custom(
-                        "clipboard needs loaded chart history",
-                    ));
+                    return Err(LoadError::NeedsHistory);
                 }
             }
             let mut copy = stored_to_drawing_with(

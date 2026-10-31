@@ -2,8 +2,8 @@
 
 use super::Chart;
 use crate::drawings::persistence::{
-    DrawingStorage, SaveError, SkippedDrawing, StoredCoord, StoredDrawing, drawing_to_stored_with,
-    stored_to_drawing_with,
+    DrawingStorage, LoadError, SaveError, SkippedDrawing, StoredCoord, StoredDrawing,
+    drawing_to_stored_with, stored_to_drawing_with,
 };
 use crate::drawings::{ChartPoint, Drawing, DrawingManager};
 use crate::model::{index_at_with_timeframe, time_at_with_timeframe};
@@ -155,11 +155,14 @@ impl Chart {
 
     /// Replaces the current symbol's drawings from a saved file, clears chart undo history
     /// and reports skipped records.
-    /// Rejects a different symbol or an unreadable file without changing the current drawings.
+    /// Rejects a different symbol or an unreadable file without changing the current drawings,
+    /// with a [`LoadError`] that tells a file from a newer release
+    /// ([`LoadError::UnsupportedVersion`]) from damaged data; each skipped record carries its
+    /// [`SkipReason`](crate::drawings::persistence::SkipReason).
     /// Can run before history arrives: timestamp anchors are projected when bars load.
     /// Restored drawings do not queue writes or enter undo history. Screen coordinates follow
     /// on the next frame. Account, filesystem and cloud storage remain the host's responsibility.
-    pub fn load_drawings(&mut self, json: &str) -> Result<Vec<SkippedDrawing>, serde_json::Error> {
+    pub fn load_drawings(&mut self, json: &str) -> Result<Vec<SkippedDrawing>, LoadError> {
         self.load_drawings_remapped(json, false)
     }
 
@@ -170,12 +173,10 @@ impl Chart {
         &mut self,
         json: &str,
         remap: bool,
-    ) -> Result<Vec<SkippedDrawing>, serde_json::Error> {
+    ) -> Result<Vec<SkippedDrawing>, LoadError> {
         let (storage, skipped) = DrawingStorage::from_json(json)?;
         if storage.symbol != self.symbol() {
-            return Err(serde::de::Error::custom(
-                "drawing storage belongs to a different symbol",
-            ));
+            return Err(LoadError::OtherSymbol);
         }
         let mut manager = DrawingManager::new();
         manager.set_sync_enabled(self.drawings.sync_enabled);
@@ -614,10 +615,53 @@ mod tests {
             chart.drawings().drawings[0].chart_points
         );
         json["symbol"] = "B".into();
-        assert!(restored.load_drawings(&json.to_string()).is_err());
+        assert!(matches!(
+            restored.load_drawings(&json.to_string()),
+            Err(LoadError::OtherSymbol)
+        ));
         assert_eq!(restored.drawings().drawings.len(), 1);
         let mut empty = Chart::new(BarData::new());
         empty.drawings_mut().drawings = chart.drawings().drawings.clone();
         assert!(empty.save_drawings().is_err());
+    }
+
+    /// A paste refuses other text, drawings of another symbol, drawings that could not all be
+    /// read and a chart without bars to place them, each with its own reason, before changing
+    /// any drawing.
+    #[test]
+    fn a_refused_paste_reports_why() {
+        use crate::drawings::persistence::{LoadError, SkipReason};
+        use crate::widget::test_frames;
+        let mut source = test_frames::chart(&[100.0], &[110.0]);
+        source.set_symbol("A");
+        let mut line = Drawing::new(0, DrawingToolType::TrendLine);
+        line.chart_points = vec![ChartPoint::new(1.0, 105.0), ChartPoint::new(2.0, 106.0)];
+        let id = source.drawings_mut().add_drawing(line).unwrap();
+        source.drawings_mut().select(id);
+        let copied = source.copy_selected_drawings().unwrap().unwrap();
+        let newer = copied.replace("\"TrendLine\"", "\"NewerTool\"");
+        type Refused = fn(&LoadError) -> bool;
+        let cases: [(&str, &str, bool, Refused); 4] = [
+            ("hello", "A", true, |e| matches!(e, LoadError::NotClipboard)),
+            (&copied, "B", true, |e| matches!(e, LoadError::OtherSymbol)),
+            (&newer, "A", true, |e| {
+                matches!(e, LoadError::Skipped(s) if s.len() == 1
+                    && matches!(&s[0].error, SkipReason::UnknownTool(t) if t.input == "NewerTool"))
+            }),
+            (&copied, "A", false, |e| {
+                matches!(e, LoadError::NeedsHistory)
+            }),
+        ];
+        for (text, symbol, bars, refused) in cases {
+            let mut target = if bars {
+                test_frames::chart(&[100.0], &[110.0])
+            } else {
+                Chart::new(BarData::new())
+            };
+            target.set_symbol(symbol);
+            let error = target.paste_drawings(text).unwrap_err();
+            assert!(refused(&error), "{symbol}: {error:?}");
+            assert!(target.drawings().drawings.is_empty(), "{error}");
+        }
     }
 }
