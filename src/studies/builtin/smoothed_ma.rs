@@ -35,7 +35,7 @@ impl SmoothedMA {
 
 impl Default for SmoothedMA {
     fn default() -> Self {
-        Self::new(14)
+        Self::new(7)
     }
 }
 

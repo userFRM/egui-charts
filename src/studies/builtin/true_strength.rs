@@ -16,7 +16,7 @@ pub struct TrueStrengthIndex {
     long_period: usize,
     /// Short period (typically 13)
     short_period: usize,
-    /// Signal line period (typically 7)
+    /// Signal line period (typically 13)
     signal_period: usize,
     values: IndicatorValues,
     stepper: Stepper<(usize, Option<f64>, [Smoothing; 5])>,
@@ -52,7 +52,7 @@ impl TrueStrengthIndex {
 
 impl Default for TrueStrengthIndex {
     fn default() -> Self {
-        Self::new(25, 13, 7)
+        Self::new(25, 13, 13)
     }
 }
 

@@ -50,6 +50,7 @@
 //!   range (high minus low on the first bar) or Wilder's average of the bar range over the middle
 //!   line's length; the simple averages of the highs and of the lows for the MA Channel; and
 //!   separate upper and lower residual deviations for the regression channel.
+//! - McGinley for the McGinley Dynamic.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
@@ -71,7 +72,7 @@
 //! Median takes the nearest-rank median (the lower middle value for an even length) and seeds its EMA
 //! with the mean of the first medians, the Chop Zone seeds its EMA with the mean of the first 34 closes,
 //! and the Volatility Stop starts at the first close in an uptrend and uses the bar's true range as its
-//! band until its ATR has a full length.
+//! band until its ATR has a full length. The McGinley Dynamic starts at the first close.
 
 use crate::model::Bar;
 use crate::studies::{
@@ -95,7 +96,7 @@ use crate::studies::{
     BollingerBars, ChandeKrollStop, ChopZone, Median, VolatilityStop, WilliamsAlligator,
 };
 use crate::studies::{Gaps, PivotPointsHighLow, RsiDivergence, WilliamsFractals};
-use crate::studies::{KeltnerBand, MAChannel, OscillatorAverage};
+use crate::studies::{KeltnerBand, MAChannel, McGinleyDynamic, OscillatorAverage};
 use crate::studies::{
     PriceMomentumOscillator, PringsSpecialK, RciRibbon, RelativeVolatilityIndex,
     SMIErgodicIndicator, SMIErgodicOscillator, WoodiesCCI,
@@ -443,7 +444,7 @@ fn small_range_studies_are_invariant_to_price_and_volume_units() {
         ),
         (Box::new(Stochastic::new(14, 1, 1)), 200.0 / 9.0),
         (Box::new(CCI::default()), -62000.0 / 759.0),
-        (Box::new(RateOfChange::default()), -100.0 / 77.0),
+        (Box::new(RateOfChange::new(14)), -100.0 / 77.0),
     ] {
         study.calculate(&bars);
         assert!((study.values().value(0, 100).unwrap() - want).abs() < 1e-9);
@@ -528,9 +529,9 @@ fn staple_studies_match_published_definitions() {
         ("ZeroTrend(20)", Box::new(ZeroTrendVol::default())),
         ("Parkinson(20)", Box::new(ParkinsonVol::default())),
         ("NetVolume", Box::new(NetVolume::default())),
-        ("SMA(20)", Box::new(SMA::default())),
-        ("EMA(12)", Box::new(EMA::default())),
-        ("WMA(20)", Box::new(WMA::default())),
+        ("SMA(20)", Box::new(SMA::new(20))),
+        ("EMA(12)", Box::new(EMA::new(12))),
+        ("WMA(20)", Box::new(WMA::new(20))),
         ("RSI(14)", Box::new(RSI::default())),
         ("StochRSI(14,14,3,3)", Box::new(StochasticRSI::default())),
         ("MACD(12,26,9)", Box::new(MACD::default())),
@@ -572,7 +573,7 @@ fn staple_studies_match_published_definitions() {
             Box::new(LinearRegressionSlope::default()),
         ),
         ("Aroon(14)", Box::new(Aroon::default())),
-        ("HMA(20)", Box::new(HMA::default())),
+        ("HMA(20)", Box::new(HMA::new(20))),
         ("HMA(21)", Box::new(HMA::new(21))),
         ("VWMA(20)", Box::new(VWMA::default())),
         ("CMF(20)", Box::new(ChaikinMoneyFlow::default())),
@@ -583,7 +584,7 @@ fn staple_studies_match_published_definitions() {
             "PSAR(0.01,0.03,0.12)",
             Box::new(ParabolicSAR::new(0.01, 0.03, 0.12)),
         ),
-        ("ROC(14)", Box::new(RateOfChange::default())),
+        ("ROC(14)", Box::new(RateOfChange::new(14))),
         ("StdDev(20)", Box::new(StandardDeviation::default())),
         ("Donchian(20)", Box::new(DonchianChannels::default())),
         ("Stoch(14,3,3)", Box::new(Stochastic::default())),
@@ -610,7 +611,7 @@ fn staple_studies_match_published_definitions() {
         ("ElderRay(13)", Box::new(ElderRay::default())),
         ("Vortex(14)", Box::new(VortexIndicator::default())),
         ("Chop(14)", Box::new(ChoppinessIndex::default())),
-        ("TRIX(15,9)", Box::new(TRIX::default())),
+        ("TRIX(15,9)", Box::new(TRIX::new(15))),
         ("Mass(9,25)", Box::new(MassIndex::default())),
         ("%B(20,2)", Box::new(PercentB::default())),
         ("BBW(20,2)", Box::new(BollingerBandsWidth::default())),
@@ -627,7 +628,8 @@ fn staple_studies_match_published_definitions() {
             Box::new(MAChannel::new(20, 10).with_offsets(3, -2)),
         ),
         ("CV(10,10)", Box::new(ChaikinVolatility::default())),
-        ("CMO(14)", Box::new(ChandeMomentumOscillator::default())),
+        ("CMO(14)", Box::new(ChandeMomentumOscillator::new(14))),
+        ("MD(14)", Box::new(McGinleyDynamic::new(14))),
         ("Coppock(14,11,10)", Box::new(CoppockCurve::default())),
         ("Ichimoku(9,26,52)", Box::new(IchimokuCloud::default())),
         ("Alligator(13,8,5)", Box::new(WilliamsAlligator::default())),

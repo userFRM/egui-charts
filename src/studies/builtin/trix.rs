@@ -61,7 +61,7 @@ impl TRIX {
 /// Construct with the conventional default parameters.
 impl Default for TRIX {
     fn default() -> Self {
-        Self::new(15)
+        Self::new(18)
     }
 }
 

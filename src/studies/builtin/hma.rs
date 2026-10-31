@@ -55,7 +55,7 @@ impl HMA {
 /// Construct with the conventional default parameters.
 impl Default for HMA {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(9)
     }
 }
 

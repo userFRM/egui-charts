@@ -211,6 +211,34 @@ fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
 /// The study browser opens the channel studies with their usual inputs, and every band they
 /// fill lies between two of their drawn plots in a colour that shows.
 #[test]
+fn catalogue_studies_open_with_their_usual_lengths() {
+    let rows = [
+        ("SMA", "period", 9),
+        ("EMA", "period", 9),
+        ("WMA", "period", 9),
+        ("HMA", "period", 9),
+        ("DEMA", "period", 9),
+        ("TEMA", "period", 9),
+        ("LSMA", "period", 25),
+        ("SMMA", "period", 7),
+        ("ROC", "period", 9),
+        ("TRIX", "period", 18),
+        ("CMO", "period", 9),
+        ("HV", "period", 10),
+        ("TSI", "signal_period", 13),
+    ];
+    for (name, id, length) in rows {
+        let inputs = IndicatorFactory::new().create(name).unwrap().inputs();
+        let input = inputs.iter().find(|input| input.id == id);
+        assert_eq!(
+            input.map(|input| &input.value),
+            Some(&crate::studies::InputValue::Length(length)),
+            "{name} {id}"
+        );
+    }
+}
+
+#[test]
 fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
     use crate::studies::{FillBoundary, InputValue};
 

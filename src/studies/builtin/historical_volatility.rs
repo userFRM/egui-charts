@@ -54,7 +54,7 @@ impl HistoricalVolatility {
 /// Construct with the conventional default parameters.
 impl Default for HistoricalVolatility {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(10)
     }
 }
 

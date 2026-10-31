@@ -306,6 +306,42 @@ mod tests {
         }
     }
 
+    /// A template restores the inputs it holds whatever the study's default has become, with every
+    /// line it showed, and an input it lacks takes the value the saved inputs had before the
+    /// study offered it.
+    #[test]
+    fn templates_saved_before_split_lengths_restore_their_values() {
+        use InputValue::Length;
+        let rows = [("SMA", vec![("period", Length(20))], vec![("period", Length(20))])];
+        let factory = IndicatorFactory::new();
+        for (name, saved, restored) in rows {
+            let mut settings = factory.create(name).unwrap().settings();
+            for plot in &mut settings.plots {
+                plot.visible = true;
+            }
+            let template = StudyTemplate {
+                name: name.to_owned(),
+                inputs: saved
+                    .into_iter()
+                    .map(|(id, value)| (id.to_owned(), value))
+                    .collect(),
+                settings,
+                visible: true,
+                scale: None,
+            };
+            let study = template.create().unwrap();
+            let inputs = study.inputs();
+            for (id, value) in restored {
+                let input = inputs.iter().find(|input| input.id == id);
+                assert_eq!(input.map(|input| &input.value), Some(&value), "{name} {id}");
+            }
+            assert!(
+                (0..study.line_count()).all(|line| study.plot_style(line).visible),
+                "{name}"
+            );
+        }
+    }
+
     /// Templates and layouts saved before the channel studies' inputs changed load and draw the
     /// lines they drew.
     #[test]
