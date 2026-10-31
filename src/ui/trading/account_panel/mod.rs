@@ -525,6 +525,49 @@ mod tests {
         harness.get_by_label("Close position");
     }
 
+    /// In panels as narrow as the demo gives on 320 and 393 point screens, the Trade, minimize
+    /// and maximize buttons stay apart and inside the panel, with or without the broker's
+    /// connection mark.
+    #[test]
+    fn tab_strip_buttons_stay_apart_in_narrow_panels() {
+        use crate::data::FeedStatus;
+        for width in [264.0, 337.0] {
+            for status in [
+                None,
+                Some(FeedStatus::Connecting),
+                Some(FeedStatus::Disconnected),
+            ] {
+                let mut trading = Trading::default();
+                trading.set_service(Arc::new(Recorder::default()));
+                trading.poll(&egui::Context::default(), &mut Toasts::new());
+                if let Some(status) = status {
+                    trading.apply(AccountEvent::Status(status), &mut Toasts::new());
+                }
+                trading.account_panel.broker = "Paper Trading".into();
+                // The harness keeps an 8 point margin around the panel.
+                let mut harness = Harness::builder()
+                    .with_size(egui::vec2(width + 16.0, 320.0))
+                    .with_context_setup(egui_extras::install_image_loaders)
+                    .build_ui_state(
+                        |ui, trading: &mut Trading| {
+                            trading.show_account_panel(ui, "SYM");
+                        },
+                        trading,
+                    );
+                harness.run();
+                let rects = ["Trade", "Minimize panel", "Maximize panel"]
+                    .map(|label| harness.get_by_label(label).rect());
+                for (index, rect) in rects.iter().enumerate() {
+                    let case = format!("{status:?} at {width}: {index}");
+                    assert!(rect.min.x >= 8.0 && rect.max.x <= 8.0 + width, "{case}");
+                    for other in &rects[index + 1..] {
+                        assert!(!rect.intersect(*other).is_positive(), "{case}");
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn history_keeps_each_partial_fill_and_discards_stale_edits() {
         let mut panel = AccountPanel::default();
