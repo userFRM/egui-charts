@@ -93,16 +93,6 @@ pub(super) fn gann_fan_lines(
         .collect()
 }
 
-/// The corner of a Gann square opposite its first anchor: the second anchor, or for a fixed
-/// square five times the first unit that the second anchor marks.
-pub(super) fn gann_square_corner(tool: DrawingToolType, first: Pos2, second: Pos2) -> Pos2 {
-    if tool == DrawingToolType::GannFixed {
-        first + (second - first) * GANN_SQUARE_UNITS
-    } else {
-        second
-    }
-}
-
 /// The visible fan lines of a Gann square whose first anchor is `start` and opposite corner
 /// `corner`, each with its level: from `start` towards the opposite corner and from the opposite
 /// corner back, as the direction selects, up to the square's edge. Invalid ratios are skipped.
@@ -212,6 +202,21 @@ pub(super) fn gann_box_angle_lines(
 }
 
 impl Drawing {
+    /// The corner of a Gann square opposite its first anchor `first`: the second anchor `second`,
+    /// or for a fixed square five of the first units that the second anchor marks, in bars and in
+    /// price, at the screen y of that price from [`Drawing::update_screen_coords`].
+    pub(super) fn gann_square_corner(&self, first: Pos2, second: Pos2) -> Pos2 {
+        if self.tool_type != DrawingToolType::GannFixed {
+            return second;
+        }
+        let corner = first + (second - first) * GANN_SQUARE_UNITS;
+        // Five units of price are not five times the first unit's height on a logarithmic scale.
+        match self.level_ys[..] {
+            [y] => Pos2::new(corner.x, y),
+            _ => corner,
+        }
+    }
+
     /// The stored configuration, or the tool's defaults without building them each frame.
     pub(super) fn gann_config(&self) -> &GannConfig {
         static BOX: LazyLock<GannConfig> =
@@ -305,7 +310,7 @@ impl Drawing {
         let &[start, second, ..] = self.points.as_slice() else {
             return;
         };
-        let corner = gann_square_corner(self.tool_type, start, second);
+        let corner = self.gann_square_corner(start, second);
         let rect = Rect::from_two_pos(start, corner);
         let config = self.gann_config();
         let at = |u: f32, v: f32| {
@@ -355,8 +360,16 @@ impl Drawing {
         }
         if config.show_grid {
             let drawn = |l: &&GannLevel| l.visible && (0.0..=GANN_SQUARE_UNITS).contains(&l.value);
+            // A fixed square's price levels lie at whole first units of price, which a
+            // logarithmic scale spaces unevenly.
+            let level_y = |units: f32| match (self.tool_type, &self.chart_points[..]) {
+                (DrawingToolType::GannFixed, [a, b, ..]) => {
+                    (view.price_to_y)(a.price + (b.price - a.price) * f64::from(units))
+                }
+                _ => at(0.0, units).y,
+            };
             for level in config.price_levels.iter().filter(drawn) {
-                painter.hline(rect.x_range(), at(0.0, level.value).y, stroke(level));
+                painter.hline(rect.x_range(), level_y(level.value), stroke(level));
             }
             for level in config.time_levels.iter().filter(drawn) {
                 painter.vline(at(level.value, 0.0).x, rect.y_range(), stroke(level));
@@ -379,12 +392,12 @@ impl Drawing {
         let [a, b, ..] = self.chart_points.as_slice() else {
             return;
         };
-        let (far_price, units) = if self.tool_type == DrawingToolType::GannFixed {
-            ((view.y_to_price)(corner.y), f64::from(GANN_SQUARE_UNITS))
+        let units = if self.tool_type == DrawingToolType::GannFixed {
+            f64::from(GANN_SQUARE_UNITS)
         } else {
-            (b.price, 1.0)
+            1.0
         };
-        let range = (far_price - a.price).abs();
+        let range = (b.price - a.price).abs() * units;
         let bars = f64::from((b.bar_idx - a.bar_idx).abs()) * units;
         if range.is_finite() && bars.is_finite() {
             let decimals = crate::scales::price_decimals(a.price);
@@ -814,13 +827,41 @@ mod tests {
             }
         }
 
-        for (tool, second) in [
-            (DrawingToolType::GannSquare, ChartPoint::new(10.0, 120.0)),
-            (DrawingToolType::GannFixed, ChartPoint::new(2.0, 104.0)),
-        ] {
+        // On a logarithmic scale a fixed square still spans five units of price: from 100 with a
+        // first unit of 10 over 2 bars its far corner is at 150, not 100 * 1.1^5 = 161.05.
+        let linear = |p: f64| 300.0 - p as f32;
+        let log = |p: f64| 300.0 - 100.0 * p.ln() as f32;
+        let cases: [(_, _, &dyn Fn(f64) -> f32, _); 3] = [
+            (
+                DrawingToolType::GannSquare,
+                ChartPoint::new(10.0, 120.0),
+                &linear,
+                "20.00\n10 bars\n2.0000/bar",
+            ),
+            (
+                DrawingToolType::GannFixed,
+                ChartPoint::new(2.0, 104.0),
+                &linear,
+                "20.00\n10 bars\n2.0000/bar",
+            ),
+            (
+                DrawingToolType::GannFixed,
+                ChartPoint::new(2.0, 110.0),
+                &log,
+                "50.00\n10 bars\n5.0000/bar",
+            ),
+        ];
+        for (tool, second, price_to_y, want) in cases {
             let mut drawing = Drawing::new(0, tool);
             drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), second];
-            drawing.update_screen_coords(|b| b * 10.0, |p| 300.0 - p as f32);
+            drawing.update_screen_coords(|b| b * 10.0, price_to_y);
+            let far = 100.0 + (second.price - 100.0) * 10.0 / f64::from(second.bar_idx);
+            let corner = Pos2::new(100.0, price_to_y(far));
+            let want_rect = Rect::from_two_pos(drawing.points[0], corner);
+            let outline = drawing.outline(Rect::EVERYTHING).unwrap();
+            assert_eq!(Rect::from_points(&outline.areas[0]), want_rect, "{want}");
+            let bounds = drawing.paint_bounds().unwrap();
+            assert!(bounds.contains_rect(want_rect), "{want}: {bounds:?}");
             let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
             let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                 drawing.render(
@@ -832,19 +873,18 @@ mod tests {
                         bars: &[],
                         revision: 0,
                         bar_to_x: &|b| b * 10.0,
-                        price_to_y: &|p| 300.0 - p as f32,
-                        y_to_price: &|y| 300.0 - f64::from(y),
+                        price_to_y,
+                        y_to_price: &|_| f64::NAN,
                         time_axis: true,
                         executions: None,
                     },
                 )
             });
             let labelled = output.shapes.iter().any(|shape| {
-                matches!(&shape.shape, egui::Shape::Text(text)
-                    if text.galley.text() == "20.00\n10 bars\n2.0000/bar")
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == want)
             });
             output.drop_without_applying_deltas();
-            assert!(labelled, "{tool:?}");
+            assert!(labelled, "{tool:?}: {want}");
         }
     }
 

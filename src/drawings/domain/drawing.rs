@@ -8,6 +8,7 @@
 //! Note: Rendering methods are in the rendering module, not here.
 //! This keeps the domain layer pure and testable.
 
+use super::gann::GANN_SQUARE_UNITS;
 use super::{
     ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig,
     GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing, RegressionTrendConfig,
@@ -92,8 +93,9 @@ pub struct Drawing {
     /// Persistent chart coordinates (bar_idx, price) - stable across pan/zoom
     #[serde(skip)]
     pub chart_points: Vec<ChartPoint>,
-    /// Screen y of each visible level of a Fibonacci retracement or extension, in config order
-    /// (empty for other tools); rebuilt with `points` by [`Self::update_screen_coords`]
+    /// Screen y of each visible level of a Fibonacci retracement or extension, in config order,
+    /// or of the far corner of a fixed Gann square (empty for other tools); rebuilt with `points`
+    /// by [`Self::update_screen_coords`]
     #[serde(skip)]
     pub level_ys: Vec<f32>,
     /// Position as fractions of the pane width and height for anchored text.
@@ -346,10 +348,18 @@ impl Drawing {
             let y = price_to_y(cp.price);
             self.points.push(egui::Pos2::new(x, y));
         }
-        self.level_ys = self
-            .fib_levels()
-            .map(|(_, prices)| prices.into_iter().map(&price_to_y).collect())
-            .unwrap_or_default();
+        self.level_ys = match (self.tool_type, &self.chart_points[..]) {
+            // Five of the first units in price, which a logarithmic scale does not keep linear.
+            (DrawingToolType::GannFixed, [a, b, ..]) => {
+                vec![price_to_y(
+                    a.price + (b.price - a.price) * f64::from(GANN_SQUARE_UNITS),
+                )]
+            }
+            _ => self
+                .fib_levels()
+                .map(|(_, prices)| prices.into_iter().map(&price_to_y).collect())
+                .unwrap_or_default(),
+        };
     }
 
     /// Rebuilds anchored text coordinates relative to the pane. Call after
