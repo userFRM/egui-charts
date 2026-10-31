@@ -5,13 +5,22 @@
 //! - Weak magnet: snap within a pixel threshold
 //! - Strong magnet: nearest OHLC of the bar under the pointer
 //! - Snap to indicators: include visible study values
+//!
+//! The first switch-on from the toolbar shows a card beside the button that explains snapping,
+//! until its button dismisses it.
 
 use crate::icons::icons;
+use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use crate::ui::drawing_toolbar::DrawingToolbarAction;
 use crate::ui::drawing_toolbar::components::icon_button::draw_latched_button;
 use crate::ui::drawing_toolbar::state::MagnetType;
 use crate::ui::drawing_toolbar::submenu_builder::SubmenuBuilder;
-use egui::{Response, Ui};
+use egui::{Id, Rect, Response, RichText, Ui, Vec2};
+
+/// Width of the magnet card's text: the explanation in two lines and the way to switch the
+/// magnet off in one, at the 13 point interface size.
+const HINT_TEXT_WIDTH: f32 = 260.0;
 
 /// Magnet button with dropdown component.
 pub struct MagnetButton;
@@ -61,5 +70,47 @@ impl MagnetButton {
             )
             .checked(snap_to_indicators)
             .show()
+    }
+
+    /// Show the card that explains the magnet right of `anchor`, the magnet button, with its top
+    /// level with the button, in the accent colours of the active theme. It takes no focus; its
+    /// button is in the Tab order. Returns true when the button dismisses the card.
+    pub(crate) fn show_hint(ui: &Ui, anchor: Rect) -> bool {
+        let theme = ui.active_theme();
+        let ctx = ui.ctx();
+        egui::Area::new(Id::NULL.with("drawing_toolbar_magnet_hint"))
+            .order(egui::Order::Foreground)
+            .enabled(ui.is_enabled())
+            .fixed_pos(anchor.right_top() + Vec2::new(theme.spacing.sm, 0.0))
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(theme.ui.accent)
+                    .corner_radius(theme.radius.md)
+                    .inner_margin(theme.spacing.xl)
+                    .shadow(ui.visuals().popup_shadow)
+                    .show(ui, |ui| {
+                        ui.set_width(HINT_TEXT_WIDTH);
+                        ui.spacing_mut().item_spacing.y = theme.spacing.lg;
+                        for text in [
+                            "Drawing points snap to the open, high, low or close of the nearest bar.",
+                            "Click the magnet again to turn it off.",
+                        ] {
+                            ui.label(
+                                RichText::new(l10n::text(ctx, text)).color(theme.ui.accent_text),
+                            );
+                        }
+                        let response = ui.add(
+                            egui::Button::new(
+                                RichText::new(l10n::text(ctx, "Got it")).color(theme.ui.accent),
+                            )
+                            .fill(theme.ui.accent_text)
+                            .corner_radius(theme.radius.sm),
+                        );
+                        crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.sm);
+                        response.clicked()
+                    })
+                    .inner
+            })
+            .inner
     }
 }

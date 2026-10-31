@@ -41,6 +41,11 @@ pub struct ToolbarState {
     pub magnet_type: MagnetType,
     /// Whether magnet targets include visible study plots; independent of its strength.
     pub snap_to_indicators: bool,
+    /// Whether the user dismissed the card that explains the magnet. Until then the card shows
+    /// beside the magnet button each time the user switches snapping on from the toolbar. Keep it
+    /// with the user's settings, as `UserSettings::magnet_hint_dismissed`; set it to leave the
+    /// card out.
+    pub magnet_hint_dismissed: bool,
     /// Stay in drawing mode after placing tool
     pub stay_in_drawing_mode: bool,
     /// Currently selected drawing color
@@ -108,6 +113,7 @@ impl Default for ToolbarState {
             magnet_mode: false,
             magnet_type: MagnetType::Strong, // Default to strong magnet
             snap_to_indicators: true,
+            magnet_hint_dismissed: false,
             stay_in_drawing_mode: false,
             drawing_color: [242, 54, 69, 255], // Default red
             show_color_picker: false,

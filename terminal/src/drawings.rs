@@ -174,8 +174,10 @@ impl Terminal {
                 for chart in &mut self.charts {
                     chart.drawings_mut().tool_defaults = defaults.iter().cloned().collect();
                 }
+                self.drawings.toolbar.state.magnet_hint_dismissed |= settings.magnet_hint_dismissed;
             }
             Direction::Save => {
+                settings.magnet_hint_dismissed = self.drawings.toolbar.state.magnet_hint_dismissed;
                 settings.drawing_defaults = self
                     .chart()
                     .drawings()

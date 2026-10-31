@@ -250,6 +250,7 @@ Drawings,Drawing management,Edit anchors with handles and move a drawing,done,li
 Drawings,Drawing management,Hide and show drawings,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/ui/drawing_toolbar/utilities/hide_menu.rs
 Drawings,Drawing management,Lock all drawings,done,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Lock and unlock a drawing,done,library,src/widget/tool_interaction/selection.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/widget/frame.rs;src/drawings/manager/interaction.rs
+Drawings,Drawing management,Magnet explanation card,done,library,src/ui/drawing_toolbar/utilities/magnet.rs;src/ui/drawing_toolbar/toolbar/mod.rs;src/services/settings.rs
 Drawings,Drawing management,Magnet modes,done,library,src/widget/tool_interaction/mod.rs;src/drawings/services/snap.rs;src/drawings/manager/mod.rs;src/widget/tool_interaction/interaction.rs;src/widget/tool_interaction/selection.rs;src/ui/drawing_toolbar/utilities/magnet.rs;src/ui/drawing_toolbar/toolbar/mod.rs
 Drawings,Drawing management,Move selected drawings with arrow keys,done,library,src/widget/keyboard.rs;src/drawings/manager/mod.rs
 Drawings,Drawing management,Multi-select drawings,done,library,src/widget/tool_interaction/selection.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
