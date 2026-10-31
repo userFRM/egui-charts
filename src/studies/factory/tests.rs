@@ -160,7 +160,7 @@ fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
     let mut duplicates = Vec::new();
     for name in names {
         let mut study = factory.create(&name).unwrap();
-        if study.order_flow_input().is_some() {
+        if !study.order_flow_inputs().is_empty() {
             continue;
         }
         // External series have no values until the host supplies their distinct inputs.

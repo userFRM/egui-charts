@@ -64,10 +64,10 @@ impl Chart {
 
         let mut inputs: Vec<crate::data::OrderFlowInput> = Vec::new();
         for study in self.studies.indicators() {
-            if let Some(input) = study.order_flow_input()
-                && !inputs.iter().any(|old| input.same_source(old))
-            {
-                inputs.push(input);
+            for input in study.order_flow_inputs() {
+                if !inputs.iter().any(|old| input.same_source(old)) {
+                    inputs.push(input.clone());
+                }
             }
         }
         if inputs.len() != link.study_inputs.len()
@@ -87,7 +87,8 @@ impl Chart {
                     if let Some(seen) = seen {
                         (input.clone(), seen)
                     } else {
-                        input.replace_trades(&link.clock, link.trades.iter());
+                        input.set_tick_size(link.instrument.as_ref().and_then(|i| i.tick_size));
+                        input.replace_trades(&link.clock, &link.trades);
                         if let Some(now) = link.time {
                             input.advance_time(&link.clock, now);
                         }
@@ -326,8 +327,9 @@ impl Chart {
             if revision != *seen {
                 for (at, study) in self.studies.indicators().iter().enumerate() {
                     if study
-                        .order_flow_input()
-                        .is_some_and(|other| input.same_source(&other))
+                        .order_flow_inputs()
+                        .iter()
+                        .any(|other| input.same_source(other))
                     {
                         let from = input.changed_since(*seen).map_or(0, |time| {
                             self.state
@@ -368,7 +370,7 @@ impl Chart {
         self.state.price_scale_mut().set_price_precision(None);
         link.trades = Trades::new(TRADE_CAPACITY);
         for study in self.studies.indicators() {
-            if let Some(input) = study.order_flow_input() {
+            for input in study.order_flow_inputs() {
                 input.clear();
             }
         }
@@ -454,6 +456,9 @@ impl Chart {
             self.request_latest(link);
         }
         let tick_size = link.instrument.as_ref().and_then(|i| i.tick_size);
+        for (input, _) in &link.study_inputs {
+            input.set_tick_size(tick_size);
+        }
         let sink = link.inbox.subscribe(
             self.symbol.clone(),
             link.clock.clone(),
@@ -600,7 +605,7 @@ impl Chart {
         self.feed.rejected_bars += link.trades.prepend(page.trades, fold);
         if changed {
             for (input, _) in &link.study_inputs {
-                input.replace_trades(&link.clock, link.trades.iter());
+                input.replace_trades(&link.clock, &link.trades);
             }
             if link.footprint.is_some() {
                 link.footprint = link.footprint();

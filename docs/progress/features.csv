@@ -476,7 +476,7 @@ Order flow,Order flow data model,Level 2 order book snapshots,done,library,src/m
 Order flow,Order flow data model,Market-by-order events,done,library,src/data/orders.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs
 Order flow,Order flow data model,Memory bounds for trade and depth history,done,library,src/data/trades.rs;src/data/depth_history.rs;src/chart/overlays/volume_bubbles.rs;src/widget/feed/mod.rs;src/data/footprint.rs;src/data/depth.rs
 Order flow,Order flow data model,Order book reconstruction from updates,done,library,src/data/depth.rs;src/model/quote.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
-Order flow,Order flow data model,Order-flow inputs to studies,partial,library,src/studies/indicator_trait.rs;src/data/order_flow.rs;src/widget/feed/mod.rs;src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/widget/feed/pump.rs;src/widget/studies.rs
+Order flow,Order flow data model,Order-flow inputs to studies,done,library,src/studies/indicator_trait.rs;src/data/order_flow.rs;src/widget/feed/mod.rs;src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/widget/feed/pump.rs;src/widget/studies.rs;src/widget/replay.rs
 Order flow,Order flow data model,Recording ticks and depth to disk for later sessions and replay,done,library,src/data/recording.rs;src/data/mod.rs
 Order flow,Order flow data model,Replay clock merging trades and book events in timestamp order,done,library,src/data/replay.rs;src/data/mod.rs
 Order flow,Order flow data model,Streaming path that delivers trades into the chart,done,library,src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/mod.rs;src/widget/frame.rs;src/data/inbox/sink.rs;src/data/trades.rs;benches/regression/mod.rs;benches/check-regressions.sh

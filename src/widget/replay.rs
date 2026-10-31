@@ -72,9 +72,11 @@ impl Chart {
                 self.session_quote = replay.session_quote;
                 self.set_feed_paused(replay.feed_paused);
                 self.invalidate_study_data();
+                self.replay_order_flow(replay.time);
             }
             return;
         };
+        let previous = self.replay.as_ref().map(|replay| replay.time);
         let rewind = self.replay.as_ref().is_none_or(|replay| time < replay.time);
         if let Some(replay) = &mut self.replay {
             if replay.time == time {
@@ -100,6 +102,7 @@ impl Chart {
             self.set_feed_paused(true);
         }
         self.apply_replay_window();
+        self.replay_order_flow(previous.map_or(time, |previous| previous.min(time)));
         // Studies on other histories see the bars completed by the new cursor.
         self.invalidate_study_data();
         if rewind {
@@ -138,6 +141,28 @@ impl Chart {
         }
         self.apply_replay_window();
         true
+    }
+
+    /// Applies the replay cutoff, or its end, to the order-flow inputs of the studies, which the
+    /// paused feed no longer updates, and recalculates those studies from the bar containing
+    /// `since`, the earlier of the old and the new cutoff.
+    fn replay_order_flow(&mut self, since: DateTime<Utc>) {
+        let time = self.replay_time();
+        let link = self.feed_link.as_ref();
+        let clock = link.map_or_else(|| self.bar_clock(), |link| link.clock.clone());
+        let trades = link.map(|link| &link.trades);
+        let open = clock.bar_open(since);
+        let from = (self.state.data().bars).partition_point(|bar| clock.bar_open(bar.time) < open);
+        for (at, study) in self.studies.indicators().iter().enumerate() {
+            let inputs = study.order_flow_inputs();
+            if inputs.is_empty() {
+                continue;
+            }
+            for input in inputs {
+                input.set_replay(&clock, time, trades);
+            }
+            self.pending_from[at] = Some(self.pending_from[at].map_or(from, |old| old.min(from)));
+        }
     }
 
     pub(super) fn apply_replay_window(&mut self) {
