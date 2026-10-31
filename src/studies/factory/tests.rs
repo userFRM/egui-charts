@@ -208,8 +208,7 @@ fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
     assert_eq!(duplicates, ["ADX and DMI"]);
 }
 
-/// The study browser opens the channel studies with their usual inputs, and every band they
-/// fill lies between two of their drawn plots in a colour that shows.
+/// The study browser opens these studies with the lengths most often used for them.
 #[test]
 fn catalogue_studies_open_with_their_usual_lengths() {
     let rows = [
@@ -238,6 +237,8 @@ fn catalogue_studies_open_with_their_usual_lengths() {
     }
 }
 
+/// The study browser opens the channel studies with their usual inputs, and every band they
+/// fill lies between two of their drawn plots in a colour that shows.
 #[test]
 fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
     use crate::studies::{FillBoundary, InputValue};

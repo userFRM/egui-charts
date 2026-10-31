@@ -973,8 +973,6 @@ struct Edge {
     tail: Option<Bar>,
 }
 
-/// `bars` without the invalid ones, sorted by time, with the last of several bars of one slot of
-/// `clock`; and the number of invalid bars dropped.
 /// The typed events studies read, without the mark source page an export froze at their end: a page
 /// covers only the visible range, so restarts on it would move while scrolling.
 fn held_events(
@@ -984,6 +982,8 @@ fn held_events(
     &events[..events.len().saturating_sub(frozen)]
 }
 
+/// `bars` without the invalid ones, sorted by time, with the last of several bars of one slot of
+/// `clock`; and the number of invalid bars dropped.
 pub(super) fn clean(bars: Vec<Bar>, clock: &BarClock) -> (Vec<Bar>, u64) {
     // Bars already in order pass as they are, without the copy through the merge.
     let slot = |bar: &Bar| clock.bar_open(bar.time);
