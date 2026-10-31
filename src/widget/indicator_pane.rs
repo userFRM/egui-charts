@@ -1626,12 +1626,12 @@ mod tests {
         let ctx = egui::Context::default();
         crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::dark());
         // Band edges and guide ys, not inverted and inverted, on a 100 point high pane of 0..100.
-        let rows: [(_, &dyn Indicator, [(f32, f32); 2], [&[f32]; 2], _, _, _); 2] = [
+        let rows = [
             (
                 config,
-                &bare,
+                &bare as &dyn Indicator,
                 [(30.0, 70.0), (30.0, 70.0)],
-                [&[30.0, 70.0], &[30.0, 70.0]],
+                [&[30.0, 70.0][..], &[30.0, 70.0]],
                 crate::studies::palette::GRAY,
                 4.0,
                 Color32::from_rgba_unmultiplied(126, 87, 194, 26),
@@ -1640,7 +1640,7 @@ mod tests {
                 IndicatorPaneConfig::from_study(&edited),
                 &edited,
                 [(20.0, 70.0), (30.0, 80.0)],
-                [&[20.0], &[80.0]],
+                [&[20.0][..], &[80.0]],
                 Color32::WHITE,
                 8.0,
                 Color32::from_rgba_unmultiplied(1, 2, 3, 40),
