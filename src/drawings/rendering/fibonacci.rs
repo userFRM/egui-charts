@@ -87,7 +87,7 @@ fn level_galley(
     });
     painter.layout_no_wrap(
         text,
-        egui::FontId::proportional(typography::SM),
+        egui::FontId::proportional(typography::SM_MD),
         level_color(level),
     )
 }

@@ -415,8 +415,10 @@ impl FibonacciConfig {
         }
     }
 
-    /// Initial levels for a tool. Existing drawings without a stored config keep their
-    /// original renderer defaults; new tools store this table when constructed.
+    /// Initial levels for a tool, each in its own colour, with the background on at 20%.
+    /// Retracements, extensions and channels list further ratios hidden. Existing drawings
+    /// without a stored config keep their original renderer defaults; new tools store this
+    /// table when constructed.
     pub fn for_tool(tool: super::DrawingToolType) -> Self {
         use super::DrawingToolType as T;
         let grey = [128, 128, 128, 255];
@@ -467,13 +469,58 @@ impl FibonacciConfig {
                 (4.236, pink),
                 (4.618, red),
             ],
-            T::FibonacciWedge => {
-                let mut config = Self::default();
-                config.levels.retain(|l| l.value != 0.0);
-                config.show_levels = Some(true);
-                return config;
+            T::FibonacciRetracement
+            | T::FibonacciExtension
+            | T::FibonacciChannel
+            | T::FibonacciWedge => {
+                let mut levels: Vec<(f32, _, _)> = [
+                    (0.0, grey),
+                    (0.236, red),
+                    (0.382, orange),
+                    (0.5, green),
+                    (0.618, teal),
+                    (0.786, cyan),
+                    (1.0, grey),
+                    (1.618, blue),
+                    (2.618, red),
+                    (3.618, purple),
+                    (4.236, pink),
+                ]
+                .map(|(value, color)| (value, color, true))
+                .to_vec();
+                if tool == T::FibonacciWedge {
+                    levels.retain(|level| level.0 != 0.0);
+                    levels.push((4.618, red, true));
+                    for level in &mut levels {
+                        level.2 = level.0 <= 1.0;
+                    }
+                } else {
+                    // Further ratios, listed hidden so they can be switched on without typing.
+                    let spare = [
+                        1.272, 1.414, 2.0, 2.272, 2.414, 3.0, 3.272, 3.414, 4.0, 4.272, 4.414,
+                        4.618, 4.764,
+                    ];
+                    let colors = [red, orange, green, teal, cyan, blue, purple, pink];
+                    levels.extend(
+                        (spare.into_iter().zip(colors.into_iter().cycle()))
+                            .map(|(value, color)| (value, color, false)),
+                    );
+                    levels.sort_by(|a, b| a.0.total_cmp(&b.0));
+                }
+                return Self {
+                    levels: levels
+                        .into_iter()
+                        .map(|(value, color, visible)| FibonacciLevel {
+                            visible,
+                            ..FibonacciLevel::new(value, "", color)
+                        })
+                        .collect(),
+                    show_background: true,
+                    background_opacity: 51,
+                    show_levels: (tool == T::FibonacciWedge).then_some(true),
+                    ..Self::default()
+                };
             }
-            T::FibonacciExtension => return Self::extension_default(),
             _ => return Self::default(),
         };
         Self {
