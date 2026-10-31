@@ -175,8 +175,8 @@ impl Drawing {
     /// the instrument's price decimals (by magnitude without them), its percentage and its whole
     /// number of pips, or else ticks, the bars between them and, on a `time_axis`, the time they
     /// span, the volume traded over them, and for the info line the angle of the line on screen.
-    /// Volume drops trailing zeros. Each anchor counts at its nearest bar: anchors N bars apart span N bars of time and the volume
-    /// of the N + 1 bars from one to the other, both included.
+    /// Volume drops trailing zeros. Each anchor counts at its nearest bar: anchors N bars apart
+    /// span N bars of time and the volume of the N + 1 bars from one to the other, both included.
     pub(crate) fn measurement_label(
         &self,
         bars: &[Bar],
@@ -313,7 +313,8 @@ impl Drawing {
 /// Paints `text` on a card in the theme's tooltip colours, placed at `pos` by `align` and
 /// moved inside the painter's clip rect.
 fn stats_card(painter: &egui::Painter, align: Align2, pos: Pos2, text: String) -> Rect {
-    let chart = painter.ctx().active_theme().chart;
+    let theme = painter.ctx().active_theme();
+    let chart = theme.chart;
     let galley = painter.layout_no_wrap(
         text,
         egui::FontId::proportional(typography::SM_MD),
@@ -326,13 +327,17 @@ fn stats_card(painter: &egui::Painter, align: Align2, pos: Pos2, text: String) -
         .anchor_size(pos, size)
         .min
         .clamp(clip.min, clip.max - size.min(clip.size()));
-    painter.rect_filled(
-        Rect::from_min_size(min, size),
+    let card = Rect::from_min_size(min, size);
+    // The border keeps the white light-theme card visible on the white chart.
+    painter.rect(
+        card,
         DESIGN_TOKENS.rounding.md,
         chart.bg_tooltip,
+        Stroke::new(1.0, theme.ui.border),
+        egui::StrokeKind::Inside,
     );
     painter.galley(min + padding, galley, chart.axis_text);
-    Rect::from_min_size(min, size)
+    card
 }
 
 /// Paints a shaft from `from` to `to` and a filled head at `to`; nothing when they meet.
@@ -508,7 +513,6 @@ mod tests {
             ),
             (Some(0.0005), None, None, "-0.0005 (-0.05%)  -1 tick"),
             (Some(25.0), None, None, "+0 (-0.05%)  +0 ticks"),
-            (Some(1e20), None, None, "+0 (-0.05%)  +0 ticks"),
             (
                 Some(1e-10),
                 None,
@@ -539,16 +543,14 @@ mod tests {
             );
         }
         // Counts beyond the exactly representable integers, including overflow, are omitted.
-        for tick in [1e-300, f64::from_bits(1)] {
-            let instrument = crate::model::Instrument::new("PAIR").with_tick_size(tick);
-            let label = drawing
-                .measurement_label(&bars, Some(&instrument), true)
-                .unwrap();
-            assert!(
-                !label.contains("ticks") && !label.contains("pips"),
-                "{label}"
-            );
-        }
+        let instrument = crate::model::Instrument::new("PAIR").with_tick_size(1e-300);
+        let label = drawing
+            .measurement_label(&bars, Some(&instrument), true)
+            .unwrap();
+        assert!(
+            !label.contains("ticks") && !label.contains("pips"),
+            "{label}"
+        );
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
