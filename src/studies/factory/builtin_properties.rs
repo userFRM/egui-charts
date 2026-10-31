@@ -356,10 +356,18 @@ fn every_update_equals_a_fresh_calculate() {
     let zigzag_labels = || -> Box<dyn Indicator> {
         Box::new(ZigZag::new(1.0, 2).with_labels(true, Some(ZigZagChange::Price), true))
     };
+    let session_labels = || -> Box<dyn Indicator> {
+        Box::new(
+            TradingSessions::new()
+                .with_labels(true, true, true)
+                .with_lines(true, true, true),
+        )
+    };
     let mut studies = builtins_with(|k| 3 + 2 * k, |v| v);
     studies.push(tokyo_week());
     studies.push(pivot_labels());
     studies.push(zigzag_labels());
+    studies.push(session_labels());
     for study in &studies {
         if matches!(
             study.name(),
@@ -376,6 +384,7 @@ fn every_update_equals_a_fresh_calculate() {
     twins.push(tokyo_week());
     twins.push(pivot_labels());
     twins.push(zigzag_labels());
+    twins.push(session_labels());
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     let mut data = Vec::<Bar>::new();
     for event in 0..200 {

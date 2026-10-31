@@ -720,7 +720,7 @@ Studies,Indicators,TRIX,done,library,src/studies/builtin/trix.rs;src/studies/fac
 Studies,Indicators,Technical Ratings,partial,library,src/studies/builtin/technical_ratings.rs;src/studies/builtin/stochastic.rs;src/studies/builtin/cci.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs;src/studies/table.rs;src/widget/indicator_pane.rs
 Studies,Indicators,Time Price Opportunity,done,library,src/studies/builtin/time_price_opportunity.rs;src/model/tpo.rs;src/widget/frame.rs;src/chart/rendering/candles/tpo.rs;src/tokens/mod.rs;src/tokens/semantic.rs
 Studies,Indicators,Time Weighted Average Price,done,library,src/studies/builtin/twap.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Trading Sessions,done,library,src/studies/builtin/trading_sessions.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Trading Sessions,done,library,src/studies/builtin/trading_sessions.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/chart/indicators/plots.rs
 Studies,Indicators,Trend Strength Index,partial,library,src/studies/builtin/linear_regression_channel.rs
 Studies,Indicators,Triple EMA,done,library,src/studies/builtin/tema.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,True Strength Index,done,library,src/studies/builtin/true_strength.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
