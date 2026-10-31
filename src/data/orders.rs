@@ -294,6 +294,29 @@ impl OrderQueue {
             .collect()
     }
 
+    /// The levels of [`largest_orders`](Self::largest_orders), one order each: what a depth
+    /// history of individual orders records next to the sums of [`filtered`](Self::filtered).
+    pub(crate) fn largest_levels(&self, filter: &OrderFilter) -> OrderBook {
+        let largest = self.largest_orders(filter);
+        let levels = |side| {
+            largest
+                .iter()
+                .filter(|o| o.side == side)
+                .map(|o| OrderBookLevel {
+                    price: o.price,
+                    size: o.size,
+                    order_cnt: Some(1),
+                })
+                .collect()
+        };
+        OrderBook {
+            ts: self.time,
+            symbol: String::new(),
+            bids: levels(OrderSide::Buy),
+            asks: levels(OrderSide::Sell),
+        }
+    }
+
     fn sum(&self, symbol: String, filter: &OrderFilter) -> OrderBook {
         let mut bids: BTreeMap<u64, OrderBookLevel> = BTreeMap::new();
         let mut asks: BTreeMap<u64, OrderBookLevel> = BTreeMap::new();

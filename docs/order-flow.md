@@ -31,7 +31,8 @@ backend limit. The current book appears as a size profile at the right of the pa
 `set_volume_bubbles(Some(Default::default()))` overlays executed volume using the same feed's
 trades. Disabling the heatmap releases its textures and retains configured depth history.
 Hosts composing their own panes can retain `chart::overlays::LiquidityHeatmap` and call `render`
-with their price mapping and time-to-x conversion.
+with their price mapping, time-to-x conversion and `OrderBookView`, whose size tiers mark large
+orders.
 
 ### Individual orders
 
@@ -59,8 +60,14 @@ unfiltered sizes as filtered ones. `OrderFilterUnavailable` names the reason.
 (`BookProfile::Total`) and the largest known individual order there (`LargestOrder`).
 `OrderBookView::tiers` sets two sizes, notable and large: a price whose largest known order
 reaches one is drawn in that tier's colour, in the profile and in the ladder's size cell. A price
-without order data is not highlighted. The heatmap's columns are aggregate sizes per price and are
-not highlighted.
+without order data is not highlighted.
+
+The heatmap marks its cells with the same tiers and colours. A history of individual orders
+(`DepthHistoryConfig::orders`, `Some(OrderFilter::default())` for every order) records the largest
+accepted order of each row in `DepthColumn::largest_bid_orders` and `largest_ask_orders`, and a
+cell whose largest order reaches a tier takes that tier's colour over its shading. A merged column
+keeps the larger of the two, so a large order stays marked at every zoom, over the whole span of
+the merged column. A history of aggregate depth records no order and marks no cell.
 
 ### Large books at 50 ms
 
@@ -103,7 +110,8 @@ into a depth column. A frame includes layout, painting, applying the update and 
 the chart draws about 1,000 columns of 2,000 rows in those frames. The upload of one frame is at
 most 74 KB once the history is full, and the first frame that draws a loaded history uploads all
 of it (2.4 MB here). A filled history holds 1,687 columns covering 50 minutes, bounded by
-`columns * 8 * rows * 2 * 16` bytes, 61 MB for this configuration.
+`columns * 8 * rows * 2 * 16` bytes, 61 MB for this configuration. A history of individual orders
+also records each row's largest order: 24 bytes a row instead of 16.
 
 The supported budget is this configuration on a machine of that class: a frame under 5 ms and
 under 60 MB of heap for 1,000 levels at 50 ms. The library degrades by dropping resolution, never

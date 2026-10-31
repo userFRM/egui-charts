@@ -21,9 +21,10 @@ pub enum BookProfile {
 }
 
 /// How the live book is shown by the heatmap's profile and by a depth ladder: which individual
-/// orders count, what a bar measures, and which orders are highlighted. The defaults show the
-/// aggregate book as the feed sends it. Serializable, so a host can keep it with its chart
-/// settings; fields missing from older documents take their defaults.
+/// orders count, what a bar measures, and which orders are highlighted. Its tiers also mark the
+/// heatmap's cells. The defaults show the aggregate book as the feed sends it. Serializable, so a
+/// host can keep it with its chart settings; fields missing from older documents take their
+/// defaults.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OrderBookView {
@@ -33,7 +34,9 @@ pub struct OrderBookView {
     /// What a bar of the profile measures.
     pub profile: BookProfile,
     /// Highlights a price whose largest known individual order reaches a tier. A price without
-    /// order data, as with an aggregate feed, is not highlighted and not reported as small.
+    /// order data, as with an aggregate feed, is not highlighted and not reported as small. The
+    /// liquidity heatmap marks its cells by the largest order its history recorded in the row, see
+    /// [`DepthColumn::largest_bid_orders`](crate::data::DepthColumn::largest_bid_orders).
     pub tiers: Option<OrderSizeTiers>,
     /// Colours of the notable and the large tier.
     pub tier_colors: [Color32; 2],

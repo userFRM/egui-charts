@@ -682,25 +682,27 @@ impl Live {
         {
             return;
         }
-        // The orders a filtered history samples, summed as they stood before this update, only
-        // when the update opens a period.
+        // The orders a filtered history samples, summed and the largest at each price, as they
+        // stood before this update, only when the update opens a period.
         let mut filtered = Book::new(self.tick_size);
-        let book = match &sampler.config.orders {
+        let mut largest = Book::new(self.tick_size);
+        let (book, largest) = match &sampler.config.orders {
             Some(filter) if sampler.due(ts) => {
-                let levels = self
-                    .orders
-                    .as_ref()
-                    .and_then(|queue| queue.filtered(&self.symbol, filter).ok());
-                let Some(levels) = levels else {
+                let levels = self.orders.as_ref().and_then(|queue| {
+                    let summed = queue.filtered(&self.symbol, filter).ok()?;
+                    Some((summed, queue.largest_levels(filter)))
+                });
+                let Some((summed, sizes)) = levels else {
                     sampler.lose();
                     return;
                 };
-                let _ = filtered.snapshot(0, levels);
-                &filtered
+                let _ = filtered.snapshot(0, summed);
+                let _ = largest.snapshot(0, sizes);
+                (&filtered, Some(&largest))
             }
-            _ => &self.book,
+            _ => (&self.book, None),
         };
-        if let Some(column) = sampler.sample(ts, book) {
+        if let Some(column) = sampler.sample(ts, book, largest) {
             let columns = &mut self.updates.depth_columns;
             if columns.len() == sampler.config.columns {
                 columns.pop_front();

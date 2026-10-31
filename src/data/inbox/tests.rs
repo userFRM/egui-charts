@@ -765,6 +765,7 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
         span: TimeDelta::seconds(span),
         bids: bids.to_vec(),
         asks: asks.to_vec(),
+        ..Default::default()
     };
     assert_eq!(
         Vec::from(updates.depth_columns),
@@ -779,6 +780,60 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
     assert!(
         updates.depth_columns.is_empty(),
         "new settings discard pending old rows"
+    );
+}
+
+/// Guards the largest order of a row: a column sampled from individual orders records, next to
+/// each row's total, the largest order the filter accepts among the row's ticks, and the same
+/// book sampled as aggregate depth records none, so no heatmap cell of it can be marked.
+#[test]
+fn order_columns_record_the_largest_accepted_order_of_each_row() {
+    use crate::data::OrderFilter;
+    use crate::model::OrderSide::{Buy, Sell};
+    let time = at(1, 0);
+    let mut orders = vec![
+        RestingOrder::new(1, Buy, 99.0, 50.0),
+        RestingOrder::new(2, Buy, 99.25, 15.0),
+        RestingOrder::new(3, Buy, 99.25, 60.0).with_participant(2),
+        RestingOrder::new(4, Sell, 99.5, 30.0),
+    ];
+    orders.extend((5..10).map(|id| RestingOrder::new(id, Buy, 99.0, 10.0)));
+    let filter = OrderFilter {
+        exclude_participants: vec![2],
+        ..Default::default()
+    };
+    let mut columns = Vec::new();
+    for sampled in [Some(filter), None] {
+        let inbox = Arc::new(Inbox::default());
+        let sink = inbox.subscribe("A".into(), Timeframe::Min1.into(), 10, Some(0.25));
+        let config = DepthHistoryConfig {
+            ticks_per_row: 2,
+            orders: sampled,
+            ..Default::default()
+        };
+        inbox.sample_depth(sink.id, Some(config));
+        sink.push_order_snapshot(1, time, orders.clone());
+        let next = RestingOrder::new(10, Sell, 100.0, 1.0);
+        sink.push_order_event(2, time + TimeDelta::seconds(1), OrderEvent::Add(next));
+        let (_, mut updates) = inbox.drain().updates.pop().unwrap();
+        columns.push(updates.depth_columns.pop_front().unwrap());
+    }
+    // Ticks 396 (99.0) and 397 (99.25) make bid row 198, tick 398 (99.5) ask row 199.
+    let column = |bid, largest_bid_orders, largest_ask_orders| DepthColumn {
+        time,
+        span: TimeDelta::seconds(1),
+        bids: vec![(198, bid)],
+        asks: vec![(199, 30.0)],
+        largest_bid_orders,
+        largest_ask_orders,
+    };
+    // Accepted: 50 + 5 * 10 + 15 = 115, the largest 50; aggregate depth also counts the 60.
+    assert_eq!(
+        columns,
+        [
+            column(115.0, vec![50.0], vec![30.0]),
+            column(175.0, vec![], vec![])
+        ]
     );
 }
 

@@ -166,9 +166,14 @@ impl Book {
     }
 
     /// The best `rows` price rows of each side, bids then asks, each best first, as the row of
-    /// `ticks_per_row` integer ticks the levels fall in, rounding down, and the sum of their
-    /// sizes. `None` for a book without a tick size.
-    pub(crate) fn rows(&self, ticks_per_row: u32, rows: usize) -> Option<[Vec<(i64, f64)>; 2]> {
+    /// `ticks_per_row` integer ticks the levels fall in, rounding down, and the sizes of its
+    /// levels folded by `combine`. `None` for a book without a tick size.
+    pub(crate) fn rows(
+        &self,
+        ticks_per_row: u32,
+        rows: usize,
+        combine: fn(f64, f64) -> f64,
+    ) -> Option<[Vec<(i64, f64)>; 2]> {
         self.tick?;
         let group = |side: &Side, order: u64| {
             let mut grouped: Vec<(i64, f64)> = Vec::with_capacity(rows.min(side.len()));
@@ -176,9 +181,7 @@ impl Book {
                 let row = ((key ^ order ^ 1 << 63) as i64).div_euclid(i64::from(ticks_per_row));
                 let full = grouped.len() == rows;
                 match grouped.last_mut() {
-                    Some((last, size)) if *last == row => {
-                        *size = (*size + level.size).min(f64::MAX)
-                    }
+                    Some((last, size)) if *last == row => *size = combine(*size, level.size),
                     _ if full => break,
                     _ => grouped.push((row, level.size)),
                 }

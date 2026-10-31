@@ -1,5 +1,6 @@
 //! Retained textures of resting liquidity, one texel per sampled column and price row.
 
+use super::OrderBookView;
 use crate::chart::coords::ChartMapping;
 use crate::data::{DepthColumn, DepthHistory};
 use chrono::{DateTime, Utc};
@@ -17,20 +18,27 @@ struct Column {
 
 /// A liquidity heatmap backed by bounded texture tiles. Retain it between frames.
 ///
-/// Each column uses logarithmic contrast against its largest resting size. Empty prices and
-/// missing time periods stay transparent. Old columns release their atlas slots; new or changed
-/// columns upload only their own texels. No texture side exceeds the backend's limit.
+/// Each column uses logarithmic contrast against its largest resting size. A cell whose largest
+/// recorded order reaches a size tier of the [`OrderBookView`] takes that tier's colour over its
+/// shading. Empty prices and missing time periods stay transparent. Old columns release their
+/// atlas slots; new or changed columns upload only their own texels, and new colours or tiers
+/// upload every held column once. No texture side exceeds the backend's limit.
 #[derive(Default)]
 pub struct LiquidityHeatmap {
     columns: BTreeMap<Key, Column>,
     tiles: BTreeMap<(usize, i64), TextureHandle>,
     size: usize,
     colors: Option<[Color32; 2]>,
+    /// The size tiers, by bit pattern, and the tier colours the held texels were drawn with.
+    marks: Option<([u64; 2], [Color32; 2])>,
 }
 
 impl LiquidityHeatmap {
     /// Draws the history using the pane's price mapping and the host's time-to-x conversion.
-    /// `step` is the instrument tick size times the history's ticks per row. Buy and sell
+    /// `step` is the instrument tick size times the history's ticks per row. `view` gives the size
+    /// tiers and their colours, as for the book profile; its filter and profile do not apply, since
+    /// the history sampled the orders of its own
+    /// [`DepthHistoryConfig::orders`](crate::data::DepthHistoryConfig::orders). Buy and sell
     /// colours follow the painter's host; call with the same colours as the price series.
     pub fn render(
         &mut self,
@@ -39,6 +47,7 @@ impl LiquidityHeatmap {
         history: &DepthHistory,
         step: f64,
         time_to_x: impl Fn(DateTime<Utc>) -> Option<f32>,
+        view: &OrderBookView,
         colors: [Color32; 2],
     ) {
         if !step.is_finite() || step <= 0.0 {
@@ -46,10 +55,15 @@ impl LiquidityHeatmap {
         }
         let half_tick = step / f64::from(history.config().ticks_per_row) * 0.5;
         let size = painter.ctx().input(|i| i.max_texture_side).clamp(1, 256);
-        if self.size != size || self.colors != Some(colors) {
+        // Tiers by bit pattern, so tiers that are not numbers do not redraw every frame.
+        let marks = view
+            .tiers
+            .map(|t| ([t.notable.to_bits(), t.large.to_bits()], view.tier_colors));
+        if self.size != size || self.colors != Some(colors) || self.marks != marks {
             *self = Self {
                 size,
                 colors: Some(colors),
+                marks,
                 ..Self::default()
             };
         }
@@ -75,10 +89,19 @@ impl LiquidityHeatmap {
             );
             used.insert(slot);
             let mut pixels: BTreeMap<i64, Vec<Color32>> = BTreeMap::new();
-            let mut volumes: BTreeMap<i64, [f64; 2]> = BTreeMap::new();
-            for (side, levels) in [&source.bids, &source.asks].into_iter().enumerate() {
-                for &(row, volume) in levels {
-                    volumes.entry(row).or_default()[side] += volume;
+            // Bid size, ask size and the largest known order of each row, 0 when none is known.
+            let mut volumes: BTreeMap<i64, [f64; 3]> = BTreeMap::new();
+            for (side, (levels, largest)) in [
+                (&source.bids, &source.largest_bid_orders),
+                (&source.asks, &source.largest_ask_orders),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                for (at, &(row, volume)) in levels.iter().enumerate() {
+                    let cell = volumes.entry(row).or_default();
+                    cell[side] += volume;
+                    cell[2] = cell[2].max(largest.get(at).copied().unwrap_or(0.0));
                 }
             }
             let max = volumes.values().map(|v| v[0] + v[1]).fold(0.0, f64::max);
@@ -101,8 +124,14 @@ impl LiquidityHeatmap {
                         0.5
                     },
                 );
+                let shaded = color.gamma_multiply(intensity * 0.75);
+                // A row without a known order is never marked, whatever the tiers.
+                let tier = view
+                    .tiers
+                    .filter(|_| volume[2] > 0.0)
+                    .and_then(|tiers| tiers.tier(volume[2]));
                 pixels[row.rem_euclid(size as i64) as usize] =
-                    color.gamma_multiply(intensity * 0.75);
+                    tier.map_or(shaded, |tier| shaded.blend(view.tier_color(tier)));
             }
             let rows = pixels.keys().copied().collect();
             for (row, pixels) in pixels {
@@ -235,6 +264,7 @@ mod tests {
                     span: TimeDelta::seconds(1),
                     bids: vec![(100, 15.0)],
                     asks: vec![(101, 3.0)],
+                    ..Default::default()
                 });
             }
             let mut output = ctx.run_ui(
@@ -249,6 +279,7 @@ mod tests {
                         &history,
                         1.0,
                         |t| Some((t - start).num_seconds() as f32 * 10.0),
+                        &OrderBookView::default(),
                         [Color32::GREEN, Color32::RED],
                     );
                 },
@@ -269,6 +300,94 @@ mod tests {
                 let egui::ImageData::Color(pixels) = &uploads[0].1[0].image;
                 assert_eq!(pixels.pixels[101].a(), 96);
             }
+            output.textures_delta.clear();
+        }
+    }
+
+    /// Guards the marks: a cell takes the colour of the tier its largest recorded order reaches,
+    /// over its shading, while a row whose total alone reaches a tier and every row of aggregate
+    /// depth keep their shading, whatever the tiers. New tiers redraw the held columns once, and
+    /// unchanged ones, even when they are not numbers, upload nothing.
+    #[test]
+    fn cells_whose_largest_order_reaches_a_tier_take_its_colour() {
+        let ctx = egui::Context::default();
+        let mut history = DepthHistory::new(Default::default()).unwrap();
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0));
+        let mapping = ChartMapping::new(
+            rect,
+            10.0,
+            0,
+            10,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(95.0, 105.0),
+                0.0,
+                100.0,
+                false,
+            ),
+        );
+        let column = |second, largest_bid_orders, largest_ask_orders| DepthColumn {
+            time: start + TimeDelta::seconds(second),
+            span: TimeDelta::seconds(1),
+            bids: vec![(198, 115.0), (197, 25.0)],
+            asks: vec![(199, 30.0)],
+            largest_bid_orders,
+            largest_ask_orders,
+        };
+        // The first column knows its orders and the second is aggregate depth.
+        history.push(column(0, vec![50.0, 5.0], vec![30.0]));
+        history.push(column(1, vec![], vec![]));
+        let tiers = |notable, large| OrderBookView {
+            tiers: Some(crate::data::OrderSizeTiers { notable, large }),
+            ..Default::default()
+        };
+        let [caution, error] = OrderBookView::default().tier_colors;
+        // Rows 197, 198 and 199 against the largest total, 115: colour * 0.75 * ln(1 + total) /
+        // ln(1 + 115), so 255 * 0.75 * (3.2581 / 4.7536) = 131, 255 * 0.75 = 191 and
+        // 255 * 0.75 * (3.4340 / 4.7536) = 138.
+        let shaded = [(0, 131, 0, 131), (0, 191, 0, 191), (138, 0, 0, 138)]
+            .map(|(r, g, b, a)| Color32::from_rgba_premultiplied(r, g, b, a));
+        let mut heatmap = LiquidityHeatmap::default();
+        for (view, expected) in [
+            (OrderBookView::default(), vec![shaded, shaded]),
+            // Row 197 stays shaded: its total of 25 reaches a tier and its largest order of 5 none.
+            (tiers(20.0, 40.0), vec![[shaded[0], error, caution], shaded]),
+            (tiers(0.0, 0.0), vec![[error; 3], shaded]),
+            (tiers(f64::NAN, f64::NAN), vec![shaded, shaded]),
+            (tiers(f64::NAN, f64::NAN), vec![]),
+        ] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    max_texture_side: Some(1024),
+                    ..Default::default()
+                },
+                |ui| {
+                    heatmap.render(
+                        ui.painter(),
+                        &mapping,
+                        &history,
+                        0.5,
+                        |t| Some((t - start).num_seconds() as f32 * 10.0),
+                        &view,
+                        [Color32::GREEN, Color32::RED],
+                    );
+                },
+            );
+            let uploads: Vec<_> = output
+                .textures_delta
+                .set
+                .iter()
+                .filter(|(id, _)| heatmap.tiles.values().any(|t| t.id() == **id))
+                .flat_map(|(_, deltas)| deltas)
+                .filter(|delta| delta.pos.is_some())
+                .map(|delta| {
+                    let egui::ImageData::Color(image) = &delta.image;
+                    [image.pixels[197], image.pixels[198], image.pixels[199]]
+                })
+                .collect();
+            assert_eq!(uploads, expected);
             output.textures_delta.clear();
         }
     }
