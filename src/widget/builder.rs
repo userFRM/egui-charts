@@ -190,6 +190,7 @@ impl Chart {
             indicator_source_request: None,
             events: Default::default(),
             time_scale_events: Default::default(),
+            frozen_source_events: 0,
             event_visibility: Default::default(),
             mark_source: None,
             signal_sources: Vec::new(),

@@ -189,6 +189,7 @@ impl Chart {
         let clock = self.bar_clock();
         for study in &mut studies {
             study.set_instrument(self.instrument());
+            study.set_time_scale_events(&self.time_scale_events);
             if let Some(timeframe) = self.timeframe {
                 study.set_timeframe(timeframe);
             }
@@ -564,6 +565,7 @@ impl Chart {
                 .cloned()
                 .collect::<Vec<_>>()
                 .into();
+            chart.frozen_source_events = source.page.events.len();
         }
         chart.desired_visible_bars = self.desired_visible_bars;
         chart.apply_visible_bars_once = self.apply_visible_bars_once;
@@ -738,6 +740,51 @@ mod tests {
         }
         let empty = Chart::new(BarData::new()).export_csv().unwrap();
         assert_eq!(empty, "time,open,high,low,close,volume\n");
+    }
+
+    /// An export's studies read the events the chart holds, as on screen, not the mark source page
+    /// frozen into its event badges.
+    #[test]
+    fn exported_studies_do_not_restart_at_a_frozen_mark_source_page() {
+        use crate::data::Reply;
+        use crate::model::{EventKind, TimeScaleEvent};
+        use crate::services::{Marks, MarksPage, MarksRequest};
+        use crate::studies::{VolumeWeightedAvgPrice, VwapAnchor};
+        use crate::widget::test_frames;
+        use std::sync::Arc;
+
+        struct Source(MarksPage);
+        impl Marks for Source {
+            fn marks(&self, _: MarksRequest, reply: Reply<MarksPage>) {
+                reply.send(Ok(self.0.clone()));
+            }
+        }
+        let ctx = egui::Context::default();
+        let mut chart = test_frames::chart(&[1.0, 5.0, 9.0], &[2.0, 6.0, 10.0]);
+        test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+        let time = chart.state.shown()[70].time;
+        chart.add_indicator(Box::new(
+            VolumeWeightedAvgPrice::new().with_anchor(VwapAnchor::Earnings),
+        ));
+        chart.set_mark_source(Some(Arc::new(Source(MarksPage {
+            bar_marks: vec![],
+            time_scale_marks: vec![],
+            events: vec![TimeScaleEvent {
+                id: "earnings".into(),
+                time,
+                kind: EventKind::Earnings,
+                title: String::new(),
+                details: String::new(),
+            }],
+        }))));
+        chart.pump_marks(&ctx);
+
+        let mut snapshot = chart.export_snapshot();
+        assert_eq!(snapshot.time_scale_events.len(), 1);
+        test_frames::frame(&ctx, &mut snapshot, 0.1, vec![]);
+        let value = |chart: &Chart| chart.indicators().next().unwrap().1.values().value(0, 80);
+        assert!(value(&chart).is_some());
+        assert_eq!(value(&snapshot), value(&chart));
     }
 
     #[test]

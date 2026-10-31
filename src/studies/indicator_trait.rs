@@ -472,6 +472,15 @@ pub trait Indicator: Send {
         false
     }
 
+    /// The typed events the chart holds for its symbol, those given to
+    /// `Chart::set_time_scale_events`, in the order supplied. Returns `true` if calculation
+    /// settings changed and the caller must recalculate from bar 0. The chart calls this on add
+    /// and before calculation. Studies that read no events keep the default.
+    fn set_time_scale_events(&mut self, events: &[crate::model::TimeScaleEvent]) -> bool {
+        let _ = events;
+        false
+    }
+
     /// Return the computed output columns, with NaN for missing values.
     ///
     /// The length of the returned output matches the length of the `data`
