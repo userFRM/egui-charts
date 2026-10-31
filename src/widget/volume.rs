@@ -166,6 +166,7 @@ pub(super) fn tags(
         let plot = study.plot_style(line);
         if let Some(value) = study.values().value(line, bar)
             && plot.visible
+            && study.plot_tagged(line)
             && map.range().contains(value)
         {
             let label = crate::chart::rendering::axes::named_label(
@@ -278,6 +279,18 @@ mod tests {
                     && text.pos.x >= chart.last_rendered_price_rect.right()
             )),
             "the last column's volume is tagged on the price axis"
+        );
+        let study = chart.indicator_mut(id).unwrap();
+        let mut settings = study.settings();
+        settings.untagged_plots = (0..settings.plots.len()).collect();
+        study.apply_settings(&[], settings).unwrap();
+        let painted = shapes(&ctx, &mut chart, 1.05, vec![]);
+        assert!(
+            !painted.iter().any(|shape| matches!(shape,
+                egui::Shape::Text(text) if text.galley.text() == "1.00M"
+                    && text.pos.x >= chart.last_rendered_price_rect.right()
+            )),
+            "untagged volume plots leave the price axis"
         );
         assert_eq!(chart.get_chart_mapping().price.range().min, price_range.min);
         assert_eq!(chart.get_chart_mapping().price.range().max, price_range.max);
