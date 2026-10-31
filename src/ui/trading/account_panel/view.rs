@@ -12,7 +12,7 @@ use crate::chart::TradingLineAction;
 use crate::icons::icons;
 use crate::model::{Order, OrderSide, OrderType};
 use crate::theme::ThemeExt;
-use crate::ui::connection_status::show_connection_status_with_label;
+use crate::ui::connection_status::{show_connection_status, show_connection_status_with_label};
 use crate::ui::top_toolbar::buttons::rule_color;
 use crate::ui::trading::widgets::{grouped, semibold, side_color};
 use crate::ui_kit::buttons::ButtonSize;
@@ -42,34 +42,10 @@ impl Trading {
             0.0,
             theme.ui.btn_bg_hover,
         );
-        // Tab strip: the broker's tab with a Trade button, then minimize and maximize.
+        // Tab strip: maximize and minimize from the right edge, then the broker's tab with a Trade
+        // button in the rest of the row.
         ui.horizontal(|ui| {
             ui.set_height(TAB_HEIGHT);
-            let tab = egui::Frame::new()
-                .fill(theme.ui.panel_bg)
-                .corner_radius(ui.active_theme().radius.sm)
-                .inner_margin(egui::Margin::symmetric(10, 4));
-            tab.show(ui, |ui| {
-                ui.add(icons::CANDLESTICK.as_image_tinted(vec2(20.0, 20.0), theme.ui.text));
-                ui.label(
-                    RichText::new(l10n::text(ui.ctx(), &self.account_panel.broker))
-                        .color(theme.ui.text),
-                );
-                if let Some(mark) = &mark {
-                    show_connection_status_with_label(ui, mark);
-                }
-                if ui
-                    .add(
-                        egui::Button::new(l10n::text(ui.ctx(), "Trade"))
-                            .min_size(vec2(63.0, 25.0))
-                            .corner_radius(ui.active_theme().radius.sm),
-                    )
-                    .on_hover_text(l10n::text(ui.ctx(), "Open the order ticket"))
-                    .clicked()
-                {
-                    self.toggle_ticket(chart_symbol.to_owned());
-                }
-            });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if IconButton::new(&icons::MAXIMIZE)
                     .icon_scale(0.9)
@@ -87,6 +63,62 @@ impl Trading {
                 {
                     action = Some(AccountPanelAction::Minimize);
                 }
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    let tab = egui::Frame::new()
+                        .fill(theme.ui.panel_bg)
+                        .corner_radius(ui.active_theme().radius.sm)
+                        .inner_margin(egui::Margin::symmetric(10, 4));
+                    tab.show(ui, |ui| {
+                        ui.add(icons::CANDLESTICK.as_image_tinted(vec2(20.0, 20.0), theme.ui.text));
+                        let (label, radius) =
+                            (l10n::text(ui.ctx(), "Trade"), ui.active_theme().radius.sm);
+                        let trade = || {
+                            egui::Button::new(label.clone())
+                                .min_size(vec2(63.0, 25.0))
+                                .corner_radius(radius)
+                        };
+                        let name = RichText::new(l10n::text(ui.ctx(), &self.account_panel.broker))
+                            .color(theme.ui.text);
+                        let width = |ui: &mut Ui, show: &dyn Fn(&mut Ui) -> egui::Response| {
+                            show(&mut ui.new_child(egui::UiBuilder::new().invisible()))
+                                .rect
+                                .width()
+                        };
+                        // The mark's label, then the broker's name, give way, so that Trade stays
+                        // clear of the panel's buttons; the mark's icon stays. The tab may take
+                        // the gap before the buttons, as its margin keeps Trade off them.
+                        let spacing = ui.spacing().item_spacing.x;
+                        let room =
+                            ui.available_width() + spacing - width(ui, &|ui| ui.add(trade()));
+                        let labelled = mark.as_ref().is_some_and(|mark| {
+                            width(ui, &|ui| ui.label(name.clone()))
+                                + width(ui, &|ui| show_connection_status_with_label(ui, mark))
+                                + 2.0 * spacing
+                                <= room
+                        });
+                        let status = mark.as_ref().map_or(0.0, |mark| match labelled {
+                            true => width(ui, &|ui| show_connection_status_with_label(ui, mark)),
+                            false => width(ui, &|ui| show_connection_status(ui, mark)),
+                        } + spacing);
+                        let name_width = (room - status - spacing).max(0.0);
+                        ui.allocate_ui(vec2(name_width, ui.available_height()), |ui| {
+                            ui.add(egui::Label::new(name).truncate());
+                        });
+                        if let Some(mark) = &mark {
+                            match labelled {
+                                true => show_connection_status_with_label(ui, mark),
+                                false => show_connection_status(ui, mark),
+                            };
+                        }
+                        if ui
+                            .add(trade())
+                            .on_hover_text(l10n::text(ui.ctx(), "Open the order ticket"))
+                            .clicked()
+                        {
+                            self.toggle_ticket(chart_symbol.to_owned());
+                        }
+                    });
+                });
             });
         });
 
