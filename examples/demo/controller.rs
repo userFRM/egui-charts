@@ -1437,11 +1437,6 @@ impl DemoApp {
         self.top_toolbar.sync_from_app_state(&self.state);
         self.top_toolbar.state.can_undo = self.chart.can_undo();
         self.top_toolbar.state.can_redo = self.chart.can_redo();
-        let bg = if self.theme.dark {
-            bg.lerp_to_gamma(self.theme.ui.text, 0.07)
-        } else {
-            bg
-        };
         egui::Panel::top("toolbar")
             .exact_size(self.top_toolbar.config.height + 4.0)
             .show_separator_line(false)
@@ -1609,7 +1604,9 @@ impl DemoApp {
                 self.size_price_based_charts();
             }
             TopToolbarAction::IntervalSelected(tf) => self.switch_timeframe(tf),
-            TopToolbarAction::OpenSymbolSearch => self.symbol_search.open(),
+            TopToolbarAction::OpenSymbolSearch => self
+                .symbol_search
+                .open_with_selected_query(self.chart.symbol().to_owned()),
             TopToolbarAction::OpenCompare => self.compare_dialog.open(),
             TopToolbarAction::OpenQuickSearch => self.quick_search.open(),
             TopToolbarAction::OpenIndicators => {
@@ -1707,7 +1704,7 @@ impl DemoApp {
             !drawings.is_empty() && drawings.iter().all(|d| d.locked);
         egui::Panel::left("drawing_toolbar")
             .resizable(false)
-            .exact_size(54.0)
+            .exact_size(56.0)
             .show_separator_line(false)
             .frame(
                 panel_frame(bg)
@@ -1912,10 +1909,10 @@ impl DemoApp {
         }
         egui::Panel::right("widget_bar")
             .resizable(false)
-            .exact_size(49.0)
+            .exact_size(46.0)
             .show_separator_line(false)
             .frame(panel_frame(bg).outer_margin(egui::Margin {
-                left: 4,
+                left: 1,
                 ..egui::Margin::ZERO
             }))
             .show(ui, |ui| {
@@ -1959,6 +1956,13 @@ impl DemoApp {
             .resizable(true)
             .default_size(300.0)
             .min_size(220.0)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::side_top_panel(ui.style()).outer_margin(egui::Margin {
+                    left: 4,
+                    ..egui::Margin::ZERO
+                }),
+            )
             .show(ui, |ui| match which {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
@@ -2478,7 +2482,7 @@ impl DemoApp {
             .exact_size(height)
             .show_separator_line(false)
             .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
-                top: 1,
+                top: 4,
                 ..egui::Margin::ZERO
             }))
             .show(ui, |ui| trading.show_account_panel(ui, &symbol))
@@ -2722,6 +2726,22 @@ impl DemoApp {
                 }
                 self.trading.show(ui, &mut self.chart);
             });
+        // The chart's rectangular background covers the frame; restore its top-left cutout.
+        let corner = chart.response.rect.min;
+        let radius = 4.0;
+        let points = (0..=8)
+            .map(|step| {
+                let angle = std::f32::consts::PI + step as f32 * std::f32::consts::FRAC_PI_2 / 8.0;
+                let x = corner.x + radius * (1.0 + angle.cos());
+                let y = corner.y + radius * (1.0 + angle.sin());
+                egui::epaint::BandPoint::new(x, corner.y..=y.max(corner.y))
+            })
+            .collect();
+        ui.painter()
+            .add(egui::Shape::Band(egui::epaint::BandShape::filled(
+                points,
+                self.theme.ui.border,
+            )));
         self.replay_control.set_dock_rect(chart.response.rect);
         if !self.replay_selecting && self.replay.is_none() {
             self.activate_chart_slot(self.layout.active());
@@ -3103,7 +3123,9 @@ impl DemoApp {
                     A::OpenIndicatorSearch => {
                         self.indicator_dialog.open_for_chart(&self.chart, None);
                     }
-                    A::OpenSymbolSearch => self.symbol_search.open(),
+                    A::OpenSymbolSearch => self
+                        .symbol_search
+                        .open_with_selected_query(self.chart.symbol().to_owned()),
                     A::OpenIntervalSearch => {
                         self.interval_entry = Some(String::new());
                         self.interval_focus = true;
@@ -3622,7 +3644,6 @@ mod tests {
                 .any(|t| t.message == format!("Filled: Sell 1 {symbol} at 110.00"))
         );
         assert!(Arc::ptr_eq(&paper, &app.paper));
-        app.trading.display.show_execution_labels = true;
         app.chart.fit_content();
         for toast in app.toasts.toasts_mut() {
             toast.duration = 0.0;
@@ -3671,7 +3692,14 @@ mod tests {
                     })
                 };
                 value |= has_text("Trade value") && has_text("110.00");
-                marked |= has_text("1 @ 100.00") && has_text("1 @ 110.00");
+                // The notices write the sides too, so look for the triangles rather than a label.
+                let has_mark = |color| {
+                    output.shapes.iter().any(|shape| {
+                        matches!(&shape.shape, egui::Shape::Path(path)
+                        if path.closed && path.points.len() == 3 && path.fill == color)
+                    })
+                };
+                marked |= has_mark(app.theme.ui.accent) && has_mark(app.theme.chart.candle_down);
                 if pass == 2 {
                     for toast in app.toasts.toasts().iter().rev().take(5) {
                         let rect = ctx
@@ -5362,7 +5390,7 @@ mod tests {
         state.trading.show_positions = false;
         state.trading.show_orders = false;
         state.trading.show_executions = false;
-        state.trading.show_execution_labels = true;
+        state.trading.show_execution_labels = false;
         app.apply_chart_settings(state.clone());
         assert_eq!(app.trading.display, state.trading);
         assert_eq!(
@@ -5908,7 +5936,6 @@ mod tests {
             (Tool::FixedRangeVolumeProfile, "Rows"),
             (Tool::AnchoredVolumeProfile, "Rows"),
             (Tool::RegressionTrend, "Deviations"),
-            (Tool::ParallelChannel, "Show middle line"),
         ] {
             app.chart.drawings_mut().drawings.clear();
             let mut drawing = Drawing::new(7, tool);
@@ -6165,8 +6192,10 @@ mod tests {
         app.chart.drawings_mut().drawings.push(drawing);
         app.open_drawing_props_for(7);
         let props = app.drawing_props.props.clone();
-        assert!(!props.visible_all_timeframes);
-        assert_eq!(props.visible_timeframes, ["1h"]);
+        assert_eq!(
+            props.timeframe_visibility,
+            TimeframeVisibility::specific(&["1h"])
+        );
         assert!(props.fill_enabled);
         assert_eq!(
             props.fill_color.unwrap().to_srgba_unmultiplied(),
@@ -6192,9 +6221,10 @@ mod tests {
         second.id = 8;
         app.chart.drawings_mut().drawings.push(second);
         app.chart.drawings_mut().select_drawings([7, 8]);
+        let mut visibility = TimeframeVisibility::default();
+        visibility.set_range(egui_charts::model::TimeframeUnit::Hour, Some(2..=4));
         let changed = DrawingProps {
-            visible_all_timeframes: false,
-            visible_timeframes: vec!["4h".into()],
+            timeframe_visibility: visibility,
             font_size: 28.0,
             fill_enabled: false,
             ..app.drawing_props.props.clone()
@@ -6313,7 +6343,10 @@ mod tests {
             assert!(app.chart.drawings().drawings[1].fib_config.is_none());
             assert_eq!(app.chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(app.chart.undo());
-            assert!(app.chart.drawings().drawings[0].fib_config.is_none());
+            assert_eq!(
+                format!("{:?}", app.chart.drawings().drawings[0].fib_config),
+                format!("{:?}", Drawing::new(7, tool).fib_config)
+            );
             assert!(app.chart.redo());
             app.chart
                 .drawings_mut()
@@ -6335,8 +6368,14 @@ mod tests {
                 .value = f32::NAN;
             props.line_width = 9.0;
             assert!(props.apply_to_chart(DrawingId(7), &mut app.chart).is_err());
-            assert_eq!(app.chart.drawings().drawings[0].stroke_width, 2.0);
-            assert_eq!(app.chart.drawings().drawings[1].stroke_width, 2.0);
+            assert_eq!(
+                app.chart.drawings().drawings[0].stroke_width,
+                Drawing::new(7, tool).stroke_width
+            );
+            assert_eq!(
+                app.chart.drawings().drawings[1].stroke_width,
+                Drawing::new(7, tool).stroke_width
+            );
         }
     }
 

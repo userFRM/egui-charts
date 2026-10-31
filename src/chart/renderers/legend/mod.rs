@@ -151,7 +151,8 @@ impl<'a> Legend<'a> {
         }
     }
 
-    /// Paints inside `plot`, 8 points from its edges, and reports a quote intent.
+    /// Paints inside `plot`, inset by the theme's large spacing from its sides and medium
+    /// spacing from its top and bottom, and reports a quote intent.
     /// Supplementary volume and study rows collapse together; quotes remain visible.
     pub fn show(&self, ui: &mut Ui, plot: Rect) -> Option<QuoteSide> {
         self.show_with_study_actions(ui, plot).0
@@ -193,7 +194,7 @@ impl<'a> Legend<'a> {
         Option<SeriesAction>,
     ) {
         let theme = ui.active_theme();
-        let bounds = plot.shrink(theme.spacing.md);
+        let bounds = plot.shrink2(Vec2::new(theme.spacing.lg, theme.spacing.md));
         if !bounds.is_positive() {
             return (None, None, plot.top(), None, None);
         }
@@ -259,7 +260,7 @@ impl<'a> Legend<'a> {
                 title,
                 theme.text.chart_title,
                 if self.series_visible {
-                    colors.text
+                    theme.ui.text
                 } else {
                     theme.ui.text_muted
                 },
@@ -588,7 +589,7 @@ impl<'a> Legend<'a> {
                         layout.text(
                             study.line_names().get(2).cloned().unwrap_or_default(),
                             theme.text.ohlc,
-                            Color32::from_gray(112),
+                            theme.ui.text_muted,
                             bounds.width(),
                         );
                     }
@@ -702,7 +703,14 @@ impl<'a> Legend<'a> {
                 rect,
                 3.0,
                 painter.ctx().active_theme().chart.bg,
-                Stroke::new(1.0, painter.ctx().active_theme().ui.border),
+                Stroke::new(
+                    1.0,
+                    if theme.dark {
+                        theme.ui.border
+                    } else {
+                        theme.ui.panel_bg.lerp_to_gamma(theme.ui.text, 0.14)
+                    },
+                ),
                 egui::StrokeKind::Inside,
             );
             let c = rect.center();
@@ -1552,6 +1560,18 @@ mod tests {
             }
             for text in ["104.00", "106.00", "2.00", "SELL", "BUY"] {
                 assert!(a.iter().any(|value| value == text) && b.iter().any(|value| value == text));
+            }
+            let titles: Vec<_> = second
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Text(text) if text.galley.text() == "SAMPLE · 1h" => Some(text),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(titles.len(), 2);
+            for (index, title) in titles.iter().enumerate() {
+                assert_eq!(title.pos.x, index as f32 * 600.0 + 8.0);
+                assert_eq!(title.galley.job.sections[0].format.font_id.size, 13.0);
             }
             let buttons: Vec<_> = second
                 .iter()

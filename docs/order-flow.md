@@ -168,10 +168,14 @@ Quote and book history before a study was connected must come from the host. Bar
 no substitute values. Counts of orders require fills grouped by order by the host; `Tick` has
 an execution id, not an order id.
 
-Inputs retain 10,000 bar outputs and at most 100,000 events per rolling window. If a window loses
-events at that limit, it gives no value until those events would have expired. This keeps memory
-bounded without silently understating a rate. The chart's existing trade store also retains at
-most 100,000 executions. Depth history has its own configurable retention and merge tiers.
+Inputs retain up to 11,000 bar outputs; the bar after that drops the oldest at once, down to the
+newest 10,000, the longest span of Rolling Volume and Delta. They also retain at most 100,000
+events per rolling window. If a window loses events at that limit, it gives no value until those
+events would have expired. This keeps memory bounded without silently understating a rate. The
+chart's existing trade store also retains at most 100,000 executions. Depth history has its own
+configurable retention and merge tiers.
 
-Clearing a source or evicting its oldest retained bar invalidates the affected plotted history,
-so earlier cached values cannot survive as stale data after a reset or retention change.
+Clearing a source or dropping its oldest bars invalidates the plotted history of its studies, so
+earlier cached values cannot survive as stale data after a reset or retention change: the chart
+recalculates them in full, and Size-Filtered CVD starts again from the oldest retained bar.
+Drops come once per 1,001 new bars; between them a new bar updates the studies from that bar.

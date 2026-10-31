@@ -1,7 +1,7 @@
 //! Tiled and tabbed charts with independent state and timestamp-based synchronization.
 
-use super::Chart;
 use super::keyboard::ShortcutRequest;
+use super::{Chart, VisibleTimeRange};
 use crate::config::KeyboardAction;
 use crate::localization as l10n;
 use crate::model::Timeframe;
@@ -211,6 +211,8 @@ pub struct ChartLayout {
     groups: [Option<String>; 16],
     detached: [bool; 16],
     previous: [Option<(String, Option<Timeframe>)>; 16],
+    previous_ranges: [Option<VisibleTimeRange>; 16],
+    pending_ranges: [Option<VisibleTimeRange>; 16],
     #[cfg(feature = "drawings")]
     drawings: DrawingLinks,
     previous_preset: Option<(ChartLayoutMode, usize)>,
@@ -258,11 +260,12 @@ impl ChartLayout {
     /// Fits an explicit date selection to the active chart, or its synchronization group
     /// when `sync_date_range` is enabled. Call after the charts have rendered at their sizes.
     pub fn apply_date_range(&self, charts: &mut [&mut Chart], range: super::VisibleTimeRange) {
+        let source = charts.get(self.active).and_then(|chart| chart.timeframe());
         for (index, chart) in charts.iter_mut().take(16).enumerate() {
             if index == self.active
                 || (self.sync.sync_date_range && self.same_group(index, self.active))
             {
-                chart.apply_synced_time_range(range);
+                chart.apply_synced_time_range_from(range, source);
             }
         }
     }
@@ -317,6 +320,17 @@ impl ChartLayout {
             self.active = index;
         }
         self.sync_state(charts, total);
+        for (index, chart) in charts.iter().enumerate() {
+            if !self.sync.sync_time_axis || total == 1 {
+                self.pending_ranges[index] = None;
+            } else if self.previous[index]
+                .as_ref()
+                .is_some_and(|p| p.1 != chart.timeframe())
+            {
+                self.pending_ranges[index] =
+                    self.pending_ranges[index].or(self.previous_ranges[index]);
+            }
+        }
         for chart in charts.iter_mut() {
             chart.last_hover_bar_idx = None;
         }
@@ -365,6 +379,7 @@ impl ChartLayout {
                         });
                     },
                 );
+                self.restore_time_range(index, chart);
                 self.detached[index] = !close;
                 if activate {
                     self.active = index;
@@ -432,6 +447,7 @@ impl ChartLayout {
                     }
                 },
             );
+            self.restore_time_range(index, charts[index]);
             if count > 1 && self.maximized.is_none() && index == self.active {
                 ui.painter().rect_stroke(
                     rect,
@@ -488,8 +504,24 @@ impl ChartLayout {
         }
         for (index, chart) in charts.iter().enumerate() {
             self.previous[index] = Some((chart.symbol().to_owned(), chart.timeframe()));
+            if self.pending_ranges[index].is_none()
+                && let Some(range) = chart.visible_time_range()
+            {
+                self.previous_ranges[index] = Some(range);
+            }
         }
         response
+    }
+
+    fn restore_time_range(&mut self, index: usize, chart: &mut Chart) {
+        // Reloads can leave a chart empty for several frames; keep UTC edges until bars arrive.
+        if let Some(range) = self.pending_ranges[index]
+            && chart.visible_time_range().is_some()
+        {
+            // A range the new bars do not cover keeps the view, but must not block the group.
+            chart.apply_synced_time_range(range);
+            self.pending_ranges[index] = None;
+        }
     }
 
     fn sync_state(&mut self, charts: &mut [&mut Chart], count: usize) {
@@ -515,7 +547,7 @@ impl ChartLayout {
         }
     }
 
-    fn sync_view(&self, charts: &mut [&mut Chart], count: usize, sync_range: bool) {
+    fn sync_view(&mut self, charts: &mut [&mut Chart], count: usize, sync_range: bool) {
         let hovered = charts
             .iter()
             .take(count)
@@ -524,6 +556,7 @@ impl ChartLayout {
         // The source's main-pane price, or `None` over volume and indicator panes.
         let price = hovered.and_then(|source| charts[source].last_crosshair?.1);
         let range = charts[self.active].visible_time_range();
+        let source = charts[self.active].timeframe();
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
             chart.set_synced_crosshair_time(None);
             if self.sync.sync_crosshair
@@ -539,10 +572,17 @@ impl ChartLayout {
             if index != self.active
                 && self.same_group(index, self.active)
                 && self.sync.sync_time_axis
+                && self.pending_ranges[self.active].is_none()
                 && sync_range
                 && let Some(range) = range
             {
-                chart.apply_synced_time_range(range);
+                // A chart awaiting its new interval's bars fits the latest range once they arrive.
+                match &mut self.pending_ranges[index] {
+                    Some(pending) => *pending = range,
+                    None => {
+                        chart.apply_synced_time_range_from(range, source);
+                    }
+                }
             }
         }
     }
@@ -918,6 +958,124 @@ mod tests {
         layout.apply_date_range(&mut refs, range);
         assert_ne!(refs[1].get_time_scale_state(), before);
         assert_eq!(refs[2].get_time_scale_state(), isolated);
+
+        // A minute chart at the spacing floor must retain its UTC view after an hourly reload.
+        let ctx = egui::Context::default();
+        for mode in [ChartLayoutMode::Four, ChartLayoutMode::Tabs] {
+            let mut layout = ChartLayout {
+                mode,
+                ..Default::default()
+            };
+            let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+            let frame = |layout: &mut ChartLayout, charts: &mut [Chart; 4]| {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            frame(&mut layout, &mut charts);
+            for active in [0, 1] {
+                layout.set_active(active);
+                frame(&mut layout, &mut charts);
+                charts[active].apply_synced_time_scale(0.5, 0.0);
+                frame(&mut layout, &mut charts);
+                let remembered = charts[active].visible_time_range().unwrap();
+                charts[active].set_timeframe(Timeframe::Hour1);
+                charts[active].set_data(super::super::SeriesId::MAIN, vec![]);
+                frame(&mut layout, &mut charts);
+                let others: Vec<_> = charts.iter().map(Chart::get_time_scale_state).collect();
+                frame(&mut layout, &mut charts);
+                for (index, chart) in charts.iter().enumerate() {
+                    if index != active {
+                        assert_eq!(chart.get_time_scale_state(), others[index]);
+                    }
+                }
+                charts[active].set_data(
+                    super::super::SeriesId::MAIN,
+                    chart(3600).state.shown().to_vec(),
+                );
+                frame(&mut layout, &mut charts);
+                // A 60x longer interval needs 60x the spacing for the same UTC span.
+                assert!((charts[active].get_time_scale_state().0 - 30.0).abs() < 0.01);
+                let actual = charts[active].visible_time_range().unwrap();
+                assert!((actual.from - remembered.from).num_milliseconds().abs() < 1);
+                assert!((actual.to - remembered.to).num_milliseconds().abs() < 1);
+            }
+            layout.set_active(0);
+            charts[0].set_visible_bars(65);
+            frame(&mut layout, &mut charts);
+            for chart in &charts {
+                let scale = chart.state.time_scale();
+                let range = scale.visible_logical_range();
+                assert!(scale.bar_spacing().is_finite() && scale.bar_spacing() >= 0.5);
+                assert!(range.left.ceil().max(0.0) <= range.right.floor().min(99.0));
+            }
+            // Bars that miss the remembered range keep the view and must not block the group.
+            layout.set_active(2);
+            frame(&mut layout, &mut charts);
+            charts[2].set_timeframe(Timeframe::Day1);
+            charts[2].set_data(super::super::SeriesId::MAIN, vec![]);
+            frame(&mut layout, &mut charts);
+            let mut later = chart(86_400).state.shown().to_vec();
+            later
+                .iter_mut()
+                .for_each(|bar| bar.time += Duration::days(3650));
+            charts[2].set_data(super::super::SeriesId::MAIN, later);
+            frame(&mut layout, &mut charts);
+            assert!(layout.pending_ranges.iter().all(Option::is_none));
+
+            // A chart still loading a synced interval adopts the group's latest range, so its
+            // arrival does not pull the group back to the range from before the switch.
+            let mut layout = ChartLayout {
+                mode,
+                ..Default::default()
+            };
+            layout.sync.sync_timeframe = true;
+            let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+            frame(&mut layout, &mut charts);
+            charts[0].set_timeframe(Timeframe::Hour1);
+            for chart in &mut charts {
+                chart.set_data(super::super::SeriesId::MAIN, vec![]);
+            }
+            frame(&mut layout, &mut charts);
+            let hourly = chart(3600).state.shown().to_vec();
+            charts[0].set_data(super::super::SeriesId::MAIN, hourly.clone());
+            frame(&mut layout, &mut charts);
+            charts[0].set_visible_bars(40);
+            frame(&mut layout, &mut charts);
+            let latest = charts[0].visible_time_range().unwrap();
+            charts[1].set_data(super::super::SeriesId::MAIN, hourly);
+            layout.set_active(1);
+            frame(&mut layout, &mut charts);
+            for chart in &charts[..2] {
+                let actual = chart.visible_time_range().unwrap();
+                assert!((actual.from - latest.from).num_milliseconds().abs() < 1);
+                assert!((actual.to - latest.to).num_milliseconds().abs() < 1);
+            }
+
+            // Charts of one interval zoom together past the cross-interval spacing cap.
+            let mut layout = ChartLayout {
+                mode,
+                ..Default::default()
+            };
+            let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+            frame(&mut layout, &mut charts);
+            charts[0].set_visible_bars(8);
+            frame(&mut layout, &mut charts);
+            assert!(charts[0].get_time_scale_state().0 > 72.0);
+            let source = charts[0].visible_time_range().unwrap();
+            for chart in &charts[1..] {
+                let actual = chart.visible_time_range().unwrap();
+                assert!((actual.from - source.from).num_milliseconds().abs() < 1);
+                assert!((actual.to - source.to).num_milliseconds().abs() < 1);
+            }
+        }
     }
 
     /// Alt+Enter shows the focused tile alone and a second press brings the preset back with the

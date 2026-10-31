@@ -700,6 +700,7 @@ impl DemoApp {
         settings.drawing_favorites = toolbar.favorites.clone();
         settings.drawing_favorites_hidden = !toolbar.floating_visible;
         settings.drawing_favorites_pos = toolbar.floating_pos.map(|pos| (pos.x, pos.y));
+        settings.magnet_hint_dismissed = toolbar.magnet_hint_dismissed;
         settings.layout = menu
             .curr_layout
             .clone()
@@ -732,6 +733,7 @@ impl DemoApp {
         toolbar.floating_pos = settings
             .drawing_favorites_pos
             .map(|(x, y)| egui::pos2(x, y));
+        toolbar.magnet_hint_dismissed |= settings.magnet_hint_dismissed;
         self.top_toolbar.layout_menu.autosave = settings.layout_autosave;
         self.top_toolbar.layout_menu.favorites = settings.layout_favorites;
         self.market_heatmap.selection = settings.market_heatmap;
@@ -822,7 +824,7 @@ mod tests {
                         remaining = ui.available_rect_before_wrap();
                         assert_eq!(
                             before.right() - remaining.right(),
-                            if width < 600.0 { 0.0 } else { 49.0 }
+                            if width < 600.0 { 0.0 } else { 46.0 }
                         );
                     },
                 )

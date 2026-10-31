@@ -372,7 +372,7 @@ pub use supertrend::SuperTrend;
 
 // Re-exports - Channel indicators
 pub use donchian::DonchianChannels;
-pub use keltner::KeltnerChannels;
+pub use keltner::{KeltnerBand, KeltnerChannels};
 
 // Re-exports - Volatility indicators
 pub use std_dev::StandardDeviation;

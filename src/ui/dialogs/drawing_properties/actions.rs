@@ -43,10 +43,8 @@ pub struct DrawingProps {
     pub label: String,
     /// Font size
     pub font_size: f32,
-    /// Visible on all timeframes
-    pub visible_all_timeframes: bool,
-    /// Specific timeframes (if not all)
-    pub visible_timeframes: Vec<String>,
+    /// The intervals the drawing shows on
+    pub timeframe_visibility: TimeframeVisibility,
 }
 
 impl Default for DrawingProps {
@@ -66,8 +64,7 @@ impl Default for DrawingProps {
             extend_right: false,
             label: String::new(),
             font_size: 12.0,
-            visible_all_timeframes: true,
-            visible_timeframes: Vec::new(),
+            timeframe_visibility: TimeframeVisibility::all(),
         }
     }
 }
@@ -81,7 +78,7 @@ pub enum DrawingPropertiesAction {
     /// Cancel the current interaction.
     Cancel,
     /// Apply the supplied properties to the drawing.
-    Apply(DrawingId, DrawingProps),
+    Apply(DrawingId, Box<DrawingProps>),
     /// Delete the identified drawing.
     Delete(DrawingId),
     /// Duplicate the identified drawing.
@@ -106,13 +103,7 @@ impl DrawingProps {
             extend_left: drawing.extend_left,
             extend_right: drawing.extend_right,
             font_size: drawing.font_size,
-            visible_all_timeframes: drawing.timeframe_visibility.show_on_all,
-            visible_timeframes: drawing
-                .timeframe_visibility
-                .visible_timeframes
-                .iter()
-                .cloned()
-                .collect(),
+            timeframe_visibility: drawing.timeframe_visibility.clone(),
             label: drawing.text.clone().unwrap_or_default(),
             ..Self::default()
         }
@@ -213,10 +204,7 @@ impl DrawingProps {
                 drawing.fill_color = fill.map(|color| color.to_srgba_unmultiplied());
             }
             drawing.font_size = self.font_size;
-            drawing.timeframe_visibility = TimeframeVisibility {
-                show_on_all: self.visible_all_timeframes,
-                visible_timeframes: self.visible_timeframes.iter().cloned().collect(),
-            };
+            drawing.timeframe_visibility = self.timeframe_visibility.clone();
             if let Some(template) = &self.tool_settings
                 && template.settings.tool_type == drawing.tool_type
                 && template.settings.custom_tool == drawing.custom_tool
@@ -270,6 +258,13 @@ impl DrawingProps {
                 .is_some_and(|c| c.levels.iter().any(|l| !l.value.is_finite()))
             {
                 return Err("Fibonacci ratios must be finite");
+            }
+            if settings
+                .fib_config
+                .as_ref()
+                .is_some_and(|c| !(c.level_width > 0.0 && c.level_width <= MAX_STROKE_WIDTH))
+            {
+                return Err("Fibonacci widths must be above 0 and at most 100");
             }
             if settings.pitchfork.as_ref().is_some_and(|c| {
                 c.levels
@@ -343,8 +338,10 @@ mod tests {
         drawing.locked = true;
         chart.drawings_mut().drawings.push(drawing);
         let props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
-        assert!(!props.visible_all_timeframes);
-        assert_eq!(props.visible_timeframes, ["1h"]);
+        assert_eq!(
+            props.timeframe_visibility,
+            TimeframeVisibility::specific(&["1h"])
+        );
         assert!(props.fill_enabled);
         assert_eq!(
             props.fill_color.unwrap().to_srgba_unmultiplied(),
@@ -377,9 +374,10 @@ mod tests {
         second.id = 8;
         chart.drawings_mut().drawings.push(second);
         chart.drawings_mut().select_drawings([7, 8]);
+        let mut visibility = TimeframeVisibility::default();
+        visibility.set_range(crate::model::TimeframeUnit::Hour, Some(2..=4));
         let changed = DrawingProps {
-            visible_all_timeframes: false,
-            visible_timeframes: vec!["4h".into()],
+            timeframe_visibility: visibility,
             font_size: 28.0,
             fill_enabled: false,
             ..props.clone()
@@ -448,24 +446,11 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            let line = matches!(
-                tool,
-                DrawingToolType::TrendLine
-                    | DrawingToolType::Ray
-                    | DrawingToolType::ExtendedLine
-                    | DrawingToolType::InfoLine
-                    | DrawingToolType::TrendAngle
-                    | DrawingToolType::Arrow
-                    | DrawingToolType::Path
-                    | DrawingToolType::Polyline
-            );
+            let line = tool.supports_line_ends();
             assert_eq!(labels.contains(&"Line start"), line, "{tool:?}");
             assert_eq!(labels.contains(&"Line end"), line, "{tool:?}");
-            assert_eq!(
-                labels.contains(&"Middle line"),
-                tool == DrawingToolType::Rect,
-                "{tool:?}"
-            );
+            let middle = tool.supports_middle_line();
+            assert_eq!(labels.contains(&"Middle line"), middle, "{tool:?}");
             output.drop_without_applying_deltas();
             let settings = &mut props.tool_settings.as_mut().unwrap().settings;
             settings.fib_config = Some(FibonacciConfig {
@@ -520,28 +505,39 @@ mod tests {
             assert!(chart.drawings().drawings[1].fib_config.is_none());
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
-            assert!(chart.drawings().drawings[0].fib_config.is_none());
+            assert_eq!(
+                format!("{:?}", chart.drawings().drawings[0].fib_config),
+                format!("{:?}", Drawing::new(7, tool).fib_config)
+            );
             assert!(chart.redo());
             chart.drawings_mut().edit_drawing(7, |d| d.locked = true);
             props.font_size = 18.0;
             props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
             assert_eq!(chart.drawings().drawings[0].font_size, 12.0);
             assert_eq!(chart.drawings().drawings[1].font_size, 18.0);
-            // A malformed ratio cannot partially change common style or another selected tool.
-            props
-                .tool_settings
-                .as_mut()
-                .unwrap()
-                .settings
-                .fib_config
-                .as_mut()
-                .unwrap()
-                .levels[0]
-                .value = f32::NAN;
-            props.line_width = 9.0;
-            assert!(props.apply_to_chart(DrawingId(7), &mut chart).is_err());
-            assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0);
-            assert_eq!(chart.drawings().drawings[1].stroke_width, 2.0);
+            // Malformed ratios or widths cannot partly change another selected drawing.
+            for (ratio, width) in [(f32::NAN, 2.0), (1.0, 0.0), (1.0, 100.01), (1.0, f32::NAN)] {
+                let config = props
+                    .tool_settings
+                    .as_mut()
+                    .unwrap()
+                    .settings
+                    .fib_config
+                    .as_mut()
+                    .unwrap();
+                config.levels[0].value = ratio;
+                config.level_width = width;
+                props.line_width = 9.0;
+                assert!(props.apply_to_chart(DrawingId(7), &mut chart).is_err());
+                assert_eq!(
+                    chart.drawings().drawings[0].stroke_width,
+                    Drawing::new(7, tool).stroke_width
+                );
+                assert_eq!(
+                    chart.drawings().drawings[1].stroke_width,
+                    Drawing::new(7, tool).stroke_width
+                );
+            }
         }
     }
 }

@@ -39,6 +39,8 @@ use std::rc::Rc;
 pub struct ChartView<'a> {
     /// Instrument metadata supplied by the host or feed, for tick and pip measurements.
     pub instrument: Option<&'a crate::model::Instrument>,
+    /// Price label formatter supplied by the chart; `None` uses instrument precision.
+    pub price_formatter: Option<&'a dyn crate::scales::PriceFormatter>,
     /// The series that drawing anchors index into.
     pub bars: &'a [Bar],
     /// [`ChartState::revision`](crate::studies::ChartState::revision) of `bars`.
@@ -359,16 +361,17 @@ impl Drawing {
             DrawingToolType::DoubleCurve => self.render_double_curve(painter),
 
             // Fibonacci (10 tools)
-            DrawingToolType::FibonacciRetracement => self.render_fibonacci(painter, rect),
-            DrawingToolType::FibonacciExtension => self.render_fibonacci_extension(painter, rect),
+            DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension => {
+                self.render_fibonacci(painter, rect, view)
+            }
             DrawingToolType::FibonacciSpeedResistanceArcs => self.render_fibonacci_arc(painter),
             DrawingToolType::FibonacciTimeZones => self.render_fibonacci_time_zones(painter, rect),
             DrawingToolType::FibonacciChannel => self.render_fibonacci_channel(painter, rect, view),
             DrawingToolType::FibonacciCircles => self.render_fibonacci_circles(painter),
             DrawingToolType::FibonacciSpeedFan => self.render_fibonacci_speed_fan(painter, rect),
-            DrawingToolType::FibonacciSpiral => self.render_fibonacci_spiral(painter),
+            DrawingToolType::FibonacciSpiral => self.render_fibonacci_spiral(painter, rect),
             DrawingToolType::FibonacciWedge => self.render_fibonacci_wedge(painter, rect),
-            DrawingToolType::TrendBasedFibTime => self.render_trend_based_fib_time(painter, rect),
+            DrawingToolType::TrendBasedFibTime => self.render_fibonacci_time_zones(painter, rect),
 
             // Gann (4 tools)
             DrawingToolType::GannFan => self.render_gann_fan(painter, rect),
@@ -560,15 +563,13 @@ impl Drawing {
                 .map(|l| l.value)
                 .filter(|v| v.is_finite() && *v >= 0.0)
                 .fold(0.0_f32, f32::max);
-            let radius = start.distance(end) * ratio;
-            let center = if self.tool_type == T::FibonacciCircles {
-                start
+            let (center, size) = if self.tool_type == T::FibonacciCircles {
+                (start.lerp(end, 0.5), (end - start).abs() * ratio)
             } else {
-                end
+                (start, egui::Vec2::splat(start.distance(end) * ratio * 2.0))
             };
-            let diameter = radius * 2.0;
-            return diameter.is_finite().then(|| {
-                Rect::from_center_size(center, egui::Vec2::splat(diameter))
+            return size.is_finite().then(|| {
+                Rect::from_center_size(center, size)
                     .union(Rect::from_two_pos(start, end))
                     .expand(PAINT_MARGIN)
             });
@@ -718,10 +719,12 @@ mod tests {
 
     /// The settings the properties dialog offers for a tool are the ones its renderer uses: a
     /// fill colour reaches a filled area, extension moves geometry (each flag flipped from the
-    /// tool's default, since an extended line starts extended) and the text is painted.
+    /// tool's default, since an extended line starts extended), the text is painted, each line
+    /// end style draws a marker and the middle line flag adds a line.
     /// Icons keep their glyph in the text field, which the glyph picker edits.
     #[test]
     fn tool_capabilities_match_their_renderers() {
+        use crate::drawings::ArrowStyle;
         fn found(shapes: &[Shape], hit: &impl Fn(&Shape) -> bool) -> bool {
             shapes.iter().any(|s| match s {
                 Shape::Vec(v) => found(v, hit),
@@ -774,6 +777,25 @@ mod tests {
             );
             let icon = matches!(tool, DrawingToolType::FontIcon | DrawingToolType::Sticker);
             assert_eq!(tool.supports_text(), text && !icon, "{tool:?} text");
+            let mut plain = drawing.clone();
+            plain.arrow_start_style = ArrowStyle::None;
+            plain.arrow_end_style = ArrowStyle::None;
+            let changes = |edit: &dyn Fn(&mut Drawing)| {
+                let mut edited = plain.clone();
+                edit(&mut edited);
+                format!("{:?}", paint(&edited)) != format!("{:?}", paint(&plain))
+            };
+            for (end, styled) in [
+                (
+                    "start",
+                    changes(&|d| d.arrow_start_style = ArrowStyle::Circle),
+                ),
+                ("end", changes(&|d| d.arrow_end_style = ArrowStyle::Circle)),
+            ] {
+                assert_eq!(tool.supports_line_ends(), styled, "{tool:?} line {end}");
+            }
+            let middle = changes(&|d| d.channel_midline = !d.channel_midline);
+            assert_eq!(tool.supports_middle_line(), middle, "{tool:?} middle line");
         }
     }
 
@@ -838,6 +860,7 @@ mod tests {
                 let ctx = Context::default();
                 let output = ctx.run_ui(RawInput::default(), |ui| {
                     let view = ChartView {
+                        price_formatter: None,
                         instrument: None,
                         bars: &bars,
                         revision: 0,
@@ -1211,6 +1234,7 @@ mod tests {
         let bars = sample_bars();
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
+                price_formatter: None,
                 instrument: None,
                 bars: if drawing.tool_type == DrawingToolType::RegressionTrend {
                     &bars
@@ -1259,6 +1283,7 @@ mod tests {
         manager.select(7);
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
+                price_formatter: None,
                 instrument: None,
                 bars: &[],
                 revision: 0,

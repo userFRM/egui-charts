@@ -652,22 +652,22 @@ impl Chart {
     }
 
     /// Removes a bar series or study and clears its selection. Removing the main series pauses
-    /// its feed and retains the time axis for the remaining series and drawings. Returns
-    /// `false` for an unknown or already removed id.
+    /// its feed and retains the time axis for the remaining series and drawings; undo of the
+    /// [`user_action`](Self::user_action) that removed it restores the series with its markers,
+    /// price lines, formatter and bar limit, and the feed follows
+    /// [`set_feed_paused`](Self::set_feed_paused) again. Returns `false` for an unknown or
+    /// already removed id.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
-        self.series_formatters.remove(&id);
-        self.bar_limits.remove(&id);
         if id == SeriesId::MAIN {
             if !self.main_series_present {
                 return false;
             }
             self.set_main_series_visible(false);
-            self.main_series_present = false;
-            self.set_feed_paused(true);
-            self.marks = Default::default();
-            self.price_lines.clear();
+            self.remove_main_series();
             return true;
         }
+        self.series_formatters.remove(&id);
+        self.bar_limits.remove(&id);
         if let Some(at) = self.price_series.iter().position(|item| item.id == id) {
             let removed = self.price_series.remove(at);
             self.retain_removed_series(removed);

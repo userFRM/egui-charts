@@ -31,6 +31,9 @@ use std::collections::HashSet;
 /// Width of the tab sidebar, before it yields to narrow windows.
 const SIDEBAR_WIDTH: f32 = 206.0;
 
+/// Outer height of the tallest tab, whose centred top edge every tab keeps.
+const TALLEST_TAB_HEIGHT: f32 = 840.0;
+
 /// Modal settings dialog with tabbed interface.
 ///
 /// Edits chart display settings, event category visibility and the host trading and
@@ -278,26 +281,29 @@ impl SettingsDialog {
         }
 
         let mut is_open = self.is_open;
-        let height = if self.config.height > 0.0 {
-            self.config.height
-        } else {
-            match self.active_tab {
-                SettingsTab::Symbol => 616.0,
-                SettingsTab::Alerts | SettingsTab::Events => 500.0,
-                _ => 840.0,
-            }
-        };
+        let fixed_height = (self.config.height > 0.0).then_some(self.config.height);
+        let height = fixed_height.unwrap_or(match self.active_tab {
+            SettingsTab::Symbol => 616.0,
+            SettingsTab::Alerts | SettingsTab::Events => 500.0,
+            _ => TALLEST_TAB_HEIGHT,
+        });
         let width = if self.config.width > 0.0 {
             self.config.width
         } else {
             752.0
         };
+        let screen = ctx.content_rect();
+        // The tallest tab sits centred in the window; shorter tabs keep its top edge.
+        let tallest_height = fixed_height.unwrap_or(TALLEST_TAB_HEIGHT);
+        let tallest_height =
+            tallest_height.min((screen.height() - 2.0 * ctx.active_theme().spacing.xxxl).max(0.0));
         Modal::new("chart_settings", "Chart settings")
             .width(width)
             .height(height)
+            .top(screen.center().y - tallest_height / 2.0)
             .dim_background(false)
             .show(ctx, &mut is_open, |ui| {
-                ui.add_space(theme.spacing.xxl);
+                ui.add_space(theme.spacing.xxxl);
                 action = self.draw_content(ui, theme);
             });
 
@@ -333,9 +339,7 @@ impl SettingsDialog {
 
         let content_height = (ui.available_height() - 68.0).max(0.0);
 
-        let seam_top = ui.cursor().top();
         let sidebar_width = SIDEBAR_WIDTH.min(ui.available_width() * 0.4);
-        let seam_x = ui.cursor().left() + sidebar_width + ui.spacing().item_spacing.x;
         let mut active = self.active_tab;
         ui.allocate_ui(Vec2::new(ui.available_width(), content_height), |ui| {
             SidebarLayout::new(sidebar_width).show(
@@ -378,11 +382,6 @@ impl SettingsDialog {
         });
         self.active_tab = active;
 
-        ui.painter().vline(
-            seam_x,
-            seam_top..=ui.cursor().top() + 8.0,
-            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
-        );
         let error = self.settings.validate().err().or_else(|| {
             (self.margin_top_str.parse::<f32>().is_err()
                 || self.margin_bottom_str.parse::<f32>().is_err()
@@ -440,6 +439,10 @@ impl SettingsDialog {
             ))
             .truncate()
             .fill(theme.ui.panel_bg)
+            .stroke(egui::Stroke::new(
+                DESIGN_TOKENS.stroke.hairline,
+                theme.ui.border_control,
+            ))
             .corner_radius(theme.radius.md as u8)
             .min_size(Vec2::new(
                 DESIGN_TOKENS.sizing.settings_dialog.template_button_width,
@@ -1088,24 +1091,29 @@ mod tests {
     }
 
     #[test]
-    fn changing_settings_tabs_stays_centered_and_fits_the_window() {
+    fn changing_settings_tabs_keeps_the_top_edge_and_fits_the_window() {
         let mut scaled = Theme::light();
         scaled.text.small = 17.0;
         scaled.spacing.lg = 12.0;
         scaled.spacing.xxxl = 32.0;
         for theme in [Theme::light(), Theme::dark(), scaled] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut dialog = SettingsDialog::new();
+            dialog.open(ChartSettingsState::default());
+            dialog.template_name = "Long template name ".repeat(20);
             for size in [
                 Vec2::new(1440.0, 900.0),
                 Vec2::new(600.0, 400.0),
                 Vec2::new(320.0, 450.0),
+                Vec2::new(1440.0, 900.0),
             ] {
-                let ctx = Context::default();
-                crate::theme::apply_to_egui(&ctx, &theme);
-                let mut dialog = SettingsDialog::new();
-                dialog.open(ChartSettingsState::default());
-                dialog.template_name = "Long template name ".repeat(20);
                 let mut tops = Vec::new();
-                for tab in SettingsTab::all() {
+                for tab in SettingsTab::all().iter().chain(&[
+                    SettingsTab::Events,
+                    SettingsTab::Symbol,
+                    SettingsTab::Events,
+                ]) {
                     dialog.active_tab = *tab;
                     for pass in 0..3 {
                         let output = ctx.run_ui(
@@ -1162,7 +1170,7 @@ mod tests {
                         Rect::from_min_size(Pos2::ZERO, size).contains_rect(rect),
                         "{tab:?}: {rect:?} in {size:?}"
                     );
-                    tops.push(rect.center().y);
+                    tops.push(rect.top());
                 }
                 assert!(
                     tops.iter().all(|top| (top - tops[0]).abs() < 1.0),
