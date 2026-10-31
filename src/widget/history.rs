@@ -96,13 +96,16 @@ struct HeldSeries {
 
 /// Whether the main series is present in one state of the chart, with the price lines, price
 /// formatter and bar limit that the state without it lacks. Its bars and markers stay in the
-/// chart, which reads them only while the series is present.
+/// chart, which reads them only while the series is present; the bars also give the remaining
+/// series their time axis while it is absent.
 #[derive(Default)]
 struct MainSeries {
     present: bool,
     price_lines: Vec<(super::PriceLineId, crate::model::PriceLine)>,
     formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     bar_limit: Option<std::num::NonZeroUsize>,
+    /// The time axis the absent state kept, for the redo of a removal whose undo reloads the feed.
+    bars: Vec<crate::model::Bar>,
 }
 
 struct StudyChange {
@@ -494,13 +497,26 @@ impl Chart {
     }
 
     /// Exchanges the main series' presence, price lines, formatter and bar limit with `main`,
-    /// so the exchange reverses itself, and pauses or resumes the feed to match.
+    /// so the exchange reverses itself, and pauses or resumes the feed to match. Removing the
+    /// series again before the resumed feed sent its bars, or after it failed to, restores the
+    /// bars the series left behind, so the remaining series keep their time axis.
     fn swap_main_series(&mut self, main: &mut MainSeries) {
         std::mem::swap(&mut self.main_series_present, &mut main.present);
         std::mem::swap(&mut self.price_lines, &mut main.price_lines);
         self.swap_series_settings(SeriesId::MAIN, &mut main.formatter, &mut main.bar_limit);
         let paused = self.feed_link.as_ref().is_some_and(|link| link.host_paused);
         self.set_feed_paused(paused);
+        if self.main_series_present {
+            // The resumed feed's reload empties the bars until its page arrives.
+            if self.feed_link.as_ref().is_some_and(|link| !link.paused) {
+                main.bars = self.state.data().bars.clone();
+            }
+        } else {
+            let kept = std::mem::take(&mut main.bars);
+            if self.state.data().bars.is_empty() && !kept.is_empty() {
+                self.replace_main_data(kept);
+            }
+        }
     }
 
     /// Exchanges the price formatter and bar limit of the bar series `id` with `formatter` and

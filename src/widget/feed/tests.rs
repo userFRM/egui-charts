@@ -1864,6 +1864,35 @@ fn feed_lifecycle() {
     );
     assert_eq!(chart.state.data().bars, bars(1000));
 }
+
+/// Redoing a main series removal before the reload started by its undo answers leaves the
+/// remaining series the time axis the first removal kept.
+#[test]
+fn redo_during_the_undo_reload_keeps_the_time_axis() {
+    let main = SeriesId::MAIN;
+    let mut frames = Frames::new();
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    frames.run(&mut chart);
+    feed.page().send(page(bars(1000), false));
+    feed.resolve().send(Ok(Instrument::new("A")));
+    frames.run(&mut chart);
+    let other = chart.add_series(crate::widget::SeriesOptions::default());
+    chart.set_data(other, bars(1000));
+    frames.run(&mut chart);
+    assert!(chart.user_action(|chart| chart.remove_series(main)));
+    frames.run(&mut chart);
+    assert!(chart.visible_logical_range().is_some(), "removed");
+    assert!(chart.undo());
+    frames.run(&mut chart);
+    assert!(chart.redo());
+    frames.run(&mut chart);
+    while let Some(reply) = feed.pages.lock().unwrap().pop() {
+        reply.send(page(bars(1000), false));
+    }
+    frames.run(&mut chart);
+    assert!(chart.visible_logical_range().is_some(), "redone");
+}
 #[cfg(feature = "studies")]
 #[test]
 fn stream_studies_keep_every_quote_and_book_loss_between_frames() {
