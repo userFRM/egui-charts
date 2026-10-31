@@ -602,15 +602,12 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                // 1_700_000_000 is 2023-11-14 22:13:20 UTC; 95 days and 12 hours later.
-                let mut tooltip = format!(
-                    "Buy 1 at 95.00, {} 10:13:20\nBuy 2 at 98.00, Sun 18 Feb '24 10:13:20",
-                    if neighbouring {
-                        "Sat 17 Feb '24"
-                    } else {
-                        "Sun 18 Feb '24"
-                    }
-                );
+                // 1_700_000_000 is 2023-11-14 22:13:20 UTC; 95 days and 12 hours later. The fill
+                // moved to bar 94 is listed by its own mark.
+                let mut tooltip = "Buy 2 at 98.00, Sun 18 Feb '24 10:13:20".to_owned();
+                if !neighbouring {
+                    tooltip.insert_str(0, "Buy 1 at 95.00, Sun 18 Feb '24 10:13:20\n");
+                }
                 if crowded {
                     tooltip += &"\nBuy 1 at 95.00, Sun 18 Feb '24 10:13:20".repeat(18);
                     tooltip += "\nand 2 more";
@@ -635,7 +632,8 @@ mod tests {
             let (low, high) = (a.max(b), a.min(b));
             // Tip, then the base's corners: 14 wide and 17 tall, 4 points from the bar. The buys
             // stack 19 points apart, leaving 2 points between them; the sell mirrors over the high.
-            let triangle = |tip: f32, base: f32| {
+            // The newest marks come first, a bar's sells after its buys.
+            let triangle = |x: f32, tip: f32, base: f32| {
                 vec![
                     egui::pos2(x, tip),
                     egui::pos2(x + 7.0, base),
@@ -643,20 +641,27 @@ mod tests {
                 ]
             };
             let mut expected = vec![
-                triangle(low + 4.0, low + 21.0),
-                triangle(low + 23.0, low + 40.0),
+                triangle(x, high - 4.0, high - 21.0),
+                triangle(x, low + 4.0, low + 21.0),
             ];
-            if crowded {
-                expected.push(triangle(low + 42.0, low + 59.0));
+            if neighbouring {
+                // The moved fill stays under its own bar, 94.
+                let x = chart.index_to_x(94.0).unwrap();
+                expected.push(triangle(x, low + 4.0, low + 21.0));
+            } else {
+                expected.push(triangle(x, low + 23.0, low + 40.0));
             }
-            expected.push(triangle(high - 4.0, high - 21.0));
+            if crowded {
+                expected.push(triangle(x, low + 42.0, low + 59.0));
+            }
             assert_eq!(tips, if drawn { expected } else { Vec::new() });
             // 22 buys with a total quantity of 23, 3 of them drawn.
-            let labels_expected: &[&str] = match (labels, crowded) {
-                (true, true) => &["+19", "Buy 23", "Sell 3"],
-                (false, true) => &["+19"],
-                (true, false) => &["Buy 3", "Sell 3"],
-                (false, false) => &[],
+            let labels_expected: &[&str] = match (labels, crowded, neighbouring) {
+                (true, true, _) => &["Sell 3", "+19", "Buy 23"],
+                (false, true, _) => &["+19"],
+                (true, false, true) => &["Sell 3", "Buy 2", "Buy 1"],
+                (true, false, false) => &["Sell 3", "Buy 3"],
+                (false, false, _) => &[],
             };
             assert_eq!(texts, labels_expected);
             assert_eq!(hovered, drawn, "hovering a mark lists its fills");
@@ -707,6 +712,87 @@ mod tests {
                     assert_eq!(marked, expected, "fill at {seconds} seconds, width {width}");
                 }
             }
+        }
+    }
+
+    /// Each fill's triangles sit under its own bar, also among fills on the bars beside it, with
+    /// labels on or off: a run of one-lot buys on ten bars in a row, and four buys on each of two
+    /// neighbouring bars, three triangles and "+1" each.
+    #[test]
+    fn fills_on_nearby_bars_stay_on_their_bars() {
+        use crate::theme::ThemeExt;
+        let rows: [(bool, Vec<(usize, usize)>); 2] = [
+            (true, (90..100).map(|bar| (bar, 1)).collect()),
+            (false, vec![(95, 4), (96, 4)]),
+        ];
+        for (labels, bars) in rows {
+            let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+            chart.symbol = "SYM".into();
+            let request = OrderRequest::new("SYM", OrderSide::Buy, 100.0, OrderType::Limit(95.0));
+            let mut state = vec![AccountEvent::Order(Order::new(
+                OrderId::new("1"),
+                request,
+                OrderStatus::Filled,
+            ))];
+            for &(bar, count) in &bars {
+                let time = chart.bars(SeriesId::MAIN)[bar].time + chrono::Duration::hours(12);
+                state.extend((0..count).map(|_| {
+                    AccountEvent::Execution(Execution::new(
+                        OrderId::new("1"),
+                        time,
+                        OrderSide::Buy,
+                        95.0,
+                        1.0,
+                    ))
+                }));
+            }
+            let mut trading = Trading::default();
+            trading.display.show_execution_labels = labels;
+            trading.set_service(Arc::new(Recorder {
+                state,
+                ..Recorder::default()
+            }));
+            trading.poll(&egui::Context::default(), &mut Toasts::new());
+            let ctx = egui::Context::default();
+            let mut tips = Vec::new();
+            for frame in 0..3 {
+                let input = egui::RawInput {
+                    time: Some(f64::from(frame)),
+                    ..Default::default()
+                };
+                let output = ctx.run_ui(input, |ui| {
+                    chart.show(ui);
+                    trading.show(ui, &mut chart);
+                });
+                let buy = ctx.active_theme().ui.accent;
+                tips = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Path(path)
+                            if path.closed && path.points.len() == 3 && path.fill == buy =>
+                        {
+                            Some(path.points[0])
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+            }
+            let low = chart.get_chart_mapping().price_to_y(90.0);
+            // Under each bar its own stack: tips 4 points under the low, 19 points apart.
+            let mut expected: Vec<_> = bars
+                .iter()
+                .flat_map(|&(bar, count)| {
+                    let x = chart.index_to_x(bar as f64).unwrap();
+                    (0..count.min(3)).map(move |i| egui::pos2(x, low + 4.0 + 19.0 * i as f32))
+                })
+                .collect();
+            let by_place =
+                |a: &egui::Pos2, b: &egui::Pos2| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y));
+            tips.sort_by(by_place);
+            expected.sort_by(by_place);
+            assert_eq!(tips, expected, "labels {labels}, bars {bars:?}");
         }
     }
 

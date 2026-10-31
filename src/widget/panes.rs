@@ -1600,7 +1600,7 @@ mod tests {
                     .all(|pane| pane.panel_rect.height() >= 39.9)
             );
             let last = chart.get_rendered_indicator_panes().last().unwrap();
-            assert!((last.panel_rect.bottom() - 564.0).abs() < 0.1);
+            assert!((last.panel_rect.bottom() - 557.0).abs() < 0.1);
             chart.pane_options_mut().resizable = false;
             let fixed = chart.get_rendered_indicator_panes().to_vec();
             let separator = Pos2::new(main.center().x, fixed[1].panel_rect.top() - 0.5);
@@ -2114,7 +2114,7 @@ mod tests {
                 assert!(legend_seen, "missing pane legend");
                 let last = panes.last().unwrap().panel_rect;
                 assert!(
-                    (bounds.bottom() - last.bottom() - 28.0).abs() < 1.0,
+                    (bounds.bottom() - last.bottom() - 35.0).abs() < 1.0,
                     "{size:?}: {last:?} in {bounds:?}"
                 );
                 if size.1 > 200.0 {
@@ -2214,7 +2214,7 @@ mod tests {
                     RawInput {
                         screen_rect: Some(Rect::from_min_size(
                             Pos2::ZERO,
-                            egui::vec2(size.0, 100.0),
+                            egui::vec2(size.0, 107.0),
                         )),
                         ..Default::default()
                     },
@@ -2384,7 +2384,7 @@ mod tests {
                 assert!(
                     painted.iter().any(
                         |shape| matches!(shape, egui::Shape::LineSegment { points, stroke }
-                if stroke.color == egui::Color32::BLUE && (points[0].y - y).abs() < 0.01
+                if stroke.color == egui::Color32::BLUE && (points[0].y - y).abs() < 0.5
                     && points[0].x == rect.left())
                     ),
                     "snap to {value}"

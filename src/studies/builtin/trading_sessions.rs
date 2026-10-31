@@ -78,6 +78,8 @@ pub struct TradingSessions {
     sessions: Vec<SessionSummary>,
     study_zones: Vec<StudyZone>,
     labels: Vec<StudyLabel>,
+    /// The session each slot was building before the last of `source_len` bars, when known.
+    before_last: Option<[Option<SessionSummary>; 3]>,
     source_len: usize,
 }
 
@@ -145,6 +147,7 @@ impl TradingSessions {
             sessions: Vec::new(),
             study_zones: Vec::new(),
             labels: Vec::new(),
+            before_last: None,
             source_len: 0,
         }
     }
@@ -216,11 +219,23 @@ impl TradingSessions {
         }
     }
 
-    /// The sessions of `slot` in `data` from bar `first` on, each day's from its start time.
-    fn scan(&self, slot: usize, data: &[Bar], first: usize, out: &mut Vec<SessionSummary>) {
-        let mut current: Option<SessionSummary> = None;
+    /// The sessions of `slot` in `data` from bar `first` on, each day's from its start time,
+    /// continuing `current`, the session the bars before `first` were building. Returns the
+    /// session the bars before the last were building.
+    fn scan(
+        &self,
+        slot: usize,
+        data: &[Bar],
+        first: usize,
+        mut current: Option<SessionSummary>,
+        out: &mut Vec<SessionSummary>,
+    ) -> Option<SessionSummary> {
+        let mut before_last = None;
         let start = TimeDelta::minutes(self.start[slot] as i64);
         for (at, bar) in data.iter().enumerate().skip(first) {
+            if at + 1 == data.len() {
+                before_last = current.clone();
+            }
             if ![bar.open, bar.high, bar.low, bar.close]
                 .iter()
                 .all(|price| price.is_finite())
@@ -260,6 +275,7 @@ impl TradingSessions {
             }
         }
         out.extend(current);
+        before_last
     }
 
     /// Writes the zones and label of `session`.
@@ -312,11 +328,19 @@ impl TradingSessions {
         }
     }
 
-    /// Brings the sessions up to date. A session stays only if all its bars come before `from`
-    /// and its slot has a later session, because the next bar can extend the last one even past
-    /// a bar that does not count.
+    /// Brings the sessions up to date. Each slot resumes the session its bars before `from` were
+    /// building: the one kept before the last bar when only that bar changed, else its latest
+    /// session that ends by `from`, after reading again the bars of one that reaches past it.
     fn update_sessions(&mut self, data: &[Bar], from: usize) {
         let from = from.min(self.source_len).min(data.len());
+        // The chart follows an update with `update(data, len)`, which must keep `before_last`.
+        if from == data.len() && from == self.source_len {
+            return;
+        }
+        let before_last = self
+            .before_last
+            .take()
+            .filter(|_| from + 1 == self.source_len);
         self.source_len = data.len();
         if self.daily {
             self.sessions.clear();
@@ -324,29 +348,43 @@ impl TradingSessions {
             self.labels.clear();
             return;
         }
-        let mut last = [usize::MAX; 3];
-        for (at, session) in self.sessions.iter().enumerate() {
-            last[session.slot] = at;
-        }
+        // Per slot, the bar to read from and the session the bars before it were building.
+        let started = self
+            .sessions
+            .partition_point(|session| session.bars.start < from);
+        let resume: [_; 3] = std::array::from_fn(|slot| {
+            if let Some(before_last) = &before_last {
+                return (from, before_last[slot].clone());
+            }
+            if !self.show[slot] {
+                return (from, None);
+            }
+            let mut latest = self.sessions[..started]
+                .iter()
+                .rev()
+                .filter(|session| session.slot == slot);
+            match (latest.next(), latest.next()) {
+                (Some(last), previous) if last.bars.end > from => {
+                    (last.bars.start, previous.cloned())
+                }
+                (last, _) => (from, last.cloned()),
+            }
+        });
+        // Sessions of a slot from the one it resumes on are written again.
+        let cut = |slot: usize| {
+            let (first, current) = &resume[slot];
+            current
+                .as_ref()
+                .map_or(*first, |session| session.bars.start)
+        };
+        let first = cut(0).min(cut(1)).min(cut(2));
         let keep = self
             .sessions
-            .iter()
-            .enumerate()
-            .position(|(at, session)| session.bars.end >= from || last[session.slot] == at)
-            .unwrap_or(self.sessions.len());
-        let mut resume = [0; 3];
-        for session in &self.sessions[..keep] {
-            resume[session.slot] = session.bars.end;
-        }
-        let first = self.sessions.get(keep).map_or(from, |session| {
-            let (bar, slot) = (session.bars.start, session.slot);
-            let kept = self
-                .labels
-                .partition_point(|label| (label.bar, label.plot) < (bar, slot));
-            self.labels.truncate(kept);
-            bar
-        });
-        self.sessions.truncate(keep);
+            .partition_point(|session| session.bars.start < first);
+        let mut tail = self.sessions.split_off(keep);
+        tail.retain(|session| session.bars.start < cut(session.slot));
+        let kept = self.labels.partition_point(|label| label.bar < first);
+        self.labels.truncate(kept);
         let per_session = [
             self.boxes,
             self.open_lines,
@@ -357,10 +395,13 @@ impl TradingSessions {
         .filter(|shown| **shown)
         .count();
         self.study_zones.truncate(keep * per_session);
-        let mut tail = Vec::new();
-        for slot in (0..3).filter(|&slot| self.show[slot]) {
-            self.scan(slot, data, first.max(resume[slot]), &mut tail);
+        let mut before_last: [_; 3] = Default::default();
+        for (slot, (first, current)) in resume.into_iter().enumerate() {
+            if self.show[slot] {
+                before_last[slot] = self.scan(slot, data, first, current, &mut tail);
+            }
         }
+        self.before_last = (from < data.len()).then_some(before_last);
         tail.sort_by_key(|session| (session.bars.start, session.slot));
         for session in &tail {
             self.emit(session);
@@ -576,6 +617,11 @@ impl Indicator for TradingSessions {
         }
     }
 
+    /// A session's box and lines take the visibility of its output.
+    fn plot_output(&self, line: usize) -> usize {
+        line % 3
+    }
+
     fn value_format(&self) -> crate::scales::StudyFormat {
         crate::scales::StudyFormat::Fixed(0)
     }
@@ -621,6 +667,10 @@ impl Indicator for TradingSessions {
 
     fn zones(&self) -> &[StudyZone] {
         &self.study_zones
+    }
+
+    fn zones_cover_whole_bars(&self) -> bool {
+        true
     }
 
     fn labels(&self) -> &[StudyLabel] {
@@ -843,6 +893,17 @@ mod tests {
         assert_eq!(night.labels()[0].text, "Night\nRange: 4.00\nAvg: 11.40");
     }
 
+    /// Hiding a session's output in the style tab hides its box and lines with its highlight.
+    #[test]
+    fn a_hidden_output_hides_its_box_and_lines() {
+        let mut study = crate::studies::ConfiguredStudy::new(Box::new(TradingSessions::new()));
+        let mut settings = study.settings();
+        settings.plots[0].visible = false;
+        study.apply_settings(&[], settings).unwrap();
+        let visible: Vec<_> = (3..9).map(|line| study.plot_style(line).visible).collect();
+        assert_eq!(visible, [false, true, true, false, true, true]);
+    }
+
     /// Hourly bars from 08:00 on the 15th to 10:00 on the 16th, sessions 08:00 to 16:00 and 14:00
     /// to 21:00. The latest second session, bars 6 to 12, overlaps the finished first session,
     /// bars 0 to 7, which a new bar must not start again from bar 6.
@@ -872,7 +933,8 @@ mod tests {
     }
 
     /// A bar that does not count does not split a session, even when it is the newest when the
-    /// next bar arrives.
+    /// next bar arrives, and joins its session once corrected, even after the session's last bar
+    /// and before the next session.
     #[test]
     fn a_session_continues_past_a_bar_without_prices() {
         let mut data = bars(DAY);
@@ -884,5 +946,53 @@ mod tests {
         data.push(next);
         sessions.update(&data, 4);
         assert_eq!(zones(&sessions), [(1..5, 13.0, 8.0, 3)]);
+
+        let mut data = bars(&[
+            (15, 9, 10.0, 11.0, 9.0, 10.0),
+            (15, 10, 10.0, 11.0, 9.0, 10.0),
+            (15, 11, 10.0, 11.0, 9.0, 10.0),
+            (16, 9, 10.0, 11.0, 9.0, 10.0),
+        ]);
+        let corrected = Bar::new(data[2].time, 10.0, 20.0, 9.0, 10.0, 1.0);
+        for at in [1, 2] {
+            data[at] = Bar::whitespace(data[at].time);
+        }
+        let mut sessions = study("Test", 9, 12);
+        sessions.calculate(&data);
+        assert_eq!(
+            zones(&sessions),
+            [(0..1, 11.0, 9.0, 3), (3..4, 11.0, 9.0, 3)]
+        );
+        data[2] = corrected;
+        sessions.update(&data, 2);
+        assert_eq!(
+            zones(&sessions),
+            [(0..3, 20.0, 9.0, 3), (3..4, 11.0, 9.0, 3)]
+        );
+    }
+
+    /// An update of the last bar reads that bar, not every bar since the oldest session still
+    /// open, so 30 of them on 22 hours of 5-second bars take less than one calculation.
+    #[test]
+    fn a_last_bar_update_reads_only_that_bar() {
+        let start = Utc.with_ymd_and_hms(2024, 1, 15, 0, 0, 0).unwrap();
+        let mut data: Vec<Bar> = (0..15_840)
+            .map(|i| {
+                let close = 100.0 + (i as f64 / 50.0).sin();
+                let time = start + TimeDelta::seconds(5 * i);
+                Bar::new(time, close, close + 0.5, close - 0.5, close, 1.0)
+            })
+            .collect();
+        let mut sessions = TradingSessions::new();
+        let calculation = std::time::Instant::now();
+        sessions.calculate(&data);
+        let calculation = calculation.elapsed();
+        let last = data.len() - 1;
+        let updates = std::time::Instant::now();
+        for tick in 0..30 {
+            data[last].close = 100.0 + tick as f64 / 100.0;
+            sessions.update(&data, last);
+        }
+        assert!(updates.elapsed() < calculation, "{:?}", updates.elapsed());
     }
 }

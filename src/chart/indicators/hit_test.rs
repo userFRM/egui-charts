@@ -125,8 +125,13 @@ where
         .iter()
         .filter(|zone| zone.plot == line_idx)
         .find(|zone| {
-            zone_rect(zone, coords, &value_to_y)
-                .is_some_and(|rect| rect.expand(HIT_TOLERANCE).contains(click_pos))
+            zone_rect(
+                zone,
+                indicator.zones_cover_whole_bars(),
+                coords,
+                &value_to_y,
+            )
+            .is_some_and(|rect| rect.expand(HIT_TOLERANCE).contains(click_pos))
         })
     {
         return Some(

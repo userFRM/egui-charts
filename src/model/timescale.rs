@@ -307,18 +307,30 @@ impl TimeScale {
     }
 
     /// Fit fractional edges, centring spans that exceed the configured or fallback spacing cap.
+    /// A fit that would leave the last bar left of the plot shows the newest bars when the span
+    /// exceeds the plot at the minimum spacing, and keeps the last bar's slot in view otherwise.
     #[cfg(feature = "widget")]
     pub(crate) fn fit_logical_range(&mut self, left: f64, right: f64, default_max: f64) {
         let (min, max) = self.spacing_bounds();
         let max = if max > 0.0 { max } else { default_max.max(min) };
         let spacing = (self.width as f64 - 1.0) / (right - left);
         self.bar_spacing = self.clamp_spacing(spacing.min(max));
+        let slots = (self.width as f64 - 1.0) / self.bar_spacing;
         let right = if spacing > max {
-            (left + right) / 2.0 + (self.width as f64 - 1.0) / (2.0 * self.bar_spacing)
+            (left + right) / 2.0 + slots / 2.0
         } else {
             right
         };
-        self.right_offset = right - self.base_idx() as f64 - 0.5;
+        let last = self.base_idx() as f64;
+        let right = if right - slots <= last {
+            right
+        } else if spacing < min {
+            last + 0.5
+        } else {
+            // A slot wider than the plot centres the bar instead.
+            last + (slots - 0.5).max(slots / 2.0)
+        };
+        self.right_offset = right - last - 0.5;
         self.apply_constraints();
     }
 

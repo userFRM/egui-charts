@@ -898,7 +898,7 @@ impl Chart {
                 } else {
                     chart_rect.left()
                 },
-                time_axis_top + 28.0,
+                time_axis_top + crate::styles::sizing::chart::BOTTOM_PADDING_WITH_TIME,
             ),
         );
         let axis_interaction = cfg!(feature = "icons")
@@ -3149,7 +3149,7 @@ impl Chart {
         );
         self.measured_axis_width = self.measured_axis_width.max(independent_axis_width);
         for tag in tags.iter().skip(usize::from(has_currency)).flatten() {
-            self.measured_axis_width = self.measured_axis_width.max(tag.width() + 5.0 + 8.0);
+            self.measured_axis_width = self.measured_axis_width.max(tag.width() + 5.0 + 6.0);
         }
 
         if show_price_axis && has_currency {
@@ -5574,7 +5574,7 @@ mod tests {
             );
             assert_eq!(
                 layout.price_rect.height(),
-                (height - 2.0 * padding - 28.0).max(0.0)
+                (height - 2.0 * padding - 35.0).max(0.0)
             );
         }
     }

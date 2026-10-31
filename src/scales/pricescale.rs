@@ -499,7 +499,7 @@ impl PriceScale {
 ///
 /// Unclamped: a price outside the visible range maps outside the pane, and the
 /// painter's clip rect clips it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PriceMap {
     transform: PriceTransform,
     range: PriceRange,
@@ -553,7 +553,34 @@ impl PriceMap {
     /// Tick marks for the visible range, spaced by the scale's
     /// [`tick_marks`](PriceScaleOptions::tick_marks) settings.
     pub fn marks(&self) -> Vec<PriceMark> {
-        PriceMarkGenerator::with_config(self.tick_marks).generate_marks(self)
+        self.shared_marks().to_vec()
+    }
+
+    /// The [`marks`](Self::marks), shared rather than copied.
+    pub(crate) fn shared_marks(&self) -> std::rc::Rc<[PriceMark]> {
+        // A frame asks for the same marks for its grid, labels, axis width and readouts, and
+        // formatting their labels is costly, so the marks of the last map are kept.
+        thread_local! {
+            static LAST: std::cell::RefCell<Option<(PriceMap, std::rc::Rc<[PriceMark]>)>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        // A signed zero labels differently ("-0.00"), so the range also compares by bits.
+        let same = |map: &PriceMap| {
+            map == self
+                && map.range.min.to_bits() == self.range.min.to_bits()
+                && map.range.max.to_bits() == self.range.max.to_bits()
+        };
+        LAST.with_borrow_mut(|last| match last {
+            Some((map, marks)) if same(map) => marks.clone(),
+            _ => {
+                let marks: std::rc::Rc<[PriceMark]> =
+                    PriceMarkGenerator::with_config(self.tick_marks)
+                        .generate_marks(self)
+                        .into();
+                *last = Some((*self, marks.clone()));
+                marks
+            }
+        })
     }
 
     /// Supplied price decimals, or `None` to derive them from the tick step.

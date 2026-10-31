@@ -500,6 +500,12 @@ impl Chart {
         mut page: HistoryPage,
         scroll_back: bool,
     ) {
+        // The oldest bars were evicted since the page was asked for: merged, it would leave
+        // the evicted bars as a gap. `scroll_back` asks again before the oldest bar held.
+        if scroll_back && asked.before != self.scroll_back_before(link) {
+            self.feed.loading_history = false;
+            return;
+        }
         let received = page.bars.len();
         page.bars.retain(|bar| {
             asked
@@ -519,7 +525,9 @@ impl Chart {
             link.paging_stopped = true;
             self.feed.last_error = Some(error);
         }
-        link.bar_cursor = continuation.filter(|_| !link.paging_stopped);
+        link.bar_cursor = continuation
+            .filter(|_| !link.paging_stopped)
+            .map(|at| (at, oldest));
         self.feed.history_complete |= (page.end_of_history
             || (empty && page.continue_before.is_none()))
             && !self.bar_limit_reached();
@@ -717,6 +725,18 @@ impl Chart {
         })
     }
 
+    /// Where the page before the oldest bar starts: that bar's slot, or the continuation an
+    /// empty page named while that bar was the oldest. An eviction lapses the continuation.
+    fn scroll_back_before(&self, link: &FeedLink) -> Option<chrono::DateTime<chrono::Utc>> {
+        let first = self.bars(SeriesId::MAIN).first().map(|bar| bar.time);
+        // Stored bars keep the feed's stamp, any instant inside the slot.
+        let oldest = first.map(|time| link.clock.bar_open(time));
+        let cursor = (link.bar_cursor)
+            .filter(|(_, held)| *held == first)
+            .map(|(at, _)| at);
+        [oldest, cursor].into_iter().flatten().min()
+    }
+
     /// Asks for the page before the oldest bar once the view nears it.
     fn scroll_back(&mut self, link: &mut FeedLink) {
         let feed = &self.feed;
@@ -732,9 +752,7 @@ impl Chart {
         {
             return;
         }
-        // Stored bars keep the feed's stamp, any instant inside the slot.
-        let oldest = (self.bars(SeriesId::MAIN).first()).map(|bar| link.clock.bar_open(bar.time));
-        let Some(before) = [oldest, link.bar_cursor].into_iter().flatten().min() else {
+        let Some(before) = self.scroll_back_before(link) else {
             return;
         };
         if self.symbol.is_empty() || self.state.visible_range().0 >= SCROLL_BACK_MARGIN {
