@@ -211,6 +211,14 @@ pub trait Indicator: Send {
         None
     }
 
+    /// The last source bar whose value on a zero-based line is final. The segments after it can
+    /// still move with later bars and are drawn dashed when the line is solid. `None`, the
+    /// default, draws the whole line as styled.
+    fn provisional_after(&self, line: usize) -> Option<usize> {
+        let _ = line;
+        None
+    }
+
     /// Optional text beside the shape a circle, cross or triangle plot draws at a source bar:
     /// under an upward triangle and over the other shapes, in the shape's colour.
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {

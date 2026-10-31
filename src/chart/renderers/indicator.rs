@@ -360,6 +360,8 @@ impl IndicatorRenderer {
 
             let style = indicator.line_style(line_idx);
             let mut points = Vec::new();
+            let provisional = indicator.provisional_after(line_idx);
+            let mut dashed = false;
 
             // values[i] belongs to bar i of the full series and `bars` are the
             // visible ones from coords.start_idx, so only that slice is walked.
@@ -369,6 +371,26 @@ impl IndicatorRenderer {
                     continue;
                 };
                 let x = coords.idx_to_x(display_bar);
+                if !dashed && provisional.is_some_and(|after| i > after) {
+                    dashed = true;
+                    // The dashes start at the value on `after`, the last final one.
+                    if plot.plot_type == PlotType::Line && plot.pattern == LineStyle::Solid {
+                        if !points.is_empty() {
+                            Self::draw_line(
+                                context,
+                                &points,
+                                color,
+                                style,
+                                PlotStyle { color, ..plot },
+                                price_scale.price_to_y(0.0),
+                            );
+                            let last = points.last().copied();
+                            points.clear();
+                            points.extend(last);
+                        }
+                        plot.pattern = LineStyle::Dashed;
+                    }
+                }
                 let next_color = indicator.plot_color(line_idx, i).unwrap_or(plot.color);
                 if next_color != color && !points.is_empty() {
                     Self::draw_line(
@@ -704,9 +726,10 @@ mod tests {
     }
 
     /// The label at the last bar reaches past the plot unless it is moved back, and the axis tags
-    /// start right of the plot.
+    /// start right of the plot. Every bar of the Zig Zag series reverses the last by 9% or 10%, so
+    /// the last pivot is bar 99, a high, and the last final one bar 98, a low.
     #[test]
-    fn study_labels_stay_in_the_plot() {
+    fn study_labels_stay_in_the_plot_and_provisional_legs_are_dashed() {
         let mut chart = chart(&[100.0, 101.0], &[110.0, 111.0]);
         chart.add_indicator(Box::new(
             crate::studies::PivotPoints::new()
@@ -727,6 +750,46 @@ mod tests {
                 "{text} at {rect:?} leaves {price:?}"
             );
         }
+
+        let blue = crate::studies::palette::BLUE;
+        let mut chart = crate::widget::test_frames::chart(&[100.0, 105.0], &[105.0, 110.0]);
+        chart.add_indicator(Box::new(
+            crate::studies::ZigZag::new(5.0, 1).with_labels(true, None, false),
+        ));
+        let ctx = Context::default();
+        let shapes = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, Vec::new());
+        let price = chart.get_rendered_price_rect();
+        let labels = painted_labels(&shapes, blue, |text| matches!(text, "100.00" | "110.00"));
+        let bottom = |text: &str| {
+            let rects = labels.iter().filter(|(label, _)| label == text);
+            rects
+                .map(|(_, rect)| rect.bottom())
+                .fold(f32::MIN, f32::max)
+        };
+        let top = |text: &str| {
+            let rects = labels.iter().filter(|(label, _)| label == text);
+            rects.map(|(_, rect)| rect.top()).fold(f32::MAX, f32::min)
+        };
+        assert!(bottom("110.00") < top("100.00"), "{labels:?}");
+        assert!(labels.iter().all(|(text, rect)| {
+            text.len() == 6 && rect.left() >= price.left() && rect.right() <= price.right()
+        }));
+        let (from, to) = (
+            chart.index_to_x(98.0).unwrap(),
+            chart.index_to_x(99.0).unwrap(),
+        );
+        assert!(shapes.iter().any(|shape| matches!(
+            shape,
+            Shape::LineSegment { points, stroke }
+                if stroke.color == blue && points[0].x >= from && points[1].x <= to
+        )));
+        let solid_points = shapes.iter().filter_map(|shape| match shape {
+            Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(blue) => {
+                Some(&path.points)
+            }
+            _ => None,
+        });
+        assert!(solid_points.flatten().all(|point| point.x <= from + 0.5));
     }
 
     #[test]

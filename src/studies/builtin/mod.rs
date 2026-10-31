@@ -395,7 +395,7 @@ pub use reversal::Reversal;
 pub use rsi_divergence::RsiDivergence;
 pub use wedge::{FallingWedge, RisingWedge, Wedge};
 pub use williams_fractals::WilliamsFractals;
-pub use zigzag::{ZigZag, ZigZagMode, ZigZagPivot};
+pub use zigzag::{ZigZag, ZigZagChange, ZigZagMode, ZigZagPivot};
 
 // Re-exports - Additional Oscillator/Momentum indicators
 pub use connors_rsi::ConnorsRSI;

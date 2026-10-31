@@ -872,6 +872,12 @@ impl Indicator for ConfiguredStudy {
     fn set_label_precision(&mut self, precision: Option<usize>) {
         self.study.set_label_precision(precision);
     }
+    fn provisional_after(&self, line: usize) -> Option<usize> {
+        self.aligned
+            .is_none()
+            .then(|| self.study.provisional_after(line))
+            .flatten()
+    }
     fn extend_right(&self) -> bool {
         self.study.extend_right()
     }

@@ -353,9 +353,13 @@ fn every_update_equals_a_fresh_calculate() {
                 .with_label_side(PivotLabelSide::Right),
         )
     };
+    let zigzag_labels = || -> Box<dyn Indicator> {
+        Box::new(ZigZag::new(1.0, 2).with_labels(true, Some(ZigZagChange::Price), true))
+    };
     let mut studies = builtins_with(|k| 3 + 2 * k, |v| v);
     studies.push(tokyo_week());
     studies.push(pivot_labels());
+    studies.push(zigzag_labels());
     for study in &studies {
         if matches!(
             study.name(),
@@ -371,6 +375,7 @@ fn every_update_equals_a_fresh_calculate() {
     let mut twins = builtins_with(|k| 3 + 2 * k, |v| v);
     twins.push(tokyo_week());
     twins.push(pivot_labels());
+    twins.push(zigzag_labels());
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     let mut data = Vec::<Bar>::new();
     for event in 0..200 {
@@ -445,7 +450,10 @@ fn every_update_equals_a_fresh_calculate() {
                             study.zones(),
                             study.table(),
                             study.projections(),
-                            study.labels()
+                            study.labels(),
+                            (0..study.line_count())
+                                .map(|line| study.provisional_after(line))
+                                .collect::<Vec<_>>()
                         )
                     ),
                     format!(
@@ -455,7 +463,10 @@ fn every_update_equals_a_fresh_calculate() {
                             fresh.zones(),
                             fresh.table(),
                             fresh.projections(),
-                            fresh.labels()
+                            fresh.labels(),
+                            (0..fresh.line_count())
+                                .map(|line| fresh.provisional_after(line))
+                                .collect::<Vec<_>>()
                         )
                     ),
                     "{} metadata, event {event}, revision {revision}",
