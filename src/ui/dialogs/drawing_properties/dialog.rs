@@ -109,17 +109,9 @@ impl DrawingPropertiesDialog {
         ctx: &Context,
         chart: &mut crate::widget::Chart,
     ) -> DrawingPropertiesAction {
-        if self
-            .preview
-            .as_ref()
-            .is_some_and(|(_, id, _)| !self.is_open || self.drawing_id != Some(*id))
-        {
-            self.restore_preview(chart);
-        }
         let action = self.show(ctx);
-        if !self.is_open || matches!(action, DrawingPropertiesAction::Apply(..)) {
-            self.restore_preview(chart);
-        }
+        // Each frame edits the drawings as they were before the preview, as Ok does.
+        self.restore_preview(chart);
         if let DrawingPropertiesAction::Apply(id, props) = &action {
             if let Err(error) = props.apply_to_chart(*id, chart) {
                 self.error = Some(error.into());
@@ -746,7 +738,8 @@ mod tests {
                 "opening keeps a wide stroke"
             );
             assert!(!chart.can_undo());
-            for width in [3.0, 5.0] {
+            // At 20, drawing 7's own width, the width is not edited and 8 shows its own.
+            for (width, peer) in [(3.0, 3.0), (20.0, 4.0), (5.0, 5.0)] {
                 dialog.props.line_width = width;
                 dialog.props.color = Color32::GREEN;
                 let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;
@@ -761,7 +754,7 @@ mod tests {
                     width,
                     "{finish}: live preview"
                 );
-                assert_eq!(chart.drawings().drawings[1].stroke_width, width);
+                assert_eq!(chart.drawings().drawings[1].stroke_width, peer, "{finish}");
                 let preview = &chart.drawings().drawings[0];
                 assert_eq!(preview.position_target_color, Some([40, 100, 220, 255]));
                 assert_eq!(preview.position_stop_color, Some([220, 140, 40, 255]));
