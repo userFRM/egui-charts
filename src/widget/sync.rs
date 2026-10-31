@@ -76,29 +76,43 @@ impl Chart {
 
     /// Fits the receiver's bars to a UTC range using its own plot width.
     /// Returns `false` without changing the view for empty data, reversed or zero ranges,
-    /// a range outside the loaded bar slots, or endpoints mapping to the same element.
+    /// a range that ends before the first bar's slot or starts after the last bar's period,
+    /// or endpoints mapping to the same element.
     /// Spacing stops at the configured maximum, or 50 pixels when unlimited, centring short
-    /// spans. The minimum spacing and local edge constraints still apply.
+    /// spans. The minimum spacing and local edge constraints still apply, and the fit keeps a
+    /// bar in view: a range longer than the plot at the minimum spacing shows the newest bars.
     pub fn apply_synced_time_range(&mut self, range: VisibleTimeRange) -> bool {
-        self.fit_time_range(range, SYNC_MAX_BAR_SPACING)
+        self.apply_synced_time_range_from(range, None)
     }
 
     /// As [`apply_synced_time_range`](Self::apply_synced_time_range) for a range from a chart
-    /// of interval `source`; only a different interval falls back to the 50-pixel cap.
+    /// with the interval and plot slots of [`Self::sync_source`]. A receiver of that interval
+    /// may exceed the 50-pixel cap up to the spacing at which its plot spans the source's slot
+    /// count, so charts with the same bar slots zoom together, while one with fewer slots in
+    /// the range, as across a closure the source trades through, stays readable.
     pub(crate) fn apply_synced_time_range_from(
         &mut self,
         range: VisibleTimeRange,
-        source: Option<crate::model::Timeframe>,
+        source: Option<(crate::model::Timeframe, f64)>,
     ) -> bool {
-        let cap = if source == self.timeframe() {
-            f64::INFINITY
-        } else {
-            SYNC_MAX_BAR_SPACING
+        let cap = match source {
+            Some((timeframe, slots)) if Some(timeframe) == self.timeframe() => {
+                SYNC_MAX_BAR_SPACING.max((f64::from(self.state.time_scale().width()) - 1.0) / slots)
+            }
+            _ => SYNC_MAX_BAR_SPACING,
         };
         self.fit_time_range(range, cap)
     }
 
-    fn fit_time_range(&mut self, range: VisibleTimeRange, default_max: f64) -> bool {
+    /// The interval and the bar slots across the plot, `None` without an interval.
+    pub(crate) fn sync_source(&self) -> Option<(crate::model::Timeframe, f64)> {
+        let scale = self.state.time_scale();
+        let edge = |x| scale.coord_to_idx_precise(x, 0.0, scale.width());
+        Some((self.timeframe()?, edge(scale.width() - 1.0) - edge(0.0)))
+    }
+
+    /// As [`Self::apply_synced_time_range`] with `default_max` in place of the 50-pixel cap.
+    pub(super) fn fit_time_range(&mut self, range: VisibleTimeRange, default_max: f64) -> bool {
         if range.from >= range.to {
             return false;
         }
@@ -109,7 +123,9 @@ impl Chart {
             return false;
         };
         let scale = self.state.time_scale_mut();
-        if to <= from || scale.width() <= 1.0 || to < -0.5 || from > scale.base_idx() as f64 + 0.5 {
+        // The last bar's period runs to the next slot at `base_idx + 1`.
+        if to <= from || scale.width() <= 1.0 || to < -0.5 || from >= scale.base_idx() as f64 + 1.0
+        {
             return false;
         }
         scale.fit_logical_range(from, to, default_max);
@@ -177,25 +193,49 @@ mod tests {
 
     #[test]
     fn sync_keeps_coarse_receivers_readable() {
-        let times: Vec<_> = (0..24).map(|i| i * 3600).collect();
-        let last = 23 * 3600;
-        for (from, to, maximum, expected) in [
-            (last + 70 * 60, last + 170 * 60, 0.0, None),
-            (-170 * 60, -70 * 60, 0.0, None),
-            (last + 10 * 60, last + 50 * 60, 0.0, Some(50.0)),
-            (last + 10 * 60, last + 50 * 60, 25.0, Some(25.0)),
-            (last + 10 * 60, last + 50 * 60, 100.0, Some(100.0)),
-            (-3600 * 2000, last, 0.0, Some(0.5)),
+        let hourly: Vec<_> = (0..24).map(|i| i * 3600).collect();
+        let daily: Vec<_> = (0..30).map(|i| i * 86_400).collect();
+        let minutes: Vec<_> = (0..1000).map(|i| i * 60).collect();
+        // A 65.5-hour closure before the last minute.
+        let mut closed = minutes.clone();
+        closed.push(999 * 60 + 235_800);
+        // Minutes from the last bar's open, and the time at the last plot pixel. A receiver
+        // without an interval takes a range as from a source without one; given the slots of a
+        // one-minute source, the receiver is a one-minute chart.
+        for (times, slots, from, to, maximum, expected, right) in [
+            (&hourly, None, 70, 170, 0.0, None, None),
+            (&hourly, None, -1550, -1450, 0.0, None, None),
+            // Centred on index 23.5, 50 px per slot shows five slots each side.
+            (&hourly, None, 10, 50, 0.0, Some(50.0), Some(330.0)),
+            (&hourly, None, 10, 50, 25.0, Some(25.0), Some(630.0)),
+            (&hourly, None, 10, 50, 100.0, Some(100.0), Some(180.0)),
+            (&hourly, None, -121_380, 0, 0.0, Some(0.5), Some(0.0)),
+            // The second half of the last bar's period.
+            (&hourly, None, 35, 55, 0.0, Some(50.0), Some(345.0)),
+            (&daily, None, 1050, 1170, 0.0, Some(50.0), Some(8310.0)),
+            // Half a slot across the plot keeps the last bar at its centre.
+            (&hourly, None, 35, 55, 1000.0, Some(1000.0), Some(15.0)),
+            // 90 days ending three days after the last minute show the newest minutes.
+            (&minutes, None, -125_280, 4320, 0.0, Some(0.5), Some(0.5)),
+            // Four hours of the closure are 0.06 of a slot here, but 240 at the source.
+            (&closed, Some(240.0), -3330, -3090, 0.0, Some(50.0), None),
         ] {
-            let mut receiver = chart(&times, 501.0);
+            let last_open = *times.last().unwrap();
+            let (from, to) = (last_open + from * 60, last_open + to * 60);
+            let mut receiver = chart(times, 501.0);
+            let source = slots.map(|slots| (crate::model::Timeframe::Min1, slots));
+            receiver.timeframe = source.map(|(timeframe, _)| timeframe);
             receiver.state.time_scale_mut().set_max_bar_spacing(maximum);
             receiver.tracking_mode_active = true;
             let before = receiver.get_time_scale_state();
             assert_eq!(
-                receiver.apply_synced_time_range(VisibleTimeRange {
-                    from: time(from),
-                    to: time(to),
-                }),
+                receiver.apply_synced_time_range_from(
+                    VisibleTimeRange {
+                        from: time(from),
+                        to: time(to),
+                    },
+                    source,
+                ),
                 expected.is_some(),
                 "{from}..{to}, max {maximum}"
             );
@@ -205,16 +245,21 @@ mod tests {
                 continue;
             };
             let scale = receiver.state.time_scale();
-            assert!((scale.bar_spacing() - spacing).abs() < 1e-4);
-            let visible = scale.visible_logical_range();
-            assert!(visible.left.ceil().max(0.0) <= visible.right.floor().min(23.0));
+            assert!((scale.bar_spacing() - spacing).abs() < 1e-4, "{from}..{to}");
+            let edge = |x| scale.coord_to_idx_precise(x, 0.0, 501.0);
+            let (left, last) = (edge(0.0), (times.len() - 1) as f64);
+            assert!(
+                left.ceil().max(0.0) <= edge(500.0).floor().min(last),
+                "{from}..{to}"
+            );
             assert!(!receiver.tracking_mode_active);
-            if from == last + 10 * 60 {
-                // The midpoint is index 23.5; 500 px / 50 px spans ten hourly slots.
-                let center = scale.idx_to_coord_precise(23.5, 0.0, 501.0);
-                assert!((center - 250.0).abs() < 1e-4);
-            } else {
-                assert_eq!(receiver.visible_time_range().unwrap().to, time(to));
+            if let Some(right) = right {
+                let actual = receiver.visible_time_range().unwrap().to;
+                let expected = time(last_open + (right * 60.0) as i64);
+                assert!(
+                    (actual - expected).num_milliseconds().abs() < 1,
+                    "{from}..{to}"
+                );
             }
         }
     }

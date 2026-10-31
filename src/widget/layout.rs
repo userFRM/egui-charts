@@ -395,10 +395,17 @@ impl ChartLayout {
     /// Fits an explicit date selection to the active chart, or its synchronization group
     /// when `sync_date_range` is enabled. Call after the charts have rendered at their sizes.
     pub fn apply_date_range(&self, charts: &mut [&mut Chart], range: super::VisibleTimeRange) {
-        let source = charts.get(self.active).and_then(|chart| chart.timeframe());
+        let Some(active) = charts.get_mut(self.active) else {
+            return;
+        };
+        let source = active
+            .fit_time_range(range, f64::INFINITY)
+            .then(|| active.sync_source())
+            .flatten();
         for (index, chart) in charts.iter_mut().take(16).enumerate() {
-            if index == self.active
-                || (self.sync.sync_date_range && self.same_group(index, self.active))
+            if index != self.active
+                && self.sync.sync_date_range
+                && self.same_group(index, self.active)
             {
                 chart.apply_synced_time_range_from(range, source);
             }
@@ -696,7 +703,7 @@ impl ChartLayout {
         // The source's main-pane price, or `None` over volume and indicator panes.
         let price = hovered.and_then(|source| charts[source].last_crosshair?.1);
         let range = charts[self.active].visible_time_range();
-        let source = charts[self.active].timeframe();
+        let source = charts[self.active].sync_source();
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
             chart.set_synced_crosshair_time(None);
             if self.sync.sync_crosshair
