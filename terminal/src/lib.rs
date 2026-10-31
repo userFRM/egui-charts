@@ -493,10 +493,13 @@ mod tests {
                 .expect("the dialog asks");
             assert!(screen.text_at("Drawings changed elsewhere").is_some());
             click(&mut mine, SIZE, screen.text_at(button).unwrap());
-            for _ in 0..3 {
-                frame(&mut mine, SIZE, vec![]);
-            }
-            assert_eq!(frame(&mut mine, SIZE, vec![]).text_at(button), None);
+            // Only a kept copy is offered, to load or discard.
+            let screens: Vec<_> = (0..5).map(|_| frame(&mut mine, SIZE, vec![])).collect();
+            let offered = screens
+                .iter()
+                .any(|screen| screen.text_at("Load").is_some());
+            assert_eq!(offered, button == "Keep both", "{button}");
+            assert_eq!(screens[4].text_at(button), None);
             let prices = |name: &str| {
                 let json = storage.get(StoreKind::Drawings, name)?;
                 let (stored, _) = DrawingStorage::from_json(&json).unwrap();

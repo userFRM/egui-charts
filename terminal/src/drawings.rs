@@ -10,7 +10,7 @@ use egui_charts::ui::Control;
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
 use egui_charts::ui::dialogs::{
     DrawingContextMenuAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
-    StudyContextMenuAction,
+    LocalCopiesDialog, StudyContextMenuAction,
 };
 use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
 use egui_charts::ui::drawing_toolbar::{
@@ -49,6 +49,8 @@ pub(super) struct State {
     selection_toolbar: FloatingSelectionToolbar,
     object_tree: ObjectTreePanel,
     properties: DrawingPropertiesDialog,
+    /// The copies of the active chart's drawings that the user kept in a conflict.
+    local_copies: LocalCopiesDialog,
     /// Whether the data window is folded in its own panel.
     data_window_folded: bool,
     /// The last pointer position a chart reported, with its slot, which the data window reads
@@ -92,6 +94,9 @@ impl Terminal {
                     self.emit(Action::ChartMenu(ChartContextAction::Drawing(action)));
                 }
                 self.show_drawing_properties(ui.ctx());
+                self.drawings
+                    .local_copies
+                    .show(ui.ctx(), &mut self.charts[self.active]);
             }
             Region::Top | Region::Bottom => {}
         }
@@ -196,7 +201,15 @@ impl Terminal {
     }
 
     pub(super) fn drawings_modal(&self) -> bool {
-        self.drawings.properties.is_open
+        self.drawings.properties.is_open || self.drawings.local_copies.is_open()
+    }
+
+    /// Offers the copies kept of the drawings of `symbol`, if the active chart shows it.
+    pub(super) fn offer_local_copies(&mut self, symbol: &str) {
+        let chart = &mut self.charts[self.active];
+        if chart.symbol() == symbol {
+            self.drawings.local_copies.open(chart);
+        }
     }
 
     /// Shows the drawing toolbar in line with the active chart and queues what it emitted.
