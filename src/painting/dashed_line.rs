@@ -1,6 +1,6 @@
 //! The dashed-line painter and the clip bound its loops use, shared by the chart and the drawing tools.
 
-use egui::{Mesh, Pos2, Rect, Stroke, emath::GuiRounding};
+use egui::{Mesh, Pos2, Rect, Stroke};
 use std::cell::RefCell;
 use std::sync::Arc;
 
@@ -126,6 +126,7 @@ pub(crate) fn draw_dotted_segments(
     stroke: Stroke,
     spacing: f32,
 ) {
+    use egui::emath::GuiRounding;
     let size = stroke.width;
     let Some(clip) = finite_clip(painter) else {
         return;
