@@ -1,9 +1,10 @@
 //! Host replay wiring: source history, start selection, checkpoints and layout groups.
 
-use super::DemoApp;
-use egui_charts::model::{BarClock, Timeframe};
+use super::{DemoApp, live::LiveFeed};
+use egui_charts::model::{Bar, BarClock, Timeframe};
 use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplayStartAction};
 use egui_charts::widget::SeriesId;
+use std::num::NonZeroU64;
 
 impl DemoApp {
     pub(super) fn toggle_replay(&mut self) {
@@ -41,6 +42,10 @@ impl DemoApp {
         if self.state.timeframe.duration_ms() > Timeframe::Min1.duration_ms() {
             intervals.push(Timeframe::Min1);
         }
+        // The feed holds its recent trades, so replay can also advance one trade at a time.
+        if !self.state.timeframe.is_trade_based() {
+            intervals.push(Timeframe::Ticks(NonZeroU64::MIN));
+        }
         self.replay_control
             .set_update_intervals(self.replay_interval, intervals);
     }
@@ -70,6 +75,12 @@ impl DemoApp {
     }
 
     pub(super) fn push_replay_window_to_chart(&mut self) {
+        self.push_replay_window(false);
+    }
+
+    /// Applies the cursor to the charts and the paper account, which restarts when a replay
+    /// starts or the cutoff moves back. `kept` keeps it on a move back that undoes no fill.
+    fn push_replay_window(&mut self, kept: bool) {
         let Some(replay) = self.replay.as_ref() else {
             return;
         };
@@ -78,7 +89,7 @@ impl DemoApp {
             return;
         };
         let previous = self.chart.replay_time();
-        if previous.is_none_or(|previous| time < previous) {
+        if previous.is_none_or(|previous| time < previous && !kept) {
             self.paper.reset();
             if self.trading.has_broker() {
                 self.trading.set_service(self.paper.clone());
@@ -109,12 +120,7 @@ impl DemoApp {
                 );
                 extra.chart.set_data(SeriesId::MAIN, bars);
                 extra.chart.set_replay_time(Some(time));
-                let clock = source_clock(&extra.chart, self.replay_interval);
-                let bars = extra.live.snapshot(
-                    self.replay_interval,
-                    clock.clone(),
-                    extra.chart.extended_hours(),
-                );
+                let (bars, clock) = replay_source(&extra.live, self.replay_interval, &extra.chart);
                 extra.chart.set_replay_source(bars, clock);
             }
         }
@@ -144,10 +150,7 @@ impl DemoApp {
         if self.replay.is_none() {
             return;
         }
-        let clock = source_clock(&self.chart, interval);
-        let bars = self
-            .live
-            .snapshot(interval, clock.clone(), self.chart.extended_hours());
+        let (bars, clock) = replay_source(&self.live, interval, &self.chart);
         if bars.is_empty() {
             self.notify("No source history for that update interval");
             return;
@@ -169,7 +172,8 @@ impl DemoApp {
         }
         self.replay = Some(next);
         self.replay_interval = interval;
-        self.push_replay_window_to_chart();
+        // One-trade updates move the cutoff back only to just after the last trade before it.
+        self.push_replay_window(matches!(interval, Timeframe::Ticks(count) if count.get() == 1));
         self.chart.set_replay_source(bars, clock);
         for (index, extra) in self.extra_charts.iter_mut().enumerate() {
             let slot = if index >= self.layout_slot {
@@ -178,11 +182,7 @@ impl DemoApp {
                 index
             };
             if self.replay_slots.contains(&slot) {
-                let clock = source_clock(&extra.chart, interval);
-                let bars =
-                    extra
-                        .live
-                        .snapshot(interval, clock.clone(), extra.chart.extended_hours());
+                let (bars, clock) = replay_source(&extra.live, interval, &extra.chart);
                 extra.chart.set_replay_source(bars, clock);
             }
         }
@@ -297,6 +297,28 @@ impl DemoApp {
     }
 }
 
+/// The replay source of `interval` for `chart`, with its clock. The feed keeps trades from a
+/// minute on, so a one-trade source leaves out the chart bar that opened before the minute of
+/// its first trade: that bar lost earlier trades, and the chart shows its own bar there.
+fn replay_source(
+    live: &LiveFeed,
+    interval: Timeframe,
+    chart: &egui_charts::Chart,
+) -> (Vec<Bar>, BarClock) {
+    let clock = source_clock(chart, interval);
+    let mut bars = live.snapshot(interval, clock.clone(), chart.extended_hours());
+    if interval.is_trade_based()
+        && let Some(first) = bars.first()
+    {
+        let from = BarClock::new(Timeframe::Min1).bar_open(first.time);
+        let chart_clock = chart.bar_clock();
+        // shortcut: a bar whose first minute had no trades is left out too; expose the feed's retention start if that shows.
+        let end = bars.partition_point(|bar| chart_clock.bar_open(bar.time) < from);
+        bars.drain(..end);
+    }
+    (bars, clock)
+}
+
 fn source_clock(chart: &egui_charts::Chart, interval: Timeframe) -> BarClock {
     use egui_charts::scales::TimezoneMode;
     let clock = BarClock::new(interval);
@@ -400,5 +422,59 @@ mod tests {
             empty(&mut app),
             "restarting must clear the previous session"
         );
+
+        // One-trade updates move the cutoff back only to just after the last trade: no fill is undone.
+        app.stop_replay();
+        let bars = app.live.snapshot(
+            app.state.timeframe,
+            app.chart.bar_clock(),
+            app.chart.extended_hours(),
+        );
+        app.chart.set_data(SeriesId::MAIN, bars);
+        app.start_replay();
+        app.handle_replay_control(ReplayControlAction::GoToEnd);
+        position(&mut app);
+        let before = app.chart.replay_time();
+        let trade = Timeframe::Ticks(std::num::NonZeroU64::MIN);
+        app.handle_replay_control(ReplayControlAction::SetUpdateInterval(trade));
+        assert_eq!(app.replay_interval, trade);
+        assert!(
+            app.chart.replay_time() < before,
+            "the cursor sits just after the last trade"
+        );
+        assert!(
+            !empty(&mut app),
+            "switching to trade updates must keep the position"
+        );
+    }
+
+    /// The feed keeps trades from 14:00, the hour two hours before 16:30: an hourly chart's
+    /// one-trade source keeps them all, a four-hour chart's leaves out the bar from 12:00, which
+    /// lost its first two hours, and keeps the trades from 16:00.
+    #[test]
+    fn trade_sources_leave_out_a_bar_the_feed_holds_in_part() {
+        let time = |text: &str| text.parse::<chrono::DateTime<chrono::Utc>>().unwrap();
+        let live = LiveFeed::new("SAMPLE", time("2024-03-15T16:30:00Z"));
+        let trade = Timeframe::Ticks(std::num::NonZeroU64::MIN);
+        for (timeframe, from) in [
+            (Timeframe::Hour1, time("2024-03-15T14:00:00Z")),
+            (Timeframe::Hour4, time("2024-03-15T16:00:00Z")),
+        ] {
+            let mut chart =
+                egui_charts::Chart::new(egui_charts::model::BarData::from_bars(Vec::new()));
+            chart.set_timeframe(timeframe);
+            let all = live.snapshot(trade, BarClock::new(trade), chart.extended_hours());
+            assert!(
+                all[0].time < time("2024-03-15T14:01:00Z"),
+                "the feed keeps the first minute"
+            );
+            let expected: Vec<_> = all.iter().filter(|bar| bar.time >= from).cloned().collect();
+            assert!(!expected.is_empty());
+            assert_eq!(
+                replay_source(&live, trade, &chart).0,
+                expected,
+                "{timeframe}"
+            );
+        }
     }
 }
