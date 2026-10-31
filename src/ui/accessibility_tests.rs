@@ -406,6 +406,26 @@ fn dialogs_expose_titles_and_label_their_fields() {
             "Drawing Properties",
             |ctx| {
                 let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open(DrawingId(1), "Gann Box".into(), DrawingProps::default());
+                dialog.props.tool_settings = Some(Box::new(
+                    crate::drawings::DrawingTemplate::from_drawing(&crate::drawings::Drawing::new(
+                        1,
+                        crate::drawings::DrawingToolType::GannBox,
+                    )),
+                ));
+                dialog.active_tab = PropertiesTab::Inputs;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::CheckBox, "Price level 1 visible"),
+                (Role::CheckBox, "Time level 1 visible"),
+                (Role::CheckBox, "Angles"),
+            ],
+        ),
+        (
+            "Drawing Properties",
+            |ctx| {
+                let mut dialog = DrawingPropertiesDialog::new();
                 dialog.open(
                     DrawingId(1),
                     "Volume Profile".into(),
@@ -671,9 +691,8 @@ fn dialogs_expose_titles_and_label_their_fields() {
                     if english == "TEST" {
                         return Some("This identifier must stay unchanged".into());
                     }
-                    (labels.iter().any(|label| label == english)
-                        || english.starts_with("Level {0}"))
-                    .then(|| format!("Translated: {english}"))
+                    (labels.iter().any(|label| label == english) || english.contains(" {0} "))
+                        .then(|| format!("Translated: {english}"))
                 });
                 harness.run();
                 assert_eq!(

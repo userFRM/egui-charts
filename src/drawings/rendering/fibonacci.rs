@@ -882,10 +882,17 @@ fn band_color(level: &FibonacciLevel, opacity: u8) -> Color32 {
 
 /// One mesh avoids antialiased seams between adjoining ring segments.
 fn paint_band(painter: &egui::Painter, inner: &[Pos2], outer: &[Pos2], color: Color32) {
+    let mut mesh = egui::Mesh::default();
+    add_band(&mut mesh, inner, outer, color);
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// Adds the band between two equal-length point lists to `mesh`; nothing if they do not match.
+pub(super) fn add_band(mesh: &mut egui::Mesh, inner: &[Pos2], outer: &[Pos2], color: Color32) {
     if inner.len() != outer.len() || inner.iter().chain(outer).any(|p| !p.is_finite()) {
         return;
     }
-    let mut mesh = egui::Mesh::default();
+    let first = mesh.vertices.len() as u32;
     mesh.reserve_vertices(inner.len() * 2);
     mesh.reserve_triangles(inner.len().saturating_sub(1) * 2);
     for (&inside, &outside) in inner.iter().zip(outer) {
@@ -893,11 +900,10 @@ fn paint_band(painter: &egui::Painter, inner: &[Pos2], outer: &[Pos2], color: Co
         mesh.colored_vertex(outside, color);
     }
     for i in 1..inner.len() {
-        let end = (i * 2) as u32;
+        let end = first + (i * 2) as u32;
         mesh.add_triangle(end - 2, end - 1, end + 1);
         mesh.add_triangle(end - 2, end + 1, end);
     }
-    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// Circular ratio arcs between the two trend rays, following their shorter signed sweep.

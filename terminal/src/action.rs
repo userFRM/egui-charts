@@ -88,4 +88,7 @@ pub enum Action {
     StrategyReport(StrategyReportAction),
     /// The dialog that settles settings another window or device changed.
     StorageConflict(ConflictChoice),
+    /// The dialog that settles the drawings of a symbol, named first, that another window or
+    /// device changed.
+    DrawingsConflict(String, ConflictChoice),
 }

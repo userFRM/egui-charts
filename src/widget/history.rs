@@ -29,8 +29,8 @@ struct Pending {
     #[cfg(feature = "drawings")]
     standalone_drawings: HistoryService,
     study_order: Vec<SeriesId>,
-    /// Added series removed during the action, with their bars.
-    removed_series: Vec<PriceSeries>,
+    /// Added series removed during the action, with their bars, price formatters and bar limits.
+    removed_series: Vec<HeldSeries>,
 }
 
 #[derive(Default)]
@@ -56,12 +56,13 @@ struct Action {
 }
 
 /// The added series of one state of the chart: their draw order, display settings and
-/// visibility, the scale of the main series, and the series the other state lacks, whole.
+/// visibility, the scale of the main series, and the series the other state lacks, whole, with
+/// their price formatters and bar limits.
 struct SeriesSet {
     props: Vec<(SeriesId, SeriesOptions, bool)>,
     main_scale: SeriesScale,
     main_alerts: SeriesAlerts,
-    held: Vec<PriceSeries>,
+    held: Vec<HeldSeries>,
 }
 
 impl SeriesSet {
@@ -83,6 +84,14 @@ impl SeriesSet {
             && self.main_alerts == other.main_alerts
             && self.props == other.props
     }
+}
+
+/// An added series that one state of the chart lacks, with the price formatter and bar limit
+/// that the chart keeps apart from it.
+struct HeldSeries {
+    series: PriceSeries,
+    formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    bar_limit: Option<std::num::NonZeroUsize>,
 }
 
 /// Whether the main series is present in one state of the chart, with the price lines, price
@@ -300,7 +309,7 @@ impl Chart {
                 before.held = pending
                     .removed_series
                     .into_iter()
-                    .filter(|item| before.props.iter().any(|(id, ..)| *id == item.id))
+                    .filter(|item| before.props.iter().any(|(id, ..)| *id == item.series.id))
                     .collect();
             }
         }
@@ -444,11 +453,30 @@ impl Chart {
         }
     }
 
-    /// Keeps a bar series removed by the pending action, bars included, so undo restores it.
+    /// Keeps a bar series removed by the pending action, bars, price formatter and bar limit
+    /// included, so undo restores it. Outside an action they are dropped.
     pub(super) fn retain_removed_series(&mut self, series: PriceSeries) {
+        let held = self.hold_series(series);
         if let Some(pending) = &mut self.history.pending {
-            pending.removed_series.push(series);
+            pending.removed_series.push(held);
         }
+    }
+
+    /// Takes `series`, which has left the chart, with its price formatter and bar limit.
+    fn hold_series(&mut self, series: PriceSeries) -> HeldSeries {
+        let mut held = HeldSeries {
+            series,
+            formatter: None,
+            bar_limit: None,
+        };
+        self.swap_series_settings(held.series.id, &mut held.formatter, &mut held.bar_limit);
+        held
+    }
+
+    /// Gives a held series its price formatter and bar limit back as it enters the chart.
+    fn restore_series(&mut self, mut held: HeldSeries) -> PriceSeries {
+        self.swap_series_settings(held.series.id, &mut held.formatter, &mut held.bar_limit);
+        held.series
     }
 
     /// Takes the main series out of the chart and pauses its feed. The pending action keeps its
@@ -466,16 +494,27 @@ impl Chart {
     fn swap_main_series(&mut self, main: &mut MainSeries) {
         std::mem::swap(&mut self.main_series_present, &mut main.present);
         std::mem::swap(&mut self.price_lines, &mut main.price_lines);
-        main.formatter = match main.formatter.take() {
-            Some(formatter) => self.series_formatters.insert(SeriesId::MAIN, formatter),
-            None => self.series_formatters.remove(&SeriesId::MAIN),
-        };
-        main.bar_limit = match main.bar_limit.take() {
-            Some(limit) => self.bar_limits.insert(SeriesId::MAIN, limit),
-            None => self.bar_limits.remove(&SeriesId::MAIN),
-        };
+        self.swap_series_settings(SeriesId::MAIN, &mut main.formatter, &mut main.bar_limit);
         let paused = self.feed_link.as_ref().is_some_and(|link| link.host_paused);
         self.set_feed_paused(paused);
+    }
+
+    /// Exchanges the price formatter and bar limit of the bar series `id` with `formatter` and
+    /// `bar_limit`, so the exchange reverses itself.
+    fn swap_series_settings(
+        &mut self,
+        id: SeriesId,
+        formatter: &mut Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+        bar_limit: &mut Option<std::num::NonZeroUsize>,
+    ) {
+        *formatter = match formatter.take() {
+            Some(formatter) => self.series_formatters.insert(id, formatter),
+            None => self.series_formatters.remove(&id),
+        };
+        *bar_limit = match bar_limit.take() {
+            Some(limit) => self.bar_limits.insert(id, limit),
+            None => self.bar_limits.remove(&id),
+        };
     }
 
     pub(super) fn record_study(&mut self, id: SeriesId) {
@@ -535,19 +574,27 @@ impl Chart {
     fn swap_series(&mut self, set: &mut SeriesSet) {
         let now = SeriesSet::capture(self);
         let mut pool = std::mem::take(&mut self.price_series);
-        pool.append(&mut set.held);
+        let mut held = std::mem::take(&mut set.held);
         for (id, options, visible) in set.props.drain(..) {
-            if let Some(at) = pool.iter().position(|item| item.id == id) {
-                let mut item = pool.swap_remove(at);
-                item.options = options;
-                item.visible = visible;
-                item.revision = crate::model::next_revision();
-                self.price_series.push(item);
-            }
+            let mut item = if let Some(at) = pool.iter().position(|item| item.id == id) {
+                pool.swap_remove(at)
+            } else if let Some(at) = held.iter().position(|item| item.series.id == id) {
+                self.restore_series(held.swap_remove(at))
+            } else {
+                continue;
+            };
+            item.options = options;
+            item.visible = visible;
+            item.revision = crate::model::next_revision();
+            self.price_series.push(item);
+        }
+        // The series the set lacks leave the chart with their formatters and limits.
+        for item in pool {
+            held.push(self.hold_series(item));
         }
         self.main_series_scale = set.main_scale;
         self.main_series_style.alerts = set.main_alerts;
-        *set = SeriesSet { held: pool, ..now };
+        *set = SeriesSet { held, ..now };
         if let Some(ChartElementId::Series(id)) = self.selection.selected_id()
             && self.price_series.iter().all(|item| item.id != id)
         {
@@ -1368,7 +1415,8 @@ mod tests {
     }
 
     /// A user's symbol navigation and comparison edits undo and redo in order, each step finding
-    /// the drawings, series, scales and symbol it was recorded against.
+    /// the drawings, series, scales and symbol it was recorded against, and a removed comparison
+    /// coming back with its price formatter and bar limit.
     #[test]
     #[cfg(feature = "drawings")]
     fn symbol_navigation_and_comparison_edits_undo_and_redo_in_order() {
@@ -1388,9 +1436,15 @@ mod tests {
         assert!(chart.drawings().drawings.is_empty());
         let bars = chart.bars(SeriesId::MAIN).to_vec();
         let mode = chart.state.price_scale().options().mode;
+        let limit = std::num::NonZeroUsize::new(1000);
         let comparison = chart.user_action(|chart| {
             let id = chart.add_comparison("CCC", Color32::GOLD);
             chart.set_data(id, bars.clone());
+            chart.set_bar_limit(id, limit);
+            assert!(chart.set_series_formatter(
+                id,
+                Some(std::sync::Arc::new(crate::scales::CurrencyFormatter::usd())),
+            ));
             id
         });
         chart.user_action(|chart| {
@@ -1407,8 +1461,13 @@ mod tests {
                 chart.series_scale(comparison),
                 chart.is_series_visible(comparison),
                 chart.bars(comparison).len(),
+                chart.bar_limit(comparison),
+                chart
+                    .series_label_formatter(comparison, PriceScaleMode::Normal)
+                    .is_some(),
             )
         };
+        let absent = (None, false, 0, None, false);
         let undo = |chart: &mut Chart| assert!(chart.undo());
         undo(&mut chart);
         assert_eq!(
@@ -1418,12 +1477,12 @@ mod tests {
         undo(&mut chart);
         assert_eq!(
             comparison_state(&chart),
-            (Some(SeriesScale::Left), false, bars.len())
+            (Some(SeriesScale::Left), false, bars.len(), limit, true)
         );
         undo(&mut chart);
         assert_eq!(
             comparison_state(&chart),
-            (Some(SeriesScale::Right), true, bars.len())
+            (Some(SeriesScale::Right), true, bars.len(), limit, true)
         );
         assert_eq!(
             chart.state.price_scale().options().mode,
@@ -1431,6 +1490,7 @@ mod tests {
         );
         undo(&mut chart);
         assert_eq!(chart.series().count(), 0);
+        assert_eq!(comparison_state(&chart), absent);
         assert_eq!(chart.state.price_scale().options().mode, mode);
         undo(&mut chart);
         assert_eq!(
@@ -1454,15 +1514,16 @@ mod tests {
         assert!(chart.redo());
         assert_eq!(
             comparison_state(&chart),
-            (Some(SeriesScale::Right), true, bars.len())
+            (Some(SeriesScale::Right), true, bars.len(), limit, true)
         );
         assert!(chart.redo());
         assert_eq!(
             comparison_state(&chart),
-            (Some(SeriesScale::Left), false, bars.len())
+            (Some(SeriesScale::Left), false, bars.len(), limit, true)
         );
         assert!(chart.redo());
         assert_eq!(chart.series().count(), 0);
+        assert_eq!(comparison_state(&chart), absent);
         assert!(chart.redo());
         assert_eq!(
             (chart.symbol(), chart.drawings().drawings.len()),

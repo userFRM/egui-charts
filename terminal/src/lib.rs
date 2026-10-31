@@ -374,13 +374,16 @@ impl Terminal {
 }
 
 impl Drop for Terminal {
-    /// Writes changed settings, as an application does when it exits.
+    /// Writes changed settings and drawings, as an application does when it exits.
     fn drop(&mut self) {
         if self.settings.is_some() {
             let current = self.user_settings();
             if let Some(settings) = &mut self.settings {
                 settings.flush(&current);
             }
+        }
+        for chart in &mut self.charts {
+            chart.flush_stored_drawings();
         }
     }
 }
@@ -451,22 +454,79 @@ mod tests {
         assert!(matches!(help.as_slice(), [Action::Shortcut(_)]));
     }
 
-    /// Guards #1100: two windows change the settings, the later write is refused, and the user's
-    /// choice in the dialog settles it.
+    /// Guards #1100 and #1463: two windows change the settings or the drawings of a symbol, the
+    /// later write is refused, and the user's choice in the dialog settles it.
     #[test]
-    fn a_settings_conflict_asks_the_user_and_settles_it_as_chosen() {
+    fn a_storage_conflict_asks_the_user_and_settles_it_as_chosen() {
+        use egui_charts::drawings::persistence::DrawingStorage;
         use egui_charts::services::{StoreKind, UserSettings};
         let name = |dark: bool| Some(if dark { "dark" } else { "light" }.to_owned());
+        let start = |storage: &Arc<MemoryStorage>| {
+            let mut terminal = Terminal::new(Arc::new(TestFeed))
+                .with_symbol("AAPL")
+                .with_storage(storage.clone());
+            // The bars a drawing's anchors need.
+            for _ in 0..6 {
+                frame(&mut terminal, SIZE, vec![]);
+            }
+            terminal
+        };
+        let draw = |terminal: &mut Terminal, price| {
+            let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+            line.chart_points = vec![ChartPoint::new(10.0, price)];
+            line.completed = true;
+            terminal
+                .chart_mut()
+                .user_action(|chart| chart.drawings_mut().add_drawing(line).unwrap());
+        };
         for button in ["Keep both", "Reload", "Overwrite"] {
             let storage = Arc::new(MemoryStorage::default());
-            let start = || {
-                let mut terminal = Terminal::new(Arc::new(TestFeed))
-                    .with_symbol("AAPL")
-                    .with_storage(storage.clone());
-                frame(&mut terminal, SIZE, vec![]);
-                terminal
+            let (mut mine, mut theirs) = (start(&storage), start(&storage));
+            draw(&mut theirs, 190.0);
+            for _ in 0..2 {
+                frame(&mut theirs, SIZE, vec![]);
+            }
+            draw(&mut mine, 170.0);
+            let screen = (0..20)
+                .map(|_| frame(&mut mine, SIZE, vec![]))
+                .find(|screen| screen.text_at(button).is_some())
+                .expect("the dialog asks");
+            assert!(screen.text_at("Drawings changed elsewhere").is_some());
+            click(&mut mine, SIZE, screen.text_at(button).unwrap());
+            for _ in 0..3 {
+                frame(&mut mine, SIZE, vec![]);
+            }
+            assert_eq!(frame(&mut mine, SIZE, vec![]).text_at(button), None);
+            let prices = |name: &str| {
+                let json = storage.get(StoreKind::Drawings, name)?;
+                let (stored, _) = DrawingStorage::from_json(&json).unwrap();
+                Some(
+                    stored
+                        .drawings()
+                        .iter()
+                        .map(|drawing| drawing.points[0].price)
+                        .collect::<Vec<_>>(),
+                )
             };
-            let (mut mine, mut theirs) = (start(), start());
+            let (stored, copy) = match button {
+                "Keep both" => (vec![190.0], Some(vec![170.0])),
+                "Reload" => (vec![190.0], None),
+                _ => (vec![170.0], None),
+            };
+            assert_eq!(prices("AAPL"), Some(stored.clone()), "{button}");
+            assert_eq!(prices("AAPL (local copy)"), copy, "{button}");
+            let shown: Vec<_> = mine
+                .chart()
+                .drawings()
+                .drawings
+                .iter()
+                .map(|drawing| drawing.chart_points[0].price)
+                .collect();
+            assert_eq!(shown, stored, "{button}");
+        }
+        for button in ["Keep both", "Reload", "Overwrite"] {
+            let storage = Arc::new(MemoryStorage::default());
+            let (mut mine, mut theirs) = (start(&storage), start(&storage));
             let dark = mine.theme.dark;
             // The other window switches the theme and writes it a second later.
             theirs.run(Action::TopToolbar(TopToolbarAction::ThemeToggle));
@@ -477,10 +537,12 @@ mod tests {
             for _ in 0..2 {
                 mine.run(Action::TopToolbar(TopToolbarAction::ThemeToggle));
             }
-            let at = (0..20)
-                .find_map(|_| frame(&mut mine, SIZE, vec![]).text_at(button))
+            let screen = (0..20)
+                .map(|_| frame(&mut mine, SIZE, vec![]))
+                .find(|screen| screen.text_at(button).is_some())
                 .expect("the dialog asks");
-            click(&mut mine, SIZE, at);
+            assert!(screen.text_at("Settings changed elsewhere").is_some());
+            click(&mut mine, SIZE, screen.text_at(button).unwrap());
             for _ in 0..3 {
                 frame(&mut mine, SIZE, vec![]);
             }

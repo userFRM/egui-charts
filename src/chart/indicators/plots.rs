@@ -105,6 +105,59 @@ pub(crate) fn paint_zones(
     }
 }
 
+/// Pixels between a label and its point, and how far beyond the plot a label's point may be
+/// for its text to still reach in.
+const LABEL_GAP: f32 = 4.0;
+const LABEL_REACH: f32 = 200.0;
+
+pub(crate) fn paint_labels(
+    painter: &egui::Painter,
+    study: &dyn crate::studies::Indicator,
+    price: &crate::scales::PriceMap,
+    coords: &crate::chart::coords::ChartMapping,
+) {
+    use crate::studies::LabelPlacement;
+    use egui::{Align2, vec2};
+    let labels = study.labels();
+    if labels.is_empty() {
+        return;
+    }
+    let clip = painter.clip_rect();
+    let first = coords.x_to_idx(clip.left() - LABEL_REACH);
+    let last = coords
+        .x_to_idx(clip.right() + LABEL_REACH)
+        .saturating_add(1);
+    for label in &labels[labels.partition_point(|label| label.bar < first)..] {
+        if label.bar > last {
+            break;
+        }
+        let style = study.plot_style(label.plot);
+        let point = egui::pos2(coords.idx_to_x(label.bar), price.price_to_y(label.price));
+        if !style.visible || !label.price.is_finite() || !point.is_finite() {
+            continue;
+        }
+        let color = style.color.to_opaque();
+        let galley =
+            painter.layout_no_wrap(label.text.clone(), egui::FontId::proportional(11.0), color);
+        let (anchor, offset) = match label.placement {
+            LabelPlacement::AboveRight => (Align2::LEFT_BOTTOM, vec2(LABEL_GAP, -LABEL_GAP)),
+            LabelPlacement::AboveLeft => (Align2::RIGHT_BOTTOM, vec2(-LABEL_GAP, -LABEL_GAP)),
+            LabelPlacement::Above => (Align2::CENTER_BOTTOM, vec2(0.0, -LABEL_GAP)),
+            LabelPlacement::Below => (Align2::CENTER_TOP, vec2(0.0, LABEL_GAP)),
+        };
+        let mut rect = anchor.anchor_size(point + offset, galley.size());
+        // Every axis tag starts right of the plot, so a label inside it clears them. A label whose
+        // point is off the plot stays there, so it is not dragged into view.
+        if clip.x_range().contains(point.x) {
+            let dx = (clip.right() - rect.right())
+                .min(0.0)
+                .max(clip.left() - rect.left());
+            rect = rect.translate(vec2(dx, 0.0));
+        }
+        painter.galley(rect.min, galley, color);
+    }
+}
+
 /// Anchor and level prices of drawings reaching the visible bars, for all study scales.
 #[cfg(feature = "drawings")]
 pub(crate) fn mapped_drawings(

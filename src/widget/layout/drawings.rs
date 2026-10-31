@@ -61,7 +61,12 @@ impl DrawingLinks {
             let origin = *self.origins.entry(key).or_insert(key);
             let symbol = charts[key.0].symbol().to_owned();
             for slot in 0..count {
-                if slot == key.0 || groups[slot] != groups[key.0] || charts[slot].symbol() != symbol
+                // Charts on one storage read each other's stored drawings instead.
+                let stored = drawing.as_ref().is_some_and(|drawing| drawing.saveable);
+                if slot == key.0
+                    || groups[slot] != groups[key.0]
+                    || charts[slot].symbol() != symbol
+                    || (stored && charts[slot].shares_stored_drawings(charts[key.0]))
                 {
                     continue;
                 }

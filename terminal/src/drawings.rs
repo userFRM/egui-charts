@@ -1343,13 +1343,15 @@ mod tests {
     }
 
     #[test]
-    fn drawing_defaults_per_tool_survive_a_restart() {
+    fn drawings_and_drawing_defaults_survive_a_restart() {
         use super::super::test_support::MemoryStorage;
         let storage = Arc::new(MemoryStorage::default());
         let mut terminal = Terminal::new(Arc::new(TestFeed))
             .with_symbol("AAPL")
             .with_storage(storage.clone());
-        frame(&mut terminal, SIZE, vec![]);
+        for _ in 0..6 {
+            frame(&mut terminal, SIZE, vec![]);
+        }
         let mut template = DrawingTemplate::from_drawing(&line(0));
         template.settings.stroke_width = 4.0;
         terminal
@@ -1357,11 +1359,18 @@ mod tests {
             .drawings_mut()
             .tool_defaults
             .insert(DrawingToolType::TrendLine, template);
+        // Written when the terminal closes, with no frame after the edit.
+        terminal
+            .chart_mut()
+            .user_action(|chart| chart.drawings_mut().add_drawing(line(0)).unwrap());
         drop(terminal);
         let mut restored = Terminal::new(Arc::new(TestFeed))
             .with_symbol("AAPL")
             .with_storage(storage);
-        frame(&mut restored, SIZE, vec![]);
+        for _ in 0..6 {
+            frame(&mut restored, SIZE, vec![]);
+        }
+        assert_eq!(restored.chart().drawings().drawings.len(), 1);
         let defaults = &restored.chart().drawings().tool_defaults;
         assert_eq!(defaults.len(), 1);
         assert_eq!(

@@ -11,8 +11,7 @@ use crate::model::Timeframe;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::list_item::{LabelContent, ListItem};
-use crate::ui_kit::tab_bar::{TabBar, TabLabel};
-use egui::Ui;
+use egui::{Role, Ui, WidgetInfo};
 
 use super::{
     actions::TopToolbarAction,
@@ -29,6 +28,7 @@ use super::{
 use crate::model::ChartType;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
+use crate::ui::dialogs::keyboard_shortcuts::shortcut_key_labels;
 use std::collections::HashSet;
 
 /// A place in the strip, holding one control.
@@ -57,6 +57,13 @@ enum Slot {
 }
 
 use Slot as S;
+
+/// Glyph of the snapshot menu's download entry.
+const DOWNLOAD_ICON: Icon = Icon::new("top-toolbar-download.svg", include_bytes!("download.svg"));
+/// Glyph of the snapshot menu's new tab entry.
+const OPEN_NEW_ICON: Icon = Icon::new("top-toolbar-open-new.svg", include_bytes!("open-new.svg"));
+/// Glyph of the snapshot menu's link entry.
+const LINK_ICON: Icon = Icon::new("top-toolbar-link.svg", include_bytes!("link.svg"));
 
 /// Left part of the strip, in groups divided by separators.
 const LEFT: &[&[Slot]] = &[
@@ -98,6 +105,21 @@ fn show_separator(ui: &mut Ui) {
     let color = super::buttons::rule_color(&ui.active_theme());
     ui.painter().rect_filled(rect, 0.0, color);
     ui.add_space(gap(ui));
+}
+
+/// Keys of the snapshot shortcut as the snapshot menu shows them.
+fn snapshot_shortcut_hint(ctx: &egui::Context, font: &egui::FontId) -> Option<String> {
+    let shortcut = ctx
+        .data(|data| {
+            data.get_temp::<crate::widget::ShortcutMap>(egui::Id::NULL.with("chart_shortcuts"))
+        })
+        .unwrap_or_default()
+        .shortcut(crate::config::KeyboardAction::Snapshot)?;
+    let keys: Vec<_> = shortcut_key_labels(ctx, font, &shortcut)
+        .iter()
+        .map(|key| l10n::text(ctx, key))
+        .collect();
+    Some(keys.join(" + "))
 }
 
 impl Slot {
@@ -177,8 +199,8 @@ enum TemplatesPage {
     Templates,
 }
 
-impl TabLabel for TemplatesPage {
-    fn tab_label(&self) -> &str {
+impl TemplatesPage {
+    fn label(self) -> &'static str {
         match self {
             Self::Indicators => "Indicators",
             Self::Templates => "Templates",
@@ -545,6 +567,8 @@ impl TopToolbar {
             S::Templates => {
                 let response = ToolbarIconButton::new(icon, label, &self.config).show(ui);
                 egui::Popup::menu(&response)
+                    // Choosing a page keeps the menu open; its rows close it themselves.
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                     .align(egui::RectAlign::BOTTOM_START)
                     .align_alternatives(&[])
                     .frame(egui::Frame::popup(ui.style()).fill(ui.active_theme().ui.panel_bg))
@@ -579,7 +603,10 @@ impl TopToolbar {
                     .frame(egui::Frame::popup(ui.style()).fill(ui.active_theme().ui.panel_bg))
                     .show(|ui| {
                         ui.set_width((ui.ctx().content_rect().width() - 24.0).clamp(0.0, 240.0));
-                        ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
+                        let font = egui::FontId::proportional(14.0);
+                        ui.style_mut().override_font_id = Some(font.clone());
+                        let theme = ui.active_theme();
+                        let hint = snapshot_shortcut_hint(ui.ctx(), &font);
                         let height =
                             (ui.ctx().content_rect().bottom() - ui.next_widget_position().y - 16.0)
                                 .max(0.0);
@@ -589,29 +616,61 @@ impl TopToolbar {
                                 ui.label(
                                     egui::RichText::new(l10n::text(ui.ctx(), "SNAPSHOT"))
                                         .size(11.0)
-                                        .color(ui.active_theme().ui.text_secondary),
+                                        .color(theme.ui.text_muted),
                                 );
-                                for (label, value, available) in [
-                                    ("Download image", TopToolbarAction::TakeScreenshot, true),
-                                    ("Copy image", TopToolbarAction::CopyImage, true),
-                                    ("Open in new tab", TopToolbarAction::OpenImage, true),
+                                for (label, icon, value, available) in [
+                                    (
+                                        "Download image",
+                                        &DOWNLOAD_ICON,
+                                        TopToolbarAction::TakeScreenshot,
+                                        true,
+                                    ),
+                                    (
+                                        "Copy image",
+                                        &embedded_icons::DUPLICATE,
+                                        TopToolbarAction::CopyImage,
+                                        true,
+                                    ),
+                                    (
+                                        "Open in new tab",
+                                        &OPEN_NEW_ICON,
+                                        TopToolbarAction::OpenImage,
+                                        true,
+                                    ),
                                     (
                                         "Copy link",
+                                        &LINK_ICON,
                                         TopToolbarAction::CopyImageLink,
                                         self.state.can_publish_image,
                                     ),
                                     (
                                         "Post image",
+                                        &embedded_icons::PUBLISH,
                                         TopToolbarAction::Publish,
                                         self.state.can_publish_image,
                                     ),
                                 ] {
-                                    if available
-                                        && ListItem::new()
-                                            .height(32.0)
-                                            .show(ui, LabelContent::new(label))
-                                            .clicked()
+                                    if !available {
+                                        continue;
+                                    }
+                                    let item = ListItem::new().height(32.0).show(
+                                        ui,
+                                        LabelContent::new(label).with_icon(icon).icon_size(17.0),
+                                    );
+                                    // Hosts bind the snapshot shortcut to this entry's action.
+                                    if value == TopToolbarAction::TakeScreenshot
+                                        && let Some(hint) = &hint
                                     {
+                                        ui.painter().text(
+                                            item.rect.right_center()
+                                                - egui::vec2(theme.spacing.lg, 0.0),
+                                            egui::Align2::RIGHT_CENTER,
+                                            hint,
+                                            font.clone(),
+                                            theme.ui.text_muted,
+                                        );
+                                    }
+                                    if item.clicked() {
                                         *action = value;
                                         ui.close();
                                     }
@@ -656,22 +715,69 @@ impl TopToolbar {
         }
     }
 
+    /// The templates menu's pages as equal halves of one track, the selected one a panel tile.
+    fn show_templates_tabs(&mut self, ui: &mut Ui) {
+        let theme = ui.active_theme();
+        let size = egui::vec2(ui.available_width(), 34.0);
+        let (track, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        ui.painter().rect_filled(
+            track,
+            theme.radius.md,
+            theme
+                .ui
+                .panel_bg
+                .lerp_to_gamma(theme.ui.panel_bg_secondary, 0.65),
+        );
+        for (index, page) in [TemplatesPage::Indicators, TemplatesPage::Templates]
+            .into_iter()
+            .enumerate()
+        {
+            let half = egui::Rect::from_min_size(
+                track.min + egui::vec2(index as f32 * size.x / 2.0, 0.0),
+                egui::vec2(size.x / 2.0, size.y),
+            );
+            let id = ui.scope_id().with(page.label());
+            let response = ui.interact(half, id, egui::Sense::click());
+            if response.clicked() {
+                self.templates_page = page;
+            }
+            let selected = self.templates_page == page;
+            let label = l10n::text(ui.ctx(), page.label());
+            response.widget_info(|| WidgetInfo::labeled(Role::Tab, ui.is_enabled(), &label));
+            ui.ctx()
+                .accesskit_node_builder(response.id, |node| node.set_selected(selected));
+            if selected {
+                ui.painter().rect_filled(
+                    half.shrink(theme.spacing.xs),
+                    theme.radius.sm,
+                    theme.ui.panel_bg,
+                );
+            }
+            ui.painter().text(
+                half.center(),
+                egui::Align2::CENTER_CENTER,
+                label,
+                egui::FontId::proportional(theme.text.title),
+                if selected || response.hovered() {
+                    theme.ui.text
+                } else {
+                    theme.ui.text_muted
+                },
+            );
+            crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.md);
+        }
+    }
+
     /// Favourite studies to add and saved templates to apply, on two pages.
     fn show_indicator_templates(&mut self, ui: &mut Ui, action: &mut TopToolbarAction) {
         use crate::ui_kit::{EmptyState, list_item::LabelContent};
-        ui.set_width(296.0);
-        TabBar::new(
-            &[TemplatesPage::Indicators, TemplatesPage::Templates],
-            &mut self.templates_page,
-        )
-        .show(ui);
+        ui.set_width(292.0);
+        self.show_templates_tabs(ui);
         ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
         let (entries, empty) = match self.templates_page {
             TemplatesPage::Indicators => (
                 &self.favorite_indicators,
-                EmptyState::new("No favorite indicators added yet")
-                    .icon(&embedded_icons::STAR_EMPTY)
-                    .description("Star an indicator in the Indicators dialog to keep it here."),
+                "No favorite indicators added yet",
             ),
             TemplatesPage::Templates => {
                 if ListItem::new()
@@ -682,16 +788,16 @@ impl TopToolbar {
                     *action = TopToolbarAction::SaveIndicatorTemplate;
                     ui.close();
                 }
-                (
-                    &self.indicator_templates,
-                    EmptyState::new("No templates saved yet").description(
-                        "Save the chart's indicators as a template to apply them in one click.",
-                    ),
-                )
+                (&self.indicator_templates, "No templates saved yet")
             }
         };
         if entries.is_empty() {
-            empty.show(ui);
+            // Keep room for a few rows, with the sentence centred in it.
+            let height = (203.0 - (ui.cursor().top() - ui.min_rect().top())).max(0.0);
+            ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
+                ui.set_min_height(height);
+                EmptyState::new(empty).fill_height().show(ui);
+            });
             return;
         }
         egui::ScrollArea::vertical()
@@ -773,10 +879,11 @@ mod tests {
         }
     }
 
-    /// Actions from clicking the strip every 4 px along its middle, one click at a time.
+    /// Actions from clicking the strip every 4 px along its middle, one click at a time, in a
+    /// window tall enough for an open menu to sit below the strip.
     fn click_along(ctx: &egui::Context, toolbar: &mut TopToolbar) -> Vec<TopToolbarAction> {
         let mut actions = Vec::new();
-        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 32.0));
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0));
         for x in (0..1440).step_by(4) {
             let pos = pos2(x as f32, 16.0);
             for pressed in [true, false] {
@@ -835,6 +942,70 @@ mod tests {
                     .collect();
                 assert_eq!(icons, vec![theme.ui.text_disabled; 2]);
                 output.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    #[test]
+    fn templates_tabs_switch_the_page_and_keep_the_menu_open() {
+        use egui::accesskit::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let mut harness = Harness::builder()
+            .with_size(vec2(400.0, 400.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, toolbar: &mut TopToolbar| {
+                    toolbar.show_control(ui, S::Templates, "SAMPLE", &mut TopToolbarAction::None);
+                },
+                TopToolbar::new(),
+            );
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::Button, "Indicator templates")
+            .click();
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::Tab, "Templates")
+            .click();
+        harness.run();
+        harness.get_by_label("Save indicator template");
+        for (tab, selected) in [("Indicators", false), ("Templates", true)] {
+            let node = harness.get_by_role_and_label(Role::Tab, tab);
+            assert_eq!(node.accesskit_node().is_selected(), Some(selected), "{tab}");
+        }
+    }
+
+    #[test]
+    fn hover_labels_name_the_control_and_show_keys_as_symbols() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for (slot, button, label, keys) in [
+            (S::Indicators, "Indicators", "Indicators", &["/"][..]),
+            (S::Alert, "Alert", "Create alert", &["Alt", "A"]),
+            (S::Save, "Layout options", "Layout options", &[]),
+        ] {
+            let mut harness = Harness::builder()
+                .with_size(vec2(400.0, 200.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    move |ui, toolbar: &mut TopToolbar| {
+                        ui.horizontal(|ui| {
+                            toolbar.show_control(ui, slot, "SAMPLE", &mut TopToolbarAction::None);
+                        });
+                    },
+                    TopToolbar::new(),
+                );
+            harness.run();
+            harness
+                .get_by_role_and_label(egui::accesskit::Role::Button, button)
+                .hover();
+            harness.run_steps(4);
+            harness.get_by_role_and_label(egui::accesskit::Role::Label, label);
+            for key in keys {
+                let chip = harness.get_by_role_and_label(egui::accesskit::Role::Label, key);
+                assert_eq!(chip.rect().height(), 18.0, "the {key} chip of {label}");
             }
         }
     }

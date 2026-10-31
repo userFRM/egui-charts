@@ -247,6 +247,11 @@ impl ChartMenus {
                         .instrument()
                         .and_then(|instrument| instrument.tick_size)
                         .filter(|tick| tick.is_finite() && *tick > 0.0);
+                    let line = chart
+                        .drawings()
+                        .registry
+                        .availability(crate::drawings::DrawingToolType::HorizontalLine);
+                    self.chart.horizontal_line = line.visible && line.enabled;
                     self.chart.open(pos, price);
                 }
             }
@@ -277,6 +282,12 @@ impl ChartMenus {
                     && let Some(tpo) = &self.tpo
                 {
                     chart.user_action(|chart| tpo.apply(chart, action));
+                }
+                if let Some(ChartContextAction::Chart(ContextMenuAction::DrawHorizontalLine(price))) =
+                    &picked
+                    && let RightClickTarget::Background { pos, .. } = context.target
+                {
+                    chart.user_action(|chart| chart.draw_horizontal_line_at(pos, *price));
                 }
                 menu_action = picked;
                 self.context = None;

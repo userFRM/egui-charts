@@ -190,7 +190,8 @@ impl Terminal {
             ContextMenuAction::None
             | ContextMenuAction::MergeTpoPrevious
             | ContextMenuAction::MergeTpoNext
-            | ContextMenuAction::SplitTpoProfile => {}
+            | ContextMenuAction::SplitTpoProfile
+            | ContextMenuAction::DrawHorizontalLine(_) => {}
             menu => return Some(Action::ChartMenu(ChartContextAction::Chart(menu))),
         }
         None
