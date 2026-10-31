@@ -1,4 +1,4 @@
-use super::super::test_frames::frame;
+use super::super::test_frames::{candle_ys, frame, shapes};
 use super::*;
 use crate::data::{DepthPage, FeedError, HistoryPage, Sink, Subscription, TradePage};
 use crate::model::{Bar, BarData, ChartType};
@@ -665,6 +665,48 @@ fn footprint_follows_trade_eviction() {
         .unwrap();
     assert_eq!(flow.bars(), summed.bars());
     assert_eq!(flow.complete_from(), Some(start + TimeDelta::minutes(1)));
+}
+
+/// Bars from the first execution on show merged candles while their cells would not be readable.
+#[test]
+fn footprint_draws_candles_from_the_first_execution_at_the_minimum_spacing() {
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_chart_type(ChartType::VolumeFootprint);
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    feed.page().send(page(bars(1), false));
+    frames.run(&mut chart);
+    let start = bars(1)[0].time;
+    let sink = feed.sink();
+    for i in 0..2000 {
+        let price = match i {
+            1900 => 500.0,
+            1950 => 20.0,
+            _ => 100.0,
+        };
+        let ts = start + TimeDelta::minutes(i);
+        sink.push_tick(Tick::new(
+            ts,
+            price,
+            1.0,
+            Some(crate::model::OrderSide::Buy),
+        ));
+    }
+    frames.run(&mut chart);
+    chart.apply_synced_time_scale(0.5, 0.0);
+    frames.run(&mut chart);
+    let painted = shapes(&frames.ctx, &mut chart, frames.time, Vec::new());
+    let config = chart.config();
+    let ys = [config.bullish_color, config.bearish_color].map(|color| candle_ys(&painted, color));
+    let ys = ys.concat();
+    let map = chart.get_chart_mapping();
+    for price in [500.0, 20.0] {
+        let y = map.price_to_y(price);
+        assert!(ys.iter().any(|at| (at - y).abs() < 1.0), "{price}: {y}");
+    }
 }
 
 /// Range bars follow the order of the supplied executions, not only the OHLC of the bars they

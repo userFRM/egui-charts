@@ -1101,6 +1101,29 @@ pub(crate) mod test_frames {
         run(ctx, chart, time, events).0
     }
 
+    /// The heights of the candles in `color` among `shapes`.
+    pub(crate) fn candle_ys(shapes: &[Shape], color: egui::Color32) -> Vec<f32> {
+        shapes
+            .iter()
+            .flat_map(|shape| match shape {
+                Shape::Vec(shapes) => candle_ys(shapes, color),
+                Shape::Rect(rect) if rect.fill == color => {
+                    vec![rect.rect.min.y, rect.rect.max.y]
+                }
+                Shape::LineSegment { points, stroke } if stroke.color == color => {
+                    points.iter().map(|point| point.y).collect()
+                }
+                Shape::Mesh(mesh) => mesh
+                    .vertices
+                    .iter()
+                    .filter(|vertex| vertex.color == color)
+                    .map(|vertex| vertex.pos.y)
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
     /// Runs one frame at `time` seconds with `events` and returns the cursor it asked for.
     pub(crate) fn frame(
         ctx: &Context,
