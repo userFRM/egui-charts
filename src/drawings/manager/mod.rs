@@ -59,15 +59,12 @@ pub struct DrawingState {
     pub magnet_mode: bool,
     /// Whether to stay in drawing mode after completing a drawing (lock mode).
     pub stay_in_drawing_mode: bool,
-    /// Current default drawing color as RGBA bytes.
-    pub curr_color: [u8; 4],
+    /// Line colour every new drawing takes instead of its tool's own, as RGBA bytes; `None`
+    /// keeps each tool's default.
+    pub curr_color: Option<[u8; 4]>,
     /// Whether eraser mode is active (click to delete drawings).
     pub eraser_mode: bool,
 }
-
-/// Colour of a new drawing: a pink that no default study uses, at 4:1 or better on the dark,
-/// light and high contrast chart backgrounds.
-const DEFAULT_DRAWING_COLOR: [u8; 4] = [233, 30, 99, 255];
 
 /// Configuration options for the [`DrawingManager`].
 ///
@@ -75,8 +72,9 @@ const DEFAULT_DRAWING_COLOR: [u8; 4] = [233, 30, 99, 255];
 /// selection handle appearance.
 #[derive(Clone, Debug)]
 pub struct DrawingManagerOptions {
-    /// Default color for new drawings as RGBA bytes.
-    pub default_color: [u8; 4],
+    /// Line colour every new drawing takes instead of its tool's own, as RGBA bytes. `None`
+    /// (the default) keeps each tool's colour; a default saved for a tool wins over both.
+    pub default_color: Option<[u8; 4]>,
     /// Enable snap-to-price (Y-axis snapping to OHLC levels).
     pub snap_to_price: bool,
     /// Enable snap-to-time (X-axis snapping to candle timestamps).
@@ -99,7 +97,7 @@ pub struct DrawingManagerOptions {
 impl Default for DrawingManagerOptions {
     fn default() -> Self {
         Self {
-            default_color: DEFAULT_DRAWING_COLOR,
+            default_color: None,
             snap_to_price: true,
             snap_to_time: true,
             snap_distance: DESIGN_TOKENS.spacing.lg + DESIGN_TOKENS.spacing.xs,
@@ -637,6 +635,19 @@ impl DrawingManager {
         }
     }
 
+    /// A new drawing of `tool` in its default style: the tool's own, recoloured by
+    /// [`DrawingManagerOptions::default_color`] when set, then the default saved for the tool.
+    pub fn new_drawing(&self, id: usize, tool: DrawingToolType) -> Drawing {
+        let mut drawing = match self.options.default_color {
+            Some(color) => Drawing::with_color(id, tool, color),
+            None => Drawing::new(id, tool),
+        };
+        if let Some(defaults) = self.tool_defaults.get(&tool) {
+            let _ = defaults.apply_to(&mut drawing);
+        }
+        drawing
+    }
+
     /// The z-order that puts a drawing added now on top of the others.
     pub(crate) fn top_z_order(&self) -> i32 {
         self.drawings.iter().map(|d| d.z_order).max().unwrap_or(0)
@@ -797,7 +808,7 @@ mod tests {
             edit(&mut manager, |d| d.font_size = 30.0);
             manager.drag_edit_drawing(3, |d| d.font_size = 40.0);
             manager.end_drag_handle();
-            assert_eq!(manager.drawings[0].font_size, 12.0);
+            assert_eq!(manager.drawings[0].font_size, 14.0);
             assert!(!manager.can_undo());
             assert!(manager.pending_sync.lock().unwrap().is_empty());
             // Tree metadata can change without unlocking geometry or style edits.
@@ -810,7 +821,7 @@ mod tests {
             assert!(!manager.drawings[0].visible);
             assert_eq!(manager.drawings[0].label.as_deref(), Some("Support"));
             assert_eq!(manager.drawings[0].folder, ["Analysis"]);
-            assert_eq!(manager.drawings[0].font_size, 12.0);
+            assert_eq!(manager.drawings[0].font_size, 14.0);
             assert!(manager.drawings[0].locked);
             assert!(manager.undo());
             assert!(manager.drawings[0].visible);

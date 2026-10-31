@@ -21,7 +21,7 @@ impl Default for GlyphPicker {
     fn default() -> Self {
         Self {
             query: String::new(),
-            size: 32.0,
+            size: 40.0,
             group: "All",
             recent: Vec::new(),
         }

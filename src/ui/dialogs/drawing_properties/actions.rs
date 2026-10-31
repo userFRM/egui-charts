@@ -110,8 +110,10 @@ impl DrawingProps {
         }
     }
 
-    /// Validate and apply one undoable edit to the unlocked selection. Tool inputs affect only
-    /// matching tools; coordinates affect only `id`. Errors leave all live drawings unchanged.
+    /// Validate and apply one undoable edit to the unlocked selection. A value that differs from
+    /// drawing `id`'s, which these properties were read from, was edited, and only edited values
+    /// change the drawings: text only those that show text, tool inputs only drawings of the same
+    /// tool, coordinates only `id`. Errors leave all live drawings unchanged.
     pub fn apply_to_chart(&self, id: DrawingId, chart: &mut Chart) -> Result<(), &'static str> {
         let edits = self.edited_drawings(id, chart)?;
         chart.user_action(|chart| {
@@ -137,6 +139,8 @@ impl DrawingProps {
     }
 
     /// Prepare validated edits without history or persistence side effects, for live preview.
+    /// Values compare with drawing `id` as `chart` holds it, so a preview restores its drawings
+    /// before calling this.
     pub(super) fn edited_drawings(
         &self,
         id: DrawingId,
@@ -177,6 +181,9 @@ impl DrawingProps {
             return Err("Drawing anchors changed; reopen its properties");
         }
         let selected = chart.drawings().is_selected(id.0);
+        let fill = self
+            .fill_enabled
+            .then(|| self.fill_color.unwrap_or(self.color.gamma_multiply(0.2)));
         let mut edits = Vec::new();
         for mut drawing in chart
             .drawings()
@@ -192,46 +199,74 @@ impl DrawingProps {
             })
             .cloned()
         {
-            drawing.color = self.color.to_srgba_unmultiplied();
-            drawing.stroke_width = self.line_width;
-            drawing.line_style = self.line_style;
-            drawing.extend_left = self.extend_left;
-            drawing.extend_right = self.extend_right;
-            drawing.text = (!self.label.is_empty()).then(|| self.label.clone());
-            let fill = self
-                .fill_enabled
-                .then(|| self.fill_color.unwrap_or(self.color.gamma_multiply(0.2)));
-            if drawing.fill_color32() != fill {
+            // The dialog opened with the target's values: one that differs from them was edited,
+            // and only edited values are written, so each drawing keeps the rest of its own.
+            if self.color != target.color32() {
+                drawing.color = self.color.to_srgba_unmultiplied();
+            }
+            if self.line_width != target.stroke_width {
+                drawing.stroke_width = self.line_width;
+            }
+            if self.line_style != target.line_style {
+                drawing.line_style = self.line_style;
+            }
+            if self.extend_left != target.extend_left {
+                drawing.extend_left = self.extend_left;
+            }
+            if self.extend_right != target.extend_right {
+                drawing.extend_right = self.extend_right;
+            }
+            // A tool that shows no text keeps it: it holds a sticker, an image or an icon.
+            if self.label != target.text.as_deref().unwrap_or_default()
+                && (drawing.id == id.0 || drawing.tool_type.supports_text())
+            {
+                drawing.text = (!self.label.is_empty()).then(|| self.label.clone());
+            }
+            if fill != target.fill_color32() && drawing.fill_color32() != fill {
                 drawing.fill_color = fill.map(|color| color.to_srgba_unmultiplied());
             }
-            drawing.font_size = self.font_size;
-            drawing.timeframe_visibility = self.timeframe_visibility.clone();
+            if self.font_size != target.font_size {
+                drawing.font_size = self.font_size;
+            }
+            if self.timeframe_visibility != target.timeframe_visibility {
+                drawing.timeframe_visibility = self.timeframe_visibility.clone();
+            }
             if let Some(template) = &self.tool_settings
                 && template.settings.tool_type == drawing.tool_type
                 && template.settings.custom_tool == drawing.custom_tool
             {
                 let settings = &template.settings;
-                drawing.font_weight = settings.font_weight;
-                drawing.italic = settings.italic;
-                drawing.text_color = settings.text_color;
-                drawing.background = settings.background;
-                drawing.border = settings.border;
-                drawing.border_color = settings.border_color;
-                drawing.arrow_start_style = settings.arrow_start_style;
-                drawing.arrow_end_style = settings.arrow_end_style;
-                drawing.custom_settings = settings.custom_settings.clone();
-                drawing.fib_config = settings.fib_config.clone();
-                drawing.pitchfork = settings.pitchfork.clone();
-                drawing.gann = settings.gann.clone();
-                drawing.ghost_feed = settings.ghost_feed;
-                drawing.position_size = settings.position_size;
-                drawing.position_sizing = settings.position_sizing;
-                drawing.position_target_color = settings.position_target_color;
-                drawing.position_stop_color = settings.position_stop_color;
-                drawing.volume_profile = settings.volume_profile;
-                drawing.regression_trend = settings.regression_trend;
-                drawing.channel_midline = settings.channel_midline;
-                drawing.elliott_degree = settings.elliott_degree;
+                // A tool setting that differs from the target's was edited.
+                macro_rules! edited {
+                    ($($field:ident),+ $(,)?) => {
+                        $(if settings.$field != target.$field {
+                            drawing.$field.clone_from(&settings.$field);
+                        })+
+                    };
+                }
+                edited!(
+                    font_weight,
+                    italic,
+                    text_color,
+                    background,
+                    border,
+                    border_color,
+                    arrow_start_style,
+                    arrow_end_style,
+                    custom_settings,
+                    fib_config,
+                    pitchfork,
+                    gann,
+                    ghost_feed,
+                    position_size,
+                    position_sizing,
+                    position_target_color,
+                    position_stop_color,
+                    volume_profile,
+                    regression_trend,
+                    channel_midline,
+                    elliott_degree,
+                );
             }
             if drawing.id == id.0
                 && !points.is_empty()
@@ -442,6 +477,8 @@ mod tests {
             chart.drawings_mut().drawings.clear();
             chart.drawings_mut().drawings.push(Drawing::new(7, tool));
             let mut peer = Drawing::new(8, DrawingToolType::TextLabel);
+            // A boxed label, so that the settings below would show on it if they leaked.
+            (peer.background, peer.border, peer.border_color) = (true, true, None);
             peer.chart_points
                 .push(crate::drawings::ChartPoint::new(5.0, 75.0));
             chart.drawings_mut().drawings.push(peer);
@@ -556,7 +593,7 @@ mod tests {
             chart.drawings_mut().edit_drawing(7, |d| d.locked = true);
             props.font_size = 18.0;
             props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
-            assert_eq!(chart.drawings().drawings[0].font_size, 12.0);
+            assert_eq!(chart.drawings().drawings[0].font_size, 14.0);
             assert_eq!(chart.drawings().drawings[1].font_size, 18.0);
             // Malformed ratios or widths cannot partly change another selected drawing.
             for (ratio, width) in [(f32::NAN, 2.0), (1.0, 0.0), (1.0, 100.01), (1.0, f32::NAN)] {
@@ -578,9 +615,123 @@ mod tests {
                 );
                 assert_eq!(
                     chart.drawings().drawings[1].stroke_width,
-                    Drawing::new(7, tool).stroke_width
+                    Drawing::new(8, DrawingToolType::TextLabel).stroke_width
                 );
             }
+        }
+    }
+
+    /// Editing another property keeps each count's degree; editing the degree reaches matching tools.
+    #[test]
+    fn selection_preserves_wave_degrees_until_the_degree_is_edited() {
+        use crate::drawings::{DrawingToolType::*, ElliottDegree::*};
+        let mut chart = Chart::new(crate::model::BarData::new());
+        chart.drawings_mut().drawings = [
+            (ElliottImpulse, Minor),
+            (ElliottImpulse, Minute),
+            (ElliottCorrection, Cycle),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(id, (tool, degree))| {
+            let mut drawing = Drawing::new(id, tool);
+            drawing.elliott_degree = degree;
+            drawing
+        })
+        .collect();
+        chart.drawings_mut().select_drawings([0, 1, 2]);
+        let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+        // A colour edit keeps the degrees of the other selected counts.
+        props.color = Color32::GREEN;
+        props.apply_to_chart(DrawingId(0), &mut chart).unwrap();
+        assert_eq!(
+            chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.elliott_degree)
+                .collect::<Vec<_>>(),
+            [Minor, Minute, Cycle]
+        );
+        // A degree edit reaches the other impulse, leaving the correction's degree alone.
+        props
+            .tool_settings
+            .as_mut()
+            .unwrap()
+            .settings
+            .elliott_degree = Minuette;
+        props.apply_to_chart(DrawingId(0), &mut chart).unwrap();
+        assert_eq!(
+            chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.elliott_degree)
+                .collect::<Vec<_>>(),
+            [Minuette, Minuette, Cycle]
+        );
+    }
+
+    /// Confirming the dialog of one drawing in a selection changes the others only where it was
+    /// edited: each keeps its own text, width, extension, visibility and tool settings, and an
+    /// edited text reaches only the drawings that show text.
+    #[test]
+    fn selection_edits_change_only_the_edited_values() {
+        use crate::drawings::FontWeight;
+        let mut alpha = Drawing::new(1, DrawingToolType::TextLabel);
+        alpha.text = Some("Alpha".into());
+        let mut beta = Drawing::new(2, DrawingToolType::TextLabel);
+        beta.text = Some("Beta".into());
+        beta.color = [0, 128, 0, 255];
+        beta.font_weight = FontWeight::Bold;
+        beta.italic = true;
+        let mut line = Drawing::new(3, DrawingToolType::TrendLine);
+        line.text = Some("Breakout".into());
+        line.stroke_width = 3.0;
+        line.extend_right = true;
+        line.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
+        // A sticker keeps its kind in its text, which it does not show.
+        let sticker = Drawing::new(4, DrawingToolType::Sticker);
+        let drawings = vec![alpha, beta, line, sticker];
+        let mut chart = Chart::new(crate::model::BarData::new());
+        chart.drawings_mut().drawings = drawings.clone();
+        chart.drawings_mut().select_drawings([1, 2, 3, 4]);
+        let opened = DrawingProps::from_drawing(&drawings[0], &chart);
+        // Each case: the edit made in the dialog, then what it changes on each drawing.
+        type Case = (&'static str, fn(&mut DrawingProps), fn(&mut Drawing));
+        let cases: [Case; 4] = [
+            ("nothing edited", |_| {}, |_| {}),
+            (
+                "colour",
+                |props| props.color = Color32::BLUE,
+                |d| d.color = [0, 0, 255, 255],
+            ),
+            (
+                "text",
+                |props| props.label = "Gamma".into(),
+                |d| {
+                    if d.tool_type != DrawingToolType::Sticker {
+                        d.text = Some("Gamma".into());
+                    }
+                },
+            ),
+            (
+                "text cleared",
+                |props| props.label.clear(),
+                |d| {
+                    if d.tool_type != DrawingToolType::Sticker {
+                        d.text = None;
+                    }
+                },
+            ),
+        ];
+        for (case, edit, change) in cases {
+            let mut props = opened.clone();
+            edit(&mut props);
+            let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+            let mut expected = drawings.clone();
+            expected.iter_mut().for_each(change);
+            assert_eq!(format!("{edits:?}"), format!("{expected:?}"), "{case}");
         }
     }
 }

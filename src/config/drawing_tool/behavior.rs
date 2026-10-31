@@ -56,6 +56,11 @@ impl DrawingToolType {
                 | Self::FibonacciSpiral
                 | Self::FibonacciSpeedResistanceArcs
                 | Self::FibonacciWedge
+                // Forks fill their bands from their level settings.
+                | Self::Pitchfork
+                | Self::SchiffPitchfork
+                | Self::ModifiedSchiffPitchfork
+                | Self::InsidePitchfork
                 | Self::Pitchfan
                 | Self::GhostFeed
                 | Self::LongPos

@@ -926,7 +926,7 @@ fn replay_reset_removes_future_data_from_the_chart() {
         }
         for (id, expected) in studies.into_iter().zip([Some(4.0), Some(1.0), None]) {
             let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
-            let values = study.order_flow_input().unwrap().values();
+            let values = study.order_flow_inputs()[0].values();
             assert!(values.keys().all(|at| *at == time), "{}", study.name());
             assert_eq!(study.values().value(0, 0), expected, "{}", study.name());
             if study.name() == "Trade Rate" {
@@ -2168,8 +2168,8 @@ fn stream_studies_keep_every_quote_and_book_loss_between_frames() {
     let (_, study) = chart.indicators().find(|(id, _)| *id == fresh).unwrap();
     assert_eq!(
         study.values().value(0, 0),
-        Some(2.0),
-        "new rate replays the two retained bar-0 executions"
+        None,
+        "a new rate leaves out bar 0, which lost an execution to the store's limit"
     );
     let (_, study) = chart.indicators().find(|(id, _)| *id == ids[2]).unwrap();
     assert_eq!(
@@ -2205,8 +2205,8 @@ fn stream_studies_keep_every_quote_and_book_loss_between_frames() {
         .find(|(id, _)| *id == ids[2])
         .unwrap()
         .1
-        .order_flow_input()
-        .unwrap();
+        .order_flow_inputs()[0]
+        .clone();
     input.clear();
     input.push_trade(&chart.bar_clock(), &Tick::new(at(125), 100.0, 1.0, None));
     for _ in 0..8 {
@@ -2312,4 +2312,228 @@ fn order_flow_studies_update_incrementally_between_input_drops() {
             [(11_002, Some(9_999.0)), (11_002, Some(10.0))],
         ]
     );
+}
+
+/// The bar containing a replay cutoff sums only the executions before the cutoff, and only while
+/// the trade store holds every one of that bar's; leaving replay restores the whole bar.
+/// Hand values, all sizes in the first default range: bar 0 is +2, bar 1 is +3 - 5 + 7 = 5, and
+/// before 00:01:30 bar 1 is +3 - 5 = -2. A store of two drops 00:00:10, then 00:01:10, which
+/// leaves bar 1 short.
+#[cfg(feature = "studies")]
+#[test]
+fn order_flow_studies_stop_at_the_replay_cutoff() {
+    use crate::model::OrderSide::{Buy, Sell};
+    let start = bars(1)[0].time;
+    let at = |second| start + TimeDelta::seconds(second);
+    for (capacity, before_cutoff) in [(TRADE_CAPACITY, Some(-2.0)), (2, None)] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let factory = crate::studies::IndicatorFactory::new();
+        let id = chart.add_indicator(factory.create("Multi-Range Delta").unwrap());
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(bars(2), true));
+        frames.run(&mut chart);
+        chart.feed_link.as_mut().unwrap().trades = Trades::new(capacity);
+        let sink = feed.sink();
+        for (second, size, side) in [
+            (10, 2.0, Buy),
+            (70, 3.0, Buy),
+            (80, 5.0, Sell),
+            (100, 7.0, Buy),
+        ] {
+            sink.push_tick(Tick::new(at(second), 100.0, size, Some(side)));
+        }
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        let delta = |chart: &Chart, bar| {
+            let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+            study.values().value(0, bar)
+        };
+        assert_eq!(
+            (delta(&chart, 0), delta(&chart, 1)),
+            (Some(2.0), Some(5.0)),
+            "live, store of {capacity}"
+        );
+        // Kept paused through replay, so leaving it does not reload the trades.
+        chart.set_feed_paused(true);
+        chart.set_replay_time(Some(at(90)));
+        assert!(chart.set_replay_source(
+            vec![Bar::new(at(70), 100.0, 100.0, 100.0, 100.0, 3.0)],
+            Timeframe::Sec1.into()
+        ));
+        for _ in 0..4 {
+            frames.run(&mut chart);
+        }
+        assert_eq!(chart.state.data().bars.len(), 2);
+        assert_eq!(
+            (delta(&chart, 0), delta(&chart, 1)),
+            (Some(2.0), before_cutoff),
+            "replay, store of {capacity}"
+        );
+        chart.set_replay_time(None);
+        for _ in 0..4 {
+            frames.run(&mut chart);
+        }
+        assert_eq!(
+            delta(&chart, 1),
+            Some(5.0),
+            "after replay, store of {capacity}"
+        );
+    }
+}
+
+/// A host study on a footprint and a book source: each bar's most traded price and best bid size.
+#[derive(Clone)]
+struct PocAndBid {
+    inputs: [crate::data::OrderFlowInput; 2],
+    clock: BarClock,
+    values: crate::studies::IndicatorValues,
+}
+
+impl crate::studies::Indicator for PocAndBid {
+    fn name(&self) -> &str {
+        "POC and bid"
+    }
+    fn order_flow_inputs(&self) -> &[crate::data::OrderFlowInput] {
+        &self.inputs
+    }
+    fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
+        let changed = self.clock != *clock;
+        self.clock = clock.clone();
+        changed
+    }
+    fn calculate(&mut self, data: &[Bar]) {
+        let flow = self.inputs[0].footprints_from(DateTime::<Utc>::MIN_UTC);
+        let books = self.inputs[1].books_from(DateTime::<Utc>::MIN_UTC);
+        self.values.clear();
+        for bar in data {
+            let open = self.clock.bar_open(bar.time);
+            let poc = (flow.bars.get(&open).and_then(|bar| bar.poc()))
+                .zip(flow.tick_size)
+                .map_or(f64::NAN, |(level, tick)| level as f64 * tick);
+            let bid = (books.bars.get(&open).and_then(|book| book.bids.first()))
+                .map_or(f64::NAN, |level| level.size);
+            self.values.push_lines(&[poc, bid]);
+        }
+    }
+    fn values(&self) -> &crate::studies::IndicatorValues {
+        &self.values
+    }
+    fn colors(&self) -> Vec<egui::Color32> {
+        Vec::new()
+    }
+    fn set_colors(&mut self, _: Vec<egui::Color32>) {}
+    fn set_visible(&mut self, _: bool) {}
+    fn clone_box(&self) -> Box<dyn crate::studies::Indicator> {
+        Box::new(self.clone())
+    }
+}
+
+/// A host study reads a footprint and a book through the chart's feed, at the instrument's tick
+/// of 0.25, live and as of each replay cutoff. Hand values: bar 0 trades 3 at 100.00 and 1 at
+/// 100.25, POC 100.00, and its last book (00:40) bids 9; bar 1 trades 3 at 100.00 and 6 at
+/// 100.25, POC 100.25, last book (01:25) bid 12. Before 01:20 bar 1 traded only 3 at 100.00 and
+/// its last book came later; before 01:30 it traded 3 at 100.00 and 1 at 100.25 and the book of
+/// 01:25 counts.
+#[test]
+fn host_studies_read_footprints_and_books_as_of_the_replay_cutoff() {
+    use crate::data::OrderFlowInput;
+    use crate::model::OrderBookLevel;
+    use crate::model::OrderSide::{Buy, Sell};
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    let id = chart.add_indicator(Box::new(PocAndBid {
+        inputs: [OrderFlowInput::footprint(), OrderFlowInput::book(1)],
+        clock: BarClock::exact(),
+        values: crate::studies::IndicatorValues::new(),
+    }));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(0.25)));
+    feed.page().send(page(bars(3), true));
+    frames.run(&mut chart);
+    let sink = feed.sink();
+    let start = bars(1)[0].time;
+    let at = |second| start + TimeDelta::seconds(second);
+    let level = |price, size| OrderBookLevel {
+        price,
+        size,
+        order_cnt: None,
+    };
+    let book = |second, bids, asks| OrderBook {
+        ts: at(second),
+        symbol: "A".into(),
+        bids,
+        asks,
+    };
+    for (sequence, second, bid, ask) in [
+        (1, 5, (99.75, 4.0), (100.25, 6.0)),
+        (2, 40, (100.0, 9.0), (100.5, 2.0)),
+        (3, 75, (100.0, 8.0), (100.25, 3.0)),
+        (4, 85, (100.0, 12.0), (100.25, 1.0)),
+    ] {
+        sink.push_depth_snapshot(
+            sequence,
+            book(second, vec![level(bid.0, bid.1)], vec![level(ask.0, ask.1)]),
+        );
+    }
+    for (second, price, size, side) in [
+        (10, 100.0, 2.0, Buy),
+        (20, 100.25, 1.0, Sell),
+        (50, 100.0, 1.0, Buy),
+        (70, 100.0, 3.0, Buy),
+        (80, 100.25, 1.0, Sell),
+        (95, 100.25, 5.0, Buy),
+    ] {
+        sink.push_tick(Tick::new(at(second), price, size, Some(side)));
+    }
+    for _ in 0..8 {
+        frames.run(&mut chart);
+    }
+    let lines = |chart: &Chart| {
+        let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+        (0..chart.state.data().bars.len())
+            .map(|bar| [study.values().value(0, bar), study.values().value(1, bar)])
+            .collect::<Vec<_>>()
+    };
+    let live = vec![
+        [Some(100.0), Some(9.0)],
+        [Some(100.25), Some(12.0)],
+        [None, None],
+    ];
+    assert_eq!(lines(&chart), live, "live");
+    chart.set_feed_paused(true);
+    chart.set_replay_time(Some(at(80)));
+    assert!(chart.set_replay_source(
+        vec![Bar::new(at(70), 100.0, 100.0, 100.0, 100.0, 3.0)],
+        Timeframe::Sec1.into()
+    ));
+    for _ in 0..4 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(
+        lines(&chart),
+        [[Some(100.0), Some(9.0)], [Some(100.0), None]],
+        "at 00:01:20 bar 1 has traded 3 at 100.00 and its last book came later"
+    );
+    chart.set_replay_time(Some(at(90)));
+    // A study without incremental updates recalculates from a later bar at most every 0.25 s.
+    for _ in 0..20 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(
+        lines(&chart),
+        [[Some(100.0), Some(9.0)], [Some(100.0), Some(12.0)]],
+        "at 00:01:30 the book of 00:01:25 counts"
+    );
+    chart.set_replay_time(None);
+    for _ in 0..20 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(lines(&chart), live, "after replay");
 }

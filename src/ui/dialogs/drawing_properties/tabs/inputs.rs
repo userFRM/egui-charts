@@ -710,8 +710,9 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
 }
 
 fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerState>) {
+    // A fork saved without a config shows the levels it is drawn with.
     let mut config = drawing.pitchfork.clone().unwrap_or_else(|| {
-        let mut config = PitchforkConfig::default();
+        let mut config = PitchforkConfig::legacy();
         for level in &mut config.levels {
             level.color = drawing.color;
             level.width = Some(if level.value == 1.0 {
@@ -904,7 +905,9 @@ fn price_per_bar(ui: &mut Ui, coordinates: &mut CoordinatesState) {
         return;
     }
     let mut ratio = (to - from).abs() / bars;
-    let speed = (ratio * 0.01).max(1e-6);
+    let (exact, shown) = (ratio, significant(ratio));
+    // Dragging steps in proportion to the ratio; a level square has no ratio to scale by.
+    let speed = if ratio > 0.0 { ratio * 0.01 } else { 1e-6 };
     FormGrid::new("gann_price_per_bar").show(ui, |ui| {
         let label = ui.label(l10n::text(ui.ctx(), "Price per bar"));
         let changed = ui
@@ -912,7 +915,16 @@ fn price_per_bar(ui: &mut Ui, coordinates: &mut CoordinatesState) {
                 egui::DragValue::new(&mut ratio)
                     .range(0.0..=f64::MAX)
                     .speed(speed)
-                    .max_decimals(8),
+                    .custom_formatter(|value, _| significant(value))
+                    // The shown text stands for the exact ratio, so leaving the field without
+                    // typing keeps the anchor where it is.
+                    .custom_parser(|text| {
+                        if text.trim() == shown {
+                            Some(exact)
+                        } else {
+                            number(text)
+                        }
+                    }),
             )
             .labelled_by(label.id)
             .changed();
@@ -922,6 +934,22 @@ fn price_per_bar(ui: &mut Ui, coordinates: &mut CoordinatesState) {
             coordinates.points[1].price = (from + side * ratio * bars).to_string();
         }
     });
+}
+
+/// `value` with eight significant digits and no trailing zeros, so a ratio of a low-priced
+/// instrument reads in full: 5, 0.0000012, 0.000000003.
+fn significant(value: f64) -> String {
+    let decimals = if value != 0.0 && value.is_finite() {
+        (7.0 - value.abs().log10().floor()).max(0.0) as usize
+    } else {
+        0
+    };
+    let text = format!("{value:.decimals$}");
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_owned()
+    } else {
+        text
+    }
 }
 
 fn level_color(ui: &mut Ui, color: &mut [u8; 4], state: &mut ColorPickerState) -> bool {
@@ -1032,21 +1060,23 @@ mod tests {
     }
 
     /// Over 10 bars a ratio of 1.5 is 15 price units from the first anchor's 100: above it for a
-    /// second anchor above or level, below it for one below. A ratio of 0 is level.
+    /// second anchor above or level, below it for one below. A ratio of 0 is level. Entering the
+    /// field without typing keeps a ratio of 0.000000003, which the field shows.
     #[test]
     fn typing_a_price_per_bar_moves_the_second_anchor_on_its_side() {
         for tool in [Tool::GannSquare, Tool::GannFixed] {
-            for (second, typed, want) in [
-                (120.0, "1.5", 115.0),
-                (80.0, "1.5", 85.0),
-                (100.0, "1.5", 115.0),
-                (80.0, "0", 100.0),
+            for (first, second, typed, want) in [
+                (100.0, 120.0, "1.5", 115.0),
+                (100.0, 80.0, "1.5", 85.0),
+                (100.0, 100.0, "1.5", 115.0),
+                (100.0, 80.0, "0", 100.0),
+                (0.0000120, 0.00001203, "", 0.00001203),
             ] {
                 let ctx = Context::default();
                 let mut chart = Chart::new(BarData::new());
                 let mut drawing = Drawing::new(7, tool);
                 drawing.chart_points =
-                    vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, second)];
+                    vec![ChartPoint::new(0.0, first), ChartPoint::new(10.0, second)];
                 drawing.completed = true;
                 // Collapsed grids keep the field inside the dialog's scroll area.
                 drawing.gann = Some(GannConfig {
@@ -1060,6 +1090,10 @@ mod tests {
                 dialog.open_for_chart(&chart, DrawingId(7));
                 dialog.active_tab = PropertiesTab::Inputs;
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
+                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                if typed.is_empty() {
+                    assert_eq!(field(&texts, "Price per bar").0, "0.000000003", "{tool:?}");
+                }
                 enter(&mut dialog, &mut chart, &ctx, "Price per bar", typed);
                 let points = &chart.drawings().drawings[0].chart_points;
                 assert_eq!(
@@ -1068,7 +1102,7 @@ mod tests {
                         points[1].price,
                         f64::from(points[1].bar_idx)
                     ],
-                    [100.0, want, 10.0],
+                    [first, want, 10.0],
                     "{tool:?}, second anchor at {second}, typed {typed}"
                 );
                 dialog.close();

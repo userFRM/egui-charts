@@ -1460,7 +1460,7 @@ mod tests {
                 0,
             ),
             (
-                current.replacen("\"font_size\": 12.0", "\"font_size\": 100000.0", 1),
+                current.replacen("\"font_size\": 14.0", "\"font_size\": 100000.0", 1),
                 "out-of-range font_size",
                 &["2"],
                 0,

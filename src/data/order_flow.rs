@@ -1,6 +1,7 @@
 //! Stream inputs for studies that cannot be calculated from OHLC bars.
 
 use super::OrderFilter;
+use super::footprint::{Footprint, FootprintBar};
 use crate::model::{BarClock, Level1Quote, OrderBook, OrderBookLevel, OrderSide, Tick};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -145,6 +146,75 @@ const KEPT_BARS: usize = 10_000;
 /// Bars an input holds before it drops its oldest down to `KEPT_BARS`. A drop recalculates the
 /// studies on the input in full, so it comes once per 1,001 new bars rather than on every bar.
 const MAX_BARS: usize = 11_000;
+/// Price rows a footprint or book source keeps when it drops its oldest bars.
+const KEPT_ROWS: usize = 100_000;
+/// Price rows a footprint or book source holds before it drops its oldest bars, down to
+/// `KEPT_BARS` bars and `KEPT_ROWS` rows.
+const MAX_ROWS: usize = 110_000;
+
+/// Bars copied from an [`OrderFlowInput`] at one moment, with what they cover.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct OrderFlowBars<T> {
+    /// Bars by opening time, from the opening time asked for. A bar before
+    /// [`complete_from`](Self::complete_from) is left out. During a chart replay only bars before
+    /// the [`cutoff`](Self::cutoff) are present, and the bar containing it holds the data before
+    /// the cutoff when the source knows it.
+    pub bars: BTreeMap<DateTime<Utc>, T>,
+    /// Opening time of the oldest bar the source holds in full, or `None` while it holds none.
+    /// Older bars were dropped for retention or lost data. A bar from here on that is absent had
+    /// none, except the bar containing the cutoff, which is also absent when its data before the
+    /// cutoff is not known.
+    pub complete_from: Option<DateTime<Utc>>,
+    /// The exclusive replay cutoff applied to these bars, or `None` outside replay.
+    pub cutoff: Option<DateTime<Utc>>,
+    /// The tick size the source was given: footprint level `n` lies at the price
+    /// `n * tick_size`.
+    pub tick_size: Option<f64>,
+    /// The source's revision when copied. It changes whenever the bars may have changed.
+    pub revision: u64,
+}
+
+/// The last synchronized order book of one bar, as an [`OrderFlowInput::book`] source holds it.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct BarBook {
+    /// Time of the update that left the book in this state.
+    pub time: DateTime<Utc>,
+    /// The nearest bid levels, best (highest price) first.
+    pub bids: Vec<OrderBookLevel>,
+    /// The nearest ask levels, best (lowest price) first.
+    pub asks: Vec<OrderBookLevel>,
+}
+
+/// What a source aggregates.
+#[derive(Clone, Copy)]
+enum Source {
+    /// Three outputs per bar.
+    Fixed(OrderFlowKind),
+    /// Each bar's executions by price.
+    Footprint,
+    /// Each bar's last synchronized book, this many levels per side.
+    Book(usize),
+}
+
+/// A chart replay cutoff and the bar containing it, with what is known of that bar before it.
+/// Options rather than an enum: only the chart builds one, and without `widget` an enum's
+/// variants would never be constructed (`dead_code`).
+struct Replay {
+    cutoff: DateTime<Utc>,
+    open: DateTime<Utc>,
+    row: Option<[f64; 3]>,
+    footprint: Option<FootprintBar>,
+    book: Option<BarBook>,
+}
+
+/// Whether `clock`'s bars span time: footprint and book sources keep no others.
+fn time_based(clock: &BarClock) -> bool {
+    clock
+        .timeframe()
+        .is_some_and(|timeframe| !timeframe.is_trade_based())
+}
 
 #[derive(Default)]
 struct Window {
@@ -260,7 +330,7 @@ impl Distinct {
 }
 
 struct State {
-    kind: OrderFlowKind,
+    source: Source,
     bars: BTreeMap<DateTime<Utc>, ([f64; 3], u64)>,
     last: Option<DateTime<Utc>>,
     inside: Option<(f64, f64)>,
@@ -275,6 +345,14 @@ struct State {
     reset_revision: u64,
     changes: BTreeMap<DateTime<Utc>, u64>,
     filter: Option<OrderFilter>,
+    /// A footprint source's executions, from its first execution with a tick size.
+    footprint: Option<Footprint>,
+    /// A book source's book at the end of each bar.
+    books: BTreeMap<DateTime<Utc>, BarBook>,
+    /// Levels held in `books`.
+    book_rows: usize,
+    tick_size: Option<f64>,
+    replay: Option<Replay>,
 }
 
 /// A bounded, thread-safe source shared by a stream study and its feed subscription.
@@ -291,27 +369,45 @@ struct State {
 /// and otherwise updates them from the first changed bar. At most 100,000 events per rolling
 /// window are retained; an overflowing window gives no value until the missing events have
 /// expired, rather than understating the rate.
+///
+/// Besides the fixed aggregations of [`OrderFlowKind`], a source can hold each bar's executions
+/// by price ([`footprint`](Self::footprint)) or its last synchronized book
+/// ([`book`](Self::book)) for a host's study. These keep at most 11,000 bars and 110,000 price
+/// rows, footprint levels or book levels; past either, the oldest bars go at once, down to 10,000
+/// bars and 100,000 rows, and the chart recalculates their studies in full.
+///
+/// During a chart replay every reader stops at the cutoff (see [`OrderFlowBars`]).
 #[derive(Clone)]
 pub struct OrderFlowInput(Arc<Mutex<State>>);
 
 impl OrderFlowInput {
     /// An empty source for this fixed aggregation.
     pub fn new(kind: OrderFlowKind) -> Self {
-        Self(Arc::new(Mutex::new(State {
-            kind: kind.normalized(),
-            bars: BTreeMap::new(),
-            last: None,
-            inside: None,
-            window: Window::default(),
-            instant: Window::default(),
-            distinct: Default::default(),
-            last_price: [None; 2],
-            revision: 0,
-            #[cfg(feature = "widget")]
-            reset_revision: 0,
-            changes: BTreeMap::new(),
-            filter: None,
-        })))
+        Self::of(Source::Fixed(kind.normalized()))
+    }
+
+    /// An empty source of each bar's executions by price, one level per instrument tick, as
+    /// [`Footprint`] aggregates them, for a study to read with
+    /// [`footprints_from`](Self::footprints_from). It keeps nothing until it has a tick size
+    /// ([`set_tick_size`](Self::set_tick_size); the chart gives it its instrument's), and only
+    /// bars of an interval measured in time: under a clock without a timeframe, or with a tick,
+    /// volume, range or delta interval, it ignores executions. An execution older than the one
+    /// before it is left out, as from the chart's footprint.
+    pub fn footprint() -> Self {
+        Self::of(Source::Footprint)
+    }
+
+    /// An empty source of the last synchronized book of each bar, its nearest `levels` on each
+    /// side (clamped to 1..=100), for a study to read with [`books_from`](Self::books_from). A
+    /// bar without a synchronized update keeps no book, and neither does one whose last update
+    /// was a loss. An update with an invalid level, or older than the source's last, is ignored.
+    /// Only bars of an interval measured in time are kept, and an order filter does not apply.
+    pub fn book(levels: usize) -> Self {
+        Self::of(Source::Book(levels.clamp(1, 100)))
+    }
+
+    fn of(source: Source) -> Self {
+        Self(Arc::new(Mutex::new(State::new(source))))
     }
 
     /// The same source, with book size summed over the individual orders `filter` accepts. The
@@ -330,7 +426,7 @@ impl OrderFlowInput {
         state
             .filter
             .clone()
-            .filter(|_| matches!(state.kind, OrderFlowKind::BookSize { .. }))
+            .filter(|_| matches!(state.source, Source::Fixed(OrderFlowKind::BookSize { .. })))
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -344,27 +440,49 @@ impl OrderFlowInput {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
-    /// Clears values on a new symbol, interval or subscription.
+    /// Clears values on a new symbol, interval or subscription. The aggregation, order filter,
+    /// tick size and any replay cutoff stay.
     pub fn clear(&self) {
         let mut state = self.state();
-        let kind = state.kind;
-        let filter = state.filter.take();
         let revision = state.revision.wrapping_add(1);
+        // The cutoff stays, so nothing after it shows; what was known before it is gone.
+        let replay = state.replay.take().map(|replay| Replay {
+            row: None,
+            footprint: None,
+            book: None,
+            ..replay
+        });
+        let filter = state.filter.take();
         *state = State {
-            kind,
             filter,
-            bars: BTreeMap::new(),
-            last: None,
-            inside: None,
-            window: Window::default(),
-            instant: Window::default(),
-            distinct: Default::default(),
-            last_price: [None; 2],
+            tick_size: state.tick_size,
+            replay,
             revision,
             #[cfg(feature = "widget")]
             reset_revision: revision,
-            changes: BTreeMap::new(),
+            ..State::new(state.source)
         };
+    }
+
+    /// Sets the instrument tick size that footprint levels count in. A size that is not finite
+    /// and positive counts as none, and a footprint source keeps nothing without one. Another
+    /// size clears the footprint, whose levels no longer apply. Other sources only report it. The
+    /// chart sets its instrument's when it connects the source and when it subscribes.
+    pub fn set_tick_size(&self, tick_size: Option<f64>) {
+        let tick_size = tick_size.filter(|size| size.is_finite() && *size > 0.0);
+        let mut state = self.state();
+        if state.tick_size == tick_size {
+            return;
+        }
+        state.tick_size = tick_size;
+        if state.footprint.take().is_some() {
+            state.changes.clear();
+            state.revision = state.revision.wrapping_add(1);
+            #[cfg(feature = "widget")]
+            {
+                state.reset_revision = state.revision;
+            }
+        }
     }
 
     #[cfg(feature = "widget")]
@@ -385,26 +503,53 @@ impl OrderFlowInput {
             .map(|(time, _)| *time)
     }
 
-    #[cfg(feature = "studies")]
     pub(crate) fn values_from(&self, time: DateTime<Utc>) -> BTreeMap<DateTime<Utc>, [f64; 3]> {
-        self.state()
-            .bars
-            .range(time..)
-            .map(|(t, (row, _))| (*t, *row))
-            .collect()
+        let state = self.state();
+        let first = state.bars.keys().next().copied();
+        // The count beside each row only serves the spread; readers drop it.
+        (state.visible(&state.bars, first, time, |replay| {
+            replay.row.map(|row| (row, 0))
+        }))
+        .into_iter()
+        .map(|(time, (row, _))| (time, row))
+        .collect()
     }
 
-    /// Copies the retained bar outputs in time order. Missing outputs are NaN.
+    /// Copies the retained bar outputs in time order. Missing outputs are NaN. During a chart
+    /// replay, as [`OrderFlowBars::bars`]: nothing from the cutoff's bar on, except that bar's
+    /// output of the executions before the cutoff, when known.
     pub fn values(&self) -> BTreeMap<DateTime<Utc>, [f64; 3]> {
-        self.state()
-            .bars
-            .iter()
-            .map(|(t, (values, _))| (*t, *values))
-            .collect()
+        self.values_from(DateTime::<Utc>::MIN_UTC)
+    }
+
+    /// Copies the bars of a footprint source that open at or after `open`, with what they
+    /// cover. Empty for other sources.
+    pub fn footprints_from(&self, open: DateTime<Utc>) -> OrderFlowBars<FootprintBar> {
+        let state = self.state();
+        let complete_from = state.footprint.as_ref().and_then(Footprint::complete_from);
+        let bars = match &state.footprint {
+            Some(flow) => state.visible(flow.bars(), complete_from, open, |replay| {
+                replay.footprint.clone()
+            }),
+            None => BTreeMap::new(),
+        };
+        state.snapshot(bars, complete_from)
+    }
+
+    /// Copies the books of a book source for the bars that open at or after `open`, with what
+    /// they cover. Empty for other sources.
+    pub fn books_from(&self, open: DateTime<Utc>) -> OrderFlowBars<BarBook> {
+        let state = self.state();
+        let complete_from = state.books.keys().next().copied();
+        let bars = state.visible(&state.books, complete_from, open, |replay| {
+            replay.book.clone()
+        });
+        state.snapshot(bars, complete_from)
     }
 
     /// Adds a quote. Invalid quotes, tick sizes and timestamps older than this stream are
-    /// ignored. Crossed quotes are retained, so their spread can be negative.
+    /// ignored. Crossed quotes are retained, so their spread can be negative. Footprint and book
+    /// sources ignore it.
     pub fn push_quote(&self, clock: &BarClock, quote: &Level1Quote, tick_size: f64) {
         if !tick_size.is_finite()
             || tick_size <= 0.0
@@ -417,8 +562,11 @@ impl OrderFlowInput {
         if state.last.is_some_and(|t| quote.ts < t) {
             return;
         }
+        let Source::Fixed(kind) = state.source else {
+            return;
+        };
         let open = clock.bar_open(quote.ts);
-        match state.kind {
+        match kind {
             OrderFlowKind::Spread => {
                 let spread = (quote.ask - quote.bid) / tick_size;
                 let (row, count) = state.bars.entry(open).or_insert(([spread; 3], 0));
@@ -450,14 +598,20 @@ impl OrderFlowInput {
         state.finish(quote.ts, open);
     }
 
-    /// Adds an execution already deduplicated by the host or chart's feed.
+    /// Adds an execution already deduplicated by the host or chart's feed. A footprint source
+    /// adds it at its price level; a book source ignores it.
     pub fn push_trade(&self, clock: &BarClock, trade: &Tick) {
         if !trade.price.is_finite() || !trade.size.is_finite() || trade.size < 0.0 {
             return;
         }
         let mut state = self.state();
         let open = clock.bar_open(trade.ts);
-        let row = match state.kind {
+        let kind = match state.source {
+            Source::Fixed(kind) => kind,
+            Source::Footprint => return state.push_footprint(clock, trade),
+            Source::Book(_) => return,
+        };
+        let row = match kind {
             OrderFlowKind::TradeRate {
                 volume,
                 seconds,
@@ -541,7 +695,10 @@ impl OrderFlowInput {
             return;
         };
         let total = row[0];
-        let row = match state.kind {
+        let Source::Fixed(kind) = state.source else {
+            return;
+        };
+        let row = match kind {
             OrderFlowKind::TradeRate {
                 seconds, instant, ..
             } => {
@@ -575,37 +732,129 @@ impl OrderFlowInput {
         state.finish(now, open);
     }
 
+    /// Rebuilds the source from the executions the chart holds, in place of what it holds. A
+    /// bar that lost an execution to the store's limit is left out, and a rolling window gives no
+    /// value while it reaches back to the loss, as when the window overflows.
     #[cfg(feature = "widget")]
-    pub(crate) fn replace_trades<'a>(
-        &self,
-        clock: &BarClock,
-        trades: impl Iterator<Item = &'a Tick>,
-    ) {
-        if !matches!(
-            self.state().kind,
-            OrderFlowKind::TradeRate { .. }
+    pub(crate) fn replace_trades(&self, clock: &BarClock, trades: &super::trades::Trades) {
+        let footprint = match self.state().source {
+            Source::Fixed(
+                OrderFlowKind::TradeRate { .. }
                 | OrderFlowKind::AggressorRate { .. }
                 | OrderFlowKind::LevelsExecuted { .. }
                 | OrderFlowKind::SizeDelta { .. }
                 | OrderFlowKind::FlowSum { .. }
-                | OrderFlowKind::FilteredCvd { .. }
-        ) {
-            return;
-        }
+                | OrderFlowKind::FilteredCvd { .. },
+            ) => false,
+            Source::Footprint => true,
+            _ => return,
+        };
         let as_of = self.state().last;
         self.clear();
-        let mut sorted: Vec<_> = trades.collect();
-        sorted.sort_by_key(|trade| trade.ts);
-        for trade in sorted {
-            self.push_trade(clock, trade);
+        let lost = trades.lost_until();
+        if footprint {
+            // In arrival order, as the chart's footprint is built.
+            for trade in trades.iter() {
+                self.push_trade(clock, trade);
+            }
+            let mut state = self.state();
+            if let (Some(lost), Some(flow)) = (lost, &mut state.footprint) {
+                flow.drop_through(lost, trades.iter());
+            }
+        } else {
+            {
+                let mut state = self.state();
+                state.window.lost_until = lost;
+                state.instant.lost_until = lost;
+                for distinct in &mut state.distinct {
+                    distinct.lost_until = lost;
+                }
+            }
+            let mut sorted: Vec<_> = trades.iter().collect();
+            sorted.sort_by_key(|trade| trade.ts);
+            for trade in sorted {
+                self.push_trade(clock, trade);
+            }
+            if let Some(lost) = lost {
+                let cut = clock.bar_open(lost);
+                let mut state = self.state();
+                state.bars.retain(|open, _| *open > cut);
+                state.changes.retain(|open, _| *open > cut);
+            }
         }
         if let Some(now) = as_of {
             self.advance_time(clock, now);
         }
     }
 
+    /// Applies a chart replay cutoff, exclusive, or removes it with `None`. Readers then stop at
+    /// the cutoff's bar. That bar holds the held executions before the cutoff for a source that
+    /// sums them, unless the store dropped one of that bar's, and a book source shows the bar's
+    /// book when the bar's last update came before the cutoff.
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_replay(
+        &self,
+        clock: &BarClock,
+        cutoff: Option<DateTime<Utc>>,
+        trades: Option<&super::trades::Trades>,
+    ) {
+        let mut state = self.state();
+        let replay = cutoff.map(|cutoff| {
+            let open = clock.bar_open(cutoff);
+            // shortcut: one scan of the store per input per seek; index the store by time if
+            // replay playback profiles show it.
+            let held = trades
+                .filter(|trades| {
+                    (trades.lost_until()).is_none_or(|lost| clock.bar_open(lost) < open)
+                })
+                .into_iter()
+                .flat_map(|trades| trades.iter())
+                .filter(|trade| open <= trade.ts && trade.ts < cutoff);
+            let mut replay = Replay {
+                cutoff,
+                open,
+                row: None,
+                footprint: None,
+                book: None,
+            };
+            match state.source {
+                Source::Fixed(
+                    kind @ (OrderFlowKind::SizeDelta { .. }
+                    | OrderFlowKind::FlowSum { .. }
+                    | OrderFlowKind::FilteredCvd { .. }),
+                ) => {
+                    let part = OrderFlowInput::new(kind);
+                    held.for_each(|trade| part.push_trade(clock, trade));
+                    replay.row = part.state().bars.get(&open).map(|(row, _)| *row);
+                }
+                Source::Footprint => {
+                    if let Some(tick_size) = state.tick_size.filter(|_| time_based(clock))
+                        && let Ok(mut part) = Footprint::new(clock.clone(), tick_size, 1)
+                    {
+                        // In arrival order, so an execution older than the one before is left out.
+                        for trade in held {
+                            let _ = part.push(trade);
+                        }
+                        replay.footprint = part.bars().get(&open).cloned();
+                    }
+                }
+                Source::Book(_) => {
+                    replay.book = (state.books.get(&open))
+                        .filter(|book| book.time < cutoff)
+                        .cloned();
+                }
+                Source::Fixed(_) => {}
+            }
+            replay
+        });
+        state.replay = replay;
+        state.revision = state.revision.wrapping_add(1);
+        state.reset_revision = state.revision;
+    }
+
     /// Adds a synchronized book, or marks its loss with `None`. A loss clears the current
     /// bar's book values and breaks the inside-market movement path until it is seeded again.
+    /// A book source keeps the nearest levels as its bar's book.
     pub fn push_book(&self, clock: &BarClock, time: DateTime<Utc>, book: Option<&OrderBook>) {
         self.book_levels(
             clock,
@@ -629,12 +878,13 @@ impl OrderFlowInput {
         if levels.is_none() {
             state.inside = None;
         }
-        let OrderFlowKind::BookSize {
-            levels: count,
-            distance,
-        } = state.kind
-        else {
-            return;
+        let (count, distance) = match state.source {
+            Source::Fixed(OrderFlowKind::BookSize {
+                levels: count,
+                distance,
+            }) => (count, distance),
+            Source::Book(count) => return state.push_bar_book(clock, time, count, levels),
+            _ => return,
         };
         if state.last.is_some_and(|t| time < t) {
             return;
@@ -679,6 +929,169 @@ fn signed_size(trade: &Tick, min: f64, max: f64) -> f64 {
 }
 
 impl State {
+    fn new(source: Source) -> Self {
+        Self {
+            source,
+            bars: BTreeMap::new(),
+            last: None,
+            inside: None,
+            window: Window::default(),
+            instant: Window::default(),
+            distinct: Default::default(),
+            last_price: [None; 2],
+            revision: 0,
+            #[cfg(feature = "widget")]
+            reset_revision: 0,
+            changes: BTreeMap::new(),
+            filter: None,
+            footprint: None,
+            books: BTreeMap::new(),
+            book_rows: 0,
+            tick_size: None,
+            replay: None,
+        }
+    }
+
+    /// The bars of `stored` that readers see from `open` on: none before `complete_from`, none
+    /// at or after the replay cutoff's bar, and that bar as `partial` gives it.
+    fn visible<T: Clone>(
+        &self,
+        stored: &BTreeMap<DateTime<Utc>, T>,
+        complete_from: Option<DateTime<Utc>>,
+        open: DateTime<Utc>,
+        partial: impl FnOnce(&Replay) -> Option<T>,
+    ) -> BTreeMap<DateTime<Utc>, T> {
+        let Some(from) = complete_from.map(|first| first.max(open)) else {
+            return BTreeMap::new();
+        };
+        let end = self.replay.as_ref().map(|replay| replay.open);
+        let mut bars: BTreeMap<_, _> = stored
+            .range(from..)
+            .take_while(|(time, _)| end.is_none_or(|end| **time < end))
+            .map(|(time, bar)| (*time, bar.clone()))
+            .collect();
+        if let Some(replay) = &self.replay
+            && replay.open >= from
+            && let Some(bar) = partial(replay)
+        {
+            bars.insert(replay.open, bar);
+        }
+        bars
+    }
+
+    fn snapshot<T>(
+        &self,
+        bars: BTreeMap<DateTime<Utc>, T>,
+        complete_from: Option<DateTime<Utc>>,
+    ) -> OrderFlowBars<T> {
+        OrderFlowBars {
+            bars,
+            complete_from,
+            cutoff: self.replay.as_ref().map(|replay| replay.cutoff),
+            tick_size: self.tick_size,
+            revision: self.revision,
+        }
+    }
+
+    /// Adds an execution to a footprint source. Past `MAX_BARS` bars or `MAX_ROWS` rows the
+    /// footprint's budget takes the oldest bar; the rest of the chunk then goes at once, down to
+    /// `KEPT_BARS` and `KEPT_ROWS`, so the studies start over once per chunk.
+    fn push_footprint(&mut self, clock: &BarClock, trade: &Tick) {
+        let Some(tick_size) = self.tick_size.filter(|_| time_based(clock)) else {
+            return;
+        };
+        if self.footprint.is_none() {
+            let Ok(mut flow) = Footprint::new(clock.clone(), tick_size, 1) else {
+                return;
+            };
+            flow.set_budget(MAX_BARS, MAX_ROWS);
+            self.footprint = Some(flow);
+        }
+        let Some(flow) = &mut self.footprint else {
+            return;
+        };
+        let first = flow.bars().keys().next().copied();
+        if !matches!(flow.push(trade), Ok(true)) {
+            return;
+        }
+        let dropped = first.is_some() && flow.bars().keys().next().copied() != first;
+        if dropped {
+            flow.set_budget(KEPT_BARS, KEPT_ROWS);
+            flow.set_budget(MAX_BARS, MAX_ROWS);
+        }
+        let first = flow.bars().keys().next().copied();
+        let latest = self.last.map_or(trade.ts, |last| last.max(trade.ts));
+        self.finish(latest, clock.bar_open(trade.ts));
+        if dropped {
+            // `changes` names only held bars, so it shares their bound; readers start over.
+            if let Some(first) = first {
+                self.changes.retain(|bar, _| *bar >= first);
+            }
+            #[cfg(feature = "widget")]
+            {
+                self.reset_revision = self.revision;
+            }
+        }
+    }
+
+    /// Keeps a book source's book at `time` as its bar's, or forgets the bar's book on a loss
+    /// (`None`). An update older than the source's last, one with an invalid level, kept or not,
+    /// and bars that do not span time are ignored. Past `MAX_BARS` bars with an update or
+    /// `MAX_ROWS` levels, the oldest bars go at once, down to `KEPT_BARS` and `KEPT_ROWS`.
+    fn push_bar_book<'a>(
+        &mut self,
+        clock: &BarClock,
+        time: DateTime<Utc>,
+        count: usize,
+        levels: Option<impl Iterator<Item = (bool, &'a OrderBookLevel)>>,
+    ) {
+        if !time_based(clock) || self.last.is_some_and(|last| time < last) {
+            return;
+        }
+        let open = clock.bar_open(time);
+        let old = match levels {
+            None => self.books.remove(&open),
+            Some(levels) => {
+                let mut book = BarBook {
+                    time,
+                    bids: Vec::new(),
+                    asks: Vec::new(),
+                };
+                for (bid, level) in levels {
+                    if !level.price.is_finite() || !level.size.is_finite() || level.size < 0.0 {
+                        return;
+                    }
+                    let side = if bid { &mut book.bids } else { &mut book.asks };
+                    if side.len() < count {
+                        side.push(level.clone());
+                    }
+                }
+                self.book_rows += book.bids.len() + book.asks.len();
+                self.books.insert(open, book)
+            }
+        };
+        if let Some(old) = old {
+            self.book_rows -= old.bids.len() + old.asks.len();
+        }
+        self.finish(time, open);
+        // Every bar with a book or a loss has a change record, so the records bound the bars;
+        // dropping a record drops its bar's book.
+        if self.changes.len() > MAX_BARS || self.book_rows > MAX_ROWS {
+            while self.changes.len() > 1
+                && (self.changes.len() > KEPT_BARS || self.book_rows > KEPT_ROWS)
+                && let Some((open, _)) = self.changes.pop_first()
+            {
+                if let Some(book) = self.books.remove(&open) {
+                    self.book_rows -= book.bids.len() + book.asks.len();
+                }
+            }
+            #[cfg(feature = "widget")]
+            {
+                self.reset_revision = self.revision;
+            }
+        }
+    }
+
     fn finish(&mut self, time: DateTime<Utc>, open: DateTime<Utc>) {
         self.last = Some(time);
         self.revision = self.revision.wrapping_add(1);
@@ -702,7 +1115,7 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Timeframe;
+    use crate::model::{OrderBook, OrderBookLevel, Timeframe};
 
     #[test]
     fn late_trades_do_not_clear_an_overflow_gap_early() {
@@ -849,5 +1262,247 @@ mod tests {
             input.push_quote(&clock, &quote(7, 96.0), 1.0);
             assert_eq!(input.values()[&start], want, "reversal {reversal}");
         }
+    }
+
+    /// Hand values: the book of 00:20 replaces that of 00:05 in bar 10:00, and the older one of
+    /// 00:10 is ignored; in bar 10:01 a loss removes the first book, the next keeps its two best
+    /// bids; bar 10:02 ends on a loss, and an update with an invalid third bid changes nothing.
+    #[test]
+    fn book_sources_keep_each_bars_last_synchronized_book() {
+        let clock = BarClock::new(Timeframe::Min1);
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let at = |second| start + TimeDelta::seconds(second);
+        let level = |price, size| OrderBookLevel {
+            price,
+            size,
+            order_cnt: None,
+        };
+        let levels = |sides: &[(f64, f64)]| sides.iter().map(|&(p, s)| level(p, s)).collect();
+        let input = OrderFlowInput::book(2);
+        for (second, sides) in [
+            (
+                5,
+                Some((
+                    vec![(99.0, 1.0), (98.0, 2.0), (97.0, 3.0)],
+                    vec![(101.0, 4.0), (102.0, 5.0)],
+                )),
+            ),
+            (20, Some((vec![(99.0, 7.0)], vec![(101.0, 8.0)]))),
+            (10, Some((vec![(90.0, 1.0)], vec![(110.0, 1.0)]))),
+            (65, Some((vec![(100.0, 1.0)], vec![(102.0, 1.0)]))),
+            (70, None),
+            (
+                75,
+                Some((
+                    vec![(100.0, 5.0), (99.0, 6.0), (98.0, 7.0)],
+                    vec![(102.0, 5.0)],
+                )),
+            ),
+            (125, None),
+            (
+                130,
+                Some((
+                    vec![(100.0, 1.0), (99.0, 1.0), (98.0, f64::NAN)],
+                    vec![(101.0, 1.0)],
+                )),
+            ),
+        ] {
+            let book = sides.map(|(bids, asks): (Vec<_>, Vec<_>)| OrderBook {
+                ts: at(second),
+                symbol: "A".into(),
+                bids: levels(&bids),
+                asks: levels(&asks),
+            });
+            input.push_book(&clock, at(second), book.as_ref());
+        }
+        let books = input.books_from(DateTime::<Utc>::MIN_UTC);
+        let bar = |time, bids: &[(f64, f64)], asks: &[(f64, f64)]| BarBook {
+            time,
+            bids: levels(bids),
+            asks: levels(asks),
+        };
+        assert_eq!(
+            books.bars,
+            BTreeMap::from([
+                (at(0), bar(at(20), &[(99.0, 7.0)], &[(101.0, 8.0)])),
+                (
+                    at(60),
+                    bar(at(75), &[(100.0, 5.0), (99.0, 6.0)], &[(102.0, 5.0)])
+                ),
+            ])
+        );
+        assert_eq!(
+            (books.complete_from, books.cutoff, books.tick_size),
+            (Some(at(0)), None, None)
+        );
+    }
+
+    /// Hand counts, one bar a minute: a footprint of one row per bar drops at bar 11,000, the
+    /// 11,001st, down to bars 1,001 to 11,000; a book of 200 levels per bar reaches 110,000 rows
+    /// at bar 549 and drops at bar 550 down to 500 bars, 51 to 550; losses alone keep no book but
+    /// a change record per bar, bounded the same way. Each drop recalculates in full once, and
+    /// the next bar updates from itself.
+    #[test]
+    fn footprint_and_book_sources_drop_their_oldest_bars_in_chunks() {
+        let clock = BarClock::new(Timeframe::Min1);
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let minute = |bar: usize| start + TimeDelta::minutes(bar as i64);
+        let footprint = OrderFlowInput::footprint();
+        footprint.set_tick_size(Some(1.0));
+        let bids: Vec<_> = (1..=100)
+            .rev()
+            .map(|price| OrderBookLevel {
+                price: f64::from(price),
+                size: 1.0,
+                order_cnt: None,
+            })
+            .collect();
+        let asks = (101..=200)
+            .map(|price| OrderBookLevel {
+                price: f64::from(price),
+                size: 1.0,
+                order_cnt: None,
+            })
+            .collect();
+        let deep = OrderBook {
+            ts: start,
+            symbol: "A".into(),
+            bids,
+            asks,
+        };
+        let cases = [
+            (footprint, 11_000, 1_001),
+            (OrderFlowInput::book(100), 550, 51),
+            (OrderFlowInput::book(1), 11_000, 1_001),
+        ];
+        for (case, (input, full, kept_from)) in cases.into_iter().enumerate() {
+            let push = |bar| match case {
+                0 => input.push_trade(
+                    &clock,
+                    &Tick::new(minute(bar), 100.0, 1.0, Some(OrderSide::Buy)),
+                ),
+                1 => input.push_book(&clock, minute(bar), Some(&deep)),
+                _ => input.push_book(&clock, minute(bar), None),
+            };
+            let held = || {
+                if case == 0 {
+                    let copy = input.footprints_from(DateTime::<Utc>::MIN_UTC);
+                    (copy.bars.len(), copy.complete_from)
+                } else {
+                    let copy = input.books_from(DateTime::<Utc>::MIN_UTC);
+                    (copy.bars.len(), copy.complete_from)
+                }
+            };
+            // Losses keep no book.
+            let bars = |from: usize, to: usize| {
+                if case == 2 {
+                    (0, None)
+                } else {
+                    (to - from, Some(minute(from)))
+                }
+            };
+            for bar in 0..full {
+                push(bar);
+            }
+            assert_eq!(held(), bars(0, full), "case {case}, {full} bars");
+            #[cfg(feature = "widget")]
+            let before = input.revision();
+            push(full);
+            assert_eq!(
+                held(),
+                bars(kept_from, full + 1),
+                "case {case}, drop at bar {full}"
+            );
+            #[cfg(feature = "widget")]
+            assert_eq!(
+                input.changed_since(before),
+                None,
+                "case {case}: full recalculation"
+            );
+            #[cfg(feature = "widget")]
+            let before = input.revision();
+            push(full + 1);
+            assert_eq!(held(), bars(kept_from, full + 2), "case {case}, next bar");
+            #[cfg(feature = "widget")]
+            assert_eq!(input.changed_since(before), Some(minute(full + 1)));
+        }
+    }
+
+    /// Hand levels: 100.2 is 200.4 ticks of 0.5, level 200, and 400.8 ticks of 0.25, level 401.
+    /// A footprint keeps nothing without a tick size or on bars that do not span time.
+    #[test]
+    fn footprint_sources_follow_their_tick_size_and_time_bars() {
+        let clock = BarClock::new(Timeframe::Min1);
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let input = OrderFlowInput::footprint();
+        let push = |clock: &BarClock, second, price| {
+            let at = start + TimeDelta::seconds(second);
+            input.push_trade(clock, &Tick::new(at, price, 1.0, Some(OrderSide::Buy)));
+        };
+        let held = || {
+            let copy = input.footprints_from(DateTime::<Utc>::MIN_UTC);
+            let levels: Vec<_> = (copy.bars.values())
+                .flat_map(|bar| bar.levels.keys().copied())
+                .collect();
+            (copy.tick_size, levels)
+        };
+        push(&clock, 0, 100.2);
+        assert_eq!(held(), (None, vec![]), "no tick size");
+        input.set_tick_size(Some(0.5));
+        push(&clock, 1, 100.2);
+        assert_eq!(held(), (Some(0.5), vec![200]));
+        input.set_tick_size(Some(0.25));
+        assert_eq!(
+            held(),
+            (Some(0.25), vec![]),
+            "another size clears the levels"
+        );
+        push(&clock, 2, 100.2);
+        assert_eq!(held(), (Some(0.25), vec![401]));
+        input.set_tick_size(Some(f64::NAN));
+        assert_eq!(held(), (None, vec![]), "NaN is no tick size");
+        input.set_tick_size(Some(1.0));
+        push(&BarClock::new("1t".parse().unwrap()), 3, 100.0);
+        assert_eq!(held(), (Some(1.0), vec![]), "tick bars do not span time");
+    }
+
+    /// Hand values: a store of two drops the buy of 00:10 when the sell of 01:05 arrives, so bar
+    /// 10:00 is cut and bar 10:01 whole. The 60 second window at 01:05 reaches back to the loss;
+    /// the 3 second window holds only the sell of 4.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn rebuilt_sources_leave_out_what_the_store_dropped() {
+        let clock = BarClock::new(Timeframe::Min1);
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let at = |second| start + TimeDelta::seconds(second);
+        let mut store = super::super::trades::Trades::new(2);
+        for (second, size, side) in [
+            (10, 1.0, OrderSide::Buy),
+            (50, 2.0, OrderSide::Buy),
+            (65, 4.0, OrderSide::Sell),
+        ] {
+            store.push(Tick::new(at(second), 100.0, size, Some(side)));
+        }
+        let rate = OrderFlowInput::new(OrderFlowKind::TradeRate {
+            volume: true,
+            seconds: 60,
+            instant: 3,
+        });
+        rate.replace_trades(&clock, &store);
+        let values = rate.values();
+        assert_eq!(values.keys().copied().collect::<Vec<_>>(), [at(60)]);
+        let [total, rolling, instant] = values[&at(60)];
+        assert_eq!((total, instant), (4.0, 4.0 / 3.0));
+        assert!(
+            rolling.is_nan(),
+            "the rolling window reaches back to the loss"
+        );
+        let footprint = OrderFlowInput::footprint();
+        footprint.set_tick_size(Some(1.0));
+        footprint.replace_trades(&clock, &store);
+        let flow = footprint.footprints_from(DateTime::<Utc>::MIN_UTC);
+        assert_eq!(flow.complete_from, Some(at(60)));
+        assert_eq!(flow.bars.keys().copied().collect::<Vec<_>>(), [at(60)]);
+        assert_eq!(flow.bars[&at(60)].bid, 4.0);
     }
 }

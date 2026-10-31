@@ -622,6 +622,11 @@ mod tests {
                 ];
                 for (case, setup, text_color, fills, strokes, italics) in cases {
                     let mut drawing = pattern(tool);
+                    // A red drawing with no text box settings of its own, whatever the tool's.
+                    drawing.color = red.to_array();
+                    (drawing.fill_color, drawing.text_color) = (None, None);
+                    (drawing.background, drawing.border) = (true, true);
+                    drawing.border_color = None;
                     drawing.points = vec![Pos2::new(100.0, 300.0), Pos2::new(200.0, 100.0)];
                     drawing.chart_points = (drawing.points.iter())
                         .map(|p| crate::drawings::ChartPoint::new(p.x, f64::from(p.y)))

@@ -118,10 +118,7 @@ impl Chart {
             return None;
         }
         let tool = crate::drawings::DrawingToolType::HorizontalLine;
-        let mut drawing = Drawing::with_color(0, tool, self.drawings.options.default_color);
-        if let Some(defaults) = self.drawings.tool_defaults.get(&tool) {
-            let _ = defaults.apply_to(&mut drawing);
-        }
+        let mut drawing = self.drawings.new_drawing(0, tool);
         // A study pane's drawings belong to its first member, as in `move_drawing_to_pane`.
         drawing.pane = self
             .pane_layout

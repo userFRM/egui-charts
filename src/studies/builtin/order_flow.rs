@@ -146,8 +146,8 @@ impl Indicator for OrderFlowStudy {
     fn desc(&self) -> &str {
         "Exact stream aggregation; missing market data leaves gaps"
     }
-    fn order_flow_input(&self) -> Option<OrderFlowInput> {
-        Some(self.input.clone())
+    fn order_flow_inputs(&self) -> &[OrderFlowInput] {
+        std::slice::from_ref(&self.input)
     }
     fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
         let changed = self.clock != *clock;
@@ -440,7 +440,7 @@ mod tests {
     }
 
     fn push(study: &OrderFlowStudy, minute: i64, trades: &[(f64, Option<OrderSide>)]) {
-        let input = study.order_flow_input().unwrap();
+        let input = &study.order_flow_inputs()[0];
         for (second, &(size, side)) in trades.iter().enumerate() {
             let at = start() + TimeDelta::minutes(minute) + TimeDelta::seconds(second as i64);
             input.push_trade(&study.clock, &Tick::new(at, 100.0, size, side));
@@ -564,7 +564,8 @@ mod tests {
                 .map(|i| i.value);
             assert_eq!(read, Some(InputValue::Number(value)), "{id}");
             let filter = study
-                .order_flow_input()
+                .order_flow_inputs()
+                .first()
                 .and_then(|input| input.order_filter())
                 .unwrap_or_default();
             assert_eq!((filter.min_age, filter.max_age), ages, "{id} {value}");

@@ -182,6 +182,7 @@ mod tests {
         for (tool, degree, points, labels) in cases {
             let case = format!("{tool:?} {degree:?} {}", points.len());
             let mut drawing = Drawing::new(7, tool);
+            assert!(drawing.fill_color.is_none(), "{case}: default fill");
             drawing.elliott_degree = degree;
             drawing.fill_color = Some([12, 34, 56, 80]); // as saved by an earlier release
             drawing.points = points.iter().map(|&(x, y)| Pos2::new(x, y)).collect();
