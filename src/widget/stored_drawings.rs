@@ -752,7 +752,9 @@ mod tests {
     use crate::data::{FeedError, Reply};
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
     use crate::model::{Bar, BarData};
+    use crate::widget::{ChartLayout, ChartLayoutMode};
     use chrono::{TimeZone, Utc};
+    use egui::{Pos2, RawInput, Rect, vec2};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1099,6 +1101,61 @@ mod tests {
         sorted(drawings.iter().map(|d| d.chart_points[0].price).collect())
     }
 
+    /// A chart of symbol A on ten one-minute bars, keeping its drawings in `storage` if given.
+    fn chart_on(storage: Option<Arc<dyn Storage>>) -> Chart {
+        let bars = (0..10)
+            .map(|i| {
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    10.0,
+                    11.0,
+                    9.0,
+                    10.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_symbol("A");
+        if let Some(storage) = storage {
+            chart.set_storage(storage);
+        }
+        chart
+    }
+
+    /// Shows `charts` in `layout` for three frames over `seconds` of input time: a write, the
+    /// read it causes, and a frame of rest.
+    fn show_frames(
+        ctx: &egui::Context,
+        layout: &mut ChartLayout,
+        charts: &mut [&mut Chart],
+        seconds: f64,
+    ) {
+        for _ in 0..3 {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 600.0))),
+                time: Some(ctx.input(|input| input.time) + seconds / 3.0),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| {
+                layout.show(ui, charts);
+            })
+            .drop_without_applying_deltas();
+        }
+    }
+
+    /// The prices of the drawings stored as A.
+    fn stored_prices(host: &Host) -> Vec<f64> {
+        let (stored, _) = DrawingStorage::from_json(&host.documents.lock().unwrap()["A"]).unwrap();
+        sorted(
+            stored
+                .drawings()
+                .iter()
+                .map(|d| d.points[0].price)
+                .collect(),
+        )
+    }
+
     /// Guards #1463 and #1604: two clients on a storage that keeps revisions, where the later
     /// write is refused and the user's choice settles it, and the copy kept is offered to load
     /// onto the chart or to discard.
@@ -1252,8 +1309,6 @@ mod tests {
     fn charts_of_one_layout_follow_each_others_stored_drawings() {
         use crate::services::document::tests::Revised;
         use crate::studies::{CustomIndicator, IndicatorValue};
-        use crate::widget::{ChartLayout, ChartLayoutMode};
-        use egui::{Pos2, RawInput, Rect, vec2};
 
         let unwatched = Revised::default();
         unwatched.2.store(true, Ordering::Relaxed);
@@ -1364,5 +1419,35 @@ mod tests {
                 assert_eq!(count(chart, 77.0), 1);
             }
         }
+    }
+
+    /// Guards #1614: a drawing read again never takes the local id of a drawing that is not
+    /// saved, so removing that one by its id leaves the read drawing on both charts and stored.
+    #[test]
+    fn a_drawing_read_again_never_takes_the_id_of_one_that_is_not_saved() {
+        let host = Arc::new(Host::default());
+        let storage: Arc<dyn Storage> = host.clone();
+        let (mut a, mut b) = (chart_on(Some(storage.clone())), chart_on(Some(storage)));
+        let mut layout = ChartLayout::default();
+        layout.mode = ChartLayoutMode::TwoHorizontal;
+        let ctx = egui::Context::default();
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        // The host marks a level on B that no document holds, and gets id 0.
+        let mut marker = line_at(4.0, 77.0);
+        marker.saveable = false;
+        let marker = b.drawings_mut().add_drawing(marker).unwrap();
+        // A's first drawing is stored as "0", and B reads it.
+        draw_line(&mut a, line_at(4.0, 10.5));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert_eq!(shown_prices(&b), [10.5, 77.0]);
+        b.drawings_mut().delete_drawing(marker);
+        assert_eq!(shown_prices(&b), [10.5]);
+        draw_line(&mut b, line_at(4.0, 9.0));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert_eq!(
+            [shown_prices(&a), shown_prices(&b)],
+            [[9.0, 10.5], [9.0, 10.5]]
+        );
+        assert_eq!(stored_prices(&host), [9.0, 10.5]);
     }
 }

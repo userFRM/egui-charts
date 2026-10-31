@@ -593,7 +593,13 @@ impl DrawingManager {
     /// What [`Self::keep_across_read`] needs of the drawings about to be replaced.
     pub(crate) fn before_read(&self) -> BeforeRead {
         BeforeRead {
-            ids: self.drawings.iter().map(|d| (sync_id(d), d.id)).collect(),
+            // A drawing that is not saveable is in no document, so its id is no stored id.
+            ids: self
+                .drawings
+                .iter()
+                .filter(|d| d.saveable)
+                .map(|d| (sync_id(d), d.id))
+                .collect(),
             next_id: self.next_id,
             unsaved: self
                 .drawings
@@ -606,8 +612,8 @@ impl DrawingManager {
 
     /// Gives drawings just read from storage the local ids they had before, so that what refers
     /// to a drawing by its local id, such as an open properties dialog, keeps referring to it.
-    /// Every other drawing gets an id no earlier drawing had, so that it is not taken for one
-    /// removed elsewhere. Drawings that are never stored stay, since no document holds them.
+    /// Every other read drawing gets an id that no drawing of the manager has or had, so that it
+    /// is not taken for one removed elsewhere. Drawings that are never stored stay, since no document holds them.
     pub(crate) fn keep_across_read(&mut self, previous: BeforeRead) {
         let BeforeRead {
             ids,
@@ -615,8 +621,11 @@ impl DrawingManager {
             unsaved,
         } = previous;
         self.next_id = self.next_id.max(next_id);
+        // The drawings that stay are in place before ids are handed out, so none gets theirs.
+        let read = self.drawings.len();
+        self.drawings.extend(unsaved);
         let mut fresh = Vec::new();
-        for (at, drawing) in self.drawings.iter_mut().enumerate() {
+        for (at, drawing) in self.drawings[..read].iter_mut().enumerate() {
             match drawing.stored_id.as_ref().and_then(|id| ids.get(id)) {
                 Some(id) => drawing.id = *id,
                 None => fresh.push(at),
@@ -625,7 +634,6 @@ impl DrawingManager {
         for at in fresh {
             self.drawings[at].id = self.take_id();
         }
-        self.drawings.extend(unsaved);
     }
 
     /// The z-order that puts a drawing added now on top of the others.
