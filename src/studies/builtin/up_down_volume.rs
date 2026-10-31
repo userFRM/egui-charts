@@ -3,14 +3,18 @@
 //! A rising candle contributes to up volume; a falling candle to down volume. When open
 //! equals close, a close at or above the previous intrabar close counts as up, otherwise
 //! down. Up volume is positive, down volume negative and delta their sum. Missing intrabar
-//! history has no value; the parent candle's volume is never substituted for it.
+//! history has no value; the parent candle's volume is never substituted for it. The Lower
+//! interval input chooses the candles' interval; one that is not shorter than the chart's or
+//! does not divide it reads the automatic one.
 
+use super::lower_interval;
 use crate::model::LineStyle;
 use crate::model::{Bar, BarClock, Timeframe};
 use crate::scales::StudyFormat;
 use crate::studies::palette;
 use crate::studies::{
-    Indicator, IndicatorValues, PlotStyle, PlotType, StudyData, StudyDataRequest,
+    Indicator, IndicatorValues, InputValue, PlotStyle, PlotType, StudyData, StudyDataRequest,
+    StudyInput,
 };
 use egui::Color32;
 
@@ -18,6 +22,8 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct UpDownVolume {
     clock: BarClock,
+    /// The interval chosen in the Lower interval input; `None` picks one from the chart interval.
+    lower_interval: Option<Timeframe>,
     values: IndicatorValues,
     colors: [Color32; 3],
     visible: bool,
@@ -29,6 +35,7 @@ impl UpDownVolume {
     pub fn new() -> Self {
         Self {
             clock: BarClock::new(Timeframe::Min1),
+            lower_interval: None,
             values: IndicatorValues::new(),
             colors: [
                 palette::GREEN.gamma_multiply_u8(102),
@@ -40,24 +47,7 @@ impl UpDownVolume {
     }
 
     fn lower_timeframe(&self) -> Option<Timeframe> {
-        let tf = self.clock.timeframe()?;
-        if matches!(tf, Timeframe::Ticks(_)) || tf.duration_ms() < Timeframe::Sec1.duration_ms() {
-            return None;
-        }
-        let lower = if tf.duration_ms() < Timeframe::Min1.duration_ms() {
-            Timeframe::Sec1
-        } else if tf.duration_ms() < Timeframe::Day1.duration_ms() {
-            Timeframe::Min1
-        } else if tf == Timeframe::Day1 {
-            Timeframe::Min5
-        } else {
-            Timeframe::Hour1
-        };
-        Some(if tf.duration_ms() % lower.duration_ms() == 0 {
-            lower
-        } else {
-            Timeframe::Sec1
-        })
+        lower_interval::lower_timeframe(&self.clock, self.lower_interval)
     }
     fn calculate_intrabars(&mut self, data: &[Bar], intrabars: &[Bar], from: usize) {
         let from = from.min(self.values.len()).min(data.len());
@@ -71,59 +61,17 @@ impl UpDownVolume {
         if intrabars.is_empty() {
             return;
         }
-        let Some(tf) = self
-            .clock
-            .timeframe()
-            .filter(|tf| !matches!(tf, Timeframe::Ticks(_)))
-        else {
+        let Some(lower) = self.lower_timeframe() else {
             return;
         };
-        let daily = tf.duration_ms() % Timeframe::Day1.duration_ms() == 0;
-        let sessions = self.clock.for_timeframe(Timeframe::Min1).sessions();
-        let key = |bar: &Bar| {
-            if daily {
-                BarClock::new(tf).bar_open(
-                    sessions
-                        .trading_date(bar.time)
-                        .and_hms_opt(0, 0, 0)
-                        .unwrap()
-                        .and_utc(),
-                )
-            } else {
-                self.clock.bar_open(bar.time)
-            }
-        };
-        let parent = |bar: &Bar| {
-            if daily {
-                BarClock::new(tf).bar_open(bar.time)
-            } else {
-                self.clock.bar_open(bar.time)
-            }
-        };
-        let mut at = data.get(from).map_or(0, |bar| {
-            intrabars.partition_point(|intrabar| key(intrabar) < parent(bar))
-        });
-        let mut previous = at.checked_sub(1).map(|i| intrabars[i].close);
-        for (i, bar) in data.iter().enumerate().skip(from) {
-            let parent = parent(bar);
-            let (mut up, mut down, mut count) = (0.0, 0.0, 0);
-            while let Some(intrabar) = intrabars.get(at).filter(|b| key(b) <= parent) {
-                let rising = intrabar.close > intrabar.open
-                    || (intrabar.close == intrabar.open
-                        && previous.is_none_or(|close| intrabar.close >= close));
-                if key(intrabar) == parent {
-                    if rising {
-                        up += intrabar.volume;
-                    } else {
-                        down -= intrabar.volume;
-                    }
-                    count += 1;
-                }
-                previous = Some(intrabar.close);
-                at += 1;
-            }
-            if count > 0 && bar.close.is_finite() {
-                for (line, value) in [up, down, up + down].into_iter().enumerate() {
+        let ranges = lower_interval::nest(&self.clock, lower, data, intrabars, from);
+        for (i, range) in (from..).zip(ranges) {
+            if !range.is_empty() && data[i].close.is_finite() {
+                let flow = lower_interval::flow(intrabars, range);
+                for (line, value) in [flow.up, flow.down, flow.up + flow.down]
+                    .into_iter()
+                    .enumerate()
+                {
                     self.values.set_value(line, i, value);
                 }
             }
@@ -144,41 +92,33 @@ impl Indicator for UpDownVolume {
     fn desc(&self) -> &str {
         "Up and down volume from lower-timeframe candles supplied by the host"
     }
+    fn inputs(&self) -> Vec<StudyInput> {
+        vec![lower_interval::input(self.lower_interval)]
+    }
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+        let ("lower_interval", InputValue::Timeframe(chosen)) = (id, value) else {
+            return Err("invalid up/down volume input");
+        };
+        self.lower_interval = chosen;
+        self.calculate(&[]);
+        Ok(())
+    }
     fn data_requests(&self) -> Vec<StudyDataRequest> {
         self.lower_timeframe()
-            .map(|timeframe| StudyDataRequest {
-                metric: None,
-                symbol: String::new(),
-                timeframe: Some(timeframe),
-            })
+            .map(lower_interval::request)
             .into_iter()
             .collect()
     }
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
         let from = from.min(self.values.len()).min(data.len());
-        let request = self.data_requests().pop();
-        let source = sources
-            .iter()
-            .find(|source| Some(&source.request) == request.as_ref());
-        let intrabars = if let Some(source) = source {
-            if Some(source.timeframe) != self.lower_timeframe()
-                || (from == 0
-                    && (source
-                        .bars
-                        .windows(2)
-                        .any(|pair| pair[0].time >= pair[1].time)
-                        || source.bars.iter().any(|bar| {
-                            !bar.open.is_finite()
-                                || !bar.close.is_finite()
-                                || !bar.volume.is_finite()
-                                || bar.volume < 0.0
-                        })))
-            {
-                return;
+        let intrabars = match self.lower_timeframe() {
+            Some(lower) => {
+                match lower_interval::reply(&lower_interval::request(lower), from, sources) {
+                    Some(bars) => bars,
+                    None => return,
+                }
             }
-            source.bars
-        } else {
-            &[]
+            None => &[],
         };
         self.calculate_intrabars(data, intrabars, from);
     }
@@ -405,6 +345,98 @@ mod tests {
             );
             assert_eq!(study.values().value(0, 0), Some(2.0));
             assert_eq!(study.values().value(0, 1), Some(1.0));
+        }
+        // A chosen lower interval replaces the automatic one when it is shorter than the
+        // chart's and divides it; otherwise the automatic one is read.
+        study.set_bar_clock(&BarClock::new(Timeframe::Min5));
+        let custom = |s| Timeframe::Custom(std::num::NonZeroU64::new(s).unwrap());
+        for (chosen, wanted) in [
+            (Some(Timeframe::Sec30), Timeframe::Sec30),
+            (Some(Timeframe::Min5), Timeframe::Min1),
+            (Some(custom(120)), Timeframe::Min1),
+            (
+                Some(Timeframe::Ticks(std::num::NonZeroU64::MIN)),
+                Timeframe::Min1,
+            ),
+            (None, Timeframe::Min1),
+        ] {
+            study
+                .set_input("lower_interval", InputValue::Timeframe(chosen))
+                .unwrap();
+            assert_eq!(requested_interval(&study), Some(wanted), "{chosen:?}");
+        }
+        study
+            .set_input(
+                "lower_interval",
+                InputValue::Timeframe(Some(Timeframe::Sec30)),
+            )
+            .unwrap();
+        let candle = |s: i64, o: f64, c: f64, v: f64| {
+            Bar::new(
+                Utc.timestamp_opt(s, 0).unwrap(),
+                o,
+                o.max(c),
+                o.min(c),
+                c,
+                v,
+            )
+        };
+        // 0:00 rises (+7), 0:30 falls (-3); the doji at 5:00 closes below 10, so it falls (-5).
+        let half_minutes = [
+            candle(0, 10.0, 11.0, 7.0),
+            candle(30, 11.0, 10.0, 3.0),
+            candle(300, 9.0, 9.0, 5.0),
+        ];
+        update(&mut study, &bars, Timeframe::Sec30, &half_minutes);
+        for (i, want) in [
+            [Some(7.0), Some(-3.0), Some(4.0)],
+            [Some(0.0), Some(-5.0), Some(-5.0)],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (line, expected) in want.into_iter().enumerate() {
+                assert_eq!(
+                    study.values().value(line, i),
+                    expected,
+                    "bar {i}, line {line}"
+                );
+            }
+        }
+        // The automatic interval's candles no longer answer the request.
+        update(&mut study, &bars, Timeframe::Min1, &corrected);
+        assert_eq!(study.values().value(2, 0), None);
+        // A chosen daily interval on weekly bars west of UTC: candles stamped 00:00 UTC belong to
+        // the week of their date. Weeks open at local Monday midnight, 05:00 UTC on 5 and 12
+        // January 1970; Sunday the 11th falls (-4), Monday the 12th rises (+10).
+        study.set_bar_clock(
+            &BarClock::new(Timeframe::Week1)
+                .with_timezone(crate::model::TimezoneId::fixed_offset(-5 * 3_600).unwrap()),
+        );
+        study
+            .set_input(
+                "lower_interval",
+                InputValue::Timeframe(Some(Timeframe::Day1)),
+            )
+            .unwrap();
+        assert_eq!(requested_interval(&study), Some(Timeframe::Day1));
+        let weeks = [4, 11].map(|d| candle(d * 86_400 + 5 * 3_600, 1.0, 1.0, 999.0));
+        let days = [
+            candle(10 * 86_400, 2.0, 1.0, 4.0),
+            candle(11 * 86_400, 1.0, 2.0, 10.0),
+        ];
+        update(&mut study, &weeks, Timeframe::Day1, &days);
+        for (i, want) in [[0.0, -4.0, -4.0], [10.0, 0.0, 10.0]]
+            .into_iter()
+            .enumerate()
+        {
+            for (line, expected) in want.into_iter().enumerate() {
+                assert_eq!(
+                    study.values().value(line, i),
+                    Some(expected),
+                    "week {i}, line {line}"
+                );
+            }
         }
         #[cfg(feature = "widget")]
         {
