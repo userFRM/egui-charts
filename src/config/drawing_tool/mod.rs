@@ -244,21 +244,22 @@ pub enum DrawingToolType {
     TextLabel,
     /// Text label anchored to screen position (doesn't move with pan).
     AnchoredText,
-    /// Sticky note annotation with background.
+    /// Note: a text label joined to the bar and price it annotates by a thin line.
     Note,
-    /// Price note -- text annotation anchored to a specific price level.
+    /// Price note: the anchor's price and any text in a solid label, joined to the anchor by a
+    /// thin line.
     PriceNote,
-    /// Anchored/pinned note that stays at a fixed screen position.
+    /// Pin: a marker on a bar and price, with its text in a popup while selected.
     AnchoredNote,
     /// Data table overlay on the chart.
     Table,
     /// Callout with arrow pointing to a chart location.
     Callout,
-    /// Comment bubble annotation.
+    /// Comment: its text in one bubble with a corner on the anchor.
     Comment,
-    /// Price label badge shown on the price axis.
+    /// Price label: the anchor's price in a badge beside the point, with a pointer to it.
     PriceLabel,
-    /// Signpost marker with directional indicator.
+    /// Signpost: a label on a thin pole above or below its bar.
     Signpost,
     /// Flag/mark note at a specific chart location.
     FlagNote,

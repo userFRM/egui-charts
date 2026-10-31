@@ -298,13 +298,31 @@ impl DrawingManager {
             if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
                 if let (Some(origin), Some(old)) = (self.drag_origin, &self.drag_old_state) {
                     let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
-                    for (point, before) in drawing.chart_points.iter_mut().zip(&old.chart_points) {
+                    // Dragging a label leaves the point it annotates; a selection, a copy or a
+                    // note saved without a label anchor moves whole.
+                    let skip = usize::from(
+                        self.drag_group.is_empty()
+                            && !self.drag_copy
+                            && old.points.len() > 1
+                            && matches!(
+                                drawing.tool_type,
+                                DrawingToolType::Callout
+                                    | DrawingToolType::Note
+                                    | DrawingToolType::PriceNote
+                            ),
+                    );
+                    for (point, before) in drawing
+                        .chart_points
+                        .iter_mut()
+                        .zip(&old.chart_points)
+                        .skip(skip)
+                    {
                         *point = ChartPoint::new(
                             before.bar_idx + bars,
                             translate_price(before.price, origin.y, snapped.y),
                         );
                     }
-                    for (point, before) in drawing.points.iter_mut().zip(&old.points) {
+                    for (point, before) in drawing.points.iter_mut().zip(&old.points).skip(skip) {
                         *point = *before + (snapped - origin);
                     }
                 } else {
@@ -331,6 +349,46 @@ impl DrawingManager {
                     ]);
                 }
             }
+        }
+    }
+
+    /// Puts each pin of this pane that still carries a pane position on the bar and price under
+    /// that position, and clears the position, so pins saved by earlier releases stay where they
+    /// were shown. Called by the chart after the pane's screen coordinates are updated.
+    pub(crate) fn anchor_pins_to_bars(
+        &mut self,
+        x_to_bar: impl Fn(f32) -> f32,
+        y_to_price: impl Fn(f32) -> f64,
+    ) {
+        let pane = self.pane_rect;
+        if !pane.is_finite() || pane.width() <= 0.0 || pane.height() <= 0.0 {
+            return;
+        }
+        let mut converted = Vec::new();
+        for drawing in self.drawings.iter_mut().chain(&mut self.curr_drawing) {
+            let Some([x, y]) = drawing.screen_anchor else {
+                continue;
+            };
+            if drawing.tool_type != DrawingToolType::AnchoredNote
+                || !self.pane_members.contains(&drawing.pane)
+            {
+                continue;
+            }
+            let pos = pane.min + egui::vec2(x * pane.width(), y * pane.height());
+            let anchor = ChartPoint::new(x_to_bar(pos.x), y_to_price(pos.y));
+            if let (Some(point), Some(chart_point), true) = (
+                drawing.points.first_mut(),
+                drawing.chart_points.first_mut(),
+                anchor.bar_idx.is_finite() && anchor.price.is_finite(),
+            ) {
+                *point = pos;
+                *chart_point = anchor;
+                drawing.screen_anchor = None;
+                converted.push(drawing.id);
+            }
+        }
+        for id in converted {
+            self.queue_update(id);
         }
     }
 
@@ -452,8 +510,8 @@ impl DrawingManager {
 
     /// Start text annotation mode
     ///
-    /// Activates the Note drawing tool, allowing the user to click
-    /// on the chart to place a text note annotation.
+    /// Activates the Note drawing tool, allowing the user to click the bar and price to
+    /// annotate, then where the label goes.
     pub fn start_text_annotation(&mut self) {
         self.set_active_tool(Some(DrawingToolType::Note));
     }
@@ -583,7 +641,7 @@ impl DrawingManager {
                 drawing.chart_points.pop();
             }
             drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
-            drawing.level_time_cycles();
+            drawing.align_second_anchor();
             if let Some(tool) = drawing
                 .custom_tool
                 .as_deref()
@@ -617,7 +675,7 @@ impl DrawingManager {
                 drawing.completed = false;
                 self.preview_point = true;
             }
-            drawing.level_time_cycles();
+            drawing.align_second_anchor();
         }
     }
 
@@ -842,41 +900,119 @@ mod tests {
         assert!(!manager.undo());
     }
 
+    /// Dragging the label of a tool that annotates a point leaves that point on its bar and price,
+    /// in one undo step. Other drawings, a selection and a copy move whole.
     #[test]
-    fn time_cycles_share_a_baseline_during_placement() {
-        for (preview, drag) in [(false, false), (true, false), (true, true)] {
+    fn annotation_boxes_move_without_their_anchor() {
+        let x_to_bar = |x: f32| x / 10.0;
+        let y_to_price = |y: f32| 1000.0 - f64::from(y);
+        let translate = |price: f64, from: f32, to: f32| price - f64::from(to - from);
+        let start_points = [Pos2::new(100.0, 200.0), Pos2::new(200.0, 100.0)];
+        let start_chart = [ChartPoint::new(10.0, 800.0), ChartPoint::new(20.0, 900.0)];
+        let label = (
+            vec![Pos2::new(100.0, 200.0), Pos2::new(250.0, 140.0)],
+            vec![ChartPoint::new(10.0, 800.0), ChartPoint::new(25.0, 860.0)],
+        );
+        let whole = (
+            vec![Pos2::new(150.0, 240.0), Pos2::new(250.0, 140.0)],
+            vec![ChartPoint::new(15.0, 760.0), ChartPoint::new(25.0, 860.0)],
+        );
+        // A note saved before its label had an anchor has only the one it annotates.
+        for (tool, anchors, group, copy, expected) in [
+            (DrawingToolType::Callout, 2, false, false, &label),
+            (DrawingToolType::Note, 2, false, false, &label),
+            (DrawingToolType::PriceNote, 2, false, false, &label),
+            (DrawingToolType::Note, 1, false, false, &whole),
+            (DrawingToolType::TrendLine, 2, false, false, &whole),
+            (DrawingToolType::Callout, 2, true, false, &whole),
+            (DrawingToolType::Callout, 2, false, true, &whole),
+        ] {
             let mut manager = DrawingManager::new();
-            let x_to_bar = |x: f32| x / 10.0;
-            let y_to_price = |y: f32| 1000.0 - f64::from(y);
-            manager.start_drawing_with_coords(
-                DrawingToolType::TimeCycles,
-                Pos2::new(100.0, 200.0),
-                x_to_bar,
-                y_to_price,
+            for id in [7, 8] {
+                let mut drawing = Drawing::new(id, tool);
+                drawing.points = start_points[..anchors].to_vec();
+                drawing.chart_points = start_chart[..anchors].to_vec();
+                manager.drawings.push(drawing);
+            }
+            if group {
+                manager.select_drawings([7, 8]);
+            }
+            manager.start_drag_body(7, Pos2::new(205.0, 105.0));
+            if copy {
+                manager.copy_dragged_drawings();
+            }
+            manager.update_drag_handle(Pos2::new(255.0, 145.0), x_to_bar, y_to_price, translate);
+            manager.end_drag_handle();
+            let moved = manager
+                .drawings
+                .last()
+                .filter(|_| copy)
+                .unwrap_or(&manager.drawings[0]);
+            assert_eq!(
+                moved.points,
+                expected.0[..anchors],
+                "{tool:?} {group} {copy}"
             );
-            if preview {
-                for point in [Pos2::new(150.0, 100.0), Pos2::new(300.0, 250.0)] {
-                    manager.update_last_point_with_coords(point, x_to_bar, y_to_price);
-                    let drawing = manager.curr_drawing.as_ref().unwrap();
-                    assert_eq!(drawing.points[1], Pos2::new(point.x, 200.0));
-                    assert_eq!(drawing.chart_points[1].price, 800.0);
+            assert_eq!(
+                moved.chart_points,
+                expected.1[..anchors],
+                "{tool:?} {group} {copy}"
+            );
+            if !copy {
+                assert!(manager.undo());
+                assert_eq!(
+                    manager.drawings[0].chart_points,
+                    start_chart[..anchors],
+                    "{tool:?}"
+                );
+            }
+        }
+    }
+
+    /// The second anchor of Time cycles sets only the period, and a Signpost's only the label's
+    /// height, in the preview and when placed.
+    #[test]
+    fn second_anchors_follow_the_first_during_placement() {
+        let same_price: fn(Pos2) -> Pos2 = |p| Pos2::new(p.x, 200.0);
+        let same_bar: fn(Pos2) -> Pos2 = |p| Pos2::new(100.0, p.y);
+        let chart = |p: Pos2| ChartPoint::new(p.x / 10.0, 1000.0 - f64::from(p.y));
+        for (tool, aligned) in [
+            (DrawingToolType::TimeCycles, same_price),
+            (DrawingToolType::Signpost, same_bar),
+        ] {
+            for (preview, drag) in [(false, false), (true, false), (true, true)] {
+                let mut manager = DrawingManager::new();
+                let x_to_bar = |x: f32| x / 10.0;
+                let y_to_price = |y: f32| 1000.0 - f64::from(y);
+                let start = Pos2::new(100.0, 200.0);
+                manager.start_drawing_with_coords(tool, start, x_to_bar, y_to_price);
+                if preview {
+                    for point in [Pos2::new(150.0, 100.0), Pos2::new(300.0, 250.0)] {
+                        manager.update_last_point_with_coords(point, x_to_bar, y_to_price);
+                        let drawing = manager.curr_drawing.as_ref().unwrap();
+                        assert_eq!(drawing.points[1], aligned(point), "{tool:?}");
+                        assert_eq!(drawing.chart_points[1], chart(aligned(point)), "{tool:?}");
+                    }
                 }
+                let end = Pos2::new(300.0, 250.0);
+                if drag {
+                    manager.complete_drag_drawing();
+                } else {
+                    manager.add_point_with_coords(end, x_to_bar, y_to_price);
+                }
+                assert_eq!(manager.drawings.len(), 1);
+                assert!(manager.is_selected(manager.drawings[0].id));
+                assert_eq!(
+                    manager.drawings[0].points,
+                    vec![start, aligned(end)],
+                    "{tool:?}"
+                );
+                assert_eq!(
+                    manager.drawings[0].chart_points,
+                    vec![chart(start), chart(aligned(end))],
+                    "{tool:?}"
+                );
             }
-            if drag {
-                manager.complete_drag_drawing();
-            } else {
-                manager.add_point_with_coords(Pos2::new(300.0, 250.0), x_to_bar, y_to_price);
-            }
-            assert_eq!(manager.drawings.len(), 1);
-            assert!(manager.is_selected(manager.drawings[0].id));
-            assert_eq!(
-                manager.drawings[0].points,
-                vec![Pos2::new(100.0, 200.0), Pos2::new(300.0, 200.0)]
-            );
-            assert_eq!(
-                manager.drawings[0].chart_points,
-                vec![ChartPoint::new(10.0, 800.0), ChartPoint::new(30.0, 800.0)]
-            );
         }
     }
 }

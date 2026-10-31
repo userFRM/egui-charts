@@ -38,9 +38,18 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
     }) else {
         return;
     };
+    // Tools whose first anchor is the point they annotate keep their text at the second.
+    let label = usize::from(matches!(
+        drawing.tool_type,
+        DrawingToolType::Callout
+            | DrawingToolType::Note
+            | DrawingToolType::PriceNote
+            | DrawingToolType::Signpost
+    ));
     let Some(mut pos) = drawing
         .points
-        .get(usize::from(drawing.tool_type == DrawingToolType::Callout))
+        .get(label)
+        .or(drawing.points.first())
         .copied()
     else {
         return;
@@ -269,7 +278,7 @@ mod tests {
             };
             step(&mut chart, vec![Event::PointerMoved(from)]);
             step(&mut chart, vec![button(from, true)]);
-            if tool == DrawingToolType::Callout {
+            if matches!(tool, DrawingToolType::Callout | DrawingToolType::Note) {
                 step(
                     &mut chart,
                     vec![Event::PointerMoved(from + egui::vec2(8.0, 0.0))],
@@ -323,9 +332,15 @@ mod tests {
             assert!(chart.redo());
             step(&mut chart, vec![]);
             let id = chart.drawings().drawings[0].id;
-            let on_text = chart.drawings().drawings[0].points
-                [usize::from(tool == DrawingToolType::Callout)]
-                + egui::vec2(10.0, 10.0);
+            let points = &chart.drawings().drawings[0].points;
+            let on_text = match tool {
+                DrawingToolType::Callout | DrawingToolType::Note => {
+                    points[1] + egui::vec2(10.0, 10.0)
+                }
+                // Inside the pin's head, outside its hole.
+                DrawingToolType::AnchoredNote => points[0] - egui::vec2(0.0, 12.0),
+                _ => points[0] + egui::vec2(10.0, 10.0),
+            };
             assert_eq!(
                 chart.drawings().hit_test(on_text),
                 Some(id),
@@ -377,7 +392,31 @@ mod tests {
         }
     }
 
-    /// Pane-relative anchors survive pan and zoom, and scale with pane size rather than data.
+    /// A price label shows the price and nothing typed, so placing one asks for no text.
+    #[test]
+    fn placing_a_price_label_opens_no_editor() {
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart
+            .drawings_mut()
+            .set_active_tool(Some(DrawingToolType::PriceLabel));
+        let pos = chart.get_rendered_price_rect().center();
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        frame(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
+        frame(&ctx, &mut chart, 0.2, vec![button(true)]);
+        frame(&ctx, &mut chart, 0.3, vec![button(false)]);
+        assert_eq!(chart.drawings().drawings.len(), 1);
+        assert!(chart.drawings().text_editor.is_none());
+    }
+
+    /// Pane-relative anchors survive pan and zoom, and scale with pane size rather than data. A
+    /// pin saved with one appears where it was shown, and then stays on its bar.
     #[test]
     fn anchored_annotations_keep_their_pane_position() {
         use crate::drawings::{ChartPoint, Drawing};
@@ -397,7 +436,7 @@ mod tests {
             chart.set_start_idx(20);
             frame(&ctx, &mut chart, 0.1, vec![]);
             let moved = chart.drawings().drawings[0].points[0];
-            if tool == DrawingToolType::TextLabel {
+            if tool != DrawingToolType::AnchoredText {
                 assert_ne!(moved, original);
             } else {
                 assert_eq!(moved, original, "{tool:?}");
@@ -442,5 +481,25 @@ mod tests {
                 assert_eq!(chart.drawings().drawings[0].points[0], original);
             }
         }
+
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let mut pin = Drawing::new(7, DrawingToolType::AnchoredNote);
+        pin.chart_points.push(ChartPoint::new(50.0, 15.0));
+        pin.screen_anchor = Some([0.25, 0.75]);
+        chart.drawings_mut().drawings.push(pin);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let rect = chart.get_rendered_price_rect();
+        let shown = rect.min + egui::vec2(0.25 * rect.width(), 0.75 * rect.height());
+        let pin = &chart.drawings().drawings[0];
+        assert_eq!(pin.screen_anchor, None);
+        assert!(pin.points[0].distance(shown) < 0.01, "{:?}", pin.points[0]);
+        let (x, anchor) = (pin.points[0].x, pin.chart_points[0]);
+        chart.set_visible_bars(70);
+        chart.set_start_idx(20);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let pin = &chart.drawings().drawings[0];
+        assert_ne!(pin.points[0].x, x);
+        assert_eq!(pin.chart_points[0], anchor);
     }
 }

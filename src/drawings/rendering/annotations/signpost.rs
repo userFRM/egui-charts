@@ -1,95 +1,43 @@
 //! Signpost rendering
 
+use super::labels::{facing_point, label_text_color};
 use crate::drawings::domain::Drawing;
-use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Stroke};
+use egui::{Pos2, Rect, Stroke};
+
+/// Height of a label above its bar for a signpost saved with one anchor, in egui logical points.
+const DEFAULT_LABEL_HEIGHT: f32 = 40.0;
 
 impl Drawing {
-    /// Renders a vertical signpost with label at top.
-    /// Features: vertical line to chart top, sign plate, date/event text.
-    pub(crate) fn render_signpost(&self, painter: &egui::Painter, rect: Rect) {
-        if self.points.is_empty() {
+    /// Renders a signpost: a label at the second anchor's height, on a thin pole from the first
+    /// anchor's bar. A signpost saved with one anchor shows its label above its bar.
+    pub(crate) fn render_signpost(&self, painter: &egui::Painter) {
+        let Some(&anchor) = self.points.first() else {
             return;
-        }
-        let pos = self.points[0];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        // Draw vertical line from point to top of chart (dashed)
-        let dash = DESIGN_TOKENS.sizing.annotation.signpost_padding_x;
-        let gap = DESIGN_TOKENS.sizing.annotation.signpost_padding_y;
-        if rect.min.y < pos.y {
-            draw_dashed_line(
-                painter,
-                Pos2::new(pos.x, rect.min.y),
-                pos,
-                Stroke::new(stroke::THICK, color),
-                dash,
-                gap,
-            );
-        }
-
-        // Draw sign plate at top
+        };
+        let color = self.color32();
+        let fill = self.fill_color32().unwrap_or(color);
+        let text_color = label_text_color(fill);
         let text = self.text.as_deref().unwrap_or("Event");
-        let font = self.annotation_font();
-        let galley = painter.layout_no_wrap(text.to_string(), font.clone(), Color32::WHITE);
-        let text_size = galley.size();
+        let galley = painter.layout_no_wrap(text.to_string(), self.annotation_font(), text_color);
         let padding = egui::vec2(
             DESIGN_TOKENS.sizing.annotation.callout_padding_x,
             DESIGN_TOKENS.sizing.annotation.text_padding_y,
         );
-        let sign_rect = Rect::from_min_size(
-            Pos2::new(
-                pos.x - text_size.x / 2.0 - padding.x,
-                rect.min.y + DESIGN_TOKENS.spacing.lg,
-            ),
-            text_size + padding * 2.0,
-        );
-
-        // Sign plate with arrow pointing down
-        painter.rect_filled(sign_rect, DESIGN_TOKENS.rounding.md, color);
-
-        // Arrow below sign pointing to line
-        let arrow_size = DESIGN_TOKENS.sizing.annotation.signpost_padding_x;
-        let arrow_points = vec![
-            Pos2::new(pos.x, sign_rect.max.y + arrow_size),
-            Pos2::new(pos.x - arrow_size, sign_rect.max.y),
-            Pos2::new(pos.x + arrow_size, sign_rect.max.y),
-        ];
-        let arrow_shape =
-            egui::epaint::PathShape::convex_polygon(arrow_points, color, Stroke::NONE);
-        painter.add(arrow_shape);
-
-        // Sign text
-        painter.text(
-            sign_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            text,
-            font,
-            Color32::WHITE,
-        );
-
-        // Date label if we have chart point data
-        if !self.chart_points.is_empty() {
-            let bar_idx = self.chart_points[0].bar_idx as i64;
-            let date_text = format!("Bar {bar_idx}");
-            let date_font = self.annotation_font();
-            painter.text(
-                Pos2::new(
-                    pos.x,
-                    sign_rect.max.y + arrow_size + DESIGN_TOKENS.sizing.annotation.signpost_bracket,
-                ),
-                egui::Align2::CENTER_TOP,
-                date_text,
-                date_font,
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 150),
+        let height = self
+            .points
+            .get(1)
+            .map_or(anchor.y - DEFAULT_LABEL_HEIGHT, |label| label.y);
+        let plate =
+            Rect::from_center_size(Pos2::new(anchor.x, height), galley.size() + padding * 2.0);
+        if !plate.contains(anchor) {
+            painter.line_segment(
+                [anchor, facing_point(plate, anchor)],
+                Stroke::new(stroke::HAIRLINE, color),
             );
         }
+        painter.rect_filled(plate, DESIGN_TOKENS.rounding.md, fill);
+        painter.galley(plate.min + padding, galley, text_color);
     }
 }
