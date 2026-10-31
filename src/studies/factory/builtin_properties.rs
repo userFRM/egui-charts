@@ -122,6 +122,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(HistoricalVolatility::new(l(0)).with_trading_days(x(252.0))),
         Box::new(ChaikinVolatility::new(l(0), l(1))),
         Box::new(ChandelierExit::new(l(0), x(3.0))),
+        Box::new(ChandelierExit::new(l(0), x(3.0)).with_atr_period(l(1))),
         Box::new(AccelerationBands::new(l(0), x(4.0))),
         Box::new(Envelopes::new(l(0), x(10.0), EnvelopeAverage::Simple)),
         Box::new(PercentB::new(l(0), x(2.0))),

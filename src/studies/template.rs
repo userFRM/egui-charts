@@ -311,7 +311,7 @@ mod tests {
     /// study offered it.
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
-        use InputValue::Length;
+        use InputValue::{Length, Number};
         let rows = [
             ("SMA", vec![("period", Length(20))], vec![("period", Length(20))]),
             (
@@ -323,6 +323,15 @@ mod tests {
                 "DMI",
                 vec![("period", Length(20))],
                 vec![("period", Length(20)), ("adx_smoothing", Length(20))],
+            ),
+            (
+                "Chandelier",
+                vec![("period", Length(10)), ("multiplier", Number(2.0))],
+                vec![
+                    ("period", Length(10)),
+                    ("atr_period", Length(10)),
+                    ("multiplier", Number(2.0)),
+                ],
             ),
         ];
         let factory = IndicatorFactory::new();

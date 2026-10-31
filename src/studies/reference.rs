@@ -76,13 +76,14 @@
 //! band until its ATR has a full length. The McGinley Dynamic starts at the first close; a
 //! simple MACD signal averages the MACD values only, and an exponential one starts at the first; ATR's
 //! simple, exponential and weighted smoothings start on the period-th true range, the exponential one at
-//! their mean.
+//! their mean; a Chandelier Exit value needs a full lookback window.
 
 use crate::model::Bar;
 use crate::studies::{
     ADX, ATR, AccumulationDistribution, Aroon, AtrSmoothing, AwesomeOscillator, BalanceOfPower,
     BollingerBands,
     BollingerBandsWidth, CCI, ChaikinMoneyFlow, ChaikinVolatility, ChandeMomentumOscillator,
+    ChandelierExit,
     ChoppinessIndex, CommoditySelectionIndex, CoppockCurve, DEMA, DirectionalMovement,
     DonchianChannels, EMA, ElderRay, EnvelopeAverage, Envelopes, ForceIndex, HL2, HLC3, HMA,
     IchimokuCloud, Indicator, IndicatorValue, KeltnerChannels, LinearRegression,
@@ -622,6 +623,10 @@ fn staple_studies_match_published_definitions() {
         ("ROC(14)", Box::new(RateOfChange::new(14))),
         ("StdDev(20)", Box::new(StandardDeviation::default())),
         ("Donchian(20)", Box::new(DonchianChannels::default())),
+        (
+            "Chandelier(22,14,3)",
+            Box::new(ChandelierExit::new(22, 3.0).with_atr_period(14)),
+        ),
         ("Stoch(14,3,3)", Box::new(Stochastic::default())),
         ("Stoch(14,1,3)", Box::new(Stochastic::new(14, 1, 3))),
         ("WilliamsR(14)", Box::new(WilliamsR::default())),
