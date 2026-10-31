@@ -872,8 +872,8 @@ Terminal,Toolbars and panels,Fullscreen,done,library,src/ui/top_toolbar/toolbar.
 Terminal,Toolbars and panels,Indicators button,done,library,src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Interval menu presets,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Keyboard shortcuts for application actions,done,library,src/widget/keyboard.rs
-Terminal,Toolbars and panels,Left drawing toolbar shell,done,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/components/svg_helpers.rs;src/ui/drawing_toolbar/components/icon_button.rs;src/ui/drawing_toolbar/components/separator.rs;terminal/src/drawings.rs
-Terminal,Toolbars and panels,Notifications / toasts,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs
+Terminal,Toolbars and panels,Left drawing toolbar shell,done,library,src/ui/drawing_toolbar/toolbar/mod.rs;terminal/src/drawings.rs;src/ui/drawing_toolbar/components/svg_helpers.rs;src/ui/drawing_toolbar/components/icon_button.rs;src/ui/drawing_toolbar/components/separator.rs
+Terminal,Toolbars and panels,Notifications / toasts,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs;src/ui_kit/notifications/panel.rs
 Terminal,Toolbars and panels,Object tree panel,done,library,src/ui/widget_bar/panels/object_tree/chart_actions.rs;src/ui/widget_bar/panels/object_tree/panel.rs;terminal/src/drawings.rs
 Terminal,Toolbars and panels,Quick search / command palette,done,library,src/ui/top_toolbar/toolbar.rs;src/ui_kit/command_palette/palette.rs
 Terminal,Toolbars and panels,Right widget bar icon strip,done,library,src/ui/widget_bar/toolbar.rs;src/theme/presets.rs

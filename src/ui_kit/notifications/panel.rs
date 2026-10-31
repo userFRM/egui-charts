@@ -178,11 +178,9 @@ impl NotificationPanel {
             side_color
         };
         let font = FontId::proportional(ui.active_theme().text.title);
-        let mut title_format = egui::text::TextFormat::simple(font.clone(), theme.ui.text);
-        title_format.coords.push("wght", 600.0);
         let mut title_job = egui::text::LayoutJob::single_section(
             l10n::text(ui.ctx(), toast.title.clone().unwrap_or_default()),
-            title_format,
+            egui::text::TextFormat::simple(FontId::proportional(theme.text.heading), theme.ui.text),
         );
         let side_text = if theme.dark {
             side_color.lerp_to_gamma(theme.ui.text, 0.25)
@@ -203,7 +201,7 @@ impl NotificationPanel {
         let price = ui.painter().layout_no_wrap(
             l10n::format_text(ui.ctx(), "at {0}", &[("0", trade.price.to_string())]),
             font,
-            theme.ui.text,
+            theme.ui.text_secondary,
         );
         let width = self
             .config
@@ -219,12 +217,8 @@ impl NotificationPanel {
             theme.ui.text,
             (content_width - 12.0).max(1.0),
         );
-        let symbol_at = if title.size().x + symbol.size().x + 18.0 <= content_width {
-            vec2(title.size().x + 6.0, -2.0)
-        } else {
-            vec2(0.0, title.size().y + 4.0)
-        };
-        let second_row = (symbol_at.y + symbol.size().y + 4.0).max(title.size().y) + 12.0;
+        let symbol_at = vec2(0.0, title.size().y + 4.0);
+        let second_row = symbol_at.y + symbol.size().y + 4.0 + 12.0;
         let price_at = if side.size().x + price.size().x + 18.0 <= content_width {
             vec2(side.size().x + 18.0, second_row + 2.0)
         } else {
@@ -233,23 +227,30 @@ impl NotificationPanel {
         let price = ui.painter().layout(
             l10n::format_text(ui.ctx(), "at {0}", &[("0", trade.price.to_string())]),
             FontId::proportional(ui.active_theme().text.title),
-            theme.ui.text,
+            theme.ui.text_secondary,
             (content_width - price_at.x).max(1.0),
         );
         let height = (price_at.y + price.size().y + 24.0).max(72.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, height.ceil()), Sense::hover());
         let painter = ui.painter().with_clip_rect(rect);
-        painter.rect_filled(rect, 8.0, theme.chart.bg);
+        let radius = theme.radius.lg;
+        painter.rect_filled(rect, radius, theme.ui.panel_bg_floating);
         let tile = Rect::from_min_size(rect.min, vec2(42.0, rect.height()));
         painter.rect_filled(
             tile,
             egui::CornerRadius {
-                nw: 8,
-                sw: 8,
+                nw: radius as u8,
+                sw: radius as u8,
                 ne: 0,
                 se: 0,
             },
             icon_color.gamma_multiply(0.14),
+        );
+        painter.rect_stroke(
+            rect,
+            radius,
+            Stroke::new(1.0, theme.ui.border),
+            egui::StrokeKind::Inside,
         );
         let c = tile.center();
         let points = if trade.executed {
@@ -295,7 +296,7 @@ impl NotificationPanel {
             Rect::from_min_size(pos2(x, top + second_row), side.size() + vec2(12.0, 4.0));
         content.rect_filled(side_rect, 4.0, side_color.gamma_multiply(0.12));
         content.galley(side_rect.min + vec2(6.0, 2.0), side, side_text);
-        content.galley(pos2(x, top) + price_at, price, theme.ui.text);
+        content.galley(pos2(x, top) + price_at, price, theme.ui.text_secondary);
         if toast.dismissible {
             let close = Rect::from_center_size(
                 pos2(rect.right() - 14.0, rect.top() + 18.0),
@@ -403,6 +404,50 @@ impl NotificationPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A trading notice is a card of its own over whatever is behind it, with a border, and its
+    /// title is at regular weight.
+    #[test]
+    fn trading_notices_are_bordered_cards_with_regular_titles() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut toast = Toast::info("Limit order placed").with_title("Limit order placed on");
+            toast.trading = Some(super::super::TradingToast {
+                symbol: "SYM".into(),
+                side: crate::model::OrderSide::Buy,
+                quantity: 1.0,
+                price: "100.00".into(),
+                executed: false,
+            });
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                NotificationPanel::new().render_toast(ui, &toast);
+            });
+            let title = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Limit order placed on" => {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .expect("the title");
+            assert_eq!(
+                title.galley.job.sections[0].format.coords,
+                Default::default()
+            );
+            let card = |check: &dyn Fn(&egui::epaint::RectShape) -> bool| {
+                output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Rect(rect)
+                        if rect.rect.contains(title.pos) && check(rect))
+                })
+            };
+            assert!(card(&|rect| rect.fill == theme.ui.panel_bg_floating));
+            assert!(card(&|rect| rect.stroke.color == theme.ui.border));
+            output.drop_without_applying_deltas();
+        }
+    }
 
     /// Toasts stack 8 points apart from the corner, and a long message wraps short of the close
     /// button.
