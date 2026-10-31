@@ -3,9 +3,10 @@
 //! A panel for displaying toast notifications.
 
 use crate::localization as l10n;
+use egui::accesskit::{Live, Role};
 use egui::{Align2, Context, Order, RichText, Ui, Vec2};
 
-use super::toast::Toast;
+use super::toast::{Toast, ToastKind};
 use super::toasts::{Toasts, current_time_seconds};
 use crate::icons::icons;
 use crate::theme::{Spacing, ThemeExt};
@@ -207,6 +208,21 @@ impl NotificationPanel {
                     ui.painter().set(edges, egui::Shape::Vec(shapes.collect()));
                     dismissed
                 });
+
+            // One live node per toast, so a screen reader announces it once when it appears.
+            let error = toast.kind == ToastKind::Error;
+            let text = toast
+                .title
+                .iter()
+                .chain([&toast.message])
+                .map(|text| l10n::text(ctx, text).to_string())
+                .collect::<Vec<_>>()
+                .join(". ");
+            ctx.accesskit_node_builder(response.response.id, |node| {
+                node.set_role(if error { Role::Alert } else { Role::Status });
+                node.set_label(text);
+                node.set_live(if error { Live::Assertive } else { Live::Polite });
+            });
 
             // Track height for stacking
             y_offset += response.response.rect.height() + self.config.gap;
@@ -627,7 +643,7 @@ mod tests {
         let pill = harness.get_by_role_and_label(Role::Button, "Show less");
         assert_eq!(pill.accesskit_node().data().is_expanded(), Some(true));
         for shown in ["B", "C"] {
-            harness.get_by_label(shown);
+            harness.get_by_role_and_label(Role::Label, shown);
         }
 
         harness
@@ -647,6 +663,56 @@ mod tests {
                     .is_none(),
                 "{gone} is gone"
             );
+        }
+    }
+
+    /// Each toast is one live node named by its title and message, polite except for errors, and
+    /// the node goes with the toast when it is dismissed.
+    #[test]
+    fn each_toast_is_a_live_region_that_goes_with_the_toast() {
+        use egui::accesskit::Live;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let cases = [
+            (
+                Toast::info("Body").with_title("Title"),
+                "Title. Body",
+                Live::Polite,
+            ),
+            (Toast::success("Order filled"), "Order filled", Live::Polite),
+            (Toast::warning("Low margin"), "Low margin", Live::Polite),
+            (
+                Toast::error("Order rejected"),
+                "Order rejected",
+                Live::Assertive,
+            ),
+        ];
+        for (toast, label, live) in cases {
+            let mut toasts = Toasts::new();
+            toasts.add(toast.permanent());
+            let mut harness = egui_kittest::Harness::builder()
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                })
+                .with_size(Vec2::new(1440.0, 900.0))
+                .build_ui_state(
+                    |ui, toasts: &mut Toasts| {
+                        NotificationPanel::new().show_with_toasts(ui.ctx(), toasts);
+                    },
+                    toasts,
+                );
+            harness.run_steps(3);
+            let announced = |harness: &egui_kittest::Harness<'_, Toasts>| {
+                harness
+                    .query_all_by_label(label)
+                    .filter_map(|node| node.accesskit_node().data().live())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(announced(&harness), [live], "{label}");
+
+            harness.state_mut().clear();
+            harness.run_steps(3);
+            assert!(announced(&harness).is_empty(), "{label} is gone");
         }
     }
 
