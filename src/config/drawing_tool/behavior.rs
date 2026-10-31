@@ -106,7 +106,6 @@ impl DrawingToolType {
                 | Self::AnchoredNote
                 | Self::Callout
                 | Self::Comment
-                | Self::PriceNote
                 | Self::FlagNote
                 | Self::Signpost
                 | Self::Table
@@ -120,7 +119,8 @@ impl DrawingToolType {
         self.is_text_annotation()
             || matches!(
                 self,
-                Self::TrendLine
+                Self::PriceNote
+                    | Self::TrendLine
                     | Self::Ray
                     | Self::InfoLine
                     | Self::ExtendedLine
@@ -170,7 +170,8 @@ impl DrawingToolType {
 
     /// Whether a double click edits the drawing's text in place instead of opening its settings.
     pub fn edits_text_inline(&self) -> bool {
-        self.is_text_annotation() || matches!(self, Self::Image | Self::PriceLabel)
+        self.is_text_annotation()
+            || matches!(self, Self::Image | Self::PriceLabel | Self::PriceNote)
     }
 
     /// Returns the [`DrawingInteractionMode`] that governs how mouse input is
@@ -193,7 +194,6 @@ impl DrawingToolType {
             | Self::HorizontalRay
             | Self::TextLabel
             | Self::AnchoredText
-            | Self::Note
             | Self::AnchoredNote
             | Self::PriceLabel
             | Self::FlagNote
@@ -280,6 +280,7 @@ impl DrawingToolType {
 
             // Click-click tools
             Self::ArrowMarker
+            | Self::Note
             | Self::PriceNote
             | Self::TrendLine
             | Self::Ray
@@ -323,6 +324,8 @@ impl DrawingToolType {
             | Self::ElliottDoubleCombo
             | Self::ElliottTripleCombo => 1,
             Self::ElliottTriangle => 6,
+            // Saved before the label had its own anchor.
+            Self::Note => 1,
             _ if self.interaction_mode() == DrawingInteractionMode::SingleClick => 1,
             _ => 2,
         }
@@ -412,6 +415,7 @@ mod tests {
             (ElliottDoubleCombo, DrawingInteractionMode::MultiPoint, 3),
             (ElliottTriangle, DrawingInteractionMode::MultiPoint, 6),
             (ElliottTripleCombo, DrawingInteractionMode::MultiPoint, 5),
+            (Note, DrawingInteractionMode::ClickClick, 2),
             (PriceNote, DrawingInteractionMode::ClickClick, 2),
             (ArrowMarker, DrawingInteractionMode::ClickClick, 2),
             (LongPos, DrawingInteractionMode::SingleClick, 1),

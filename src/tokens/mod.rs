@@ -224,8 +224,6 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
             callout_padding_x: 10.0,
             callout_padding_y: 6.0,
             pointer_size: 8.0,
-            note_size: 24.0,
-            note_fold_size: 6.0,
             table_cell_width: 70.0,
             table_cell_height: 22.0,
             table_header_height: 26.0,

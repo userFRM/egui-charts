@@ -334,6 +334,46 @@ impl DrawingManager {
         }
     }
 
+    /// Puts each pin of this pane that still carries a pane position on the bar and price under
+    /// that position, and clears the position, so pins saved by earlier releases stay where they
+    /// were shown. Called by the chart after the pane's screen coordinates are updated.
+    pub(crate) fn anchor_pins_to_bars(
+        &mut self,
+        x_to_bar: impl Fn(f32) -> f32,
+        y_to_price: impl Fn(f32) -> f64,
+    ) {
+        let pane = self.pane_rect;
+        if !pane.is_finite() || pane.width() <= 0.0 || pane.height() <= 0.0 {
+            return;
+        }
+        let mut converted = Vec::new();
+        for drawing in self.drawings.iter_mut().chain(&mut self.curr_drawing) {
+            let Some([x, y]) = drawing.screen_anchor else {
+                continue;
+            };
+            if drawing.tool_type != DrawingToolType::AnchoredNote
+                || !self.pane_members.contains(&drawing.pane)
+            {
+                continue;
+            }
+            let pos = pane.min + egui::vec2(x * pane.width(), y * pane.height());
+            let anchor = ChartPoint::new(x_to_bar(pos.x), y_to_price(pos.y));
+            if let (Some(point), Some(chart_point), true) = (
+                drawing.points.first_mut(),
+                drawing.chart_points.first_mut(),
+                anchor.bar_idx.is_finite() && anchor.price.is_finite(),
+            ) {
+                *point = pos;
+                *chart_point = anchor;
+                drawing.screen_anchor = None;
+                converted.push(drawing.id);
+            }
+        }
+        for id in converted {
+            self.queue_update(id);
+        }
+    }
+
     /// Ends the current handle drag or [`Self::drag_edit_drawing`] gesture, pushing one modify
     /// command to the undo history and queuing one update for the whole gesture.
     /// A copy drag records the additions instead, so undo removes every copy.
@@ -452,8 +492,8 @@ impl DrawingManager {
 
     /// Start text annotation mode
     ///
-    /// Activates the Note drawing tool, allowing the user to click
-    /// on the chart to place a text note annotation.
+    /// Activates the Note drawing tool, allowing the user to click the bar and price to
+    /// annotate, then where the label goes.
     pub fn start_text_annotation(&mut self) {
         self.set_active_tool(Some(DrawingToolType::Note));
     }

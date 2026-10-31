@@ -444,10 +444,6 @@ pub struct AnnotationSizingTokens {
     pub callout_padding_y: f32,
     /// Pointer size, in egui logical points.
     pub pointer_size: f32,
-    /// Note size, in egui logical points.
-    pub note_size: f32,
-    /// Note fold size, in egui logical points.
-    pub note_fold_size: f32,
     /// Table cell width, in egui logical points.
     pub table_cell_width: f32,
     /// Table cell height, in egui logical points.

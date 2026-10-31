@@ -131,6 +131,7 @@ impl Chart {
 
         // Update all drawings' screen coords before rendering (handles pan/zoom)
         drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y);
+        drawing_manager.anchor_pins_to_bars(x_to_bar_precise, |y| price_map.y_to_price(y));
 
         // Only gather bars within the pointer's screen-space tolerance. Rebuild after pan/zoom.
         drawing_manager.snap_targets.clear();

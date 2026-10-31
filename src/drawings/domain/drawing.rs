@@ -96,8 +96,10 @@ pub struct Drawing {
     /// (empty for other tools); rebuilt with `points` by [`Self::update_screen_coords`]
     #[serde(skip)]
     pub level_ys: Vec<f32>,
-    /// Position as fractions of the pane width and height for anchored text and notes.
+    /// Position as fractions of the pane width and height for anchored text.
     /// `None` adopts the first displayed position, including for older saved drawings.
+    /// A pin saved with one takes the bar and price under it the first time a chart draws it,
+    /// and the chart then clears it.
     #[serde(default)]
     pub screen_anchor: Option<[f32; 2]>,
     /// Drawing color as RGBA
@@ -352,14 +354,12 @@ impl Drawing {
             .unwrap_or_default();
     }
 
-    /// Rebuilds anchored text and note coordinates relative to the pane. Call after
+    /// Rebuilds anchored text coordinates relative to the pane. Call after
     /// `update_screen_coords`; other tools retain their chart coordinates. Older drawings
     /// adopt their first displayed position. Resizing preserves the width and height fractions.
     pub fn update_pane_coords(&mut self, pane: egui::Rect) {
-        if !matches!(
-            self.tool_type,
-            DrawingToolType::AnchoredText | DrawingToolType::AnchoredNote
-        ) || !pane.is_finite()
+        if self.tool_type != DrawingToolType::AnchoredText
+            || !pane.is_finite()
             || pane.width() <= 0.0
             || pane.height() <= 0.0
         {

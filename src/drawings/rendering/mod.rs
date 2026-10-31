@@ -445,7 +445,7 @@ impl Drawing {
             DrawingToolType::TextLabel => self.render_text_label(painter),
             DrawingToolType::AnchoredText => self.render_anchored_text(painter),
             DrawingToolType::Note => self.render_note(painter),
-            DrawingToolType::AnchoredNote => self.render_anchored_note(painter),
+            DrawingToolType::AnchoredNote => self.render_anchored_note(painter, selected),
             DrawingToolType::Callout => self.render_callout(painter),
             DrawingToolType::PriceLabel => self.render_price_label(painter),
             DrawingToolType::FlagNote => self.render_flag_note(painter),
@@ -467,7 +467,7 @@ impl Drawing {
             DrawingToolType::Sector => self.render_sector(painter),
             DrawingToolType::Path => self.render_path(painter),
             DrawingToolType::Curve => self.render_curve(painter),
-            DrawingToolType::PriceNote => self.render_price_note(painter, rect),
+            DrawingToolType::PriceNote => self.render_price_note(painter, view),
             DrawingToolType::Table => self.render_table(painter),
             DrawingToolType::Comment => self.render_comment(painter),
             DrawingToolType::Signpost => self.render_signpost(painter, rect),
@@ -643,7 +643,7 @@ pub(crate) fn sample_bars() -> Vec<Bar> {
 mod tests {
     use super::*;
     use crate::drawings::DrawingManager;
-    use egui::{Context, Pos2, RawInput, Shape};
+    use egui::{Color32, Context, Pos2, RawInput, Shape};
 
     /// A non-default style reaches geometry in every renderer family, while fills keep
     /// their configured colour. Dashes in a 200 px horizontal edge cannot be one solid edge.
@@ -789,7 +789,7 @@ mod tests {
             let mut labelled = drawing.clone();
             labelled.text = Some("Edited text".into());
             let text = found(
-                &paint(&labelled),
+                &paint_with(&labelled, true),
                 &|s| matches!(s, Shape::Text(t) if t.galley.text().contains("Edited text")),
             );
             let icon = matches!(tool, DrawingToolType::FontIcon | DrawingToolType::Sticker);
@@ -948,7 +948,7 @@ mod tests {
             drawing.text = Some("Sample".into());
             drawing.font_size = 48.0;
             drawing.font_weight = FontWeight::Bold;
-            let shapes = paint(&drawing);
+            let shapes = paint_with(&drawing, true);
             let mut texts = Vec::new();
             fn collect<'a>(shapes: &'a [Shape], texts: &mut Vec<&'a egui::epaint::TextShape>) {
                 for s in shapes {
@@ -971,7 +971,6 @@ mod tests {
                 assert!(
                     texts
                         .iter()
-                        .filter(|t| tool == DrawingToolType::Table || t.galley.job.text == "N")
                         .all(|t| table.contains_rect(t.visual_bounding_rect()))
                 );
             }
@@ -1253,6 +1252,10 @@ mod tests {
     }
 
     fn paint(drawing: &Drawing) -> Vec<Shape> {
+        paint_with(drawing, false)
+    }
+
+    fn paint_with(drawing: &Drawing, selected: bool) -> Vec<Shape> {
         let ctx = Context::default();
         let bars = sample_bars();
         let output = ctx.run_ui(RawInput::default(), |ui| {
@@ -1271,15 +1274,145 @@ mod tests {
                 time_axis: true,
                 executions: None,
             };
-            drawing.render(
+            drawing.render_with_selection(
                 ui.painter(),
                 Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.)),
                 &view,
+                selected,
             );
         });
         let shapes = output.shapes.iter().map(|s| s.shape.clone()).collect();
         output.drop_without_applying_deltas();
         shapes
+    }
+
+    /// Each tool with an anchor and a label draws the label where its anchors say, joined to the
+    /// anchor by one thin line from the side that faces it, and a pin shows its text only while
+    /// selected.
+    #[test]
+    fn anchored_labels_join_their_anchor() {
+        #[derive(Default)]
+        struct Painted {
+            rects: Vec<egui::epaint::RectShape>,
+            segments: Vec<([Pos2; 2], egui::Stroke)>,
+            circles: Vec<egui::epaint::CircleShape>,
+            paths: Vec<egui::epaint::PathShape>,
+            texts: Vec<egui::epaint::TextShape>,
+        }
+        fn collect(shapes: &[Shape], painted: &mut Painted) {
+            for shape in shapes {
+                match shape {
+                    Shape::Vec(shapes) => collect(shapes, painted),
+                    Shape::Rect(r) => painted.rects.push(r.clone()),
+                    Shape::LineSegment { points, stroke } => {
+                        painted.segments.push((*points, *stroke))
+                    }
+                    Shape::Circle(c) => painted.circles.push(*c),
+                    Shape::Path(p) => painted.paths.push(p.clone()),
+                    Shape::Text(t) => painted.texts.push(t.clone()),
+                    _ => {}
+                }
+            }
+        }
+        let text_of = |t: &egui::epaint::TextShape| t.galley.job.text.clone();
+        let pos = |x, y| Pos2::new(x, y);
+        // Bars and prices come from the mapping `paint` renders with.
+        let draw = |tool, points: &[(f32, f32)], text: &str, selected| {
+            let mut drawing = Drawing::new(7, tool);
+            // White on this red has a contrast of 1.05 / (0.2195 + 0.05) = 3.90.
+            drawing.color = [0xF2, 0x36, 0x45, 0xFF];
+            drawing.points = points.iter().map(|&(x, y)| pos(x, y)).collect();
+            drawing.chart_points = points
+                .iter()
+                .map(|&(x, y)| crate::drawings::ChartPoint::new(x / 10.0, 500.0 - f64::from(y)))
+                .collect();
+            drawing.text = Some(text.into());
+            let mut painted = Painted::default();
+            collect(&paint_with(&drawing, selected), &mut painted);
+            painted
+        };
+
+        let note = draw(
+            DrawingToolType::Note,
+            &[(130., 400.), (100., 100.)],
+            "Hi",
+            false,
+        );
+        let [card] = &note.rects[..] else {
+            panic!("one label");
+        };
+        assert_eq!(card.rect.min, pos(100.0, 100.0));
+        assert_eq!(card.stroke.width, 1.0);
+        // The anchor lies far below and at most 30 px to the side, so the bottom faces it.
+        assert_eq!(
+            note.segments,
+            [(
+                [
+                    pos(card.rect.center().x, card.rect.max.y),
+                    pos(130.0, 400.0)
+                ],
+                egui::Stroke::new(1.0, Color32::from_rgb(0xF2, 0x36, 0x45)),
+            )]
+        );
+        let [dot] = &note.circles[..] else {
+            panic!("one dot");
+        };
+        assert_eq!((dot.center, dot.radius), (pos(130.0, 400.0), 3.0));
+        assert_eq!(note.texts.iter().map(text_of).collect::<Vec<_>>(), ["Hi"]);
+
+        let saved = draw(DrawingToolType::Note, &[(100., 100.)], "", false);
+        assert_eq!(saved.rects[0].rect.min, pos(100.0, 100.0));
+        assert!(saved.segments.is_empty());
+        assert_eq!(
+            saved.texts.iter().map(text_of).collect::<Vec<_>>(),
+            ["Text"]
+        );
+
+        let price_note = draw(
+            DrawingToolType::PriceNote,
+            &[(130., 400.), (100., 100.)],
+            "Entry",
+            false,
+        );
+        assert_eq!(
+            price_note.texts.iter().map(text_of).collect::<Vec<_>>(),
+            ["100.00 Entry"]
+        );
+        assert_eq!(price_note.segments.len(), 1, "no line across the pane");
+        assert_eq!(
+            price_note.rects[0].fill,
+            Color32::from_rgb(0xF2, 0x36, 0x45)
+        );
+        assert_eq!(
+            price_note.texts[0].galley.job.sections[0].format.color,
+            Color32::WHITE
+        );
+
+        let pin = draw(
+            DrawingToolType::AnchoredNote,
+            &[(200., 300.)],
+            "Fill",
+            false,
+        );
+        assert!(pin.texts.is_empty());
+        let [marker] = &pin.paths[..] else {
+            panic!("one marker");
+        };
+        let bounds = Rect::from_points(&marker.points);
+        assert!(marker.closed && marker.points.contains(&pos(200.0, 300.0)));
+        assert!(
+            Rect::from_min_max(pos(194.0, 278.0), pos(206.0, 300.0))
+                .expand(0.01)
+                .contains_rect(bounds)
+                && bounds.height() > 20.0,
+            "{bounds:?}"
+        );
+        let selected = draw(DrawingToolType::AnchoredNote, &[(200., 300.)], "Fill", true);
+        assert_eq!(
+            selected.texts.iter().map(text_of).collect::<Vec<_>>(),
+            ["Fill"]
+        );
+        assert!(selected.texts[0].visual_bounding_rect().max.y <= 274.0);
     }
 
     /// A pattern's projected target and selection handles can cross the pane edge;
