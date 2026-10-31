@@ -119,7 +119,8 @@ if let Some(range) = source.visible_time_range() {
 Pick the chart under the pointer as the source, clear crosshairs when the pointer
 leaves, and request a repaint after changing a chart already drawn in this frame.
 Each target must have been shown once to know its plot width. Synchronize the
-viewport only when the source changes to avoid feedback between differing widths.
+viewport only when the source's view changes in a pan or zoom, not when the pointer
+moves to another chart, to avoid feedback between differing widths and intervals.
 
 ## Strategy reports and scripts
 
