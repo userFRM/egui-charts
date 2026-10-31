@@ -918,9 +918,19 @@ mod tests {
             .unwrap()
             .remove("watermark_description");
         legacy["charts"][0]["settings"]["watermark"]["mode"] = "SymbolAndDescription".into();
+        // Layouts saved before `thousands_sep` existed group thousands like a new chart.
+        assert!(
+            legacy["charts"][0]["config"]
+                .as_object_mut()
+                .unwrap()
+                .remove("thousands_sep")
+                .is_some()
+        );
+        restored.config_mut().thousands_sep = None;
         let migrated = SavedLayout::from_json(&legacy.to_string()).unwrap();
         restored.restore(&migrated.charts[0]).unwrap();
         assert!(!restored.chart_options().tooltip.show_volume_details);
+        assert_eq!(restored.config().thousands_sep, Some(','));
         assert_eq!(restored.config().watermark_text, None);
         assert!(restored.config().watermark_description);
         legacy["version"] = 1.into();

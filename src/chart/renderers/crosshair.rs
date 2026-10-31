@@ -202,7 +202,6 @@ pub(crate) fn render_crosshair_price_tag(
     {
         return None;
     }
-    let price = price_scale.y_to_price(pos.y);
     let transform = price_scale.transform();
     let label = if let Some(label) = label {
         label
@@ -210,12 +209,12 @@ pub(crate) fn render_crosshair_price_tag(
         transform.mode,
         PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
     ) {
-        transform.label(price_scale.y_to_scale(pos.y), 2, None)
+        price_scale.label(price_scale.y_to_scale(pos.y), 2, None)
     } else {
         let decimals = price_scale
             .price_precision()
             .unwrap_or_else(|| tick_decimals(price_scale, pos.y));
-        format!("{price:.decimals$}")
+        price_scale.label(price_scale.y_to_scale(pos.y), decimals, None)
     };
     let left = axis_right <= context.rect.left();
     let painter = context

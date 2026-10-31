@@ -8,7 +8,7 @@ The host input integration can call `set_pointer_kind(Some(PointerKind::Pen))` b
 
 Standalone legends built with `Legend::new` take `ValueFormatters` in their `formatters` field; its default preserves built-in formatting. `StudyValue::formatted_value` uses the chart-supplied formatted text when present, so host readouts match the chart. Direct `StudyValue` literals set `formatted: None` to use the declared units and precision.
 
-`set_locale`, `set_date_format`, `set_time_formatter` and `set_session_provider` already support localized calendar names, crosshair/tooltip date patterns, separate time tick/hover methods and host session rules. Hosts supply numeric separators and currency conventions through their numeric formatters.
+`set_locale`, `set_date_format`, `set_time_formatter` and `set_session_provider` already support localized calendar names, crosshair/tooltip date patterns, separate time tick/hover methods and host session rules. Built-in price labels on price scales, their tags, the crosshair and the legend group thousands with `ChartConfig::thousands_sep` (`','` by default, `None` for plain digits); hosts supply decimal commas and currency conventions through their numeric formatters, whose labels are never grouped.
 
 Read runtime options with `chart_options` and replace them with `set_chart_options`. `set_size` can constrain the widget's allocated size; `set_crosshair_position` takes UTC time and raw price. `export_png` returns encoded bytes from an isolated CPU-rendered frame. `ImageExportOptions::include_crosshair` controls the crosshair independently of host overlays. The demo saves these encoded bytes directly and includes the crosshair in its quick image export.
 

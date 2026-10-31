@@ -29,6 +29,35 @@ pub(super) fn format_decimal(value: f64, precision: usize) -> String {
     formatted
 }
 
+/// Writes `separator` between the groups of three digits of the integer part of `text`, its
+/// first run of ASCII digits: `-42541.77` becomes `-42,541.77` with `','`. Text whose integer
+/// part has three digits or fewer, text without digits (`NaN`, `inf`) and a `None` separator
+/// come back unchanged, without allocating.
+pub(crate) fn group_thousands(text: String, separator: Option<char>) -> String {
+    let Some(separator) = separator else {
+        return text;
+    };
+    let Some(start) = text.find(|c: char| c.is_ascii_digit()) else {
+        return text;
+    };
+    let digits = text[start..]
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(text.len() - start);
+    if digits <= 3 {
+        return text;
+    }
+    let mut grouped = String::with_capacity(text.len() + (digits - 1) / 3 * separator.len_utf8());
+    grouped.push_str(&text[..start]);
+    for (index, digit) in text[start..start + digits].chars().enumerate() {
+        if index > 0 && (digits - index) % 3 == 0 {
+            grouped.push(separator);
+        }
+        grouped.push(digit);
+    }
+    grouped.push_str(&text[start + digits..]);
+    grouped
+}
+
 /// Instrument decimals, falling back to the decimal places needed to write its minimum tick.
 /// Invalid tick sizes are ignored; explicit decimals take precedence.
 pub fn instrument_price_precision(instrument: &Instrument) -> Option<u8> {
@@ -239,11 +268,11 @@ impl CurrencyFormatter {
 
 impl PriceFormatter for CurrencyFormatter {
     fn format(&self, price: f64) -> String {
-        let val_str = if let Some(sep) = self.thousands_sep.filter(|sep| *sep != self.decimal_sep) {
-            self.format_with_separator(price, sep)
-        } else {
-            format_decimal(price, self.precision).replace('.', &self.decimal_sep.to_string())
-        };
+        // The decimal point is replaced first, so a '.' thousands separator is never confused with it.
+        let val_str = group_thousands(
+            format_decimal(price, self.precision).replace('.', &self.decimal_sep.to_string()),
+            self.thousands_sep.filter(|sep| *sep != self.decimal_sep),
+        );
 
         let space = if self.add_space { " " } else { "" };
 
@@ -261,44 +290,6 @@ impl PriceFormatter for CurrencyFormatter {
 
     fn clone_box(&self) -> Box<dyn PriceFormatter> {
         Box::new(self.clone())
-    }
-}
-
-impl CurrencyFormatter {
-    fn format_with_separator(&self, price: f64, separator: char) -> String {
-        let formatted = format_decimal(price, self.precision);
-        let mut parts = formatted.splitn(2, '.');
-
-        let integer = parts.next().unwrap_or("");
-        let decimal = parts.next().unwrap_or("");
-
-        // Group only the digits of the magnitude; the sign is never counted.
-        let (sign, magnitude) = match integer.strip_prefix('-') {
-            Some(digits) => ("-", digits),
-            None => ("", integer),
-        };
-
-        let integer_with_sep: String = magnitude
-            .chars()
-            .rev()
-            .enumerate()
-            .fold(String::new(), |mut acc, (i, c)| {
-                if i > 0 && i % 3 == 0 {
-                    acc.push(separator);
-                }
-                acc.push(c);
-                acc
-            })
-            .chars()
-            .rev()
-            .collect();
-
-        let body = if decimal.is_empty() {
-            integer_with_sep
-        } else {
-            format!("{integer_with_sep}{}{decimal}", self.decimal_sep)
-        };
-        format!("{sign}{body}")
     }
 }
 
@@ -602,6 +593,7 @@ mod tests {
         assert_eq!(usd.format(1234.56), "$1,234.56");
 
         for (formatter, value, expected) in [
+            (CurrencyFormatter::usd(), 1234567.891, "$1,234,567.89"),
             (CurrencyFormatter::eur(), 1234.56, "1.234,56 €"),
             (CurrencyFormatter::eur(), -1234.5, "-1.234,50 €"),
             (CurrencyFormatter::eur(), 0.5, "0,50 €"),

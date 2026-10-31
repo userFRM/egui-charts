@@ -214,6 +214,8 @@ pub(super) struct SeriesLegend {
     formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     /// Decimals of the series' price scale, when it sets them.
     precision: Option<usize>,
+    /// Groups the thousands of built-in prices, from the series' price scale.
+    thousands_sep: Option<char>,
 }
 
 impl SeriesLegend {
@@ -222,6 +224,7 @@ impl SeriesLegend {
         close: Option<f64>,
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
         precision: Option<usize>,
+        thousands_sep: Option<char>,
     ) -> Self {
         Self {
             name: item.options.name.clone(),
@@ -235,6 +238,7 @@ impl SeriesLegend {
             close,
             formatter,
             precision,
+            thousands_sep,
             values: IndicatorValues::default(),
         }
     }
@@ -251,7 +255,12 @@ impl Indicator for SeriesLegend {
 
     fn format_value(&self, value: f64) -> String {
         self.formatter.as_ref().map_or_else(
-            || StudyFormat::Price.format(value, self.precision),
+            || {
+                crate::scales::group_thousands(
+                    StudyFormat::Price.format(value, self.precision),
+                    self.thousands_sep,
+                )
+            },
             |formatter| formatter.format(value),
         )
     }
@@ -520,7 +529,10 @@ impl Chart {
                 .panes
                 .iter()
                 .find(|pane| pane.members.contains(&id) && pane.rect.is_positive())
-                .map(|pane| pane.price_map());
+                .map(|pane| {
+                    pane.price_map()
+                        .with_thousands_sep(self.config.thousands_sep)
+                });
         }
         let rect = self.last_rendered_price_rect;
         if !rect.is_positive() {
@@ -539,7 +551,7 @@ impl Chart {
     pub fn format_series_price(&self, id: SeriesId, price: f64) -> Option<String> {
         let map = self.series_price_map(id)?;
         let transform = map.transform();
-        Some(transform.label(
+        Some(map.label(
             transform.to_scale(price),
             map.price_precision().unwrap_or(2),
             self.series_label_formatter(id, transform.mode).as_deref(),
@@ -870,11 +882,9 @@ impl Chart {
     }
 
     pub(super) fn series_map(&self, item: &PriceSeries, rect: Rect) -> PriceMap {
-        self.secondary_scale(item.options.scale).map(
-            self.series_transform(item),
-            rect.top(),
-            rect.bottom(),
-        )
+        self.secondary_scale(item.options.scale)
+            .map(self.series_transform(item), rect.top(), rect.bottom())
+            .with_thousands_sep(self.config.thousands_sep)
     }
 
     pub(super) fn secondary_axis_values(
@@ -915,7 +925,7 @@ impl Chart {
         crate::chart::rendering::axes::named_label(
             last_value && self.config.price_axis.show_symbol_name,
             &item.options.name,
-            transform.label(
+            map.label(
                 transform.to_scale(value),
                 crate::chart::rendering::axes::tag_decimals(map, map.price_to_y(value)),
                 self.series_label_formatter(item.id, transform.mode)
@@ -1270,10 +1280,10 @@ impl Chart {
                     |bar| {
                         formatter.as_ref().map_or_else(
                             || {
-                                format!(
-                                    "{:.*}",
-                                    self.series_map(item, rect).price_precision().unwrap_or(2),
-                                    bar.close
+                                let map = self.series_map(item, rect);
+                                crate::scales::group_thousands(
+                                    format!("{:.*}", map.price_precision().unwrap_or(2), bar.close),
+                                    map.thousands_sep(),
                                 )
                             },
                             |formatter| formatter.format(bar.close),
@@ -1479,7 +1489,8 @@ impl Chart {
                     let mapping = study
                         .scale_mapping()
                         .unwrap_or(map)
-                        .with_bounds(rect.top(), rect.bottom());
+                        .with_bounds(rect.top(), rect.bottom())
+                        .with_thousands_sep(map.thousands_sep());
                     crate::chart::rendering::axes::render_study_tags(
                         &clipped,
                         label_rect,
