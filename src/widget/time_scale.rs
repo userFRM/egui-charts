@@ -423,7 +423,7 @@ mod tests {
         let plot = chart.get_rendered_price_rect();
         let width = plot.width();
         let events: Vec<_> = chart.drain_events().collect();
-        assert_eq!(chart.time_scale_size(), egui::vec2(width, 28.0));
+        assert_eq!(chart.time_scale_size(), egui::vec2(width, 35.0));
         assert!(events.contains(&ChartEvent::TimeScaleResized(chart.time_scale_size())));
         assert!(events.contains(&ChartEvent::VisibleLogicalRangeChanged(
             chart.visible_logical_range()

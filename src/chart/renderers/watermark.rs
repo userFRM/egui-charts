@@ -197,7 +197,8 @@ mod tests {
                 .expect("the image")
                 .visual_bounding_rect();
             assert_eq!(image.size(), Vec2::new(100.0, 50.0), "{align:?}");
-            assert!((image.top() - top).abs() < 0.01, "{align:?}");
+            // The image snaps to whole pixels, so a centred image may move half a pixel.
+            assert!((image.top() - top).abs() <= 0.5, "{align:?}");
             assert!(edge(image).abs() < 0.01, "{align:?}");
             for (color, centre, copies) in
                 [(bold, top + 50.0 + 24.0, 2), (plain, top + 122.0 - 12.0, 1)]

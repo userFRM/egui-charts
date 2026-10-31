@@ -1,5 +1,5 @@
 use super::context::{ChartMapping, RenderContext, StyleColors};
-use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, axis_font};
+use crate::chart::rendering::axes::{PRICE_LABEL_GAP, axis_font};
 use crate::config::{PriceAxisOptions, TimeScaleOptions};
 use crate::model::Bar;
 use crate::scales::price_decimals;
@@ -399,6 +399,9 @@ pub fn render_time_labels(
     let min_label_spacing = min_time_label_spacing(options); // Min pixels between label centers
     let mut last_label_x: Option<f32> = None;
     let mut labels = Vec::new();
+    // Labels centre in the axis row below the plot.
+    let y = context.rect.max.y
+        + crate::styles::sizing::chart::BOTTOM_PADDING_WITH_TIME.max(options.minimum_height) / 2.0;
     if options.border_visible {
         let y = context.painter.round_to_pixel_center(context.rect.bottom());
         labels.push(Shape::hline(
@@ -428,7 +431,6 @@ pub fn render_time_labels(
             continue;
         }
 
-        let y = context.rect.max.y + TIME_LABEL_GAP;
         let galley = if options.allow_bold_labels && mark.bold {
             context
                 .painter
@@ -441,7 +443,7 @@ pub fn render_time_labels(
                 .painter
                 .layout_no_wrap(mark.label, font.clone(), text_color)
         };
-        let rect = egui::Align2::CENTER_TOP.anchor_size(Pos2::new(x, y), galley.size());
+        let rect = egui::Align2::CENTER_CENTER.anchor_size(Pos2::new(x, y), galley.size());
         if rect.left() >= context.rect.left()
             && rect.right() <= context.rect.right()
             && context.painter.clip_rect().contains_rect(rect)

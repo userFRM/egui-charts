@@ -10,9 +10,6 @@ use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, V
 /// Gap between the plot's right edge and the start of the price axis labels.
 pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;
 
-/// Gap between the plot's bottom edge and the top of the time axis labels.
-pub(crate) const TIME_LABEL_GAP: f32 = 5.0;
-
 /// Padding between an axis tag's text and its edge.
 const TAG_PADDING: Vec2 = Vec2::new(6.0, 0.5);
 

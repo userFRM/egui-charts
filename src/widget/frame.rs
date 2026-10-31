@@ -898,7 +898,7 @@ impl Chart {
                 } else {
                     chart_rect.left()
                 },
-                time_axis_top + 28.0,
+                time_axis_top + crate::styles::sizing::chart::BOTTOM_PADDING_WITH_TIME,
             ),
         );
         let axis_interaction = cfg!(feature = "icons")
@@ -5574,7 +5574,7 @@ mod tests {
             );
             assert_eq!(
                 layout.price_rect.height(),
-                (height - 2.0 * padding - 28.0).max(0.0)
+                (height - 2.0 * padding - 35.0).max(0.0)
             );
         }
     }
