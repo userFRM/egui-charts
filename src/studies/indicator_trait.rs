@@ -98,7 +98,8 @@ pub struct StudyPane {
     pub height: Option<f32>,
     /// Fixed initial range, or automatic fitting to visible values.
     pub range: Option<(f64, f64)>,
-    /// Reference level, colour and caption.
+    /// Reference level, colour and caption: the defaults of
+    /// [`StudySettings::levels`](super::StudySettings::levels).
     pub levels: Vec<(f64, Color32, &'static str)>,
     /// Fill between the outer levels using [`Indicator::level_fill_color`].
     pub fill_between_levels: bool,
@@ -239,6 +240,8 @@ pub trait Indicator: Send {
 
     /// Current applied presentation, initialized from the study's own defaults.
     fn settings(&self) -> super::StudySettings {
+        let (levels, fill_between_levels, level_fill_color) =
+            super::settings::declared_levels(self);
         super::StudySettings {
             plots: (0..self.line_count())
                 .map(|line| self.plot_style(line))
@@ -246,6 +249,9 @@ pub trait Indicator: Send {
             precision: self.precision(),
             hidden_intervals: Vec::new(),
             interval_range: Default::default(),
+            levels,
+            fill_between_levels,
+            level_fill_color,
         }
     }
 
@@ -587,6 +593,9 @@ pub trait Indicator: Send {
     }
 
     /// Default separate-pane layout and reference levels, independent of the study name.
+    /// [`ConfiguredStudy`](super::ConfiguredStudy) returns its levels where its settings place
+    /// them, in their colours, and a hidden level in `Color32::TRANSPARENT`, which still bounds
+    /// the fill.
     fn pane(&self) -> StudyPane {
         StudyPane::default()
     }

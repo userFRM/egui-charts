@@ -76,9 +76,11 @@ pub struct IndicatorPaneConfig {
     pub y_range: Option<(f64, f64)>,
     /// Show horizontal zone lines (e.g., RSI 70/30)
     pub show_zones: bool,
-    /// Zone line levels and colors
+    /// Zone levels, colours and captions. A zone in `Color32::TRANSPARENT` draws no line and
+    /// still bounds the fill.
     pub zones: Vec<(f64, Color32, &'static str)>,
-    /// Fill between the lowest and highest zone with the first plot colour at 20% opacity.
+    /// Fill between the lowest and highest zone in the study's
+    /// [`Indicator::level_fill_color`].
     pub fill_between_zones: bool,
     /// Show legend
     pub show_legend: bool,
@@ -982,6 +984,11 @@ impl IndicatorPane {
             }
             return;
         }
+        // Design-token colours shade beyond labelled levels only for studies without their own
+        // presentation; a configured study shows the colours of its Style tab.
+        if indicator.has_settings() {
+            return;
+        }
         let colors = painter.ctx().active_theme().chart;
         let (bullish, bearish) = (colors.candle_up, colors.candle_down);
         for (level, color, label) in &self.config.zones {
@@ -1030,13 +1037,21 @@ impl IndicatorPane {
     ) {
         // Draw zone lines with dashed style
         if self.config.show_zones {
+            // Design-token colours stand for the grid colour only for studies without their own
+            // presentation; a configured study shows the colours of its Style tab.
+            let tokens = !indicator.has_settings();
             for (level, color, _label) in &self.config.zones {
-                let live_color = if [
-                    DESIGN_TOKENS.semantic.extended.bullish,
-                    DESIGN_TOKENS.semantic.extended.bearish,
-                    DESIGN_TOKENS.semantic.extended.chart_text,
-                ]
-                .contains(color)
+                // A hidden level bounds the band but draws no line.
+                if *color == Color32::TRANSPARENT {
+                    continue;
+                }
+                let live_color = if tokens
+                    && [
+                        DESIGN_TOKENS.semantic.extended.bullish,
+                        DESIGN_TOKENS.semantic.extended.bearish,
+                        DESIGN_TOKENS.semantic.extended.chart_text,
+                    ]
+                    .contains(color)
                 {
                     grid_color
                 } else {
@@ -1053,13 +1068,16 @@ impl IndicatorPane {
                         painter.line_segment([start, end], stroke);
                         continue;
                     }
-                    let (dash, gap) = if pattern == crate::model::LineStyle::Dotted {
-                        (1.0, 3.0)
-                    } else if self.config.fill_between_zones {
-                        (4.0, 4.0)
+                    let (dash, gap) = if self.config.fill_between_zones
+                        || matches!(
+                            pattern,
+                            crate::model::LineStyle::Dotted | crate::model::LineStyle::SparseDotted
+                        ) {
+                        pattern.hairline_pattern()
                     } else {
-                        pattern.dash_pattern().unwrap_or((5.0, 3.0))
-                    };
+                        pattern.dash_pattern()
+                    }
+                    .unwrap_or((5.0, 3.0));
                     draw_dashed_line(painter, start, end, stroke, dash, gap);
                 }
             }
@@ -1588,61 +1606,103 @@ mod tests {
     }
 
     #[test]
-    fn rsi_default_paints_only_the_middle_band_and_two_guides() {
+    fn rsi_paints_the_band_and_guides_of_its_preset_and_its_level_settings() {
         let config = IndicatorPaneConfig::rsi();
         assert_eq!(config.height, 138.0);
         assert_eq!(
             config.zones.iter().map(|z| z.0).collect::<Vec<_>>(),
             vec![70.0, 30.0]
         );
+        let mut edited =
+            crate::studies::ConfiguredStudy::new(Box::new(crate::studies::RSI::default()));
+        let mut settings = edited.settings();
+        settings.levels[0].value = Some(80.0);
+        settings.levels[0].color = Color32::WHITE;
+        settings.levels[0].pattern = crate::model::LineStyle::LargeDashed;
+        settings.levels[1].visible = false;
+        settings.level_fill_color = Color32::from_rgba_unmultiplied(1, 2, 3, 40);
+        edited.apply_settings(&[], settings).unwrap();
+        let bare = crate::studies::RSI::default();
         let ctx = egui::Context::default();
         crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::dark());
-        for inverted in [false, true] {
-            let mut pane = IndicatorPane::with_config(config.clone());
-            pane.price_map = Some(PriceMap::new(
-                PriceTransform::default(),
-                PriceRange::new(0.0, 100.0),
-                0.0,
-                100.0,
-                inverted,
-            ));
-            let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
-            let study = crate::studies::RSI::default();
-            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                pane.draw_zone_fills(ui.painter(), rect, 0.0, 100.0, &study);
-                pane.draw_horizontal_lines(ui.painter(), rect, 0.0, 100.0, Color32::BLACK, &study);
-            });
-            let shapes = std::mem::take(&mut output.shapes);
-            output.drop_without_applying_deltas();
-            let bands: Vec<_> = shapes
-                .iter()
-                .filter_map(|s| match &s.shape {
-                    egui::Shape::Rect(r) => Some(r),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(bands.len(), 1);
-            assert!((bands[0].rect.top() - 30.0).abs() < 0.001);
-            assert!((bands[0].rect.bottom() - 70.0).abs() < 0.001);
-            assert_eq!(
-                bands[0].fill,
-                Color32::from_rgba_unmultiplied(126, 87, 194, 26)
-            );
-            let guides: Vec<_> = shapes
-                .iter()
-                .filter_map(|s| match &s.shape {
-                    egui::Shape::LineSegment { points, stroke }
-                        if stroke.color == crate::studies::palette::GRAY =>
-                    {
-                        Some(points)
-                    }
-                    _ => None,
-                })
-                .collect();
-            assert!(!guides.is_empty());
-            for guide in guides {
-                assert!((guide[0].y - 30.0).abs() < 0.001 || (guide[0].y - 70.0).abs() < 0.001);
-                assert!((guide[1].x - guide[0].x - 4.0).abs() < 0.001);
+        // Band edges and guide ys, not inverted and inverted, on a 100 point high pane of 0..100.
+        let rows = [
+            (
+                config,
+                &bare as &dyn Indicator,
+                [(30.0, 70.0), (30.0, 70.0)],
+                [&[30.0, 70.0][..], &[30.0, 70.0]],
+                crate::studies::palette::GRAY,
+                4.0,
+                Color32::from_rgba_unmultiplied(126, 87, 194, 26),
+            ),
+            (
+                IndicatorPaneConfig::from_study(&edited),
+                &edited,
+                [(20.0, 70.0), (30.0, 80.0)],
+                [&[20.0][..], &[80.0]],
+                Color32::WHITE,
+                8.0,
+                Color32::from_rgba_unmultiplied(1, 2, 3, 40),
+            ),
+        ];
+        for (config, study, band, guide_ys, color, dash, fill) in rows {
+            for inverted in [false, true] {
+                let mut pane = IndicatorPane::with_config(config.clone());
+                pane.price_map = Some(PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(0.0, 100.0),
+                    0.0,
+                    100.0,
+                    inverted,
+                ));
+                let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    pane.draw_zone_fills(ui.painter(), rect, 0.0, 100.0, study);
+                    pane.draw_horizontal_lines(
+                        ui.painter(),
+                        rect,
+                        0.0,
+                        100.0,
+                        Color32::BLACK,
+                        study,
+                    );
+                });
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                let bands: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(r) => Some(r),
+                        _ => None,
+                    })
+                    .collect();
+                let (top, bottom) = band[inverted as usize];
+                assert_eq!(bands.len(), 1);
+                assert!((bands[0].rect.top() - top).abs() < 0.001);
+                assert!((bands[0].rect.bottom() - bottom).abs() < 0.001);
+                assert_eq!(bands[0].fill, fill);
+                let guides: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::LineSegment { points, stroke }
+                            if stroke.color != Color32::BLACK =>
+                        {
+                            Some((points, stroke.color))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!guides.is_empty());
+                for (guide, guide_color) in guides {
+                    assert_eq!(guide_color, color);
+                    assert!(
+                        guide_ys[inverted as usize]
+                            .iter()
+                            .any(|y| (guide[0].y - y).abs() < 0.001)
+                    );
+                    assert!((guide[1].x - guide[0].x - dash).abs() < 0.001);
+                }
             }
         }
     }
