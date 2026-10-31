@@ -11,8 +11,7 @@ use crate::model::Timeframe;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::list_item::{LabelContent, ListItem};
-use crate::ui_kit::tab_bar::{TabBar, TabLabel};
-use egui::Ui;
+use egui::{Role, Ui, WidgetInfo};
 
 use super::{
     actions::TopToolbarAction,
@@ -177,8 +176,8 @@ enum TemplatesPage {
     Templates,
 }
 
-impl TabLabel for TemplatesPage {
-    fn tab_label(&self) -> &str {
+impl TemplatesPage {
+    fn label(self) -> &'static str {
         match self {
             Self::Indicators => "Indicators",
             Self::Templates => "Templates",
@@ -545,6 +544,8 @@ impl TopToolbar {
             S::Templates => {
                 let response = ToolbarIconButton::new(icon, label, &self.config).show(ui);
                 egui::Popup::menu(&response)
+                    // Choosing a page keeps the menu open; its rows close it themselves.
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                     .align(egui::RectAlign::BOTTOM_START)
                     .align_alternatives(&[])
                     .frame(egui::Frame::popup(ui.style()).fill(ui.active_theme().ui.panel_bg))
@@ -656,22 +657,69 @@ impl TopToolbar {
         }
     }
 
+    /// The templates menu's pages as equal halves of one track, the selected one a panel tile.
+    fn show_templates_tabs(&mut self, ui: &mut Ui) {
+        let theme = ui.active_theme();
+        let size = egui::vec2(ui.available_width(), 34.0);
+        let (track, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        ui.painter().rect_filled(
+            track,
+            theme.radius.md,
+            theme
+                .ui
+                .panel_bg
+                .lerp_to_gamma(theme.ui.panel_bg_secondary, 0.65),
+        );
+        for (index, page) in [TemplatesPage::Indicators, TemplatesPage::Templates]
+            .into_iter()
+            .enumerate()
+        {
+            let half = egui::Rect::from_min_size(
+                track.min + egui::vec2(index as f32 * size.x / 2.0, 0.0),
+                egui::vec2(size.x / 2.0, size.y),
+            );
+            let id = ui.scope_id().with(page.label());
+            let response = ui.interact(half, id, egui::Sense::click());
+            if response.clicked() {
+                self.templates_page = page;
+            }
+            let selected = self.templates_page == page;
+            let label = l10n::text(ui.ctx(), page.label());
+            response.widget_info(|| WidgetInfo::labeled(Role::Tab, ui.is_enabled(), &label));
+            ui.ctx()
+                .accesskit_node_builder(response.id, |node| node.set_selected(selected));
+            if selected {
+                ui.painter().rect_filled(
+                    half.shrink(theme.spacing.xs),
+                    theme.radius.sm,
+                    theme.ui.panel_bg,
+                );
+            }
+            ui.painter().text(
+                half.center(),
+                egui::Align2::CENTER_CENTER,
+                label,
+                egui::FontId::proportional(theme.text.title),
+                if selected || response.hovered() {
+                    theme.ui.text
+                } else {
+                    theme.ui.text_muted
+                },
+            );
+            crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.md);
+        }
+    }
+
     /// Favourite studies to add and saved templates to apply, on two pages.
     fn show_indicator_templates(&mut self, ui: &mut Ui, action: &mut TopToolbarAction) {
         use crate::ui_kit::{EmptyState, list_item::LabelContent};
-        ui.set_width(296.0);
-        TabBar::new(
-            &[TemplatesPage::Indicators, TemplatesPage::Templates],
-            &mut self.templates_page,
-        )
-        .show(ui);
+        ui.set_width(292.0);
+        self.show_templates_tabs(ui);
         ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
         let (entries, empty) = match self.templates_page {
             TemplatesPage::Indicators => (
                 &self.favorite_indicators,
-                EmptyState::new("No favorite indicators added yet")
-                    .icon(&embedded_icons::STAR_EMPTY)
-                    .description("Star an indicator in the Indicators dialog to keep it here."),
+                "No favorite indicators added yet",
             ),
             TemplatesPage::Templates => {
                 if ListItem::new()
@@ -682,16 +730,16 @@ impl TopToolbar {
                     *action = TopToolbarAction::SaveIndicatorTemplate;
                     ui.close();
                 }
-                (
-                    &self.indicator_templates,
-                    EmptyState::new("No templates saved yet").description(
-                        "Save the chart's indicators as a template to apply them in one click.",
-                    ),
-                )
+                (&self.indicator_templates, "No templates saved yet")
             }
         };
         if entries.is_empty() {
-            empty.show(ui);
+            // Keep room for a few rows, with the sentence centred in it.
+            let height = (203.0 - (ui.cursor().top() - ui.min_rect().top())).max(0.0);
+            ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
+                ui.set_min_height(height);
+                EmptyState::new(empty).fill_height().show(ui);
+            });
             return;
         }
         egui::ScrollArea::vertical()
@@ -836,6 +884,38 @@ mod tests {
                 assert_eq!(icons, vec![theme.ui.text_disabled; 2]);
                 output.drop_without_applying_deltas();
             }
+        }
+    }
+
+    #[test]
+    fn templates_tabs_switch_the_page_and_keep_the_menu_open() {
+        use egui::accesskit::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let mut harness = Harness::builder()
+            .with_size(vec2(400.0, 400.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, toolbar: &mut TopToolbar| {
+                    toolbar.show_control(ui, S::Templates, "SAMPLE", &mut TopToolbarAction::None);
+                },
+                TopToolbar::new(),
+            );
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::Button, "Indicator templates")
+            .click();
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::Tab, "Templates")
+            .click();
+        harness.run();
+        harness.get_by_label("Save indicator template");
+        for (tab, selected) in [("Indicators", false), ("Templates", true)] {
+            let node = harness.get_by_role_and_label(Role::Tab, tab);
+            assert_eq!(node.accesskit_node().is_selected(), Some(selected), "{tab}");
         }
     }
 
