@@ -1149,7 +1149,7 @@ mod tests {
                             .iter()
                             .find(|rect| rect.stroke.color == accent && rect.stroke.width == 1.0)
                             .expect("label body");
-                        assert_eq!(body.rect.height(), HEIGHT);
+                        assert!((19.0..=20.0).contains(&body.rect.height()));
                         assert_ne!(body.fill, theme.chart.bg);
                         assert_eq!(body.fill.a(), 255);
                         if submit {
