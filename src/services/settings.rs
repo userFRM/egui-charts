@@ -198,18 +198,20 @@ impl SettingsStore {
     }
 
     /// Writes `current` now if it differs from the stored settings, such as when the
-    /// application exits. Nothing is written while stored settings that [`poll`](Self::poll)
-    /// has not returned yet are pending, nor while a conflict is unsettled.
-    pub fn flush(&mut self, current: &UserSettings) {
+    /// application exits, and returns whether storage has acknowledged it. Nothing is written
+    /// before the settings are read, after they could not be read, while stored settings that
+    /// [`poll`](Self::poll) has not returned yet are pending, nor while a conflict is unsettled;
+    /// it returns `false` then, so a host that waits for `true` bounds the wait.
+    pub fn flush(&mut self, current: &UserSettings) -> bool {
         if self.written.is_none() {
-            return;
+            return false;
         }
         // `current` may hold changes made after the last poll.
         self.document.hold(self.written.as_ref() != Some(current));
         let received = self.document.receive(&*self.storage);
         self.receive(received);
         if self.restored.is_some() {
-            return;
+            return false;
         }
         if self
             .written
@@ -221,6 +223,7 @@ impl SettingsStore {
         }
         let received = self.document.flush(&*self.storage);
         self.receive(received);
+        self.written.as_ref() == Some(current) && !self.document.saving()
     }
 
     /// Takes in what the settings document received.
@@ -435,13 +438,13 @@ mod tests {
                 reply.send(Ok(()));
             }
         }
-        store.flush(&current);
+        assert!(store.flush(&current));
         assert!(
             host.0.lock().unwrap().is_empty(),
             "confirmed settings need no write"
         );
         current.symbol = Some("B".into());
-        store.flush(&current);
+        assert!(!store.flush(&current));
         let (_, reply) = host.0.lock().unwrap().pop().unwrap();
         current.symbol = Some("A".into());
         store.flush(&current);
@@ -450,7 +453,7 @@ mod tests {
         let (json, reply) = host.0.lock().unwrap().pop().unwrap();
         assert_eq!(UserSettings::from_json(&json).unwrap(), current);
         reply.send(Ok(()));
-        store.flush(&current);
+        assert!(store.flush(&current));
         assert!(host.0.lock().unwrap().is_empty());
     }
 
