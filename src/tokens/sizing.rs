@@ -452,10 +452,6 @@ pub struct AnnotationSizingTokens {
     pub table_header_height: f32,
     /// Horizontal signpost padding, in egui logical points.
     pub signpost_padding_x: f32,
-    /// Vertical signpost padding, in egui logical points.
-    pub signpost_padding_y: f32,
-    /// Signpost bracket, in egui logical points.
-    pub signpost_bracket: f32,
     /// Vertical text padding, in egui logical points.
     pub text_padding_y: f32,
 }

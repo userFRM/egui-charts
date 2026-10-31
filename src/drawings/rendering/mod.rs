@@ -470,7 +470,7 @@ impl Drawing {
             DrawingToolType::PriceNote => self.render_price_note(painter, view),
             DrawingToolType::Table => self.render_table(painter),
             DrawingToolType::Comment => self.render_comment(painter),
-            DrawingToolType::Signpost => self.render_signpost(painter, rect),
+            DrawingToolType::Signpost => self.render_signpost(painter),
             DrawingToolType::Image => self.render_image(painter),
             DrawingToolType::Tweet => self.render_post(painter),
             DrawingToolType::Idea => self.render_idea(painter),
@@ -1483,6 +1483,28 @@ mod tests {
         assert!(badge.closed && badge.points.contains(&pos(100.0, 300.0)));
         let text = label.texts[0].visual_bounding_rect();
         assert!(text.min.x > 108.0 && text.max.y < 292.0, "{text:?}");
+
+        // A second anchor on another bar still gets a vertical pole; one anchor shows the label
+        // 40 px above the bar.
+        for (points, centre) in [
+            (&[(100., 300.), (160., 200.)][..], pos(100.0, 200.0)),
+            (&[(100., 300.)][..], pos(100.0, 260.0)),
+        ] {
+            let signpost = draw(DrawingToolType::Signpost, points, "Earnings", false);
+            let [plate] = &signpost.rects[..] else {
+                panic!("one plate");
+            };
+            assert_eq!(plate.rect.center(), centre);
+            let [(pole, stroke)] = signpost.segments[..] else {
+                panic!("one pole");
+            };
+            assert_eq!(pole, [pos(100.0, 300.0), pos(100.0, plate.rect.max.y)]);
+            assert_eq!(stroke.width, 1.0);
+            assert_eq!(
+                signpost.texts.iter().map(text_of).collect::<Vec<_>>(),
+                ["Earnings"]
+            );
+        }
     }
 
     /// A pattern's projected target and selection handles can cross the pane edge;

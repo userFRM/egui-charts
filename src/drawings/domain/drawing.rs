@@ -572,15 +572,22 @@ impl Drawing {
         }
     }
 
-    /// Puts a Time cycles second anchor on the first anchor's price, so the second only sets
-    /// the period.
-    pub(crate) fn level_time_cycles(&mut self) {
-        if self.tool_type == DrawingToolType::TimeCycles
-            && self.points.len() >= 2
-            && self.chart_points.len() >= 2
-        {
-            self.points[1].y = self.points[0].y;
-            self.chart_points[1].price = self.chart_points[0].price;
+    /// Keeps a second anchor on the first one's price for Time cycles, so it only sets the period,
+    /// and on the first one's bar for a Signpost, so it only sets the label's height.
+    pub(crate) fn align_second_anchor(&mut self) {
+        if self.points.len() < 2 || self.chart_points.len() < 2 {
+            return;
+        }
+        match self.tool_type {
+            DrawingToolType::TimeCycles => {
+                self.points[1].y = self.points[0].y;
+                self.chart_points[1].price = self.chart_points[0].price;
+            }
+            DrawingToolType::Signpost => {
+                self.points[1].x = self.points[0].x;
+                self.chart_points[1].bar_idx = self.chart_points[0].bar_idx;
+            }
+            _ => {}
         }
     }
 

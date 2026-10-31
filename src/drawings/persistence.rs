@@ -1246,6 +1246,7 @@ mod tests {
         // Settings from a file saved before the new fields and placement counts.
         for (tool, count, origins) in [
             (DrawingToolType::Note, 1, &[0][..]),
+            (DrawingToolType::Signpost, 1, &[0][..]),
             (DrawingToolType::PriceNote, 1, &[0, 0][..]),
             (DrawingToolType::ArrowMarker, 1, &[0, 0][..]),
             (DrawingToolType::RotatedRect, 2, &[0, 1, 1][..]),

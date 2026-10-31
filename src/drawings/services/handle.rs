@@ -334,23 +334,31 @@ impl HandleService {
                     anchor.bar_idx = x_to_bar(new_pos.x);
                 }
             }
-            DrawingToolType::TimeCycles => {
-                if drawing.points.len() < 2 || drawing.chart_points.len() < 2 {
-                    return;
-                }
+            DrawingToolType::TimeCycles | DrawingToolType::Signpost => {
                 match handle {
                     HandlePos::Start | HandlePos::Point(0) => {
-                        drawing.points[0] = new_pos;
-                        drawing.chart_points[0].bar_idx = x_to_bar(new_pos.x);
-                        drawing.chart_points[0].price = y_to_price(new_pos.y);
+                        if let (Some(point), Some(anchor)) =
+                            (drawing.points.first_mut(), drawing.chart_points.first_mut())
+                        {
+                            *point = new_pos;
+                            anchor.bar_idx = x_to_bar(new_pos.x);
+                            anchor.price = y_to_price(new_pos.y);
+                        }
                     }
-                    HandlePos::End | HandlePos::Point(1) => {
-                        drawing.points[1].x = new_pos.x;
-                        drawing.chart_points[1].bar_idx = x_to_bar(new_pos.x);
+                    HandlePos::End | HandlePos::Point(1)
+                        if drawing.points.len() > 1 && drawing.chart_points.len() > 1 =>
+                    {
+                        if drawing.tool_type == DrawingToolType::TimeCycles {
+                            drawing.points[1].x = new_pos.x;
+                            drawing.chart_points[1].bar_idx = x_to_bar(new_pos.x);
+                        } else {
+                            drawing.points[1].y = new_pos.y;
+                            drawing.chart_points[1].price = y_to_price(new_pos.y);
+                        }
                     }
                     _ => return,
                 }
-                drawing.level_time_cycles();
+                drawing.align_second_anchor();
             }
             // The target and the stop move in price only; the width handle moves the right
             // edge, where the target and the stop anchors sit, never left of the entry.
@@ -789,7 +797,6 @@ mod tests {
                     DrawingToolType::AnchoredVolumeProfile,
                     DrawingToolType::Table,
                     DrawingToolType::Comment,
-                    DrawingToolType::Signpost,
                     DrawingToolType::FontIcon,
                     DrawingToolType::Tweet,
                     DrawingToolType::Idea,
@@ -829,6 +836,7 @@ mod tests {
                     DrawingToolType::Circle,
                     DrawingToolType::Ellipse,
                     DrawingToolType::Note,
+                    DrawingToolType::Signpost,
                     DrawingToolType::PriceNote,
                     DrawingToolType::Callout,
                     DrawingToolType::Image,
@@ -1034,6 +1042,23 @@ mod tests {
     fn update_handle_moves_screen_and_chart_points() {
         // Edges ignore the pointer's other coordinate, including reversed and crossed sides.
         let cases = [
+            // The label's handle changes only its height; the bar's handle carries the label along.
+            (
+                DrawingToolType::Signpost,
+                vec![pos2(100.0, 300.0), pos2(100.0, 200.0)],
+                HandlePos::Point(1),
+                pos2(250.0, 80.0),
+                vec![pos2(100.0, 300.0), pos2(100.0, 80.0)],
+                vec![ChartPoint::new(10.0, 700.0), ChartPoint::new(10.0, 920.0)],
+            ),
+            (
+                DrawingToolType::Signpost,
+                vec![pos2(100.0, 300.0), pos2(100.0, 200.0)],
+                HandlePos::Point(0),
+                pos2(150.0, 320.0),
+                vec![pos2(150.0, 320.0), pos2(150.0, 200.0)],
+                vec![ChartPoint::new(15.0, 680.0), ChartPoint::new(15.0, 800.0)],
+            ),
             (
                 DrawingToolType::Rect,
                 vec![pos2(100.0, 100.0), pos2(200.0, 300.0)],

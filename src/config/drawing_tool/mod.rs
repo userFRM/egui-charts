@@ -259,7 +259,7 @@ pub enum DrawingToolType {
     Comment,
     /// Price label: the anchor's price in a badge beside the point, with a pointer to it.
     PriceLabel,
-    /// Signpost marker with directional indicator.
+    /// Signpost: a label on a thin pole above or below its bar.
     Signpost,
     /// Flag/mark note at a specific chart location.
     FlagNote,

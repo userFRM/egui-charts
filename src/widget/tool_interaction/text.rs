@@ -41,7 +41,10 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
     // Tools whose first anchor is the point they annotate keep their text at the second.
     let label = usize::from(matches!(
         drawing.tool_type,
-        DrawingToolType::Callout | DrawingToolType::Note | DrawingToolType::PriceNote
+        DrawingToolType::Callout
+            | DrawingToolType::Note
+            | DrawingToolType::PriceNote
+            | DrawingToolType::Signpost
     ));
     let Some(mut pos) = drawing
         .points

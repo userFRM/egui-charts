@@ -228,8 +228,6 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
             table_cell_height: 22.0,
             table_header_height: 26.0,
             signpost_padding_x: 6.0,
-            signpost_padding_y: 4.0,
-            signpost_bracket: 12.0,
             text_padding_y: 5.0,
         },
         media: MediaSizingTokens {

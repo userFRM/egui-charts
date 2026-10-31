@@ -640,7 +640,7 @@ impl DrawingManager {
                 drawing.chart_points.pop();
             }
             drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
-            drawing.level_time_cycles();
+            drawing.align_second_anchor();
             if let Some(tool) = drawing
                 .custom_tool
                 .as_deref()
@@ -674,7 +674,7 @@ impl DrawingManager {
                 drawing.completed = false;
                 self.preview_point = true;
             }
-            drawing.level_time_cycles();
+            drawing.align_second_anchor();
         }
     }
 
@@ -954,41 +954,50 @@ mod tests {
         }
     }
 
+    /// The second anchor of Time cycles sets only the period, and a Signpost's only the label's
+    /// height, in the preview and when placed.
     #[test]
-    fn time_cycles_share_a_baseline_during_placement() {
-        for (preview, drag) in [(false, false), (true, false), (true, true)] {
-            let mut manager = DrawingManager::new();
-            let x_to_bar = |x: f32| x / 10.0;
-            let y_to_price = |y: f32| 1000.0 - f64::from(y);
-            manager.start_drawing_with_coords(
-                DrawingToolType::TimeCycles,
-                Pos2::new(100.0, 200.0),
-                x_to_bar,
-                y_to_price,
-            );
-            if preview {
-                for point in [Pos2::new(150.0, 100.0), Pos2::new(300.0, 250.0)] {
-                    manager.update_last_point_with_coords(point, x_to_bar, y_to_price);
-                    let drawing = manager.curr_drawing.as_ref().unwrap();
-                    assert_eq!(drawing.points[1], Pos2::new(point.x, 200.0));
-                    assert_eq!(drawing.chart_points[1].price, 800.0);
+    fn second_anchors_follow_the_first_during_placement() {
+        let same_price: fn(Pos2) -> Pos2 = |p| Pos2::new(p.x, 200.0);
+        let same_bar: fn(Pos2) -> Pos2 = |p| Pos2::new(100.0, p.y);
+        let chart = |p: Pos2| ChartPoint::new(p.x / 10.0, 1000.0 - f64::from(p.y));
+        for (tool, aligned) in [
+            (DrawingToolType::TimeCycles, same_price),
+            (DrawingToolType::Signpost, same_bar),
+        ] {
+            for (preview, drag) in [(false, false), (true, false), (true, true)] {
+                let mut manager = DrawingManager::new();
+                let x_to_bar = |x: f32| x / 10.0;
+                let y_to_price = |y: f32| 1000.0 - f64::from(y);
+                let start = Pos2::new(100.0, 200.0);
+                manager.start_drawing_with_coords(tool, start, x_to_bar, y_to_price);
+                if preview {
+                    for point in [Pos2::new(150.0, 100.0), Pos2::new(300.0, 250.0)] {
+                        manager.update_last_point_with_coords(point, x_to_bar, y_to_price);
+                        let drawing = manager.curr_drawing.as_ref().unwrap();
+                        assert_eq!(drawing.points[1], aligned(point), "{tool:?}");
+                        assert_eq!(drawing.chart_points[1], chart(aligned(point)), "{tool:?}");
+                    }
                 }
+                let end = Pos2::new(300.0, 250.0);
+                if drag {
+                    manager.complete_drag_drawing();
+                } else {
+                    manager.add_point_with_coords(end, x_to_bar, y_to_price);
+                }
+                assert_eq!(manager.drawings.len(), 1);
+                assert!(manager.is_selected(manager.drawings[0].id));
+                assert_eq!(
+                    manager.drawings[0].points,
+                    vec![start, aligned(end)],
+                    "{tool:?}"
+                );
+                assert_eq!(
+                    manager.drawings[0].chart_points,
+                    vec![chart(start), chart(aligned(end))],
+                    "{tool:?}"
+                );
             }
-            if drag {
-                manager.complete_drag_drawing();
-            } else {
-                manager.add_point_with_coords(Pos2::new(300.0, 250.0), x_to_bar, y_to_price);
-            }
-            assert_eq!(manager.drawings.len(), 1);
-            assert!(manager.is_selected(manager.drawings[0].id));
-            assert_eq!(
-                manager.drawings[0].points,
-                vec![Pos2::new(100.0, 200.0), Pos2::new(300.0, 200.0)]
-            );
-            assert_eq!(
-                manager.drawings[0].chart_points,
-                vec![ChartPoint::new(10.0, 800.0), ChartPoint::new(30.0, 800.0)]
-            );
         }
     }
 }
