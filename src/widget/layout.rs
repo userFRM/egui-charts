@@ -13,7 +13,9 @@ mod drawings;
 #[cfg(feature = "drawings")]
 use drawings::DrawingLinks;
 
-/// Multi-chart arrangement. Changing presets retains the host's hidden charts.
+/// Multi-chart arrangement. Changing presets retains the host's hidden charts. Charts fill a preset
+/// in slot order, row by row from the top; presets with a large chart at the left or right fill
+/// column by column from the left.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
 )]
@@ -27,12 +29,59 @@ pub enum ChartLayoutMode {
     TwoVertical,
     /// Three charts, with the last spanning the bottom row.
     Three,
+    /// Three columns.
+    ThreeHorizontal,
+    /// Three rows.
+    ThreeVertical,
+    /// One chart in the left half, two stacked in the right half.
+    ThreeLargeLeft,
+    /// Two charts stacked in the left half, one in the right half.
+    ThreeLargeRight,
+    /// One chart in the top half, two side by side in the bottom half; [`Three`](Self::Three) is
+    /// the reverse.
+    ThreeLargeTop,
     /// Two columns and two rows.
     Four,
+    /// Four columns.
+    FourHorizontal,
+    /// Four rows.
+    FourVertical,
+    /// One chart in the left half, three stacked in the right half.
+    FourLargeLeft,
+    /// Three charts stacked in the left half, one in the right half.
+    FourLargeRight,
+    /// One chart in the top half, three side by side in the bottom half.
+    FourLargeTop,
+    /// Three charts side by side in the top half, one in the bottom half.
+    FourLargeBottom,
     /// Five charts in three columns.
     Five,
+    /// Five columns.
+    FiveHorizontal,
+    /// Five rows.
+    FiveVertical,
+    /// One chart in the left half, four stacked in the right half.
+    FiveLargeLeft,
+    /// Four charts stacked in the left half, one in the right half.
+    FiveLargeRight,
+    /// One chart in the top half, four side by side in the bottom half.
+    FiveLargeTop,
+    /// Four charts side by side in the top half, one in the bottom half.
+    FiveLargeBottom,
     /// Three columns and two rows.
     Six,
+    /// Six columns.
+    SixHorizontal,
+    /// Six rows.
+    SixVertical,
+    /// One chart in the left half, five stacked in the right half.
+    SixLargeLeft,
+    /// Five charts stacked in the left half, one in the right half.
+    SixLargeRight,
+    /// One chart in the top half, five side by side in the bottom half.
+    SixLargeTop,
+    /// Five charts side by side in the top half, one in the bottom half.
+    SixLargeBottom,
     /// Seven charts in four columns.
     Seven,
     /// Four columns and two rows.
@@ -58,16 +107,39 @@ pub enum ChartLayoutMode {
 }
 
 impl ChartLayoutMode {
-    /// All selectable presets.
+    /// All selectable presets, by chart count.
     pub fn all() -> &'static [Self] {
         &[
             Self::Single,
             Self::TwoHorizontal,
             Self::TwoVertical,
             Self::Three,
+            Self::ThreeHorizontal,
+            Self::ThreeVertical,
+            Self::ThreeLargeLeft,
+            Self::ThreeLargeRight,
+            Self::ThreeLargeTop,
             Self::Four,
+            Self::FourHorizontal,
+            Self::FourVertical,
+            Self::FourLargeLeft,
+            Self::FourLargeRight,
+            Self::FourLargeTop,
+            Self::FourLargeBottom,
             Self::Five,
+            Self::FiveHorizontal,
+            Self::FiveVertical,
+            Self::FiveLargeLeft,
+            Self::FiveLargeRight,
+            Self::FiveLargeTop,
+            Self::FiveLargeBottom,
             Self::Six,
+            Self::SixHorizontal,
+            Self::SixVertical,
+            Self::SixLargeLeft,
+            Self::SixLargeRight,
+            Self::SixLargeTop,
+            Self::SixLargeBottom,
             Self::Seven,
             Self::Eight,
             Self::Nine,
@@ -82,16 +154,39 @@ impl ChartLayoutMode {
         ]
     }
 
-    /// Human-readable preset name.
+    /// Human-readable preset name, distinct for every preset.
     pub fn label(&self) -> &'static str {
         match self {
             Self::Single => "Single",
             Self::TwoHorizontal => "2 Horizontal",
             Self::TwoVertical => "2 Vertical",
-            Self::Three => "3 Charts",
+            Self::Three => "2 Top, 1 Bottom",
+            Self::ThreeHorizontal => "3 Horizontal",
+            Self::ThreeVertical => "3 Vertical",
+            Self::ThreeLargeLeft => "1 Left, 2 Right",
+            Self::ThreeLargeRight => "2 Left, 1 Right",
+            Self::ThreeLargeTop => "1 Top, 2 Bottom",
             Self::Four => "2x2 Grid",
-            Self::Five => "5 Charts",
+            Self::FourHorizontal => "4 Horizontal",
+            Self::FourVertical => "4 Vertical",
+            Self::FourLargeLeft => "1 Left, 3 Right",
+            Self::FourLargeRight => "3 Left, 1 Right",
+            Self::FourLargeTop => "1 Top, 3 Bottom",
+            Self::FourLargeBottom => "3 Top, 1 Bottom",
+            Self::Five => "3 Top, 2 Bottom",
+            Self::FiveHorizontal => "5 Horizontal",
+            Self::FiveVertical => "5 Vertical",
+            Self::FiveLargeLeft => "1 Left, 4 Right",
+            Self::FiveLargeRight => "4 Left, 1 Right",
+            Self::FiveLargeTop => "1 Top, 4 Bottom",
+            Self::FiveLargeBottom => "4 Top, 1 Bottom",
             Self::Six => "3x2 Grid",
+            Self::SixHorizontal => "6 Horizontal",
+            Self::SixVertical => "6 Vertical",
+            Self::SixLargeLeft => "1 Left, 5 Right",
+            Self::SixLargeRight => "5 Left, 1 Right",
+            Self::SixLargeTop => "1 Top, 5 Bottom",
+            Self::SixLargeBottom => "5 Top, 1 Bottom",
             Self::Seven => "7 Charts",
             Self::Eight => "4x2 Grid",
             Self::Nine => "3x3 Grid",
@@ -108,38 +203,66 @@ impl ChartLayoutMode {
 
     /// Number of charts in a preset; tabs can show up to sixteen supplied charts.
     pub fn chart_count(&self) -> usize {
-        match self {
-            Self::Single => 1,
-            Self::TwoHorizontal | Self::TwoVertical => 2,
-            Self::Three => 3,
-            Self::Four => 4,
-            Self::Five => 5,
-            Self::Six => 6,
-            Self::Seven => 7,
-            Self::Eight => 8,
-            Self::Nine => 9,
-            Self::Ten => 10,
-            Self::Eleven => 11,
-            Self::Twelve => 12,
-            Self::Thirteen => 13,
-            Self::Fourteen => 14,
-            Self::Fifteen => 15,
-            Self::Sixteen | Self::Tabs => 16,
+        if *self == Self::Tabs {
+            return 16;
+        }
+        let (Tracks::Rows(cells) | Tracks::Columns(cells)) = self.tracks();
+        cells.iter().sum()
+    }
+
+    /// Maximum columns and rows. A row or column with fewer cells than another stretches them to
+    /// fill it.
+    pub fn grid_size(&self) -> (usize, usize) {
+        match self.tracks() {
+            Tracks::Rows(cells) => (cells.iter().copied().max().unwrap_or(1), cells.len()),
+            Tracks::Columns(cells) => (cells.len(), cells.iter().copied().max().unwrap_or(1)),
         }
     }
 
-    /// Maximum columns and rows. An incomplete final row fills the available width.
-    pub fn grid_size(&self) -> (usize, usize) {
+    /// How the preset divides its rectangle. Tabs show one chart at a time in one cell.
+    fn tracks(&self) -> Tracks {
+        use Tracks::{Columns, Rows};
         match self {
-            Self::Single | Self::Tabs => (1, 1),
-            Self::TwoHorizontal => (2, 1),
-            Self::TwoVertical => (1, 2),
-            Self::Three | Self::Four => (2, 2),
-            Self::Five | Self::Six => (3, 2),
-            Self::Seven | Self::Eight => (4, 2),
-            Self::Nine => (3, 3),
-            Self::Ten | Self::Eleven | Self::Twelve => (4, 3),
-            _ => (4, 4),
+            Self::Single | Self::Tabs => Rows(&[1]),
+            Self::TwoHorizontal => Rows(&[2]),
+            Self::TwoVertical => Rows(&[1, 1]),
+            Self::Three => Rows(&[2, 1]),
+            Self::ThreeHorizontal => Rows(&[3]),
+            Self::ThreeVertical => Rows(&[1, 1, 1]),
+            Self::ThreeLargeLeft => Columns(&[1, 2]),
+            Self::ThreeLargeRight => Columns(&[2, 1]),
+            Self::ThreeLargeTop => Rows(&[1, 2]),
+            Self::Four => Rows(&[2, 2]),
+            Self::FourHorizontal => Rows(&[4]),
+            Self::FourVertical => Rows(&[1, 1, 1, 1]),
+            Self::FourLargeLeft => Columns(&[1, 3]),
+            Self::FourLargeRight => Columns(&[3, 1]),
+            Self::FourLargeTop => Rows(&[1, 3]),
+            Self::FourLargeBottom => Rows(&[3, 1]),
+            Self::Five => Rows(&[3, 2]),
+            Self::FiveHorizontal => Rows(&[5]),
+            Self::FiveVertical => Rows(&[1, 1, 1, 1, 1]),
+            Self::FiveLargeLeft => Columns(&[1, 4]),
+            Self::FiveLargeRight => Columns(&[4, 1]),
+            Self::FiveLargeTop => Rows(&[1, 4]),
+            Self::FiveLargeBottom => Rows(&[4, 1]),
+            Self::Six => Rows(&[3, 3]),
+            Self::SixHorizontal => Rows(&[6]),
+            Self::SixVertical => Rows(&[1, 1, 1, 1, 1, 1]),
+            Self::SixLargeLeft => Columns(&[1, 5]),
+            Self::SixLargeRight => Columns(&[5, 1]),
+            Self::SixLargeTop => Rows(&[1, 5]),
+            Self::SixLargeBottom => Rows(&[5, 1]),
+            Self::Seven => Rows(&[4, 3]),
+            Self::Eight => Rows(&[4, 4]),
+            Self::Nine => Rows(&[3, 3, 3]),
+            Self::Ten => Rows(&[4, 4, 2]),
+            Self::Eleven => Rows(&[4, 4, 3]),
+            Self::Twelve => Rows(&[4, 4, 4]),
+            Self::Thirteen => Rows(&[4, 4, 4, 1]),
+            Self::Fourteen => Rows(&[4, 4, 4, 2]),
+            Self::Fifteen => Rows(&[4, 4, 4, 3]),
+            Self::Sixteen => Rows(&[4, 4, 4, 4]),
         }
     }
 }
@@ -148,6 +271,13 @@ impl std::fmt::Display for ChartLayoutMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.label())
     }
+}
+
+/// The cells of a preset: rows from the top or columns from the left, each holding the given
+/// number of equal cells. Charts fill one row or column after the other.
+enum Tracks {
+    Rows(&'static [usize]),
+    Columns(&'static [usize]),
 }
 
 /// Independent synchronization switches within each layout group.
@@ -281,7 +411,7 @@ impl ChartLayout {
 
     /// Shows the preset and synchronizes its charts. Click or scroll a panel to activate it.
     /// Its corner menu offers detachment and named groups. The active border is painted
-    /// inside the chart; rows have a two-point gap and columns meet at their edge.
+    /// inside the chart; stacked charts have a two-point gap and side-by-side charts meet at their edge.
     /// Extra charts remain owned by the host and are not painted by a grid preset.
     pub fn show(&mut self, ui: &mut Ui, charts: &mut [&mut Chart]) -> Response {
         let total = charts.len().min(16);
@@ -605,25 +735,36 @@ impl ChartLayout {
                 .map(|index| if index == slot { rect } else { Rect::NOTHING })
                 .collect();
         }
-        let (columns, _) = self.mode.grid_size();
-        let columns = columns.min(count);
-        let rows = count.div_ceil(columns);
-        let height = ((rect.height() - 2.0 * (rows - 1) as f32) / rows as f32).max(0.0);
-        (0..count)
-            .map(|index| {
-                let row = index / columns;
-                let row_columns = columns.min(count - row * columns);
-                let width = rect.width() / row_columns as f32;
-                Rect::from_min_size(
-                    rect.min
-                        + Vec2::new(
-                            (index % columns) as f32 * width,
-                            row as f32 * (height + 2.0),
-                        ),
-                    Vec2::new(width, height),
-                )
+        let (by_rows, tracks) = match self.mode.tracks() {
+            Tracks::Rows(tracks) => (true, tracks),
+            Tracks::Columns(tracks) => (false, tracks),
+        };
+        // Fewer charts than the preset holds fill its first rows or columns; empty ones go.
+        let tracks: Vec<usize> = tracks
+            .iter()
+            .scan(count, |left, &cells| {
+                let cells = cells.min(*left);
+                *left -= cells;
+                (cells > 0).then_some(cells)
             })
-            .collect()
+            .collect();
+        let mut rects = Vec::with_capacity(count);
+        for (track, &cells) in tracks.iter().enumerate() {
+            for cell in 0..cells {
+                let (column, columns, row, rows) = if by_rows {
+                    (cell, cells, track, tracks.len())
+                } else {
+                    (track, tracks.len(), cell, cells)
+                };
+                let width = rect.width() / columns as f32;
+                let height = ((rect.height() - 2.0 * (rows - 1) as f32) / rows as f32).max(0.0);
+                rects.push(Rect::from_min_size(
+                    rect.min + Vec2::new(column as f32 * width, row as f32 * (height + 2.0)),
+                    Vec2::new(width, height),
+                ));
+            }
+        }
+        rects
     }
 }
 
@@ -666,7 +807,9 @@ mod tests {
     #[test]
     fn presets_preserve_chart_state_and_route_input_to_visible_slots() {
         let rect = Rect::from_min_size(pos2(54.0, 70.0), vec2(1386.0, 716.0));
+        let mut labels = std::collections::HashSet::new();
         for &mode in ChartLayoutMode::all() {
+            assert!(labels.insert(mode.label()), "{mode:?}");
             let layout = ChartLayout {
                 mode,
                 ..Default::default()
@@ -676,12 +819,14 @@ mod tests {
             if mode == ChartLayoutMode::Tabs {
                 continue;
             }
-            let (_, rows) = mode.grid_size();
             let area: f32 = rects.iter().map(Rect::area).sum();
-            assert!(
-                (area - rect.area() + 2.0 * (rows - 1) as f32 * rect.width()).abs() < 1.0,
-                "{mode:?}"
-            );
+            // Each cell above the bottom edge leaves a two-point gap below it.
+            let gaps: f32 = rects
+                .iter()
+                .filter(|cell| cell.bottom() < rect.bottom() - 1.0)
+                .map(|cell| 2.0 * cell.width())
+                .sum();
+            assert!((area + gaps - rect.area()).abs() < 1.0, "{mode:?}");
             for (index, cell) in rects.iter().enumerate() {
                 assert!(rect.contains_rect(*cell));
                 assert!(
@@ -695,7 +840,26 @@ mod tests {
                 assert_eq!(rects[2].top(), 429.0);
                 assert_eq!(rects[1].left(), 747.0);
             }
+            if mode == ChartLayoutMode::ThreeLargeLeft {
+                assert_eq!(
+                    rects,
+                    [
+                        Rect::from_min_size(rect.min, vec2(693.0, 716.0)),
+                        Rect::from_min_size(pos2(747.0, 70.0), vec2(693.0, 357.0)),
+                        Rect::from_min_size(pos2(747.0, 429.0), vec2(693.0, 357.0)),
+                    ]
+                );
+            }
         }
+        // Fewer charts than a preset holds fill its first rows, which share the full height.
+        let sixteen = ChartLayout {
+            mode: ChartLayoutMode::Sixteen,
+            ..Default::default()
+        };
+        assert_eq!(
+            sixteen.rects(rect, 6)[5],
+            Rect::from_min_size(pos2(747.0, 429.0), vec2(693.0, 357.0))
+        );
         let ctx = egui::Context::default();
         for width in [80.0, 240.0] {
             let clip = Rect::from_min_size(Pos2::ZERO, vec2(width, 600.0));
