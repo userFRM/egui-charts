@@ -1346,7 +1346,9 @@ mod tests {
             let tiers = super::super::ORDER_TIERS;
             assert!(sizes.iter().any(|&s| s >= tiers.large), "large: {sizes:?}");
             assert!(
-                sizes.iter().any(|&s| (tiers.notable..tiers.large).contains(&s)),
+                sizes
+                    .iter()
+                    .any(|&s| (tiers.notable..tiers.large).contains(&s)),
                 "notable: {sizes:?}"
             );
             for filter in [
