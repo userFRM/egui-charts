@@ -16,7 +16,7 @@
 //! Bars longer than a day, or of an interval that does not divide a day, cannot be split into
 //! the last 24 hours, so on those intervals the study requests lower-interval candles through
 //! [`Indicator::data_requests`]: one hour above a day, one minute below it and one second below
-//! a minute. Each bar then sums the candles that open in the 24 hours before the close of its
+//! a minute, or one second on an interval that is not a whole number of those. Each bar then sums the candles that open in the 24 hours before the close of its
 //! last candle: the bar's own close when trading runs to its end, and otherwise its last
 //! trading hours, so a weekly bar of a market closed at the weekend sums its last trading day.
 //! A bar without candles has no value. Until candles are supplied the study sums chart bars,
