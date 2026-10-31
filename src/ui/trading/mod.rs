@@ -21,13 +21,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::chart::TradingLineAction;
-use crate::data::FeedStatus;
 use crate::data::inbox::Inbox;
+use crate::data::{FeedError, FeedStatus};
 use crate::model::{
     Account, Capabilities, Instrument, Order, OrderPreview, OrderRequest, OrderSide, OrderType,
     Position, Quote, TradingRules,
 };
 use crate::services::{Broker, HistoryKind, Listener};
+use crate::ui::model::ConnectionState;
 use crate::widget::settings::TradingSettings;
 use format::Numbers;
 use ticket::{OrderTicket, order_quantity};
@@ -233,6 +234,17 @@ impl Trading {
         self.service.is_some()
     }
 
+    /// The connection status the account panel and the order ticket show while the broker
+    /// reports that it is not live; `None` while it is live, before it reports a status and
+    /// without a broker.
+    fn offline(&self) -> Option<ConnectionState> {
+        match self.connection {
+            Some(FeedStatus::Connecting) => Some(ConnectionState::Connecting),
+            Some(FeedStatus::Disconnected) => Some(ConnectionState::Disconnected),
+            Some(FeedStatus::Live) | None => None,
+        }
+    }
+
     fn connect(&mut self) {
         self.pending = None;
         self.preview = None;
@@ -306,9 +318,28 @@ impl Trading {
     }
 
     fn place(&self, request: OrderRequest) {
-        if let Some(service) = &self.service {
+        if let Some(service) = self.live_service() {
             service.place(request, self.inbox.reply(0));
         }
+    }
+
+    /// The broker to send an order, cancellation or change to: `None` without a broker, and
+    /// while the broker reports that it is not live, when nothing is sent and the next
+    /// [`poll`](Self::poll) reports the order, cancellation or change as refused.
+    fn live_service(&self) -> Option<Arc<dyn Broker>> {
+        let service = self.service.clone()?;
+        if self.is_connected() {
+            return Some(service);
+        }
+        self.refuse();
+        None
+    }
+
+    /// Reports an order, cancellation or change as refused because the broker is not live, the
+    /// way [`poll`](Self::poll) reports the broker's own refusals.
+    fn refuse(&self) {
+        let error = FeedError::Other("the broker is not connected".into());
+        self.inbox.reply::<()>(0).send(Err(error));
     }
 
     fn load_rules(&mut self, symbol: &str) {

@@ -225,7 +225,17 @@ impl Trading {
                     self.sound = Some(self.display.execution_sound.clone());
                 }
             }
-            AccountEvent::Status(status) => self.connection = Some(status),
+            AccountEvent::Status(status) => {
+                let was_connected = self.is_connected();
+                self.connection = Some(status);
+                if was_connected && !self.is_connected() {
+                    // Confirmed while the broker was live, these would be sent once their rules
+                    // arrive, after it is back: refuse them now instead.
+                    for _ in std::mem::take(&mut self.placing) {
+                        self.refuse();
+                    }
+                }
+            }
             _ => {}
         }
     }

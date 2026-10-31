@@ -5,6 +5,7 @@ use crate::chart::decimals;
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
+use crate::ui::connection_status::show_connection_status_with_label;
 use crate::ui::trading::widgets::{SECTION_TITLE_SIZE, hit, side_fill, side_name, text, track};
 use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
@@ -140,7 +141,8 @@ impl OrderTicket {
         action
     }
 
-    /// The symbol, the menu of presets and one-click trading, and the close button.
+    /// The symbol with the broker's status while it is not live, the menu of presets and
+    /// one-click trading, and the close button.
     fn header(
         &mut self,
         ui: &mut Ui,
@@ -155,6 +157,9 @@ impl OrderTicket {
                     .strong()
                     .size(SECTION_TITLE_SIZE),
             );
+            if let Some(state) = &market.offline {
+                show_connection_status_with_label(ui, state);
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if IconButton::new(&icons::CLOSE)
                     .icon_scale(1.0)
@@ -386,6 +391,7 @@ mod tests {
                     balance: None,
                     rules: &rules,
                     rules_ready: true,
+                    offline: None,
                     capabilities: Capabilities {
                         market: true,
                         limit: true,
@@ -497,6 +503,7 @@ mod tests {
             capabilities,
             rules: &rules,
             rules_ready: true,
+            offline: None,
             ladder: None,
             ladder_unavailable: None,
             highlights: Vec::new(),

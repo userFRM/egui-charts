@@ -186,6 +186,10 @@ pub(crate) struct Market<'a> {
     pub capabilities: Capabilities,
     pub rules: &'a TradingRules,
     pub rules_ready: bool,
+    /// The broker's status while it reports that it is not live, which the header shows; the
+    /// ticket sends nothing meanwhile. `None` while it is live, before it reports a status and
+    /// without a broker.
+    pub offline: Option<crate::ui::model::ConnectionState>,
     /// The sizes the depth ladder shows: the book summed over the orders the chart's order book
     /// view accepts.
     pub ladder: Option<std::borrow::Cow<'a, OrderBook>>,
@@ -479,6 +483,9 @@ impl OrderTicket {
 
     /// The order the ticket describes, or what is wrong with it.
     pub fn request(&self, market: &Market<'_>) -> Result<OrderRequest, String> {
+        if market.offline.is_some() {
+            return Err("Waiting for the broker to connect".into());
+        }
         if !market.rules_ready {
             return Err("Waiting for the symbol's trading rules".into());
         }
@@ -766,6 +773,7 @@ mod tests {
             capabilities,
             rules: &rules,
             rules_ready: true,
+            offline: None,
             ladder: None,
             ladder_unavailable: None,
             highlights: Vec::new(),
@@ -875,6 +883,7 @@ mod tests {
             capabilities,
             rules: &rules,
             rules_ready: true,
+            offline: None,
             ladder: None,
             ladder_unavailable: None,
             highlights: Vec::new(),

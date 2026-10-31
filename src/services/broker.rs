@@ -101,10 +101,11 @@ pub trait Broker: MaybeSend + 'static {
     /// A stream starts as connected. While the connection to the broker is not live, push
     /// [`AccountEvent::Status`] with [`FeedStatus::Connecting`] or [`FeedStatus::Disconnected`],
     /// on each new stream too, and [`FeedStatus::Live`] once it is live again; until then the
-    /// account panel marks the broker and the terminal reports it as not connected. A broker
-    /// that never pushes a status counts as connected. The terminal still sends the orders,
-    /// cancellations and changes the user confirms meanwhile: refuse with a
-    /// [`FeedError`](crate::data::FeedError) what cannot reach the broker.
+    /// account panel and the order ticket mark the broker and the terminal reports it as not
+    /// connected. A broker that never pushes a status counts as connected. Meanwhile the terminal
+    /// sends no order, cancellation or change: it reports the ones the user confirms as refused,
+    /// and a position order confirmed earlier that still waits for its trading rules too, and
+    /// sends none of them later.
     fn connect(&self, events: Events<AccountEvent>);
 
     /// Sends `order` to the broker. The terminal calls this only after the user confirmed the
