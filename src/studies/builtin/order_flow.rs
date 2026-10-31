@@ -581,6 +581,90 @@ mod tests {
         }
     }
 
+    /// Signed sizes give -1 then +24 on three-tick/range bars. A sell of eight
+    /// splits 4/4 on volume bars; a buy of sixteen splits 12/4 on delta bars.
+    #[test]
+    fn trade_intervals_allocate_every_fill_to_its_chart_bar() {
+        use OrderSide::{Buy, Sell};
+        let six = [
+            (1.0, Buy),
+            (2.0, Buy),
+            (4.0, Sell),
+            (8.0, Buy),
+            (16.0, Sell),
+            (32.0, Buy),
+        ];
+        let mut results = Vec::new();
+        let mut expected = Vec::new();
+        for (interval, fills, same_time, want) in [
+            ("3t", six.to_vec(), false, vec![-1.0, 23.0]),
+            ("2r", six.to_vec(), false, vec![-1.0, 23.0]),
+            (
+                "10v",
+                vec![(6.0, Buy), (8.0, Sell), (6.0, Buy)],
+                false,
+                vec![2.0, 4.0],
+            ),
+            (
+                "10delta",
+                vec![(6.0, Buy), (8.0, Sell), (16.0, Buy)],
+                false,
+                vec![10.0, 14.0],
+            ),
+            (
+                "1t",
+                six.to_vec(),
+                true,
+                vec![1.0, 3.0, -1.0, 7.0, -9.0, 23.0],
+            ),
+        ] {
+            let clock = BarClock::new(interval.parse().unwrap());
+            let ticks: Vec<_> = fills
+                .into_iter()
+                .enumerate()
+                .map(|(i, (size, side))| {
+                    let second = if same_time { 0 } else { i as i64 };
+                    Tick::new(
+                        start() + TimeDelta::seconds(second),
+                        100.0 + i as f64,
+                        size,
+                        Some(side),
+                    )
+                })
+                .collect();
+            let data =
+                crate::data::aggregate_trades_with_tick_size(&ticks, clock.clone(), Some(1.0))
+                    .unwrap();
+            let (size, filtered) = match interval {
+                "10v" => (8.0, vec![-4.0, -8.0]),
+                "10delta" => (16.0, vec![12.0, 16.0]),
+                "1t" => (8.0, vec![0.0, 0.0, 0.0, 8.0, 8.0, 8.0]),
+                _ => (8.0, vec![0.0, 8.0]),
+            };
+            for (min, max, want) in [(0.0, f64::MAX, want), (size, size, filtered)] {
+                let mut study = OrderFlowStudy::new(OrderFlowKind::FilteredCvd { min, max });
+                study.set_bar_clock(&clock);
+                let input = study.order_flow_inputs()[0].clone();
+                input.set_tick_size(Some(1.0));
+                for tick in &ticks {
+                    input.push_trade(&clock, tick);
+                }
+                study.calculate(&data);
+                results.push((
+                    interval,
+                    study.values().line(0).to_vec(),
+                    input.values().keys().copied().collect::<Vec<_>>(),
+                ));
+                expected.push((
+                    interval,
+                    want,
+                    data.iter().map(|bar| bar.time).collect::<Vec<_>>(),
+                ));
+            }
+        }
+        assert_eq!(results, expected);
+    }
+
     /// At 11,001 bars retention keeps bars 1,001..=11,000: 10,000 buys of one.
     /// A ten-bar sum first has a complete window at bar 1,010.
     #[test]

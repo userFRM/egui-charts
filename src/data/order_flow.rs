@@ -331,6 +331,7 @@ impl Distinct {
 
 struct State {
     source: Source,
+    trade_bars: super::inbox::TradeBars,
     bars: BTreeMap<DateTime<Utc>, ([f64; 3], u64)>,
     last: Option<DateTime<Utc>>,
     inside: Option<(f64, f64)>,
@@ -462,7 +463,7 @@ impl OrderFlowInput {
         };
     }
 
-    /// Sets the instrument tick size that footprint levels count in. A size that is not finite
+    /// Sets the instrument tick size that footprint levels and range intervals count in. A size that is not finite
     /// and positive counts as none, and a footprint source keeps nothing without one. Another
     /// size clears the footprint, whose levels no longer apply. Other sources only report it. The
     /// chart sets its instrument's when it connects the source and when it subscribes.
@@ -565,7 +566,9 @@ impl OrderFlowInput {
         let Source::Fixed(kind) = state.source else {
             return;
         };
-        let open = clock.bar_open(quote.ts);
+        let Some(open) = state.open(clock, quote.ts) else {
+            return;
+        };
         match kind {
             OrderFlowKind::Spread => {
                 let spread = (quote.ask - quote.bid) / tick_size;
@@ -599,88 +602,48 @@ impl OrderFlowInput {
     }
 
     /// Adds an execution already deduplicated by the host or chart's feed. A footprint source
-    /// adds it at its price level; a book source ignores it.
+    /// adds it at its price level; a book source ignores it. Fixed sources on tick, volume,
+    /// range and delta intervals use the same allocations as [`super::aggregate_trades`]. Push
+    /// every execution from the same grouping anchor as the chart, including into quote and
+    /// book size sources, so later updates belong to the current bar. Range intervals need
+    /// [`set_tick_size`](Self::set_tick_size) first. A split fill contributes only its allocated
+    /// size to each bar, with size filters tested against the original execution.
     pub fn push_trade(&self, clock: &BarClock, trade: &Tick) {
         if !trade.price.is_finite() || !trade.size.is_finite() || trade.size < 0.0 {
             return;
         }
         let mut state = self.state();
-        let open = clock.bar_open(trade.ts);
-        let kind = match state.source {
-            Source::Fixed(kind) => kind,
-            Source::Footprint => return state.push_footprint(clock, trade),
-            Source::Book(_) => return,
-        };
-        let row = match kind {
-            OrderFlowKind::TradeRate {
-                volume,
-                seconds,
-                instant,
-            } => {
-                let x = if volume { trade.size } else { 1.0 };
-                let rolling = state.window.push(trade.ts, [x, 0.0], seconds)[0]
-                    / seconds.clamp(1, 86400) as f64;
-                let fast = state.instant.push(trade.ts, [x, 0.0], instant)[0]
-                    / instant.clamp(1, 86400) as f64;
-                let total = state.bars.get(&open).map_or(0.0, |(v, _)| v[0]) + x;
-                [total, rolling, fast]
+        if matches!(state.source, Source::Footprint) {
+            return state.push_footprint(clock, trade);
+        }
+        if let Some(timeframe) = clock.timeframe().filter(|tf| tf.is_trade_based()) {
+            let tick_size = state.tick_size;
+            let Ok(parts) = state.trade_bars.push(timeframe, trade, tick_size) else {
+                return;
+            };
+            for (i, (bar, size)) in parts.into_iter().enumerate() {
+                state.add_trade(trade, bar.time, size, i == 0);
             }
-            OrderFlowKind::AggressorRate { seconds, instant } => {
-                let key = trade.aggressor_order_id;
-                let [bar, rolling, fast] = &mut state.distinct;
-                [
-                    bar.push(trade.ts, key, 1, Some(open)),
-                    rolling.push(trade.ts, key, seconds, None) / seconds.clamp(1, 86400) as f64,
-                    fast.push(trade.ts, key, instant, None) / instant.clamp(1, 86400) as f64,
-                ]
-            }
-            OrderFlowKind::LevelsExecuted { seconds, reversal } => {
-                let Some(side) = trade.side else { return };
-                let side = usize::from(side == OrderSide::Sell);
-                // Buyers lift offers upward and sellers hit bids downward.
-                let reversed = state.last_price[side].is_some_and(|last| {
-                    if side == 0 {
-                        trade.price < last
-                    } else {
-                        trade.price > last
-                    }
-                });
-                state.last_price[side] = Some(trade.price);
-                if reversal && reversed {
-                    state.distinct[side].restart();
-                }
-                let bar = (seconds == 0).then_some(open);
-                let mut levels = [f64::NAN; 2];
-                for (other, level) in levels.iter_mut().enumerate() {
-                    let key = (other == side).then(|| trade.price.to_bits());
-                    *level = state.distinct[other].push(trade.ts, key, seconds, bar);
-                }
-                [levels[0], levels[1], levels[0] + levels[1]]
-            }
-            OrderFlowKind::SizeDelta { ranges } => {
-                let mut row = state.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
-                for (sum, [min, max]) in row.iter_mut().zip(ranges) {
-                    *sum += signed_size(trade, min, max);
-                }
-                row
-            }
-            OrderFlowKind::FlowSum { .. } => {
-                let old = state.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
-                [
-                    old[0] + trade.size,
-                    old[1] + signed_size(trade, 0.0, f64::MAX),
-                    0.0,
-                ]
-            }
-            OrderFlowKind::FilteredCvd { min, max } => {
-                let old = state.bars.get(&open).map_or(0.0, |(v, _)| v[0]);
-                [old + signed_size(trade, min, max), 0.0, 0.0]
-            }
-            _ => return,
-        };
-        state.bars.insert(open, (row, 0));
-        let latest = state.last.map_or(trade.ts, |t| t.max(trade.ts));
-        state.finish(latest, open);
+        } else {
+            state.add_trade(trade, clock.bar_open(trade.ts), trade.size, true);
+        }
+    }
+
+    /// The sink has already validated and allocated this execution to its chart bars.
+    pub(crate) fn push_trade_part(
+        &self,
+        trade: &Tick,
+        open: DateTime<Utc>,
+        size: f64,
+        first: bool,
+    ) {
+        let mut state = self.state();
+        state.trade_bars.forming = Some(open);
+        state.add_trade(trade, open, size, first);
+    }
+
+    pub(crate) fn set_trade_bar(&self, open: DateTime<Utc>) {
+        self.state().trade_bars.forming = Some(open);
     }
 
     /// Expires rolling rates and movement during an idle part of a bar with stream data.
@@ -690,7 +653,9 @@ impl OrderFlowInput {
         if state.last.is_some_and(|t| now < t) {
             return;
         }
-        let open = clock.bar_open(now);
+        let Some(open) = state.open(clock, now) else {
+            return;
+        };
         let Some((row, _)) = state.bars.get(&open) else {
             return;
         };
@@ -800,16 +765,26 @@ impl OrderFlowInput {
     ) {
         let mut state = self.state();
         let replay = cutoff.map(|cutoff| {
-            let open = clock.bar_open(cutoff);
+            let trade_based = clock.timeframe().is_some_and(|tf| tf.is_trade_based());
+            let open = if trade_based {
+                state
+                    .bars
+                    .range(..=cutoff)
+                    .next_back()
+                    .map_or(cutoff, |(open, _)| *open)
+            } else {
+                clock.bar_open(cutoff)
+            };
             // shortcut: one scan of the store per input per seek; index the store by time if
             // replay playback profiles show it.
             let held = trades
                 .filter(|trades| {
-                    (trades.lost_until()).is_none_or(|lost| clock.bar_open(lost) < open)
+                    (trades.lost_until())
+                        .is_none_or(|lost| !trade_based && clock.bar_open(lost) < open)
                 })
                 .into_iter()
                 .flat_map(|trades| trades.iter())
-                .filter(|trade| open <= trade.ts && trade.ts < cutoff);
+                .filter(|trade| (trade_based || open <= trade.ts) && trade.ts < cutoff);
             let mut replay = Replay {
                 cutoff,
                 open,
@@ -824,6 +799,7 @@ impl OrderFlowInput {
                     | OrderFlowKind::FilteredCvd { .. }),
                 ) => {
                     let part = OrderFlowInput::new(kind);
+                    part.set_tick_size(state.tick_size);
                     held.for_each(|trade| part.push_trade(clock, trade));
                     replay.row = part.state().bars.get(&open).map(|(row, _)| *row);
                 }
@@ -910,28 +886,132 @@ impl OrderFlowInput {
             }
             row = [sizes[0], sizes[1], sizes[0] - sizes[1]];
         }
-        state.bars.insert(clock.bar_open(time), (row, 0));
-        state.finish(time, clock.bar_open(time));
+        let Some(open) = state.open(clock, time) else {
+            return;
+        };
+        state.bars.insert(open, (row, 0));
+        state.finish(time, open);
     }
 }
 
 /// The execution's size, negative for a sell, when it is classified and its size lies in
 /// `min..=max`; zero otherwise.
-fn signed_size(trade: &Tick, min: f64, max: f64) -> f64 {
+fn signed_size(trade: &Tick, min: f64, max: f64, size: f64) -> f64 {
     if !(min..=max).contains(&trade.size) {
         return 0.0;
     }
     match trade.side {
-        Some(OrderSide::Buy) => trade.size,
-        Some(OrderSide::Sell) => -trade.size,
+        Some(OrderSide::Buy) => size,
+        Some(OrderSide::Sell) => -size,
         None => 0.0,
     }
 }
 
 impl State {
+    fn open(&self, clock: &BarClock, time: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+            self.trade_bars.forming
+        } else {
+            Some(clock.bar_open(time))
+        }
+    }
+
+    fn add_trade(&mut self, trade: &Tick, open: DateTime<Utc>, size: f64, first: bool) {
+        let Source::Fixed(kind) = self.source else {
+            return;
+        };
+        let row = match kind {
+            OrderFlowKind::TradeRate {
+                volume,
+                seconds,
+                instant,
+            } => {
+                let x = if volume { size } else { 1.0 };
+                let event = if first {
+                    if volume { trade.size } else { 1.0 }
+                } else {
+                    0.0
+                };
+                let rolling = self.window.push(trade.ts, [event, 0.0], seconds)[0]
+                    / seconds.clamp(1, 86400) as f64;
+                let fast = self.instant.push(trade.ts, [event, 0.0], instant)[0]
+                    / instant.clamp(1, 86400) as f64;
+                let total = self.bars.get(&open).map_or(0.0, |(v, _)| v[0]) + x;
+                [total, rolling, fast]
+            }
+            OrderFlowKind::AggressorRate { seconds, instant } => {
+                let key = trade.aggressor_order_id;
+                let [bar, rolling, fast] = &mut self.distinct;
+                [
+                    bar.push(trade.ts.max(open), key, 1, Some(open)),
+                    rolling.push(trade.ts, key.filter(|_| first), seconds, None)
+                        / seconds.clamp(1, 86400) as f64,
+                    fast.push(trade.ts, key.filter(|_| first), instant, None)
+                        / instant.clamp(1, 86400) as f64,
+                ]
+            }
+            OrderFlowKind::LevelsExecuted { seconds, reversal } => {
+                let Some(side) = trade.side else { return };
+                let side = usize::from(side == OrderSide::Sell);
+                // Buyers lift offers upward and sellers hit bids downward.
+                let reversed = self.last_price[side].is_some_and(|last| {
+                    if side == 0 {
+                        trade.price < last
+                    } else {
+                        trade.price > last
+                    }
+                });
+                self.last_price[side] = Some(trade.price);
+                if reversal && reversed {
+                    self.distinct[side].restart();
+                }
+                let bar = (seconds == 0).then_some(open);
+                let mut levels = [f64::NAN; 2];
+                for (other, level) in levels.iter_mut().enumerate() {
+                    let key = (other == side).then(|| trade.price.to_bits());
+                    *level = self.distinct[other].push(
+                        if seconds == 0 {
+                            trade.ts.max(open)
+                        } else {
+                            trade.ts
+                        },
+                        key,
+                        seconds,
+                        bar,
+                    );
+                }
+                [levels[0], levels[1], levels[0] + levels[1]]
+            }
+            OrderFlowKind::SizeDelta { ranges } => {
+                let mut row = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
+                for (sum, [min, max]) in row.iter_mut().zip(ranges) {
+                    *sum += signed_size(trade, min, max, size);
+                }
+                row
+            }
+            OrderFlowKind::FlowSum { .. } => {
+                let old = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
+                [
+                    old[0] + size,
+                    old[1] + signed_size(trade, 0.0, f64::MAX, size),
+                    0.0,
+                ]
+            }
+            OrderFlowKind::FilteredCvd { min, max } => {
+                let old = self.bars.get(&open).map_or(0.0, |(v, _)| v[0]);
+                [old + signed_size(trade, min, max, size), 0.0, 0.0]
+            }
+            _ => return,
+        };
+        self.bars.insert(open, (row, 0));
+        let latest = self.last.map_or(trade.ts, |t| t.max(trade.ts));
+        self.finish(latest, open);
+    }
+
     fn new(source: Source) -> Self {
         Self {
             source,
+            trade_bars: super::inbox::TradeBars::default(),
             bars: BTreeMap::new(),
             last: None,
             inside: None,
@@ -1182,6 +1262,79 @@ mod tests {
                 assert_eq!(row, [0.0; 3]);
             }
         }
+    }
+
+    /// Quotes and books between fills belong to the current three-tick bar, even when
+    /// the feed sends the entire burst before the chart drains it.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn trade_bar_streams_share_the_sinks_allocation_before_drain() {
+        let clock = BarClock::new("3t".parse().unwrap());
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let inbox = Arc::new(super::super::inbox::Inbox::default());
+        let sink = inbox.subscribe("A".into(), clock.clone(), 100, Some(1.0));
+        let spread = OrderFlowInput::new(OrderFlowKind::Spread);
+        let book = OrderFlowInput::new(OrderFlowKind::BookSize {
+            levels: 1,
+            distance: 0.0,
+        });
+        let flow = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+        inbox.study_inputs(sink.id, vec![spread.clone(), book.clone()]);
+        for second in 0..6 {
+            if second == 2 {
+                inbox.study_inputs(sink.id, vec![spread.clone(), book.clone(), flow.clone()]);
+            }
+            let at = start + TimeDelta::seconds(second);
+            sink.push_tick(Tick::new(at, 100.0, 1.0, Some(OrderSide::Buy)));
+            sink.push_quote(Level1Quote {
+                ts: at + TimeDelta::milliseconds(100),
+                symbol: "A".into(),
+                bid: 99.0,
+                ask: 101.0 + second as f64,
+                bid_size: 1.0,
+                ask_size: 1.0,
+            });
+            sink.push_depth_snapshot(
+                second as u64,
+                OrderBook {
+                    ts: at + TimeDelta::milliseconds(200),
+                    symbol: "A".into(),
+                    bids: vec![OrderBookLevel {
+                        price: 99.0,
+                        size: second as f64 + 1.0,
+                        order_cnt: None,
+                    }],
+                    asks: vec![],
+                },
+            );
+        }
+        let opens = [start, start + TimeDelta::seconds(3)];
+        let got: Vec<_> = [&spread, &book, &flow]
+            .iter()
+            .map(|input| input.values().into_iter().collect::<Vec<_>>())
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                vec![(opens[0], [4.0, 3.0, 4.0]), (opens[1], [7.0, 6.0, 7.0])],
+                vec![(opens[0], [3.0, 0.0, 3.0]), (opens[1], [6.0, 0.0, 6.0])],
+                vec![(opens[0], [3.0, 3.0, 0.0]), (opens[1], [3.0, 3.0, 0.0])],
+            ]
+        );
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        let cutoff = start + TimeDelta::seconds(2);
+        for input in [&spread, &book, &flow] {
+            input.set_replay(&clock, Some(cutoff), Some(&updates.trades));
+        }
+        assert_eq!(flow.values(), BTreeMap::from([(start, [2.0, 2.0, 0.0])]));
+        assert!(
+            spread.values().is_empty(),
+            "past quotes cannot be reconstructed"
+        );
+        assert!(
+            book.values().is_empty(),
+            "past depth cannot be reconstructed"
+        );
     }
 
     /// Hand counts: ids 7 and 8 fill in the first minute (7 twice, an unidentified fill
