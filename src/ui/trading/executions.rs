@@ -70,7 +70,6 @@ pub(super) fn show(
     let mapping = chart.get_chart_mapping();
     let theme = ui.ctx().active_theme();
     let painter = ui.painter().with_clip_rect(mapping.rect);
-    let width = |lines: &[Arc<Galley>]| lines.iter().map(|l| l.size().x).fold(0.0, f32::max);
     let (mut text_rects, mut texts): (Vec<Rect>, Vec<(Rect, Arc<Galley>)>) = Default::default();
     // Newest first, so that where labels crowd each other the newer ones keep their text.
     for run in placed
@@ -142,7 +141,8 @@ pub(super) fn show(
         if !lines.is_empty() {
             let height: f32 = lines.iter().map(|line| line.size().y).sum::<f32>()
                 + (lines.len() - 1) as f32 * GAP / 2.0;
-            let size = egui::vec2(width(&lines), height);
+            let width = lines.iter().map(|line| line.size().x).fold(0.0, f32::max);
+            let size = egui::vec2(width, height);
             let top = if down > 0.0 {
                 rect.bottom() + GAP
             } else {
