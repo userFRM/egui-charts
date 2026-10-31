@@ -140,10 +140,10 @@ impl ProfileStudy {
             values: IndicatorValues::new(),
             colors: vec![
                 Color32::from_rgb(41, 98, 255),
-                Color32::from_rgba_unmultiplied(0, 188, 212, 110),
-                Color32::from_rgba_unmultiplied(233, 30, 99, 110),
-                Color32::from_rgba_unmultiplied(0, 188, 212, 163),
-                Color32::from_rgba_unmultiplied(233, 30, 99, 163),
+                Color32::from_rgba_unmultiplied(51, 74, 212, 89),
+                Color32::from_rgba_unmultiplied(214, 140, 35, 89),
+                Color32::from_rgb(51, 74, 212),
+                Color32::from_rgb(214, 140, 35),
             ],
             visible: true,
         }
@@ -1191,16 +1191,12 @@ mod rendering_tests {
                 &coords,
             );
         });
-        let poc = output.shapes.iter().any(|shape| {
-            matches!(&shape.shape,
-            egui::Shape::Text(t) if t.galley.text() == "POC")
-        });
         let rows = output
             .shapes
             .iter()
             .filter(|shape| {
                 matches!(&shape.shape,
-            egui::Shape::Rect(r) if (r.rect.height() - 49.0).abs() < 0.01)
+            egui::Shape::Rect(r) if (r.rect.height() - 48.0).abs() < 0.01)
             })
             .count();
         // The rows are estimated from the bar, as noted at the top left of the
@@ -1215,7 +1211,7 @@ mod rendering_tests {
             .collect();
         output.drop_without_applying_deltas();
         assert_eq!(notes, [egui::pos2(283.0, 50.0)]);
-        assert!(poc && rows >= 2, "profile rows {rows}, POC {poc}");
+        assert!(rows >= 2, "profile rows {rows}");
         // Equal row volumes put the POC at y=125; its line extends past the row fill.
         for (x, y, expected) in [
             (395.0, 125.0, true),

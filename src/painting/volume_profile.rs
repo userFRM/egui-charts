@@ -4,10 +4,10 @@ use crate::data::{ProfileDisplay, ProfileSource, VolumeProfile, VolumeProfileCon
 use crate::styles::{stroke, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
+use egui::{Color32, Pos2, Rect, Stroke};
 use std::ops::Range;
 
-/// Studies retain their boxed presentation; drawings leave the measured candles visible.
+/// Studies show their rows alone; drawings tint their span and leave the measured candles visible.
 pub(crate) enum ProfileStyle {
     Study {
         right_aligned: bool,
@@ -65,7 +65,7 @@ pub(crate) fn paint_profile(
         // Ordered on screen: the upper row edge is lower down on an inverted scale.
         let (upper, lower) = (y_at_row(row + 1), y_at_row(row));
         let (top, bottom) = (upper.min(lower), upper.max(lower));
-        let gap = ((bottom - top) * 0.5).min(1.0);
+        let gap = ((bottom - top) * 0.5).min(if drawing { 1.0 } else { 2.0 });
         let width = (volume / max_volume) as f32 * max_width;
 
         let in_value_area = (va_low..=va_high).contains(&row);
@@ -152,18 +152,7 @@ pub(crate) fn paint_profile(
         config.show_value_area_lines,
         drawing,
     );
-    if !drawing {
-        painter.rect_stroke(
-            rect,
-            0.0,
-            Stroke::new(
-                stroke::HAIRLINE,
-                Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
-            ),
-            StrokeKind::Outside,
-        );
-    }
-    // A study box often starts at the pane's left edge, under the chart legend, so a study whose
+    // A study's span often starts at the pane's left edge, under the chart legend, so a study whose
     // rows start at the left notes its source at the right.
     let note_right = !drawing && !right_aligned;
     paint_source_note(painter, profile.source(), rect, note_right, color);
@@ -171,7 +160,7 @@ pub(crate) fn paint_profile(
 
 /// Notes at the top of `rect`, in the colour of the value area lines, a profile that does not hold
 /// every execution of its span, when the note fits inside `rect`. It takes the left corner, or
-/// with `right` the room left of the POC badge and the value area labels.
+/// with `right` the room left of the value area labels.
 fn paint_source_note(
     painter: &egui::Painter,
     source: ProfileSource,
@@ -218,7 +207,11 @@ fn draw_volume_profile_lines(
     let theme = painter.ctx().active_theme();
     let font = egui::FontId::proportional(theme.text.tiny);
 
-    let poc_color = theme.ui.text;
+    let poc_color = if drawing {
+        theme.ui.text
+    } else {
+        Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3])
+    };
     painter.add(egui::Shape::line(
         vec![Pos2::new(rect.min.x, poc_y), Pos2::new(rect.max.x, poc_y)],
         Stroke::new(
@@ -239,24 +232,7 @@ fn draw_volume_profile_lines(
             Stroke::new(stroke::HAIRLINE, va_color),
         );
     }
-    if rect.width() < 50.0 {
-        return;
-    }
-
-    if !drawing {
-        let poc_bg =
-            Rect::from_center_size(Pos2::new(rect.max.x - 25.0, poc_y), egui::vec2(40.0, 14.0));
-        painter.rect_filled(poc_bg, DESIGN_TOKENS.rounding.sm, poc_color);
-        painter.text(
-            poc_bg.center(),
-            egui::Align2::CENTER_CENTER,
-            "POC",
-            font.clone(),
-            theme.chart.bg,
-        );
-    }
-
-    if !show_value_area_lines {
+    if rect.width() < 50.0 || !show_value_area_lines {
         return;
     }
 
@@ -276,11 +252,90 @@ fn draw_volume_profile_lines(
 
 #[cfg(all(test, feature = "drawings"))]
 mod tests {
+    use super::{ProfileStyle, paint_profile};
+    use crate::data::{ProfileDisplay, VolumeProfile, VolumeProfileConfig};
     use crate::drawings::domain::ChartPoint;
     use crate::drawings::{Drawing, DrawingToolType};
     use crate::model::{Bar, BarData};
+    use crate::theme::ThemeExt;
     use chrono::{TimeZone, Utc};
-    use egui::{Context, Pos2, RawInput, Rect, Shape};
+    use egui::{Color32, Context, Pos2, RawInput, Rect, Shape, Stroke};
+
+    /// A study's rows alone show its extent, 2 px apart, with its point of control a 1 px line in
+    /// the profile's colour and no label. A drawing keeps 1 px gaps and its stronger line.
+    #[test]
+    fn studies_mark_the_point_of_control_without_a_box_or_label() {
+        let bars = [Bar::new(
+            Utc.timestamp_opt(0, 0).unwrap(),
+            100.0,
+            110.0,
+            100.0,
+            110.0,
+            1.0,
+        )];
+        let mut config = VolumeProfileConfig::new(10, 0.7).unwrap();
+        config.display = ProfileDisplay::UpDown;
+        let profile = VolumeProfile::from_bars(&bars, config).unwrap();
+        let color = [51, 74, 212, 255];
+        let tone = Color32::from_rgb(51, 74, 212);
+        // (a drawing, gap between rows, width of the point of control line)
+        for (drawing, row_gap, poc_width) in [(false, 2.0, 1.0), (true, 1.0, 2.0)] {
+            let ctx = Context::default();
+            let text = ctx.active_theme().ui.text;
+            let output = ctx.run_ui(RawInput::default(), |ui| {
+                paint_profile(
+                    ui.painter(),
+                    &profile,
+                    config,
+                    color,
+                    0.0..300.0,
+                    if drawing {
+                        ProfileStyle::Drawing { anchored: false }
+                    } else {
+                        ProfileStyle::Study {
+                            right_aligned: false,
+                        }
+                    },
+                    &|price| (price - 100.0) as f32 * 10.0,
+                );
+            });
+            let rows = output.shapes.iter().find_map(|s| match &s.shape {
+                Shape::Rect(row)
+                    if row.fill
+                        == Color32::from_rgba_unmultiplied(
+                            config.up_color[0],
+                            config.up_color[1],
+                            config.up_color[2],
+                            config.up_color[3],
+                        ) =>
+                {
+                    Some(row.rect.height())
+                }
+                _ => None,
+            });
+            assert_eq!(rows, Some(10.0 - row_gap));
+            assert!(output.shapes.iter().all(|s| match &s.shape {
+                Shape::Rect(rect) => rect.stroke == Stroke::NONE,
+                Shape::Text(label) => label.galley.text() != "POC",
+                _ => true,
+            }));
+            let poc: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Path(line) => Some(line.stroke.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(poc.len(), 1);
+            assert_eq!(poc[0].width, poc_width);
+            assert_eq!(
+                poc[0].color,
+                egui::epaint::ColorMode::Solid(if drawing { text } else { tone })
+            );
+            output.drop_without_applying_deltas();
+        }
+    }
 
     /// Guards the frame cost of an anchored volume profile restored from saved drawings with its
     /// anchor 200,000 bars before the view: it paints a bounded number of shapes, not one per
