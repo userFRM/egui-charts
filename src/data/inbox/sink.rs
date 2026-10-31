@@ -684,7 +684,7 @@ impl Live {
         }
         // The orders a filtered history samples, summed and the largest at each price, as they
         // stood before this update, only when the update opens a period.
-        let (mut filtered, mut largest);
+        let (mut summed_book, mut largest_book);
         let (book, largest) = match &sampler.config.orders {
             Some(filter) if sampler.due(ts) => {
                 let levels = self.orders.as_ref().and_then(|queue| {
@@ -695,11 +695,11 @@ impl Live {
                     sampler.lose();
                     return;
                 };
-                filtered = Book::new(self.tick_size);
-                largest = Book::new(self.tick_size);
-                let _ = filtered.snapshot(0, summed);
-                let _ = largest.snapshot(0, sizes);
-                (&filtered, Some(&largest))
+                summed_book = Book::new(self.tick_size);
+                largest_book = Book::new(self.tick_size);
+                let _ = summed_book.snapshot(0, summed);
+                let _ = largest_book.snapshot(0, sizes);
+                (&summed_book, Some(&largest_book))
             }
             _ => (&self.book, None),
         };
