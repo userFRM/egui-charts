@@ -166,7 +166,7 @@ impl Trading {
                     }
                 }
             }
-            Some(Action::Confirm(change)) => self.pending = Some(change),
+            Some(Action::Confirm(change)) => self.pending = Some(*change),
             None => {}
         }
     }
@@ -189,6 +189,7 @@ impl Trading {
             reverse: display.reverse_button && capabilities.reverse,
             take_profit: capabilities.limit,
             stop_loss: capabilities.stop,
+            order_exits: capabilities.brackets && capabilities.modify,
             pnl: display.position_pnl.then_some(display.position_pnl_unit),
             bracket_pnl: display.bracket_pnl.then_some(display.bracket_pnl_unit),
             last_price: last,
@@ -419,6 +420,7 @@ impl Trading {
                 reverse: false,
                 take_profit: false,
                 stop_loss: false,
+                order_exits: self.capabilities().brackets,
                 pnl: None,
                 bracket_pnl: self
                     .display
@@ -596,6 +598,13 @@ fn describe(
         if let Some(take_profit) = request.take_profit {
             text += &format!(", take profit {}", price(take_profit));
         }
+        for level in &request.take_profit_levels {
+            text += &format!(
+                ", take profit {} for {}",
+                price(level.price),
+                level.quantity
+            );
+        }
         if let Some(stop_loss) = request.stop_loss {
             text += &format!(", stop loss {}", price(stop_loss));
         }
@@ -652,7 +661,7 @@ fn describe(
 mod tests {
     use super::*;
     use crate::data::FeedError;
-    use crate::model::{Account, Capabilities, Instrument, OrderPreview};
+    use crate::model::{Account, Capabilities, Instrument, OrderPreview, TakeProfitLevel};
     use crate::services::AccountEvent;
     use crate::ui::trading::TradingFormatter;
     use crate::ui::trading::tests::Recorder;
@@ -721,7 +730,7 @@ mod tests {
         let mut changed = order.request.clone();
         changed.order_type = OrderType::Limit(96.0);
         let action = TradingLineAction::Modify(order, changed);
-        trading.perform(Some(Action::Confirm(action.clone())));
+        trading.perform(Some(Action::Confirm(Box::new(action.clone()))));
         let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
         chart.symbol = "SYM".into();
         ctx.run_ui(Default::default(), |ui| {
@@ -744,20 +753,39 @@ mod tests {
                 .flat_map(|width| [Left, Center, Right].map(|alignment| (width, alignment)))
             {
                 for instant in [false, true] {
-                    for (operation, edge, handle) in [
-                        ("Cancel order", false, false),
-                        ("Modify order", false, false),
-                        ("Modify order", false, true),
-                        ("Modify order", true, false),
-                        ("Close position", false, false),
-                        ("Reverse position", false, false),
-                        ("Place take profit", false, false),
-                        ("Place stop loss", false, false),
+                    for (operation, edge, handle, gesture) in [
+                        ("Cancel order", false, false, ""),
+                        ("Modify order", false, false, ""),
+                        ("Modify order", false, true, ""),
+                        ("Modify order", true, false, ""),
+                        ("Close position", false, false, ""),
+                        ("Reverse position", false, false, ""),
+                        ("Place take profit", false, false, ""),
+                        ("Place stop loss", false, false, ""),
+                        ("Modify order", false, false, "levels entry"),
+                        ("Modify order", false, true, "levels drag"),
+                        ("Modify order", false, false, "levels remove"),
+                        ("Modify order", false, false, "add TP"),
+                        ("Modify order", false, false, "add SL"),
                     ] {
+                        // The gestures behave alike in both themes; one keeps the test's time down.
+                        if !gesture.is_empty() && theme != Theme::light() {
+                            continue;
+                        }
                         let mut request =
                             OrderRequest::new("SYM", OrderSide::Sell, 1.0, OrderType::Limit(105.0));
-                        request.take_profit = Some(102.0);
-                        request.stop_loss = Some(108.0);
+                        let add = gesture.starts_with("add");
+                        if gesture.starts_with("levels") {
+                            request.take_profit_levels = vec![
+                                TakeProfitLevel::new(102.0, 0.5),
+                                TakeProfitLevel::new(101.0, 0.5),
+                            ];
+                        } else if !add {
+                            request.take_profit = Some(102.0);
+                        }
+                        if !add {
+                            request.stop_loss = Some(108.0);
+                        }
                         let order = Order::new(OrderId::new("7"), request, OrderStatus::Working);
                         let position = Position::new("SYM", -2.0, 100.0);
                         let broker = Arc::new(Recorder {
@@ -765,6 +793,7 @@ mod tests {
                                 AccountEvent::Order(order.clone()),
                                 AccountEvent::Position(position.clone()),
                             ],
+                            brackets: true,
                             ..Recorder::default()
                         });
                         let mut trading = Trading::default();
@@ -850,11 +879,15 @@ mod tests {
                                 .any(|(_, color)| *color == theme.chart.candle_down)
                         );
                         let mapping = chart.get_chart_mapping();
-                        let y = mapping.price_to_y(if operation.ends_with("order") {
-                            105.0
-                        } else {
-                            100.0
-                        });
+                        let y = mapping.price_to_y(
+                            if matches!(gesture, "levels drag" | "levels remove") {
+                                101.0
+                            } else if operation.ends_with("order") {
+                                105.0
+                            } else {
+                                100.0
+                            },
+                        );
                         // Hovering the label shows the reverse button.
                         let texts = frame(&mut trading, &mut chart, vec![]);
                         let right = texts
@@ -873,7 +906,26 @@ mod tests {
                             vec![egui::Event::PointerMoved(close)],
                         );
                         let take_profit = find(texts.clone(), "TP").expect("a TP button");
+                        // The position has its own buttons on another row.
+                        let on_row = |wanted: &str| {
+                            texts
+                                .iter()
+                                .find(|(text, rect)| {
+                                    text == wanted && (rect.center().y - y).abs() < 2.0
+                                })
+                                .map(|(_, rect)| rect.center().x)
+                        };
+                        if gesture.is_empty() && operation.ends_with("order") {
+                            assert_eq!(
+                                (on_row("TP"), on_row("SL")),
+                                (None, None),
+                                "an order with both exits offers no button"
+                            );
+                        }
                         let x = match operation {
+                            _ if gesture == "levels remove" => close.x,
+                            _ if gesture == "add TP" => on_row("TP").expect("the order's TP"),
+                            _ if gesture == "add SL" => on_row("SL").expect("the order's SL"),
                             "Modify order" if handle => mapping.rect.right() - 42.0,
                             "Modify order" => find(texts.clone(), "Limit").unwrap().center().x,
                             "Place take profit" => take_profit.center().x,
@@ -898,6 +950,14 @@ mod tests {
                         frame(&mut trading, &mut chart, vec![click(start, true)]);
                         let end = if edge {
                             egui::pos2(x, mapping.rect.top())
+                        } else if gesture == "levels remove" {
+                            start
+                        } else if gesture == "levels drag" {
+                            egui::pos2(x, mapping.price_to_y(100.5))
+                        } else if gesture == "add TP" {
+                            egui::pos2(x, mapping.price_to_y(101.5))
+                        } else if gesture == "add SL" {
+                            egui::pos2(x, mapping.price_to_y(108.5))
                         } else if operation == "Modify order" {
                             egui::pos2(x, mapping.price_to_y(103.07))
                         } else if operation == "Place take profit" {
@@ -922,7 +982,8 @@ mod tests {
                             assert!(broker.placed.lock().unwrap().is_empty());
                             assert!(broker.cancelled.lock().unwrap().is_empty());
                             assert!(broker.modified.lock().unwrap().is_empty());
-                            if operation == "Modify order" && !edge && !handle {
+                            if operation == "Modify order" && !edge && !handle && gesture.is_empty()
+                            {
                                 let discard =
                                     find(frame(&mut trading, &mut chart, vec![]), "Discard")
                                         .unwrap()
@@ -984,9 +1045,30 @@ mod tests {
                                 } else {
                                     (103.07, 100.07, 106.07)
                                 };
-                                assert_eq!(changed[0].1.order_type, OrderType::Limit(price));
-                                assert_eq!(changed[0].1.take_profit, Some(take_profit));
-                                assert_eq!(changed[0].1.stop_loss, Some(stop_loss));
+                                let mut expected = order.request.clone();
+                                match gesture {
+                                    "levels entry" => {
+                                        expected.order_type = OrderType::Limit(price);
+                                        expected.take_profit_levels = vec![
+                                            TakeProfitLevel::new(100.07, 0.5),
+                                            TakeProfitLevel::new(99.07, 0.5),
+                                        ];
+                                        expected.stop_loss = Some(stop_loss);
+                                    }
+                                    "levels drag" => expected.take_profit_levels[1].price = 100.5,
+                                    "levels remove" => {
+                                        expected.take_profit = Some(102.0);
+                                        expected.take_profit_levels.clear();
+                                    }
+                                    "add TP" => expected.take_profit = Some(101.5),
+                                    "add SL" => expected.stop_loss = Some(108.5),
+                                    _ => {
+                                        expected.order_type = OrderType::Limit(price);
+                                        expected.take_profit = Some(take_profit);
+                                        expected.stop_loss = Some(stop_loss);
+                                    }
+                                }
+                                assert_eq!(changed[0].1, expected, "{gesture}");
                             }
                             _ => {
                                 // Closing and the exits are for the position's size, reversing for

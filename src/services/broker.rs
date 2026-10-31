@@ -122,8 +122,8 @@ pub trait Broker: MaybeSend + 'static {
     fn cancel(&self, id: OrderId, reply: Reply<()>);
 
     /// Replaces the working order `id` with `order`, which differs in its prices or brackets,
-    /// after the user dragged one of its lines or removed a bracket, and confirmed. Called only
-    /// for an account whose [`Capabilities::modify`](crate::model::Capabilities::modify) is set. Answer
+    /// after the user dragged one of its lines, added or removed a take profit or stop loss, and
+    /// confirmed. Called only for an account whose [`Capabilities::modify`](crate::model::Capabilities::modify) is set. Answer
     /// once the broker accepted the change; push the changed order as an [`AccountEvent::Order`].
     /// By default every change is refused as [`FeedError::NotSupported`].
     fn modify(&self, id: OrderId, order: OrderRequest, reply: Reply<()>) {

@@ -120,8 +120,8 @@ pub use tpo::{
 pub(crate) use trading::rounding_tolerance;
 pub use trading::{
     Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderPreview,
-    OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce,
-    TradingRules,
+    OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, TakeProfitLevel,
+    TimeInForce, TradingRules,
 };
 
 pub use watchlist::{Watchlist, WatchlistFlag, WatchlistItem};

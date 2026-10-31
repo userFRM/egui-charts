@@ -90,8 +90,11 @@ impl OrderTicket {
                 || !market.capabilities.accepts(&request.order_type)
                 || !market.rules.time_in_force.contains(&request.time_in_force)
                 || order_quantity(request.quantity, market.rules) != Ok(request.quantity)
-                || (request.stop_loss.is_some() || request.take_profit.is_some())
+                || (request.stop_loss.is_some()
+                    || request.take_profit.is_some()
+                    || !request.take_profit_levels.is_empty())
                     && !market.capabilities.brackets
+                || !request.take_profit_levels.is_empty() && !market.capabilities.take_profit_levels
         }) {
             self.confirm = None;
         }

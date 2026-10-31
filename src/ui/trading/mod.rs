@@ -368,6 +368,7 @@ mod tests {
     #[derive(Default)]
     pub(super) struct Recorder {
         pub(super) state: Vec<AccountEvent>,
+        pub(super) brackets: bool,
         pub(super) placed: Mutex<Vec<OrderRequest>>,
         pub(super) cancelled: Mutex<Vec<OrderId>>,
         pub(super) modified: Mutex<Vec<(OrderId, OrderRequest)>>,
@@ -386,6 +387,7 @@ mod tests {
                 close: true,
                 reverse: true,
                 preview: true,
+                brackets: self.brackets,
                 ..Capabilities::default()
             };
             events.push(AccountEvent::Account(Account::new(
