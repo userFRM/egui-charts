@@ -879,10 +879,11 @@ mod tests {
         }
     }
 
-    /// Actions from clicking the strip every 4 px along its middle, one click at a time.
+    /// Actions from clicking the strip every 4 px along its middle, one click at a time, in a
+    /// window tall enough for an open menu to sit below the strip.
     fn click_along(ctx: &egui::Context, toolbar: &mut TopToolbar) -> Vec<TopToolbarAction> {
         let mut actions = Vec::new();
-        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 32.0));
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0));
         for x in (0..1440).step_by(4) {
             let pos = pos2(x as f32, 16.0);
             for pressed in [true, false] {
