@@ -345,8 +345,29 @@ fn every_update_equals_a_fresh_calculate() {
                 .with_time_zone(TimezoneId::fixed_offset(9 * 3600).unwrap()),
         )
     };
+    let pivot_labels = || -> Box<dyn Indicator> {
+        Box::new(
+            PivotPoints::new()
+                .with_pivots_back(3)
+                .with_labels(true, true)
+                .with_label_side(PivotLabelSide::Right),
+        )
+    };
+    let zigzag_labels = || -> Box<dyn Indicator> {
+        Box::new(ZigZag::new(1.0, 2).with_labels(true, Some(ZigZagChange::Price), true))
+    };
+    let session_labels = || -> Box<dyn Indicator> {
+        Box::new(
+            TradingSessions::new()
+                .with_labels(true, true, true)
+                .with_lines(true, true, true),
+        )
+    };
     let mut studies = builtins_with(|k| 3 + 2 * k, |v| v);
     studies.push(tokyo_week());
+    studies.push(pivot_labels());
+    studies.push(zigzag_labels());
+    studies.push(session_labels());
     for study in &studies {
         if matches!(
             study.name(),
@@ -361,6 +382,9 @@ fn every_update_equals_a_fresh_calculate() {
     }
     let mut twins = builtins_with(|k| 3 + 2 * k, |v| v);
     twins.push(tokyo_week());
+    twins.push(pivot_labels());
+    twins.push(zigzag_labels());
+    twins.push(session_labels());
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     let mut data = Vec::<Bar>::new();
     for event in 0..200 {
@@ -434,7 +458,11 @@ fn every_update_equals_a_fresh_calculate() {
                             study.markers(),
                             study.zones(),
                             study.table(),
-                            study.projections()
+                            study.projections(),
+                            study.labels(),
+                            (0..study.line_count())
+                                .map(|line| study.provisional_after(line))
+                                .collect::<Vec<_>>()
                         )
                     ),
                     format!(
@@ -443,7 +471,11 @@ fn every_update_equals_a_fresh_calculate() {
                             fresh.markers(),
                             fresh.zones(),
                             fresh.table(),
-                            fresh.projections()
+                            fresh.projections(),
+                            fresh.labels(),
+                            (0..fresh.line_count())
+                                .map(|line| fresh.provisional_after(line))
+                                .collect::<Vec<_>>()
                         )
                     ),
                     "{} metadata, event {event}, revision {revision}",

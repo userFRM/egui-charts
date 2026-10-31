@@ -388,14 +388,14 @@ pub use key_levels::KeyLevels;
 pub use knoxville_divergence::KnoxvilleDivergence;
 pub use lunar_phases::{LunarPhase, LunarPhases, MoonPhase, lunar_phases};
 pub use missed_pivots::MissedPivots;
-pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
+pub use pivot_points::{PivotLabelSide, PivotMethod, PivotPoints, PivotTimeframe};
 pub use pivot_points_high_low::PivotPointsHighLow;
 pub use projected_pivot_points::ProjectedPivotPoints;
 pub use reversal::Reversal;
 pub use rsi_divergence::RsiDivergence;
 pub use wedge::{FallingWedge, RisingWedge, Wedge};
 pub use williams_fractals::WilliamsFractals;
-pub use zigzag::{ZigZag, ZigZagMode, ZigZagPivot};
+pub use zigzag::{ZigZag, ZigZagChange, ZigZagMode, ZigZagPivot};
 
 // Re-exports - Additional Oscillator/Momentum indicators
 pub use connors_rsi::ConnorsRSI;

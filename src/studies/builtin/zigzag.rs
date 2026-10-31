@@ -1,7 +1,8 @@
 use super::clamp_param;
 use crate::model::Bar;
+use crate::scales::StudyFormat;
 use crate::studies::palette;
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues, LabelPlacement, StudyLabel};
 use egui::Color32;
 
 /// ZigZag mode - what price to use
@@ -14,6 +15,17 @@ pub enum ZigZagMode {
     Close,
     /// Use typical price (HLC/3)
     Typical,
+}
+
+/// How a Zig Zag label writes the change from the previous pivot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum ZigZagChange {
+    /// The price difference, signed.
+    Price,
+    /// The percentage of the previous pivot's price, signed.
+    #[default]
+    Percent,
 }
 
 /// One swing extreme in source-bar order. The last pivot is provisional and can move.
@@ -53,6 +65,8 @@ pub struct ZigZagPivot {
 ///   `depth` bars is drawn when a later bar confirms it.
 /// - The last pivot is the extreme of the current leg, which moves while price extends it.
 ///   Bars before the first pivot and after the last have no value.
+/// - Optional labels show each pivot's price, change and leg volume; the last leg, whose end
+///   still moves, is drawn dashed.
 #[derive(Clone)]
 pub struct ZigZag {
     /// Min percentage change to register a swing
@@ -71,6 +85,14 @@ pub struct ZigZag {
     before_last: Checkpoint,
     color: Color32,
     visible: bool,
+    price_labels: bool,
+    change_labels: bool,
+    change_mode: ZigZagChange,
+    volume_labels: bool,
+    /// The instrument's decimals and those of the study's presentation settings.
+    precision: Option<usize>,
+    label_precision: Option<usize>,
+    labels: Vec<StudyLabel>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -104,6 +126,13 @@ impl ZigZag {
             before_last: Checkpoint::default(),
             color: palette::BLUE,
             visible: true,
+            price_labels: false,
+            change_labels: false,
+            change_mode: ZigZagChange::Percent,
+            volume_labels: false,
+            precision: None,
+            label_precision: None,
+            labels: Vec::new(),
         }
     }
 
@@ -123,6 +152,76 @@ impl ZigZag {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
+    }
+
+    /// Labels each pivot, above highs and below lows, with its price, its change from the
+    /// previous pivot (`None` leaves it out) and the volume of the leg that ends at it, from the
+    /// bar after the previous pivot through the pivot's bar. No labels by default.
+    pub fn with_labels(mut self, price: bool, change: Option<ZigZagChange>, volume: bool) -> Self {
+        self.price_labels = price;
+        self.change_labels = change.is_some();
+        self.change_mode = change.unwrap_or(self.change_mode);
+        self.volume_labels = volume;
+        self
+    }
+
+    /// Rewrites the labels of the pivots from `fixed` on: the earlier ones and their legs are
+    /// final, and the last one moves.
+    fn refresh_labels(&mut self, data: &[Bar], fixed: usize) {
+        if !(self.price_labels || self.change_labels || self.volume_labels) {
+            self.labels.clear();
+            return;
+        }
+        let kept = fixed.checked_sub(1).map_or(0, |last| {
+            let bar = self.pivots[last].bar_index;
+            self.labels.partition_point(|label| label.bar <= bar)
+        });
+        self.labels.truncate(kept);
+        let precision = self.label_precision.or(self.precision);
+        for (k, pivot) in self.pivots.iter().enumerate().skip(fixed) {
+            let mut lines = Vec::new();
+            if self.price_labels {
+                lines.push(StudyFormat::Price.format(pivot.price, precision));
+            }
+            if let Some(previous) = k.checked_sub(1).map(|k| self.pivots[k]) {
+                let change = pivot.price - previous.price;
+                let sign = if change > 0.0 { "+" } else { "" };
+                if self.change_labels {
+                    lines.push(match self.change_mode {
+                        ZigZagChange::Price => {
+                            format!("{sign}{}", StudyFormat::Price.format(change, precision))
+                        }
+                        ZigZagChange::Percent => {
+                            let percent = change / previous.price * 100.0;
+                            format!("{sign}{}", StudyFormat::Percent.format(percent, Some(2)))
+                        }
+                    });
+                }
+                if self.volume_labels {
+                    let first = self.finite.binary_search(&previous.bar_index).unwrap() + 1;
+                    let last = self.finite.binary_search(&pivot.bar_index).unwrap();
+                    let volume: f64 = self.finite[first..=last]
+                        .iter()
+                        .map(|&bar| data[bar].volume)
+                        .filter(|volume| volume.is_finite())
+                        .sum();
+                    lines.push(StudyFormat::Volume.format(volume, None));
+                }
+            }
+            if !lines.is_empty() {
+                self.labels.push(StudyLabel {
+                    bar: pivot.bar_index,
+                    price: pivot.price,
+                    text: lines.join("\n"),
+                    placement: if pivot.is_high {
+                        LabelPlacement::Above
+                    } else {
+                        LabelPlacement::Below
+                    },
+                    plot: 0,
+                });
+            }
+        }
     }
 
     /// Get price value based on mode
@@ -309,7 +408,11 @@ impl Indicator for ZigZag {
     crate::studies::inputs::study_inputs!(self;
         deviation_percent: number("Deviation percent", 0.0, f64::MAX),
         depth: length("Depth", 1, usize::MAX),
-        mode: choice("Mode", [ZigZagMode::HighLow, ZigZagMode::Close, ZigZagMode::Typical])
+        mode: choice("Mode", [ZigZagMode::HighLow, ZigZagMode::Close, ZigZagMode::Typical]),
+        price_labels: toggle("Show price"),
+        change_labels: toggle("Show change"),
+        change_mode: choice("Change as", [ZigZagChange::Price, ZigZagChange::Percent]),
+        volume_labels: toggle("Show leg volume")
     ; {});
 
     fn name(&self) -> &str {
@@ -358,10 +461,34 @@ impl Indicator for ZigZag {
                 );
             }
         }
+        self.refresh_labels(data, fixed);
     }
 
     fn is_incremental(&self) -> bool {
         true
+    }
+
+    fn set_instrument(&mut self, instrument: Option<&crate::model::Instrument>) -> bool {
+        let precision = instrument
+            .and_then(crate::scales::instrument_price_precision)
+            .map(usize::from);
+        let changed = precision != self.precision;
+        self.precision = precision;
+        changed
+    }
+
+    fn labels(&self) -> &[StudyLabel] {
+        &self.labels
+    }
+
+    fn set_label_precision(&mut self, precision: Option<usize>) {
+        self.label_precision = precision;
+    }
+
+    /// The last pivot before the leg that still moves.
+    fn provisional_after(&self, line: usize) -> Option<usize> {
+        let before_last = self.pivots.len().checked_sub(2)?;
+        (line == 0).then(|| self.pivots[before_last].bar_index)
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -406,6 +533,83 @@ impl Indicator for ZigZag {
 mod tests {
     use super::*;
     use crate::studies::test_support::make_range_bar as make_bar;
+
+    /// Pivots of the "rises from the first bar" series: a low of 100 on bar 0, a high of 110 on
+    /// bar 3 and a low of 103 on bar 4, the last. The leg to bar 3 holds volumes 1200, 300 and
+    /// 500, and (103 - 110) / 110 = -6.36%.
+    #[test]
+    fn pivots_are_labelled_and_the_last_leg_is_provisional() {
+        let data: Vec<Bar> = [
+            (101.0, 100.0, 100.0),
+            (103.0, 102.0, 1200.0),
+            (106.0, 105.0, 300.0),
+            (110.0, 109.0, 500.0),
+            (104.0, 103.0, 750.0),
+            (105.0, 104.0, 40.0),
+        ]
+        .into_iter()
+        .map(|(high, low, volume)| Bar {
+            volume,
+            ..make_bar(high, low, low)
+        })
+        .collect();
+        let study = || ZigZag::new(5.0, 1);
+        for (price, change, volume, want) in [
+            (
+                true,
+                Some(ZigZagChange::Price),
+                true,
+                &[
+                    (0, "100.00"),
+                    (3, "110.00\n+10.00\n2.00K"),
+                    (4, "103.00\n-7.00\n750"),
+                ][..],
+            ),
+            (
+                true,
+                Some(ZigZagChange::Percent),
+                true,
+                &[
+                    (0, "100.00"),
+                    (3, "110.00\n+10.00%\n2.00K"),
+                    (4, "103.00\n-6.36%\n750"),
+                ][..],
+            ),
+            (
+                false,
+                Some(ZigZagChange::Percent),
+                false,
+                &[(3, "+10.00%"), (4, "-6.36%")][..],
+            ),
+            (false, None, false, &[][..]),
+        ] {
+            let mut zigzag = study().with_labels(price, change, volume);
+            zigzag.calculate(&data);
+            let got: Vec<_> = zigzag
+                .labels()
+                .iter()
+                .map(|label| (label.bar, label.text.as_str()))
+                .collect();
+            assert_eq!(got, want);
+            for label in zigzag.labels() {
+                let placement = if label.bar == 3 {
+                    LabelPlacement::Above
+                } else {
+                    LabelPlacement::Below
+                };
+                assert_eq!(label.placement, placement);
+            }
+        }
+
+        let mut zigzag = study();
+        zigzag.calculate(&data[..4]);
+        assert_eq!(zigzag.provisional_after(0), Some(0));
+        zigzag.update(&data[..5], 4);
+        assert_eq!(zigzag.provisional_after(0), Some(3));
+        zigzag.update(&data, 5);
+        assert_eq!(zigzag.provisional_after(0), Some(3));
+        assert_eq!(zigzag.provisional_after(1), None);
+    }
 
     /// Expected values from an independent percentage-filter reference
     /// (Merrill's filtered waves, drawn as straight lines between pivots).

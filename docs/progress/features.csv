@@ -680,7 +680,7 @@ Studies,Indicators,Percentage Volume Oscillator,partial,library,src/studies/buil
 Studies,Indicators,Performance,done,library,src/studies/builtin/performance.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/table.rs;src/widget/indicator_pane.rs;src/studies/data.rs;src/widget/studies_data.rs
 Studies,Indicators,Periodic Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/studies/data.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/settings.rs
 Studies,Indicators,Pivot Points High Low,done,library,src/studies/builtin/pivot_points_high_low.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Pivot Points Standard,done,library,src/studies/builtin/pivot_points.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Pivot Points Standard,done,library,src/studies/builtin/pivot_points.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs
 Studies,Indicators,Positive Volume Index,done,library,src/studies/builtin/volume_price_trend.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Price Channel,done,library,src/studies/builtin/price_channel.rs;src/studies/builtin/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Price Momentum Oscillator,done,library,src/studies/builtin/price_momentum_oscillator.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
@@ -722,7 +722,7 @@ Studies,Indicators,TRIX,done,library,src/studies/builtin/trix.rs;src/studies/fac
 Studies,Indicators,Technical Ratings,partial,library,src/studies/builtin/technical_ratings.rs;src/studies/builtin/stochastic.rs;src/studies/builtin/cci.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs;src/studies/table.rs;src/widget/indicator_pane.rs
 Studies,Indicators,Time Price Opportunity,done,library,src/studies/builtin/time_price_opportunity.rs;src/model/tpo.rs;src/widget/frame.rs;src/chart/rendering/candles/tpo.rs;src/tokens/mod.rs;src/tokens/semantic.rs
 Studies,Indicators,Time Weighted Average Price,done,library,src/studies/builtin/twap.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Trading Sessions,done,library,src/studies/builtin/trading_sessions.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Trading Sessions,done,library,src/studies/builtin/trading_sessions.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/chart/indicators/plots.rs
 Studies,Indicators,Trend Strength Index,partial,library,src/studies/builtin/linear_regression_channel.rs
 Studies,Indicators,Triple EMA,done,library,src/studies/builtin/tema.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,True Strength Index,done,library,src/studies/builtin/true_strength.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
@@ -748,7 +748,7 @@ Studies,Indicators,Williams %R,done,library,src/studies/builtin/williams_r.rs;sr
 Studies,Indicators,Williams Alligator,done,library,src/studies/builtin/williams_alligator.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Williams Fractal,done,library,src/studies/builtin/williams_fractals.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Woodies CCI,partial,library,src/studies/builtin/woodies_cci.rs
-Studies,Indicators,Zig Zag,done,library,src/studies/builtin/zigzag.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Zig Zag,done,library,src/studies/builtin/zigzag.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs
 Studies,Strategy tester,Backtest engine,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs;src/services/paper.rs;docs/strategy-report.md;
 Studies,Strategy tester,Built-in Bollinger Bands strategy,missing,library,
 Studies,Strategy tester,Built-in Bollinger Bands strategy Directed,missing,library,

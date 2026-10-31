@@ -211,6 +211,14 @@ pub trait Indicator: Send {
         None
     }
 
+    /// The last source bar whose value on a zero-based line is final. The segments after it can
+    /// still move with later bars and are drawn dashed when the line is solid. `None`, the
+    /// default, draws the whole line as styled.
+    fn provisional_after(&self, line: usize) -> Option<usize> {
+        let _ = line;
+        None
+    }
+
     /// Optional text beside the shape a circle, cross or triangle plot draws at a source bar:
     /// under an upward triangle and over the other shapes, in the shape's colour.
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
@@ -502,6 +510,22 @@ pub trait Indicator: Send {
     /// Empty by default.
     fn zones(&self) -> &[super::StudyZone] {
         &[]
+    }
+
+    /// Text beside study values, in order of `bar`. The chart draws the labels near the visible
+    /// bars, in the colour of their plot, inside the plot area, so they never run under the
+    /// price axis. Empty by default. Keep the text from the last calculation: it is drawn every
+    /// frame.
+    fn labels(&self) -> &[super::StudyLabel] {
+        &[]
+    }
+
+    /// The decimal places the study's presentation settings set for the prices in
+    /// [`labels`](Self::labels), `None` when they set none and the instrument's decimals apply.
+    /// The text is written when the study calculates, so calculate again afterwards, as a chart
+    /// does after any settings edit. Studies without price labels keep the default.
+    fn set_label_precision(&mut self, precision: Option<usize>) {
+        let _ = precision;
     }
 
     /// Price-row volume profiles intersecting a half-open visible source-bar range.
