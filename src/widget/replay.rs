@@ -2,8 +2,8 @@
 
 use super::price_series::PriceSeries;
 use super::{Chart, ChartLayout, SeriesId};
-use crate::data::merge::{Origin, merge};
-use crate::model::{Bar, BarClock};
+use crate::data::merge::{Origin, fold, merge};
+use crate::model::{Bar, BarClock, Timeframe};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap};
 
@@ -123,6 +123,14 @@ impl Chart {
     /// and summed volume. Earlier chart history stays available. The host must supply all finer
     /// bars in the covered chart slots; missing bars are treated as periods without trades.
     ///
+    /// Recorded trades replay one at a time as bars of one trade each under a clock of
+    /// `Timeframe::Ticks` one, as [`data::aggregate_trades`](crate::data::aggregate_trades) builds
+    /// them. A trade is an instant: it falls in the chart bar that holds it and is complete once
+    /// the cutoff passes it, so a `ReplayController` over the same bars advances the unfinished bar
+    /// trade by trade. `aggregate_trades` stamps trades that share a timestamp one nanosecond
+    /// apart, keeping each a step of its own; bars at one time would replace each other. Bars of
+    /// more than one trade are refused, since each is stamped at its first trade.
+    ///
     /// Returns `false` without changes outside replay, without a chart timeframe, for invalid
     /// bars, or when the source intervals do not nest in the chart interval. Input is cleaned
     /// and sorted as by `set_data`. An empty source clears it. Other bar series use completed
@@ -132,8 +140,7 @@ impl Chart {
             return false;
         }
         let (bars, rejected) = super::series::clean(bars, &clock);
-        if rejected != 0 || crate::data::resample(&bars, clock.clone(), self.bar_clock()).is_none()
-        {
+        if rejected != 0 || fold_source(&bars, &clock, &self.bar_clock()).is_none() {
             return false;
         }
         if let Some(replay) = &mut self.replay {
@@ -189,10 +196,10 @@ impl Chart {
             if let Some((source, source_clock)) = &replay.source
                 && let Some(first) = source.first()
                 && let Some(last) = source.last()
-                && let Some(partial) = crate::data::resample(
+                && let Some(partial) = fold_source(
                     completed(source, source_clock, replay.time),
-                    source_clock.clone(),
-                    clock.clone(),
+                    source_clock,
+                    &clock,
                 )
             {
                 let start = clock.bar_open(first.time);
@@ -298,6 +305,45 @@ pub(super) fn completed<'a>(bars: &'a [Bar], clock: &BarClock, time: DateTime<Ut
             .map_or(bar.time < time, |end| end <= time)
     });
     &bars[..end]
+}
+
+/// The chart bars that `bars` of the `source` clock build under `chart`, or `None` when they do
+/// not nest in them. A bar of one trade is an instant and falls in the chart bar that holds it;
+/// other sources go through `data::resample`, which refuses the other trade-based intervals,
+/// whose bars are stamped at their first trade. Replay folds the completed trades on every step,
+/// so they are folded per chart bar, bisecting for its last trade, instead of a clock lookup per
+/// trade: a session clock's lookup is not cheap. `bar_open` is ordered, as `completed` assumes.
+fn fold_source(bars: &[Bar], source: &BarClock, chart: &BarClock) -> Option<Vec<Bar>> {
+    let instants = matches!(source.timeframe(), Some(Timeframe::Ticks(count)) if count.get() == 1)
+        && chart
+            .timeframe()
+            .is_some_and(|timeframe| !timeframe.is_trade_based());
+    if !instants {
+        return crate::data::resample(bars, source.clone(), chart.clone());
+    }
+    let mut folded = Vec::new();
+    let mut rest = bars;
+    while let Some(first) = rest.first() {
+        let slot = chart.bar_open(first.time);
+        // The first trade is in its own slot, so every pass takes at least one.
+        let end = rest
+            .partition_point(|bar| chart.bar_open(bar.time) <= slot)
+            .max(1);
+        // As in `resample`: a source bar's colours and payload are not the chart bar's.
+        let mut bar = Bar {
+            time: slot,
+            colors: None,
+            payload: None,
+            ..first.clone()
+        };
+        for trade in &rest[1..end] {
+            bar = fold(&bar, trade)?;
+        }
+        folded.push(bar);
+        rest = &rest[end..];
+    }
+    // shortcut: every step refolds all trades before the cutoff; keep the folded complete chart bars if long trade sources make playback slow.
+    Some(folded)
 }
 
 impl ChartLayout {
@@ -507,5 +553,77 @@ mod tests {
             chart.indicators().next().unwrap().1.values().line(0)[1],
             10.5
         );
+    }
+
+    /// Bar replay over recorded trades: one-trade bars build the unfinished chart bar from the
+    /// trades before each cursor position, two trades of one timestamp are two steps, a trade in
+    /// the next minute starts that bar, and seeking back shows the earlier bar again. The
+    /// chart's own minute 1, with its high of 14, never shows. Bars of two trades are refused: the
+    /// second opens at 00:01:00.5 and holds the trade of 00:02:00.25.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn replay_advances_trade_by_trade() {
+        use crate::model::Tick;
+        use crate::ui::replay::{ReplayAction, ReplayController};
+        use chrono::TimeDelta;
+
+        let minute_0 = bar(0, [10.0, 12.0, 9.0, 11.0, 5.0]);
+        let mut chart = Chart::new(BarData::from_bars(vec![
+            minute_0.clone(),
+            bar(1, [11.0, 14.0, 10.0, 13.0, 6.0]),
+        ]));
+        chart.set_timeframe(Timeframe::Min1);
+        let at = |ms| time(1) + TimeDelta::milliseconds(ms);
+        let trades = [
+            Tick::new(at(0), 11.0, 1.0, None),
+            Tick::new(at(0), 13.0, 2.0, None),
+            Tick::new(at(500), 10.0, 1.0, None),
+            Tick::new(at(60_250), 12.0, 3.0, None),
+        ];
+        let one_trade = BarClock::new("1t".parse().unwrap());
+        let source = crate::data::aggregate_trades(&trades, one_trade.clone()).unwrap();
+        let mut cursor = ReplayController::new(source.clone(), Vec::new());
+        chart.set_replay_time(cursor.cutoff(&one_trade));
+        assert!(chart.set_replay_source(source, one_trade.clone()));
+        let steps = [
+            // Cutoff 00:01:00.000000001: the first trade.
+            (
+                ReplayAction::None,
+                vec![bar(1, [11.0, 11.0, 11.0, 11.0, 1.0])],
+            ),
+            // The second trade of 00:01:00, stamped one nanosecond later.
+            (
+                ReplayAction::StepForward,
+                vec![bar(1, [11.0, 13.0, 11.0, 13.0, 3.0])],
+            ),
+            (
+                ReplayAction::StepForward,
+                vec![bar(1, [11.0, 13.0, 10.0, 10.0, 4.0])],
+            ),
+            // Minute 1 is complete and built from its trades; minute 2 holds one.
+            (
+                ReplayAction::StepForward,
+                vec![
+                    bar(1, [11.0, 13.0, 10.0, 10.0, 4.0]),
+                    bar(2, [12.0, 12.0, 12.0, 12.0, 3.0]),
+                ],
+            ),
+            (
+                ReplayAction::JumpToBar(1),
+                vec![bar(1, [11.0, 13.0, 11.0, 13.0, 3.0])],
+            ),
+        ];
+        for (action, unfinished) in steps {
+            cursor.handle_action(action.clone());
+            chart.set_replay_time(cursor.cutoff(&one_trade));
+            let mut expected = vec![minute_0.clone()];
+            expected.extend(unfinished);
+            assert_eq!(chart.bars(SeriesId::MAIN), expected, "{action:?}");
+        }
+        let shown = chart.bars(SeriesId::MAIN).to_vec();
+        let two_trades = BarClock::new("2t".parse().unwrap());
+        let pairs = crate::data::aggregate_trades(&trades, two_trades.clone()).unwrap();
+        assert!(!chart.set_replay_source(pairs, two_trades));
+        assert_eq!(chart.bars(SeriesId::MAIN), shown);
     }
 }

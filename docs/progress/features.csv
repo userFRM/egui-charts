@@ -845,6 +845,7 @@ Terminal,Replay,"Start options: select date, random bar, first available date",d
 Terminal,Replay,Step forward and back one bar,done,library,src/ui/replay/mod.rs;src/ui/replay/state.rs
 Terminal,Replay,Synchronised replay across the charts of a layout,done,library,src/widget/replay.rs
 Terminal,Replay,Tick replay,done,library,src/data/replay.rs
+Terminal,Replay,Trade-by-trade updates during bar replay,done,library,src/widget/replay.rs;src/ui/replay/floating.rs
 Terminal,Replay,Update interval smaller than the chart interval,done,library,src/widget/replay.rs;src/ui/replay/floating.rs
 Terminal,Templates and layouts,Autosave,done,library,src/ui/top_toolbar/components/layout_menu.rs
 Terminal,Templates and layouts,Chart settings templates,done,library,src/ui/dialogs/chart_settings/mod.rs
