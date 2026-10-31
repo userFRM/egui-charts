@@ -298,11 +298,12 @@ impl DrawingManager {
             if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
                 if let (Some(origin), Some(old)) = (self.drag_origin, &self.drag_old_state) {
                     let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
-                    // Dragging a label leaves the point it annotates; a selection or a copy moves
-                    // whole.
+                    // Dragging a label leaves the point it annotates; a selection, a copy or a
+                    // note saved without a label anchor moves whole.
                     let skip = usize::from(
                         self.drag_group.is_empty()
                             && !self.drag_copy
+                            && old.points.len() > 1
                             && matches!(
                                 drawing.tool_type,
                                 DrawingToolType::Callout
@@ -916,19 +917,21 @@ mod tests {
             vec![Pos2::new(150.0, 240.0), Pos2::new(250.0, 140.0)],
             vec![ChartPoint::new(15.0, 760.0), ChartPoint::new(25.0, 860.0)],
         );
-        for (tool, group, copy, expected) in [
-            (DrawingToolType::Callout, false, false, &label),
-            (DrawingToolType::Note, false, false, &label),
-            (DrawingToolType::PriceNote, false, false, &label),
-            (DrawingToolType::TrendLine, false, false, &whole),
-            (DrawingToolType::Callout, true, false, &whole),
-            (DrawingToolType::Callout, false, true, &whole),
+        // A note saved before its label had an anchor has only the one it annotates.
+        for (tool, anchors, group, copy, expected) in [
+            (DrawingToolType::Callout, 2, false, false, &label),
+            (DrawingToolType::Note, 2, false, false, &label),
+            (DrawingToolType::PriceNote, 2, false, false, &label),
+            (DrawingToolType::Note, 1, false, false, &whole),
+            (DrawingToolType::TrendLine, 2, false, false, &whole),
+            (DrawingToolType::Callout, 2, true, false, &whole),
+            (DrawingToolType::Callout, 2, false, true, &whole),
         ] {
             let mut manager = DrawingManager::new();
             for id in [7, 8] {
                 let mut drawing = Drawing::new(id, tool);
-                drawing.points = start_points.clone();
-                drawing.chart_points = start_chart.clone();
+                drawing.points = start_points[..anchors].to_vec();
+                drawing.chart_points = start_chart[..anchors].to_vec();
                 manager.drawings.push(drawing);
             }
             if group {
@@ -945,11 +948,23 @@ mod tests {
                 .last()
                 .filter(|_| copy)
                 .unwrap_or(&manager.drawings[0]);
-            assert_eq!(&moved.points, &expected.0, "{tool:?} {group} {copy}");
-            assert_eq!(&moved.chart_points, &expected.1, "{tool:?} {group} {copy}");
+            assert_eq!(
+                moved.points,
+                expected.0[..anchors],
+                "{tool:?} {group} {copy}"
+            );
+            assert_eq!(
+                moved.chart_points,
+                expected.1[..anchors],
+                "{tool:?} {group} {copy}"
+            );
             if !copy {
                 assert!(manager.undo());
-                assert_eq!(manager.drawings[0].chart_points, start_chart, "{tool:?}");
+                assert_eq!(
+                    manager.drawings[0].chart_points,
+                    start_chart[..anchors],
+                    "{tool:?}"
+                );
             }
         }
     }
