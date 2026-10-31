@@ -64,6 +64,9 @@ struct ProfileStudy {
     adaptive: bool,
     tick_size: Option<f64>,
     resolutions: Vec<ProfileResolution>,
+    /// The finer interval and data start stated before the chart emptied the profile to wait
+    /// for its full recompute, still stated until it has bars again.
+    held: Option<(Option<Timeframe>, Option<DateTime<Utc>>)>,
     /// Chart bars in view, from `set_visible_range`.
     view: Range<usize>,
     days: ExchangeDays,
@@ -131,6 +134,7 @@ impl ProfileStudy {
             adaptive: false,
             tick_size: None,
             resolutions: Vec::new(),
+            held: None,
             view: 0..0,
             days: ExchangeDays::default(),
             data: Vec::new(),
@@ -262,6 +266,7 @@ impl ProfileStudy {
         }
         self.values.clear();
         self.data.clear();
+        self.held = None;
         self.fine.clear();
         self.ranges.clear();
         self.cache.get_mut().clear();
@@ -269,8 +274,12 @@ impl ProfileStudy {
     }
 
     /// An explicit interval shorter than the chart's, or the shortest suggested interval
-    /// that serves the profile length while the source follows the chart.
+    /// that serves the profile length while the source follows the chart; the held one while
+    /// emptied for a recompute.
     fn finer(&self) -> Option<Timeframe> {
+        if let Some((timeframe, _)) = self.held.filter(|_| self.data.is_empty()) {
+            return timeframe;
+        }
         let shorter = |source: &Timeframe| {
             !matches!(source, Timeframe::Ticks(_))
                 && source.duration_ms() < self.interval.duration_ms()
@@ -336,8 +345,12 @@ impl ProfileStudy {
     }
 
     /// The open of the first chart bar a profile in view reads, from which its finer bars are
-    /// needed; the open of the newest bar with no profile in view, and `None` without bars.
+    /// needed; the open of the newest bar with no profile in view, the held start while emptied
+    /// for a recompute, and `None` without bars otherwise.
     fn data_start(&self) -> Option<DateTime<Utc>> {
+        if self.data.is_empty() {
+            return self.held.and_then(|(_, start)| start);
+        }
         let first = self
             .ranges_in(self.view.clone())
             .iter()
@@ -435,6 +448,10 @@ impl ProfileStudy {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
+        if data.is_empty() && !self.data.is_empty() {
+            // Keeps requesting what it read, so the chart keeps those bars for the recompute.
+            self.held = Some((self.finer(), self.data_start()));
+        }
         let from = from.min(data.len()).min(self.data.len());
         let times_changed = self.data.len() != data.len()
             || self.data[from..]

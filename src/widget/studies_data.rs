@@ -1326,4 +1326,148 @@ mod tests {
             assert_eq!(befores, expected, "{chart_type:?} {view:?}");
         }
     }
+
+    /// Guards #1667 and #1681: each full recompute of the profiles that read histories runs on
+    /// its own frame, and a profile waiting for its turn keeps requesting the finer history it
+    /// read and the start it read it from. So that history is loaded once from the newest bar,
+    /// only back to the earliest profile start in view (the session open at 1970-01-13 00:00, or
+    /// bar 305 at 17:00 for the visible range alone), and the recompute reads all 190 half-hour
+    /// bars of volume 1 under bars 305 to 399. The feed answers ten hours a page.
+    #[test]
+    fn waiting_profiles_keep_their_finer_history() {
+        use crate::model::ProfileResolution;
+        use crate::studies::{Indicator, VolProfileSession, VolProfileVisible};
+        let hour = |hour: i64| DateTime::UNIX_EPOCH + Duration::hours(hour);
+        let hourly = bars(&[1.0; 400], 60);
+        let suggested = |intervals: &[(Timeframe, Option<i64>)]| {
+            Instrument::new("MAIN").with_profile_resolutions(intervals.iter().map(
+                |&(timeframe, days)| {
+                    ProfileResolution::new(timeframe, days.map(chrono::TimeDelta::days))
+                },
+            ))
+        };
+        let explicit = |mut study: Box<dyn Indicator>, timeframe| {
+            study
+                .set_input("source_interval", InputValue::Timeframe(Some(timeframe)))
+                .unwrap();
+            study
+        };
+        let session = || Box::new(VolProfileSession::default()) as Box<dyn Indicator>;
+        let visible = || Box::new(VolProfileVisible::default()) as Box<dyn Indicator>;
+        let finer = [(Timeframe::Min15, Some(1)), (Timeframe::Min30, None)];
+        let half = [(Timeframe::Min30, None)];
+        for (name, instrument, studies, main_page, last) in [
+            (
+                "session on 15 minutes, visible range on 30, as suggested",
+                suggested(&finer),
+                [session(), visible()],
+                400,
+                22,
+            ),
+            (
+                "older chart bars arrive after the half-hour history",
+                suggested(&half),
+                [Box::new(SMA::new(5)) as Box<dyn Indicator>, visible()],
+                200,
+                22,
+            ),
+            (
+                "both on suggested 30 minutes",
+                suggested(&half),
+                [session(), visible()],
+                400,
+                2,
+            ),
+            (
+                "both on explicit 30 minutes",
+                suggested(&[]),
+                [
+                    explicit(session(), Timeframe::Min30),
+                    explicit(visible(), Timeframe::Min30),
+                ],
+                400,
+                2,
+            ),
+            (
+                "explicit 15 minute session, 30 minute visible range",
+                suggested(&[]),
+                [
+                    explicit(session(), Timeframe::Min15),
+                    explicit(visible(), Timeframe::Min30),
+                ],
+                400,
+                22,
+            ),
+        ] {
+            let feed = Arc::new(RetryFeed::default());
+            let mut chart = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("MAIN")
+                .with_timeframe(Timeframe::Hour1)
+                .build();
+            let id = studies.map(|study| chart.add_indicator(study))[1];
+            let ctx = egui::Context::default();
+            let mut befores = Vec::new();
+            for frame in 0..150 {
+                shapes(&ctx, &mut chart, frame as f64, Vec::new());
+                for reply in feed.resolves.lock().unwrap().drain(..) {
+                    reply.send(Ok(instrument.clone()));
+                }
+                let pending: Vec<_> = feed.histories.lock().unwrap().drain(..).collect();
+                for (request, reply) in pending {
+                    let minutes = request.timeframe.duration_ms() / 60_000;
+                    let before = request.before.unwrap_or(hour(400));
+                    if minutes == 60 {
+                        // Older chart bars are held until the half-hour history has loaded.
+                        if request.before.is_some() && frame < 60 {
+                            feed.histories.lock().unwrap().push((request, reply));
+                            continue;
+                        }
+                        let end = hourly.partition_point(|bar| bar.time < before);
+                        let start = end.saturating_sub(main_page);
+                        let page = hourly[start..end].to_vec();
+                        reply.send(Ok(HistoryPage::new(page, start == 0)));
+                        continue;
+                    }
+                    if minutes == 30 {
+                        befores.push(request.before);
+                    }
+                    let page: Vec<_> = bars(&vec![1.0; 24_000 / minutes as usize], minutes)
+                        .into_iter()
+                        .filter(|bar| bar.time < before && bar.time >= before - Duration::hours(10))
+                        .collect();
+                    let end = page.first().is_none_or(|bar| bar.time == hour(0));
+                    reply.send(Ok(HistoryPage::new(page, end)));
+                }
+            }
+            let held = chart
+                .study_data
+                .series
+                .iter()
+                .find(|series| series.request.timeframe == Some(Timeframe::Min30))
+                .map_or(0, |series| {
+                    series
+                        .bars
+                        .iter()
+                        .filter(|bar| bar.time >= hour(305))
+                        .count()
+                });
+            let profile = chart.indicators().find(|(key, _)| *key == id).unwrap().1;
+            let volume: f64 = profile
+                .volume_profiles(305..400)
+                .iter()
+                .flat_map(|plot| plot.profile.volume())
+                .sum();
+            assert_eq!(
+                (
+                    befores.iter().filter(|before| before.is_none()).count(),
+                    befores.last().copied().flatten(),
+                    held,
+                    volume,
+                ),
+                (1, Some(hour(12 * 24 + last)), 190, 190.0),
+                "{name}"
+            );
+        }
+    }
 }
