@@ -12,6 +12,8 @@ use crate::widget::Chart;
 
 /// The most triangles one mark draws; a "+N" line counts the rest.
 const MAX_STACK: usize = 3;
+/// The most rows crowded labels stack in; a label with no room left is left out.
+const MAX_LABEL_ROWS: usize = 3;
 /// The most fills a mark's hover lists before "and N more".
 const MAX_HOVER_FILLS: usize = 20;
 /// Half the width of a triangle's base.
@@ -27,20 +29,11 @@ use super::account_panel::quantity_decimals;
 use super::format::Numbers;
 use super::widgets::{side_color, side_name};
 
-/// The fills of one side in one bar, drawn as one mark.
-struct Mark<'a> {
-    /// The bar's index; a fractional index never occurs, `f64` matches `index_to_x`.
-    index: f64,
-    side: OrderSide,
-    fills: Vec<&'a Execution>,
-    /// Its lines of text, nearest the stack first, laid out once while its fills are known.
-    lines: Vec<Arc<Galley>>,
-}
-
 /// Draws `fills` on the price pane of `chart`. The fills of one side in one bar form one mark: up
 /// to [`MAX_STACK`] triangles stacked outward, pointing up in the buy colour just under the bar's
 /// low, or down in the sell colour just over its high, and beyond them a "+N" line for the fills
-/// not drawn. With `labels`, a line beyond the stack gives the side and total quantity. Hovering a
+/// not drawn. With `labels`, a line beyond the stack gives the side and total quantity. Text that
+/// would overlap newer text moves outward, up to [`MAX_LABEL_ROWS`] rows, or is left out. Hovering a
 /// mark lists its fills with their side, quantity, price and time, up to [`MAX_HOVER_FILLS`].
 pub(super) fn show(
     ui: &mut Ui,
@@ -77,82 +70,33 @@ pub(super) fn show(
     let mapping = chart.get_chart_mapping();
     let theme = ui.ctx().active_theme();
     let painter = ui.painter().with_clip_rect(mapping.rect);
-    let layout = |side: OrderSide, group: &[&Execution]| -> Vec<Arc<Galley>> {
-        let more = (group.len() > MAX_STACK).then(|| format!("+{}", group.len() - MAX_STACK));
-        let label = labels.then(|| {
-            let quantity: f64 = group.iter().map(|fill| fill.quantity).sum();
-            format!(
-                "{} {}",
-                l10n::text(ui.ctx(), side_name(side)),
-                numbers.quantity(quantity, quantity_decimals(quantity))
-            )
-        });
-        more.into_iter()
-            .chain(label)
-            .map(|line| {
-                painter.layout_no_wrap(
-                    line,
-                    FontId::proportional(ui.active_theme().text.label),
-                    chart.config().text_color,
-                )
-            })
-            .collect()
-    };
-    let width = |lines: &[Arc<Galley>]| lines.iter().map(|l| l.size().x).fold(0.0, f32::max);
-    // Coalesce neighbouring runs whose text would overlap horizontally; a mark without text has
-    // nothing to overlap. Use the newest bar as the anchor and retain every fill for the total
-    // and the hover details.
-    let mut marks: Vec<Mark> = Vec::new();
-    for run in placed.chunk_by(|a, b| a.0 == b.0 && a.1.side == b.1.side) {
+    let (mut text_rects, mut texts): (Vec<Rect>, Vec<(Rect, Arc<Galley>)>) = Default::default();
+    // Newest first, so that where labels crowd each other the newer ones keep their text.
+    for run in placed
+        .chunk_by(|a, b| a.0 == b.0 && a.1.side == b.1.side)
+        .rev()
+    {
         let (index, side) = (run[0].0, run[0].1.side);
-        let group: Vec<&Execution> = run.iter().map(|(_, fill)| *fill).collect();
-        let lines = layout(side, &group);
-        match marks.iter_mut().rfind(|open| open.side == side) {
-            Some(open)
-                if !open.lines.is_empty()
-                    && !lines.is_empty()
-                    && chart
-                        .index_to_x(open.index)
-                        .zip(chart.index_to_x(index))
-                        .is_some_and(|(a, b)| {
-                            (b - a).abs() < (width(&open.lines) + width(&lines)) / 2.0 + GAP
-                        }) =>
-            {
-                open.index = index;
-                open.fills.extend(group);
-                open.lines = layout(side, &open.fills);
-            }
-            _ => marks.push(Mark {
-                index,
-                side,
-                fills: group,
-                lines,
-            }),
-        }
-    }
-    let mut text_rects: Vec<Rect> = Vec::new();
-    for mark in &marks {
-        let Some(x) = chart.index_to_x(mark.index) else {
+        let Some(x) = chart.index_to_x(index) else {
             continue;
         };
         if x < mapping.rect.left() - HALF_WIDTH || x > mapping.rect.right() + HALF_WIDTH {
             continue;
         }
-        let quantity: f64 = mark.fills.iter().map(|fill| fill.quantity).sum();
-        let price = mark
-            .fills
+        let quantity: f64 = run.iter().map(|(_, fill)| fill.quantity).sum();
+        let price = run
             .iter()
-            .map(|fill| fill.price * fill.quantity)
+            .map(|(_, fill)| fill.price * fill.quantity)
             .sum::<f64>()
             / quantity;
         // A fill timed after the last bar waits at its price for its bar.
-        let (low, high) = usize::try_from(mark.index as i64)
+        let (low, high) = usize::try_from(index as i64)
             .ok()
             .and_then(|index| bars.get(index))
             .map_or((price, price), |bar| (bar.low, bar.high));
         let (low_y, high_y) = (mapping.price_to_y(low), mapping.price_to_y(high));
-        let color = side_color(&theme, mark.side);
-        let (down, edge) = match mark.side {
+        let color = side_color(&theme, side);
+        let (down, edge) = match side {
             OrderSide::Buy => (1.0, low_y.max(high_y) + GAP),
             OrderSide::Sell => (-1.0, low_y.min(high_y) - GAP),
         };
@@ -160,7 +104,7 @@ pub(super) fn show(
             continue;
         }
         let at = |dx: f32, dy: f32| pos2(x + dx, edge + down * dy);
-        let drawn = mark.fills.len().min(MAX_STACK);
+        let drawn = run.len().min(MAX_STACK);
         for triangle in 0..drawn {
             let dy = triangle as f32 * (HEIGHT + STEP);
             painter.add(Shape::convex_polygon(
@@ -175,56 +119,80 @@ pub(super) fn show(
         }
         let length = drawn as f32 * HEIGHT + (drawn - 1) as f32 * STEP;
         let mut rect = Rect::from_two_pos(at(-HALF_WIDTH, 0.0), at(HALF_WIDTH, length));
-        if !mark.lines.is_empty() {
-            let height: f32 = mark.lines.iter().map(|line| line.size().y).sum::<f32>()
-                + (mark.lines.len() - 1) as f32 * GAP / 2.0;
-            let size = egui::vec2(width(&mark.lines), height);
+        let more = (run.len() > MAX_STACK).then(|| format!("+{}", run.len() - MAX_STACK));
+        let label = labels.then(|| {
+            format!(
+                "{} {}",
+                l10n::text(ui.ctx(), side_name(side)),
+                numbers.quantity(quantity, quantity_decimals(quantity))
+            )
+        });
+        let lines: Vec<_> = more
+            .into_iter()
+            .chain(label)
+            .map(|line| {
+                painter.layout_no_wrap(
+                    line,
+                    FontId::proportional(ui.active_theme().text.label),
+                    chart.config().text_color,
+                )
+            })
+            .collect();
+        if !lines.is_empty() {
+            let height: f32 = lines.iter().map(|line| line.size().y).sum::<f32>()
+                + (lines.len() - 1) as f32 * GAP / 2.0;
+            let width = lines.iter().map(|line| line.size().x).fold(0.0, f32::max);
+            let size = egui::vec2(width, height);
             let top = if down > 0.0 {
                 rect.bottom() + GAP
             } else {
                 rect.top() - GAP - size.y
             };
-            let mut block = Rect::from_min_size(pos2(x - size.x / 2.0, top), size);
-            while text_rects
-                .iter()
-                .any(|other| other.expand(GAP / 2.0).intersects(block))
-            {
-                block = block.translate(egui::vec2(0.0, down * (size.y + GAP)));
+            let block = (0..MAX_LABEL_ROWS)
+                .map(|row| {
+                    Rect::from_min_size(pos2(x - size.x / 2.0, top), size)
+                        .translate(egui::vec2(0.0, down * row as f32 * (size.y + GAP)))
+                })
+                .find(|block| {
+                    // The nearest labels, the likeliest to overlap, were placed last.
+                    !text_rects
+                        .iter()
+                        .rev()
+                        .any(|other| other.expand(GAP / 2.0).intersects(*block))
+                });
+            // Without room among the newer labels the mark keeps its triangles and hover only.
+            if let Some(block) = block {
+                text_rects.push(block);
+                let mut y = if down > 0.0 {
+                    block.top()
+                } else {
+                    block.bottom()
+                };
+                for line in lines {
+                    let size = line.size();
+                    let top = if down > 0.0 { y } else { y - size.y };
+                    texts.push((Rect::from_min_size(pos2(x - size.x / 2.0, top), size), line));
+                    y += down * (size.y + GAP / 2.0);
+                }
+                rect = rect.union(block);
             }
-            text_rects.push(block);
-            let mut y = if down > 0.0 {
-                block.top()
-            } else {
-                block.bottom()
-            };
-            for line in &mark.lines {
-                let size = line.size();
-                let top = if down > 0.0 { y } else { y - size.y };
-                let line_rect = Rect::from_min_size(pos2(x - size.x / 2.0, top), size);
-                // The chart's background keeps the text readable over the bars beside its own.
-                painter.rect_filled(line_rect.expand(1.0), 2.0, theme.chart.bg);
-                painter.galley(line_rect.min, line.clone(), chart.config().text_color);
-                y += down * (size.y + GAP / 2.0);
-            }
-            rect = rect.union(block);
         }
         let hover = rect.expand(2.0).intersect(mapping.rect);
         if hover.is_positive() {
             ui.interact(
                 hover,
                 ui.scope_id()
-                    .with(("execution", side_name(mark.side), mark.index.to_bits())),
+                    .with(("execution", side_name(side), index.to_bits())),
                 Sense::hover(),
             )
             // Written only while it shows: a mark can hold every fill of the list.
             .on_hover_ui(|ui| {
                 let time = chart.build_time_formatter();
                 let decimals = numbers.decimals;
-                let mut lines: Vec<_> = mark
-                    .fills
+                let mut lines: Vec<_> = run
                     .iter()
                     .take(MAX_HOVER_FILLS)
-                    .map(|fill| {
+                    .map(|(_, fill)| {
                         format!(
                             "{} {} at {:.decimals$}, {}",
                             side_name(fill.side),
@@ -235,7 +203,7 @@ pub(super) fn show(
                         )
                     })
                     .collect();
-                let more = mark.fills.len().saturating_sub(MAX_HOVER_FILLS);
+                let more = run.len().saturating_sub(MAX_HOVER_FILLS);
                 if more > 0 {
                     lines.push(l10n::format_text(
                         ui.ctx(),
@@ -247,5 +215,11 @@ pub(super) fn show(
                 ui.label(l10n::text(ui.ctx(), lines.join("\n")));
             });
         }
+    }
+    // Over every triangle, so that a neighbouring stack never hides a label.
+    for (rect, line) in texts {
+        // The chart's background keeps the text readable over the bars beside its own.
+        painter.rect_filled(rect.expand(1.0), 2.0, theme.chart.bg);
+        painter.galley(rect.min, line, chart.config().text_color);
     }
 }

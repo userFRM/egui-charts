@@ -304,7 +304,7 @@ impl Trading {
     }
 
     /// Draws the chart symbol's working orders, brackets, positions and execution marks,
-    /// respecting [`display`](Self::display). Hovering a mark lists every fill grouped in it.
+    /// respecting [`display`](Self::display). Hovering a mark lists the fills of its bar.
     /// Asks the user to confirm a change made on a line or in the depth ladder before sending it.
     pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
         chart.trading_bid_ask = self.display.bid_ask_labels;
