@@ -80,6 +80,7 @@ impl Trading {
             capabilities: self.capabilities(),
             rules: &self.rules,
             rules_ready: self.rules_ready && self.rules.symbol == symbol,
+            offline: self.offline(),
             ladder_unavailable: ladder.as_ref().err().copied(),
             ladder: ladder.unwrap_or(None),
             highlights,
@@ -160,7 +161,7 @@ impl Trading {
                 }
             }
             Some(Action::Cancel(ids)) => {
-                if let Some(service) = &self.service {
+                if let Some(service) = self.live_service() {
                     for id in ids {
                         service.cancel(id, self.inbox.reply(0));
                     }
@@ -461,10 +462,15 @@ impl Trading {
         }
     }
 
-    /// Sends a confirmed change to the broker. Closing and reversing a position are market
-    /// orders on the other side, for the position's size and for twice it.
+    /// Sends a confirmed change to the broker, or reports it as refused while the broker is not
+    /// live. Closing and reversing a position are market orders on the other side, for the
+    /// position's size and for twice it.
     pub(super) fn execute(&mut self, action: Option<TradingLineAction>) {
-        let Some(service) = &self.service else {
+        // With instant orders `show` passes the lines' action of every frame, mostly none.
+        if action.is_none() {
+            return;
+        }
+        let Some(service) = self.live_service() else {
             return;
         };
         let reverse = matches!(action, Some(TradingLineAction::Reverse(_)));
@@ -1652,5 +1658,162 @@ mod tests {
                 "later panels stay beside the ticket at {width}"
             );
         }
+    }
+
+    /// While the broker reports that it is not live the ticket shows its status and why it
+    /// cannot send, and an order, cancellation or change the user confirms is reported as
+    /// refused, once each, instead of sent; a close confirmed before the drop that waits for its
+    /// symbol's rules is refused too and not sent when they arrive after the broker is back. Once
+    /// the broker is live the same actions send one call each. A regression sends to a broker
+    /// that is not live, sends a confirmation from before the drop after it, refuses without a
+    /// word or leaves the ticket looking ready.
+    #[test]
+    fn nothing_is_sent_while_the_broker_is_not_live() {
+        use crate::data::FeedStatus;
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+        chart.symbol = "SYM".into();
+        let working = Order::new(
+            OrderId::new("7"),
+            OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(95.0)),
+            OrderStatus::Working,
+        );
+        let mut moved = working.request.clone();
+        moved.order_type = OrderType::Limit(96.0);
+        let place = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Market);
+        let broker = Arc::new(Recorder {
+            state: vec![AccountEvent::Order(working.clone())],
+            ..Recorder::default()
+        });
+        let mut trading = Trading::default();
+        trading.set_service(broker.clone());
+        trading.poll(&ctx, &mut Toasts::new());
+        trading.open_ticket(place.clone());
+        let (_, reply) = broker.rules.lock().unwrap().pop().unwrap();
+        reply.send(Ok(TradingRules::new("SYM")));
+        trading.poll(&ctx, &mut Toasts::new());
+        // Confirmed while live, the close waits for the rules of its own symbol.
+        trading.execute(Some(TradingLineAction::Close(Position::new(
+            "OTHER", 2.0, 100.0,
+        ))));
+        let (symbol, other) = broker.rules.lock().unwrap().pop().unwrap();
+        assert_eq!(symbol, "OTHER");
+        // The ticket's status and its reason not to send, as drawn.
+        let shown = |trading: &mut Trading| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| trading.show_ticket(ui, &chart));
+            let mut texts: Vec<String> = (output.shapes.iter())
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text)
+                        if [
+                            "Connecting...",
+                            "Offline",
+                            "Waiting for the broker to connect",
+                        ]
+                        .contains(&text.galley.text()) =>
+                    {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            texts.sort();
+            texts
+        };
+        let confirm = |trading: &mut Trading| {
+            trading.perform(Some(Action::Place(place.clone())));
+            trading.perform(Some(Action::Cancel(vec![working.id.clone()])));
+            trading.execute(Some(TradingLineAction::Modify(
+                working.clone(),
+                moved.clone(),
+            )));
+        };
+
+        let mut toasts = Toasts::new();
+        trading.apply(AccountEvent::Status(FeedStatus::Disconnected), &mut toasts);
+        assert_eq!(
+            shown(&mut trading),
+            ["Offline", "Waiting for the broker to connect"]
+        );
+        confirm(&mut trading);
+        // With instant orders `show` passes the lines' action every frame, mostly none.
+        trading.execute(None);
+        trading.poll(&ctx, &mut toasts);
+        let messages: Vec<_> = (toasts.toasts().iter())
+            .map(|toast| toast.message.as_str())
+            .collect();
+        assert_eq!(messages, ["Order refused: the broker is not connected"; 4]);
+
+        trading.apply(AccountEvent::Status(FeedStatus::Live), &mut toasts);
+        other.send(Ok(TradingRules::new("OTHER")));
+        trading.poll(&ctx, &mut toasts);
+        assert!(shown(&mut trading).is_empty());
+        assert!(
+            broker.placed.lock().unwrap().is_empty(),
+            "the close confirmed before the drop"
+        );
+        assert!(broker.cancelled.lock().unwrap().is_empty());
+        assert!(broker.modified.lock().unwrap().is_empty());
+        confirm(&mut trading);
+        trading.poll(&ctx, &mut toasts);
+        assert_eq!(*broker.placed.lock().unwrap(), [place]);
+        assert_eq!(
+            *broker.cancelled.lock().unwrap(),
+            std::slice::from_ref(&working.id)
+        );
+        assert_eq!(*broker.modified.lock().unwrap(), [(working.id, moved)]);
+        assert_eq!(toasts.toasts().len(), 4, "the broker accepted them");
+    }
+
+    /// At the narrowest ticket a long symbol gives way, so that the broker's status stays clear of
+    /// the More and Close buttons. A regression covers the status with the buttons, the one sign
+    /// in the header of why the ticket does not send, or draws it twice.
+    #[test]
+    fn a_long_symbol_gives_way_to_the_tickets_status_and_buttons() {
+        use crate::data::FeedStatus;
+        let width = 320.0;
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+        chart.symbol = "EXCHANGE:A.VERY.LONG.SYMBOL.NAME.INDEED".into();
+        let mut trading = Trading::default();
+        trading.set_service(Arc::new(Recorder::default()));
+        trading.open_ticket(OrderRequest::new(
+            chart.symbol(),
+            OrderSide::Buy,
+            1.0,
+            OrderType::Market,
+        ));
+        trading.poll(&ctx, &mut Toasts::new());
+        trading.apply(
+            AccountEvent::Status(FeedStatus::Disconnected),
+            &mut Toasts::new(),
+        );
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 600.0),
+            )),
+            ..Default::default()
+        };
+        let output = ctx.run_ui(input, |ui| trading.show_ticket(ui, &chart));
+        let status: Vec<f32> = (output.shapes.iter())
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Offline" => {
+                    Some(text.visual_bounding_rect().right())
+                }
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        assert_eq!(status.len(), 1, "{status:?}");
+        // The panel's margin of 16 points, then the two buttons of the header.
+        assert!(status[0] <= width - 16.0 - 50.0, "{status:?}");
     }
 }

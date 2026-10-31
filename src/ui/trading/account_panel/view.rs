@@ -9,12 +9,10 @@ use super::{
     TAB_HEIGHT, Tab, Trading, csv, kind, pnl_color, quantity_decimals, status, time,
 };
 use crate::chart::TradingLineAction;
-use crate::data::FeedStatus;
 use crate::icons::icons;
 use crate::model::{Order, OrderSide, OrderType};
 use crate::theme::ThemeExt;
 use crate::ui::connection_status::show_connection_status_with_label;
-use crate::ui::model::ConnectionState;
 use crate::ui::top_toolbar::buttons::rule_color;
 use crate::ui::trading::widgets::{grouped, semibold, side_color};
 use crate::ui_kit::buttons::ButtonSize;
@@ -37,11 +35,7 @@ impl Trading {
             .map_or(String::new(), |account| account.currency.clone());
 
         // On the tab, which every panel height shows, until the broker reports it is live.
-        let mark = match self.connection {
-            Some(FeedStatus::Connecting) => Some(ConnectionState::Connecting),
-            Some(FeedStatus::Disconnected) => Some(ConnectionState::Disconnected),
-            Some(FeedStatus::Live) | None => None,
-        };
+        let mark = self.offline();
 
         ui.painter().rect_filled(
             Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), TAB_HEIGHT)),

@@ -101,10 +101,14 @@ pub trait Broker: MaybeSend + 'static {
     /// A stream starts as connected. While the connection to the broker is not live, push
     /// [`AccountEvent::Status`] with [`FeedStatus::Connecting`] or [`FeedStatus::Disconnected`],
     /// on each new stream too, and [`FeedStatus::Live`] once it is live again; until then the
-    /// account panel marks the broker and the terminal reports it as not connected. A broker
-    /// that never pushes a status counts as connected. The terminal still sends the orders,
-    /// cancellations and changes the user confirms meanwhile: refuse with a
-    /// [`FeedError`](crate::data::FeedError) what cannot reach the broker.
+    /// account panel and the order ticket mark the broker and the terminal reports it as not
+    /// connected. A broker that never pushes a status counts as connected. Meanwhile the terminal
+    /// sends no order, cancellation or change: it reports the ones the user confirms as refused,
+    /// and a position order confirmed earlier that still waits for its trading rules too, and
+    /// sends none of them later. It asks for [`rules`](Self::rules) and
+    /// [`history`](Self::history) only while the broker is live, and once it is live again it asks
+    /// again for those that were on their way when it stopped being live, or that failed meanwhile
+    /// or with a [recoverable](FeedError::is_recoverable) error.
     fn connect(&self, events: Events<AccountEvent>);
 
     /// Sends `order` to the broker. The terminal calls this only after the user confirmed the
@@ -162,12 +166,14 @@ pub trait Broker: MaybeSend + 'static {
     /// account `connect` last served; a consumer drops an answer that arrives after the account
     /// changed.
     ///
-    /// The account panel asks once the account arrived and the user scrolls to the end of a
-    /// history: first for the range that ends one second after the oldest entry it lists (for an
-    /// order, when it closed), so that entries sharing that time are not skipped, then for each
-    /// `next` until it is `None` or the history lists 1,000 entries. After an error other than
-    /// `NotSupported`, which it shows, it asks for that history again only after the next
-    /// `connect`.
+    /// The account panel asks once the account arrived, while the broker is live, and the user
+    /// scrolls to the end of a history: first for the range that ends one second after the oldest
+    /// entry it lists (for an order, when it closed), so that entries sharing that time are not
+    /// skipped, then for each `next` until it is `None` or the history lists 1,000 entries. After
+    /// an error, which it shows unless it is `NotSupported`, it asks for that history again only
+    /// after the next `connect`; after a [recoverable](FeedError::is_recoverable) error or one that
+    /// arrives while the broker reports that it is not live, it asks again once the broker
+    /// reports that it is live again.
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
         let _ = request;
         reply.send(Err(FeedError::NotSupported));

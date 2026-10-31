@@ -21,13 +21,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::chart::TradingLineAction;
-use crate::data::FeedStatus;
 use crate::data::inbox::Inbox;
+use crate::data::{FeedError, FeedStatus};
 use crate::model::{
     Account, Capabilities, Instrument, Order, OrderPreview, OrderRequest, OrderSide, OrderType,
     Position, Quote, TradingRules,
 };
 use crate::services::{Broker, HistoryKind, Listener};
+use crate::ui::model::ConnectionState;
 use crate::widget::settings::TradingSettings;
 use format::Numbers;
 use ticket::{OrderTicket, order_quantity};
@@ -80,6 +81,9 @@ pub struct Trading {
     rules_key: u64,
     request_key: u64,
     rules_ready: bool,
+    /// Whether the rules of `rules.symbol` failed for another reason than the connection, or
+    /// came back invalid: they are not asked for again when the broker is live again.
+    rules_failed: bool,
     /// Confirmed position orders waiting for their symbol's trading rules.
     placing: Vec<(u64, Position, OrderRequest)>,
     ticket: OrderTicket,
@@ -137,6 +141,7 @@ impl Default for Trading {
             rules_key: 1,
             request_key: 1,
             rules_ready: false,
+            rules_failed: false,
             placing: Vec::new(),
             ticket: OrderTicket::default(),
             pending: None,
@@ -233,6 +238,17 @@ impl Trading {
         self.service.is_some()
     }
 
+    /// The connection status the account panel and the order ticket show while the broker
+    /// reports that it is not live; `None` while it is live, before it reports a status and
+    /// without a broker.
+    fn offline(&self) -> Option<ConnectionState> {
+        match self.connection {
+            Some(FeedStatus::Connecting) => Some(ConnectionState::Connecting),
+            Some(FeedStatus::Disconnected) => Some(ConnectionState::Disconnected),
+            Some(FeedStatus::Live) | None => None,
+        }
+    }
+
     fn connect(&mut self) {
         self.pending = None;
         self.preview = None;
@@ -241,6 +257,7 @@ impl Trading {
         self.ticket = OrderTicket::default();
         self.rules = TradingRules::new("");
         self.rules_ready = false;
+        self.rules_failed = false;
         self.account = None;
         self.connection = None;
         self.orders.clear();
@@ -306,9 +323,28 @@ impl Trading {
     }
 
     fn place(&self, request: OrderRequest) {
-        if let Some(service) = &self.service {
+        if let Some(service) = self.live_service() {
             service.place(request, self.inbox.reply(0));
         }
+    }
+
+    /// The broker to send an order, cancellation or change to: `None` without a broker, and
+    /// while the broker reports that it is not live, when nothing is sent and the next
+    /// [`poll`](Self::poll) reports the order, cancellation or change as refused.
+    fn live_service(&self) -> Option<Arc<dyn Broker>> {
+        let service = self.service.clone()?;
+        if self.is_connected() {
+            return Some(service);
+        }
+        self.refuse();
+        None
+    }
+
+    /// Reports an order, cancellation or change as refused because the broker is not live, the
+    /// way [`poll`](Self::poll) reports the broker's own refusals.
+    fn refuse(&self) {
+        let error = FeedError::Other("the broker is not connected".into());
+        self.inbox.reply::<()>(0).send(Err(error));
     }
 
     fn load_rules(&mut self, symbol: &str) {
@@ -316,21 +352,30 @@ impl Trading {
             self.pending = None;
             self.rules = TradingRules::new(symbol);
             self.rules_ready = false;
-            self.request_key += 2;
-            self.rules_key = self.request_key;
-            if let Some(service) = &self.service {
-                service.rules(symbol, self.inbox.reply(self.rules_key));
-            }
+            self.rules_failed = false;
+            self.ask_rules();
+        }
+    }
+
+    /// Asks the broker for the rules of `rules.symbol` under a new key, so that the answer to an
+    /// earlier request is dropped; while the broker is not live, the request waits until it is.
+    fn ask_rules(&mut self) {
+        self.request_key += 2;
+        self.rules_key = self.request_key;
+        if self.is_connected()
+            && let Some(service) = &self.service
+        {
+            service.rules(&self.rules.symbol, self.inbox.reply(self.rules_key));
         }
     }
 
     /// Asks the broker for the page of `kind` before the oldest entry the account panel lists,
-    /// once the account arrived; see [`AccountPanel`].
+    /// once the account arrived and while the broker is live; see [`AccountPanel`].
     fn load_older(&mut self, kind: HistoryKind) {
         let Some(service) = &self.service else {
             return;
         };
-        if self.account.is_none() {
+        if self.account.is_none() || !self.is_connected() {
             return;
         }
         let key = self.request_key + 2;
