@@ -1,4 +1,4 @@
-//! Serializable inputs and presentation of one study.
+//! Serializable inputs and presentation of studies, alone or as a chart's set.
 
 use crate::studies::{
     ConfiguredStudy, Indicator, IndicatorFactory, InputValue, StudyScale, StudySettings,
@@ -22,10 +22,84 @@ pub struct StudyTemplate {
     pub scale: Option<StudyScale>,
 }
 
+/// The studies of a chart, with the links between them and the panes they share, as
+/// `Chart::study_template_set` saves them and `Chart::apply_study_template_set` applies them.
+///
+/// An input that reads another study's plot (`StudySource::Study`) names that study by its
+/// position in [`studies`](Self::studies), and a position past the end names no study. A
+/// position appears at most once in [`price_pane`](Self::price_pane) and
+/// [`panes`](Self::panes) together; a study listed in neither is placed where
+/// `Chart::add_indicator` places a new study. Legend captions, the price auto-scale choice,
+/// pane heights and the place of the price pane among the panes are not kept.
+///
+/// A list of study templates also reads as a set: its sources name positions in the list and
+/// every study takes its default place.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[non_exhaustive]
+pub struct StudyTemplateSet {
+    /// The studies, in the order they were added to the chart.
+    pub studies: Vec<StudyTemplate>,
+    /// Positions in `studies` of the studies drawn on the price pane.
+    pub price_pane: Vec<usize>,
+    /// The other panes that hold studies of the set, from top to bottom, each with the
+    /// positions in `studies` of its studies in legend order.
+    pub panes: Vec<Vec<usize>>,
+}
+
+impl<'de> serde::Deserialize<'de> for StudyTemplateSet {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct Fields {
+            studies: Vec<StudyTemplate>,
+            #[serde(default)]
+            price_pane: Vec<usize>,
+            #[serde(default)]
+            panes: Vec<Vec<usize>>,
+        }
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = StudyTemplateSet;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a study template set or a list of study templates")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                let studies = serde::Deserialize::deserialize(
+                    serde::de::value::SeqAccessDeserializer::new(seq),
+                )?;
+                Ok(StudyTemplateSet {
+                    studies,
+                    ..StudyTemplateSet::default()
+                })
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let Fields {
+                    studies,
+                    price_pane,
+                    panes,
+                } = serde::Deserialize::deserialize(serde::de::value::MapAccessDeserializer::new(
+                    map,
+                ))?;
+                Ok(StudyTemplateSet {
+                    studies,
+                    price_pane,
+                    panes,
+                })
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
 impl StudyTemplate {
     /// Capture the current calculation inputs, presentation and value scale, without computed
-    /// values.
-    /// Hosts remap chart-local study source ids when saving or restoring a set of studies.
+    /// values. An input that reads another study's plot keeps that study's chart id;
+    /// `Chart::study_template_set` saves a chart's studies with the links between them.
     pub fn from_study(study: &dyn Indicator) -> Self {
         Self {
             name: study.name().into(),
