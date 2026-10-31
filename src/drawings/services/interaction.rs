@@ -753,8 +753,8 @@ mod tests {
     /// y = 200 - 300 / 2 = 50 at x = 300. The measure fills its box, which holds (20, 80), 42 px
     /// from its diagonal. A measure across bars at one price, from (0, 100) to (100, 100), is hit
     /// 2 px off its border at (50, 102), but not 400 px past its end on the same line. A
-    /// highlighter is drawn 8 times its stroke width of 2, 16 px wide, so a point 7 px off its
-    /// line is on it. The date range fills the band between x = 100 and 200 at any height.
+    /// highlighter 16 px wide is hit within 8 px of its line, so a point 7 px off is on it and
+    /// one 9 px off is not. The date range fills the band between x = 100 and 200 at any height.
     /// The ellipse in the box from (0, 0) to (200, 100) is lowest at (100, 100). Every drawing
     /// extends both ways where its tool can: the trend line from (100, 100) to (200, 150) runs on
     /// through (500, 300) and (0, 50). A head and shoulders on a neckline at y = 300 fills its
