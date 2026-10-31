@@ -329,19 +329,14 @@ impl ProfileStudy {
 
     /// The chart bar ranges of the profiles in `visible`: the clamped view for a visible
     /// profile, the ranges overlapping it otherwise.
-    fn ranges_in(&self, visible: Range<usize>) -> Vec<Range<usize>> {
+    fn ranges_in(&self, visible: Range<usize>) -> impl Iterator<Item = Range<usize>> + '_ {
         let visible = visible.start.min(self.data.len())..visible.end.min(self.data.len());
-        if visible.is_empty() {
-            Vec::new()
-        } else if self.kind == Kind::Visible {
-            vec![visible]
-        } else {
-            self.ranges
-                .iter()
-                .filter(|range| range.start < visible.end && range.end > visible.start)
-                .cloned()
-                .collect()
-        }
+        let own = (self.kind == Kind::Visible && !visible.is_empty()).then(|| visible.clone());
+        // A visible profile has no ranges of its own.
+        let overlapping = self.ranges.iter().filter(move |range| {
+            !visible.is_empty() && range.start < visible.end && range.end > visible.start
+        });
+        own.into_iter().chain(overlapping.cloned())
     }
 
     /// The open of the first chart bar a profile in view reads, from which its finer bars are
@@ -351,12 +346,9 @@ impl ProfileStudy {
         if self.data.is_empty() {
             return self.held.and_then(|(_, start)| start);
         }
-        let first = self
-            .ranges_in(self.view.clone())
-            .iter()
-            .map(|r| r.start)
-            .min();
-        first
+        self.ranges_in(self.view.clone())
+            .map(|range| range.start)
+            .min()
             .map_or(self.data.last(), |at| self.data.get(at))
             .map(|bar| bar.time)
     }
@@ -562,7 +554,7 @@ impl ProfileStudy {
     }
 
     fn profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
-        let ranges = self.ranges_in(visible);
+        let ranges: Vec<_> = self.ranges_in(visible).collect();
         if ranges.is_empty() {
             return Vec::new();
         }

@@ -263,38 +263,40 @@ impl Chart {
         self.element_studies.dirty = true;
     }
 
-    /// How far back the connected feed loads the resolved study history `request`: to the
-    /// chart's first bar, or to a later start that every study reading it states through
-    /// `Indicator::data_start`. `None` while the chart has no bars.
-    fn study_data_reach(
-        &self,
-        request: &StudyDataRequest,
-    ) -> Option<chrono::DateTime<chrono::Utc>> {
-        let first = self.state.data().bars.first()?.time;
+    /// [`Self::study_data_requests`], each with how far back the connected feed loads it: to
+    /// the chart's first bar, or to a later start that every study reading it states through
+    /// `Indicator::data_start`. `None` while the chart has no bars. Allocates only the requests,
+    /// since it runs every frame.
+    fn study_data_reaches(&self) -> Vec<(StudyDataRequest, Option<chrono::DateTime<chrono::Utc>>)> {
         // Price-based chart types run their studies on elements; the source studies asked
         // here are not given the view, so their histories load in full.
-        if self.chart_type.is_time_independent() {
-            return Some(first);
-        }
-        let mut starts = Vec::new();
+        let full = self.chart_type.is_time_independent();
+        let mut reaches: Vec<(StudyDataRequest, Option<_>)> = Vec::new();
         for (_, study) in self.indicators() {
             for declared in study.data_requests() {
-                if resolved(&declared, self.symbol(), self.timeframe()) == *request {
-                    starts.push(study.data_start(&declared));
+                let start = study.data_start(&declared).filter(|_| !full);
+                let request = resolved(&declared, self.symbol(), self.timeframe());
+                match reaches.iter_mut().find(|(known, _)| *known == request) {
+                    // `None` sorts first: a study without a start loads it to the first bar.
+                    Some((_, reach)) => *reach = (*reach).min(start),
+                    None => reaches.push((request, start)),
                 }
             }
         }
-        // `None` sorts first: a study without a start, or a history no study reads, loads it
-        // to the first bar.
-        let start = starts.into_iter().min().flatten();
-        Some(start.map_or(first, |start| start.max(first)))
+        let first = self.state.data().bars.first().map(|bar| bar.time);
+        for (_, reach) in &mut reaches {
+            *reach = first.map(|first| reach.map_or(first, |start| start.max(first)));
+        }
+        reaches
     }
 
     pub(super) fn pump_study_data(&mut self, ctx: &egui::Context, feed: Option<Arc<dyn Datafeed>>) {
-        let requests = self.study_data_requests();
+        let requests = self.study_data_reaches();
         let previous = self.study_data.series.len();
         self.study_data.series.retain(|series| {
-            requests.contains(&series.request)
+            requests
+                .iter()
+                .any(|(request, _)| *request == series.request)
                 && series.stream.as_ref().is_none_or(|stream| {
                     feed.as_ref()
                         .is_some_and(|feed| Arc::ptr_eq(feed, &stream.feed))
@@ -302,7 +304,7 @@ impl Chart {
         });
         let removed = self.study_data.series.len() != previous;
         if let Some(feed) = &feed {
-            for request in &requests {
+            for (request, _) in &requests {
                 if request.symbol.is_empty() {
                     continue;
                 }
@@ -356,10 +358,6 @@ impl Chart {
         }
         let extended = self.extended_hours();
         let now = ctx.input(|input| input.time);
-        let reaches: Vec<_> = requests
-            .iter()
-            .map(|request| self.study_data_reach(request))
-            .collect();
         let count = self.state.data().bars.len().max(300);
         let mut changed = removed || self.study_data.series.len() != previous;
         for series in &mut self.study_data.series {
@@ -543,8 +541,8 @@ impl Chart {
             }
             let reach = requests
                 .iter()
-                .position(|request| *request == series.request)
-                .and_then(|at| reaches[at]);
+                .find(|(request, _)| *request == series.request)
+                .and_then(|(_, reach)| *reach);
             if !stream.pending
                 && stream.retry_at.is_none()
                 && !stream.end
@@ -643,6 +641,48 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// Counts the heap allocations of each thread, so a test can bound its own.
+    struct Counting;
+
+    thread_local! {
+        static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: Counting = Counting;
+
+    // SAFETY: every call forwards to `System` with the caller's arguments; the counter only observes.
+    unsafe impl std::alloc::GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
+            // SAFETY: forwarded unchanged.
+            unsafe { std::alloc::System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+            // SAFETY: forwarded unchanged.
+            unsafe { std::alloc::System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(
+            &self,
+            ptr: *mut u8,
+            layout: std::alloc::Layout,
+            new_size: usize,
+        ) -> *mut u8 {
+            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
+            // SAFETY: forwarded unchanged.
+            unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    /// The heap allocations `run` makes on this thread, not counting the drop of its result.
+    fn allocations<T>(run: impl FnOnce() -> T) -> (usize, T) {
+        let before = ALLOCATIONS.with(std::cell::Cell::get);
+        let result = run();
+        (ALLOCATIONS.with(std::cell::Cell::get) - before, result)
     }
 
     #[derive(Default)]
@@ -1469,5 +1509,42 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// Guards #1668: the pass that runs every frame to resolve the study histories also works
+    /// out how far back each loads, allocating for the requests alone. Two profiles read one
+    /// finer history here; the session profile reads the half-hour bars from 00:00.
+    #[test]
+    fn study_data_reaches_allocate_only_the_requests() {
+        use crate::studies::{Indicator, VolProfileSession, VolProfileVisible};
+        let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&[1.0; 30], 60)));
+        chart.set_symbol("MAIN");
+        chart.set_timeframe(Timeframe::Hour1);
+        for mut profile in [
+            Box::new(VolProfileSession::new(10)) as Box<dyn Indicator>,
+            Box::new(VolProfileVisible::new(10)),
+        ] {
+            profile
+                .set_input(
+                    "source_interval",
+                    InputValue::Timeframe(Some(Timeframe::Min30)),
+                )
+                .unwrap();
+            chart.add_indicator(profile);
+        }
+        let ctx = egui::Context::default();
+        for frame in 0..3 {
+            shapes(&ctx, &mut chart, frame as f64, Vec::new());
+        }
+        let (requests, expected) = allocations(|| chart.study_data_requests());
+        let (reaches, resolved) = allocations(|| chart.study_data_reaches());
+        assert_eq!(reaches, requests);
+        assert_eq!(
+            resolved,
+            expected
+                .into_iter()
+                .map(|request| (request, Some(DateTime::UNIX_EPOCH)))
+                .collect::<Vec<_>>()
+        );
     }
 }
