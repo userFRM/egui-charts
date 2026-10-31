@@ -269,11 +269,7 @@ impl Drawing {
 
             // Draw label at chart edge with background
             if fan_end.y >= chart_rect.min.y && fan_end.y <= chart_rect.max.y {
-                let label_bg = DESIGN_TOKENS
-                    .semantic
-                    .extended
-                    .chart_axis_bg
-                    .gamma_multiply(0.85);
+                let chart = painter.ctx().active_theme().chart;
                 let gann_label_width = DESIGN_TOKENS.sizing.technical_labels.gann_label_width;
                 let gann_label_height = DESIGN_TOKENS.sizing.technical_labels.gann_label_height;
                 let label_rect = Rect::from_min_size(
@@ -291,13 +287,13 @@ impl Drawing {
                     continue;
                 }
                 labels.push(label_rect);
-                painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
+                painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, chart.bg_axis);
                 painter.text(
                     label_rect.center(),
                     egui::Align2::CENTER_CENTER,
                     ratio_label(level.value),
                     egui::FontId::proportional(typography::XS),
-                    color,
+                    chart.axis_text,
                 );
             }
         }

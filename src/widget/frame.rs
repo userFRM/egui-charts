@@ -375,42 +375,54 @@ impl Chart {
         }
     }
 
-    /// Draw watermark overlay (large symbol name)
-    fn draw_watermark(&self, painter: &egui::Painter, rect: Rect) {
+    /// Paints the symbol watermark: the custom text at the configured size, else the symbol and
+    /// the interval at twice that size with, when asked for, the instrument's description below
+    /// them at 11/12 of it.
+    fn draw_watermark(&self, ui: &Ui, painter: &egui::Painter, rect: Rect) {
         if !self.config.show_watermark {
             return;
         }
-
-        let text = self
-            .config
-            .watermark_text
-            .as_deref()
-            .unwrap_or(&self.symbol);
-        if text.is_empty() {
-            return;
-        }
-
-        let font_size = crate::styles::typography::font_size(self.config.watermark_font_size);
-        let font_id = egui::FontId::proportional(font_size);
-
-        // Calculate position based on watermark_pos
-        let pos = match self.config.watermark_pos {
-            WatermarkPos::Center => rect.center(),
-            WatermarkPos::TopLeft => Pos2::new(rect.min.x + 20.0, rect.min.y + font_size),
-            WatermarkPos::TopRight => Pos2::new(rect.max.x - 20.0, rect.min.y + font_size),
-            WatermarkPos::BottomLeft => Pos2::new(rect.min.x + 20.0, rect.max.y - 20.0),
-            WatermarkPos::BottomRight => Pos2::new(rect.max.x - 20.0, rect.max.y - 20.0),
+        let size = self.config.watermark_font_size;
+        let line = |text: &str, size: f32| {
+            renderers::WatermarkLine::new(
+                text,
+                crate::styles::typography::font_size(size),
+                self.config.watermark_color,
+            )
         };
-
-        let anchor = match self.config.watermark_pos {
+        let lines = if let Some(custom) = &self.config.watermark_text {
+            custom.lines().map(|text| line(text, size)).collect()
+        } else if self.symbol.is_empty() {
+            Vec::new()
+        } else {
+            let title = match self.timeframe {
+                Some(timeframe) => format!("{}, {timeframe}", self.symbol),
+                None => self.symbol.clone(),
+            };
+            let description = self
+                .config
+                .watermark_description
+                .then(|| self.instrument()?.description.as_deref())
+                .flatten()
+                .filter(|text| !text.is_empty());
+            std::iter::once(line(&title, size * 2.0))
+                .chain(description.map(|text| line(text, size * 11.0 / 12.0)))
+                .collect()
+        };
+        let align = match self.config.watermark_pos {
             WatermarkPos::Center => egui::Align2::CENTER_CENTER,
             WatermarkPos::TopLeft => egui::Align2::LEFT_TOP,
             WatermarkPos::TopRight => egui::Align2::RIGHT_TOP,
             WatermarkPos::BottomLeft => egui::Align2::LEFT_BOTTOM,
             WatermarkPos::BottomRight => egui::Align2::RIGHT_BOTTOM,
         };
-
-        painter.text(pos, anchor, text, font_id, self.config.watermark_color);
+        let watermark = renderers::Watermark {
+            lines,
+            align,
+            padding: 20.0,
+            ..Default::default()
+        };
+        renderers::render_watermark(ui, painter, rect, &watermark);
     }
 
     /// Renders the chart with its studies and drawings, and handles pan, zoom,
@@ -1065,7 +1077,7 @@ impl Chart {
         self.pump_targets(ui.ctx());
 
         // Draw watermark overlay (if enabled)
-        self.draw_watermark(&painter, chart_rect);
+        self.draw_watermark(ui, &painter, chart_rect);
         if let Some(watermark) = &self.watermark {
             renderers::render_watermark(ui, &painter, chart_rect, watermark);
         }

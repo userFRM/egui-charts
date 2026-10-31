@@ -771,7 +771,9 @@ impl Ladder {
             }
             let tag_response = tag_response.on_hover_text(l10n::format_text(ui.ctx(), "{0} {1} @ {2} {label} · {3}. Drag to move, right-click to cancel. {4} order(s) here; click to choose", &[("0", side.label().to_string()), ("1", numbers.quantity(working.request.quantity - working.filled, quantity_decimals)), ("2", numbers.price(at)), ("label", label.to_string()), ("3", working.id.0.to_string()), ("4", format!("{}", group.len()))]));
             if tag_response.secondary_clicked() {
-                action = Some(Action::Confirm(TradingLineAction::Cancel(working.clone())));
+                action = Some(Action::Confirm(Box::new(TradingLineAction::Cancel(
+                    working.clone(),
+                ))));
             }
             if tag_response.drag_stopped()
                 && market.capabilities.modify
@@ -791,9 +793,13 @@ impl Ladder {
                         other => other,
                     };
                     changed.take_profit = changed.take_profit.map(shift);
+                    for level in &mut changed.take_profit_levels {
+                        level.price = shift(level.price);
+                    }
                     changed.stop_loss = changed.stop_loss.map(shift);
                     let valid = |price: f64| price.is_finite() && price > 0.0;
                     if changed.take_profit.is_none_or(valid)
+                        && changed.take_profit_levels.iter().all(|l| valid(l.price))
                         && changed.stop_loss.is_none_or(valid)
                         && match changed.order_type {
                             OrderType::StopLimit { limit, .. } => valid(limit),
@@ -801,7 +807,7 @@ impl Ladder {
                         }
                     {
                         let modify = TradingLineAction::Modify(working.clone(), changed);
-                        action = Some(Action::Confirm(modify));
+                        action = Some(Action::Confirm(Box::new(modify)));
                     }
                 }
             }
@@ -985,7 +991,9 @@ impl Ladder {
                 ),
             ) && let Some(position) = position
             {
-                action = Some(Action::Confirm(TradingLineAction::Close(position.clone())));
+                action = Some(Action::Confirm(Box::new(TradingLineAction::Close(
+                    position.clone(),
+                ))));
             }
             if outlined(
                 &mut thirds[1],
@@ -1007,9 +1015,9 @@ impl Ladder {
                 ),
             ) && let Some(position) = position
             {
-                action = Some(Action::Confirm(TradingLineAction::Reverse(
+                action = Some(Action::Confirm(Box::new(TradingLineAction::Reverse(
                     position.clone(),
-                )));
+                ))));
             }
         });
 
@@ -1176,6 +1184,11 @@ mod tests {
                         let mut second = working[0].clone();
                         second.id = OrderId::new("second");
                         second.request.quantity = 3.0;
+                        second.request.take_profit = None;
+                        second.request.take_profit_levels = vec![
+                            crate::model::TakeProfitLevel::new(102.0, 1.0),
+                            crate::model::TakeProfitLevel::new(103.0, 2.0),
+                        ];
                         working.push(second);
                     }
                     let positions = [crate::model::Position::new("ES", 2.0, 99.0)];
@@ -1326,11 +1339,22 @@ mod tests {
                         )),
                         "modify" => {
                             request.order_type = OrderType::Limit(99.0);
-                            request.take_profit = Some(101.5);
+                            if stacked {
+                                request.take_profit = None;
+                                request.take_profit_levels = vec![
+                                    crate::model::TakeProfitLevel::new(101.5, 1.0),
+                                    crate::model::TakeProfitLevel::new(102.5, 2.0),
+                                ];
+                            } else {
+                                request.take_profit = Some(101.5);
+                            }
                             request.stop_loss = Some(97.5);
-                            Action::Confirm(TradingLineAction::Modify(original.clone(), request))
+                            Action::Confirm(Box::new(TradingLineAction::Modify(
+                                original.clone(),
+                                request,
+                            )))
                         }
-                        _ => Action::Confirm(TradingLineAction::Cancel(original.clone())),
+                        _ => Action::Confirm(Box::new(TradingLineAction::Cancel(original.clone()))),
                     };
                     assert_eq!(action, Some(expected), "{gesture} at {width}");
                     let (_, labels) = frame(vec![], 110.0);

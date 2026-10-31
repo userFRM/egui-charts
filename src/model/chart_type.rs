@@ -411,6 +411,8 @@ pub struct ChartTypeParams {
     pub tpo_split_sessions: bool,
     /// TPO: highlight the rows touched by a single period.
     pub tpo_single_prints: bool,
+    /// TPO: paint each period's letter inside its block.
+    pub tpo_letters: bool,
     /// TPO: sessions combined into one profile, as in
     /// [`TPOConfig::composites`](super::TPOConfig::composites).
     pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
@@ -442,6 +444,7 @@ impl Default for ChartTypeParams {
             tpo_value_area: 70.0,
             tpo_split_sessions: false,
             tpo_single_prints: true,
+            tpo_letters: false,
             tpo_composites: Vec::new(),
         }
     }
@@ -458,6 +461,11 @@ impl ChartTypeParams {
             value_area_pct: self.tpo_value_area / 100.0,
             split_sessions: self.tpo_split_sessions,
             show_single_prints: self.tpo_single_prints,
+            display_mode: if self.tpo_letters {
+                super::TPODisplayMode::Both
+            } else {
+                super::TPODisplayMode::Blocks
+            },
             composites: self.tpo_composites.clone(),
             instrument_tick: tick_size,
             ..Default::default()

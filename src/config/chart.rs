@@ -391,13 +391,19 @@ pub struct ChartConfig {
     pub show_extended_hours: bool,
     /// Extended-hours fill. `PLACEHOLDER` uses the active theme accent at low opacity.
     pub extended_hours_color: Color32,
-    /// Whether to show watermark (large symbol name overlay)
+    /// Whether to show the symbol watermark.
     pub show_watermark: bool,
-    /// Watermark text (None = use symbol name)
+    /// Text of the symbol watermark; `\n` starts another line. `None` shows the symbol and the
+    /// interval, such as `AAPL, 1D`, which follow symbol and interval changes.
     pub watermark_text: Option<String>,
+    /// Without `watermark_text`, adds the instrument's description on a second line. Absent in
+    /// configurations saved before it existed, where it reads as `false`.
+    #[serde(default)]
+    pub watermark_description: bool,
     /// Watermark color (typically semi-transparent)
     pub watermark_color: Color32,
-    /// Watermark font size
+    /// Font size of `watermark_text`. The symbol and interval line is twice this size and the
+    /// description line 11/12 of it.
     pub watermark_font_size: f32,
     /// Watermark position
     pub watermark_pos: WatermarkPos,
@@ -536,6 +542,7 @@ impl Default for ChartConfig {
             // Watermark disabled by default
             show_watermark: false,
             watermark_text: None,
+            watermark_description: false,
             watermark_color: chart.grid_line,
             watermark_font_size: 48.0,
             watermark_pos: WatermarkPos::Center,
@@ -569,7 +576,11 @@ impl ChartConfig {
         self.watermark_color = if theme.dark {
             theme.chart.grid_line
         } else {
-            theme.chart.bg.lerp_to_gamma(theme.ui.text, 0.18)
+            // A cool ink: the interface text would give a neutral grey on the white plot.
+            theme
+                .chart
+                .bg
+                .lerp_to_gamma(Color32::from_rgb(10, 16, 33), 0.18)
         };
         self
     }
@@ -583,6 +594,6 @@ mod tests {
     fn with_theme_recolours_session_breaks_and_watermark() {
         let config = ChartConfig::default().with_theme(&Theme::light());
         assert_eq!(config.session_break_color, Color32::from_rgb(229, 229, 229));
-        assert_eq!(config.watermark_color, Color32::from_rgb(209, 209, 209));
+        assert_eq!(config.watermark_color, Color32::from_rgb(211, 212, 215));
     }
 }

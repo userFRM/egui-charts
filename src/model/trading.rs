@@ -118,6 +118,25 @@ pub enum PositionBracket {
     StopLoss,
 }
 
+/// A take profit that closes its own part of an order: one of
+/// [`OrderRequest::take_profit_levels`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TakeProfitLevel {
+    /// The price at which it closes [`quantity`](Self::quantity): above the entry for a buy,
+    /// below for a sell.
+    pub price: f64,
+    /// Positive, in the symbol's trading units.
+    pub quantity: f64,
+}
+
+impl TakeProfitLevel {
+    /// A take profit that closes `quantity` at `price`.
+    pub fn new(price: f64, quantity: f64) -> Self {
+        Self { price, quantity }
+    }
+}
+
 /// An order as the user or the host asks for it.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -132,7 +151,13 @@ pub struct OrderRequest {
     pub order_type: OrderType,
     /// The price at which a take-profit order closes the filled quantity, for an account that
     /// accepts [brackets](Capabilities::brackets): above the entry for a buy, below for a sell.
+    /// `None` while [`take_profit_levels`](Self::take_profit_levels) are set.
     pub take_profit: Option<f64>,
+    /// Several take profits, each closing its own quantity, for an account that accepts
+    /// [take-profit levels](Capabilities::take_profit_levels), in the order given. Their
+    /// quantities add up to [`quantity`](Self::quantity). Empty for one take profit or none,
+    /// which [`take_profit`](Self::take_profit) holds.
+    pub take_profit_levels: Vec<TakeProfitLevel>,
     /// The price at which a stop-loss order closes the filled quantity, for an account that
     /// accepts [brackets](Capabilities::brackets): below the entry for a buy, above for a sell.
     pub stop_loss: Option<f64>,
@@ -157,6 +182,7 @@ impl OrderRequest {
             quantity,
             order_type,
             take_profit: None,
+            take_profit_levels: Vec::new(),
             stop_loss: None,
             time_in_force: TimeInForce::Day,
             position_bracket: None,
@@ -440,8 +466,13 @@ pub struct Capabilities {
     pub stop: bool,
     /// Accepts stop-limit orders.
     pub stop_limit: bool,
-    /// Accepts a take-profit and a stop-loss with an order.
+    /// Accepts a take-profit and a stop-loss with an order, and with [`modify`](Self::modify)
+    /// adds them to a working order.
     pub brackets: bool,
+    /// Accepts several take profits with an order, each closing its own quantity, through
+    /// [`OrderRequest::take_profit_levels`]. Needs [`brackets`](Self::brackets); without it the
+    /// order ticket offers one take profit.
+    pub take_profit_levels: bool,
     /// Closes a position with an opposite market order, so the Close and Flatten controls work.
     pub close: bool,
     /// Reverses a position with an opposite market order of twice its size, so the Reverse
@@ -451,7 +482,8 @@ pub struct Capabilities {
     /// preview an order before it is placed.
     pub preview: bool,
     /// Changes working orders through [`Broker::modify`](crate::services::Broker::modify), so
-    /// their lines on the chart can be dragged.
+    /// their lines on the chart can be dragged, and with [`brackets`](Self::brackets) exits
+    /// added to them.
     pub modify: bool,
 }
 

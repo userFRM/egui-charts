@@ -185,21 +185,14 @@ impl ChartSettingsState {
             .copied()
             .find(|mode| mode.decimals() == decimals)
             .unwrap_or_default();
-        let symbol_description = chart
-            .instrument()
-            .and_then(|instrument| instrument.description.as_deref())
-            .map_or_else(
-                || chart.symbol.clone(),
-                |description| format!("{} · {description}", chart.symbol),
-            );
         settings.watermark.mode = if !config.show_watermark {
             WatermarkMode::ReplayMode
-        } else if config.watermark_text.is_none() {
-            WatermarkMode::Symbol
-        } else if config.watermark_text.as_deref() == Some(symbol_description.as_str()) {
+        } else if config.watermark_text.is_some() {
+            WatermarkMode::Custom
+        } else if config.watermark_description {
             WatermarkMode::SymbolAndDescription
         } else {
-            WatermarkMode::Custom
+            WatermarkMode::Symbol
         };
         settings.watermark.color = config.watermark_color;
         settings.scales_appearance.text_color = config.text_color;
@@ -276,19 +269,6 @@ impl ChartSettingsState {
         }
         chart.set_event_visibility(self.events.clone());
         chart.set_price_targets_visible(self.show_price_targets);
-        let watermark_text = if self.watermark.mode == WatermarkMode::SymbolAndDescription {
-            Some(
-                chart
-                    .instrument()
-                    .and_then(|instrument| instrument.description.as_deref())
-                    .map_or_else(
-                        || chart.symbol.clone(),
-                        |description| format!("{} · {description}", chart.symbol),
-                    ),
-            )
-        } else {
-            None
-        };
         chart.chart_options.time_scale.timezone = timezone;
         if self.scales_appearance.lines_color != axis_line_color(chart.config()) {
             // A transparent line is no line; any other colour draws on the price axes and the time axis.
@@ -402,7 +382,9 @@ impl ChartSettingsState {
         config.show_watermark = self.watermark.mode != WatermarkMode::ReplayMode;
         config.watermark_color = self.watermark.color;
         if self.watermark.mode != WatermarkMode::Custom {
-            config.watermark_text = watermark_text;
+            config.watermark_text = None;
+            config.watermark_description =
+                self.watermark.mode == WatermarkMode::SymbolAndDescription;
         }
         chart.price_scale_mut().options_mut().scale_margins = crate::scales::PriceScaleMargins {
             top: f64::from(self.margins.top_percent.clamp(0.0, 100.0)) / 100.0,
@@ -724,6 +706,60 @@ mod tests {
             // A layout saved with this size could not be restored.
             settings.scales_appearance.font_size = 0;
             assert!(settings.apply_to_chart(&mut chart).is_err());
+        }
+    }
+
+    /// Each watermark mode paints its lines for the symbol, interval and description shown, also
+    /// after they change without the settings being applied again, and reads back as chosen. At
+    /// the default font size of 48, custom text keeps that size; the symbol line is 96 and the
+    /// description 44, whose capitals are about 68 and 31 pixels high in the interface font.
+    #[test]
+    fn watermark_modes_follow_symbol_and_interval_changes() {
+        use crate::model::Timeframe;
+        use crate::widget::test_frames::{chart, shapes};
+        let color = Color32::from_rgb(1, 2, 3);
+        for mode in WatermarkMode::all().iter().copied() {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.config_mut().watermark_text =
+                (mode == WatermarkMode::Custom).then(|| "Desk 4\nNight".to_owned());
+            let mut settings = ChartSettingsState::from_chart(&chart);
+            settings.watermark.mode = mode;
+            settings.watermark.color = color;
+            settings.apply_to_chart(&mut chart).unwrap();
+            for (symbol, interval, description, title) in [
+                ("AAPL", Timeframe::Day1, "Apple Inc", "AAPL, 1D"),
+                ("MSFT", Timeframe::Day1, "Microsoft Corp", "MSFT, 1D"),
+                ("MSFT", Timeframe::Hour4, "Microsoft Corp", "MSFT, 4h"),
+            ] {
+                chart.set_symbol(symbol);
+                chart.set_timeframe(interval);
+                chart.set_instrument(Some(Instrument::new(symbol).with_description(description)));
+                let painted: Vec<_> = shapes(&ctx, &mut chart, 0.0, Vec::new())
+                    .into_iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Text(text) if text.fallback_color == color => Some((
+                            text.galley.text().to_owned(),
+                            text.galley.job.sections[0].format.font_id.size,
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                let expected: Vec<(String, f32)> = match mode {
+                    WatermarkMode::ReplayMode => vec![],
+                    WatermarkMode::Symbol => vec![(title.into(), 96.0)],
+                    WatermarkMode::SymbolAndDescription => {
+                        vec![(title.into(), 96.0), (description.into(), 44.0)]
+                    }
+                    WatermarkMode::Custom => vec![("Desk 4".into(), 48.0), ("Night".into(), 48.0)],
+                };
+                assert_eq!(painted, expected, "{mode:?} {title}");
+                assert_eq!(
+                    ChartSettingsState::from_chart(&chart).watermark.mode,
+                    mode,
+                    "{title}"
+                );
+            }
         }
     }
 }

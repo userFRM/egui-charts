@@ -140,6 +140,20 @@ fn custom_controls_report_names_roles_and_states() {
         (Role::Button, "Chart Sync Options", |ui, _| {
             super::top_toolbar::components::SyncButton::new().show(ui);
         }),
+        (Role::MenuItemRadio, "2x2 Grid", |ui, selected| {
+            use crate::widget::ChartLayoutMode;
+            let current = if selected {
+                ChartLayoutMode::Four
+            } else {
+                ChartLayoutMode::Single
+            };
+            super::top_toolbar::components::ChartGridSelector::new(current).show_menu(ui);
+        }),
+        (Role::Switch, "Crosshair", |ui, selected| {
+            let mut selector = super::top_toolbar::components::ChartGridSelector::default();
+            selector.sync.sync_crosshair = selected;
+            selector.show_menu(ui);
+        }),
         (Role::Button, "Chart settings", |ui, _| {
             super::top_toolbar::components::settings_menu::SettingsMenu::new()
                 .show_btn(ui, ui.max_rect());
@@ -270,6 +284,8 @@ fn custom_controls_report_names_roles_and_states() {
                         "Stay in drawing mode",
                         "Favorite",
                         "Line tools",
+                        "2x2 Grid",
+                        "Crosshair",
                     ]
                     .contains(&label)
                     {

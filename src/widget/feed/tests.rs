@@ -932,7 +932,7 @@ fn depth_pages_follow_visible_time_and_stop_without_older_columns() {
             time: bars[index].time,
             span: TimeDelta::seconds(seconds),
             bids: vec![(400, 2.0)],
-            asks: vec![],
+            ..Default::default()
         };
         chart.set_visible_logical_range(crate::model::LogicalRange {
             left: 950.0,
