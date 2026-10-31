@@ -104,6 +104,8 @@ impl MagnetButton {
                                 RichText::new(l10n::text(ctx, "Got it")).color(theme.ui.accent),
                             )
                             .fill(theme.ui.accent_text)
+                            // The WCAG 2.2 AA minimum target size.
+                            .min_size(Vec2::splat(24.0))
                             .corner_radius(theme.radius.sm),
                         );
                         crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.sm);

@@ -294,8 +294,8 @@ impl DrawingToolbar {
         }
 
         // === MAGNET CARD (outside scroll area) ===
+        self.magnet_hint_open &= self.state.magnet_mode;
         if self.magnet_hint_open
-            && self.state.magnet_mode
             && !self.state.magnet_hint_dismissed
             && self.state.expanded_category.is_none()
             && let Some(anchor) = self.magnet_rect
@@ -1239,6 +1239,17 @@ mod tests {
         frame(&mut toolbar, vec![]);
         let (shapes, _) = frame(&mut toolbar, vec![]);
         assert!(label(&shapes, "Got it").is_some());
+
+        // Switched off, then restored on by the host, it brings no card.
+        toolbar.apply_pick(DrawingToolbarAction::ToggleMagnet);
+        frame(&mut toolbar, vec![]);
+        toolbar.sync_from_domain_state(&DrawingToolbarDomainState {
+            magnet_mode: true,
+            ..toolbar.get_domain_state()
+        });
+        frame(&mut toolbar, vec![]);
+        let (shapes, _) = frame(&mut toolbar, vec![]);
+        assert!(label(&shapes, "Got it").is_none());
     }
 
     /// The bar keeps its grid and utility order, with distinct selection and magnet fills.
