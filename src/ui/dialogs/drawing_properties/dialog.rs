@@ -639,10 +639,10 @@ mod tests {
             let mut chart = Chart::new(BarData::new());
             let mut dialog = DrawingPropertiesDialog::new();
             for (tool, fill, extend, text) in [
-                (Tool::HorizontalLine, false, false, false),
-                (Tool::Rect, true, true, false),
+                (Tool::HorizontalLine, false, false, true),
+                (Tool::Rect, true, true, true),
                 (Tool::Brush, false, false, false),
-                (Tool::TrendLine, false, true, false),
+                (Tool::TrendLine, false, true, true),
                 (Tool::TextLabel, true, false, true),
                 (Tool::Highlighter, false, false, false),
             ] {

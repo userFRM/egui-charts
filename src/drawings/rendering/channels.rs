@@ -56,6 +56,7 @@ impl Drawing {
                 );
             }
         }
+        self.render_line_text(painter, self.points[0], self.points[1], true);
     }
 
     pub(super) fn parallel_channel_outline(&self, rect: Rect) -> Option<super::Outline> {
@@ -168,6 +169,7 @@ impl Drawing {
             })
         };
         let [upper, center, lower] = [deviations, 0.0, -deviations].map(line);
+        let fitted = center;
 
         let label_pos = lower[0] + egui::vec2(4.0, 4.0);
         let extend = |[a, b]: [Pos2; 2]| {
@@ -228,6 +230,7 @@ impl Drawing {
             egui::FontId::proportional(typography::XS),
             band_color,
         );
+        self.render_line_text(painter, fitted[0], fitted[1], true);
     }
 
     /// Unextended endpoints in anchor order, shared with selection handles.

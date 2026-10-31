@@ -374,7 +374,11 @@ fn hit_shape(point: Pos2, shape: &egui::Shape) -> bool {
                 },
             )
         }
-        Shape::Text(t) => t.visual_bounding_rect().contains(point),
+        // A turned label is hit over its own box, not the larger upright box around it.
+        Shape::Text(t) => t
+            .galley
+            .mesh_bounds
+            .contains((egui::emath::Rot2::from_angle(-t.angle) * (point - t.pos)).to_pos2()),
         Shape::Mesh(m) => m.indices.as_chunks::<3>().0.iter().any(|tri| {
             let points = [
                 m.vertices[tri[0] as usize].pos,
@@ -450,6 +454,44 @@ pub fn point_to_line_distance(point: Pos2, line_start: Pos2, line_end: Pos2) -> 
 mod tests {
     use super::*;
     use crate::drawings::ChartPoint;
+
+    /// The glyph box is about [0, w] x [0, h] from the text's position. Turned 45 degrees clockwise,
+    /// the upright box around it has its top-right corner at about (w c, 0), with c = cos 45. Turned
+    /// back that is (w / 2, -w / 2), far above the glyphs, so the corner must not hit.
+    #[test]
+    fn turned_text_is_hit_over_its_own_box() {
+        use egui::epaint::{ClippedShape, TextShape};
+        let pos = Pos2::new(100., 100.);
+        let hits = |shape: &TextShape, point: Pos2| {
+            DrawingInteraction::hit_test_painted(
+                point,
+                &[ClippedShape::new(
+                    Rect::EVERYTHING,
+                    egui::Shape::Text(shape.clone()),
+                )],
+            )
+        };
+        egui::Context::default()
+            .run_ui(Default::default(), |ui| {
+                let galley = ui.painter().layout_no_wrap(
+                    "WWWWWWWW".into(),
+                    egui::FontId::proportional(20.0),
+                    Color32::WHITE,
+                );
+                let bounds = galley.mesh_bounds;
+                let upright = TextShape::new(pos, galley, Color32::WHITE);
+                let turned = upright.clone().with_angle(std::f32::consts::FRAC_PI_4);
+                let center =
+                    egui::emath::Rot2::from_angle(turned.angle) * bounds.center().to_vec2();
+                assert!(hits(&turned, pos + center));
+                let corner = turned.visual_bounding_rect().right_top() + egui::vec2(-1., 1.);
+                assert!(!hits(&turned, corner));
+                assert!(hits(&upright, pos + bounds.center().to_vec2()));
+                let past = Pos2::new(bounds.max.x + 1., bounds.center().y);
+                assert!(!hits(&upright, past + pos.to_vec2()));
+            })
+            .drop_without_applying_deltas();
+    }
 
     #[test]
     fn test_point_to_line_distance() {
