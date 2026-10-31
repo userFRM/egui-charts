@@ -159,6 +159,9 @@ pub struct ChartSyncOptions {
     pub sync_crosshair: bool,
     /// Synchronize completed main-pane drawings between charts of the same symbol.
     /// Study-owned drawings stay local because study ids and scales belong to each chart.
+    /// Charts that keep their drawings in the same storage are left to it: they read each other's
+    /// stored drawings whether this is on or off, so a drawing reaches them once a chart history
+    /// edit writes it. Only drawings that are not saveable still sync between them here.
     pub sync_drawings: bool,
     /// Synchronize symbol changes. A host without a feed must supply replacement bars.
     pub sync_symbol: bool,
@@ -186,7 +189,9 @@ impl Default for ChartSyncOptions {
 /// Each chart keeps its own feed, settings, scales, studies and drawings. An unnamed group
 /// synchronizes with other unnamed charts; named groups are isolated. Save this state and the
 /// charts through host storage as needed. Synchronization includes supplied slots hidden by a
-/// grid preset. The container does not acquire data or persist it.
+/// grid preset. The container does not acquire data or persist it. Charts that keep their
+/// drawings in the same storage (`Chart::set_storage`) read the drawings of their symbol again
+/// after another of them wrote them, in any group.
 ///
 /// ```
 /// # fn example(ui: &mut egui::Ui) {
@@ -500,6 +505,10 @@ impl ChartLayout {
                 .drawings
                 .sync(charts, total, &self.groups, pointer_down)
         {
+            ui.ctx().request_repaint();
+        }
+        #[cfg(feature = "drawings")]
+        if Chart::share_stored_drawings(charts) {
             ui.ctx().request_repaint();
         }
         for (index, chart) in charts.iter().enumerate() {

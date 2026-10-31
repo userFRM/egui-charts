@@ -590,6 +590,44 @@ impl DrawingManager {
         id
     }
 
+    /// What [`Self::keep_across_read`] needs of the drawings about to be replaced.
+    pub(crate) fn before_read(&self) -> BeforeRead {
+        BeforeRead {
+            ids: self.drawings.iter().map(|d| (sync_id(d), d.id)).collect(),
+            next_id: self.next_id,
+            unsaved: self
+                .drawings
+                .iter()
+                .filter(|d| !d.saveable)
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// Gives drawings just read from storage the local ids they had before, so that what refers
+    /// to a drawing by its local id, such as an open properties dialog, keeps referring to it.
+    /// Every other drawing gets an id no earlier drawing had, so that it is not taken for one
+    /// removed elsewhere. Drawings that are never stored stay, since no document holds them.
+    pub(crate) fn keep_across_read(&mut self, previous: BeforeRead) {
+        let BeforeRead {
+            ids,
+            next_id,
+            unsaved,
+        } = previous;
+        self.next_id = self.next_id.max(next_id);
+        let mut fresh = Vec::new();
+        for (at, drawing) in self.drawings.iter_mut().enumerate() {
+            match drawing.stored_id.as_ref().and_then(|id| ids.get(id)) {
+                Some(id) => drawing.id = *id,
+                None => fresh.push(at),
+            }
+        }
+        for at in fresh {
+            self.drawings[at].id = self.take_id();
+        }
+        self.drawings.extend(unsaved);
+    }
+
     /// The z-order that puts a drawing added now on top of the others.
     pub(crate) fn top_z_order(&self) -> i32 {
         self.drawings.iter().map(|d| d.z_order).max().unwrap_or(0)
@@ -608,6 +646,15 @@ impl DrawingManager {
         }
         self.history.visit_chart_points(visit);
     }
+}
+
+/// What a manager keeps when drawings read from storage replace its own.
+pub(crate) struct BeforeRead {
+    /// The local id of each drawing by the id it is stored under.
+    ids: std::collections::HashMap<String, usize>,
+    next_id: usize,
+    /// The drawings that are never stored.
+    unsaved: Vec<Drawing>,
 }
 
 /// Coalesces repeated saves and updates of a drawing without reordering them across its delete.

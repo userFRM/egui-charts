@@ -1,9 +1,9 @@
 //! Each symbol's drawings kept in the host's storage.
 
 use super::Chart;
-use crate::drawings::persistence::DrawingStorage;
+use crate::drawings::persistence::{DrawingStorage, StoredPane};
 use crate::services::document::{Received, StoredDocument};
-use crate::services::{Storage, StoreKind};
+use crate::services::{ConflictChoice, Revision, Storage, StoreKind};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -21,6 +21,13 @@ pub(super) struct DrawingStore {
     /// Edits made before a read finishes. The flag distinguishes edits from a restored layout.
     pending: HashMap<String, (DrawingStorage, bool)>,
     error: Option<String>,
+    /// Documents this chart wrote, or read again at a newer revision, since the charts of its
+    /// layout that keep drawings in the same storage were told; `None` for a host without
+    /// revisions.
+    changed: HashMap<String, Option<Revision>>,
+    /// Per symbol, the stored pane of each read drawing whose study this chart does not show, by
+    /// stored id with its creation time: shown in the price pane, it is written back in its own.
+    unshown_panes: HashMap<String, HashMap<String, (i64, StoredPane)>>,
 }
 
 impl DrawingStore {
@@ -35,6 +42,7 @@ impl DrawingStore {
         }
         self.documents.remove(symbol);
         self.loaded.remove(symbol);
+        self.unshown_panes.remove(symbol);
         self.documents.shrink_to_fit();
         self.loaded.shrink_to_fit();
         true
@@ -52,6 +60,13 @@ impl DrawingStore {
     }
 }
 
+/// Starts reading the drawings of `symbol` and follows changes other clients make to them.
+fn open_drawings(storage: &dyn Storage, symbol: &str) -> StoredDocument {
+    let mut document = StoredDocument::open(storage, StoreKind::Drawings, symbol);
+    document.follow_changes(storage);
+    document
+}
+
 impl Chart {
     /// Keeps each symbol's drawings in `storage`, in the [`StoreKind::Drawings`] document named
     /// by the symbol. The drawings of a symbol are read when it is first shown and, when a
@@ -59,9 +74,21 @@ impl Chart {
     /// every drawing edit made through chart history (every user edit, undo and redo) and when
     /// the symbol changes. Failed writes retain the latest document and retry after one second
     /// of input time; [`Self::flush_stored_drawings`] retries immediately.
-    /// Drawings that could not all be read are never written over. Charts that show the same
-    /// symbol write the same document, so share their drawings through
-    /// [`ChartLayout`](super::ChartLayout) drawing sync or give storage to one of them.
+    /// Drawings that could not all be read are never written over.
+    ///
+    /// Charts that show one symbol keep its drawings in one document. A chart reads them again
+    /// after another chart of the same [`ChartLayout`](super::ChartLayout) wrote them to the same
+    /// `storage`, and after another client changed them if `storage` keeps revisions and reports
+    /// changes through [`Storage::watch`]. It does so once nothing of its own is unsaved and no
+    /// drawing is being drawn, dragged, measured or edited: the stored drawings replace its
+    /// saveable drawings, selection and undo history, each keeping its local id, and a document
+    /// deleted elsewhere leaves none. A drawing whose study the chart does not show appears in
+    /// the price pane and is written back in its study's pane. If `storage` keeps revisions, a
+    /// write over drawings changed elsewhere since they were read is refused and waits, with the
+    /// chart's drawings unchanged, until [`Self::resolve_storage_conflict`] settles it; without
+    /// revisions, the later write replaces the earlier one, including edits on two charts within
+    /// the time one write takes.
+    ///
     /// Per-drawing storage notifications are disabled and cleared. To consume them alongside
     /// automatic storage, call `chart.drawings_mut().set_sync_enabled(true)` after attaching it.
     pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
@@ -78,13 +105,17 @@ impl Chart {
             captured: self.history.drawing_edits,
             pending: HashMap::new(),
             error: None,
+            changed: HashMap::new(),
+            unshown_panes: HashMap::new(),
         });
     }
 
     /// Captures current drawing edits and retries failed writes for every symbol immediately.
     /// Available replies are processed, but asynchronous storage is not awaited. Returns `true`
     /// once all captured edits are acknowledged. Keep rendering or call again to finish delayed
-    /// reads and writes; inspect [`Self::take_storage_error`] for failures.
+    /// reads and writes; inspect [`Self::take_storage_error`] for failures. A write refused
+    /// because the drawings changed elsewhere stays unacknowledged until
+    /// [`Self::resolve_storage_conflict`] settles it.
     pub fn flush_stored_drawings(&mut self) -> bool {
         if let Some(sync) = self.drawing_store.as_ref().map(|store| store.sync) {
             sync(self, None);
@@ -104,6 +135,79 @@ impl Chart {
         self.drawing_store.as_mut()?.error.take()
     }
 
+    /// The symbol whose drawings `storage` refused to write because another client changed them
+    /// after they were read: the shown symbol first, then the others by name. The chart keeps
+    /// its drawings and writes nothing of that symbol until [`Self::resolve_storage_conflict`]
+    /// settles it; ask the user, for example with `ui::dialogs::StorageConflictDialog`. `None`
+    /// while no refused write waits, including while a kept copy is being written.
+    pub fn storage_conflict(&self) -> Option<&str> {
+        let store = self.drawing_store.as_ref()?;
+        let waiting = |document: &StoredDocument| document.conflicted() && !document.copying();
+        if store.documents.get(&self.symbol).is_some_and(waiting) {
+            return Some(self.symbol.as_str());
+        }
+        store
+            .documents
+            .iter()
+            .filter(|(_, document)| waiting(document))
+            .map(|(name, _)| name.as_str())
+            .min()
+    }
+
+    /// Settles the refused write of `symbol`'s drawings that [`Self::storage_conflict`] reports
+    /// with the user's `choice`: read the stored drawings, keep the unsaved ones as the document
+    /// `<symbol> (local copy)` (or the next free numbered copy) and read the stored ones, or write
+    /// the unsaved ones over the stored ones. The drawings change on the next frame or
+    /// [`Self::flush_stored_drawings`]. Does nothing when no write of `symbol` waits for a choice.
+    pub fn resolve_storage_conflict(&mut self, symbol: &str, choice: ConflictChoice) {
+        if let Some(store) = &mut self.drawing_store
+            && let Some(document) = store.documents.get_mut(symbol)
+        {
+            document.resolve(&*store.storage, choice);
+        }
+    }
+
+    /// Whether this chart and `other` keep their drawings in the same storage.
+    pub(super) fn shares_stored_drawings(&self, other: &Chart) -> bool {
+        match (&self.drawing_store, &other.drawing_store) {
+            (Some(own), Some(other)) => Arc::ptr_eq(&own.storage, &other.storage),
+            _ => false,
+        }
+    }
+
+    /// Tells each chart in `charts` which documents the others that keep drawings in the same
+    /// storage wrote or read again since the last call, so that it reads them again. Returns
+    /// whether any chart was told.
+    pub(super) fn share_stored_drawings(charts: &mut [&mut Chart]) -> bool {
+        let mut shared = false;
+        for at in 0..charts.len() {
+            let Some(store) = &mut charts[at].drawing_store else {
+                continue;
+            };
+            if store.changed.is_empty() {
+                continue;
+            }
+            let changed = std::mem::take(&mut store.changed);
+            let storage = Arc::clone(&store.storage);
+            for (other, chart) in charts.iter_mut().enumerate() {
+                let Some(store) = chart
+                    .drawing_store
+                    .as_mut()
+                    .filter(|store| other != at && Arc::ptr_eq(&store.storage, &storage))
+                else {
+                    continue;
+                };
+                for (name, revision) in &changed {
+                    if let Some(document) = store.documents.get_mut(name) {
+                        document.changed_elsewhere(revision.clone());
+                        shared = true;
+                    }
+                }
+            }
+        }
+        shared
+    }
+
     /// Reads the shown symbol's drawings when it is first shown and saves edited drawings.
     pub(super) fn sync_stored_drawings(&mut self, ctx: &egui::Context) {
         if let Some(store) = &self.drawing_store {
@@ -114,14 +218,21 @@ impl Chart {
     fn poll_stored_drawings(&mut self, ctx: Option<&egui::Context>) {
         self.save_stored_drawings();
         let symbol = self.symbol.clone();
+        // A change made elsewhere is read between gestures, so that it cannot cut one short.
+        let busy = ctx.is_some_and(|ctx| ctx.input(|input| input.pointer.any_down()))
+            || self.drawings.curr_drawing.is_some()
+            || self.drawings.measurement.is_some()
+            || self.drawings.text_editor.is_some();
         let Some(store) = &mut self.drawing_store else {
             return;
         };
         if !symbol.is_empty() && !store.documents.contains_key(&symbol) {
-            let document = StoredDocument::open(&*store.storage, StoreKind::Drawings, &symbol);
+            let document = open_drawings(&*store.storage, &symbol);
             store.documents.insert(symbol.clone(), document);
         }
         for (name, document) in &mut store.documents {
+            document.hold(busy && name == &symbol);
+            let mut first = document.reading();
             let received = match ctx {
                 Some(ctx) => document.poll(&*store.storage, ctx),
                 None => document.flush(&*store.storage),
@@ -129,6 +240,16 @@ impl Chart {
             for received in received {
                 match received {
                     Received::Loaded(json) => {
+                        let later = !std::mem::replace(&mut first, false);
+                        if later && let Some(revision) = document.revision() {
+                            store.changed.insert(name.clone(), Some(revision.clone()));
+                        }
+                        // Read again and missing, the document was deleted: no drawings remain.
+                        let json = json.or_else(|| {
+                            later
+                                .then(|| DrawingStorage::new(name.clone()).to_json().ok())
+                                .flatten()
+                        });
                         let read = json.as_deref().map(DrawingStorage::from_json).transpose();
                         match read {
                             Ok(Some((drawings, skipped)))
@@ -186,12 +307,13 @@ impl Chart {
                         }
                     }
                     Received::Failed(error) => store.error = Some(error),
-                    Received::Conflict => {
-                        store.error = Some(format!(
-                            "Could not save drawings of {name}: they were changed elsewhere"
-                        ))
+                    // `storage_conflict` reports it until `resolve_storage_conflict` settles it.
+                    Received::Conflict => {}
+                    Received::Saved(_) => {
+                        store
+                            .changed
+                            .insert(name.clone(), document.revision().cloned());
                     }
-                    Received::Saved(_) => {}
                 }
             }
         }
@@ -210,12 +332,37 @@ impl Chart {
 
     /// Replaces the drawings with the stored ones in `json`.
     fn restore_stored_drawings(&mut self, json: &str) {
-        let refused = match self.load_drawings_remapped(json, true) {
+        let previous = self.drawings.before_read();
+        let loaded = self.load_drawings_remapped(json, true);
+        if loaded.is_ok() {
+            self.drawings.keep_across_read(previous);
+        }
+        let refused = match loaded {
             Ok(skipped) if skipped.is_empty() => None,
             Ok(skipped) => Some(format!("{} drawings could not be read", skipped.len())),
             Err(error) => Some(error.to_string()),
         };
+        // Drawings whose study this chart does not show, shown in the price pane.
+        let unshown: HashMap<_, _> = DrawingStorage::from_json(json)
+            .map(|(stored, _)| {
+                self.drawings
+                    .drawings
+                    .iter()
+                    .filter(|drawing| drawing.pane.is_none())
+                    .filter_map(|drawing| {
+                        let id = drawing.stored_id.as_ref()?;
+                        let record = stored.get_drawing(id)?;
+                        Some((id.clone(), (record.created_at, record.pane.clone()?)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let store = self.drawing_store.as_mut().expect("drawing storage");
+        if unshown.is_empty() {
+            store.unshown_panes.remove(&self.symbol);
+        } else {
+            store.unshown_panes.insert(self.symbol.clone(), unshown);
+        }
         if let Some(error) = refused {
             if let Some(document) = store.documents.get_mut(&self.symbol) {
                 document.refuse_writes();
@@ -244,14 +391,25 @@ impl Chart {
         {
             return;
         }
-        let drawings = self.save_drawings();
+        let mut drawings = self.save_drawings();
         let store = self.drawing_store.as_mut().expect("drawing storage");
+        // A drawing whose study is not shown here stays in that study's pane for the charts
+        // that show it.
+        if let (Ok(drawings), Some(panes)) = (&mut drawings, store.unshown_panes.get(&self.symbol))
+        {
+            for record in &mut drawings.drawings {
+                if record.pane.is_none()
+                    && let Some((created_at, pane)) = panes.get(&record.id)
+                    && *created_at == record.created_at
+                {
+                    record.pane = Some(pane.clone());
+                }
+            }
+        }
         let document = store
             .documents
             .entry(self.symbol.clone())
-            .or_insert_with(|| {
-                StoredDocument::open(&*store.storage, StoreKind::Drawings, &self.symbol)
-            });
+            .or_insert_with(|| open_drawings(&*store.storage, &self.symbol));
         match drawings {
             Ok(drawings) if document.reading() => {
                 let merge = store
@@ -613,6 +771,234 @@ mod tests {
         for drawing in &delayed.drawings().drawings {
             assert_eq!(drawing.chart_points[0].bar_idx, 2.0);
             assert_eq!(drawing.chart_points[0].price, 10.5);
+        }
+    }
+
+    fn line_at(bar: f32, price: f64) -> Drawing {
+        let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+        line.chart_points = vec![ChartPoint::new(bar, price)];
+        line.completed = true;
+        line
+    }
+
+    fn draw_line(chart: &mut Chart, line: Drawing) -> usize {
+        chart.user_action(|chart| chart.drawings_mut().add_drawing(line).unwrap())
+    }
+
+    fn sorted(mut prices: Vec<f64>) -> Vec<f64> {
+        prices.sort_by(f64::total_cmp);
+        prices
+    }
+
+    fn shown_prices(chart: &Chart) -> Vec<f64> {
+        let drawings = &chart.drawings().drawings;
+        sorted(drawings.iter().map(|d| d.chart_points[0].price).collect())
+    }
+
+    /// Guards #1463: two clients on a storage that keeps revisions, where the later write is
+    /// refused and the user's choice settles it.
+    #[test]
+    fn a_refused_drawings_write_waits_for_the_users_choice() {
+        use crate::services::document::tests::Revised;
+        let stored = |host: &Revised, name: &str| {
+            host.get(name).map(|json| {
+                let (stored, _) = DrawingStorage::from_json(&json).unwrap();
+                sorted(
+                    stored
+                        .drawings()
+                        .iter()
+                        .map(|d| d.points[0].price)
+                        .collect(),
+                )
+            })
+        };
+        let new_chart = |host: &Arc<Revised>| {
+            let bar = Bar::new(Utc.timestamp_opt(0, 0).unwrap(), 10.0, 11.0, 9.0, 10.0, 1.0);
+            let mut chart = Chart::new(BarData::from_bars(vec![bar]));
+            chart.set_symbol("A");
+            chart.set_storage(host.clone());
+            assert!(chart.flush_stored_drawings());
+            chart
+        };
+        // The choice, whether the other client deletes the document instead of adding to it, the
+        // prices then stored, those of the kept copy, and those the chart shows.
+        for (choice, deleted, expected, copy, shown) in [
+            (
+                ConflictChoice::ReloadRemote,
+                false,
+                Some(vec![10.0, 10.5]),
+                None,
+                vec![10.0, 10.5],
+            ),
+            (
+                ConflictChoice::KeepLocalCopy,
+                false,
+                Some(vec![10.0, 10.5]),
+                Some(vec![10.0, 11.0]),
+                vec![10.0, 10.5],
+            ),
+            (
+                ConflictChoice::Retry,
+                false,
+                Some(vec![10.0, 11.0]),
+                None,
+                vec![10.0, 11.0],
+            ),
+            (ConflictChoice::ReloadRemote, true, None, None, vec![]),
+        ] {
+            let host = Arc::new(Revised::default());
+            let mut theirs = new_chart(&host);
+            draw_line(&mut theirs, line_at(0.0, 10.0));
+            assert!(theirs.flush_stored_drawings());
+            let mut mine = new_chart(&host);
+            assert_eq!(shown_prices(&mine), [10.0]);
+            draw_line(&mut mine, line_at(0.0, 11.0));
+            if deleted {
+                host.remove("A");
+            } else {
+                draw_line(&mut theirs, line_at(0.0, 10.5));
+                assert!(theirs.flush_stored_drawings());
+            }
+            assert!(!mine.flush_stored_drawings(), "{choice:?}");
+            assert_eq!(mine.storage_conflict(), Some("A"));
+            assert_eq!(shown_prices(&mine), [10.0, 11.0], "kept until the choice");
+            mine.resolve_storage_conflict("A", choice);
+            assert!(mine.flush_stored_drawings(), "{choice:?}");
+            assert_eq!(mine.storage_conflict(), None);
+            assert_eq!(stored(&host, "A"), expected, "{choice:?}");
+            assert_eq!(stored(&host, "A (local copy)"), copy, "{choice:?}");
+            assert_eq!(shown_prices(&mine), shown, "{choice:?}");
+            // A change from elsewhere waits for the drawing in progress.
+            if choice == ConflictChoice::Retry {
+                theirs.drawings_mut().curr_drawing = Some(line_at(0.0, 12.0));
+                theirs.flush_stored_drawings();
+                assert_eq!(shown_prices(&theirs), [10.0, 10.5]);
+                theirs.drawings_mut().curr_drawing = None;
+                theirs.flush_stored_drawings();
+                assert_eq!(shown_prices(&theirs), [10.0, 11.0]);
+            }
+        }
+    }
+
+    /// Guards #1463: two charts of one layout on one storage edit one symbol with drawing sync
+    /// on, whether the host keeps revisions or not, without a refusal or a lost drawing; a
+    /// drawing keeps its study's pane, and a reread keeps what an open dialog refers to.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn charts_of_one_layout_follow_each_others_stored_drawings() {
+        use crate::services::document::tests::Revised;
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use crate::widget::{ChartLayout, ChartLayoutMode};
+        use egui::{Pos2, RawInput, Rect, vec2};
+
+        let unwatched = Revised::default();
+        unwatched.2.store(true, Ordering::Relaxed);
+        let hosts: [Arc<dyn Storage>; 2] = [Arc::new(Host::default()), Arc::new(unwatched)];
+        for host in hosts {
+            let new_chart = || {
+                let bars = (0..10)
+                    .map(|i| {
+                        let time = Utc.timestamp_opt(i * 60, 0).unwrap();
+                        Bar::new(time, 10.0, 11.0, 9.0, 10.0, 1.0)
+                    })
+                    .collect();
+                let mut chart = Chart::new(BarData::from_bars(bars));
+                chart.set_symbol("A");
+                chart.set_storage(host.clone());
+                chart
+            };
+            let (mut a, mut b) = (new_chart(), new_chart());
+            let gamma = a.add_indicator(Box::new(
+                CustomIndicator::new("Gamma", |bars: &[Bar]| {
+                    vec![IndicatorValue::Single(40.0); bars.len()]
+                })
+                .with_overlay(false),
+            ));
+            let mut layout = ChartLayout::default();
+            layout.mode = ChartLayoutMode::TwoHorizontal;
+            layout.sync.sync_drawings = true;
+            let ctx = egui::Context::default();
+            // A write, the reread it causes, and a frame of rest.
+            let mut frames = |a: &mut Chart, b: &mut Chart| {
+                for _ in 0..3 {
+                    let input = RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
+                        ..Default::default()
+                    };
+                    ctx.run_ui(input, |ui| {
+                        layout.show(ui, &mut [&mut *a, &mut *b]);
+                    })
+                    .drop_without_applying_deltas();
+                }
+            };
+            let find = |chart: &Chart, price: f64| {
+                let drawings = &chart.drawings().drawings;
+                drawings
+                    .iter()
+                    .find(|d| d.chart_points[0].price == price)
+                    .cloned()
+                    .unwrap()
+            };
+            frames(&mut a, &mut b);
+            let mut study_line = line_at(4.0, 40.0);
+            study_line.pane = Some(gamma.0);
+            draw_line(&mut a, study_line);
+            frames(&mut a, &mut b);
+            assert_eq!(shown_prices(&a), [40.0]);
+            assert_eq!(shown_prices(&b), [40.0]);
+
+            draw_line(&mut b, line_at(4.0, 10.5));
+            frames(&mut a, &mut b);
+            assert_eq!(shown_prices(&a), [10.5, 40.0]);
+            assert_eq!(shown_prices(&b), [10.5, 40.0]);
+            assert_eq!(find(&a, 40.0).pane, Some(gamma.0));
+            assert_eq!(find(&a, 10.5).pane, None);
+
+            // Properties opened before a reread that removes one drawing and adds another.
+            #[cfg(feature = "ui")]
+            {
+                use crate::ui::dialogs::{DrawingId, DrawingProps};
+                let open = |chart: &Chart, price: f64| {
+                    let drawing = find(chart, price);
+                    let props = DrawingProps {
+                        line_width: 3.5,
+                        ..DrawingProps::from_drawing(&drawing, chart)
+                    };
+                    (DrawingId(drawing.id), props)
+                };
+                let (removed_id, removed) = open(&a, 40.0);
+                let (kept_id, kept) = open(&a, 10.5);
+                let gone = find(&b, 40.0).id;
+                b.user_action(|chart| {
+                    chart.drawings_mut().delete_drawing(gone);
+                });
+                draw_line(&mut b, line_at(4.0, 9.5));
+                frames(&mut a, &mut b);
+                assert_eq!(shown_prices(&a), [9.5, 10.5]);
+                assert_eq!(find(&a, 10.5).id, kept_id.0);
+                assert!(removed.apply_to_chart(removed_id, &mut a).is_err());
+                let width = find(&a, 9.5).stroke_width;
+                assert_eq!(find(&a, 10.5).stroke_width, width);
+                kept.apply_to_chart(kept_id, &mut a).unwrap();
+                assert_eq!(find(&a, 10.5).stroke_width, 3.5);
+                assert_eq!(find(&a, 9.5).stroke_width, width);
+            }
+
+            // A drawing no document holds stays through a reread and reaches the other chart by
+            // drawing sync.
+            let mut volatile = line_at(4.0, 77.0);
+            volatile.saveable = false;
+            a.drawings_mut().add_synced_drawing(volatile);
+            frames(&mut a, &mut b);
+            draw_line(&mut b, line_at(4.0, 8.5));
+            frames(&mut a, &mut b);
+            let count = |chart: &Chart, price: f64| {
+                shown_prices(chart).iter().filter(|p| **p == price).count()
+            };
+            for chart in [&a, &b] {
+                assert_eq!(count(chart, 8.5), 1);
+                assert_eq!(count(chart, 77.0), 1);
+            }
         }
     }
 }
