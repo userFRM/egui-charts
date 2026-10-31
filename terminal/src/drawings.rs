@@ -227,7 +227,7 @@ impl Terminal {
             MagnetType::Weak
         };
         toolbar.sync_from_domain_state(&DrawingToolbarDomainState {
-            sel_tool: manager.active_tool,
+            sel_tool: manager.active_tool(),
             magnet_mode: manager.options.magnet_mode,
             snap_to_indicators: manager.options.snap_to_indicators,
             magnet_type,
@@ -238,11 +238,14 @@ impl Terminal {
                 CrosshairStyle::Demonstration => CursorType::Demonstration,
                 CrosshairStyle::Magic => CursorType::Magic,
             },
-            eraser_mode_enabled: manager.eraser_mode,
+            eraser_mode_enabled: manager.is_eraser_mode(),
             stay_in_drawing_mode: manager.stay_in_drawing_mode,
             // The swatch shows the colour the active tool draws in, its saved default or its own.
             drawing_color: manager
-                .new_drawing(0, manager.active_tool.unwrap_or(DrawingToolType::TrendLine))
+                .new_drawing(
+                    0,
+                    manager.active_tool().unwrap_or(DrawingToolType::TrendLine),
+                )
                 .color,
         });
         let drawings = &manager.drawings;
@@ -346,7 +349,7 @@ impl Terminal {
             }
             DrawingToolbarAction::ToggleEraserMode => {
                 let manager = chart.drawings_mut();
-                let on = !manager.eraser_mode;
+                let on = !manager.is_eraser_mode();
                 manager.set_eraser_mode(on);
             }
             DrawingToolbarAction::ToggleStayInDrawingMode => {
@@ -356,7 +359,7 @@ impl Terminal {
             DrawingToolbarAction::ColorChanged(rgba) => {
                 // The colour becomes the active tool's saved default; other tools keep theirs.
                 let manager = chart.drawings_mut();
-                if let Some(tool) = manager.active_tool {
+                if let Some(tool) = manager.active_tool() {
                     let mut drawing = manager.new_drawing(0, tool);
                     drawing.color = rgba;
                     manager
@@ -383,7 +386,7 @@ impl Terminal {
             DrawingToolbarAction::InsertGlyph { icon_name, size } => {
                 let manager = chart.drawings_mut();
                 manager.start_icon_insertion(icon_name.to_string());
-                if let Some(drawing) = &mut manager.curr_drawing {
+                if let Some(drawing) = manager.curr_drawing_mut() {
                     drawing.font_size = size;
                 }
             }
@@ -919,7 +922,7 @@ mod tests {
                 f64::from,
             );
             manager.add_point_with_coords(pos2(3.0, 4.0), |x| x, f64::from);
-            assert!(manager.active_tool.is_none());
+            assert!(manager.active_tool().is_none());
             frame(&mut terminal, SIZE, vec![]);
             assert!(terminal.drawings.toolbar.state.sel_tool.is_none());
             terminal.chart_mut().drawings_mut().set_eraser_mode(true);

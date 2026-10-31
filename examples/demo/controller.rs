@@ -1739,7 +1739,7 @@ impl DemoApp {
         };
         self.drawing_toolbar
             .sync_from_domain_state(&DrawingToolbarDomainState {
-                sel_tool: dm.active_tool,
+                sel_tool: dm.active_tool(),
                 magnet_mode: dm.options.magnet_mode,
                 snap_to_indicators: dm.options.snap_to_indicators,
                 magnet_type,
@@ -1750,12 +1750,12 @@ impl DemoApp {
                     CrosshairStyle::Demonstration => CursorType::Demonstration,
                     CrosshairStyle::Magic => CursorType::Magic,
                 },
-                eraser_mode_enabled: dm.eraser_mode,
+                eraser_mode_enabled: dm.is_eraser_mode(),
                 stay_in_drawing_mode: dm.stay_in_drawing_mode,
                 drawing_color: dm
                     .new_drawing(
                         0,
-                        dm.active_tool
+                        dm.active_tool()
                             .unwrap_or(egui_charts::drawings::DrawingToolType::TrendLine),
                     )
                     .color,
@@ -1914,7 +1914,7 @@ impl DemoApp {
                     .set_crosshair_mode(egui_charts::config::CrosshairMode::Magnet);
             }
             DrawingToolbarAction::ToggleEraserMode => {
-                let on = !dm.eraser_mode;
+                let on = !dm.is_eraser_mode();
                 dm.set_eraser_mode(on);
             }
             DrawingToolbarAction::ToggleStayInDrawingMode => {
@@ -1928,7 +1928,7 @@ impl DemoApp {
             DrawingToolbarAction::LockAllDrawings => dm.toggle_lock_all(),
             DrawingToolbarAction::InsertGlyph { icon_name, size } => {
                 dm.start_icon_insertion(icon_name.to_string());
-                if let Some(drawing) = &mut dm.curr_drawing {
+                if let Some(drawing) = dm.curr_drawing_mut() {
                     drawing.font_size = size;
                 }
             }
@@ -3830,7 +3830,7 @@ mod tests {
             );
         }
         assert_eq!(
-            app.chart.drawings().active_tool,
+            app.chart.drawings().active_tool(),
             Some(DrawingToolType::TrendLine)
         );
     }
@@ -4843,7 +4843,7 @@ mod tests {
                     }
                 }
                 "Trend Line" => assert_eq!(
-                    app.chart.drawings().active_tool,
+                    app.chart.drawings().active_tool(),
                     Some(egui_charts::drawings::DrawingToolType::TrendLine)
                 ),
                 "Sample backtest" => {
@@ -4965,7 +4965,7 @@ mod tests {
             assert!(!app.keyboard_shortcuts.is_open);
             assert_eq!(app.chart.drawings().sel_drawing(), Some(7));
             assert_eq!(
-                app.chart.drawings().active_tool,
+                app.chart.drawings().active_tool(),
                 Some(DrawingToolType::TrendLine)
             );
             assert_eq!(app.replay.is_some(), replay);
@@ -5791,7 +5791,7 @@ mod tests {
                 f64::from,
             );
             dm.add_point_with_coords(egui::pos2(3.0, 4.0), |x| x, f64::from);
-            assert!(dm.active_tool.is_none());
+            assert!(dm.active_tool().is_none());
             frame(&mut app);
             assert!(app.drawing_toolbar.state.sel_tool.is_none());
             app.chart.drawings_mut().set_eraser_mode(true);
@@ -6203,19 +6203,13 @@ mod tests {
             |y| y as f64,
         );
         assert_eq!(
-            app.chart
-                .drawings()
-                .curr_drawing
-                .as_ref()
-                .unwrap()
-                .stroke_width,
+            app.chart.drawings().curr_drawing().unwrap().stroke_width,
             4.0
         );
         assert_eq!(
             app.chart
                 .drawings()
-                .curr_drawing
-                .as_ref()
+                .curr_drawing()
                 .unwrap()
                 .chart_points
                 .len(),
@@ -6223,7 +6217,7 @@ mod tests {
             "defaults cannot copy anchors"
         );
         assert!(
-            app.chart.drawings().curr_drawing.as_ref().unwrap().visible,
+            app.chart.drawings().curr_drawing().unwrap().visible,
             "a hidden source must not make new drawings invisible"
         );
         assert!(!app.chart.drawings().drawings[0].visible);

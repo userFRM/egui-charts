@@ -463,6 +463,37 @@ impl DrawingManager {
         self.active_custom_tool.as_deref()
     }
 
+    /// The built-in tool the next pointer placement uses, or `None` in selection mode. A
+    /// registered tool is active as [`DrawingToolType::Polyline`] with its id in
+    /// [`Self::active_custom_tool`]. Set it with [`Self::set_active_tool`] or
+    /// [`Self::set_custom_tool`].
+    pub fn active_tool(&self) -> Option<DrawingToolType> {
+        self.active_tool
+    }
+
+    /// Whether a click deletes the drawing under the pointer instead of selecting it. Switch
+    /// it with [`Self::set_eraser_mode`].
+    pub fn is_eraser_mode(&self) -> bool {
+        self.eraser_mode
+    }
+
+    /// The drawing being placed, which joins [`Self::drawings`] when it is completed.
+    pub fn curr_drawing(&self) -> Option<&Drawing> {
+        self.curr_drawing.as_ref()
+    }
+
+    /// The drawing being placed, to adjust its settings before it is completed, such as the
+    /// glyph size of an icon that [`Self::start_icon_insertion`] prepared.
+    pub fn curr_drawing_mut(&mut self) -> Option<&mut Drawing> {
+        self.curr_drawing.as_mut()
+    }
+
+    /// The drawing and handle being dragged, as `(drawing_id, handle)`, from
+    /// [`Self::start_drag_handle`] or [`Self::start_drag_body`] until [`Self::end_drag_handle`].
+    pub fn dragging_handle(&self) -> Option<(usize, HandlePos)> {
+        self.dragging_handle
+    }
+
     /// Starts a registered tool's multi-click construction. One-anchor tools complete on the
     /// first click. The host picker uses `registry.custom_tools()` for its ids and names.
     pub fn set_custom_tool(&mut self, id: &str) -> Result<(), &'static str> {

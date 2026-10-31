@@ -179,9 +179,9 @@ pub struct DrawingManager {
     /// All completed drawings on the chart.
     pub drawings: Vec<Drawing>,
     /// Currently active drawing tool, or `None` for selection/pointer mode.
-    pub active_tool: Option<DrawingToolType>,
+    pub(crate) active_tool: Option<DrawingToolType>,
     /// The drawing currently being created (not yet completed).
-    pub curr_drawing: Option<Drawing>,
+    pub(crate) curr_drawing: Option<Drawing>,
     /// Whether the last point of `curr_drawing` follows the pointer rather than a click.
     preview_point: bool,
     /// The last finished measurement, shown until the next click on the chart. It is never
@@ -210,7 +210,7 @@ pub struct DrawingManager {
     pub options: DrawingManagerOptions,
 
     /// Currently dragged handle, if any: `(drawing_id, handle_position)`.
-    pub dragging_handle: Option<(usize, HandlePos)>,
+    pub(crate) dragging_handle: Option<(usize, HandlePos)>,
     /// Snapshot of the drawing state before the current drag began (for undo).
     drag_old_state: Option<Drawing>,
     /// Pointer origin of a body or centre-handle translation.
@@ -233,9 +233,7 @@ pub struct DrawingManager {
     pub curr_timeframe: String,
     /// Whether a click deletes the drawing under the pointer instead of selecting it. Set it
     /// with [`Self::set_eraser_mode`].
-    pub eraser_mode: bool,
-    /// Drawing ID currently hovered by the eraser cursor (for visual feedback).
-    pub eraser_hover_drawing: Option<usize>,
+    pub(crate) eraser_mode: bool,
 
     /// Changes to the stored drawings, oldest first, for the host to drain, for example
     /// with `std::mem::take(&mut *manager.pending_sync.lock().unwrap())`. See
@@ -298,13 +296,13 @@ impl DrawingManager {
             stay_in_drawing_mode: false,
             curr_timeframe: String::from("1D"),
             eraser_mode: false,
-            eraser_hover_drawing: None,
             pending_sync: Arc::new(Mutex::new(Vec::new())),
             sync_enabled: true,
         }
     }
 
-    /// Apply the host's tool, snapping, color, eraser and selection state.
+    /// Apply the host's tool, snapping, color, eraser and selection state. A state with both
+    /// a tool and the eraser leaves only the eraser on, as [`Self::set_eraser_mode`] does.
     pub fn sync_from_app_state(&mut self, drawing_state: &DrawingState) {
         if self.active_tool != drawing_state.active_tool {
             self.set_active_tool(drawing_state.active_tool);
@@ -312,7 +310,9 @@ impl DrawingManager {
         self.options.magnet_mode = drawing_state.magnet_mode;
         self.options.default_color = drawing_state.curr_color;
         self.stay_in_drawing_mode = drawing_state.stay_in_drawing_mode;
-        self.eraser_mode = drawing_state.eraser_mode;
+        if self.eraser_mode != drawing_state.eraser_mode {
+            self.set_eraser_mode(drawing_state.eraser_mode);
+        }
 
         // Sync selection
         match (drawing_state.sel_drawing, self.selection.primary()) {
@@ -1315,5 +1315,19 @@ mod tests {
         let points = &manager.drawings[0].chart_points;
         assert_eq!((points[1].bar_idx, points[1].price), (260.0, 115.0));
         assert_eq!((points[2].bar_idx, points[2].price), (260.0, 95.0));
+    }
+
+    /// A host state with both a tool and the eraser leaves only the eraser on, as
+    /// `set_eraser_mode` does.
+    #[test]
+    fn app_state_with_a_tool_and_the_eraser_leaves_only_the_eraser() {
+        let mut manager = DrawingManager::new();
+        manager.sync_from_app_state(&DrawingState {
+            active_tool: Some(DrawingToolType::TrendLine),
+            eraser_mode: true,
+            ..DrawingState::default()
+        });
+        assert!(manager.is_eraser_mode());
+        assert_eq!(manager.active_tool(), None);
     }
 }
