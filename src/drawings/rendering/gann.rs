@@ -8,6 +8,7 @@ use crate::drawings::domain::{
     GannLevel,
 };
 use crate::styles::typography;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 use std::f32::consts::FRAC_PI_2;
