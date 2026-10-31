@@ -1062,6 +1062,18 @@ mod tests {
                 egui::Color32::WHITE,
             );
             ui.label("LAYOUT TOOLBAR");
+            ui.painter().add(
+                egui::epaint::TextShape::new(
+                    egui::pos2(300.0, 20.0),
+                    ui.painter().layout_no_wrap(
+                        "TURNED LABEL".into(),
+                        egui::FontId::proportional(12.0),
+                        egui::Color32::WHITE,
+                    ),
+                    egui::Color32::WHITE,
+                )
+                .with_angle(-std::f32::consts::FRAC_PI_2),
+            );
             for (id, x) in [(high_id, 160.0), (egui::TextureId::User(7), 208.0)] {
                 ui.painter().image(
                     id,
@@ -1074,6 +1086,14 @@ mod tests {
         };
         let svg = chart.export_layout_svg(&ctx, &supplied, layout).unwrap();
         assert!(svg.contains("LAYOUT TOOLBAR") && svg.contains("WATERMARK"));
+        // egui's clockwise -90 degrees is SVG's clockwise rotate(-90), about the text's position.
+        let (_, group) = svg.split_once(r#"<g transform="rotate("#).unwrap();
+        let (rotation, group) = group.split_once(r#")">"#).unwrap();
+        let rotation: Vec<f32> = rotation.split(' ').map(|n| n.parse().unwrap()).collect();
+        for (value, expected) in rotation.iter().zip([-90.0, 300.0, 20.0]) {
+            assert!((value - expected).abs() < 1e-3, "{rotation:?}");
+        }
+        assert!(group.split_once("</g>").unwrap().0.contains("TURNED LABEL"));
         assert!(svg.contains(r#"width="2" height="1""#));
         for id in [7, 7 | 1u64 << 63] {
             assert!(svg.contains(&format!(r#"id="tu{id}_"#)));

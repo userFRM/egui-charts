@@ -50,7 +50,7 @@ pub(crate) mod plots;
 pub(crate) mod projection;
 mod settings;
 pub(crate) mod table;
-pub use plots::{FillBoundary, StudyCandle, StudyFill, StudyZone};
+pub use plots::{FillBoundary, LabelPlacement, StudyCandle, StudyFill, StudyLabel, StudyZone};
 pub use projection::StudyProjection;
 pub use settings::{
     ConfiguredStudy, PlotStyle, PlotType, StudyIntervalRange, StudySettings, StudySettingsSnapshot,

@@ -7,6 +7,7 @@ use crate::scales::{
     HorizontalScale, PriceFormatter, PriceMap, PriceMark, PriceScaleId, TickMark, TickMarkLayout,
 };
 use crate::theme::ThemeExt;
+use chrono::Datelike;
 use egui::layers::ShapeIdx;
 use egui::{Color32, FontId, Pos2, Rect, Shape};
 
@@ -200,8 +201,12 @@ fn min_time_label_spacing(options: &TimeScaleOptions) -> f32 {
 }
 
 /// The tick marks of the time axis from `scale`, and the keys they are placed by: the bars in
-/// view with their logical indices, extended into the whitespace on either side by keys
-/// mapped by `time_at` from the full chart history. [`render_time_labels`] paints them.
+/// view with their logical indices, extended by keys that `time_at` maps from the full chart
+/// history, up to ten to the left but not before the first bar, and into the whitespace past
+/// the right edge. With no bar in view the keys start at the left edge of the view. Past the
+/// last bar the keys skip the weekdays on which the series has no bars (`closed_weekdays`), so
+/// a series of weekday bars labels no weekend there.
+/// [`render_time_labels`] paints them.
 pub(crate) fn time_axis_marks(
     context: &RenderContext,
     visible_data: &[Bar],
@@ -210,41 +215,39 @@ pub(crate) fn time_axis_marks(
     options: &TimeScaleOptions,
     time_at: impl Fn(f64) -> Option<chrono::DateTime<chrono::Utc>>,
 ) -> (Vec<TickMark>, Vec<(chrono::DateTime<chrono::Utc>, usize)>) {
-    if visible_data.is_empty() {
-        return (Vec::new(), Vec::new());
-    }
+    // The logical index at the right edge of the plot.
+    let right = coords.base_idx as f64 + coords.right_offset;
+    let first = if visible_data.is_empty() {
+        // The left edge of the view; keys never go left of the first bar.
+        (right + 1.0 - f64::from(context.rect.width() / coords.bar_spacing))
+            .floor()
+            .max(0.0) as usize
+    } else {
+        coords.start_idx
+    };
+    let next = first.saturating_add(visible_data.len());
+    // Two keys past the right edge, and at least one past the bars in view.
+    let end = ((right.ceil() + 2.0).max(0.0) as usize).max(next.saturating_add(1));
 
-    let first_visible_idx = coords.start_idx;
-    let last_visible_idx = coords.start_idx + visible_data.len().saturating_sub(1);
-
-    // Extend range in BOTH directions to ensure grid lines outside visible data
-    // still get correct indices (prevents async movement when panning)
-    let extra_left = (coords.start_idx as i64).min(10); // Extend left up to 10 bars or to index 0
-    let extra_right = coords.right_offset.ceil().max(0.0).min(f64::from(
-        (context.rect.width() / coords.bar_spacing).ceil(),
-    )) as i64
-        + 2;
-
-    // Extrapolation stops where chrono's range ends, so a bar near it cannot panic.
-    // Extrapolated bars BEFORE the visible data (for grid lines that fall before the visible range)
-    let mut bars: Vec<_> = (1..=extra_left)
-        .map_while(|i| {
-            let index = first_visible_idx.saturating_sub(i as usize);
-            Some((time_at(index as f64)?, index))
-        })
+    // Ten keys left of the view keep its marks steady while panning. Extrapolation stops where
+    // chrono's range ends, so a bar near it cannot panic.
+    let mut bars: Vec<_> = (first.saturating_sub(10)..first)
+        .rev()
+        .map_while(|index| Some((time_at(index as f64)?, index)))
         .collect();
     bars.reverse();
     bars.extend(
         visible_data
             .iter()
             .enumerate()
-            .map(|(i, bar)| (bar.time, coords.start_idx + i)),
+            .map(|(i, bar)| (bar.time, first + i)),
     );
-    // Extrapolated bars AFTER the visible data (for grid lines in the future)
-    bars.extend((1..=extra_right).map_while(|i| {
-        let index = last_visible_idx.saturating_add(i as usize);
-        Some((time_at(index as f64)?, index))
-    }));
+    bars.extend((next..=end).map_while(|index| Some((time_at(index as f64)?, index))));
+    // Past the last bar, a daily series gets no keys on the weekdays it has no bars.
+    let closed = closed_weekdays(coords.base_idx, &time_at);
+    bars.retain(|(time, index)| {
+        *index <= coords.base_idx || !closed[time.weekday().num_days_from_monday() as usize]
+    });
     let layout = TickMarkLayout {
         width: context.rect.width(),
         bar_spacing: coords.bar_spacing,
@@ -252,6 +255,34 @@ pub(crate) fn time_axis_marks(
         uniform_distribution: options.uniform_distribution,
     };
     (scale.tick_marks(&bars, &layout), bars)
+}
+
+/// The weekdays, Monday first, on which none of the 16 keys up to the last bar, `last`, falls,
+/// when those keys span two weeks or more and the next key follows within a day: the days a
+/// daily series has no bars, such as the weekend of a market open on weekdays. A weekday counts
+/// as closed only when both of its dates in those two weeks lack a bar, so one holiday closes
+/// nothing. Weekly and longer intervals, merged daily bars and series shorter than two weeks
+/// close no day. Weekdays are read in UTC, which is consistent because the keys of a daily
+/// series share one time of day.
+fn closed_weekdays(
+    last: usize,
+    time_at: impl Fn(f64) -> Option<chrono::DateTime<chrono::Utc>>,
+) -> [bool; 7] {
+    let from = last.saturating_sub(15);
+    let Some((_, end)) = time_at(from as f64)
+        .zip(time_at(last as f64))
+        .filter(|(first, end)| *end - *first >= chrono::Duration::days(13))
+    else {
+        return [false; 7];
+    };
+    if time_at(last as f64 + 1.0).is_none_or(|next| next - end > chrono::Duration::days(1)) {
+        return [false; 7];
+    }
+    let mut closed = [true; 7];
+    for time in (from..=last).filter_map(|index| time_at(index as f64)) {
+        closed[time.weekday().num_days_from_monday() as usize] = false;
+    }
+    closed
 }
 
 fn time_to_idx(
@@ -439,7 +470,7 @@ pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
 pub(crate) use legend::{SeriesAction, study_controls};
 
 /// Formats text at weight 600 when the face has a weight axis.
-fn semibold(font: FontId, color: Color32) -> egui::text::TextFormat {
+pub(super) fn semibold(font: FontId, color: Color32) -> egui::text::TextFormat {
     let mut format = egui::text::TextFormat::simple(font, color);
     format.coords.push("wght", 600.0);
     format

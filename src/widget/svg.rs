@@ -8,8 +8,8 @@ use std::fmt::Write;
 
 /// Renders `shapes` as an SVG document of `size` points, embedding the textures that `delta`
 /// sets as PNG. Fails on shapes the format cannot take over unchanged: host callbacks, host
-/// textures without supplied pixels, rotated or underlined text, gradient strokes and non-linear
-/// mesh colours.
+/// textures without supplied pixels, underlined text, gradient strokes and non-linear mesh
+/// colours.
 pub(super) fn svg(
     size: [u32; 2],
     shapes: &[ClippedShape],
@@ -299,11 +299,22 @@ impl Svg {
     /// One `<text>` per run of glyphs of one colour, size and family, each glyph at the position
     /// the layout gave it.
     fn text(&mut self, text: &TextShape) -> Result<(), String> {
-        if text.angle != 0.0 {
-            return Err("Rotated text cannot be written as SVG".into());
+        if !text.angle.is_finite() {
+            return Err("Text at a non-finite angle cannot be written as SVG".into());
         }
         if !text.underline.is_empty() {
             return Err("Underlined text cannot be written as SVG".into());
+        }
+        // egui turns text clockwise about its position, as an SVG rotation about that point does.
+        let rotated = text.angle != 0.0;
+        if rotated {
+            let _ = write!(
+                self.body,
+                r#"<g transform="rotate({} {} {})">"#,
+                text.angle.to_degrees(),
+                text.pos.x,
+                text.pos.y
+            );
         }
         let job = &text.galley.job;
         let ends: Vec<_> = job
@@ -388,6 +399,9 @@ impl Svg {
             if placed.ends_with_newline {
                 index += 1;
             }
+        }
+        if rotated {
+            self.body.push_str("</g>");
         }
         Ok(())
     }

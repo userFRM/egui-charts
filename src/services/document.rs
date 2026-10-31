@@ -27,6 +27,7 @@ const SAVE_VERSIONED: u64 = 3;
 const COPY: u64 = 4;
 const REFRESH: u64 = 5;
 const CHANGED: u64 = 6;
+const RELOAD: u64 = 7;
 
 /// How many names a kept copy tries, from `<name> (local copy)` to `<name> (local copy 100)`,
 /// before it is reported as failed.
@@ -73,6 +74,9 @@ pub(crate) struct StoredDocument {
     refreshing: bool,
     /// The newest revision another client reported that this document has not read.
     notified: Option<Revision>,
+    /// Whether another chart of this application wrote the document to a host that keeps no
+    /// revisions since it was last read.
+    rewritten: bool,
     /// Whether the owner has changes it has not passed to [`save`](Self::save) yet.
     held: bool,
     /// Answers produced by [`resolve`](Self::resolve), delivered with the next ones.
@@ -101,6 +105,7 @@ impl StoredDocument {
             copy: None,
             refreshing: false,
             notified: None,
+            rewritten: false,
             held: false,
             ready: Vec::new(),
             changes: None,
@@ -113,6 +118,26 @@ impl StoredDocument {
         let (listener, events) = Listener::new(&self.inbox, CHANGED);
         storage.watch(self.kind, &self.name, events);
         self.changes = Some(listener);
+    }
+
+    /// Another chart of this application wrote the document, at `revision` if the host keeps
+    /// revisions: it is read again once nothing is unsaved, as after a change another client made.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn changed_elsewhere(&mut self, revision: Option<Revision>) {
+        match revision {
+            Some(revision) if self.revision.as_ref() != Some(&revision) => {
+                self.notified = Some(revision);
+            }
+            Some(_) => {}
+            None => self.rewritten = true,
+        }
+    }
+
+    /// The revision the document was last read or written at; `None` while none exists, and
+    /// always for a host that keeps no revisions.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn revision(&self) -> Option<&Revision> {
+        self.revision.as_ref()
     }
 
     /// Whether the document is still being read.
@@ -284,16 +309,25 @@ impl StoredDocument {
         self.conflict.is_none() && !self.saving() && !self.held
     }
 
-    /// Reads the stored document again once nothing is unsaved, after another client changed it.
+    /// Reads the stored document again once nothing is unsaved, after another client changed it
+    /// or another chart of this application wrote it.
     fn refresh(&mut self, storage: &dyn Storage) {
-        if self.versioned == Some(true)
-            && !self.refreshing
-            && self.idle()
-            && let Some(revision) = self.notified.take()
-            && self.revision.as_ref() != Some(&revision)
-        {
-            self.refreshing = true;
+        if self.versioned.is_none() || self.writable.is_none() || self.refreshing || !self.idle() {
+            return;
+        }
+        let notified = self.versioned == Some(true)
+            && self
+                .notified
+                .take()
+                .is_some_and(|revision| self.revision.as_ref() != Some(&revision));
+        if !std::mem::take(&mut self.rewritten) && !notified {
+            return;
+        }
+        self.refreshing = true;
+        if self.versioned == Some(true) {
             storage.load_versioned(self.kind, &self.name, self.inbox.reply(REFRESH));
+        } else {
+            storage.load(self.kind, &self.name, self.inbox.reply(RELOAD));
         }
     }
 
@@ -362,6 +396,20 @@ impl StoredDocument {
                                 // Read again once nothing is unsaved; a write before then is
                                 // refused.
                                 self.notified.get_or_insert(stored.revision);
+                            }
+                        }
+                    }
+                    RELOAD => {
+                        self.refreshing = false;
+                        let answer = *answer
+                            .downcast::<Result<Option<String>, FeedError>>()
+                            .expect("document reload");
+                        if let Ok(document) = answer {
+                            if self.idle() {
+                                received.push(Received::Loaded(document));
+                            } else {
+                                // Read again once nothing is unsaved.
+                                self.rewritten = true;
                             }
                         }
                     }
@@ -585,9 +633,10 @@ pub(crate) mod tests {
     }
 
     /// A host that keeps revisions as a counter and pushes every change to its watchers. Its
-    /// versioned writes fail while the flag is set.
+    /// versioned writes fail while the first flag is set, and it drops watch streams, as a host
+    /// that reports no changes does, while the second is.
     #[derive(Default)]
-    pub(crate) struct Revised(Mutex<Remote>, AtomicBool);
+    pub(crate) struct Revised(Mutex<Remote>, AtomicBool, pub(crate) AtomicBool);
 
     /// The documents with their counters, and the watchers.
     type Remote = (HashMap<String, (String, u64)>, Vec<Events<Revision>>);
@@ -658,7 +707,9 @@ pub(crate) mod tests {
             reply.send(Ok(SaveOutcome::Saved(self.put(name, &document))));
         }
         fn watch(&self, _: StoreKind, _: &str, events: Events<Revision>) {
-            self.0.lock().unwrap().1.push(events);
+            if !self.2.load(Ordering::Relaxed) {
+                self.0.lock().unwrap().1.push(events);
+            }
         }
     }
 

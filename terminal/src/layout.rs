@@ -89,6 +89,9 @@ impl Terminal {
             );
             self.chart_events
                 .extend(chart.drain_events().map(|event| (index, event)));
+            if let Some(error) = chart.take_storage_error() {
+                self.toasts.error(error);
+            }
         }
         self.show_region(ui, Region::Chart);
         if let Some(action) = self.menus.show(&ctx, &mut self.charts[self.active]) {

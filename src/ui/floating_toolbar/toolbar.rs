@@ -198,7 +198,7 @@ impl FloatingSelectionToolbar {
         self.set_locked(drawing.locked);
         self.set_object_visible(drawing.visible);
         self.set_colors(vec![ColorSlot {
-            label: if drawing.tool_type.supports_text() {
+            label: if drawing.tool_type.is_text_annotation() {
                 "Text color"
             } else {
                 "Line color"
@@ -566,6 +566,31 @@ mod tests {
                     "missing accessible name: {label}"
                 );
             }
+        }
+    }
+
+    /// The colour of a text annotation is its text's; a label on a line does not make the line's
+    /// colour a text colour, although the colour paints both.
+    #[test]
+    fn colour_slot_names_what_the_colour_paints() {
+        use crate::drawings::{Drawing, DrawingToolType as Tool};
+        for (tool, label) in [
+            (Tool::TrendLine, "Line color"),
+            (Tool::TextLabel, "Text color"),
+        ] {
+            let mut chart = Chart::new(crate::model::BarData::new());
+            let mut drawing = Drawing::new(7, tool);
+            drawing.completed = true;
+            drawing.points = vec![Pos2::new(100.0, 100.0)];
+            chart.drawings_mut().drawings = vec![drawing];
+            chart.drawings_mut().select(7);
+            let mut toolbar = FloatingSelectionToolbar::new();
+            egui::Context::default()
+                .run_ui(Default::default(), |ui| {
+                    toolbar.show_and_apply(ui, &mut chart);
+                })
+                .drop_without_applying_deltas();
+            assert_eq!(toolbar.color_slots[0].label, label, "{tool:?}");
         }
     }
 

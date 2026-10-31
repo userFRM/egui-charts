@@ -6,6 +6,7 @@
 //! - Magnifier: Circular zoom lens for detailed data inspection
 
 use super::context::{ChartMapping, RenderContext, StyleColors};
+use super::labels::semibold;
 use crate::config::{TooltipMode, TooltipOptions};
 use crate::model::{Bar, Instrument, percent_change};
 use crate::scales::price_decimals;
@@ -91,10 +92,18 @@ pub fn render_tooltip_with_options(
 ) {
     match options.mode {
         TooltipMode::Floating => {
+            // The held crosshair's vertical line snaps to the bar's centre, and the card follows it.
+            let hover_pos = coords
+                .local_idx_at_x(hover_pos.x, visible_data.len())
+                .filter(|_| options.on_long_press)
+                .map_or(hover_pos, |local| {
+                    Pos2::new(coords.idx_to_x(coords.start_idx + local), hover_pos.y)
+                });
             render_floating_tooltip(
                 context.painter,
                 hover_pos,
                 context.rect,
+                coords.bar_spacing,
                 candle,
                 previous_close,
                 options,
@@ -137,11 +146,14 @@ pub fn render_tooltip_with_options(
 /// on the side away from the pointer, so it never covers the hovered bar.
 /// The `instrument`'s symbol heads the grid.
 /// Held values use time, OHLC and total volume instead of the hover change row;
-/// optional study rows follow these values.
+/// optional study rows follow these values. Their card sits beside the bar centred at
+/// `hover_pos.x`, 15 px from that line or clear of the `bar_spacing` slot when it is wider, on
+/// the right unless only the left has room, with its top at the pointer and values in semibold.
 pub fn render_floating_tooltip(
     painter: &Painter,
     hover_pos: Pos2,
     price_rect: Rect,
+    bar_spacing: f32,
     candle: &Bar,
     previous_close: Option<f64>,
     options: &TooltipOptions,
@@ -243,7 +255,14 @@ pub fn render_floating_tooltip(
         .map(|(label, value, color)| {
             (
                 painter.layout_no_wrap(label, font_id.clone(), options.text_color),
-                painter.layout_no_wrap(value, font_id.clone(), color),
+                if options.on_long_press {
+                    painter.layout_job(egui::text::LayoutJob::single_section(
+                        value,
+                        semibold(font_id.clone(), color),
+                    ))
+                } else {
+                    painter.layout_no_wrap(value, font_id.clone(), color)
+                },
             )
         })
         .collect();
@@ -268,10 +287,21 @@ pub fn render_floating_tooltip(
     };
     let inset = theme.spacing.lg;
     let mut bounds = price_rect.shrink(inset);
-    if hover_pos.x > price_rect.center().x {
-        bounds.max.x = hover_pos.x - inset;
+    let (on_left, clearance) = if options.on_long_press {
+        let clearance = (bar_spacing / 2.0).max(15.0);
+        let width = label_width + theme.spacing.lg + value_width + 2.0 * padding;
+        let room = bounds.right() - hover_pos.x - clearance;
+        (
+            room < width && hover_pos.x - clearance - bounds.left() > room,
+            clearance,
+        )
     } else {
-        bounds.min.x = hover_pos.x + inset;
+        (hover_pos.x > price_rect.center().x, inset)
+    };
+    if on_left {
+        bounds.max.x = bounds.max.x.min(hover_pos.x - clearance);
+    } else {
+        bounds.min.x = bounds.min.x.max(hover_pos.x + clearance);
     }
     if !bounds.is_positive() {
         return;
@@ -294,13 +324,14 @@ pub fn render_floating_tooltip(
         label_width + gap + value_width + 2.0 * padding,
         (rows.len() as f32 * line_height - row_gap + 2.0 * padding).min(bounds.height()),
     );
-    let x = if hover_pos.x > price_rect.center().x {
+    // The held card keeps to the line, the hover card to the far corner.
+    let x = if on_left != options.on_long_press {
         bounds.left()
     } else {
         bounds.right() - size.x
     };
     let y = if options.on_long_press {
-        (hover_pos.y - size.y / 2.0).clamp(bounds.top(), bounds.bottom() - size.y)
+        hover_pos.y.min(bounds.bottom() - size.y).max(bounds.top())
     } else {
         bounds.top()
     };
@@ -801,6 +832,7 @@ mod tests {
                     ui.painter(),
                     HOVER,
                     Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
+                    10.0,
                     &Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0),
                     None,
                     &options,
@@ -858,6 +890,7 @@ mod tests {
                         ui.painter(),
                         Pos2::new(plot.left() + 100.0, plot.center().y),
                         plot,
+                        10.0,
                         &bar,
                         None,
                         &TooltipOptions {
@@ -933,6 +966,7 @@ mod tests {
                             ui.painter(),
                             pointer,
                             plot,
+                            10.0,
                             &bar,
                             None,
                             &TooltipOptions {
@@ -992,6 +1026,114 @@ mod tests {
                     }
                     assert!(labels > 0);
                 }
+            }
+        }
+    }
+
+    /// The held card follows the vertical line at the bar's centre, not the pointer: 15 px to its
+    /// right, to its left when the right has no room, and past a wide bar. Its top is the pointer's
+    /// unless that leaves the plot. Values are semibold and labels regular.
+    #[test]
+    fn held_values_sit_beside_the_vertical_line() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 500.0));
+        let map = PriceMap::new(
+            PriceTransform {
+                mode: PriceScaleMode::Normal,
+                base: 0.0,
+            },
+            PriceRange::new(0.0, 20.0),
+            0.0,
+            500.0,
+            false,
+        );
+        let colors = StyleColors {
+            bullish: egui::Color32::GREEN,
+            bearish: egui::Color32::RED,
+            text: egui::Color32::WHITE,
+            bullish_border: None,
+            bearish_border: None,
+            bullish_wick: None,
+            bearish_wick: None,
+            candle_border_width: 0.0,
+        };
+        let options = TooltipOptions {
+            mode: TooltipMode::Floating,
+            on_long_press: true,
+            ..Default::default()
+        };
+        let scale = crate::scales::TimeFormatterBuilder::new().build();
+        // A bar's centre is at 800 - (last - index + 0.5) * spacing - 1 px.
+        for (spacing, last, pointer, left, right, top) in [
+            // Bar 40 at 404.
+            (10.0, 79, (402.0, 250.0), Some(419.0), None, Some(250.0)),
+            // Bar 0 at 4.
+            (10.0, 79, (5.0, 250.0), Some(19.0), None, Some(250.0)),
+            // Bar 78 at 784, with no room on the right.
+            (10.0, 79, (785.0, 250.0), None, Some(769.0), Some(250.0)),
+            // Bar 6 at 409, half of its 60 px slot being wider than 15 px.
+            (60.0, 12, (400.0, 250.0), Some(439.0), None, Some(250.0)),
+            // Bar 12 at 769, likewise on the left.
+            (60.0, 12, (770.0, 250.0), None, Some(739.0), Some(250.0)),
+            // A pointer low in the plot keeps the card above the 8 px inset.
+            (10.0, 79, (402.0, 490.0), Some(419.0), None, None),
+        ] {
+            let bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0);
+            let bars = vec![bar; last + 1];
+            let coords = ChartMapping::new(rect, spacing, 0, last, 0.0, map);
+            let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
+                render_tooltip_with_options(
+                    &RenderContext::new(ui.painter(), rect),
+                    Pos2::new(pointer.0, pointer.1),
+                    &bars[0],
+                    None,
+                    &options,
+                    &colors,
+                    &map,
+                    &coords,
+                    &bars,
+                    &scale,
+                    60,
+                    &[],
+                    None,
+                    ValueFormatters::default(),
+                );
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let card = shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(card) if card.stroke.width == 1.0 => Some(card.rect),
+                    _ => None,
+                })
+                .expect("a held card");
+            let case = format!("{spacing} {pointer:?}: {card:?}");
+            let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+            assert!(left.is_none_or(|left| close(card.left(), left)), "{case}");
+            assert!(
+                right.is_none_or(|right| close(card.right(), right)),
+                "{case}"
+            );
+            assert!(
+                top.map_or(close(card.bottom(), 492.0), |top| close(card.top(), top)),
+                "{case}"
+            );
+            let weights: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(
+                        !text.galley.job.sections[0]
+                            .format
+                            .coords
+                            .as_ref()
+                            .is_empty(),
+                    ),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(weights.len(), 12, "{case}");
+            for row in weights.chunks(2) {
+                assert_eq!(row, [false, true], "{case}");
             }
         }
     }

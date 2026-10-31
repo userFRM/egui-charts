@@ -109,6 +109,34 @@ impl Chart {
         true
     }
 
+    /// Adds a horizontal line at `price` in the pane under `pos`, the price pane when no other
+    /// pane is there, with the tool's default style, and selects it. Returns its id, or `None`
+    /// for a price that is not finite or a disabled tool.
+    #[cfg(feature = "ui")]
+    pub(crate) fn draw_horizontal_line_at(&mut self, pos: egui::Pos2, price: f64) -> Option<usize> {
+        if !price.is_finite() {
+            return None;
+        }
+        let tool = crate::drawings::DrawingToolType::HorizontalLine;
+        let mut drawing = Drawing::with_color(0, tool, self.drawings.options.default_color);
+        if let Some(defaults) = self.drawings.tool_defaults.get(&tool) {
+            let _ = defaults.apply_to(&mut drawing);
+        }
+        // A study pane's drawings belong to its first member, as in `move_drawing_to_pane`.
+        drawing.pane = self
+            .pane_layout
+            .panes
+            .iter()
+            .find(|pane| pane.id != PaneId::MAIN && pane.rect.contains(pos))
+            .map(|pane| pane.members.first().map_or(pane.id.0, |id| id.0));
+        drawing.z_order = self.drawings.top_z_order();
+        let bar = self.get_chart_mapping().x_to_idx_f64(pos.x).round() as f32;
+        drawing.chart_points = vec![ChartPoint::new(bar, price)];
+        let id = self.drawings.add_drawing(drawing).ok()?;
+        self.drawings.select(id);
+        Some(id)
+    }
+
     /// Reveals an offscreen drawing by panning, retaining zoom and the auto/manual scale state.
     #[cfg(feature = "ui")]
     pub(crate) fn reveal_drawing(&mut self, id: usize) {

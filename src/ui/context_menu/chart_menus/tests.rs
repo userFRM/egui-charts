@@ -56,6 +56,14 @@ fn hidden_menu_controls_remove_rows_and_empty_sections() {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
             let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            // The horizontal line row follows the drawing tool's availability, not a named control.
+            chart.drawings_mut().registry.set_availability(
+                crate::drawings::DrawingToolType::HorizontalLine,
+                crate::drawings::ToolAvailability {
+                    visible: false,
+                    enabled: true,
+                },
+            );
             let mut menus = ChartMenus::default();
             let frame = |menus: &mut ChartMenus, chart: &mut Chart| {
                 let mut output = ctx.run_ui(Default::default(), |ui| {
@@ -681,6 +689,112 @@ fn tpo_profile_menu_merges_and_splits_sessions() {
         assert!(chart.undo());
         assert_eq!(counts(&chart), [12, 4]);
     }
+}
+
+/// Guards #1540: picking the row adds one selected horizontal line at the clicked price in the
+/// clicked pane as one undo step, and the row is absent while the tool is disabled.
+#[test]
+fn horizontal_line_row_draws_at_the_clicked_price_and_pane() {
+    use crate::drawings::{DrawingToolType, ToolAvailability};
+    use crate::model::Timeframe;
+    use crate::studies::RSI;
+    use crate::widget::PaneId;
+    use egui::{Event, PointerButton, RawInput, Shape};
+    let ctx = Context::default();
+    crate::theme::apply_to_egui(&ctx, &Theme::dark());
+    let mut chart = crate::widget::test_frames::chart(&[100.0; 10], &[110.0; 10]);
+    chart.set_timeframe(Timeframe::Day1);
+    let rsi = chart.add_indicator(Box::new(RSI::new(3)));
+    let mut menus = ChartMenus::default();
+    let frame = |chart: &mut Chart, menus: &mut ChartMenus, events| {
+        let mut output = ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 900.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                chart.show(ui);
+                menus.show(ui.ctx(), chart);
+            },
+        );
+        fn flatten(shape: Shape, out: &mut Vec<Shape>) {
+            match shape {
+                Shape::Vec(shapes) => shapes.into_iter().for_each(|shape| flatten(shape, out)),
+                shape => out.push(shape),
+            }
+        }
+        let mut shapes = Vec::new();
+        for clipped in std::mem::take(&mut output.shapes) {
+            flatten(clipped.shape, &mut shapes);
+        }
+        output.drop_without_applying_deltas();
+        shapes
+    };
+    let click = |chart: &mut Chart, menus: &mut ChartMenus, pos, button| {
+        frame(chart, menus, vec![Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                chart,
+                menus,
+                vec![Event::PointerButton {
+                    pos,
+                    button,
+                    pressed,
+                    modifiers: Default::default(),
+                }],
+            );
+        }
+    };
+    // The centre of the row, after a secondary click at `pos`.
+    let open_row = |chart: &mut Chart, menus: &mut ChartMenus, pos| {
+        click(chart, menus, pos, PointerButton::Secondary);
+        frame(chart, menus, vec![])
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Text(text) if text.galley.text().starts_with("Draw horizontal line at") => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            })
+    };
+    frame(&mut chart, &mut menus, vec![]);
+    frame(&mut chart, &mut menus, vec![]);
+
+    // Above the bars, whose highs are 110: a click on a bar opens the series menu instead.
+    let mapping = chart.get_chart_mapping();
+    let pos = Pos2::new(mapping.rect.center().x, mapping.price_to_y(110.5));
+    let row = open_row(&mut chart, &mut menus, pos).expect("row in the price pane");
+    click(&mut chart, &mut menus, row, PointerButton::Primary);
+    let lines = chart.drawings().drawings.clone();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].tool_type, DrawingToolType::HorizontalLine);
+    let id = lines[0].id;
+    assert!((lines[0].chart_points[0].price - 110.5).abs() < 0.001);
+    assert_eq!(chart.drawing_pane(id), Some(PaneId::MAIN));
+    assert!(chart.drawings().is_selected(id));
+    assert!(chart.undo());
+    assert!(chart.drawings().drawings.is_empty());
+
+    let pane = &chart.get_rendered_indicator_panes()[0];
+    let pos = Pos2::new(pane.chart_rect.center().x, pane.mapping.price_to_y(50.0));
+    let row = open_row(&mut chart, &mut menus, pos).expect("row in the study pane");
+    click(&mut chart, &mut menus, row, PointerButton::Primary);
+    let lines = chart.drawings().drawings.clone();
+    assert_eq!(lines.len(), 1);
+    assert!((lines[0].chart_points[0].price - 50.0).abs() < 0.001);
+    assert_eq!(chart.drawing_pane(lines[0].id), chart.series_pane(rsi));
+
+    chart.drawings_mut().registry.set_availability(
+        DrawingToolType::HorizontalLine,
+        ToolAvailability {
+            visible: true,
+            enabled: false,
+        },
+    );
+    let mapping = chart.get_chart_mapping();
+    let pos = Pos2::new(mapping.rect.center().x, mapping.price_to_y(110.5));
+    assert_eq!(open_row(&mut chart, &mut menus, pos), None);
 }
 
 /// Guards #850: a secondary click on a study's legend row opens the study's menu, and each

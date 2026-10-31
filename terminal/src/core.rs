@@ -3,6 +3,7 @@
 use super::{Action, ExportContents, ExportFile, Terminal};
 use egui_charts::Chart;
 use egui_charts::data::FeedStatus;
+use egui_charts::localization as l10n;
 use egui_charts::model::{ChartType, Timeframe};
 use egui_charts::services::{Notification, SettingsStore, UserSettings};
 use egui_charts::theme::Theme;
@@ -74,6 +75,12 @@ impl Terminal {
         if let Action::StorageConflict(choice) = action {
             if let Some(settings) = &mut self.settings {
                 settings.resolve_conflict(choice);
+            }
+            return None;
+        }
+        if let Action::DrawingsConflict(symbol, choice) = &action {
+            for chart in &mut self.charts {
+                chart.resolve_storage_conflict(symbol, *choice);
             }
             return None;
         }
@@ -225,6 +232,10 @@ impl Terminal {
             || self.compare_modal()
             || self.commands_modal()
             || self.settings.as_ref().is_some_and(SettingsStore::conflict)
+            || self
+                .charts
+                .iter()
+                .any(|chart| chart.storage_conflict().is_some())
     }
 
     /// Shows the top toolbar in line with the active chart and queues what it emitted.
@@ -316,19 +327,33 @@ impl Terminal {
         }
     }
 
-    /// Asks how to settle settings that another window or device changed while these had
-    /// unsaved changes.
+    /// Asks how to settle settings, then drawings, that another window or device changed while
+    /// these had unsaved changes.
     pub(super) fn show_storage_conflict(&mut self, ctx: &egui::Context) {
-        if !self.settings.as_ref().is_some_and(SettingsStore::conflict) {
+        let (dialog, symbol) = if self.settings.as_ref().is_some_and(SettingsStore::conflict) {
+            let dialog = StorageConflictDialog::new(
+                "Settings changed elsewhere",
+                "Another window or device saved the settings while this window had unsaved \
+                 changes. Nothing is saved until you choose.",
+            );
+            (dialog, None)
+        } else if let Some(symbol) = self.charts.iter().find_map(Chart::storage_conflict) {
+            let message = l10n::format_text(
+                ctx,
+                "Another window or device saved the drawings of {symbol} while this window had \
+                 unsaved changes to them. Nothing is saved until you choose.",
+                &[("symbol", symbol.to_owned())],
+            );
+            let dialog = StorageConflictDialog::new("Drawings changed elsewhere", message);
+            (dialog, Some(symbol.to_owned()))
+        } else {
             return;
-        }
-        let dialog = StorageConflictDialog::new(
-            "Settings changed elsewhere",
-            "Another window or device saved the settings while this window had unsaved \
-             changes. Nothing is saved until you choose.",
-        );
+        };
         if let Some(choice) = dialog.show(ctx) {
-            self.emit(Action::StorageConflict(choice));
+            self.emit(match symbol {
+                Some(symbol) => Action::DrawingsConflict(symbol, choice),
+                None => Action::StorageConflict(choice),
+            });
         }
     }
 }

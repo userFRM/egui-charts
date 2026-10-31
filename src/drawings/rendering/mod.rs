@@ -185,12 +185,20 @@ impl Drawing {
             }
             T::HeadAndShoulders => {
                 outline.lines = path(false);
-                outline.lines.extend(self.neckline().map(|(line, _)| line));
+                if let Some((neckline, regions)) = patterns::head_and_shoulders_outline(p) {
+                    outline.lines.push(neckline);
+                    if filled {
+                        outline.areas.extend(regions.iter().map(|r| r.to_vec()));
+                    }
+                }
             }
             T::TrianglePattern => match patterns::triangle_boundaries(p, f32::INFINITY) {
-                Some((lines, _)) => {
+                Some((lines, fill)) => {
                     outline.lines = path(false);
                     outline.lines.extend(lines);
+                    if filled {
+                        outline.areas.extend(fill);
+                    }
                 }
                 None => outline.lines = path(p.len() == 3),
             },
@@ -215,9 +223,8 @@ impl Drawing {
             T::Measure | T::DateAndPriceRange | T::GannBox => {
                 boxed(&mut outline, Rect::from_two_pos(first, second));
             }
-            T::GannFixed => boxed(&mut outline, Rect::from_two_pos(first, second)),
-            T::GannSquare => {
-                let corner = gann::gann_square_corner(first, second);
+            T::GannSquare | T::GannFixed => {
+                let corner = gann::gann_square_corner(self.tool_type, first, second);
                 boxed(&mut outline, Rect::from_two_pos(first, corner));
             }
             T::RotatedRect => {
@@ -290,7 +297,11 @@ impl Drawing {
             T::Pitchfan => {
                 outline.lines = pitchfork::pitchfan_lines(first, second, *p.get(2)?, rect)
             }
-            T::GannFan => outline.lines = gann::gann_fan_lines(first, second, rect),
+            T::GannFan => {
+                let config = self.gann_config();
+                let visible = config.fan_ratios.iter().filter(|l| l.visible);
+                outline.lines = gann::gann_fan_lines(first, second, rect, visible.map(|l| l.value));
+            }
             T::FlatTopBottom | T::DisjointChannel => return self.wedge_channel_outline(rect),
             T::ParallelChannel => return self.parallel_channel_outline(rect),
             T::FibonacciTimeZones => outline.lines = self.fibonacci_time_zone_lines(rect),
@@ -375,9 +386,10 @@ impl Drawing {
 
             // Gann (4 tools)
             DrawingToolType::GannFan => self.render_gann_fan(painter, rect),
-            DrawingToolType::GannSquare => self.render_gann_square(painter),
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed => {
+                self.render_gann_square(painter, view)
+            }
             DrawingToolType::GannBox => self.render_gann_box(painter),
-            DrawingToolType::GannFixed => self.render_gann_fixed(painter),
 
             // Pitchforks (4 tools)
             DrawingToolType::Pitchfork => self.render_pitchfork(painter, rect),
@@ -399,7 +411,7 @@ impl Drawing {
             DrawingToolType::HeadAndShoulders => self.render_head_and_shoulders(painter),
             DrawingToolType::ABCDPattern => self.render_abcd_pattern(painter),
             DrawingToolType::TrianglePattern => self.render_triangle_pattern(painter),
-            DrawingToolType::ThreeDrivesPattern => self.render_three_drives_pattern(painter, view),
+            DrawingToolType::ThreeDrivesPattern => self.render_three_drives_pattern(painter),
 
             // Elliott Wave (5 tools)
             DrawingToolType::ElliottImpulse => self.render_elliott_impulse(painter, view),
@@ -490,11 +502,11 @@ impl Drawing {
     }
 
     /// The screen area this drawing paints in, for tools that paint within three times the
-    /// diagonal of their anchors plus [`PAINT_MARGIN`] around them, so a drawing outside the pane
-    /// can be skipped. Tools that also paint at prices taken from the bars, such as positions and
-    /// volume profiles, or run a leg on a fixed time past its anchor, which a steep leg carries to
-    /// any price, are bounded in time only. `None` for tools that can reach the pane's edges, as
-    /// lines extended left or right do.
+    /// diagonal of their anchors plus [`PAINT_MARGIN`] and the room its text needs around them, so
+    /// a drawing outside the pane can be skipped. Tools that also paint at prices taken from the
+    /// bars, such as positions and volume profiles, or run a leg on a fixed time past its anchor,
+    /// which a steep leg carries to any price, are bounded in time only. `None` for tools that can
+    /// reach the pane's edges, as lines extended left or right do.
     pub(crate) fn paint_bounds(&self) -> Option<Rect> {
         use DrawingToolType as T;
         let bounded = matches!(
@@ -574,8 +586,21 @@ impl Drawing {
                     .expand(PAINT_MARGIN)
             });
         }
+        if self.tool_type == T::GannFixed {
+            let &[first, second, ..] = self.points.as_slice() else {
+                return None;
+            };
+            // Five times the anchors' span can pass the reach below when the span is steep.
+            let corner = gann::gann_square_corner(T::GannFixed, first, second);
+            return Some(Rect::from_two_pos(first, corner).expand(PAINT_MARGIN));
+        }
         let hull = self.bounding_rect()?;
-        let reach = 3.0 * hull.size().length() + PAINT_MARGIN;
+        // Room for the drawing's text: one and a half ems per character covers the widest glyph
+        // advance and the row of a line break.
+        let text = self.text.as_deref().map_or(0.0, |t| {
+            1.5 * crate::styles::typography::font_size(self.font_size) * t.chars().count() as f32
+        });
+        let reach = 3.0 * hull.size().length() + PAINT_MARGIN + text;
         let bounds = hull.expand(reach);
         let time_only = matches!(
             self.tool_type,
@@ -842,7 +867,7 @@ mod tests {
         let pane = Rect::from_min_max(Pos2::new(-2000., -2000.), Pos2::new(2500., 2500.));
         let mut wrong = Vec::new();
         for &tool in DrawingToolType::all() {
-            for layout in layouts {
+            for (i, layout) in layouts.into_iter().enumerate() {
                 let mut drawing = Drawing::new(7, tool);
                 let count = tool.required_points().unwrap_or(layout.len());
                 drawing.points = layout
@@ -853,7 +878,13 @@ mod tests {
                 drawing.chart_points = (drawing.points.iter())
                     .map(|p| crate::drawings::ChartPoint::new(p.x / 40.0, 500.0 - p.y as f64))
                     .collect();
-                drawing.text = Some("Sample".into());
+                // A label too long for the margin must grow the bounds with it, on the tiny anchors
+                // where the margin is nearly all the reach there is.
+                drawing.text = Some(if i == 2 {
+                    "Sample label ".repeat(8)
+                } else {
+                    "Sample".into()
+                });
                 let Some(bounds) = drawing.paint_bounds() else {
                     continue;
                 };
@@ -922,6 +953,12 @@ mod tests {
                     )
                 })
                 .collect();
+            // Three drives labels only its ratios, which are measured in price.
+            if tool == DrawingToolType::ThreeDrivesPattern {
+                drawing.chart_points = (drawing.points.iter())
+                    .map(|p| crate::drawings::ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
+                    .collect();
+            }
             drawing.text = Some("Sample".into());
             drawing.font_size = 48.0;
             drawing.font_weight = FontWeight::Bold;
@@ -1259,7 +1296,7 @@ mod tests {
         shapes
     }
 
-    /// A pattern's projected target and selection handles can cross the pane edge;
+    /// A pattern's labels and selection handles can cross the pane edge;
     /// their paint commands retain the pane's clip, intersected with the caller's clip.
     #[test]
     fn drawings_and_handles_keep_the_pane_clip() {

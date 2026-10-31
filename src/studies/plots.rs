@@ -49,6 +49,37 @@ pub struct StudyZone {
     pub plot: usize,
 }
 
+/// Where the text of a [`StudyLabel`] sits relative to its point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LabelPlacement {
+    /// Above the point, starting at it and extending right.
+    AboveRight,
+    /// Above the point, ending at it and extending left.
+    AboveLeft,
+    /// Centred above the point.
+    Above,
+    /// Centred below the point.
+    Below,
+}
+
+/// Text beside a study value, stored once per label instead of per bar.
+///
+/// The text is written when the study calculates, so drawing a frame formats nothing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StudyLabel {
+    /// Source bar the text is attached to; may lie past the last bar, in future whitespace.
+    pub bar: usize,
+    /// Price the text is attached to, in the study's value scale.
+    pub price: f64,
+    /// The text; a line break starts a new line.
+    pub text: String,
+    /// Where the text sits relative to `bar` and `price`.
+    pub placement: LabelPlacement,
+    /// Output whose colour and visibility apply to the text. The text is drawn opaque.
+    pub plot: usize,
+}
+
 #[cfg(feature = "drawings")]
 pub(crate) fn drawing_prices(
     study: &dyn super::Indicator,

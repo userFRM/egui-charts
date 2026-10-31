@@ -391,9 +391,9 @@ impl<'a> Legend<'a> {
                     Rect::from_min_size(controls.min + Vec2::new(28.0, 0.0), Vec2::splat(20.0))
                         .intersect(bounds);
                 painter.rect_stroke(
-                    title_rect,
+                    title_rect.union(controls.expand2(Vec2::new(0.0, 2.0))),
                     theme.radius.sm,
-                    Stroke::new(1.0, theme.ui.border_control),
+                    Stroke::new(1.0, theme.ui.accent),
                     egui::StrokeKind::Inside,
                 );
                 painter.rect_filled(controls, 0.0, theme.chart.bg);
@@ -492,7 +492,7 @@ impl<'a> Legend<'a> {
                         painter.rect_filled(rect, theme.radius.sm, theme.ui.btn_bg_hover);
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
-                    icon.as_image_tinted(Vec2::splat(14.0), theme.ui.text_secondary)
+                    icon.as_image_tinted(Vec2::splat(14.0), theme.ui.text)
                         .paint_at(ui, rect.shrink(3.0));
                     if response.clicked() {
                         series_action = Some(action);
@@ -665,6 +665,8 @@ impl<'a> Legend<'a> {
                 };
                 let row = Rect::from_min_max(row_start, Pos2::new(row_right, controls.bottom()))
                     .intersect(bounds);
+                // The next row's backdrop goes under this row's outline, which reaches into it.
+                layout.new_row();
                 let (responses, menu) = study_controls(
                     ui,
                     row,
@@ -684,7 +686,6 @@ impl<'a> Legend<'a> {
                 if let Some(pos) = menu {
                     study_settings = Some(StudyAction::Menu { index, pos });
                 }
-                layout.new_row();
             }
         }
         if has_rows {
@@ -839,9 +840,9 @@ pub(crate) fn study_controls(
         ui.painter()
             .rect_filled(controls, theme.radius.sm, theme.chart.bg);
         ui.painter().rect_stroke(
-            row,
+            row.union(controls.expand2(Vec2::new(0.0, 2.0))),
             theme.radius.sm,
-            Stroke::new(1.0, theme.ui.border_control),
+            Stroke::new(1.0, theme.ui.accent),
             egui::StrokeKind::Inside,
         );
     }
@@ -889,7 +890,7 @@ pub(crate) fn study_controls(
                 2 => &crate::icons::icons::TRASH,
                 _ => &crate::icons::icons::UI_MORE_HORIZONTAL,
             };
-            icon.as_image_tinted(Vec2::splat(14.0), theme.ui.text_secondary)
+            icon.as_image_tinted(Vec2::splat(14.0), theme.ui.text)
                 .paint_at(ui, rect.shrink(3.0));
         }
         #[cfg(not(feature = "icons"))]
@@ -898,7 +899,7 @@ pub(crate) fn study_controls(
             egui::Align2::CENTER_CENTER,
             [if visible { "−" } else { "+" }, "...", "×", "•••"][index],
             FontId::proportional(14.0),
-            theme.ui.text_secondary,
+            theme.ui.text,
         );
         response
     });
@@ -1282,8 +1283,10 @@ mod tests {
                         menu = opened;
                     },
                 );
+                // An accent outline 24 px tall, 2 px past the 20 px row on each side.
+                let outline = Rect::from_min_size(Pos2::new(10.0, 8.0), Vec2::new(220.0, 24.0));
                 let painted = output.shapes.iter().any(|s| match &s.shape {
-                    Shape::Rect(r) => r.rect == row,
+                    Shape::Rect(r) => r.rect == outline && r.stroke.color == theme.ui.accent,
                     _ => false,
                 });
                 let buttons_filled = output.shapes.iter().any(|s| {

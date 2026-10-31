@@ -114,6 +114,39 @@ pub(crate) fn draw_dashed_segment(
     );
 }
 
+/// Draws square dots of side `stroke.width`, one every `spacing` along each segment from its
+/// start, inside the painter's clip only, as one mesh: a dotted guide is one shape however long
+/// it is.
+#[cfg(feature = "drawings")]
+pub(crate) fn draw_dotted_segments(
+    painter: &egui::Painter,
+    segments: &[[Pos2; 2]],
+    stroke: Stroke,
+    spacing: f32,
+) {
+    let size = stroke.width;
+    let Some(clip) = finite_clip(painter) else {
+        return;
+    };
+    if !(size > 0.0 && spacing >= size) {
+        return;
+    }
+    // A dot whose centre is just outside the clip still shows its inner half.
+    let clip = clip.expand(size / 2.0);
+    let pixels_per_point = painter.pixels_per_point();
+    let mut dots = Mesh::default();
+    for &[start, end] in segments {
+        visible_dashes(start, end, clip, size, spacing - size, 0.0, |a, b| {
+            let rect = Rect::from_center_size(a.lerp(b, 0.5), egui::Vec2::splat(size));
+            let rect = Rect::from_min_size(rect.min.round_to_pixels(pixels_per_point), rect.size());
+            dots.add_colored_rect(rect, stroke.color);
+        });
+    }
+    if !dots.is_empty() {
+        painter.add(dots);
+    }
+}
+
 /// Batch square dots into one mesh so tessellation does not repeatedly grow its output mesh.
 pub(crate) fn draw_dashed_segments(
     painter: &egui::Painter,
@@ -408,6 +441,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// All the segments' dots are one shape, and a segment reaching far off screen walks only its
+    /// visible part: 142.13 px of the diagonal, 36 dots at spacing 4, in the clip grown by half a
+    /// dot, and all 100 px of the horizontal, 25 dots.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn dotted_segments_are_one_mesh_inside_the_clip() {
+        let clip = Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 100.0));
+        let segments = [
+            [Pos2::ZERO, Pos2::new(1e14, 1e14)],
+            [Pos2::new(0.0, 50.0), Pos2::new(100.0, 50.0)],
+        ];
+        let paint = |width: f32| {
+            let output = Context::default().run_ui(RawInput::default(), |ui| {
+                draw_dotted_segments(
+                    &ui.painter().with_clip_rect(clip),
+                    &segments,
+                    Stroke::new(width, Color32::WHITE),
+                    4.0,
+                );
+            });
+            let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        let shapes = paint(1.0);
+        let [egui::Shape::Mesh(mesh)] = shapes.as_slice() else {
+            panic!("the dots are not one mesh: {} shapes", shapes.len());
+        };
+        assert_eq!(mesh.vertices.len(), 4 * 61);
+        let reach = Rect::from_min_max(Pos2::new(-1.0, -1.0), Pos2::new(101.0, 101.0));
+        assert!(mesh.vertices.iter().all(|v| reach.contains(v.pos)));
+        assert!(paint(0.0).is_empty());
     }
 
     /// An endpoint far off screen (a drawing anchored outside a collapsed

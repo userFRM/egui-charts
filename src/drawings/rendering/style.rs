@@ -599,7 +599,7 @@ mod tests {
                         Shape::LineSegment { points, stroke } => (
                             drawing.points.windows(2).any(|p| p == points)
                                 || tool == CyclicLines
-                                || (tool == HeadAndShoulders && stroke.color.a() == 200),
+                                || matches!(tool, GannFan | GannBox | GannSquare | GannFixed),
                             *stroke,
                         ),
                         Shape::Path(p) => {
@@ -611,17 +611,14 @@ mod tests {
                                     .windows(2)
                                     .any(|p| drawing.points.windows(2).any(|leg| leg == p))
                                     || (tool == SineLine && p.points.len() > 100)
+                                    || matches!(tool, GannSquare | GannFixed)
                                     || (tool == TimeCycles
                                         && p.points.len() > 4
                                         && color == drawing.color32()),
                                 Stroke::new(p.stroke.width, color),
                             )
                         }
-                        Shape::Rect(r) => (
-                            matches!(tool, GannBox | GannSquare | GannFixed)
-                                && !r.stroke.is_empty(),
-                            r.stroke,
-                        ),
+                        Shape::Rect(r) => (false, r.stroke),
                         _ => continue,
                     };
                     if stroke.is_empty() {
@@ -645,12 +642,7 @@ mod tests {
                 assert!(main > 0, "{tool:?} missing main line");
                 if matches!(
                     tool,
-                    XABCDPattern
-                        | GannBox
-                        | GannSquare
-                        | ElliottTriangle
-                        | ElliottDoubleCombo
-                        | ElliottTripleCombo
+                    ElliottTriangle | ElliottDoubleCombo | ElliottTripleCombo
                 ) {
                     assert!(details > 0, "{tool:?} missing details");
                 }
@@ -665,15 +657,10 @@ mod tests {
             XABCDPattern,
             CypherPattern,
             HeadAndShoulders,
-            ABCDPattern,
             TrianglePattern,
-            ThreeDrivesPattern,
             ElliottImpulse,
             ElliottCorrection,
             ElliottTriangle,
-            GannBox,
-            GannSquare,
-            GannFixed,
         ] {
             let mut drawing = pattern(tool);
             if tool != ElliottImpulse {
@@ -706,16 +693,7 @@ mod tests {
                             );
                         }
                         Shape::Rect(r) if r.fill.a() > 0 => {
-                            if (matches!(tool, GannBox | GannSquare | GannFixed)
-                                && r.rect.contains(drawing.points[0]))
-                                || (tool == ThreeDrivesPattern
-                                    && r.rect.left() == drawing.points[5].x)
-                            {
-                                bodies += 1;
-                                assert_eq!(r.fill, configured, "{tool:?} body");
-                            } else {
-                                assert_ne!(r.fill, configured, "{tool:?} label recoloured");
-                            }
+                            assert_ne!(r.fill, configured, "{tool:?} label recoloured");
                         }
                         _ => {}
                     }

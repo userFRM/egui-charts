@@ -183,6 +183,28 @@ impl KeyboardShortcutsDialog {
     }
 }
 
+/// Labels of a shortcut's keys: its modifiers, then the key's symbol where `font` has it.
+///
+/// `format_shortcut` spells every key out ("Plus", "PageUp") with the bundled fonts.
+pub(crate) fn shortcut_key_labels(
+    ctx: &Context,
+    font: &FontId,
+    shortcut: &KeyboardShortcut,
+) -> Vec<String> {
+    let symbol = shortcut.logical_key.symbol_or_name();
+    let key = if ctx.fonts_mut(|f| f.has_glyphs(font, symbol)) {
+        symbol
+    } else {
+        shortcut.logical_key.name()
+    };
+    ctx.format_modifiers(shortcut.modifiers)
+        .split('+')
+        .filter(|modifier| !modifier.is_empty())
+        .chain([key])
+        .map(str::to_owned)
+        .collect()
+}
+
 /// One badge per key combination, joined by a muted "or".
 fn key_badges(ui: &mut Ui, theme: &Theme, shortcuts: &[KeyboardShortcut]) {
     for (idx, shortcut) in shortcuts.iter().enumerate() {
@@ -193,21 +215,9 @@ fn key_badges(ui: &mut Ui, theme: &Theme, shortcuts: &[KeyboardShortcut]) {
                     .color(ui.visuals().weak_text_color()),
             );
         }
-        // `format_shortcut` spells every key out ("Plus", "PageUp") with the bundled fonts, so
-        // the badge shows the key's symbol where a font has it, and screen readers get the name.
-        let modifiers = ui.ctx().format_modifiers(shortcut.modifiers);
-        let symbol = shortcut.logical_key.symbol_or_name();
+        // Screen readers get the name.
         let font = FontId::proportional(theme.text.small);
-        let key = if ui.fonts_mut(|f| f.has_glyphs(&font, symbol)) {
-            symbol
-        } else {
-            shortcut.logical_key.name()
-        };
-        let text = if modifiers.is_empty() {
-            key.to_owned()
-        } else {
-            format!("{modifiers}+{key}")
-        };
+        let text = shortcut_key_labels(ui.ctx(), &font, shortcut).join("+");
         let name = ui.ctx().format_shortcut(shortcut);
         Frame::new()
             .fill(theme.ui.panel_bg_secondary)

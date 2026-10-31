@@ -13,7 +13,8 @@
 //! Each projected level is a box from the last bar as wide as the period so far has bars, so the
 //! projection is state-distinct from the confirmed lines: it moves with every bar until the
 //! period ends, and its levels become the confirmed lines of the next period. A level the
-//! method does not define is absent. Overlay indicator with the inputs of Pivot Points Standard.
+//! method does not define is absent. Confirmed and projected levels carry the labels of Pivot
+//! Points Standard. Overlay indicator with the inputs of Pivot Points Standard.
 //!
 //! # Example
 //!
@@ -36,9 +37,9 @@
 //! assert!((pivots.projections()[0].top - 31.0 / 3.0).abs() < 1e-12);
 //! ```
 
-use super::pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
+use super::pivot_points::{PivotLabelSide, PivotMethod, PivotPoints, PivotTimeframe};
 use crate::model::{Bar, Instrument, Timeframe};
-use crate::studies::{Indicator, IndicatorValues, StudyProjection};
+use crate::studies::{Indicator, IndicatorValues, StudyDataRequest, StudyLabel, StudyProjection};
 use egui::Color32;
 
 /// Projected Pivot Points: the next period's pivot levels from the period so far.
@@ -73,6 +74,48 @@ impl ProjectedPivotPoints {
     pub fn with_pivots_back(mut self, pivots_back: usize) -> Self {
         self.pivots = self.pivots.with_pivots_back(pivots_back);
         self
+    }
+
+    /// Whether each level is labelled with its name (P, R1, S1 and so on) and with its price.
+    /// Names only by default.
+    pub fn with_labels(mut self, names: bool, prices: bool) -> Self {
+        self.pivots = self.pivots.with_labels(names, prices);
+        self
+    }
+
+    /// The end of each level its label sits at; the left end by default.
+    pub fn with_label_side(mut self, side: PivotLabelSide) -> Self {
+        self.pivots = self.pivots.with_label_side(side);
+        self
+    }
+
+    /// Takes the previous period's values from the feed's daily bars, as
+    /// [`PivotPoints::with_daily_bars`] does.
+    pub fn with_daily_bars(mut self, daily: bool) -> Self {
+        self.pivots = self.pivots.with_daily_bars(daily);
+        self
+    }
+
+    fn project(&mut self, data: &[Bar]) {
+        self.projections.clear();
+        if let Some((method, period, start)) = self.pivots.latest_period() {
+            let last = data.len() - 1;
+            let width = data.len() - start;
+            let levels = PivotPoints::levels(method, period, period.close);
+            self.projections.extend(
+                levels
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, price)| price.is_finite())
+                    .map(|(plot, price)| StudyProjection {
+                        bars: last as f64..(last + width) as f64,
+                        top: price,
+                        bottom: price,
+                        plot,
+                    }),
+            );
+            self.pivots.label_projection(last..last + width, &levels);
+        }
     }
 }
 
@@ -112,24 +155,21 @@ impl Indicator for ProjectedPivotPoints {
 
     fn update(&mut self, data: &[Bar], from: usize) {
         self.pivots.update(data, from);
-        self.projections.clear();
-        if let Some((method, period, start)) = self.pivots.latest_period() {
-            let last = data.len() - 1;
-            let width = (data.len() - start) as f64;
-            let levels = PivotPoints::levels(method, period, period.close);
-            self.projections.extend(
-                levels
-                    .into_iter()
-                    .enumerate()
-                    .filter(|(_, price)| price.is_finite())
-                    .map(|(plot, price)| StudyProjection {
-                        bars: last as f64..last as f64 + width,
-                        top: price,
-                        bottom: price,
-                        plot,
-                    }),
-            );
-        }
+        self.project(data);
+    }
+
+    fn data_requests(&self) -> Vec<StudyDataRequest> {
+        self.pivots.data_requests()
+    }
+
+    fn update_data(
+        &mut self,
+        data: &[Bar],
+        from: usize,
+        sources: &[crate::studies::StudyData<'_>],
+    ) {
+        self.pivots.update_data(data, from, sources);
+        self.project(data);
     }
 
     fn is_incremental(&self) -> bool {
@@ -150,6 +190,14 @@ impl Indicator for ProjectedPivotPoints {
 
     fn projections(&self) -> &[StudyProjection] {
         &self.projections
+    }
+
+    fn labels(&self) -> &[StudyLabel] {
+        self.pivots.labels()
+    }
+
+    fn set_label_precision(&mut self, precision: Option<usize>) {
+        self.pivots.set_label_precision(precision);
     }
 
     fn values(&self) -> &IndicatorValues {

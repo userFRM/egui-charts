@@ -54,7 +54,7 @@ impl HandleService {
     ///
     /// Handle layouts vary by tool type:
     /// - **Two-point tools** (TrendLine, Fibonacci, etc.): Start and End handles
-    /// - **Rectangle**: Four corner handles and four edge handles
+    /// - **Rectangle and Gann box**: Four corner handles and four edge handles
     /// - **Single-point tools** (HorizontalLine, VerticalLine): One Start handle
     /// - **Glyphs**: Four resize corners around the centre and a Middle move handle
     /// - **Three-anchor channels**: Four indexed handles, one at each line end
@@ -71,7 +71,7 @@ impl HandleService {
                     handles.push((HandlePos::End, drawing.points[1]));
                 }
             }
-            DrawingToolType::Rect => {
+            DrawingToolType::Rect | DrawingToolType::GannBox => {
                 if drawing.points.len() >= 2 {
                     let p1 = drawing.points[0];
                     let p2 = drawing.points[1];
@@ -112,8 +112,7 @@ impl HandleService {
             // Fibonacci and similar two-point tools
             DrawingToolType::FibonacciRetracement
             | DrawingToolType::GannFan
-            | DrawingToolType::GannSquare
-            | DrawingToolType::GannBox => {
+            | DrawingToolType::GannSquare => {
                 if !drawing.points.is_empty() {
                     handles.push((HandlePos::Start, drawing.points[0]));
                 }
@@ -231,11 +230,10 @@ impl HandleService {
             | DrawingToolType::Measure
             | DrawingToolType::FibonacciRetracement
             | DrawingToolType::GannFan
-            | DrawingToolType::GannSquare
-            | DrawingToolType::GannBox => {
+            | DrawingToolType::GannSquare => {
                 Self::update_two_point_handle(drawing, handle, new_pos, &x_to_bar, &y_to_price);
             }
-            DrawingToolType::Rect => {
+            DrawingToolType::Rect | DrawingToolType::GannBox => {
                 Self::update_rect_handle(drawing, handle, new_pos, &x_to_bar, &y_to_price);
             }
             DrawingToolType::FontIcon | DrawingToolType::Sticker
@@ -681,6 +679,20 @@ mod tests {
             ),
             (
                 DrawingToolType::Rect,
+                vec![pos2(100.0, 100.0), pos2(200.0, 300.0)],
+                vec![
+                    (TopLeft, pos2(100.0, 100.0)),
+                    (TopRight, pos2(200.0, 100.0)),
+                    (BottomLeft, pos2(100.0, 300.0)),
+                    (BottomRight, pos2(200.0, 300.0)),
+                    (Top, pos2(150.0, 100.0)),
+                    (Bottom, pos2(150.0, 300.0)),
+                    (Left, pos2(100.0, 200.0)),
+                    (Right, pos2(200.0, 200.0)),
+                ],
+            ),
+            (
+                DrawingToolType::GannBox,
                 vec![pos2(100.0, 100.0), pos2(200.0, 300.0)],
                 vec![
                     (TopLeft, pos2(100.0, 100.0)),
@@ -1285,6 +1297,14 @@ mod tests {
             ),
             (
                 DrawingToolType::Rect,
+                vec![pos2(100.0, 100.0), pos2(200.0, 300.0)],
+                HandlePos::TopRight,
+                pos2(250.0, 80.0),
+                vec![pos2(100.0, 80.0), pos2(250.0, 300.0)],
+                vec![ChartPoint::new(10.0, 920.0), ChartPoint::new(25.0, 700.0)],
+            ),
+            (
+                DrawingToolType::GannBox,
                 vec![pos2(100.0, 100.0), pos2(200.0, 300.0)],
                 HandlePos::TopRight,
                 pos2(250.0, 80.0),
