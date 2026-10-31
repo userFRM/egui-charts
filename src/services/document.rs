@@ -12,7 +12,8 @@ pub(crate) enum Received {
     Loaded(Option<String>),
     /// The exact document acknowledged by a successful write.
     Saved(String),
-    /// A read failed, or the first of a run of failed writes. The message names the document.
+    /// A read failed, or the first of a run of failed reads again or of failed writes. The
+    /// message names the document.
     Failed(String),
     /// The host refused a write because the stored document changed; the unsaved document waits
     /// for [`StoredDocument::resolve`].
@@ -105,9 +106,13 @@ pub(crate) struct StoredDocument {
     refreshing: bool,
     /// The newest revision another client reported that this document has not read.
     notified: Option<Revision>,
-    /// Whether another chart of this application wrote the document to a host that keeps no
-    /// revisions since it was last read.
+    /// Whether the document is to be read again: another chart of this application wrote it to a
+    /// host that keeps no revisions since it was last read, or reading it again failed.
     rewritten: bool,
+    /// The earliest input time to read the document again after that failed.
+    reread_at: Option<f64>,
+    /// Whether the last read again failed, so that a run of failures is reported once.
+    reread_failing: bool,
     /// Whether the owner has changes it has not passed to [`save`](Self::save) yet.
     held: bool,
     /// Answers produced by [`resolve`](Self::resolve), delivered with the next ones.
@@ -137,6 +142,8 @@ impl StoredDocument {
             refreshing: false,
             notified: None,
             rewritten: false,
+            reread_at: None,
+            reread_failing: false,
             held: false,
             ready: Vec::new(),
             changes: None,
@@ -213,6 +220,7 @@ impl StoredDocument {
             // This write replaces what other charts wrote before it, which a read now would only
             // bring back.
             self.rewritten = false;
+            self.reread_at = None;
             self.writing = Some(document.clone());
             if self.versioned == Some(true) {
                 storage.save_versioned(
@@ -316,6 +324,10 @@ impl StoredDocument {
         if let Some(at) = self.retry_at {
             ctx.request_repaint_after(Duration::from_secs_f64((at - self.now).max(0.0)));
         }
+        // Once due, the read waits only for unsaved changes, whose write answer wakes the UI.
+        if let Some(at) = self.reread_at.filter(|&at| at > self.now) {
+            ctx.request_repaint_after(Duration::from_secs_f64(at - self.now));
+        }
         received
     }
 
@@ -347,7 +359,12 @@ impl StoredDocument {
     /// Reads the stored document again once nothing is unsaved, after another client changed it
     /// or another chart of this application wrote it.
     fn refresh(&mut self, storage: &dyn Storage) {
-        if self.versioned.is_none() || self.writable.is_none() || self.refreshing || !self.idle() {
+        if self.versioned.is_none()
+            || self.writable.is_none()
+            || self.refreshing
+            || !self.idle()
+            || self.reread_at.is_some_and(|at| at > self.now)
+        {
             return;
         }
         let notified = self.versioned == Some(true)
@@ -359,6 +376,7 @@ impl StoredDocument {
             return;
         }
         self.refreshing = true;
+        self.reread_at = None;
         if self.versioned == Some(true) {
             storage.load_versioned(self.kind, &self.name, self.inbox.reply(REFRESH));
         } else {
@@ -422,8 +440,9 @@ impl StoredDocument {
                             .downcast::<Result<Option<Versioned>, FeedError>>()
                             .expect("document refresh");
                         match answer {
-                            Err(_) => {}
+                            Err(error) => self.reread_failed(&error, &mut received),
                             Ok(stored) => {
+                                self.reread_failing = false;
                                 let revision =
                                     stored.as_ref().map(|stored| stored.revision.clone());
                                 // A late report of this document's own write: nothing changed.
@@ -448,12 +467,16 @@ impl StoredDocument {
                         let answer = *answer
                             .downcast::<Result<Option<String>, FeedError>>()
                             .expect("document reload");
-                        if let Ok(document) = answer {
-                            if self.idle() {
-                                received.push(Received::Loaded(document));
-                            } else {
-                                // Read again once nothing is unsaved.
-                                self.rewritten = true;
+                        match answer {
+                            Err(error) => self.reread_failed(&error, &mut received),
+                            Ok(document) => {
+                                self.reread_failing = false;
+                                if self.idle() {
+                                    received.push(Received::Loaded(document));
+                                } else {
+                                    // Read again once nothing is unsaved.
+                                    self.rewritten = true;
+                                }
                             }
                         }
                     }
@@ -473,6 +496,20 @@ impl StoredDocument {
     fn unreadable(&mut self, error: &FeedError) -> Received {
         self.refuse_writes();
         Received::Failed(format!("Could not read {}: {error}", self.name))
+    }
+
+    /// A read again failed: reported once a run, and tried again a second of input time later,
+    /// once nothing is unsaved.
+    fn reread_failed(&mut self, error: &FeedError, received: &mut Vec<Received>) {
+        if !self.reread_failing {
+            received.push(Received::Failed(format!(
+                "Could not read {}: {error}",
+                self.name
+            )));
+        }
+        self.reread_failing = true;
+        self.rewritten = true;
+        self.reread_at = Some(self.now + 1.0);
     }
 
     /// Finishes a write of the kept copy. A newer draft is written over the copy, and a name that

@@ -251,8 +251,9 @@ impl Chart {
     /// changes through [`Storage::watch`]. It does so once nothing of its own is unsaved and no
     /// drawing is being drawn, dragged, measured or edited: the stored drawings replace its
     /// saveable drawings, selection and undo history, each keeping its local id, and a document
-    /// deleted elsewhere leaves none. A drawing whose study the chart does not show appears in
-    /// the price pane and is written back in its study's pane. If `storage` keeps revisions, a
+    /// deleted elsewhere leaves none. A write waits for such a read, and one that fails is tried
+    /// again a second of input time later. A drawing whose study the chart does not show appears
+    /// in the price pane and is written back in its study's pane. If `storage` keeps revisions, a
     /// write over drawings changed elsewhere since they were read is refused and waits, with the
     /// chart's drawings unchanged, until [`Self::resolve_storage_conflict`] settles it; without
     /// revisions, the later write replaces the earlier one, including edits on two charts within
@@ -300,7 +301,9 @@ impl Chart {
     }
 
     /// The error of a failed read or write of drawings since the last call, to show to the
-    /// user. A failed write keeps the drawings on the chart and is reported once.
+    /// user. A failed write keeps the drawings on the chart and is reported once. A failed read
+    /// of drawings changed elsewhere is reported once and tried again a second of input time
+    /// later until it succeeds.
     pub fn take_storage_error(&mut self) -> Option<String> {
         self.drawing_store.as_mut()?.error.take()
     }
@@ -763,6 +766,7 @@ mod tests {
         documents: Mutex<HashMap<String, String>>,
         fail_writes: AtomicBool,
         delay_loads: AtomicBool,
+        fail_loads: AtomicBool,
         loads: Mutex<Vec<(String, Reply<Option<String>>)>>,
         delay_writes: AtomicBool,
         writes: Mutex<Vec<Reply<()>>>,
@@ -774,6 +778,9 @@ mod tests {
         }
         fn load(&self, kind: StoreKind, name: &str, reply: Reply<Option<String>>) {
             assert_eq!(kind, StoreKind::Drawings);
+            if self.fail_loads.load(Ordering::Relaxed) {
+                return reply.send(Err(FeedError::Network("offline".into())));
+            }
             if self.delay_loads.load(Ordering::Relaxed) {
                 self.loads.lock().unwrap().push((name.into(), reply));
             } else {
@@ -1482,5 +1489,38 @@ mod tests {
         assert_eq!(shown_prices(&b), [10.0, 11.0]);
         assert_eq!(stored_prices(&host), [10.0, 11.0]);
         assert!(b.can_undo(), "B read its own write again");
+    }
+
+    /// Guards #1617: a failed read of drawings another chart wrote is reported once and tried
+    /// again each second, so the chart's next edit keeps them.
+    #[test]
+    fn a_failed_read_of_drawings_another_chart_wrote_is_reported_once_and_tried_again() {
+        let host = Arc::new(Host::default());
+        let storage: Arc<dyn Storage> = host.clone();
+        let (mut a, mut b) = (chart_on(Some(storage.clone())), chart_on(Some(storage)));
+        let mut layout = ChartLayout::default();
+        layout.mode = ChartLayoutMode::TwoHorizontal;
+        let ctx = egui::Context::default();
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        host.fail_loads.store(true, Ordering::Relaxed);
+        draw_line(&mut a, line_at(4.0, 10.0));
+        // A writes; B's read of it fails, and fails again a second later.
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 3.0);
+        assert_eq!(
+            b.take_storage_error().as_deref(),
+            Some("Could not read A: network error: offline")
+        );
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 3.0);
+        assert_eq!(
+            b.take_storage_error(),
+            None,
+            "a run of failed reads is reported once"
+        );
+        host.fail_loads.store(false, Ordering::Relaxed);
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 3.0);
+        assert_eq!(shown_prices(&b), [10.0]);
+        draw_line(&mut b, line_at(4.0, 11.0));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert_eq!(stored_prices(&host), [10.0, 11.0]);
     }
 }
