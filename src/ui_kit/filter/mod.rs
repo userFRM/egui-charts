@@ -24,7 +24,7 @@
 
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
-use egui::{Margin, Rect, Response, TextEdit, Ui, UiBuilder, Vec2, Widget, pos2};
+use egui::{Align2, Margin, Rect, Response, TextEdit, Ui, UiBuilder, Vec2, Widget, pos2};
 
 use crate::icons::icons;
 use crate::tokens::DESIGN_TOKENS;
@@ -165,6 +165,7 @@ fn search_field(
                 .hint_text(l10n::text(ui.ctx(), placeholder))
                 .desired_width(f32::INFINITY)
                 .min_size(Vec2::new(0.0, ui.spacing().interact_size.y))
+                .align(Align2::LEFT_CENTER)
                 .margin(Margin {
                     left: margin(show_icon),
                     right: margin(show_clear),
@@ -257,6 +258,35 @@ mod tests {
                 query,
                 if focused { "" } else { "RSI" },
                 "focused: {focused}, moved: {moved}"
+            );
+        }
+    }
+
+    #[test]
+    fn placeholder_and_query_are_centred_in_a_tall_field() {
+        for typed in ["", "RSI"] {
+            let ctx = Context::default();
+            let mut query = typed.to_owned();
+            let mut field = Rect::NOTHING;
+            let output = ctx.run_ui(RawInput::default(), |ui| {
+                ui.spacing_mut().interact_size.y = 40.0;
+                field = filter_input(ui, &mut query).response.rect;
+            });
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) => Some(text.visual_bounding_rect()),
+                    _ => None,
+                })
+                .expect("the field paints its text");
+            output.drop_without_applying_deltas();
+            assert_eq!(field.height(), 40.0, "{typed:?}");
+            assert!(
+                (text.center().y - field.center().y).abs() <= 1.0,
+                "{typed:?}: text centre {} in field centre {}",
+                text.center().y,
+                field.center().y
             );
         }
     }
