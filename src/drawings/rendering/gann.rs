@@ -888,6 +888,53 @@ mod tests {
         }
     }
 
+    /// A saved `gann` object without fields draws what no `gann` draws, for every Gann tool: the
+    /// fan's nine lines, and the square's six levels at whole units rather than the box's seven
+    /// fractions.
+    #[test]
+    fn an_empty_gann_object_draws_the_tool_defaults() {
+        use crate::drawings::ChartPoint;
+        let shapes = |drawing: &Drawing| {
+            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                drawing.render(
+                    ui.painter(),
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)),
+                    &ChartView {
+                        price_formatter: None,
+                        instrument: None,
+                        bars: &[],
+                        revision: 0,
+                        bar_to_x: &|b| b * 10.0,
+                        price_to_y: &|p| 300.0 - p as f32,
+                        y_to_price: &|y| 300.0 - f64::from(y),
+                        time_axis: true,
+                        executions: None,
+                    },
+                )
+            });
+            let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        for tool in [
+            DrawingToolType::GannBox,
+            DrawingToolType::GannSquare,
+            DrawingToolType::GannFixed,
+            DrawingToolType::GannFan,
+        ] {
+            let mut drawing = Drawing::new(0, tool);
+            drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(4.0, 140.0)];
+            let mut saved = serde_json::to_value(&drawing).unwrap();
+            saved["gann"] = serde_json::json!({});
+            let mut loaded: Drawing = serde_json::from_value(saved).unwrap();
+            loaded.chart_points = drawing.chart_points.clone();
+            for d in [&mut drawing, &mut loaded] {
+                d.update_screen_coords(|b| b * 10.0, |p| 300.0 - p as f32);
+            }
+            assert_eq!(shapes(&loaded), shapes(&drawing), "{tool:?}");
+        }
+    }
+
     #[test]
     fn gann_square_fan_and_arcs_follow_their_settings() {
         const GREY: [u8; 4] = [128, 128, 128, 255];

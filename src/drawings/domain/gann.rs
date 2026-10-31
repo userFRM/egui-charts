@@ -87,6 +87,10 @@ impl From<SavedGannLevel> for GannLevel {
 }
 
 /// Levels, fan lines and arcs of the Gann tools, and the background between them.
+///
+/// A field missing from a saved object takes the value of [`GannConfig::for_tool`] for the tool
+/// of the [`Drawing`](crate::drawings::Drawing) that holds it, or of [`GannConfig::default`]
+/// when the object is read on its own.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GannConfig {
@@ -126,6 +130,9 @@ fn levels(entries: &[(f32, [u8; 4])]) -> Vec<GannLevel> {
 }
 
 impl Default for GannConfig {
+    /// The Gann box's configuration, as [`GannConfig::for_tool`] gives it. A Gann square, fixed
+    /// square or fan reads its levels or fan lines differently and starts from `for_tool` of its
+    /// own tool.
     fn default() -> Self {
         let box_levels = levels(&[
             (0.0, GREY),
@@ -180,7 +187,9 @@ impl Default for GannConfig {
 
 impl GannConfig {
     /// The levels, fan lines and arcs a new Gann box, square, fixed square or fan starts from,
-    /// which a drawing without [`Drawing::gann`](crate::drawings::Drawing::gann) draws.
+    /// which a drawing without [`Drawing::gann`](crate::drawings::Drawing::gann) draws. Start a
+    /// configuration from the drawing's own tool here rather than from
+    /// [`GannConfig::default`], which is the Gann box's.
     pub fn for_tool(tool: DrawingToolType) -> Self {
         match tool {
             DrawingToolType::GannSquare | DrawingToolType::GannFixed => {

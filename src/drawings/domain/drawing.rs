@@ -41,6 +41,8 @@ use serde::{Deserialize, Serialize};
 /// timestamps by [`persistence`](crate::drawings::persistence). A field added
 /// later needs `#[serde(default)]`, so that saved version 2 files still load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// The trait impls below wrap the derived ones.
+#[serde(remote = "Self")]
 pub struct Drawing {
     /// Unique identifier for this drawing
     #[serde(skip)]
@@ -706,6 +708,32 @@ impl Drawing {
 impl Default for Drawing {
     fn default() -> Self {
         Self::new(0, DrawingToolType::TrendLine)
+    }
+}
+
+impl Serialize for Drawing {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Drawing {
+    /// A saved `gann` object takes the fields it leaves out from [`GannConfig::for_tool`] of the
+    /// drawing's tool, which a drawing without one draws.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        let tool = value
+            .get("tool_type")
+            .and_then(|tool| DrawingToolType::deserialize(tool).ok());
+        if let (Some(tool), Some(serde_json::Value::Object(gann))) = (tool, value.get_mut("gann"))
+            && let Ok(serde_json::Value::Object(defaults)) =
+                serde_json::to_value(GannConfig::for_tool(tool))
+        {
+            for (field, default) in defaults {
+                gann.entry(field).or_insert(default);
+            }
+        }
+        Self::deserialize(value).map_err(serde::de::Error::custom)
     }
 }
 
