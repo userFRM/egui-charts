@@ -757,7 +757,10 @@ mod tests {
     /// line is on it. The date range fills the band between x = 100 and 200 at any height.
     /// The ellipse in the box from (0, 0) to (200, 100) is lowest at (100, 100). Every drawing
     /// extends both ways where its tool can: the trend line from (100, 100) to (200, 150) runs on
-    /// through (500, 300) and (0, 50).
+    /// through (500, 300) and (0, 50). A head and shoulders on a neckline at y = 300 fills its
+    /// head above it, which holds (300, 200), and not the gap between shoulder and head at
+    /// (200, 200). The triangle pattern's boundaries y = x / 4 and y = 200 - x / 4 meet at
+    /// (400, 100), so its fill holds (300, 100) beyond the anchors.
     #[test]
     fn drawings_are_hit_along_what_they_draw() {
         use DrawingToolType as T;
@@ -806,6 +809,40 @@ mod tests {
                     (300.0, 100.0),
                     (400.0, 0.0),
                 ],
+            ),
+            (
+                T::HeadAndShoulders,
+                (300.0, 200.0),
+                Some(7),
+                vec![
+                    (0.0, 450.0),
+                    (100.0, 150.0),
+                    (200.0, 300.0),
+                    (300.0, 0.0),
+                    (400.0, 300.0),
+                    (500.0, 150.0),
+                    (600.0, 450.0),
+                ],
+            ),
+            (
+                T::HeadAndShoulders,
+                (200.0, 200.0),
+                None,
+                vec![
+                    (0.0, 450.0),
+                    (100.0, 150.0),
+                    (200.0, 300.0),
+                    (300.0, 0.0),
+                    (400.0, 300.0),
+                    (500.0, 150.0),
+                    (600.0, 450.0),
+                ],
+            ),
+            (
+                T::TrianglePattern,
+                (300.0, 100.0),
+                Some(7),
+                vec![(0.0, 0.0), (0.0, 200.0), (200.0, 50.0), (200.0, 150.0)],
             ),
             (
                 T::Triangle,

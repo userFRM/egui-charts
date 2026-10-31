@@ -597,9 +597,7 @@ mod tests {
                 for shape in &shapes {
                     let (is_main, stroke) = match shape {
                         Shape::LineSegment { points, stroke } => (
-                            drawing.points.windows(2).any(|p| p == points)
-                                || tool == CyclicLines
-                                || (tool == HeadAndShoulders && stroke.color.a() == 200),
+                            drawing.points.windows(2).any(|p| p == points) || tool == CyclicLines,
                             *stroke,
                         ),
                         Shape::Path(p) => {
@@ -645,8 +643,7 @@ mod tests {
                 assert!(main > 0, "{tool:?} missing main line");
                 if matches!(
                     tool,
-                    XABCDPattern
-                        | GannBox
+                    GannBox
                         | GannSquare
                         | ElliottTriangle
                         | ElliottDoubleCombo
@@ -665,9 +662,7 @@ mod tests {
             XABCDPattern,
             CypherPattern,
             HeadAndShoulders,
-            ABCDPattern,
             TrianglePattern,
-            ThreeDrivesPattern,
             ElliottImpulse,
             ElliottCorrection,
             ElliottTriangle,
@@ -706,10 +701,8 @@ mod tests {
                             );
                         }
                         Shape::Rect(r) if r.fill.a() > 0 => {
-                            if (matches!(tool, GannBox | GannSquare | GannFixed)
-                                && r.rect.contains(drawing.points[0]))
-                                || (tool == ThreeDrivesPattern
-                                    && r.rect.left() == drawing.points[5].x)
+                            if matches!(tool, GannBox | GannSquare | GannFixed)
+                                && r.rect.contains(drawing.points[0])
                             {
                                 bodies += 1;
                                 assert_eq!(r.fill, configured, "{tool:?} body");

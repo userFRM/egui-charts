@@ -185,12 +185,20 @@ impl Drawing {
             }
             T::HeadAndShoulders => {
                 outline.lines = path(false);
-                outline.lines.extend(self.neckline().map(|(line, _)| line));
+                if let Some((neckline, regions)) = patterns::head_and_shoulders_outline(p) {
+                    outline.lines.push(neckline);
+                    if filled {
+                        outline.areas.extend(regions.iter().map(|r| r.to_vec()));
+                    }
+                }
             }
             T::TrianglePattern => match patterns::triangle_boundaries(p, f32::INFINITY) {
-                Some((lines, _)) => {
+                Some((lines, fill)) => {
                     outline.lines = path(false);
                     outline.lines.extend(lines);
+                    if filled {
+                        outline.areas.extend(fill);
+                    }
                 }
                 None => outline.lines = path(p.len() == 3),
             },
@@ -399,7 +407,7 @@ impl Drawing {
             DrawingToolType::HeadAndShoulders => self.render_head_and_shoulders(painter),
             DrawingToolType::ABCDPattern => self.render_abcd_pattern(painter),
             DrawingToolType::TrianglePattern => self.render_triangle_pattern(painter),
-            DrawingToolType::ThreeDrivesPattern => self.render_three_drives_pattern(painter, view),
+            DrawingToolType::ThreeDrivesPattern => self.render_three_drives_pattern(painter),
 
             // Elliott Wave (5 tools)
             DrawingToolType::ElliottImpulse => self.render_elliott_impulse(painter, view),
@@ -933,6 +941,12 @@ mod tests {
                     )
                 })
                 .collect();
+            // Three drives labels only its ratios, which are measured in price.
+            if tool == DrawingToolType::ThreeDrivesPattern {
+                drawing.chart_points = (drawing.points.iter())
+                    .map(|p| crate::drawings::ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
+                    .collect();
+            }
             drawing.text = Some("Sample".into());
             drawing.font_size = 48.0;
             drawing.font_weight = FontWeight::Bold;
@@ -1270,7 +1284,7 @@ mod tests {
         shapes
     }
 
-    /// A pattern's projected target and selection handles can cross the pane edge;
+    /// A pattern's labels and selection handles can cross the pane edge;
     /// their paint commands retain the pane's clip, intersected with the caller's clip.
     #[test]
     fn drawings_and_handles_keep_the_pane_clip() {
