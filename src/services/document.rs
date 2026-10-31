@@ -421,16 +421,25 @@ impl StoredDocument {
                         let answer = *answer
                             .downcast::<Result<Option<Versioned>, FeedError>>()
                             .expect("document refresh");
-                        if let Ok(stored) = answer {
-                            if self.idle() {
-                                self.revision =
+                        match answer {
+                            Err(_) => {}
+                            Ok(stored) => {
+                                let revision =
                                     stored.as_ref().map(|stored| stored.revision.clone());
-                                received
-                                    .push(Received::Loaded(stored.map(|stored| stored.document)));
-                            } else if let Some(stored) = stored {
-                                // Read again once nothing is unsaved; a write before then is
-                                // refused.
-                                self.notified.get_or_insert(stored.revision);
+                                // A late report of this document's own write: nothing changed.
+                                if revision == self.revision {
+                                    continue;
+                                }
+                                if self.idle() {
+                                    self.revision = revision;
+                                    received.push(Received::Loaded(
+                                        stored.map(|stored| stored.document),
+                                    ));
+                                } else if let Some(revision) = revision {
+                                    // Read again once nothing is unsaved; a write before then is
+                                    // refused.
+                                    self.notified.get_or_insert(revision);
+                                }
                             }
                         }
                     }
@@ -858,6 +867,19 @@ pub(crate) mod tests {
             [Received::Saved(_)]
         ));
         assert!(mine.receive(&host).is_empty());
+        // Late reports of its own writes change nothing (#1616).
+        let watchers = std::mem::take(&mut host.0.lock().unwrap().1);
+        mine.save(&host, "mine 2".into());
+        mine.save(&host, "mine 3".into());
+        assert!(matches!(
+            mine.receive(&host).as_slice(),
+            [Received::Saved(a), Received::Saved(b)] if a == "mine 2" && b == "mine 3"
+        ));
+        for revision in ["4", "5"] {
+            watchers[0].push(Revision(revision.into()));
+        }
+        assert!(mine.receive(&host).is_empty());
+        host.0.lock().unwrap().1 = watchers;
         // Changes while a write is refused are read once the conflict is settled.
         host.put("A", "theirs again");
         mine.save(&host, "mine again".into());
