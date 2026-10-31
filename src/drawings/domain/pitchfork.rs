@@ -34,6 +34,7 @@ impl Default for PitchforkConfig {
     /// The median in red and nine levels in their own colours, of which 0.5 and 1 are shown,
     /// with bands at 20%.
     fn default() -> Self {
+        use super::drawing::{BLUE, CYAN, PINK, PURPLE, RED, TEAL};
         let level = |value, color, visible| PitchforkLevel {
             value,
             visible,
@@ -43,15 +44,15 @@ impl Default for PitchforkConfig {
         };
         Self {
             levels: vec![
-                level(0.0, [242, 54, 69, 255], true),
+                level(0.0, RED, true),
                 level(0.25, [255, 183, 77, 255], false),
                 level(0.382, [129, 199, 132, 255], false),
-                level(0.5, [8, 153, 129, 255], true),
-                level(0.618, [8, 153, 129, 255], false),
-                level(0.75, [0, 188, 212, 255], false),
-                level(1.0, [41, 98, 255, 255], true),
-                level(1.5, [156, 39, 176, 255], false),
-                level(1.75, [233, 30, 99, 255], false),
+                level(0.5, TEAL, true),
+                level(0.618, TEAL, false),
+                level(0.75, CYAN, false),
+                level(1.0, BLUE, true),
+                level(1.5, PURPLE, false),
+                level(1.75, PINK, false),
                 level(2.0, [247, 124, 128, 255], false),
             ],
             show_background: true,

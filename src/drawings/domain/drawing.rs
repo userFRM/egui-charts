@@ -200,16 +200,16 @@ fn enabled() -> bool {
     true
 }
 
-const BLUE: [u8; 4] = [41, 98, 255, 255];
-const RED: [u8; 4] = [242, 54, 69, 255];
-const ORANGE: [u8; 4] = [255, 152, 0, 255];
-const GREEN: [u8; 4] = [76, 175, 80, 255];
-const TEAL: [u8; 4] = [8, 153, 129, 255];
-const CYAN: [u8; 4] = [0, 188, 212, 255];
-const PINK: [u8; 4] = [233, 30, 99, 255];
-const PURPLE: [u8; 4] = [156, 39, 176, 255];
+pub(super) const BLUE: [u8; 4] = [41, 98, 255, 255];
+pub(super) const RED: [u8; 4] = [242, 54, 69, 255];
+pub(super) const ORANGE: [u8; 4] = [255, 152, 0, 255];
+pub(super) const GREEN: [u8; 4] = [76, 175, 80, 255];
+pub(super) const TEAL: [u8; 4] = [8, 153, 129, 255];
+pub(super) const CYAN: [u8; 4] = [0, 188, 212, 255];
+pub(super) const PINK: [u8; 4] = [233, 30, 99, 255];
+pub(super) const PURPLE: [u8; 4] = [156, 39, 176, 255];
 const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
-const GREY: [u8; 4] = [128, 128, 128, 255];
+pub(super) const GREY: [u8; 4] = [128, 128, 128, 255];
 const WHITE: [u8; 4] = [255, 255, 255, 255];
 
 /// `color` at `alpha` of 255.

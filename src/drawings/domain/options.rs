@@ -421,76 +421,68 @@ impl FibonacciConfig {
     /// table when constructed.
     pub fn for_tool(tool: super::DrawingToolType) -> Self {
         use super::DrawingToolType as T;
-        let grey = [128, 128, 128, 255];
-        let blue = [41, 98, 255, 255];
-        let red = [242, 54, 69, 255];
-        let orange = [255, 152, 0, 255];
-        let green = [76, 175, 80, 255];
-        let teal = [8, 153, 129, 255];
-        let cyan = [0, 188, 212, 255];
-        let pink = [233, 30, 99, 255];
-        let purple = [156, 39, 176, 255];
+        use super::drawing::{BLUE, CYAN, GREEN, GREY, ORANGE, PINK, PURPLE, RED, TEAL};
         let table = match tool {
             T::FibonacciTimeZones => [0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0, 89.0]
-                .map(|value| (value, if value == 0.0 { grey } else { blue }))
+                .map(|value| (value, if value == 0.0 { GREY } else { BLUE }))
                 .to_vec(),
             T::TrendBasedFibTime => vec![
-                (0.0, grey),
-                (0.382, red),
+                (0.0, GREY),
+                (0.382, RED),
                 (0.5, [129, 199, 132, 255]),
-                (0.618, green),
-                (1.0, teal),
-                (1.382, cyan),
-                (1.618, grey),
-                (2.0, blue),
-                (2.382, pink),
-                (2.618, purple),
+                (0.618, GREEN),
+                (1.0, TEAL),
+                (1.382, CYAN),
+                (1.618, GREY),
+                (2.0, BLUE),
+                (2.382, PINK),
+                (2.618, PURPLE),
                 (3.0, [103, 58, 183, 255]),
             ],
             T::FibonacciSpeedFan => vec![
-                (0.0, grey),
-                (0.25, orange),
-                (0.382, cyan),
-                (0.5, green),
-                (0.618, teal),
-                (0.75, blue),
-                (1.0, grey),
+                (0.0, GREY),
+                (0.25, ORANGE),
+                (0.382, CYAN),
+                (0.5, GREEN),
+                (0.618, TEAL),
+                (0.75, BLUE),
+                (1.0, GREY),
             ],
             T::FibonacciCircles | T::FibonacciSpeedResistanceArcs => vec![
-                (0.236, red),
-                (0.382, orange),
-                (0.5, teal),
-                (0.618, green),
-                (0.786, cyan),
-                (1.0, grey),
-                (1.618, blue),
-                (2.618, pink),
-                (3.618, blue),
-                (4.236, pink),
-                (4.618, red),
+                (0.236, RED),
+                (0.382, ORANGE),
+                (0.5, TEAL),
+                (0.618, GREEN),
+                (0.786, CYAN),
+                (1.0, GREY),
+                (1.618, BLUE),
+                (2.618, PINK),
+                (3.618, BLUE),
+                (4.236, PINK),
+                (4.618, RED),
             ],
             T::FibonacciRetracement
             | T::FibonacciExtension
             | T::FibonacciChannel
             | T::FibonacciWedge => {
                 let mut levels: Vec<(f32, _, _)> = [
-                    (0.0, grey),
-                    (0.236, red),
-                    (0.382, orange),
-                    (0.5, green),
-                    (0.618, teal),
-                    (0.786, cyan),
-                    (1.0, grey),
-                    (1.618, blue),
-                    (2.618, red),
-                    (3.618, purple),
-                    (4.236, pink),
+                    (0.0, GREY),
+                    (0.236, RED),
+                    (0.382, ORANGE),
+                    (0.5, GREEN),
+                    (0.618, TEAL),
+                    (0.786, CYAN),
+                    (1.0, GREY),
+                    (1.618, BLUE),
+                    (2.618, RED),
+                    (3.618, PURPLE),
+                    (4.236, PINK),
                 ]
                 .map(|(value, color)| (value, color, true))
                 .to_vec();
                 if tool == T::FibonacciWedge {
                     levels.retain(|level| level.0 != 0.0);
-                    levels.push((4.618, red, true));
+                    levels.push((4.618, RED, true));
                     for level in &mut levels {
                         level.2 = level.0 <= 1.0;
                     }
@@ -500,7 +492,7 @@ impl FibonacciConfig {
                         1.272, 1.414, 2.0, 2.272, 2.414, 3.0, 3.272, 3.414, 4.0, 4.272, 4.414,
                         4.618, 4.764,
                     ];
-                    let colors = [red, orange, green, teal, cyan, blue, purple, pink];
+                    let colors = [RED, ORANGE, GREEN, TEAL, CYAN, BLUE, PURPLE, PINK];
                     levels.extend(
                         (spare.into_iter().zip(colors.into_iter().cycle()))
                             .map(|(value, color)| (value, color, false)),
