@@ -23,8 +23,9 @@ impl Chart {
         }
     }
 
-    /// Formats a timestamp with the chart's zone, clock visibility and bar duration, or a key
-    /// as the crosshair label of the [horizontal scale](Self::set_horizontal_scale) reads.
+    /// Formats a timestamp with the chart's zone, clock visibility and the duration of the bars
+    /// in view (of the two bars nearest the view when fewer than two are in it), or a key as the
+    /// crosshair label of the [horizontal scale](Self::set_horizontal_scale) reads.
     /// Hosts can use this for data windows and other readouts beside the chart.
     pub fn format_time(&self, time: chrono::DateTime<chrono::Utc>) -> String {
         let bar_seconds = self.time_label_seconds();
@@ -102,22 +103,27 @@ impl Chart {
         crate::scales::bar_countdown(last.time, timeframe, now, self.bar_close_time.or(close))
     }
 
-    // Source-bar cadence sets precision even when many elements share one time.
+    // Source-bar cadence sets precision even when many elements share one time. With fewer
+    // than two bars in view, the two bars nearest the view set it.
     fn time_label_seconds(&self) -> i64 {
         let bars = &self.state.data().bars;
-        let visible = self.state.visible_data();
-        let Some((first, last)) = visible.first().zip(visible.last()) else {
+        let shown = self.state.shown();
+        // An empty range starts at 0 before the first bar and at the bar count after the last.
+        let (start, end) = self.state.visible_range();
+        let nearest = |index: usize| shown.get(index.min(shown.len().saturating_sub(1)));
+        let Some((first, last)) = nearest(start).zip(nearest(end.saturating_sub(1).max(start)))
+        else {
             return 1;
         };
         let end = bars.partition_point(|bar| bar.time <= last.time);
         let at = bars
             .partition_point(|bar| bar.time < first.time)
             .min(end.saturating_sub(2));
-        if end >= 2 {
-            (bars[at + 1].time - bars[at].time).num_seconds().abs()
-        } else {
-            1
-        }
+        bars.get(at)
+            .zip(bars.get(at + 1))
+            .map_or(1, |(left, right)| {
+                (right.time - left.time).num_seconds().abs()
+            })
     }
 
     pub(super) fn display_timezone(&self) -> crate::scales::TimezoneMode {
@@ -5215,6 +5221,29 @@ mod tests {
             assert_eq!(labels, [expected], "{case:?}");
             let time = chart.state.shown()[index + 1].time;
             assert_eq!(chart.format_time(time), expected, "host readout: {case:?}");
+        }
+    }
+
+    /// With fewer than two bars in view, on either side of the bars, time labels keep the daily
+    /// precision of the bars.
+    #[test]
+    fn views_past_the_bars_keep_the_chart_readable() {
+        use crate::model::LogicalRange;
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        // The first bar opens at 2023-11-14 22:13:20 UTC, and the bars are a day apart.
+        let first = chart.state.data().bars[0].time;
+        // (left, right, bars in view)
+        for (left, right, in_view) in [
+            (40.5, 80.5, 42),
+            (-30.25, -0.25, 1),
+            (-60.0, -20.0, 0),
+            (110.0, 150.0, 0),
+        ] {
+            assert!(chart.set_visible_logical_range(LogicalRange::new(left, right)));
+            assert_eq!(chart.state.visible_data().len(), in_view, "{left}..{right}");
+            assert_eq!(chart.format_time(first), "Nov 14, 2023", "{left}..{right}");
         }
     }
 
