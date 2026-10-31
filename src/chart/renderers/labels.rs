@@ -1067,7 +1067,7 @@ mod tests {
                             })
                             .expect("custom price tag");
                         assert!((tag.left() - plot.right() - 5.0).abs() < 0.1);
-                        assert!((widget.right() - tag.right() - 8.0).abs() < 0.1);
+                        assert!((widget.right() - tag.right() - 6.0).abs() < 0.1);
                     }
                 }
             }

@@ -218,7 +218,7 @@ Chart,Scales and axes,Index-based time axis,done,library,src/model/timescale.rs;
 Chart,Scales and axes,Indexed to 100 scale,done,library,src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/studies/chart_state.rs;src/ui/dialogs/series_settings/tabs/scales.rs;src/widget/mod.rs
 Chart,Scales and axes,Indicator labels and last values on the scale,done,library,src/widget/frame.rs;src/chart/rendering/axes.rs;src/widget/settings/apply.rs;src/chart/renderers/study_scale.rs;src/widget/indicator_pane.rs;src/widget/price_series.rs
 Chart,Scales and axes,Invert scale,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/scales/pricescale.rs;src/widget/frame.rs
-Chart,Scales and axes,Last price line and label,done,library,src/widget/frame.rs;src/chart/rendering/axes.rs;src/widget/settings/apply.rs;src/painting/dashed_line.rs
+Chart,Scales and axes,Last price line and label,done,library,src/widget/frame.rs;src/chart/rendering/axes.rs;src/widget/settings/apply.rs;src/painting/dashed_line.rs;src/model/series_style.rs
 Chart,Scales and axes,Left price scale and moving the scale,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/widget/frame.rs;src/widget/price_series.rs;src/ui/context_menu/axis.rs
 Chart,Scales and axes,Lock price to bar ratio,done,library,src/ui/context_menu/axis.rs;src/widget/frame.rs;src/scales/pricescale.rs
 Chart,Scales and axes,Logarithmic scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/frame.rs;src/ui/context_menu/axis.rs;src/scales/pricescale_marks.rs
@@ -229,7 +229,7 @@ Chart,Scales and axes,Previous close line,done,library,src/widget/settings/apply
 Chart,Scales and axes,Price label precision,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/chart/renderers/crosshair.rs;src/widget/price_series.rs;src/widget/frame.rs;src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/chart/rendering/axes.rs;src/chart/renderers/labels.rs
 Chart,Scales and axes,Regular price scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/frame.rs;src/scales/pricescale_marks.rs
 Chart,Scales and axes,Right offset,done,library,src/model/timescale.rs;src/widget/mod.rs;src/widget/builder.rs;src/widget/time_scale.rs;src/widget/pan_zoom.rs;src/widget/sync.rs
-Chart,Scales and axes,Right price scale,done,library,src/widget/mod.rs;src/widget/frame.rs;src/chart/renderers/labels.rs
+Chart,Scales and axes,Right price scale,done,library,src/widget/mod.rs;src/widget/frame.rs;src/chart/renderers/labels.rs;src/chart/rendering/axes.rs
 Chart,Scales and axes,Scale margins,done,library,src/widget/settings/apply.rs;src/scales/pricescale.rs;src/widget/frame.rs
 Chart,Scales and axes,Session breaks,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/ui/context_menu/axis.rs;src/config/chart.rs;src/widget/palette.rs;src/model/session/exchange.rs;src/model/session/mod.rs;src/model/clock.rs
 Chart,Scales and axes,Symbol name label on the scale,done,library,;src/config/chart.rs;src/chart/rendering/axes.rs;src/widget/frame.rs;src/widget/price_series.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs

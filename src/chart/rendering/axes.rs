@@ -14,7 +14,7 @@ pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;
 pub(crate) const TIME_LABEL_GAP: f32 = 5.0;
 
 /// Padding between an axis tag's text and its edge.
-const TAG_PADDING: Vec2 = Vec2::new(8.0, 0.5);
+const TAG_PADDING: Vec2 = Vec2::new(6.0, 0.5);
 
 /// The font of every axis label and tag: the theme's label text.
 pub(crate) fn axis_font(ctx: &egui::Context) -> FontId {
@@ -35,7 +35,7 @@ pub(crate) fn paint_axis_tag(
     fill: Color32,
 ) -> Rect {
     let max_x = if align == Align2::LEFT_CENTER {
-        max_x - 8.0
+        max_x - 6.0
     } else {
         max_x
     };
@@ -397,7 +397,7 @@ pub fn price_axis_width(
         .fold(0.0, f32::max)
         + 5.0
         + TAG_PADDING.x * 2.0
-        + 8.0
+        + 6.0
 }
 
 /// Paints independent current close, session and volume readouts, returning their rectangles

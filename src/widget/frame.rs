@@ -3149,7 +3149,7 @@ impl Chart {
         );
         self.measured_axis_width = self.measured_axis_width.max(independent_axis_width);
         for tag in tags.iter().skip(usize::from(has_currency)).flatten() {
-            self.measured_axis_width = self.measured_axis_width.max(tag.width() + 5.0 + 8.0);
+            self.measured_axis_width = self.measured_axis_width.max(tag.width() + 5.0 + 6.0);
         }
 
         if show_price_axis && has_currency {
