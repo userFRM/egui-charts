@@ -616,6 +616,11 @@ impl Indicator for TradingSessions {
         }
     }
 
+    /// A session's box and lines take the visibility of its output.
+    fn plot_output(&self, line: usize) -> usize {
+        line % 3
+    }
+
     fn value_format(&self) -> crate::scales::StudyFormat {
         crate::scales::StudyFormat::Fixed(0)
     }
@@ -881,6 +886,17 @@ mod tests {
         night.calculate(&data);
         assert_eq!(zones(&night), [(1..5, 13.0, 9.0, 3), (7..8, 21.0, 19.0, 3)]);
         assert_eq!(night.labels()[0].text, "Night\nRange: 4.00\nAvg: 11.40");
+    }
+
+    /// Hiding a session's output in the style tab hides its box and lines with its highlight.
+    #[test]
+    fn a_hidden_output_hides_its_box_and_lines() {
+        let mut study = crate::studies::ConfiguredStudy::new(Box::new(TradingSessions::new()));
+        let mut settings = study.settings();
+        settings.plots[0].visible = false;
+        study.apply_settings(&[], settings).unwrap();
+        let visible: Vec<_> = (3..9).map(|line| study.plot_style(line).visible).collect();
+        assert_eq!(visible, [false, true, true, false, true, true]);
     }
 
     /// Hourly bars from 08:00 on the 15th to 10:00 on the 16th, sessions 08:00 to 16:00 and 14:00

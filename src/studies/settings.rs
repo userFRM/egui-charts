@@ -700,16 +700,19 @@ impl Indicator for ConfiguredStudy {
         style
     }
     fn plot_style(&self, line: usize) -> PlotStyle {
-        let mut plot = self
-            .settings
-            .plots
-            .get(line)
-            .copied()
-            .unwrap_or_else(|| self.study.plot_style(line));
+        let mut plot = self.settings.plots.get(line).copied().unwrap_or_else(|| {
+            let mut plot = self.study.plot_style(line);
+            let output = self.settings.plots.get(self.study.plot_output(line));
+            plot.visible &= output.is_none_or(|output| output.visible);
+            plot
+        });
         if self.study.is_volume() {
             plot.visible &= self.study.plot_style(line).visible;
         }
         plot
+    }
+    fn plot_output(&self, line: usize) -> usize {
+        self.study.plot_output(line)
     }
     fn plot_offset(&self, line: usize) -> isize {
         self.study

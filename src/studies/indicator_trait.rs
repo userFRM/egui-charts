@@ -199,6 +199,13 @@ pub trait Indicator: Send {
         }
     }
 
+    /// The output whose visibility in the style tab also applies to plot `line`, for a plot past
+    /// [`line_count`](Self::line_count) that draws zones or candles for one of the outputs. The
+    /// default is `line` itself.
+    fn plot_output(&self, line: usize) -> usize {
+        line
+    }
+
     /// Horizontal displacement in bars. Positive values draw into future whitespace.
     /// Values remain indexed by their source bar; missing bars still occupy a position.
     fn plot_offset(&self, line: usize) -> isize {
