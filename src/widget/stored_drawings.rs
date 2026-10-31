@@ -1553,16 +1553,14 @@ mod tests {
     fn a_chart_outside_the_storage_shows_each_drawing_once_and_keeps_its_own() {
         use crate::services::document::tests::Revised;
 
-        let host = Arc::new(Host::default());
-        let revised = Arc::new(Revised::default());
-        let stores: [(Arc<dyn Storage>, Box<dyn Fn() -> String>); 2] = [
-            (
-                host.clone(),
-                Box::new(move || host.documents.lock().unwrap()["A"].clone()),
-            ),
-            (revised.clone(), Box::new(move || revised.get("A").unwrap())),
-        ];
-        for (storage, stored) in stores {
+        for revised in [false, true] {
+            let host = Arc::new(Host::default());
+            let watched = Arc::new(Revised::default());
+            let storage: Arc<dyn Storage> = if revised {
+                watched.clone()
+            } else {
+                host.clone()
+            };
             let (mut a, mut b) = (chart_on(Some(storage.clone())), chart_on(Some(storage)));
             let mut c = chart_on(None);
             let mut layout = ChartLayout::default();
@@ -1586,7 +1584,11 @@ mod tests {
             let own = c.drawings().drawings.iter().find(|d| d.id == own).unwrap();
             assert_eq!(own.chart_points[0].price, 9.0);
             assert_eq!(
-                prices_in(&stored()),
+                if revised {
+                    prices_in(&watched.get("A").unwrap())
+                } else {
+                    stored_prices(&host)
+                },
                 [8.0, 10.5],
                 "a mirrored drawing is not stored"
             );
