@@ -455,9 +455,10 @@ pub fn render_chart_type(
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{Bar, BarData, ChartType, LineStyle};
+    use crate::model::{Bar, BarData, ChartType, ChartTypeParams, LineStyle, Timeframe};
     use crate::widget::Chart;
     use egui::{Color32, Context, RawInput, Rect, Shape, pos2, vec2};
+    use std::collections::BTreeSet;
 
     #[test]
     fn chart_type_styles_paint_and_survive_switching_and_serialization() {
@@ -595,6 +596,68 @@ mod tests {
             ChartType::Line,
             "reset must keep the dialog's active type"
         );
+    }
+
+    #[test]
+    fn tpo_chart_type_draws_the_display_of_its_params() {
+        let time = chrono::DateTime::parse_from_rfc3339("2024-01-02T14:30:00Z")
+            .unwrap()
+            .to_utc();
+        let bars = (0..8)
+            .map(|i| {
+                let low = 100.0 + f64::from(i);
+                Bar::new(
+                    time + chrono::Duration::minutes(i64::from(i) * 30),
+                    low + 0.25,
+                    low + 1.0,
+                    low,
+                    low + 0.75,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.config_mut().show_volume = false;
+        chart.set_timeframe(Timeframe::Min30);
+        chart.set_chart_type(ChartType::TimePriceOpportunity);
+        let mut letters_of = |params: ChartTypeParams| {
+            chart.set_chart_type_params(params);
+            let ctx = Context::default();
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            );
+            let letters: BTreeSet<String> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(text)
+                        if text.galley.text().len() == 1
+                            && text.galley.text().chars().all(|c| c.is_ascii_uppercase()) =>
+                    {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            letters.into_iter().collect::<String>()
+        };
+
+        // Settings saved before the option existed keep the blocks they were saved with.
+        let saved = serde_json::from_str::<ChartTypeParams>("{}").unwrap();
+        assert_eq!(letters_of(saved.clone()), "");
+        // Eight half-hour bars of one session are the periods A to H.
+        let lettered = ChartTypeParams {
+            tpo_letters: true,
+            ..saved
+        };
+        assert_eq!(letters_of(lettered), "ABCDEFGH");
     }
 
     #[test]
