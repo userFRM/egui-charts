@@ -17,13 +17,13 @@ pub use countdown::bar_countdown;
 pub use horizontal::{
     HorizontalScale, MaturityScale, PriceHorizontalScale, TickMarkLayout, key_time, time_key,
 };
-#[cfg(feature = "widget")]
-pub(crate) use price_formatter::price_decimals;
 pub use price_formatter::{
     CurrencyFormatter, CustomPriceFormatter, DefaultPriceFormatter, PercentageFormatter,
     PriceFormatter, PriceFormatterBuilder, ScientificFormatter, VolumeFormatter,
     instrument_price_precision,
 };
+#[cfg(feature = "widget")]
+pub(crate) use price_formatter::{group_thousands, price_decimals};
 #[cfg(feature = "widget")]
 pub(crate) use pricescale::auto_scale_span;
 pub use pricescale::{

@@ -201,7 +201,7 @@ pub(crate) fn render_study_tags(
             continue;
         }
         let label = if study.value_format() == crate::scales::StudyFormat::Price {
-            transform.label(
+            map.label(
                 transform.to_scale(value),
                 study
                     .precision()
@@ -285,7 +285,7 @@ pub fn render_price_line(
     if !show_axis || !line.axis_label {
         return None;
     }
-    let label = transform.label(
+    let label = price_map.label(
         transform.to_scale(line.price),
         tag_decimals(price_map, y),
         None,
@@ -467,7 +467,7 @@ pub(crate) fn render_quote_tags_with_countdown(
                 let price = named_label(
                     true,
                     close_name,
-                    transform.label(
+                    price_map.label(
                         transform.to_scale(close.price),
                         tag_decimals(price_map, close_y),
                         formatter,
@@ -502,7 +502,7 @@ pub(crate) fn render_quote_tags_with_countdown(
         if !allow_overlap && !rows.is_empty() && (y - close_y).abs() < separation {
             y = close_y - separation;
         }
-        let label = transform.label(
+        let label = price_map.label(
             transform.to_scale(quote.price),
             tag_decimals(price_map, price_map.price_to_y(quote.price)),
             formatter,

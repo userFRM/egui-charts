@@ -117,6 +117,9 @@ pub struct Legend<'a> {
     /// The order quantity shown in a box under the quote buttons' spread, which the user clicks
     /// to change it.
     pub(crate) quantity: Option<f64>,
+    /// Groups the thousands of built-in price values; the chart sets it from
+    /// `ChartConfig::thousands_sep`.
+    pub(crate) thousands_sep: Option<char>,
 }
 
 impl<'a> Legend<'a> {
@@ -148,6 +151,7 @@ impl<'a> Legend<'a> {
             day_change: None,
             study_backdrop: 0.6,
             quantity: None,
+            thousands_sep: None,
         }
     }
 
@@ -288,13 +292,23 @@ impl<'a> Legend<'a> {
                 layout.field(
                     "C ",
                     self.formatters.price.map_or_else(
-                        || format!("{:.precision$}", self.bar.close),
+                        || {
+                            crate::scales::group_thousands(
+                                format!("{:.precision$}", self.bar.close),
+                                self.thousands_sep,
+                            )
+                        },
                         |formatter| formatter.format(self.bar.close),
                     ),
                     layout.bar_color(self.bar),
                 );
             } else {
-                layout.ohlc(self.bar, precision, self.formatters.price);
+                layout.ohlc(
+                    self.bar,
+                    precision,
+                    self.formatters.price,
+                    self.thousands_sep,
+                );
             }
         }
         // The change from `reference` to `value`, absolute and as a percentage.
@@ -302,7 +316,12 @@ impl<'a> Legend<'a> {
             let change = value - reference;
             let pct = percent_change(reference, value);
             let absolute = self.formatters.price.map_or_else(
-                || format!("{change:+.precision$}"),
+                || {
+                    crate::scales::group_thousands(
+                        format!("{change:+.precision$}"),
+                        self.thousands_sep,
+                    )
+                },
                 |formatter| formatter.format(change),
             );
             let percent = self
@@ -515,7 +534,16 @@ impl<'a> Legend<'a> {
                 return (None, None);
             }
             let precision = self.price_precision(bid.abs().max(ask.abs()));
-            let action = paint_quotes(ui, &mut layout, bid, ask, precision, self.quantity, id);
+            let action = paint_quotes(
+                ui,
+                &mut layout,
+                bid,
+                ask,
+                precision,
+                self.thousands_sep,
+                self.quantity,
+                id,
+            );
             layout.new_row();
             layout.pos.y += 4.0;
             action
@@ -640,7 +668,10 @@ impl<'a> Legend<'a> {
                         let value = study.plot_value(index, self.bar_index).unwrap_or(f64::NAN);
                         let text = if value.is_finite() {
                             if study.value_format() == crate::scales::StudyFormat::Price {
-                                study.value_format().format(value, precision)
+                                crate::scales::group_thousands(
+                                    study.value_format().format(value, precision),
+                                    self.thousands_sep,
+                                )
                             } else {
                                 study.format_value(value)
                             }
@@ -1012,6 +1043,7 @@ impl<'a> Layout<'a> {
         bar: &Bar,
         precision: usize,
         formatter: Option<&dyn crate::scales::PriceFormatter>,
+        thousands_sep: Option<char>,
     ) {
         let color = self.bar_color(bar);
         for (label, value) in [
@@ -1023,7 +1055,12 @@ impl<'a> Layout<'a> {
             self.field(
                 label,
                 formatter.map_or_else(
-                    || format!("{value:.precision$}"),
+                    || {
+                        crate::scales::group_thousands(
+                            format!("{value:.precision$}"),
+                            thousands_sep,
+                        )
+                    },
                     |formatter| formatter.format(value),
                 ),
                 color,
@@ -1040,10 +1077,12 @@ fn paint_quotes(
     bid: f64,
     ask: f64,
     precision: usize,
+    thousands_sep: Option<char>,
     quantity: Option<f64>,
     id: egui::Id,
 ) -> (Option<QuoteSide>, Option<Rect>) {
-    let spread = format!("{:.precision$}", ask - bid);
+    let spread =
+        crate::scales::group_thousands(format!("{:.precision$}", ask - bid), thousands_sep);
     let theme = ui.active_theme();
     let spread_galley = layout.painter.layout_no_wrap(
         spread,
@@ -1055,7 +1094,7 @@ fn paint_quotes(
         let price = layout
             .painter
             .layout_job(egui::text::LayoutJob::single_section(
-                format!("{price:.precision$}"),
+                crate::scales::group_thousands(format!("{price:.precision$}"), thousands_sep),
                 semibold(FontId::proportional(theme.text.ohlc), color),
             ));
         let label = layout.painter.layout_no_wrap(
