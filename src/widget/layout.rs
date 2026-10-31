@@ -411,7 +411,8 @@ impl ChartLayout {
 
     /// Shows the preset and synchronizes its charts. Click or scroll a panel to activate it.
     /// Its corner menu offers detachment and named groups. The active border is painted
-    /// inside the chart; stacked charts have a two-point gap and side-by-side charts meet at their edge.
+    /// inside the chart; stacked charts have a two-point gap and side-by-side charts meet at their
+    /// edge.
     /// Extra charts remain owned by the host and are not painted by a grid preset.
     pub fn show(&mut self, ui: &mut Ui, charts: &mut [&mut Chart]) -> Response {
         let total = charts.len().min(16);

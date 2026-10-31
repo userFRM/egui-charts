@@ -119,36 +119,36 @@ impl ChartGridSelector {
                 });
                 ui.add_space(theme.spacing.sm);
                 for (value, label, effect) in [
-                (
-                    &mut self.sync.sync_symbol,
-                    "Symbol",
-                    "A symbol chosen on one chart applies to every chart of the group.",
-                ),
-                (
-                    &mut self.sync.sync_timeframe,
-                    "Interval",
-                    "An interval chosen on one chart applies to every chart of the group.",
-                ),
-                (
-                    &mut self.sync.sync_crosshair,
-                    "Crosshair",
-                    "Every chart of the group marks the time hovered on one of them.",
-                ),
-                (
-                    &mut self.sync.sync_time_axis,
-                    "Scroll and zoom",
-                    "Scrolling or zooming one chart shows the same time span on every chart of the group.",
-                ),
-                (
-                    &mut self.sync.sync_date_range,
-                    "Date range",
-                    "A date range chosen on one chart applies to every chart of the group.",
-                ),
-                (
-                    &mut self.sync.sync_drawings,
-                    "Drawings on the same symbol",
-                    "A drawing completed on one chart appears on the charts of the group showing the same symbol.",
-                ),
+                    (
+                        &mut self.sync.sync_symbol,
+                        "Symbol",
+                        "A symbol chosen on one chart applies to every chart of the group.",
+                    ),
+                    (
+                        &mut self.sync.sync_timeframe,
+                        "Interval",
+                        "An interval chosen on one chart applies to every chart of the group.",
+                    ),
+                    (
+                        &mut self.sync.sync_crosshair,
+                        "Crosshair",
+                        "Every chart of the group marks the time hovered on one of them.",
+                    ),
+                    (
+                        &mut self.sync.sync_time_axis,
+                        "Scroll and zoom",
+                        "Scrolling or zooming one chart shows the same time span on every chart of the group.",
+                    ),
+                    (
+                        &mut self.sync.sync_date_range,
+                        "Date range",
+                        "A date range chosen on one chart applies to every chart of the group.",
+                    ),
+                    (
+                        &mut self.sync.sync_drawings,
+                        "Drawings on the same symbol",
+                        "A drawing completed on one chart appears on the charts of the group showing the same symbol.",
+                    ),
                 ] {
                     sync_switch(ui, value, label, effect);
                 }
@@ -182,6 +182,9 @@ fn arrangement(ui: &mut Ui, layout: ChartLayoutMode, chosen: bool) -> egui::Resp
         .as_image_tinted(glyph.size(), ink)
         .paint_at(ui, glyph);
     crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.sm);
+    if response.has_focus() {
+        response.scroll_to_me(None);
+    }
     let name = l10n::text(ui.ctx(), layout.label());
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::Role::MenuItemRadio, response.enabled(), chosen, &name)
@@ -254,6 +257,7 @@ fn sync_switch(ui: &mut Ui, on: &mut bool, label: &str, effect: &str) {
             egui::Stroke::new(2.0, crate::styles::focus::focus_ring_color(ui)),
             egui::StrokeKind::Inside,
         );
+        response.scroll_to_me(None);
     }
 }
 
