@@ -642,7 +642,8 @@ mod tests {
         chart.drawings_mut().select_drawings([1, 2, 3, 4]);
         let opened = DrawingProps::from_drawing(&drawings[0], &chart);
         // Each case: the edit made in the dialog, then what it changes on each drawing.
-        let cases: [(&str, fn(&mut DrawingProps), fn(&mut Drawing)); 4] = [
+        type Case = (&'static str, fn(&mut DrawingProps), fn(&mut Drawing));
+        let cases: [Case; 4] = [
             ("nothing edited", |_| {}, |_| {}),
             (
                 "colour",
