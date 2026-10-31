@@ -18,8 +18,8 @@ use crate::theme::{Theme, ThemeExt};
 pub enum TradingLineAction {
     /// Cancel the working order.
     Cancel(Order),
-    /// Replace the working order with the request: the user dragged its price, its take profit
-    /// or its stop loss, or removed a bracket.
+    /// Replace the working order with the request: the user dragged its price, a take profit or
+    /// its stop loss, removed one of them, or dragged a take profit or stop loss out of its label.
     Modify(Order, OrderRequest),
     /// Close the position at the market.
     Close(Position),
@@ -123,6 +123,11 @@ pub struct TradingLineOptions<'a> {
     pub take_profit: bool,
     /// Position labels offer an SL button, dragged out to place a stop loss as a stop order.
     pub stop_loss: bool,
+    /// Labels of orders with an entry price and no position bracket offer a TP button while the
+    /// order has no take profit, and an SL button while it has no stop loss. Dragging one out
+    /// places that exit at the pointer's price and asks for it as a
+    /// [`TradingLineAction::Modify`].
+    pub order_exits: bool,
     /// A position's label gives its profit or loss in this unit, or none.
     pub pnl: Option<PnlUnit>,
     /// A take profit or stop loss gives, in this unit, the profit or loss its order makes if
@@ -282,6 +287,24 @@ pub fn render_trading_lines<'a>(
             );
             // Removing a bracket changes the order, so it needs the same support as a drag.
             let cancel = level == Level::Entry || options.modify;
+            // What an exit dragged out of the entry's label makes if the price reaches it.
+            let exit_pnl = |unit, at: f64| {
+                let gain = (at - price) * direction(request.side);
+                let money = gain * open * options.point_value;
+                pnl_text(&ctx, unit, money, gain, price, options).0
+            };
+            let exits = if level == Level::Entry
+                && options.order_exits
+                && request.position_bracket.is_none()
+                && initial_entry.is_some()
+            {
+                offered_exits(
+                    request.take_profit.is_none() && request.take_profit_levels.is_empty(),
+                    request.stop_loss.is_none(),
+                )
+            } else {
+                &[]
+            };
             let label = Label {
                 id: ("trading_order", &order.id.0),
                 body: &body,
@@ -290,9 +313,11 @@ pub fn render_trading_lines<'a>(
                 buttons: if cancel { &[Button::Cancel] } else { &[] },
                 draggable: options.modify,
                 submit: (options.submit && level == Level::Entry).then_some(request.side),
+                exits,
+                exit_pnl: &exit_pnl,
             };
             let first_tag = tags.len();
-            let (dragged, pressed) = ui
+            let (dragged, pressed, released) = ui
                 .push_id((level as u8, index), |ui| {
                     label.show(ui, mapping, options, &line, &mut tags)
                 })
@@ -320,6 +345,16 @@ pub fn render_trading_lines<'a>(
                 connector(ui, mapping, entry, drawn, side_color(request.side));
             }
             if tags.len() == first_tag {
+                continue;
+            }
+            if let Some((exit, price)) = released {
+                let mut changed = request.clone();
+                if exit == Level::TakeProfit {
+                    changed.take_profit = Some(price);
+                } else {
+                    changed.stop_loss = Some(price);
+                }
+                action = action.or(Some(TradingLineAction::Modify(order.clone(), changed)));
                 continue;
             }
             let price = match (dragged, pressed) {
@@ -510,33 +545,13 @@ fn show_position(
         };
         Some((layout(text, text_color), text_color))
     });
-    let exits = [
-        (options.take_profit, "TP", theme.ui.take_profit),
-        (options.stop_loss, "SL", theme.ui.stop_loss),
-    ]
-    .map(|(offered, name, color)| {
-        offered.then(|| (name, layout(l10n::text(ui.ctx(), name), color), color))
-    });
+    let exits = offered_exits(options.take_profit, options.stop_loss);
     let quantity = layout(format!("{size}"), Color32::WHITE);
     let close = if options.close { HEIGHT } else { 0.0 };
-    let total = exits
-        .iter()
-        .flatten()
-        .map(|(_, galley, _)| width(galley))
-        .sum::<f32>()
+    let total = exit_buttons_width(ui, exits)
         + width(&quantity)
         + pnl.as_ref().map_or(0.0, |(galley, _)| width(galley))
-        + close
-        - if options.take_profit && options.stop_loss {
-            1.0
-        } else {
-            0.0
-        }
-        + if exits.iter().any(Option::is_some) {
-            HEIGHT * 0.65
-        } else {
-            0.0
-        };
+        + close;
     let reverse = options.close && options.reverse;
     let label_width = total + if reverse { HEIGHT * 1.6 } else { 0.0 };
     let inset = LABEL_INSET.min((mapping.rect.width() - total - HEIGHT * 1.6).max(8.0));
@@ -612,154 +627,44 @@ fn show_position(
         }
     }
 
-    let mut x = right - total;
-    for (name, galley, exit_color) in exits.into_iter().flatten() {
-        let rect = cell(x, width(&galley));
-        x = rect.right()
-            - if name == "TP" && options.stop_loss {
-                1.0
-            } else {
-                0.0
-            };
-        let id = key.with(name);
-        let response = ui
-            .interact(rect.intersect(mapping.rect), id, Sense::drag())
-            .on_hover_text(l10n::text(
-                ui.ctx(),
-                if name == "TP" {
-                    "Drag to place a take profit"
-                } else {
-                    "Drag to place a stop loss"
-                },
-            ));
-        if response.hovered() || response.dragged() {
-            ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
-        }
-        let r = rect.shrink(0.5);
-        let left_radius = if name == "SL" && options.take_profit {
-            0.0
+    let (mut x, released) = ExitButtons {
+        key,
+        exits,
+        x: right - total,
+        y,
+        entry,
+        line_left: if options.extend_lines {
+            mapping.rect.left()
         } else {
-            4.0
-        };
-        let right_radius = if name == "TP" && options.stop_loss {
-            0.0
+            label.left()
+        },
+        preview_right: right,
+        pnl: &|unit, price| result(unit, (price - entry) * direction(side)).0,
+    }
+    .show(ui, mapping, options, tags);
+    if let Some((exit, price)) = released {
+        let mut request = OrderRequest::new(
+            position.symbol.clone(),
+            match side {
+                OrderSide::Buy => OrderSide::Sell,
+                OrderSide::Sell => OrderSide::Buy,
+            },
+            size,
+            if exit == Level::TakeProfit {
+                OrderType::Limit(price)
+            } else {
+                OrderType::Stop(price)
+            },
+        );
+        request.position_bracket = Some(if exit == Level::TakeProfit {
+            PositionBracket::TakeProfit
         } else {
-            4.0
-        };
-        painter.rect_filled(
-            r,
-            egui::CornerRadius {
-                nw: left_radius as u8,
-                sw: left_radius as u8,
-                ne: right_radius as u8,
-                se: right_radius as u8,
-            },
-            label_fill(&theme, exit_color),
-        );
-        draw_dashed_polyline(
-            &painter,
-            &[
-                r.left_top() + vec2(left_radius, 0.0),
-                r.right_top() - vec2(right_radius, 0.0),
-                r.right_top() + vec2(-right_radius / 4.0, right_radius / 4.0),
-                r.right_top() + vec2(0.0, right_radius),
-                r.right_bottom() - vec2(0.0, right_radius),
-                r.right_bottom() - vec2(right_radius / 4.0, right_radius / 4.0),
-                r.right_bottom() - vec2(right_radius, 0.0),
-                r.left_bottom() + vec2(left_radius, 0.0),
-                r.left_bottom() + vec2(left_radius / 4.0, -left_radius / 4.0),
-                r.left_bottom() - vec2(0.0, left_radius),
-                r.left_top() + vec2(0.0, left_radius),
-                r.left_top() + vec2(left_radius / 4.0, left_radius / 4.0),
-                r.left_top() + vec2(left_radius, 0.0),
-            ],
-            Stroke::new(1.0, exit_color),
-            1.0,
-            2.0,
-        );
-        painter.galley(
-            pos2(rect.left() + PADDING, y - galley.size().y / 2.0),
-            galley,
-            exit_color,
-        );
-        let price = response
-            .interact_pointer_pos()
-            .filter(|_| response.dragged() || response.drag_stopped())
-            .map(|pointer| {
-                let y = pointer.y.clamp(mapping.rect.top(), mapping.rect.bottom());
-                to_step(mapping.y_to_price(y), options.tick_size, f64::round)
-            })
-            .filter(|price| price.is_finite() && *price != entry);
-        let Some(price) = price else {
-            continue;
-        };
-        if response.drag_stopped() {
-            let mut exit = OrderRequest::new(
-                position.symbol.clone(),
-                match side {
-                    OrderSide::Buy => OrderSide::Sell,
-                    OrderSide::Sell => OrderSide::Buy,
-                },
-                size,
-                if name == "TP" {
-                    OrderType::Limit(price)
-                } else {
-                    OrderType::Stop(price)
-                },
-            );
-            exit.position_bracket = Some(if name == "TP" {
-                PositionBracket::TakeProfit
-            } else {
-                PositionBracket::StopLoss
-            });
-            action = action.or(Some(TradingLineAction::Exit(position.clone(), exit)));
-            continue;
-        }
-        // The exit being dragged: its line and a label like a bracket's.
-        let line = PriceLine::new(price, exit_color).with_style(LineStyle::Solid);
-        render_price_line(
-            &painter,
-            mapping.rect,
-            &mapping.price,
-            &line,
-            if options.extend_lines {
-                mapping.rect.left()
-            } else {
-                label.left()
-            },
-            false,
-            f32::INFINITY,
-        );
-        tags.push((price, exit_color));
-        let text = match options.bracket_pnl {
-            Some(unit) => format!(
-                "{} {}",
-                l10n::text(ui.ctx(), name),
-                result(unit, (price - entry) * direction(side)).0
-            ),
-            None => l10n::text(ui.ctx(), name),
-        };
-        let text = layout(text, exit_color);
-        let y = mapping.price_to_y(price);
-        let preview = Rect::from_min_size(
-            pos2(right - width(&text), y - HEIGHT / 2.0),
-            vec2(width(&text), HEIGHT),
-        );
-        painter.rect(
-            preview,
-            2.0,
-            label_fill(&theme, exit_color),
-            Stroke::new(1.0, exit_color),
-            egui::StrokeKind::Inside,
-        );
-        painter.galley(
-            pos2(preview.left() + PADDING, y - text.size().y / 2.0),
-            text,
-            exit_color,
-        );
+            PositionBracket::StopLoss
+        });
+        action = action.or(Some(TradingLineAction::Exit(position.clone(), request)));
     }
 
-    if options.take_profit || options.stop_loss {
+    if !exits.is_empty() {
         x += HEIGHT * 0.65;
     }
     let group_rect = Rect::from_min_max(pos2(x, label.top()), pos2(right, label.bottom()));
@@ -819,6 +724,198 @@ fn show_position(
     action
 }
 
+/// The TP and SL buttons a label offers, from left to right.
+fn offered_exits(take_profit: bool, stop_loss: bool) -> &'static [Level] {
+    match (take_profit, stop_loss) {
+        (true, true) => &[Level::TakeProfit, Level::StopLoss],
+        (true, false) => &[Level::TakeProfit],
+        (false, true) => &[Level::StopLoss],
+        (false, false) => &[],
+    }
+}
+
+/// An exit's name and colour.
+fn exit_style(theme: &Theme, exit: Level) -> (&'static str, Color32) {
+    if exit == Level::TakeProfit {
+        ("TP", theme.ui.take_profit)
+    } else {
+        ("SL", theme.ui.stop_loss)
+    }
+}
+
+/// The width of the TP and SL buttons in `exits` with the gap after them, or 0 without buttons.
+fn exit_buttons_width(ui: &Ui, exits: &[Level]) -> f32 {
+    let theme = ui.ctx().active_theme();
+    let font = FontId::proportional(theme.text.ohlc);
+    let buttons = exits
+        .iter()
+        .map(|exit| {
+            let (name, color) = exit_style(&theme, *exit);
+            let name = l10n::text(ui.ctx(), name);
+            let galley = ui.painter().layout_no_wrap(name, font.clone(), color);
+            galley.size().x + 2.0 * PADDING
+        })
+        .sum::<f32>();
+    match exits.len() {
+        0 => 0.0,
+        // The two buttons share an edge.
+        2 => buttons - 1.0 + HEIGHT * 0.65,
+        _ => buttons + HEIGHT * 0.65,
+    }
+}
+
+/// The TP and SL buttons on a label's row.
+struct ExitButtons<'a> {
+    key: egui::Id,
+    /// From left to right.
+    exits: &'a [Level],
+    /// The left edge of the first button.
+    x: f32,
+    /// The middle of the row.
+    y: f32,
+    /// A dragged exit asks for nothing at this price.
+    entry: f64,
+    /// Where a dragged exit's line starts.
+    line_left: f32,
+    /// The right edge of a dragged exit's label.
+    preview_right: f32,
+    /// The text after the name on a dragged exit's label, from its price.
+    pnl: &'a dyn Fn(PnlUnit, f64) -> String,
+}
+
+impl ExitButtons<'_> {
+    /// Draws the buttons and handles their drags: while one is dragged, the exit's line and a
+    /// label at the pointer's tick price. Returns the right edge of the last button, and the exit
+    /// released with its price.
+    fn show(
+        &self,
+        ui: &Ui,
+        mapping: &ChartMapping,
+        options: &TradingLineOptions<'_>,
+        tags: &mut Vec<(f64, Color32)>,
+    ) -> (f32, Option<(Level, f64)>) {
+        let theme = ui.ctx().active_theme();
+        let painter = ui.painter().with_clip_rect(mapping.rect);
+        let font = FontId::proportional(theme.text.ohlc);
+        let layout = |text: String, color| painter.layout_no_wrap(text, font.clone(), color);
+        let width = |galley: &egui::Galley| galley.size().x + 2.0 * PADDING;
+        let y = self.y;
+        let joined = self.exits.len() == 2;
+        let mut x = self.x;
+        let mut released = None;
+        for &exit in self.exits {
+            let (name, exit_color) = exit_style(&theme, exit);
+            let galley = layout(l10n::text(ui.ctx(), name), exit_color);
+            let rect = Rect::from_min_size(pos2(x, y - HEIGHT / 2.0), vec2(width(&galley), HEIGHT));
+            let take_profit = exit == Level::TakeProfit;
+            x = rect.right() - if take_profit && joined { 1.0 } else { 0.0 };
+            let id = self.key.with(name);
+            let response = ui
+                .interact(rect.intersect(mapping.rect), id, Sense::drag())
+                .on_hover_text(l10n::text(
+                    ui.ctx(),
+                    if take_profit {
+                        "Drag to place a take profit"
+                    } else {
+                        "Drag to place a stop loss"
+                    },
+                ));
+            if response.hovered() || response.dragged() {
+                ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+            }
+            let r = rect.shrink(0.5);
+            let left_radius = if !take_profit && joined { 0.0 } else { 4.0 };
+            let right_radius = if take_profit && joined { 0.0 } else { 4.0 };
+            painter.rect_filled(
+                r,
+                egui::CornerRadius {
+                    nw: left_radius as u8,
+                    sw: left_radius as u8,
+                    ne: right_radius as u8,
+                    se: right_radius as u8,
+                },
+                label_fill(&theme, exit_color),
+            );
+            draw_dashed_polyline(
+                &painter,
+                &[
+                    r.left_top() + vec2(left_radius, 0.0),
+                    r.right_top() - vec2(right_radius, 0.0),
+                    r.right_top() + vec2(-right_radius / 4.0, right_radius / 4.0),
+                    r.right_top() + vec2(0.0, right_radius),
+                    r.right_bottom() - vec2(0.0, right_radius),
+                    r.right_bottom() - vec2(right_radius / 4.0, right_radius / 4.0),
+                    r.right_bottom() - vec2(right_radius, 0.0),
+                    r.left_bottom() + vec2(left_radius, 0.0),
+                    r.left_bottom() + vec2(left_radius / 4.0, -left_radius / 4.0),
+                    r.left_bottom() - vec2(0.0, left_radius),
+                    r.left_top() + vec2(0.0, left_radius),
+                    r.left_top() + vec2(left_radius / 4.0, left_radius / 4.0),
+                    r.left_top() + vec2(left_radius, 0.0),
+                ],
+                Stroke::new(1.0, exit_color),
+                1.0,
+                2.0,
+            );
+            painter.galley(
+                pos2(rect.left() + PADDING, y - galley.size().y / 2.0),
+                galley,
+                exit_color,
+            );
+            let price = response
+                .interact_pointer_pos()
+                .filter(|_| response.dragged() || response.drag_stopped())
+                .map(|pointer| {
+                    let y = pointer.y.clamp(mapping.rect.top(), mapping.rect.bottom());
+                    to_step(mapping.y_to_price(y), options.tick_size, f64::round)
+                })
+                .filter(|price| price.is_finite() && *price != self.entry);
+            let Some(price) = price else {
+                continue;
+            };
+            if response.drag_stopped() {
+                released = Some((exit, price));
+                continue;
+            }
+            // The exit being dragged: its line and a label like a bracket's.
+            let line = PriceLine::new(price, exit_color).with_style(LineStyle::Solid);
+            render_price_line(
+                &painter,
+                mapping.rect,
+                &mapping.price,
+                &line,
+                self.line_left,
+                false,
+                f32::INFINITY,
+            );
+            tags.push((price, exit_color));
+            let text = match options.bracket_pnl {
+                Some(unit) => format!("{} {}", l10n::text(ui.ctx(), name), (self.pnl)(unit, price)),
+                None => l10n::text(ui.ctx(), name),
+            };
+            let text = layout(text, exit_color);
+            let y = mapping.price_to_y(price);
+            let preview = Rect::from_min_size(
+                pos2(self.preview_right - width(&text), y - HEIGHT / 2.0),
+                vec2(width(&text), HEIGHT),
+            );
+            painter.rect(
+                preview,
+                2.0,
+                label_fill(&theme, exit_color),
+                Stroke::new(1.0, exit_color),
+                egui::StrokeKind::Inside,
+            );
+            painter.galley(
+                pos2(preview.left() + PADDING, y - text.size().y / 2.0),
+                text,
+                exit_color,
+            );
+        }
+        (x, released)
+    }
+}
+
 /// `value` as the whole multiple of `step` that `round` picks from `value / step`, written at the
 /// step's decimals.
 pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 {
@@ -843,7 +940,8 @@ fn entry_price(order_type: &OrderType) -> Option<f64> {
     }
 }
 
-/// The label at the right end of a trading line: a description, the open quantity and buttons.
+/// The label at the right end of a trading line: TP and SL buttons, the open quantity, a
+/// description and buttons.
 struct Label<'a> {
     id: (&'a str, &'a str),
     /// The description at the line's price.
@@ -853,11 +951,15 @@ struct Label<'a> {
     buttons: &'a [Button],
     draggable: bool,
     submit: Option<OrderSide>,
+    /// The TP and SL buttons before the label.
+    exits: &'a [Level],
+    /// The text after the name on a label of an exit dragged out of `exits`, from its price.
+    exit_pnl: &'a dyn Fn(PnlUnit, f64) -> String,
 }
 
 impl Label<'_> {
-    /// Draws the line and its label. Returns the price a finished drag ended at, and the button
-    /// the user clicked.
+    /// Draws the line and its label. Returns the price a finished drag ended at, the button the
+    /// user clicked, and the exit dragged out of the label with its price.
     fn show(
         &self,
         ui: &mut Ui,
@@ -865,7 +967,7 @@ impl Label<'_> {
         options: &TradingLineOptions<'_>,
         line: &PriceLine,
         tags: &mut Vec<(f64, Color32)>,
-    ) -> (Option<f64>, Option<Button>) {
+    ) -> (Option<f64>, Option<Button>, Option<(Level, f64)>) {
         let key = ui.scope_id().with(self.id);
         if !self.draggable {
             ui.ctx().data_mut(|data| data.remove::<f64>(key));
@@ -873,7 +975,7 @@ impl Label<'_> {
         let staged = ui.ctx().data(|data| data.get_temp::<f64>(key));
         let y = mapping.price_to_y(staged.unwrap_or(line.price));
         if !y.is_finite() || (staged.is_none() && !mapping.is_y_visible(y)) {
-            return (None, None);
+            return (None, None, None);
         }
         // A tick can snap beyond the pane; keep its drag target reachable until release.
         let y = y.clamp(mapping.rect.top(), mapping.rect.bottom());
@@ -887,8 +989,10 @@ impl Label<'_> {
         let total = body.as_deref().map_or(0.0, width)
             + width(&quantity)
             + HEIGHT * self.buttons.len() as f32;
-        let inset = LABEL_INSET.min((mapping.rect.width() - total - 8.0).max(8.0));
-        let mut x = options.label_alignment.left(mapping.rect, total, inset);
+        let exits_width = exit_buttons_width(ui, self.exits);
+        let group = total + exits_width;
+        let inset = LABEL_INSET.min((mapping.rect.width() - group - 8.0).max(8.0));
+        let mut x = options.label_alignment.left(mapping.rect, group, inset) + exits_width;
         let rect = Rect::from_min_size(pos2(x, y - HEIGHT / 2.0), vec2(total, HEIGHT));
 
         let mut dragged = None;
@@ -1023,14 +1127,31 @@ impl Label<'_> {
             }
             paint_glyph(&clipped, *button, cell.center(), line.color);
         }
+        // After the grab area, which runs under them with extended lines: the last widget wins.
+        let group_left = rect.left() - exits_width;
+        let (_, released) = ExitButtons {
+            key,
+            exits: self.exits,
+            x: group_left,
+            y,
+            entry: value,
+            line_left: if options.extend_lines {
+                mapping.rect.left()
+            } else {
+                rect.left()
+            },
+            preview_right: rect.right(),
+            pnl: self.exit_pnl,
+        }
+        .show(ui, mapping, options, tags);
         if let Some(side) = self.submit {
             let size = vec2(58.0, HEIGHT);
-            let left = rect.left() - size.x - HEIGHT * 0.65;
+            let left = group_left - size.x - HEIGHT * 0.65;
             let at = if left >= mapping.rect.left() + 8.0 {
                 pos2(left, rect.top())
             } else {
                 pos2(
-                    rect.left().max(mapping.rect.left() + 8.0),
+                    group_left.max(mapping.rect.left() + 8.0),
                     rect.bottom() + 4.0,
                 )
             };
@@ -1057,7 +1178,7 @@ impl Label<'_> {
                 pressed = Some(Button::Submit);
             }
         }
-        (dragged, pressed)
+        (dragged, pressed, released)
     }
 }
 
@@ -1139,6 +1260,7 @@ mod tests {
                     reverse: false,
                     take_profit: false,
                     stop_loss: false,
+                    order_exits: false,
                     pnl: None,
                     bracket_pnl: None,
                     last_price: None,

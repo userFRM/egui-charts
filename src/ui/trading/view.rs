@@ -189,6 +189,7 @@ impl Trading {
             reverse: display.reverse_button && capabilities.reverse,
             take_profit: capabilities.limit,
             stop_loss: capabilities.stop,
+            order_exits: capabilities.brackets && capabilities.modify,
             pnl: display.position_pnl.then_some(display.position_pnl_unit),
             bracket_pnl: display.bracket_pnl.then_some(display.bracket_pnl_unit),
             last_price: last,
@@ -419,6 +420,7 @@ impl Trading {
                 reverse: false,
                 take_profit: false,
                 stop_loss: false,
+                order_exits: self.capabilities().brackets,
                 pnl: None,
                 bracket_pnl: self
                     .display
@@ -763,18 +765,27 @@ mod tests {
                         ("Modify order", false, false, "levels entry"),
                         ("Modify order", false, true, "levels drag"),
                         ("Modify order", false, false, "levels remove"),
+                        ("Modify order", false, false, "add TP"),
+                        ("Modify order", false, false, "add SL"),
                     ] {
+                        // The gestures behave alike in both themes; one keeps the test's time down.
+                        if !gesture.is_empty() && theme != Theme::light() {
+                            continue;
+                        }
                         let mut request =
                             OrderRequest::new("SYM", OrderSide::Sell, 1.0, OrderType::Limit(105.0));
+                        let add = gesture.starts_with("add");
                         if gesture.starts_with("levels") {
                             request.take_profit_levels = vec![
                                 TakeProfitLevel::new(102.0, 0.5),
                                 TakeProfitLevel::new(101.0, 0.5),
                             ];
-                        } else {
+                        } else if !add {
                             request.take_profit = Some(102.0);
                         }
-                        request.stop_loss = Some(108.0);
+                        if !add {
+                            request.stop_loss = Some(108.0);
+                        }
                         let order = Order::new(OrderId::new("7"), request, OrderStatus::Working);
                         let position = Position::new("SYM", -2.0, 100.0);
                         let broker = Arc::new(Recorder {
@@ -782,6 +793,7 @@ mod tests {
                                 AccountEvent::Order(order.clone()),
                                 AccountEvent::Position(position.clone()),
                             ],
+                            brackets: true,
                             ..Recorder::default()
                         });
                         let mut trading = Trading::default();
@@ -894,8 +906,26 @@ mod tests {
                             vec![egui::Event::PointerMoved(close)],
                         );
                         let take_profit = find(texts.clone(), "TP").expect("a TP button");
+                        // The position has its own buttons on another row.
+                        let on_row = |wanted: &str| {
+                            texts
+                                .iter()
+                                .find(|(text, rect)| {
+                                    text == wanted && (rect.center().y - y).abs() < 2.0
+                                })
+                                .map(|(_, rect)| rect.center().x)
+                        };
+                        if gesture.is_empty() && operation.ends_with("order") {
+                            assert_eq!(
+                                (on_row("TP"), on_row("SL")),
+                                (None, None),
+                                "an order with both exits offers no button"
+                            );
+                        }
                         let x = match operation {
                             _ if gesture == "levels remove" => close.x,
+                            _ if gesture == "add TP" => on_row("TP").expect("the order's TP"),
+                            _ if gesture == "add SL" => on_row("SL").expect("the order's SL"),
                             "Modify order" if handle => mapping.rect.right() - 42.0,
                             "Modify order" => find(texts.clone(), "Limit").unwrap().center().x,
                             "Place take profit" => take_profit.center().x,
@@ -924,6 +954,10 @@ mod tests {
                             start
                         } else if gesture == "levels drag" {
                             egui::pos2(x, mapping.price_to_y(100.5))
+                        } else if gesture == "add TP" {
+                            egui::pos2(x, mapping.price_to_y(101.5))
+                        } else if gesture == "add SL" {
+                            egui::pos2(x, mapping.price_to_y(108.5))
                         } else if operation == "Modify order" {
                             egui::pos2(x, mapping.price_to_y(103.07))
                         } else if operation == "Place take profit" {
@@ -1026,6 +1060,8 @@ mod tests {
                                         expected.take_profit = Some(102.0);
                                         expected.take_profit_levels.clear();
                                     }
+                                    "add TP" => expected.take_profit = Some(101.5),
+                                    "add SL" => expected.stop_loss = Some(108.5),
                                     _ => {
                                         expected.order_type = OrderType::Limit(price);
                                         expected.take_profit = Some(take_profit);

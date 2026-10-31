@@ -898,6 +898,7 @@ Terminal,Trading panel,Place an order from the chart context menu,done,host,src/
 Terminal,Trading panel,"Position line with P&L, close and reverse",done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Terminal,Trading panel,Several take-profit levels on one order,done,host,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/chart/renderers/trading_lines.rs;src/ui/trading/account_panel/view.rs;src/services/paper.rs
 Terminal,Trading panel,"Show/hide positions, orders and executions",done,library,src/ui/trading/mod.rs;src/ui/trading/view.rs
+Terminal,Trading panel,Take-profit and stop-loss buttons on working order labels,done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/view.rs
 Terminal,Trading panel,Time in force and order presets,done,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/ui/trading/widgets.rs
 Terminal,Trading panel,Trade button and broker / paper account picker,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/broker_picker.rs
 Terminal,Trading panel,Trading notifications,done,host,src/ui/trading/mod.rs;src/ui/trading/events.rs
