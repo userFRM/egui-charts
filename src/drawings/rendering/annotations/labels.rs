@@ -33,7 +33,11 @@ pub(super) fn facing_point(rect: Rect, target: Pos2) -> Pos2 {
 /// White or black, whichever reads on `fill`, by the rule the price axis tags use. The chart
 /// behind a translucent fill is not known here, so the colour the user picked decides.
 pub(super) fn label_text_color(fill: Color32) -> Color32 {
-    crate::chart::rendering::axes::tag_text_color(fill.to_opaque())
+    if crate::theme::contrast(Color32::WHITE, fill.to_opaque()) >= 2.0 {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
 }
 
 /// Outline of `rect`, rounded by `radius`, with a pointer from `from` through `tip` to `to`, as one
