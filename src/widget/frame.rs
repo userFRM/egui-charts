@@ -1235,7 +1235,8 @@ impl Chart {
         let price_map = self
             .state
             .price_scale()
-            .map(transform, price_rect.min.y, price_rect.max.y);
+            .map(transform, price_rect.min.y, price_rect.max.y)
+            .with_thousands_sep(self.config.thousands_sep);
 
         self.update_shared_study_maps(price_rect);
         let price_formatter =
@@ -2328,7 +2329,7 @@ impl Chart {
                 ys = rendering::axes::spread_axis_ys(&painter, &ys);
             }
             for ((_, value, colors, outlined), y) in shown.into_iter().zip(ys) {
-                let label = price_map.transform().label(
+                let label = price_map.label(
                     price_map.transform().to_scale(value),
                     rendering::axes::tag_decimals(&price_map, price_map.price_to_y(value)),
                     price_formatter.as_deref(),
@@ -2551,7 +2552,7 @@ impl Chart {
                     .range()
                     .contains(price_map.transform().to_scale(value))
                 {
-                    let price = price_map.transform().label(
+                    let price = price_map.label(
                         price_map.transform().to_scale(value),
                         rendering::axes::tag_decimals(&price_map, price_map.price_to_y(value)),
                         price_formatter.as_deref(),
@@ -2765,6 +2766,7 @@ impl Chart {
                     })
                     .collect();
                 legend.formatters = self.value_formatters();
+                legend.thousands_sep = price_map.thousands_sep();
                 legend.instrument = self.instrument();
                 legend.badge = self
                     .legend_badge
@@ -3135,7 +3137,7 @@ impl Chart {
         let current_price = crate::model::last_with_value(&self.state.data().bars)
             .filter(|_| self.main_series_visible && self.config.show_symbol_last_val)
             .map(|bar| {
-                price_map.transform().label(
+                price_map.label(
                     price_map.transform().to_scale(bar.close),
                     rendering::axes::tag_decimals(&price_map, price_map.price_to_y(bar.close)),
                     price_formatter.as_deref(),

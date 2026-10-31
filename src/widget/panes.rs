@@ -287,6 +287,8 @@ impl Chart {
                         .position(|item| item.id == *id && item.visible)
                 })
                 .collect();
+            // Panes without a visible bar series (study panes) keep their own formats.
+            let thousands_sep = self.config.thousands_sep.filter(|_| !series.is_empty());
             // The fitted ranges of the visible host series in view, and the prices of their
             // markers anchored in view, which share the pane scale.
             let prices: Vec<f64> = series
@@ -413,7 +415,9 @@ impl Chart {
                 transform.to_scale(shared_range.0),
                 transform.to_scale(shared_range.1),
             );
-            let map = pane_scale.map(transform, panel_rect.top(), panel_rect.bottom());
+            let map = pane_scale
+                .map(transform, panel_rect.top(), panel_rect.bottom())
+                .with_thousands_sep(thousands_sep);
             let mut drawing_response = None;
             let mut axis_tags = Vec::new();
             let hovered = self.last_hover_bar_idx.and_then(|index| {
@@ -440,6 +444,7 @@ impl Chart {
                                 crate::scales::PriceScaleMode::Normal,
                             ),
                             map.price_precision(),
+                            map.thousands_sep(),
                         ),
                     )
                 })
@@ -1020,7 +1025,7 @@ impl Chart {
                         })
                         .filter(|(value, _)| map.range().contains(map.transform().to_scale(*value)))
                     {
-                        let label = map.transform().label(
+                        let label = map.label(
                             map.transform().to_scale(value),
                             crate::chart::rendering::axes::tag_decimals(
                                 &map,

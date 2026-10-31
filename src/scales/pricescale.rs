@@ -508,6 +508,7 @@ pub struct PriceMap {
     inverted: bool,
     price_precision: Option<u8>,
     tick_marks: PriceMarkGeneratorConfig,
+    thousands_sep: Option<char>,
 }
 
 impl PriceMap {
@@ -528,6 +529,7 @@ impl PriceMap {
             inverted,
             price_precision: None,
             tick_marks: PriceMarkGeneratorConfig::default(),
+            thousands_sep: None,
         }
     }
 
@@ -550,8 +552,41 @@ impl PriceMap {
         self
     }
 
+    /// Groups the thousands of the built-in labels with `separator`, which charts take from
+    /// `ChartConfig::thousands_sep`. `'.'` and digits group nothing: built-in labels write
+    /// `'.'` as the decimal point.
+    #[cfg(feature = "widget")]
+    pub(crate) fn with_thousands_sep(mut self, separator: Option<char>) -> Self {
+        self.thousands_sep =
+            separator.filter(|separator| *separator != '.' && !separator.is_ascii_digit());
+        self
+    }
+
+    /// The separator that groups the thousands of the built-in labels, if any.
+    pub(crate) fn thousands_sep(&self) -> Option<char> {
+        self.thousands_sep
+    }
+
+    /// Formats a scale value as [`PriceTransform::label`] does and groups the thousands of a
+    /// built-in label; a host `formatter`'s label is returned as written.
+    #[cfg(feature = "widget")]
+    pub(crate) fn label(
+        &self,
+        value: f64,
+        decimals: usize,
+        formatter: Option<&dyn super::PriceFormatter>,
+    ) -> String {
+        let label = self.transform.label(value, decimals, formatter);
+        if formatter.is_some() {
+            label
+        } else {
+            super::price_formatter::group_thousands(label, self.thousands_sep)
+        }
+    }
+
     /// Tick marks for the visible range, spaced by the scale's
-    /// [`tick_marks`](PriceScaleOptions::tick_marks) settings.
+    /// [`tick_marks`](PriceScaleOptions::tick_marks) settings. Maps a chart returns label
+    /// prices of four or more integer digits with its `ChartConfig::thousands_sep`.
     pub fn marks(&self) -> Vec<PriceMark> {
         self.shared_marks().to_vec()
     }

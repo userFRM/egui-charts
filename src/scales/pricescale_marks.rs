@@ -83,7 +83,7 @@ impl PriceMarkGenerator {
     ///
     /// Logarithmic scales get marks at 1, 2 and 5 times powers of ten; the other
     /// modes get evenly stepped marks in scale units, labelled as prices, signed
-    /// percentages or index values.
+    /// percentages or index values. Labels group their thousands with the map's separator.
     pub fn generate_marks(&self, map: &PriceMap) -> Vec<PriceMark> {
         let range = map.range();
         let (top, bottom) = map.extent();
@@ -215,6 +215,7 @@ impl PriceMarkGenerator {
                 } else {
                     map.transform().label(curr_price, precision, None)
                 };
+                let label = super::price_formatter::group_thousands(label, map.thousands_sep());
 
                 // Calculate weight (higher for rounder numbers)
                 let weight = self.calculate_weight(curr_price, nice_step);
@@ -298,8 +299,10 @@ impl PriceMarkGenerator {
                     let precision = map
                         .price_precision()
                         .unwrap_or_else(|| self.calculate_precision(base).max(2));
-                    let label =
-                        self.format_price(price, precision, map.price_precision().is_none());
+                    let label = super::price_formatter::group_thousands(
+                        self.format_price(price, precision, map.price_precision().is_none()),
+                        map.thousands_sep(),
+                    );
 
                     let weight = if multiplier == 1.0 {
                         100

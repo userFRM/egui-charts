@@ -55,6 +55,11 @@ fn pane_buttons_on_hover() -> NavigationButtons {
     NavigationButtons::OnHover
 }
 
+/// Layouts saved before `thousands_sep` existed group thousands like a new chart.
+fn group_thousands_with_comma() -> Option<char> {
+    Some(',')
+}
+
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
 /// the main and series price axes; value tag settings also apply to study panes.
 ///
@@ -266,6 +271,16 @@ pub struct ChartConfig {
     /// Font size of the price and time axis labels in logical pixels; `None` follows the theme.
     /// Default: None
     pub axis_font_size: Option<f32>,
+    /// Character that groups the thousands of the built-in price labels: the ticks and tags of
+    /// price scales, the crosshair label and the legend's prices write `42,541.77` with the
+    /// default `','`. `None` writes plain digits (`42541.77`), and so do `'.'` and the ASCII
+    /// digits, since built-in labels always write `'.'` as the decimal point. Labels written by
+    /// a host formatter ([`Chart::set_price_formatter`](crate::Chart::set_price_formatter)) are
+    /// never grouped; study panes, tooltips and volumes keep their own formats. Layouts saved
+    /// without this field restore with the default.
+    /// Default: `Some(',')`
+    #[serde(default = "group_thousands_with_comma")]
+    pub thousands_sep: Option<char>,
     /// Width of candlestick/bar bodies as a fraction of available space (0.0 to 1.0)
     pub candle_width: f32,
     /// Stroke width for candlestick wicks
@@ -471,6 +486,7 @@ impl Default for ChartConfig {
             // Text color
             text_color: chart.axis_text,
             axis_font_size: None,
+            thousands_sep: Some(','),
             // Candle bodies leave room for the wider volume bars
             candle_width: 0.6,
             // Wick - thin crisp lines

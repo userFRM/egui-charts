@@ -87,11 +87,7 @@ pub fn render_price_labels_at_pos(
                         Some(formatter) => {
                             formatter.format_tick(price_scale.transform().axis_value(value))
                         }
-                        None => price_scale.transform().label(
-                            value,
-                            tick_decimals(price_scale, y),
-                            None,
-                        ),
+                        None => price_scale.label(value, tick_decimals(price_scale, y), None),
                     },
                     y_coord: y,
                     weight: 0,
@@ -903,6 +899,112 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Prices of four or more integer digits group their thousands in the axis ticks, the last
+    /// price and crosshair tags and the legend with `ChartConfig::thousands_sep`, and the axis
+    /// column widens to fit them. `None`, `'.'` (it would read as the decimal point) and host
+    /// formatters keep plain digits, and prices under 1000 never change.
+    #[test]
+    fn thousands_sep_groups_axis_tag_crosshair_and_legend_prices() {
+        use crate::model::Instrument;
+        use crate::scales::{DefaultPriceFormatter, PriceScaleId};
+        const BIG: (f64, f64) = (1_234_500.0, 1_234_567.89);
+        // (low, high, separator, host formatter, last price)
+        let rows = [
+            (BIG.0, BIG.1, None, false, "1234567.89"),
+            (BIG.0, BIG.1, Some(','), false, "1,234,567.89"),
+            (BIG.0, BIG.1, Some(' '), false, "1 234 567.89"),
+            (BIG.0, BIG.1, Some('.'), false, "1234567.89"),
+            (BIG.0, BIG.1, Some(','), true, "1234567.89"),
+            (998.5, 999.99, Some(','), false, "999.99"),
+            (999.5, 1_000.0, Some(','), false, "1,000.00"),
+        ];
+        let mut widths = Vec::new();
+        for (index, (low, high, separator, host, last)) in rows.into_iter().enumerate() {
+            let ctx = Context::default();
+            let mut chart = chart(&[low], &[high]);
+            chart.config_mut().show_volume = false;
+            chart.config_mut().thousands_sep = separator;
+            chart.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.01)));
+            if host {
+                chart.set_price_formatter(Some(std::sync::Arc::new(
+                    DefaultPriceFormatter::with_precision(2),
+                )));
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            widths.push(chart.price_axis_width(PriceScaleId::Right));
+            let pointer = chart.get_rendered_price_rect().center();
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pointer)]);
+            let plot = chart.get_rendered_price_rect();
+            let text: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) => Some(text),
+                    _ => None,
+                })
+                .collect();
+            let names: Vec<_> = text.iter().map(|text| text.galley.text()).collect();
+            assert!(names.contains(&last), "row {index} last price: {names:?}");
+            assert!(
+                names.contains(&format!("C {last}").as_str()),
+                "row {index} legend: {names:?}"
+            );
+            let group = separator.filter(|separator| *separator != '.' && !host);
+            // The ticks, the last price tag and the crosshair tag: digits right of the plot and
+            // above the time axis.
+            let axis: Vec<_> = text
+                .iter()
+                .filter(|text| {
+                    text.pos.x > plot.right()
+                        && text.pos.y < plot.bottom()
+                        && text.galley.text().contains(|c: char| c.is_ascii_digit())
+                })
+                .collect();
+            assert!(!axis.is_empty(), "row {index}: {names:?}");
+            for label in &axis {
+                let value = label.galley.text();
+                assert!(
+                    label.pos.x + label.galley.size().x <= plot.right() + widths[index] + 0.5,
+                    "row {index}: {value} is cut by the axis column"
+                );
+                let integer = value.split('.').next().unwrap().trim_start_matches('-');
+                match group {
+                    Some(separator) => {
+                        let groups: Vec<_> = integer.split(separator).collect();
+                        assert!(
+                            groups.iter().all(|group| {
+                                group.bytes().all(|b| b.is_ascii_digit()) && !group.is_empty()
+                            }) && (1..=3).contains(&groups[0].len())
+                                && groups[1..].iter().all(|group| group.len() == 3),
+                            "row {index}: {value}"
+                        );
+                    }
+                    None => assert!(
+                        integer.bytes().all(|b| b.is_ascii_digit()),
+                        "row {index}: {value}"
+                    ),
+                }
+            }
+            if index <= 4 {
+                // The crosshair tag spans the pointer's y and hides the ticks under it.
+                let tag = axis
+                    .iter()
+                    .find(|label| {
+                        (label.pos.y..=label.pos.y + label.galley.size().y).contains(&pointer.y)
+                    })
+                    .unwrap_or_else(|| panic!("row {index}: no crosshair tag in {names:?}"));
+                assert_eq!(
+                    group.is_some_and(|separator| tag.galley.text().contains(separator)),
+                    group.is_some(),
+                    "row {index}: {}",
+                    tag.galley.text()
+                );
+            }
+        }
+        assert!(widths[1] > widths[0] && widths[2] > widths[0], "{widths:?}");
+        assert_eq!(widths[3], widths[0]);
+        assert_eq!(widths[4], widths[0]);
     }
 
     #[cfg(feature = "studies")]
