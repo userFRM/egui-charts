@@ -347,10 +347,30 @@ pub struct ChartLayout {
     detached: [bool; 16],
     previous: [Option<(String, Option<Timeframe>)>; 16],
     previous_ranges: [Option<VisibleTimeRange>; 16],
-    pending_ranges: [Option<VisibleTimeRange>; 16],
+    previous_bars: [BarsKey; 16],
+    pending_ranges: [Option<PendingRange>; 16],
     #[cfg(feature = "drawings")]
     drawings: DrawingLinks,
     previous_preset: Option<(ChartLayoutMode, usize)>,
+}
+
+/// Identifies a chart's bars: it changes when they are replaced, not when they stream.
+type BarsKey = (u64, Option<chrono::DateTime<chrono::Utc>>);
+
+fn bars_key(chart: &Chart) -> BarsKey {
+    (
+        chart.state.revision(),
+        chart.state.shown().first().map(|bar| bar.time),
+    )
+}
+
+/// A range a chart fits once bars of its new interval replace those it held at the switch.
+#[derive(Clone, Copy)]
+struct PendingRange {
+    range: VisibleTimeRange,
+    /// The [`Chart::sync_source`] of the chart it came from, `None` for the chart's own range.
+    source: Option<(Timeframe, f64)>,
+    bars: BarsKey,
 }
 
 impl ChartLayout {
@@ -470,8 +490,12 @@ impl ChartLayout {
                 .as_ref()
                 .is_some_and(|p| p.1 != chart.timeframe())
             {
-                self.pending_ranges[index] =
-                    self.pending_ranges[index].or(self.previous_ranges[index]);
+                let own = self.previous_ranges[index].map(|range| PendingRange {
+                    range,
+                    source: None,
+                    bars: self.previous_bars[index],
+                });
+                self.pending_ranges[index] = self.pending_ranges[index].or(own);
             }
         }
         for chart in charts.iter_mut() {
@@ -651,6 +675,7 @@ impl ChartLayout {
         }
         for (index, chart) in charts.iter().enumerate() {
             self.previous[index] = Some((chart.symbol().to_owned(), chart.timeframe()));
+            self.previous_bars[index] = bars_key(chart);
             if self.pending_ranges[index].is_none()
                 && let Some(range) = chart.visible_time_range()
             {
@@ -661,12 +686,14 @@ impl ChartLayout {
     }
 
     fn restore_time_range(&mut self, index: usize, chart: &mut Chart) {
-        // Reloads can leave a chart empty for several frames; keep UTC edges until bars arrive.
-        if let Some(range) = self.pending_ranges[index]
+        // Reloads can leave a chart empty for several frames, and a host without a feed replaces
+        // the old bars a frame or more after the switch; keep UTC edges until new bars arrive.
+        if let Some(pending) = self.pending_ranges[index]
             && chart.visible_time_range().is_some()
+            && bars_key(chart) != pending.bars
         {
             // A range the new bars do not cover keeps the view, but must not block the group.
-            chart.apply_synced_time_range(range);
+            chart.apply_synced_time_range_from(pending.range, pending.source);
             self.pending_ranges[index] = None;
         }
     }
@@ -722,7 +749,10 @@ impl ChartLayout {
             {
                 // A chart awaiting its new interval's bars fits the latest range once they arrive.
                 match &mut self.pending_ranges[index] {
-                    Some(pending) => *pending = range,
+                    Some(pending) => {
+                        pending.range = range;
+                        pending.source = source;
+                    }
                     None => {
                         chart.apply_synced_time_range_from(range, source);
                     }
@@ -1209,32 +1239,36 @@ mod tests {
             assert!(layout.pending_ranges.iter().all(Option::is_none));
 
             // A chart still loading a synced interval adopts the group's latest range, so its
-            // arrival does not pull the group back to the range from before the switch.
-            let mut layout = ChartLayout {
-                mode,
-                ..Default::default()
-            };
-            layout.sync.sync_timeframe = true;
-            let mut charts = [chart(60), chart(60), chart(60), chart(60)];
-            frame(&mut layout, &mut charts);
-            charts[0].set_timeframe(Timeframe::Hour1);
-            for chart in &mut charts {
-                chart.set_data(super::super::SeriesId::MAIN, vec![]);
-            }
-            frame(&mut layout, &mut charts);
-            let hourly = chart(3600).state.shown().to_vec();
-            charts[0].set_data(super::super::SeriesId::MAIN, hourly.clone());
-            frame(&mut layout, &mut charts);
-            charts[0].set_visible_bars(40);
-            frame(&mut layout, &mut charts);
-            let latest = charts[0].visible_time_range().unwrap();
-            charts[1].set_data(super::super::SeriesId::MAIN, hourly);
-            layout.set_active(1);
-            frame(&mut layout, &mut charts);
-            for chart in &charts[..2] {
-                let actual = chart.visible_time_range().unwrap();
-                assert!((actual.from - latest.from).num_milliseconds().abs() < 1);
-                assert!((actual.to - latest.to).num_milliseconds().abs() < 1);
+            // arrival does not pull the group back to the range from before the switch, also
+            // past 50 px per bar and when its old bars are replaced, not emptied, a frame later.
+            for emptied in [true, false] {
+                let mut layout = ChartLayout {
+                    mode,
+                    ..Default::default()
+                };
+                layout.sync.sync_timeframe = true;
+                let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+                frame(&mut layout, &mut charts);
+                charts[0].set_timeframe(Timeframe::Hour1);
+                for chart in charts.iter_mut().filter(|_| emptied) {
+                    chart.set_data(super::super::SeriesId::MAIN, vec![]);
+                }
+                frame(&mut layout, &mut charts);
+                let hourly = chart(3600).state.shown().to_vec();
+                charts[0].set_data(super::super::SeriesId::MAIN, hourly.clone());
+                frame(&mut layout, &mut charts);
+                charts[0].set_visible_bars(8);
+                frame(&mut layout, &mut charts);
+                assert!(charts[0].get_time_scale_state().0 > 50.0);
+                let latest = charts[0].visible_time_range().unwrap();
+                charts[1].set_data(super::super::SeriesId::MAIN, hourly);
+                layout.set_active(1);
+                frame(&mut layout, &mut charts);
+                for chart in &charts[..2] {
+                    let actual = chart.visible_time_range().unwrap();
+                    assert!((actual.from - latest.from).num_milliseconds().abs() < 1);
+                    assert!((actual.to - latest.to).num_milliseconds().abs() < 1);
+                }
             }
 
             // Charts of one interval zoom together past the cross-interval spacing cap.
