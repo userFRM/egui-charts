@@ -195,8 +195,8 @@ impl Chart {
         removed
     }
 
-    /// Keeps at most `limit` bars of `series`. When it holds more, at once and after history
-    /// loads and updates, the oldest are evicted down to `limit - limit / 8`, so a series that
+    /// Keeps at most `limit` bars of `series`. When it holds more, now or after history loads
+    /// and updates, the oldest are evicted down to `limit - limit / 8`, so a series that
     /// has reached its limit holds between seven eighths of it and all of it. `None` (the
     /// default) keeps all bars. The limit survives symbol and timeframe changes and also bounds
     /// retained replay history. Removed data must be supplied again by the host to recover it.
@@ -983,8 +983,8 @@ pub(super) fn clean(bars: Vec<Bar>, clock: &BarClock) -> (Vec<Bar>, u64) {
     (clean, merged.rejected)
 }
 
-/// Keeps the newest bars `limit` allows, as [`evicted_bars`] counts them, and releases excessive
-/// capacity after a large import.
+/// Evicts the oldest bars [`evicted_bars`] counts and releases excessive capacity after a large
+/// import.
 pub(super) fn retain_bars(bars: &mut Vec<Bar>, limit: Option<NonZeroUsize>) {
     if let Some(limit) = limit {
         let count = evicted_bars(bars.len(), limit);
