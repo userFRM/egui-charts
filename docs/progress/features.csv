@@ -177,7 +177,7 @@ Chart,Keyboard shortcuts,Reset chart,done,library,src/config/keyboard.rs;src/wid
 Chart,Keyboard shortcuts,Save layout,done,library,src/config/keyboard.rs
 Chart,Keyboard shortcuts,Scale toggles,done,library,src/config/keyboard.rs;src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Shortcut list dialog,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/dialogs/keyboard_shortcuts/mod.rs
-Chart,Keyboard shortcuts,Snapshot,done,library,src/config/keyboard.rs;src/widget/export.rs
+Chart,Keyboard shortcuts,Snapshot,done,library,src/config/keyboard.rs;src/widget/export.rs;src/ui/top_toolbar/toolbar.rs
 Chart,Keyboard shortcuts,Type to change symbol,done,host,src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Undo and redo,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/history.rs
 Chart,Legend and data window,Data window panel,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs
@@ -856,8 +856,8 @@ Terminal,Templates and layouts,Open a saved layout; layout list with favourites 
 Terminal,Templates and layouts,Persist preferences,done,library,src/services/settings.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs
 Terminal,Templates and layouts,Save chart layout,done,library,src/widget/snapshot.rs;src/ui/top_toolbar/components/layout_menu.rs;src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs
 Terminal,Templates and layouts,Share a layout by link,done,host,src/services/sharing.rs;src/ui/share_controls.rs;src/ui/top_toolbar/components/layout_menu.rs
-Terminal,Templates and layouts,Snapshot: copy image to clipboard,done,library,src/ui/export.rs
-Terminal,Templates and layouts,Snapshot: download the chart image,done,library,src/widget/export.rs
+Terminal,Templates and layouts,Snapshot: copy image to clipboard,done,library,src/ui/export.rs;src/ui/top_toolbar/toolbar.rs
+Terminal,Templates and layouts,Snapshot: download the chart image,done,library,src/widget/export.rs;src/ui/top_toolbar/toolbar.rs
 Terminal,Templates and layouts,Sync between charts,done,library,src/widget/layout.rs;src/widget/layout/drawings.rs
 Terminal,Toolbars and panels,Bottom time bar,done,library,src/ui/timeframe_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs;src/theme/mod.rs
 Terminal,Toolbars and panels,Chart settings button and applying the dialog,done,library,src/ui/top_toolbar/toolbar.rs;src/widget/settings/apply.rs

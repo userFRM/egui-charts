@@ -28,6 +28,7 @@ use super::{
 use crate::model::ChartType;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
+use crate::ui::dialogs::keyboard_shortcuts::shortcut_key_labels;
 use std::collections::HashSet;
 
 /// A place in the strip, holding one control.
@@ -56,6 +57,13 @@ enum Slot {
 }
 
 use Slot as S;
+
+/// Glyph of the snapshot menu's download entry.
+const DOWNLOAD_ICON: Icon = Icon::new("top-toolbar-download.svg", include_bytes!("download.svg"));
+/// Glyph of the snapshot menu's new tab entry.
+const OPEN_NEW_ICON: Icon = Icon::new("top-toolbar-open-new.svg", include_bytes!("open-new.svg"));
+/// Glyph of the snapshot menu's link entry.
+const LINK_ICON: Icon = Icon::new("top-toolbar-link.svg", include_bytes!("link.svg"));
 
 /// Left part of the strip, in groups divided by separators.
 const LEFT: &[&[Slot]] = &[
@@ -97,6 +105,21 @@ fn show_separator(ui: &mut Ui) {
     let color = super::buttons::rule_color(&ui.active_theme());
     ui.painter().rect_filled(rect, 0.0, color);
     ui.add_space(gap(ui));
+}
+
+/// Keys of the snapshot shortcut as the snapshot menu shows them.
+fn snapshot_shortcut_hint(ctx: &egui::Context, font: &egui::FontId) -> Option<String> {
+    let shortcut = ctx
+        .data(|data| {
+            data.get_temp::<crate::widget::ShortcutMap>(egui::Id::NULL.with("chart_shortcuts"))
+        })
+        .unwrap_or_default()
+        .shortcut(crate::config::KeyboardAction::Snapshot)?;
+    let keys: Vec<_> = shortcut_key_labels(ctx, font, &shortcut)
+        .iter()
+        .map(|key| l10n::text(ctx, key))
+        .collect();
+    Some(keys.join(" + "))
 }
 
 impl Slot {
@@ -580,7 +603,10 @@ impl TopToolbar {
                     .frame(egui::Frame::popup(ui.style()).fill(ui.active_theme().ui.panel_bg))
                     .show(|ui| {
                         ui.set_width((ui.ctx().content_rect().width() - 24.0).clamp(0.0, 240.0));
-                        ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
+                        let font = egui::FontId::proportional(14.0);
+                        ui.style_mut().override_font_id = Some(font.clone());
+                        let theme = ui.active_theme();
+                        let hint = snapshot_shortcut_hint(ui.ctx(), &font);
                         let height =
                             (ui.ctx().content_rect().bottom() - ui.next_widget_position().y - 16.0)
                                 .max(0.0);
@@ -590,29 +616,61 @@ impl TopToolbar {
                                 ui.label(
                                     egui::RichText::new(l10n::text(ui.ctx(), "SNAPSHOT"))
                                         .size(11.0)
-                                        .color(ui.active_theme().ui.text_secondary),
+                                        .color(theme.ui.text_muted),
                                 );
-                                for (label, value, available) in [
-                                    ("Download image", TopToolbarAction::TakeScreenshot, true),
-                                    ("Copy image", TopToolbarAction::CopyImage, true),
-                                    ("Open in new tab", TopToolbarAction::OpenImage, true),
+                                for (label, icon, value, available) in [
+                                    (
+                                        "Download image",
+                                        &DOWNLOAD_ICON,
+                                        TopToolbarAction::TakeScreenshot,
+                                        true,
+                                    ),
+                                    (
+                                        "Copy image",
+                                        &embedded_icons::DUPLICATE,
+                                        TopToolbarAction::CopyImage,
+                                        true,
+                                    ),
+                                    (
+                                        "Open in new tab",
+                                        &OPEN_NEW_ICON,
+                                        TopToolbarAction::OpenImage,
+                                        true,
+                                    ),
                                     (
                                         "Copy link",
+                                        &LINK_ICON,
                                         TopToolbarAction::CopyImageLink,
                                         self.state.can_publish_image,
                                     ),
                                     (
                                         "Post image",
+                                        &embedded_icons::PUBLISH,
                                         TopToolbarAction::Publish,
                                         self.state.can_publish_image,
                                     ),
                                 ] {
-                                    if available
-                                        && ListItem::new()
-                                            .height(32.0)
-                                            .show(ui, LabelContent::new(label))
-                                            .clicked()
+                                    if !available {
+                                        continue;
+                                    }
+                                    let item = ListItem::new().height(32.0).show(
+                                        ui,
+                                        LabelContent::new(label).with_icon(icon).icon_size(17.0),
+                                    );
+                                    // Hosts bind the snapshot shortcut to this entry's action.
+                                    if value == TopToolbarAction::TakeScreenshot
+                                        && let Some(hint) = &hint
                                     {
+                                        ui.painter().text(
+                                            item.rect.right_center()
+                                                - egui::vec2(theme.spacing.lg, 0.0),
+                                            egui::Align2::RIGHT_CENTER,
+                                            hint,
+                                            font.clone(),
+                                            theme.ui.text_muted,
+                                        );
+                                    }
+                                    if item.clicked() {
                                         *action = value;
                                         ui.close();
                                     }
