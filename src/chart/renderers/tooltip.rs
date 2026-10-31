@@ -1121,9 +1121,13 @@ mod tests {
             let weights: Vec<_> = shapes
                 .iter()
                 .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) => {
-                        Some(!text.galley.job.sections[0].format.coords.as_ref().is_empty())
-                    }
+                    egui::Shape::Text(text) => Some(
+                        !text.galley.job.sections[0]
+                            .format
+                            .coords
+                            .as_ref()
+                            .is_empty(),
+                    ),
                     _ => None,
                 })
                 .collect();
