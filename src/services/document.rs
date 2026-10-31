@@ -75,7 +75,8 @@ struct LocalCopy {
 
 /// One named document of the host's [`Storage`]. Nothing is written before it has been read, nor
 /// after it could not be read, so a document this release cannot read is never replaced. One
-/// write is in flight at a time: a newer document waits for it, replacing any older one waiting.
+/// call is in flight at a time: a write waits for a read under way, and a newer document waits
+/// for the write in flight, replacing any older one waiting.
 ///
 /// If the host keeps revisions, a write is made over the revision read, and one the host refuses
 /// leaves the newest unsaved document waiting until [`resolve`](Self::resolve) settles it.
@@ -200,11 +201,18 @@ impl StoredDocument {
             self.waiting = None;
             return;
         }
-        if self.writing.is_some() || self.retry_at.is_some() || self.conflict.is_some() {
+        if self.writing.is_some()
+            || self.retry_at.is_some()
+            || self.conflict.is_some()
+            || self.refreshing
+        {
             self.waiting = Some(document);
         } else {
             self.waiting = None;
             self.retry_at = None;
+            // This write replaces what other charts wrote before it, which a read now would only
+            // bring back.
+            self.rewritten = false;
             self.writing = Some(document.clone());
             if self.versioned == Some(true) {
                 storage.save_versioned(

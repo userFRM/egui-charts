@@ -1450,4 +1450,37 @@ mod tests {
         );
         assert_eq!(stored_prices(&host), [9.0, 10.5]);
     }
+
+    /// Guards #1615: an edit made while the chart reads its drawings again is not written before
+    /// the read is answered, and the read answered after it does not replace the edit.
+    #[test]
+    fn an_edit_made_while_the_drawings_are_read_again_waits_for_the_read() {
+        let host = Arc::new(Host::default());
+        let storage: Arc<dyn Storage> = host.clone();
+        let (mut a, mut b) = (chart_on(Some(storage.clone())), chart_on(Some(storage)));
+        let mut layout = ChartLayout::default();
+        layout.mode = ChartLayoutMode::TwoHorizontal;
+        let ctx = egui::Context::default();
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        draw_line(&mut a, line_at(4.0, 10.0));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert_eq!(shown_prices(&b), [10.0]);
+        // A draws a line and undoes it, so A writes and B reads the drawings again; the host
+        // has not answered that read yet.
+        host.delay_loads.store(true, Ordering::Relaxed);
+        draw_line(&mut a, line_at(4.0, 12.0));
+        assert!(a.undo());
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        let (_, read) = host.loads.lock().unwrap().pop().expect("B reads again");
+        let before = host.documents.lock().unwrap()["A"].clone();
+        draw_line(&mut b, line_at(4.0, 11.0));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert_eq!(stored_prices(&host), [10.0], "written during the read");
+        host.delay_loads.store(false, Ordering::Relaxed);
+        read.send(Ok(Some(before)));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert_eq!(shown_prices(&b), [10.0, 11.0]);
+        assert_eq!(stored_prices(&host), [10.0, 11.0]);
+        assert!(b.can_undo(), "B read its own write again");
+    }
 }
