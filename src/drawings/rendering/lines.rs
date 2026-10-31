@@ -37,12 +37,7 @@ impl Drawing {
         if !(a.is_finite() && b.is_finite()) {
             return;
         }
-        let mut angle = (b.y - a.y).atan2(b.x - a.x);
-        if angle >= std::f32::consts::FRAC_PI_2 {
-            angle -= std::f32::consts::PI;
-        } else if angle < -std::f32::consts::FRAC_PI_2 {
-            angle += std::f32::consts::PI;
-        }
+        let angle = upright_angle(a, b);
         // The side the text's top faces once it is turned by `angle`.
         let up = egui::vec2(angle.sin(), -angle.cos());
         let gap = self.stroke_width.max(0.0) / 2.0 + DESIGN_TOKENS.spacing.sm;
@@ -612,6 +607,19 @@ impl Drawing {
                 Align2::CENTER_BOTTOM,
             );
         }
+    }
+}
+
+/// The angle of the segment from `a` to `b`, turned by half a turn where needed so that text along
+/// it reads upright; a vertical segment gives the angle of reading from bottom to top.
+pub(super) fn upright_angle(a: Pos2, b: Pos2) -> f32 {
+    let angle = (b.y - a.y).atan2(b.x - a.x);
+    if angle >= std::f32::consts::FRAC_PI_2 {
+        angle - std::f32::consts::PI
+    } else if angle < -std::f32::consts::FRAC_PI_2 {
+        angle + std::f32::consts::PI
+    } else {
+        angle
     }
 }
 
