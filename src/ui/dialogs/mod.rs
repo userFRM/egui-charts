@@ -11,7 +11,7 @@
 //! - Series settings dialog
 //! - Series context menu
 //! - Study context menu
-//! - Storage conflict dialog
+//! - Storage conflict and kept copies dialogs
 
 pub mod alert_dialog;
 pub mod chart_settings;
@@ -41,4 +41,4 @@ pub use keyboard_shortcuts::{KeyboardShortcutsAction, KeyboardShortcutsDialog};
 pub use series_settings::{
     SeriesSettingsAction, SeriesSettingsConfig, SeriesSettingsDialog, SeriesSettingsTab,
 };
-pub use storage_conflict::StorageConflictDialog;
+pub use storage_conflict::{LocalCopiesDialog, StorageConflictDialog};

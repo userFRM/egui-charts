@@ -162,6 +162,47 @@ impl DrawingManager {
             });
     }
 
+    /// Replaces every saveable drawing with `drawings`, restored from storage, as one undo step.
+    /// Each keeps its stored identity (`stored_id`, `created_at`, `notes`) and layer and gets a
+    /// new id; drawings that are never saved stay. Queues a `Delete` for each drawing it removes
+    /// and a save for each it adds.
+    pub(crate) fn replace_saved_drawings(&mut self, drawings: Vec<Drawing>) {
+        let removed: Vec<_> = self
+            .drawings
+            .iter()
+            .enumerate()
+            .filter(|(_, drawing)| drawing.saveable)
+            .map(|(index, drawing)| (index, drawing.clone()))
+            .collect();
+        if removed.is_empty() && drawings.is_empty() {
+            return;
+        }
+        let mut ids: Vec<_> = removed.iter().map(|(_, drawing)| drawing.id).collect();
+        // Taken while the replaced drawings are listed, so that no id is handed out twice.
+        let mut added = Vec::with_capacity(drawings.len());
+        for mut drawing in drawings {
+            drawing.id = self.take_id();
+            ids.push(drawing.id);
+            added.push(drawing);
+        }
+        for (_, drawing) in &removed {
+            self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
+        }
+        self.drawings.retain(|drawing| !drawing.saveable);
+        for drawing in added {
+            let id = drawing.id;
+            self.drawings.push(drawing);
+            self.queue(DrawingSyncAction::SaveDrawing(id));
+        }
+        self.selection
+            .prune(&self.drawings.iter().map(|d| d.id).collect());
+        self.history
+            .push_command(crate::drawings::services::DrawingCommand::Snapshot {
+                drawings: removed,
+                ids,
+            });
+    }
+
     /// Applies `edit` to the drawing with the given ID, records it for undo and queues it to
     /// be saved. Edit a drawing through this rather than [`Self::drawings`] so the change is
     /// saved. A locked drawing accepts only visibility, name and folder changes, or an edit that unlocks it.

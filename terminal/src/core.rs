@@ -5,7 +5,7 @@ use egui_charts::Chart;
 use egui_charts::data::FeedStatus;
 use egui_charts::localization as l10n;
 use egui_charts::model::{ChartType, Timeframe};
-use egui_charts::services::{Notification, SettingsStore, UserSettings};
+use egui_charts::services::{ConflictChoice, Notification, SettingsStore, UserSettings};
 use egui_charts::theme::Theme;
 use egui_charts::ui::Control;
 use egui_charts::ui::app_state::ChartAppState;
@@ -81,6 +81,9 @@ impl Terminal {
         if let Action::DrawingsConflict(symbol, choice) = &action {
             for chart in &mut self.charts {
                 chart.resolve_storage_conflict(symbol, *choice);
+            }
+            if *choice == ConflictChoice::KeepLocalCopy {
+                self.offer_local_copies(symbol);
             }
             return None;
         }
