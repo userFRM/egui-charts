@@ -451,6 +451,8 @@ impl Chart {
 
     /// Draws a footprint in place of the price series, below studies, cursor and legend.
     /// Supply executions aggregated with the same clock as the chart's source bars.
+    /// Bars without complete executions are drawn as candles, as are all bars, merged per pixel
+    /// column when zoomed out, while cells would be too narrow to read.
     /// Price-based chart types keep their normal series because their x-axis is not time.
     pub fn show_footprint(
         &mut self,
@@ -1483,7 +1485,9 @@ impl Chart {
             self.config.price_source,
         );
         // Draw one merged bar, or a column's line points, for each group.
-        let merged = super::merge::line_style(self.chart_type)
+        let merged = footprint
+            .map(|_| false)
+            .or_else(|| super::merge::line_style(self.chart_type))
             .filter(|_| factor > 1)
             .map(|line| {
                 let merge = |line| {
@@ -1760,148 +1764,151 @@ impl Chart {
                 if time_based {
                     self.paint_liquidity(&clipped_painter, &self.get_chart_mapping());
                 }
-                if let Some((flow, config)) = footprint.filter(|_| time_based) {
-                    if show_volume && !cfg!(feature = "studies") {
-                        // Volume merges as bars, including beneath a merged line.
-                        match merged
-                            .as_ref()
-                            .map(|(bars, volume)| volume.as_ref().unwrap_or(bars))
-                        {
-                            Some(volume) => rendering::candles::volume::render_volume_bars(
-                                &clipped_volume_ctx,
-                                &volume.bars[volume.start..],
-                                volume.start,
-                                max_volume,
-                                &colors,
-                                chart_rect.min.x,
-                                |index, min_x| merged_x(volume, index, min_x),
-                            ),
-                            None => rendering::candles::volume::render_volume_bars(
-                                &clipped_volume_ctx,
-                                visible_data,
-                                start_idx,
-                                max_volume,
-                                &colors,
-                                chart_rect.min.x,
-                                idx_to_coord,
-                            ),
-                        }
-                    }
-                    crate::chart::overlays::render_footprint(
-                        &clipped_painter,
-                        &self.get_chart_mapping(),
-                        self.bars(super::SeriesId::MAIN),
-                        flow,
-                        config,
-                    );
-                } else {
-                    // Share the renderer instantiation between ordinary and merged bars.
-                    let (mut data, params) = match &merged {
-                        Some((merged, _)) => (
-                            rendering::CandleDataContext {
-                                visible_data: &merged.bars[merged.start..],
-                                full_data: &merged.bars,
-                                start_idx: merged.start,
-                                ..render_ctx
-                            },
-                            &merged_params,
-                        ),
-                        None => (
-                            rendering::CandleDataContext { ..render_ctx },
-                            &render_params,
-                        ),
-                    };
-                    // Bars from the first execution on are drawn from executions, those before as
-                    // candles.
-                    let executions = self
-                        .feed_link
-                        .as_ref()
-                        .and_then(|link| link.footprint.as_ref())
-                        .filter(|_| time_based && self.replay.is_none())
-                        .map(|flow| {
-                            let first = flow.complete_from();
-                            let candles = first.map_or(visible_data.len(), |first| {
-                                visible_data.partition_point(|bar| bar.time < first)
-                            });
-                            (flow, candles)
+                // Share the renderer instantiation between ordinary and merged bars.
+                let (mut data, params) = match &merged {
+                    Some((merged, _)) => (
+                        rendering::CandleDataContext {
+                            visible_data: &merged.bars[merged.start..],
+                            full_data: &merged.bars,
+                            start_idx: merged.start,
+                            ..render_ctx
+                        },
+                        &merged_params,
+                    ),
+                    None => (
+                        rendering::CandleDataContext { ..render_ctx },
+                        &render_params,
+                    ),
+                };
+                let host = footprint.filter(|_| time_based);
+                let feed = self
+                    .feed_link
+                    .as_ref()
+                    .and_then(|link| link.footprint.as_ref())
+                    .filter(|_| time_based && self.replay.is_none());
+                let feed_config = feed.map(|_| FootprintConfig {
+                    text_color: colors.text,
+                    neutral_color: colors.text,
+                    ask_color: colors.bullish,
+                    bid_color: colors.bearish,
+                    ..Default::default()
+                });
+                let session_profiles =
+                    host.is_none() && self.chart_type == ChartType::SessionVolumeProfile;
+                // Bars from the first execution on are drawn from executions, those before as
+                // candles, and all of them as candles while their cells would not be readable.
+                let executions = host
+                    .or_else(|| feed.zip(feed_config.as_ref()))
+                    .filter(|(_, config)| {
+                        session_profiles
+                            || crate::chart::overlays::footprint_column_width(bar_spacing, config)
+                                .is_some()
+                    })
+                    .map(|(flow, config)| {
+                        let first = flow.complete_from();
+                        let candles = first.map_or(visible_data.len(), |first| {
+                            visible_data.partition_point(|bar| bar.time < first)
                         });
-                    if let Some((_, candles)) = executions {
-                        data.visible_data = match &merged {
-                            // Merged candles end before the group of the first execution.
-                            Some((merged, _)) if candles < visible_data.len() => {
-                                let end = merged.count_before(start_idx + candles, factor);
-                                &merged.bars[merged.start..end.max(merged.start)]
-                            }
-                            Some(_) => data.visible_data,
-                            None => &visible_data[..candles],
-                        };
-                    }
-                    rendering::render_chart_type(self.chart_type, &data, params, |index, min_x| {
-                        match &merged {
-                            Some((merged, _)) => merged_x(merged, index, min_x),
-                            None => idx_to_coord(index, min_x),
-                        }
+                        (flow, config, candles)
                     });
-                    if let Some((flow, candles)) = executions {
-                        if params.show_volume() {
+                if let Some((_, _, candles)) = executions {
+                    data.visible_data = match &merged {
+                        // Merged candles end before the group of the first execution.
+                        Some((merged, _)) if candles < visible_data.len() => {
+                            let end = merged.count_before(start_idx + candles, factor);
+                            &merged.bars[merged.start..end.max(merged.start)]
+                        }
+                        Some(_) => data.visible_data,
+                        None => &visible_data[..candles],
+                    };
+                }
+                // A host's footprint replaces any chart type, so what it leaves is always candles.
+                let series_type = if host.is_some() {
+                    ChartType::Candles
+                } else {
+                    self.chart_type
+                };
+                let paint_series =
+                    |data: &rendering::CandleDataContext,
+                     params: &rendering::ChartTypeParams,
+                     merged: Option<&super::merge::Merged>| {
+                        rendering::render_chart_type(series_type, data, params, |index, min_x| {
+                            match merged {
+                                Some(merged) => merged_x(merged, index, min_x),
+                                None => idx_to_coord(index, min_x),
+                            }
+                        });
+                    };
+                paint_series(&data, params, merged.as_ref().map(|(merged, _)| merged));
+                if let Some((flow, config, candles)) = executions {
+                    let has_cells = |bar: &crate::model::Bar| {
+                        session_profiles || flow.bar_at(bar.time).is_some()
+                    };
+                    let mut first = start_idx + candles;
+                    // A bar nothing traded in shows its candle among the cells.
+                    for run in visible_data[candles..]
+                        .chunk_by(|bar, next| has_cells(bar) == has_cells(next))
+                    {
+                        if !has_cells(&run[0]) {
+                            let data = rendering::CandleDataContext {
+                                visible_data: run,
+                                start_idx: first,
+                                ..render_ctx
+                            };
+                            paint_series(&data, &render_params, None);
+                        } else if params.show_volume() {
                             rendering::candles::volume::render_volume_bars(
                                 &clipped_volume_ctx,
-                                &visible_data[candles..],
-                                start_idx + candles,
+                                run,
+                                first,
                                 max_volume,
                                 &colors,
                                 chart_rect.min.x,
                                 idx_to_coord,
                             );
                         }
-                        let config = FootprintConfig {
-                            text_color: colors.text,
-                            neutral_color: colors.text,
-                            ask_color: colors.bullish,
-                            bid_color: colors.bearish,
-                            ..Default::default()
-                        };
-                        let mapping = self.get_chart_mapping();
-                        let bars = self.bars(super::SeriesId::MAIN);
-                        if self.chart_type == ChartType::VolumeFootprint {
-                            crate::chart::overlays::render_footprint(
-                                &clipped_painter,
-                                &mapping,
-                                bars,
-                                flow,
-                                &config,
-                            );
-                        }
-                        #[cfg(feature = "studies")]
-                        if self.chart_type == ChartType::SessionVolumeProfile
-                            && let Some(ranges) = session_ranges(
-                                bars,
-                                start_idx + candles..start_idx + visible_data.len(),
-                                &bar_clock,
-                            )
-                        {
-                            let profiles = crate::studies::trade_profiles(flow, &ranges);
-                            crate::chart::overlays::render_session_volume_profiles(
-                                &clipped_painter,
-                                &mapping,
-                                bars,
-                                &profiles,
-                                flow.price_step(),
-                                flow.tick_size(),
-                            );
-                        }
+                        first += run.len();
                     }
-                    if let Some((_, Some(volume))) = &merged {
-                        rendering::candles::volume::render_volume_bars(
-                            &clipped_volume_ctx,
-                            &volume.bars[volume.start..],
-                            volume.start,
-                            max_volume,
-                            &colors,
-                            chart_rect.min.x,
-                            |index, min_x| merged_x(volume, index, min_x),
+                    let mapping = self.get_chart_mapping();
+                    let bars = self.bars(super::SeriesId::MAIN);
+                    if !session_profiles {
+                        crate::chart::overlays::render_footprint(
+                            &clipped_painter,
+                            &mapping,
+                            bars,
+                            flow,
+                            config,
                         );
                     }
+                    #[cfg(feature = "studies")]
+                    if session_profiles
+                        && let Some(ranges) = session_ranges(
+                            bars,
+                            start_idx + candles..start_idx + visible_data.len(),
+                            &bar_clock,
+                        )
+                    {
+                        let profiles = crate::studies::trade_profiles(flow, &ranges);
+                        crate::chart::overlays::render_session_volume_profiles(
+                            &clipped_painter,
+                            &mapping,
+                            bars,
+                            &profiles,
+                            flow.price_step(),
+                            flow.tick_size(),
+                        );
+                    }
+                }
+                if let Some((_, Some(volume))) = &merged {
+                    rendering::candles::volume::render_volume_bars(
+                        &clipped_volume_ctx,
+                        &volume.bars[volume.start..],
+                        volume.start,
+                        max_volume,
+                        &colors,
+                        chart_rect.min.x,
+                        |index, min_x| merged_x(volume, index, min_x),
+                    );
                 }
                 self.paint_last_price_pulse(ui, &clipped_painter, price_rect, &coords);
             }
@@ -3303,7 +3310,7 @@ fn session_ranges(
 mod tests {
     use crate::chart::series::SeriesSettings;
     use crate::scales::PriceScaleMode;
-    use crate::widget::test_frames::{chart, frame, shapes};
+    use crate::widget::test_frames::{candle_ys, chart, frame, shapes};
     use egui::{Event, Pos2, Rect, Shape};
 
     #[cfg(feature = "timezones")]
@@ -4619,24 +4626,7 @@ mod tests {
         }
         let color = chart.config().bullish_color;
         let painted_ys = |chart: &mut crate::widget::Chart, t| -> Vec<f32> {
-            shapes(&ctx, chart, t, Vec::new())
-                .iter()
-                .flat_map(|shape| match shape {
-                    Shape::Rect(rect) if rect.fill == color => {
-                        vec![rect.rect.min.y, rect.rect.max.y]
-                    }
-                    Shape::LineSegment { points, stroke } if stroke.color == color => {
-                        points.iter().map(|point| point.y).collect()
-                    }
-                    Shape::Mesh(mesh) => mesh
-                        .vertices
-                        .iter()
-                        .filter(|vertex| vertex.color == color)
-                        .map(|vertex| vertex.pos.y)
-                        .collect(),
-                    _ => Vec::new(),
-                })
-                .collect()
+            candle_ys(&shapes(&ctx, chart, t, Vec::new()), color)
         };
         let ys = painted_ys(&mut chart, 0.2);
         // About one bar per pixel column, each still reaching the highest and lowest price.
@@ -4672,6 +4662,80 @@ mod tests {
             let top = ys.iter().copied().fold(f32::INFINITY, f32::min);
             let y = chart.get_chart_mapping().price_to_y(high);
             assert!((top - y).abs() < 1.0, "{high}: {top} against {y}");
+        }
+    }
+
+    /// Bars whose footprint cells are not drawn show candles: all bars, merged per pixel column,
+    /// at the minimum spacing, and only the bars without complete executions at a wide one.
+    #[test]
+    fn footprint_leaves_bars_without_cells_to_candles() {
+        use crate::chart::overlays::{FootprintColor, FootprintConfig};
+        use crate::data::Footprint;
+        use crate::model::{Bar, BarClock, BarData, OrderSide, Tick, Timeframe};
+        use chrono::{TimeDelta, TimeZone, Utc};
+        let start = Utc.with_ymd_and_hms(2024, 3, 11, 0, 0, 0).unwrap();
+        let time = |i: usize| start + TimeDelta::minutes(i as i64);
+        // Bar 3985 precedes the executions of the wide case, 3995 has none, 3997 has them.
+        let bars = (0..4000)
+            .map(|i| {
+                let (low, high) = match i {
+                    3985 => (100.0, 500.0),
+                    3995 => (20.0, 101.0),
+                    3997 => (100.0, 300.0),
+                    _ => (100.0, 101.0),
+                };
+                Bar::new(time(i), 100.0, high, low, 101.0, 1.0)
+            })
+            .collect();
+        let config = FootprintConfig {
+            color_by: FootprintColor::Volume,
+            neutral_color: egui::Color32::from_rgb(21, 45, 78),
+            ..Default::default()
+        };
+        let cell = config.neutral_color.gamma_multiply(0.5);
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        let color = chart.config().bullish_color;
+        for (spacing, traded, cells) in [(0.5, 0..4000, false), (20.0, 3990..4000, true)] {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for i in traded.filter(|&i| !cells || i != 3995) {
+                flow.push(&Tick::new(time(i), 100.0, 1.0, Some(OrderSide::Buy)))
+                    .unwrap();
+            }
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            chart.apply_synced_time_scale(spacing, 0.0);
+            frame(&ctx, &mut chart, 0.1, Vec::new());
+            let plain = candle_ys(&shapes(&ctx, &mut chart, 0.2, Vec::new()), color);
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                    time: Some(0.2),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        chart.show_footprint(ui, &flow, &config);
+                    });
+                },
+            );
+            let painted = std::mem::take(&mut output.shapes)
+                .into_iter()
+                .map(|clipped| clipped.shape)
+                .collect::<Vec<_>>();
+            output.drop_without_applying_deltas();
+            let ys = candle_ys(&painted, color);
+            let map = chart.get_chart_mapping();
+            let reaches = |price| ys.iter().any(|y| (y - map.price_to_y(price)).abs() < 1.0);
+            assert!(reaches(500.0) && reaches(20.0), "spacing {spacing}: {ys:?}");
+            assert_eq!(reaches(300.0), !cells, "spacing {spacing}");
+            if !cells {
+                assert!(ys == plain, "{} points against {}", ys.len(), plain.len());
+            }
+            let has_cells = painted.iter().any(|shape| match shape {
+                Shape::Mesh(mesh) => mesh.vertices.iter().any(|v| v.color == cell),
+                _ => false,
+            });
+            assert_eq!(has_cells, cells, "spacing {spacing}");
         }
     }
 

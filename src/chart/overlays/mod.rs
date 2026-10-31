@@ -7,6 +7,7 @@
 mod book_profile;
 pub use book_profile::{BookProfile, OrderBookView, render_book_profile};
 mod footprint;
+pub(crate) use footprint::footprint_column_width;
 pub use footprint::{
     FootprintColor, FootprintConfig, FootprintMode, pullback_range, render_footprint,
     render_footprint_statistics,

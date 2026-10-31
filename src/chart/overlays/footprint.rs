@@ -146,6 +146,15 @@ pub fn pullback_range(bar: &Bar, flow: &Footprint) -> Option<(i64, i64)> {
     (range.0 < range.1).then_some(range)
 }
 
+/// The width of a column of cells at `bar_spacing` points per bar, its half-point gap included,
+/// or `None` when cells would be under a point wide. Those are unreadable and, painted without
+/// antialiasing, can fall between pixel centres and draw nothing at all.
+pub(crate) fn footprint_column_width(bar_spacing: f32, config: &FootprintConfig) -> Option<f32> {
+    let columns = config.modes.len().min(4);
+    let width = bar_spacing * 0.92 / columns as f32;
+    (columns > 0 && bar_spacing.is_finite() && width - 0.5 >= 1.0).then_some(width)
+}
+
 /// Draws visible footprint bars, bounded by the visible bar range and clipped to `mapping.rect`.
 ///
 /// For the chart widget use [`crate::widget::Chart::show_footprint`] to keep cells below its
@@ -155,8 +164,8 @@ pub fn pullback_range(bar: &Bar, flow: &Footprint) -> Option<(i64, i64)> {
 /// never request a layout. Row bands extend half an instrument tick below their first
 /// tick and above their last tick, including grouped rows. Fractional volumes below 100 retain
 /// up to three decimals; nonzero magnitudes below 0.001 use scientific notation. Only display
-/// grouping runs during painting. Below 0.5 points per bar, cells have no horizontal area
-/// and are skipped before looking up executions.
+/// grouping runs during painting. Cells under a point wide are too narrow to read and are skipped
+/// before looking up executions.
 pub fn render_footprint(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -164,11 +173,10 @@ pub fn render_footprint(
     flow: &Footprint,
     config: &FootprintConfig,
 ) {
-    if bars.is_empty()
-        || config.modes.is_empty()
-        || !mapping.bar_spacing.is_finite()
-        || mapping.bar_spacing < 0.5
-    {
+    let Some(width) = footprint_column_width(mapping.bar_spacing, config) else {
+        return;
+    };
+    if bars.is_empty() {
         return;
     }
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
@@ -184,7 +192,6 @@ pub fn render_footprint(
     let background = painter.add(Shape::Noop);
     let mut mesh = Mesh::default();
     let columns = config.modes.len().min(4);
-    let width = (mapping.bar_spacing * 0.92 / columns as f32).max(0.5);
     // Bars cut by dropped executions are drawn as candles, not as complete footprint bars.
     let complete_from = flow.complete_from();
     for (index, bar) in bars.iter().enumerate().take(end).skip(first) {
@@ -695,15 +702,16 @@ mod tests {
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
 
-    /// Rows cover the nearest-tick band; spacing below 0.5 points produces no geometry.
+    /// Rows cover the nearest-tick band; spacing that leaves cells under a point wide produces no
+    /// geometry.
     #[test]
     fn rendered_rows_surround_their_instrument_ticks() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
         // y(P) = (high - P) / (high - 99) * 160, calculated independently.
         #[rustfmt::skip]
         let cases = [
-            (0.49, 1.0, 1, None, 100.0, 102.0, None),
-            (0.5, 1.0, 1, None, 100.0, 102.0, Some((80.0, 133.33333))),
+            (1.63, 1.0, 1, None, 100.0, 102.0, None),
+            (1.64, 1.0, 1, None, 100.0, 102.0, Some((80.0, 133.33333))),
             (100.0, 1.0, 1, None, 100.0, 102.0, Some((80.0, 133.33333))),
             (100.0, 0.25, 1, None, 100.25, 102.0, Some((86.66667, 100.0))),
             (100.0, 1.0, 4, None, 100.0, 106.0, Some((57.142857, 148.57143))),
