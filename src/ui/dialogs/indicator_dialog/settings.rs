@@ -24,7 +24,7 @@ pub struct StudyEdit {
     pub id: SeriesId,
     /// Calculation input ids and their new values.
     pub inputs: Vec<(String, InputValue)>,
-    /// Per-plot styles, levels, precision and interval visibility.
+    /// Per-plot styles and value tags, levels, precision and interval visibility.
     pub settings: StudySettings,
 }
 
@@ -406,6 +406,22 @@ impl IndicatorSettingsDialog {
                                             })
                                             .response
                                             .accessible_name(l10n::text(ui.ctx(), "Plot type"));
+                                        let mut tagged =
+                                            !edit.settings.untagged_plots.contains(&line);
+                                        if ui
+                                            .checkbox(
+                                                &mut tagged,
+                                                l10n::text(ui.ctx(), "Value on scale"),
+                                            )
+                                            .changed()
+                                        {
+                                            edit.settings
+                                                .untagged_plots
+                                                .retain(|&other| other != line);
+                                            if !tagged {
+                                                edit.settings.untagged_plots.push(line);
+                                            }
+                                        }
                                     });
                                     ui.separator();
                                 });
