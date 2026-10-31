@@ -136,6 +136,18 @@ impl VolumeProfileConfig {
     pub fn value_area(&self) -> f64 {
         self.value_area
     }
+
+    /// Settings a new volume profile drawing starts with: up and down volume side by side in
+    /// cyan and pink, drawn at half opacity outside the value area. Studies keep
+    /// [`Self::default`].
+    pub fn drawing_default() -> Self {
+        Self {
+            display: ProfileDisplay::UpDown,
+            up_color: [124, 210, 225, 180],
+            down_color: [222, 119, 155, 180],
+            ..Self::default()
+        }
+    }
 }
 
 impl Default for VolumeProfileConfig {

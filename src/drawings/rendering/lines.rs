@@ -772,6 +772,8 @@ mod tests {
             drawing.stroke_width = 2.0;
             drawing.font_size = 20.0;
             drawing.color = [40, 120, 200, 255];
+            // Synthetic bold paints the text twice.
+            drawing.font_weight = crate::drawings::FontWeight::Normal;
             let place = |drawing: &mut Drawing, points: &[Pos2]| {
                 drawing.points = points.to_vec();
                 drawing.chart_points = points

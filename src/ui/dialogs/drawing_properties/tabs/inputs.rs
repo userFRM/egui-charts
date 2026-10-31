@@ -680,8 +680,9 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
 }
 
 fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerState>) {
+    // A fork saved without a config shows the levels it is drawn with.
     let mut config = drawing.pitchfork.clone().unwrap_or_else(|| {
-        let mut config = PitchforkConfig::default();
+        let mut config = PitchforkConfig::legacy();
         for level in &mut config.levels {
             level.color = drawing.color;
             level.width = Some(if level.value == 1.0 {

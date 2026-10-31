@@ -98,9 +98,11 @@ impl StyleTab {
 
                 if props.fill_enabled {
                     ui.label(l10n::text(ui.ctx(), "Fill color"));
-                    let fill = props
-                        .fill_color
-                        .unwrap_or(ui.active_theme().ui.accent.gamma_multiply(0.2));
+                    // A first fill is a light tint of the line colour.
+                    let fill = props.fill_color.unwrap_or_else(|| {
+                        let [r, g, b, _] = props.color.to_srgba_unmultiplied();
+                        Color32::from_rgba_unmultiplied(r, g, b, 51)
+                    });
                     props.fill_color = Some(fill);
                     if let Some(picked) = color_swatch(ui, fill_picker, fill, "drawing_props_fill")
                     {

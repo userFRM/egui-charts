@@ -781,6 +781,8 @@ mod tests {
             }
             let mut filled = drawing.clone();
             filled.fill_color = Some([12, 34, 56, 80]);
+            // A text box shows its fill once its background is on.
+            filled.background = true;
             let fill = filled.fill_color32().unwrap();
             let fill = found(&paint(&filled), &|s| match s {
                 Shape::Path(p) => p.fill == fill,
