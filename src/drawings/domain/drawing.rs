@@ -236,7 +236,7 @@ const LINE: DefaultStyle = DefaultStyle {
 };
 
 /// The default style of each tool, chosen for its role: areas start filled with a light tint
-/// (20%, 15% for chart patterns and measurers), small labels take 12 px text.
+/// (20%, 15% for chart patterns, 40% for date ranges), small labels take 12 px text.
 fn default_style(tool: DrawingToolType) -> DefaultStyle {
     use DrawingToolType as T;
     let filled = |color: [u8; 4], alpha: u8| DefaultStyle {
@@ -263,7 +263,7 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
         T::Rect => filled(PURPLE, 51),
         T::RotatedRect => filled(GREEN, 51),
         T::Circle | T::Ellipse => filled(RED, 51),
-        // shortcut: polylines and arcs start unfilled until their renderers paint a fill.
+        // Polylines and arcs paint no fill yet, so they start unfilled.
         T::Polyline | T::Brush => colored(CYAN),
         T::Arc => colored(PINK),
         T::Sector => DefaultStyle {

@@ -687,6 +687,8 @@ mod tests {
         use super::super::test_support::click;
         let mut terminal = ready();
         let mut drawing = line(0);
+        // A red line, so that picking the palette blue changes it.
+        drawing.color = [242, 54, 69, 255];
         drawing.chart_points = vec![ChartPoint::new(430.0, 180.0), ChartPoint::new(460.0, 182.0)];
         terminal
             .chart_mut()
