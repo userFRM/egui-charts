@@ -6,12 +6,19 @@ use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Chandelier Exit
-/// Trailing stop-loss indicator based on Wilder's ATR
+/// Trailing stop-loss indicator: the highest high or lowest low of the last `period` bars, minus
+/// or plus `multiplier` times Wilder's ATR over `atr_period`. A value needs a full window as well
+/// as an ATR value.
 /// Developed by Chuck LeBeau
+///
+/// The `period` input sets both lengths, as studies saved with a single length expect;
+/// `atr_period`, which follows it in `inputs()`, then sets the ATR length alone.
 #[derive(Clone)]
 pub struct ChandelierExit {
-    /// ATR period (typically 22)
+    /// Lookback period (typically 22)
     period: usize,
+    /// ATR period (typically 22)
+    atr_period: usize,
     /// ATR multiplier (typically 3.0)
     multiplier: f64,
     values: IndicatorValues,
@@ -27,6 +34,7 @@ impl ChandelierExit {
     pub fn new(period: usize, multiplier: f64) -> Self {
         Self {
             period: period.max(1),
+            atr_period: period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             atr: ATR::new(period),
@@ -37,6 +45,13 @@ impl ChandelierExit {
             ],
             visible: true,
         }
+    }
+
+    /// Set the length of the ATR, clamped to at least one. `new` sets it to the lookback period.
+    pub fn with_atr_period(mut self, period: usize) -> Self {
+        self.atr_period = period.max(1);
+        self.atr = ATR::new(self.atr_period);
+        self
     }
 
     /// Set plot colors in the order returned by [`Indicator::line_names`].
@@ -54,9 +69,15 @@ impl Default for ChandelierExit {
 
 impl Indicator for ChandelierExit {
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX),
+        period: length("Lookback period", 1, usize::MAX),
+        atr_period: length("ATR period", 1, usize::MAX),
         multiplier: number("Multiplier", 0.0, f64::MAX)
-    ; {});
+    ; changed => {
+        // Before the ATR input existed, `period` set both lengths; saved studies still do.
+        if changed == "period" {
+            self.atr_period = self.period;
+        }
+    });
 
     fn name(&self) -> &str {
         "Chandelier"
@@ -72,7 +93,7 @@ impl Indicator for ChandelierExit {
 
     fn update(&mut self, data: &[Bar], from: usize) {
         if from == 0 {
-            self.atr = ATR::new(self.period);
+            self.atr = ATR::new(self.atr_period);
         }
         self.atr.update(data, from);
         self.stepper
@@ -85,6 +106,9 @@ impl Indicator for ChandelierExit {
                 state.1.push_back([bar.high, bar.low]);
                 if state.1.len() > self.period {
                     state.1.pop_front();
+                }
+                if state.1.len() < self.period {
+                    return IndicatorValue::None;
                 }
                 let Some(atr) = self.atr.values().value(0, index) else {
                     return IndicatorValue::None;
@@ -141,9 +165,14 @@ impl Indicator for ChandelierExit {
     }
 
     fn line_names(&self) -> Vec<String> {
+        let lengths = if self.atr_period == self.period {
+            self.period.to_string()
+        } else {
+            format!("{},{}", self.period, self.atr_period)
+        };
         vec![
-            format!("Long Exit({},{})", self.period, self.multiplier),
-            format!("Short Exit({},{})", self.period, self.multiplier),
+            format!("Long Exit({lengths},{})", self.multiplier),
+            format!("Short Exit({lengths},{})", self.multiplier),
         ]
     }
 }

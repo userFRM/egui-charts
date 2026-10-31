@@ -107,7 +107,7 @@ impl LSMA {
 /// Construct with the conventional default parameters.
 impl Default for LSMA {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(25)
     }
 }
 

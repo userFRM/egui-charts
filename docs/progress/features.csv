@@ -742,7 +742,7 @@ Studies,Indicators,Volatility Stop,done,library,src/studies/builtin/volatility_s
 Studies,Indicators,Volatility Zero Trend Close-to-Close,done,library,src/studies/builtin/zero_trend_vol.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Volume,done,library,src/studies/builtin/volume.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/widget/volume.rs;src/studies/palette.rs
 Studies,Indicators,Volume Delta,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs
-Studies,Indicators,Volume Weighted Average Price,partial,library,src/studies/builtin/vwap.rs;src/studies/settings.rs
+Studies,Indicators,Volume Weighted Average Price,done,library,src/studies/builtin/vwap.rs;src/studies/settings.rs;src/widget/series.rs
 Studies,Indicators,Volume-Weighted Moving Average,done,library,src/studies/builtin/vwma.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Vortex Indicator,done,library,src/studies/builtin/vortex.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Weighted Moving Average,done,library,src/studies/builtin/wma.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs

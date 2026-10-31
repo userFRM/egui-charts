@@ -57,7 +57,7 @@ impl DEMA {
 /// Construct with the conventional default parameters.
 impl Default for DEMA {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(9)
     }
 }
 

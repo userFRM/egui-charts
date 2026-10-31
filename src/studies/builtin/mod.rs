@@ -338,7 +338,7 @@ pub use wma::WMA;
 
 // Re-exports - Momentum indicators
 pub use aroon::Aroon;
-pub use atr::ATR;
+pub use atr::{ATR, AtrSmoothing};
 pub use awesome_oscillator::AwesomeOscillator;
 pub use cci::CCI;
 pub use momentum::Momentum;

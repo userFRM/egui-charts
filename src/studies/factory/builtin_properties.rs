@@ -33,6 +33,10 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(MARibbon::new()),
         Box::new(RSI::new(l(0))),
         Box::new(MACD::new(l(0), l(1), l(2))),
+        Box::new(
+            MACD::new(l(0), l(1), l(2))
+                .with_averages(OscillatorAverage::Simple, OscillatorAverage::Simple),
+        ),
         Box::new(VolumeWeightedMACD::new(l(0), l(1), l(2))),
         Box::new(Stochastic::new(l(0), l(1), l(2))),
         Box::new(StochasticRSI::new(l(0), l(1), l(2), l(3))),
@@ -79,10 +83,12 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(SMIErgodicOscillator::new(l(0), l(1), l(2))),
         Box::new(WoodiesCCI::new(l(0), l(1))),
         Box::new(ADX::new(l(0))),
+        Box::new(ADX::new(l(0)).with_smoothing(l(1))),
         Box::new(SuperTrend::new(l(0), x(3.0))),
         Box::new(IchimokuCloud::new(l(0), l(1), l(2))),
         Box::new(ParabolicSAR::new(x(0.02), x(0.02), x(0.2))),
         Box::new(DirectionalMovement::new(l(0))),
+        Box::new(DirectionalMovement::new(l(0)).with_smoothing(l(1))),
         Box::new(VortexIndicator::new(l(0))),
         Box::new(
             SqueezeMomentum::new()
@@ -101,6 +107,8 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(BollingerBands::new(l(0), x(2.0))),
         Box::new(BollingerBandsWidth::new(l(0), x(2.0))),
         Box::new(ATR::new(l(0))),
+        Box::new(ATR::new(l(0)).with_smoothing(AtrSmoothing::Weighted)),
+        Box::new(ATR::new(l(0)).with_smoothing(AtrSmoothing::Simple)),
         Box::new(TrueRange::new()),
         Box::new(KeltnerChannels::new(l(0), l(1), x(2.0))),
         Box::new(
@@ -114,6 +122,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(HistoricalVolatility::new(l(0)).with_trading_days(x(252.0))),
         Box::new(ChaikinVolatility::new(l(0), l(1))),
         Box::new(ChandelierExit::new(l(0), x(3.0))),
+        Box::new(ChandelierExit::new(l(0), x(3.0)).with_atr_period(l(1))),
         Box::new(AccelerationBands::new(l(0), x(4.0))),
         Box::new(Envelopes::new(l(0), x(10.0), EnvelopeAverage::Simple)),
         Box::new(PercentB::new(l(0), x(2.0))),

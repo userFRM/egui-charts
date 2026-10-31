@@ -61,7 +61,7 @@ impl RateOfChange {
 /// Construct with the conventional default parameters.
 impl Default for RateOfChange {
     fn default() -> Self {
-        Self::new(14)
+        Self::new(9)
     }
 }
 

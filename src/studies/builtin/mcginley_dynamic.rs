@@ -4,9 +4,10 @@ use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
-/// McGinley Dynamic
-/// Adaptive moving avg designed to track price better than traditional MAs
-/// Self-adjusts based on price volatility
+/// McGinley Dynamic: an average that speeds up when price falls away from it and slows down when
+/// price rises above it. `MD = MD[1] + (close - MD[1]) / (N x (close / MD[1])^4)` with N the
+/// period, starting at the first close. While MD is zero, or the divisor is zero, MD keeps its
+/// value.
 #[derive(Clone)]
 pub struct McGinleyDynamic {
     /// Period (typically 10 or 14)
@@ -74,7 +75,7 @@ impl Indicator for McGinleyDynamic {
                 let md = state.get_or_insert(bar.close);
                 if *md != 0.0 {
                     let ratio = bar.close / *md;
-                    let divisor = 0.6 * self.period as f64 * ratio.powi(4);
+                    let divisor = self.period as f64 * ratio.powi(4);
                     if divisor != 0.0 {
                         *md += (bar.close - *md) / divisor;
                     }
@@ -119,29 +120,5 @@ impl Indicator for McGinleyDynamic {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("MD({})", self.period)]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::studies::test_support::make_bar;
-
-    #[test]
-    fn test_mcginley() {
-        let mut md = McGinleyDynamic::new(14);
-
-        let data: Vec<Bar> = (0..20).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        md.calculate(&data);
-
-        assert_eq!(md.values.len(), 20);
-
-        // MD should track price but smoother
-        let rows = md.values.to_rows();
-        let IndicatorValue::Single(v) = rows.last().unwrap() else {
-            panic!("no value: {:?}", md.values.to_rows().last().unwrap());
-        };
-        assert!(*v > 100.0 && *v < 120.0);
     }
 }

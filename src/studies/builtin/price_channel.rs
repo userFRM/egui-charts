@@ -12,6 +12,7 @@ use egui::Color32;
 pub struct PriceChannel {
     /// Lookback period
     period: usize,
+    offset: i32,
     values: IndicatorValues,
     /// Colors: [Upper, Lower, Middle]
     colors: Vec<Color32>,
@@ -23,6 +24,7 @@ impl PriceChannel {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            offset: 0,
             values: IndicatorValues::new(),
             colors: vec![
                 Color32::from_rgb(245, 0, 87), // Upper
@@ -36,6 +38,12 @@ impl PriceChannel {
     /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
+        self
+    }
+
+    /// Draw every line `offset` bars later, earlier when negative.
+    pub fn with_offset(mut self, offset: i32) -> Self {
+        self.offset = offset;
         self
     }
 }
@@ -79,8 +87,13 @@ impl PriceChannel {
 
 impl Indicator for PriceChannel {
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Period", 1, usize::MAX),
+        offset: integer("Offset", i32::MIN, i32::MAX)
     ; {});
+
+    fn plot_offset(&self, _line: usize) -> isize {
+        self.offset as isize
+    }
 
     fn name(&self) -> &str {
         "Price Channel"

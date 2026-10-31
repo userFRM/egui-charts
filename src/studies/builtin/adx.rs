@@ -29,10 +29,16 @@ use crate::studies::stepper::Stepper;
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
-/// Avg Directional Index indicator
+/// Avg Directional Index indicator. Draws its ADX line; +DI and -DI are computed and can be shown
+/// from its style settings.
+///
+/// The `period` input sets both lengths, as studies saved with a single length expect;
+/// `adx_smoothing`, which follows it in `inputs()`, then sets the smoothing alone.
 #[derive(Clone)]
 pub struct ADX {
     period: usize,
+    /// Length of Wilder's average of DX that forms the ADX line.
+    adx_smoothing: usize,
     values: IndicatorValues,
     stepper: Stepper<State>,
     adx_color: Color32,
@@ -60,6 +66,7 @@ impl ADX {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            adx_smoothing: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             adx_color: palette::RED,
@@ -67,6 +74,13 @@ impl ADX {
             minus_di_color: palette::ORANGE,
             visible: true,
         }
+    }
+
+    /// Set the length of Wilder's average of DX that forms the ADX line, clamped to at least one.
+    /// `new` sets it to the DI period.
+    pub fn with_smoothing(mut self, smoothing: usize) -> Self {
+        self.adx_smoothing = smoothing.max(1);
+        self
     }
 
     /// Set colors for all three lines
@@ -93,8 +107,25 @@ impl Default for ADX {
 
 impl Indicator for ADX {
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
-    ; {});
+        period: length("DI period", 1, usize::MAX),
+        adx_smoothing: length("ADX smoothing period", 1, usize::MAX)
+    ; changed => {
+        // Before the smoothing input existed, `period` set both lengths; saved studies still do.
+        if changed == "period" {
+            self.adx_smoothing = self.period;
+        }
+    });
+
+    fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.colors().get(line).copied().unwrap_or(Color32::WHITE),
+            width: self.line_style(line).width,
+            pattern: crate::model::LineStyle::Solid,
+            plot_type: crate::studies::PlotType::Line,
+            // +DI and -DI are available in the style settings.
+            visible: line == 0,
+        }
+    }
 
     fn name(&self) -> &str {
         "ADX"
@@ -149,15 +180,16 @@ impl Indicator for ADX {
                 } else {
                     0.0
                 };
-                if state.dx_count < self.period {
+                if state.dx_count < self.adx_smoothing {
                     state.dx_count += 1;
                     state.adx += dx;
-                    if state.dx_count < self.period {
+                    if state.dx_count < self.adx_smoothing {
                         return IndicatorValue::Multiple(vec![f64::NAN, plus, minus]);
                     }
-                    state.adx /= self.period as f64;
+                    state.adx /= self.adx_smoothing as f64;
                 } else {
-                    state.adx = (state.adx * (self.period - 1) as f64 + dx) / self.period as f64;
+                    state.adx = (state.adx * (self.adx_smoothing - 1) as f64 + dx)
+                        / self.adx_smoothing as f64;
                 }
                 IndicatorValue::Multiple(vec![state.adx, plus, minus])
             });
@@ -209,9 +241,29 @@ impl Indicator for ADX {
 
     fn line_names(&self) -> Vec<String> {
         vec![
-            format!("ADX({})", self.period),
+            if self.adx_smoothing == self.period {
+                format!("ADX({})", self.period)
+            } else {
+                format!("ADX({},{})", self.period, self.adx_smoothing)
+            },
             "+DI".to_string(),
             "-DI".to_string(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::studies::{ConfiguredStudy, Indicator, IndicatorFactory};
+
+    #[test]
+    fn a_new_adx_draws_only_its_adx_line() {
+        for (name, visible) in [("ADX", [true, false, false]), ("DMI", [true; 3])] {
+            let study = ConfiguredStudy::new(IndicatorFactory::new().create(name).unwrap());
+            assert_eq!(
+                visible,
+                [0, 1, 2].map(|line| study.plot_style(line).visible)
+            );
+        }
     }
 }

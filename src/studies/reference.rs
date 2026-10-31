@@ -50,6 +50,8 @@
 //!   range (high minus low on the first bar) or Wilder's average of the bar range over the middle
 //!   line's length; the simple averages of the highs and of the lows for the MA Channel; and
 //!   separate upper and lower residual deviations for the regression channel.
+//! - McGinley for the McGinley Dynamic; Appel's MACD over simple averages; Wilder's true range under
+//!   simple, exponential and weighted averages.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
@@ -71,20 +73,24 @@
 //! Median takes the nearest-rank median (the lower middle value for an even length) and seeds its EMA
 //! with the mean of the first medians, the Chop Zone seeds its EMA with the mean of the first 34 closes,
 //! and the Volatility Stop starts at the first close in an uptrend and uses the bar's true range as its
-//! band until its ATR has a full length.
+//! band until its ATR has a full length. The McGinley Dynamic starts at the first close; a
+//! simple MACD signal averages the MACD values only, and an exponential one starts at the first; ATR's
+//! simple, exponential and weighted smoothings start on the period-th true range, the exponential one at
+//! their mean; a Chandelier Exit value needs a full lookback window.
 
 use crate::model::Bar;
 use crate::studies::{
-    ADX, ATR, AccumulationDistribution, Aroon, AwesomeOscillator, BalanceOfPower, BollingerBands,
-    BollingerBandsWidth, CCI, ChaikinMoneyFlow, ChaikinVolatility, ChandeMomentumOscillator,
-    ChoppinessIndex, CommoditySelectionIndex, CoppockCurve, DEMA, DirectionalMovement,
-    DonchianChannels, EMA, ElderRay, EnvelopeAverage, Envelopes, ForceIndex, HL2, HLC3, HMA,
-    IchimokuCloud, Indicator, IndicatorValue, KeltnerChannels, LinearRegression,
-    LinearRegressionSlope, MACD, MassIndex, MedianPrice, MoneyFlowIndex, NetVolume, OHLC4,
-    OnBalanceVolume, ParabolicSAR, ParkinsonVol, PercentB, PercentageVolumeOscillator,
-    PriceOscillator, RSI, RateOfChange, SMA, StandardDeviation, Stochastic, SuperTrend, TEMA, TRIX,
-    TrueRange, TypicalPrice, UltimateOscillator, VWMA, VortexIndicator, WMA, Week52HighLow,
-    Week52HighLowLevels, WeightedClose, WilliamsR, ZeroTrendVol,
+    ADX, ATR, AccumulationDistribution, Aroon, AtrSmoothing, AwesomeOscillator, BalanceOfPower,
+    BollingerBands, BollingerBandsWidth, CCI, ChaikinMoneyFlow, ChaikinVolatility,
+    ChandeMomentumOscillator, ChandelierExit, ChoppinessIndex, CommoditySelectionIndex,
+    CoppockCurve, DEMA, DirectionalMovement, DonchianChannels, EMA, ElderRay, EnvelopeAverage,
+    Envelopes, ForceIndex, HL2, HLC3, HMA, IchimokuCloud, Indicator, IndicatorValue,
+    KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD, MassIndex, MedianPrice,
+    MoneyFlowIndex, NetVolume, OHLC4, OnBalanceVolume, ParabolicSAR, ParkinsonVol, PercentB,
+    PercentageVolumeOscillator, PriceOscillator, RSI, RateOfChange, SMA, StandardDeviation,
+    Stochastic, SuperTrend, TEMA, TRIX, TrueRange, TypicalPrice, UltimateOscillator, VWMA,
+    VortexIndicator, WMA, Week52HighLow, Week52HighLowLevels, WeightedClose, WilliamsR,
+    ZeroTrendVol,
 };
 use crate::studies::{
     AcceleratorOscillator, AdvanceDeclineRatioBars, AroonOscillator, AverageDailyRange, BBTrend,
@@ -95,7 +101,7 @@ use crate::studies::{
     BollingerBars, ChandeKrollStop, ChopZone, Median, VolatilityStop, WilliamsAlligator,
 };
 use crate::studies::{Gaps, PivotPointsHighLow, RsiDivergence, WilliamsFractals};
-use crate::studies::{KeltnerBand, MAChannel, OscillatorAverage};
+use crate::studies::{KeltnerBand, MAChannel, McGinleyDynamic, OscillatorAverage};
 use crate::studies::{
     PriceMomentumOscillator, PringsSpecialK, RciRibbon, RelativeVolatilityIndex,
     SMIErgodicIndicator, SMIErgodicOscillator, WoodiesCCI,
@@ -443,7 +449,7 @@ fn small_range_studies_are_invariant_to_price_and_volume_units() {
         ),
         (Box::new(Stochastic::new(14, 1, 1)), 200.0 / 9.0),
         (Box::new(CCI::default()), -62000.0 / 759.0),
-        (Box::new(RateOfChange::default()), -100.0 / 77.0),
+        (Box::new(RateOfChange::new(14)), -100.0 / 77.0),
     ] {
         study.calculate(&bars);
         assert!((study.values().value(0, 100).unwrap() - want).abs() < 1e-9);
@@ -528,16 +534,46 @@ fn staple_studies_match_published_definitions() {
         ("ZeroTrend(20)", Box::new(ZeroTrendVol::default())),
         ("Parkinson(20)", Box::new(ParkinsonVol::default())),
         ("NetVolume", Box::new(NetVolume::default())),
-        ("SMA(20)", Box::new(SMA::default())),
-        ("EMA(12)", Box::new(EMA::default())),
-        ("WMA(20)", Box::new(WMA::default())),
+        ("SMA(20)", Box::new(SMA::new(20))),
+        ("EMA(12)", Box::new(EMA::new(12))),
+        ("WMA(20)", Box::new(WMA::new(20))),
         ("RSI(14)", Box::new(RSI::default())),
         ("StochRSI(14,14,3,3)", Box::new(StochasticRSI::default())),
         ("MACD(12,26,9)", Box::new(MACD::default())),
+        (
+            "MACD(12,26,9,SMA,SMA)",
+            Box::new(
+                MACD::new(12, 26, 9)
+                    .with_averages(OscillatorAverage::Simple, OscillatorAverage::Simple),
+            ),
+        ),
+        (
+            "MACD(12,26,9,SMA,EMA)",
+            Box::new(
+                MACD::new(12, 26, 9)
+                    .with_averages(OscillatorAverage::Simple, OscillatorAverage::Exponential),
+            ),
+        ),
         ("BB(20,2)", Box::new(BollingerBands::default())),
         ("ATR(14)", Box::new(ATR::default())),
+        (
+            "ATR(14,SMA)",
+            Box::new(ATR::new(14).with_smoothing(AtrSmoothing::Simple)),
+        ),
+        (
+            "ATR(14,EMA)",
+            Box::new(ATR::new(14).with_smoothing(AtrSmoothing::Exponential)),
+        ),
+        (
+            "ATR(14,WMA)",
+            Box::new(ATR::new(14).with_smoothing(AtrSmoothing::Weighted)),
+        ),
         ("ADX(14)", Box::new(ADX::default())),
         ("DMI(14)", Box::new(DirectionalMovement::default())),
+        (
+            "DMI(14,20)",
+            Box::new(DirectionalMovement::new(14).with_smoothing(20)),
+        ),
         (
             "CSI(14,50,3000,25)",
             Box::new(
@@ -572,7 +608,7 @@ fn staple_studies_match_published_definitions() {
             Box::new(LinearRegressionSlope::default()),
         ),
         ("Aroon(14)", Box::new(Aroon::default())),
-        ("HMA(20)", Box::new(HMA::default())),
+        ("HMA(20)", Box::new(HMA::new(20))),
         ("HMA(21)", Box::new(HMA::new(21))),
         ("VWMA(20)", Box::new(VWMA::default())),
         ("CMF(20)", Box::new(ChaikinMoneyFlow::default())),
@@ -583,9 +619,13 @@ fn staple_studies_match_published_definitions() {
             "PSAR(0.01,0.03,0.12)",
             Box::new(ParabolicSAR::new(0.01, 0.03, 0.12)),
         ),
-        ("ROC(14)", Box::new(RateOfChange::default())),
+        ("ROC(14)", Box::new(RateOfChange::new(14))),
         ("StdDev(20)", Box::new(StandardDeviation::default())),
         ("Donchian(20)", Box::new(DonchianChannels::default())),
+        (
+            "Chandelier(22,14,3)",
+            Box::new(ChandelierExit::new(22, 3.0).with_atr_period(14)),
+        ),
         ("Stoch(14,3,3)", Box::new(Stochastic::default())),
         ("Stoch(14,1,3)", Box::new(Stochastic::new(14, 1, 3))),
         ("WilliamsR(14)", Box::new(WilliamsR::default())),
@@ -610,7 +650,7 @@ fn staple_studies_match_published_definitions() {
         ("ElderRay(13)", Box::new(ElderRay::default())),
         ("Vortex(14)", Box::new(VortexIndicator::default())),
         ("Chop(14)", Box::new(ChoppinessIndex::default())),
-        ("TRIX(15,9)", Box::new(TRIX::default())),
+        ("TRIX(15,9)", Box::new(TRIX::new(15))),
         ("Mass(9,25)", Box::new(MassIndex::default())),
         ("%B(20,2)", Box::new(PercentB::default())),
         ("BBW(20,2)", Box::new(BollingerBandsWidth::default())),
@@ -627,7 +667,8 @@ fn staple_studies_match_published_definitions() {
             Box::new(MAChannel::new(20, 10).with_offsets(3, -2)),
         ),
         ("CV(10,10)", Box::new(ChaikinVolatility::default())),
-        ("CMO(14)", Box::new(ChandeMomentumOscillator::default())),
+        ("CMO(14)", Box::new(ChandeMomentumOscillator::new(14))),
+        ("MD(14)", Box::new(McGinleyDynamic::new(14))),
         ("Coppock(14,11,10)", Box::new(CoppockCurve::default())),
         ("Ichimoku(9,26,52)", Box::new(IchimokuCloud::default())),
         ("Alligator(13,8,5)", Box::new(WilliamsAlligator::default())),

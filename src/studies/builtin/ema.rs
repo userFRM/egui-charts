@@ -84,7 +84,7 @@ impl EMA {
 /// Construct with the conventional default parameters.
 impl Default for EMA {
     fn default() -> Self {
-        Self::new(12)
+        Self::new(9)
     }
 }
 
