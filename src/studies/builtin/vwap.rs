@@ -36,9 +36,7 @@
 //! ```
 
 use super::clamp_param;
-use crate::model::{
-    Bar, EventKind, Session, SessionWindow, TimeScaleEvent, Timeframe, TimezoneId,
-};
+use crate::model::{Bar, EventKind, Session, SessionWindow, TimeScaleEvent, Timeframe, TimezoneId};
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
@@ -1160,14 +1158,19 @@ mod tests {
     fn vwap_restarts_at_the_chart_events_of_its_anchor() {
         use crate::model::BarData;
         use crate::widget::{Chart, test_frames::shapes};
-        let bars: Vec<_> = [(100.0, 1000.0), (102.0, 1000.0), (104.0, 2000.0), (106.0, 1000.0)]
-            .into_iter()
-            .zip(2..)
-            .map(|((price, volume), day)| {
-                let time = Utc.with_ymd_and_hms(2026, 3, day, 0, 0, 0).unwrap();
-                Bar::new(time, price, price, price, price, volume)
-            })
-            .collect();
+        let bars: Vec<_> = [
+            (100.0, 1000.0),
+            (102.0, 1000.0),
+            (104.0, 2000.0),
+            (106.0, 1000.0),
+        ]
+        .into_iter()
+        .zip(2..)
+        .map(|((price, volume), day)| {
+            let time = Utc.with_ymd_and_hms(2026, 3, day, 0, 0, 0).unwrap();
+            Bar::new(time, price, price, price, price, volume)
+        })
+        .collect();
         let event = |kind, time| TimeScaleEvent {
             id: format!("{kind:?}"),
             time,
@@ -1194,7 +1197,9 @@ mod tests {
         let ctx = egui::Context::default();
         let values = |chart: &Chart| -> Vec<f64> {
             let study = chart.indicators().next().unwrap().1;
-            (0..4).map(|bar| study.values().value(0, bar).unwrap()).collect()
+            (0..4)
+                .map(|bar| study.values().value(0, bar).unwrap())
+                .collect()
         };
         let assert_close = |got: Vec<f64>, want: [f64; 4]| {
             for (got, want) in got.iter().zip(want) {

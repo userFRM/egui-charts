@@ -81,17 +81,16 @@
 use crate::model::Bar;
 use crate::studies::{
     ADX, ATR, AccumulationDistribution, Aroon, AtrSmoothing, AwesomeOscillator, BalanceOfPower,
-    BollingerBands,
-    BollingerBandsWidth, CCI, ChaikinMoneyFlow, ChaikinVolatility, ChandeMomentumOscillator,
-    ChandelierExit,
-    ChoppinessIndex, CommoditySelectionIndex, CoppockCurve, DEMA, DirectionalMovement,
-    DonchianChannels, EMA, ElderRay, EnvelopeAverage, Envelopes, ForceIndex, HL2, HLC3, HMA,
-    IchimokuCloud, Indicator, IndicatorValue, KeltnerChannels, LinearRegression,
-    LinearRegressionSlope, MACD, MassIndex, MedianPrice, MoneyFlowIndex, NetVolume, OHLC4,
-    OnBalanceVolume, ParabolicSAR, ParkinsonVol, PercentB, PercentageVolumeOscillator,
-    PriceOscillator, RSI, RateOfChange, SMA, StandardDeviation, Stochastic, SuperTrend, TEMA, TRIX,
-    TrueRange, TypicalPrice, UltimateOscillator, VWMA, VortexIndicator, WMA, Week52HighLow,
-    Week52HighLowLevels, WeightedClose, WilliamsR, ZeroTrendVol,
+    BollingerBands, BollingerBandsWidth, CCI, ChaikinMoneyFlow, ChaikinVolatility,
+    ChandeMomentumOscillator, ChandelierExit, ChoppinessIndex, CommoditySelectionIndex,
+    CoppockCurve, DEMA, DirectionalMovement, DonchianChannels, EMA, ElderRay, EnvelopeAverage,
+    Envelopes, ForceIndex, HL2, HLC3, HMA, IchimokuCloud, Indicator, IndicatorValue,
+    KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD, MassIndex, MedianPrice,
+    MoneyFlowIndex, NetVolume, OHLC4, OnBalanceVolume, ParabolicSAR, ParkinsonVol, PercentB,
+    PercentageVolumeOscillator, PriceOscillator, RSI, RateOfChange, SMA, StandardDeviation,
+    Stochastic, SuperTrend, TEMA, TRIX, TrueRange, TypicalPrice, UltimateOscillator, VWMA,
+    VortexIndicator, WMA, Week52HighLow, Week52HighLowLevels, WeightedClose, WilliamsR,
+    ZeroTrendVol,
 };
 use crate::studies::{
     AcceleratorOscillator, AdvanceDeclineRatioBars, AroonOscillator, AverageDailyRange, BBTrend,
@@ -543,17 +542,17 @@ fn staple_studies_match_published_definitions() {
         ("MACD(12,26,9)", Box::new(MACD::default())),
         (
             "MACD(12,26,9,SMA,SMA)",
-            Box::new(MACD::new(12, 26, 9).with_averages(
-                OscillatorAverage::Simple,
-                OscillatorAverage::Simple,
-            )),
+            Box::new(
+                MACD::new(12, 26, 9)
+                    .with_averages(OscillatorAverage::Simple, OscillatorAverage::Simple),
+            ),
         ),
         (
             "MACD(12,26,9,SMA,EMA)",
-            Box::new(MACD::new(12, 26, 9).with_averages(
-                OscillatorAverage::Simple,
-                OscillatorAverage::Exponential,
-            )),
+            Box::new(
+                MACD::new(12, 26, 9)
+                    .with_averages(OscillatorAverage::Simple, OscillatorAverage::Exponential),
+            ),
         ),
         ("BB(20,2)", Box::new(BollingerBands::default())),
         ("ATR(14)", Box::new(ATR::default())),

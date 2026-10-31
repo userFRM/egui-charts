@@ -260,7 +260,10 @@ mod tests {
     fn a_new_adx_draws_only_its_adx_line() {
         for (name, visible) in [("ADX", [true, false, false]), ("DMI", [true; 3])] {
             let study = ConfiguredStudy::new(IndicatorFactory::new().create(name).unwrap());
-            assert_eq!(visible, [0, 1, 2].map(|line| study.plot_style(line).visible));
+            assert_eq!(
+                visible,
+                [0, 1, 2].map(|line| study.plot_style(line).visible)
+            );
         }
     }
 }

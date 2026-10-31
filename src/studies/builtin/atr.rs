@@ -165,7 +165,8 @@ impl Indicator for ATR {
                     return IndicatorValue::Single(if smoothing == AtrSmoothing::Simple {
                         state.window.iter().sum::<f64>() / period as f64
                     } else {
-                        let weighted: f64 = (1..).zip(&state.window).map(|(w, tr)| w as f64 * tr).sum();
+                        let weighted: f64 =
+                            (1..).zip(&state.window).map(|(w, tr)| w as f64 * tr).sum();
                         weighted / (period as f64 * (period as f64 + 1.0) / 2.0)
                     });
                 }

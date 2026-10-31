@@ -33,10 +33,10 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(MARibbon::new()),
         Box::new(RSI::new(l(0))),
         Box::new(MACD::new(l(0), l(1), l(2))),
-        Box::new(MACD::new(l(0), l(1), l(2)).with_averages(
-            OscillatorAverage::Simple,
-            OscillatorAverage::Simple,
-        )),
+        Box::new(
+            MACD::new(l(0), l(1), l(2))
+                .with_averages(OscillatorAverage::Simple, OscillatorAverage::Simple),
+        ),
         Box::new(VolumeWeightedMACD::new(l(0), l(1), l(2))),
         Box::new(Stochastic::new(l(0), l(1), l(2))),
         Box::new(StochasticRSI::new(l(0), l(1), l(2), l(3))),

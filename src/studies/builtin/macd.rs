@@ -214,16 +214,8 @@ impl Indicator for MACD {
                         (state.fast, state.slow)
                     }
                     OscillatorAverage::Simple => (
-                        state.means[0].next(
-                            OscillatorAverage::Simple,
-                            bar.close,
-                            self.fast_period,
-                        ),
-                        state.means[1].next(
-                            OscillatorAverage::Simple,
-                            bar.close,
-                            self.slow_period,
-                        ),
+                        state.means[0].next(OscillatorAverage::Simple, bar.close, self.fast_period),
+                        state.means[1].next(OscillatorAverage::Simple, bar.close, self.slow_period),
                     ),
                 };
                 state.usable += 1;
@@ -241,11 +233,9 @@ impl Indicator for MACD {
                         };
                         state.signal
                     }
-                    OscillatorAverage::Simple => state.means[2].next(
-                        OscillatorAverage::Simple,
-                        macd,
-                        self.signal_period,
-                    ),
+                    OscillatorAverage::Simple => {
+                        state.means[2].next(OscillatorAverage::Simple, macd, self.signal_period)
+                    }
                 };
                 state.defined += 1;
                 IndicatorValue::Multiple(vec![macd, signal, macd - signal])
