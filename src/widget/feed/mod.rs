@@ -545,7 +545,10 @@ impl Chart {
     }
 
     /// How the heatmap's profile and the depth ladder show the live book: which individual orders
-    /// count, what a bar measures and which orders are highlighted. Applies from the next frame.
+    /// count, what a bar measures and which orders are highlighted. Its size tiers also mark the
+    /// heatmap's cells whose largest recorded order reaches one; the orders the heatmap records are
+    /// those of [`DepthHistoryConfig::orders`](crate::data::DepthHistoryConfig::orders). Applies
+    /// from the next frame.
     /// A view that needs individual orders on an aggregate feed draws an explicit notice in the
     /// pane and an empty ladder, rather than aggregate sizes.
     pub fn set_order_book_view(&mut self, view: crate::chart::overlays::OrderBookView) {
@@ -622,6 +625,7 @@ impl Chart {
             history,
             tick * history.config().ticks_per_row as f64,
             |time| self.time_to_index(time).and_then(|i| self.index_to_x(i)),
+            &link.book_view,
             [self.config.bullish_color, self.config.bearish_color],
         );
         let shown = crate::chart::overlays::render_book_profile(

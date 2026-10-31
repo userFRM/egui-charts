@@ -112,9 +112,10 @@ impl OrderFlowStudy {
         }
     }
 
-    /// Book size over the individual orders `filter` accepts: a minimum size, a minimum resting
-    /// age and excluded participants, the first two also set by the study's inputs. Needs a feed
-    /// that sends order events, see [`OrderFlowInput::with_order_filter`]. Starts a fresh source.
+    /// Book size over the individual orders `filter` accepts: a minimum size, a minimum and a
+    /// maximum resting age and excluded participants, all but the last also set by the study's
+    /// inputs. Needs a feed that sends order events, see [`OrderFlowInput::with_order_filter`].
+    /// Starts a fresh source.
     pub fn with_order_filter(mut self, filter: OrderFilter) -> Self {
         self.filter = filter;
         self.reset();
@@ -258,6 +259,12 @@ impl Indicator for OrderFlowStudy {
                     InputValue::Number(self.filter.min_age.map_or(0.0, |age| age.as_seconds_f64())),
                     InputKind::Number(0.0, 86400.0),
                 ),
+                StudyInput::new(
+                    "max_age",
+                    "Maximum resting seconds (0 for any, needs order events)",
+                    InputValue::Number(self.filter.max_age.map_or(0.0, |age| age.as_seconds_f64())),
+                    InputKind::Number(0.0, 86400.0),
+                ),
             ],
             OrderFlowKind::TradeRate {
                 volume,
@@ -379,6 +386,10 @@ impl Indicator for OrderFlowStudy {
             }
             (OrderFlowKind::BookSize { .. }, "min_age", InputValue::Number(v)) => {
                 self.filter.min_age = (v > 0.0).then(|| TimeDelta::milliseconds((v * 1e3) as i64));
+                self.reset();
+            }
+            (OrderFlowKind::BookSize { .. }, "max_age", InputValue::Number(v)) => {
+                self.filter.max_age = (v > 0.0).then(|| TimeDelta::milliseconds((v * 1e3) as i64));
                 self.reset();
             }
             (OrderFlowKind::TradeRate { volume, .. }, "volume", InputValue::Toggle(v)) => {
@@ -528,6 +539,35 @@ mod tests {
                 assert_eq!(format!("{:?}", &old[..5]), format!("{:?}", &new[..5]));
             }
             data.pop();
+        }
+    }
+
+    /// Guards the resting age inputs of book size: seconds set the filter's age bound that the
+    /// study's source applies and reads back, and 0 removes the bound.
+    #[test]
+    fn resting_age_inputs_set_the_book_size_filter() {
+        let ten = Some(TimeDelta::seconds(10));
+        for (id, value, ages) in [
+            ("min_age", 10.0, (ten, None)),
+            ("max_age", 10.0, (None, ten)),
+            ("max_age", 0.0, (None, None)),
+        ] {
+            let mut study = OrderFlowStudy::new(OrderFlowKind::BookSize {
+                levels: 10,
+                distance: 0.0,
+            });
+            study.set_input(id, InputValue::Number(value)).unwrap();
+            let read = study
+                .inputs()
+                .into_iter()
+                .find(|i| i.id == id)
+                .map(|i| i.value);
+            assert_eq!(read, Some(InputValue::Number(value)), "{id}");
+            let filter = study
+                .order_flow_input()
+                .and_then(|input| input.order_filter())
+                .unwrap_or_default();
+            assert_eq!((filter.min_age, filter.max_age), ages, "{id} {value}");
         }
     }
 }

@@ -69,6 +69,12 @@ pub struct OrderFilter {
     /// the placement time the feed supplied. Orders without one cannot be shown to have rested
     /// that long and are left out. A negative age counts as zero.
     pub min_age: Option<TimeDelta>,
+    /// Only orders that have rested less than this long at the time of the book, measured from the
+    /// placement time the feed supplied: the most recently placed ones. Orders without one cannot
+    /// be shown to be that recent and are left out. A negative age counts as zero. With
+    /// [`min_age`](Self::min_age) of the same age, every order with a placement time passes exactly
+    /// one of the two.
+    pub max_age: Option<TimeDelta>,
     /// Orders of these participants are left out. Orders without a participant stay.
     pub exclude_participants: Vec<u64>,
 }
@@ -84,6 +90,11 @@ impl OrderFilter {
                     .placed
                     .is_some_and(|placed| now - placed >= age.max(TimeDelta::zero()))
             })
+            && self.max_age.is_none_or(|age| {
+                order
+                    .placed
+                    .is_some_and(|placed| now - placed < age.max(TimeDelta::zero()))
+            })
             && order
                 .participant
                 .is_none_or(|p| !self.exclude_participants.contains(&p))
@@ -98,7 +109,7 @@ pub enum OrderFilterUnavailable {
     AggregateDepth,
     /// The filter excludes participants but no held order names one.
     Participants,
-    /// The filter has a minimum age but no held order has a placement time.
+    /// The filter has a minimum or maximum age but no held order has a placement time.
     PlacementTimes,
 }
 
@@ -263,7 +274,9 @@ impl OrderQueue {
             {
                 return Err(OrderFilterUnavailable::Participants);
             }
-            if filter.min_age.is_some() && self.orders.iter().all(|o| o.placed.is_none()) {
+            if (filter.min_age.is_some() || filter.max_age.is_some())
+                && self.orders.iter().all(|o| o.placed.is_none())
+            {
                 return Err(OrderFilterUnavailable::PlacementTimes);
             }
         }
@@ -292,6 +305,29 @@ impl OrderQueue {
             .chain(asks)
             .map(|(_, order)| order)
             .collect()
+    }
+
+    /// The levels of [`largest_orders`](Self::largest_orders), one order each: what a depth
+    /// history of individual orders records next to the sums of [`filtered`](Self::filtered).
+    pub(crate) fn largest_levels(&self, filter: &OrderFilter) -> OrderBook {
+        let largest = self.largest_orders(filter);
+        let levels = |side| {
+            largest
+                .iter()
+                .filter(|o| o.side == side)
+                .map(|o| OrderBookLevel {
+                    price: o.price,
+                    size: o.size,
+                    order_cnt: Some(1),
+                })
+                .collect()
+        };
+        OrderBook {
+            ts: self.time,
+            symbol: String::new(),
+            bids: levels(OrderSide::Buy),
+            asks: levels(OrderSide::Sell),
+        }
     }
 
     fn sum(&self, symbol: String, filter: &OrderFilter) -> OrderBook {

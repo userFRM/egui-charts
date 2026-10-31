@@ -50,8 +50,10 @@ fn trade_bar_thresholds_survive_drains_and_keep_raw_fills() {
 
 /// Guards that one filter gives one answer: the book size study, the heatmap's depth columns and
 /// the ladder's book (`OrderQueue::filtered`) sum the same orders, leaving out a small order, a
-/// young one, one of an excluded participant and one whose age is unknown, and that a feed with
-/// aggregate depth only gives no value or column instead of an unfiltered one.
+/// young one, one of an excluded participant and one whose age is unknown, that a maximum age keeps
+/// the orders younger than it, so a minimum and a maximum of the same age split the orders that
+/// carry a placement time, and that a feed with aggregate depth only gives no value or column
+/// instead of an unfiltered one.
 #[test]
 fn one_order_filter_gives_book_size_heatmap_and_ladder_the_same_sizes() {
     use crate::data::{OrderFilter, OrderFilterUnavailable, OrderFlowInput, OrderFlowKind};
@@ -76,6 +78,7 @@ fn one_order_filter_gives_book_size_heatmap_and_ladder_the_same_sizes() {
     let filter = OrderFilter {
         min_size: 2.0,
         min_age: Some(TimeDelta::seconds(10)),
+        max_age: None,
         exclude_participants: vec![2],
     };
     let config = DepthHistoryConfig {
@@ -171,6 +174,13 @@ fn one_order_filter_gives_book_size_heatmap_and_ladder_the_same_sizes() {
         ),
         (
             OrderFilter {
+                max_age: Some(TimeDelta::seconds(1)),
+                ..Default::default()
+            },
+            Err(OrderFilterUnavailable::PlacementTimes),
+        ),
+        (
+            OrderFilter {
                 min_size: 1.0,
                 ..Default::default()
             },
@@ -178,6 +188,36 @@ fn one_order_filter_gives_book_size_heatmap_and_ladder_the_same_sizes() {
         ),
     ] {
         assert_eq!(queue.filtered("A", &filter).map(|_| ()), expected);
+    }
+
+    // A minimum and a maximum of the same age split the orders that carry a placement time: 2 s
+    // is fresh, 10 s and 30 s persistent, and the order without one is in neither.
+    let mut queue = crate::data::OrderQueue::new(Some(0.25));
+    let orders = vec![
+        RestingOrder::new(1, Buy, 99.0, 1.0).with_placed(ago(2)),
+        RestingOrder::new(2, Buy, 99.0, 2.0).with_placed(ago(10)),
+        RestingOrder::new(3, Buy, 99.0, 4.0).with_placed(ago(30)),
+        RestingOrder::new(4, Buy, 99.0, 8.0),
+    ];
+    queue.snapshot(1, time, orders).unwrap();
+    let ten = Some(TimeDelta::seconds(10));
+    for (filter, expected) in [
+        (
+            OrderFilter {
+                max_age: ten,
+                ..Default::default()
+            },
+            vec![1.0],
+        ),
+        (
+            OrderFilter {
+                min_age: ten,
+                ..Default::default()
+            },
+            vec![6.0],
+        ),
+    ] {
+        assert_eq!(sizes(&queue.filtered("A", &filter).unwrap().bids), expected);
     }
 }
 
@@ -765,6 +805,7 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
         span: TimeDelta::seconds(span),
         bids: bids.to_vec(),
         asks: asks.to_vec(),
+        ..Default::default()
     };
     assert_eq!(
         Vec::from(updates.depth_columns),
@@ -779,6 +820,60 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
     assert!(
         updates.depth_columns.is_empty(),
         "new settings discard pending old rows"
+    );
+}
+
+/// Guards the largest order of a row: a column sampled from individual orders records, next to
+/// each row's total, the largest order the filter accepts among the row's ticks, and the same
+/// book sampled as aggregate depth records none, so no heatmap cell of it can be marked.
+#[test]
+fn order_columns_record_the_largest_accepted_order_of_each_row() {
+    use crate::data::OrderFilter;
+    use crate::model::OrderSide::{Buy, Sell};
+    let time = at(1, 0);
+    let mut orders = vec![
+        RestingOrder::new(1, Buy, 99.0, 50.0),
+        RestingOrder::new(2, Buy, 99.25, 15.0),
+        RestingOrder::new(3, Buy, 99.25, 60.0).with_participant(2),
+        RestingOrder::new(4, Sell, 99.5, 30.0),
+    ];
+    orders.extend((5..10).map(|id| RestingOrder::new(id, Buy, 99.0, 10.0)));
+    let filter = OrderFilter {
+        exclude_participants: vec![2],
+        ..Default::default()
+    };
+    let mut columns = Vec::new();
+    for sampled in [Some(filter), None] {
+        let inbox = Arc::new(Inbox::default());
+        let sink = inbox.subscribe("A".into(), Timeframe::Min1.into(), 10, Some(0.25));
+        let config = DepthHistoryConfig {
+            ticks_per_row: 2,
+            orders: sampled,
+            ..Default::default()
+        };
+        inbox.sample_depth(sink.id, Some(config));
+        sink.push_order_snapshot(1, time, orders.clone());
+        let next = RestingOrder::new(10, Sell, 100.0, 1.0);
+        sink.push_order_event(2, time + TimeDelta::seconds(1), OrderEvent::Add(next));
+        let (_, mut updates) = inbox.drain().updates.pop().unwrap();
+        columns.push(updates.depth_columns.pop_front().unwrap());
+    }
+    // Ticks 396 (99.0) and 397 (99.25) make bid row 198, tick 398 (99.5) ask row 199.
+    let column = |bid, largest_bid_orders, largest_ask_orders| DepthColumn {
+        time,
+        span: TimeDelta::seconds(1),
+        bids: vec![(198, bid)],
+        asks: vec![(199, 30.0)],
+        largest_bid_orders,
+        largest_ask_orders,
+    };
+    // Accepted: 50 + 5 * 10 + 15 = 115, the largest 50; aggregate depth also counts the 60.
+    assert_eq!(
+        columns,
+        [
+            column(115.0, vec![50.0], vec![30.0]),
+            column(175.0, vec![], vec![])
+        ]
     );
 }
 
