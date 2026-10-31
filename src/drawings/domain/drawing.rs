@@ -102,7 +102,8 @@ pub struct Drawing {
     /// and the chart then clears it.
     #[serde(default)]
     pub screen_anchor: Option<[f32; 2]>,
-    /// Drawing color as RGBA
+    /// Drawing colour as RGBA; also the text and border colour of annotations that have none of
+    /// their own.
     pub color: [u8; 4],
     /// Stroke width in pixels
     pub stroke_width: f32,
@@ -117,7 +118,8 @@ pub struct Drawing {
     // === Styling properties ===
     /// Line style (Solid, Dashed, Dotted)
     pub line_style: LineStyle,
-    /// Fill color for shapes - None means no fill
+    /// Fill colour of shapes and the background colour of annotation boxes. `None` leaves shapes
+    /// unfilled and gives an annotation box its tool's default colour.
     pub fill_color: Option<[u8; 4]>,
     /// Whether the drawing is locked (prevents editing/moving)
     pub locked: bool,
@@ -127,6 +129,24 @@ pub struct Drawing {
     pub font_size: f32,
     /// Font weight for text annotations
     pub font_weight: FontWeight,
+    /// Whether annotation text is slanted. Older drawings are upright.
+    #[serde(default)]
+    pub italic: bool,
+    /// Text colour of annotations; `None` uses the tool's default, the drawing colour except on
+    /// a solid label, which takes white or black, whichever reads on its fill.
+    #[serde(default)]
+    pub text_color: Option<[u8; 4]>,
+    /// Whether an annotation draws a box behind its text, in `fill_color` or else the tool's
+    /// default: the theme's panel colour, or the drawing colour for a solid label. Older
+    /// drawings have it on.
+    #[serde(default = "enabled")]
+    pub background: bool,
+    /// Whether an annotation's box has a 1 px border. Older drawings have it on.
+    #[serde(default = "enabled")]
+    pub border: bool,
+    /// Border colour of annotation boxes; `None` uses the drawing colour.
+    #[serde(default)]
+    pub border_color: Option<[u8; 4]>,
     /// Extend line to left edge
     pub extend_left: bool,
     /// Extend line to right edge
@@ -260,6 +280,11 @@ impl Drawing {
                 12.0
             },
             font_weight: FontWeight::Normal,
+            italic: false,
+            text_color: None,
+            background: true,
+            border: true,
+            border_color: None,
             extend_left: tool_type == DrawingToolType::ExtendedLine,
             extend_right: matches!(
                 tool_type,
@@ -327,7 +352,6 @@ impl Drawing {
     pub fn with_text(id: usize, text: String) -> Self {
         let mut drawing = Self::new(id, DrawingToolType::TextLabel);
         drawing.text = Some(text);
-        drawing.color = [255, 255, 255, 255]; // White
         drawing.arrow_end_style = ArrowStyle::None;
         drawing
     }

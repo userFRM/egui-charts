@@ -2,7 +2,8 @@
 
 use super::OrderBookView;
 use crate::chart::coords::ChartMapping;
-use crate::data::{DepthColumn, DepthHistory};
+use crate::data::{DepthColumn, DepthHistory, OrderSizeTier};
+use crate::theme::ThemeExt;
 use chrono::{DateTime, Utc};
 use egui::{Color32, ColorImage, Painter, Rect, TextureHandle, TextureOptions, pos2};
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,7 +37,8 @@ pub struct LiquidityHeatmap {
 impl LiquidityHeatmap {
     /// Draws the history using the pane's price mapping and the host's time-to-x conversion.
     /// `step` is the instrument tick size times the history's ticks per row. `view` gives the size
-    /// tiers and their colours, as for the book profile; its filter and profile do not apply, since
+    /// tiers and their colours, as for the book profile, from the painter's active theme when the
+    /// view sets none; its filter and profile do not apply, since
     /// the history sampled the orders of its own
     /// [`DepthHistoryConfig::orders`](crate::data::DepthHistoryConfig::orders). Buy and sell
     /// colours follow the painter's host; call with the same colours as the price series.
@@ -55,10 +57,16 @@ impl LiquidityHeatmap {
         }
         let half_tick = step / f64::from(history.config().ticks_per_row) * 0.5;
         let size = painter.ctx().input(|i| i.max_texture_side).clamp(1, 256);
-        // Tiers by bit pattern, so tiers that are not numbers do not redraw every frame.
-        let marks = view
-            .tiers
-            .map(|t| ([t.notable.to_bits(), t.large.to_bits()], view.tier_colors));
+        let theme = painter.ctx().active_theme().chart;
+        // Tiers by bit pattern, so tiers that are not numbers do not redraw every frame, and the
+        // resolved colours, so a change of theme redraws the held columns.
+        let marks = view.tiers.map(|t| {
+            (
+                [t.notable.to_bits(), t.large.to_bits()],
+                [OrderSizeTier::Notable, OrderSizeTier::Large]
+                    .map(|tier| view.tier_color(tier, &theme)),
+            )
+        });
         if self.size != size || self.colors != Some(colors) || self.marks != marks {
             *self = Self {
                 size,
@@ -131,7 +139,7 @@ impl LiquidityHeatmap {
                     .filter(|_| volume[2] > 0.0)
                     .and_then(|tiers| tiers.tier(volume[2]));
                 pixels[row.rem_euclid(size as i64) as usize] =
-                    tier.map_or(shaded, |tier| shaded.blend(view.tier_color(tier)));
+                    tier.map_or(shaded, |tier| shaded.blend(view.tier_color(tier, &theme)));
             }
             let rows = pixels.keys().copied().collect();
             for (row, pixels) in pixels {
@@ -234,6 +242,7 @@ impl LiquidityHeatmap {
 mod tests {
     use super::*;
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
+    use crate::theme::Theme;
     use chrono::TimeDelta;
 
     #[test]
@@ -306,7 +315,8 @@ mod tests {
 
     /// Guards the marks: a cell takes the colour of the tier its largest recorded order reaches,
     /// over its shading, while a row whose total alone reaches a tier and every row of aggregate
-    /// depth keep their shading, whatever the tiers. New tiers redraw the held columns once, and
+    /// depth keep their shading, whatever the tiers. The default view takes the colours of the
+    /// painter's active theme. New tiers or a new theme redraw the held columns once, and
     /// unchanged ones, even when they are not numbers, upload nothing.
     #[test]
     fn cells_whose_largest_order_reaches_a_tier_take_its_colour() {
@@ -343,21 +353,34 @@ mod tests {
             tiers: Some(crate::data::OrderSizeTiers { notable, large }),
             ..Default::default()
         };
-        let [caution, error] = OrderBookView::default().tier_colors;
+        let (dark, light) = (Theme::dark(), Theme::light());
+        let [dark_notable, dark_large] = [dark.chart.order_notable, dark.chart.order_large];
+        let [light_notable, light_large] = [light.chart.order_notable, light.chart.order_large];
         // Rows 197, 198 and 199 against the largest total, 115: colour * 0.75 * ln(1 + total) /
         // ln(1 + 115), so 255 * 0.75 * (3.2581 / 4.7536) = 131, 255 * 0.75 = 191 and
         // 255 * 0.75 * (3.4340 / 4.7536) = 138.
         let shaded = [(0, 131, 0, 131), (0, 191, 0, 191), (138, 0, 0, 138)]
             .map(|(r, g, b, a)| Color32::from_rgba_premultiplied(r, g, b, a));
         let mut heatmap = LiquidityHeatmap::default();
-        for (view, expected) in [
-            (OrderBookView::default(), vec![shaded, shaded]),
+        for (theme, view, expected) in [
+            (&dark, OrderBookView::default(), vec![shaded, shaded]),
             // Row 197 stays shaded: its total of 25 reaches a tier and its largest order of 5 none.
-            (tiers(20.0, 40.0), vec![[shaded[0], error, caution], shaded]),
-            (tiers(0.0, 0.0), vec![[error; 3], shaded]),
-            (tiers(f64::NAN, f64::NAN), vec![shaded, shaded]),
-            (tiers(f64::NAN, f64::NAN), vec![]),
+            (
+                &dark,
+                tiers(20.0, 40.0),
+                vec![[shaded[0], dark_large, dark_notable], shaded],
+            ),
+            // The same tiers on another theme.
+            (
+                &light,
+                tiers(20.0, 40.0),
+                vec![[shaded[0], light_large, light_notable], shaded],
+            ),
+            (&dark, tiers(0.0, 0.0), vec![[dark_large; 3], shaded]),
+            (&dark, tiers(f64::NAN, f64::NAN), vec![shaded, shaded]),
+            (&dark, tiers(f64::NAN, f64::NAN), vec![]),
         ] {
+            crate::theme::apply_to_egui(&ctx, theme);
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     max_texture_side: Some(1024),

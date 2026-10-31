@@ -251,8 +251,11 @@ impl Chart {
     /// changes through [`Storage::watch`]. It does so once nothing of its own is unsaved and no
     /// drawing is being drawn, dragged, measured or edited: the stored drawings replace its
     /// saveable drawings, selection and undo history, each keeping its local id, and a document
-    /// deleted elsewhere leaves none. A drawing whose study the chart does not show appears in
-    /// the price pane and is written back in its study's pane. If `storage` keeps revisions, a
+    /// deleted elsewhere leaves none. A write waits for such a read, and one that fails is tried
+    /// again a second of input time later. Drawing sync of a [`ChartLayout`](super::ChartLayout)
+    /// shows drawings of charts outside `storage` on this chart without saving them here. A
+    /// drawing whose study the chart does not show appears in the price pane and is written back
+    /// in its study's pane. If `storage` keeps revisions, a
     /// write over drawings changed elsewhere since they were read is refused and waits, with the
     /// chart's drawings unchanged, until [`Self::resolve_storage_conflict`] settles it; without
     /// revisions, the later write replaces the earlier one, including edits on two charts within
@@ -300,7 +303,9 @@ impl Chart {
     }
 
     /// The error of a failed read or write of drawings since the last call, to show to the
-    /// user. A failed write keeps the drawings on the chart and is reported once.
+    /// user. A failed write keeps the drawings on the chart and is reported once. A failed read
+    /// of drawings changed elsewhere is reported once and tried again a second of input time
+    /// later until it succeeds.
     pub fn take_storage_error(&mut self) -> Option<String> {
         self.drawing_store.as_mut()?.error.take()
     }
@@ -476,6 +481,11 @@ impl Chart {
             (Some(own), Some(other)) => Arc::ptr_eq(&own.storage, &other.storage),
             _ => false,
         }
+    }
+
+    /// Whether this chart keeps its drawings in a storage.
+    pub(super) fn keeps_stored_drawings(&self) -> bool {
+        self.drawing_store.is_some()
     }
 
     /// Tells each chart in `charts` which documents the others that keep drawings in the same
@@ -752,7 +762,9 @@ mod tests {
     use crate::data::{FeedError, Reply};
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
     use crate::model::{Bar, BarData};
+    use crate::widget::{ChartLayout, ChartLayoutMode};
     use chrono::{TimeZone, Utc};
+    use egui::{Pos2, RawInput, Rect, vec2};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -761,6 +773,7 @@ mod tests {
         documents: Mutex<HashMap<String, String>>,
         fail_writes: AtomicBool,
         delay_loads: AtomicBool,
+        fail_loads: AtomicBool,
         loads: Mutex<Vec<(String, Reply<Option<String>>)>>,
         delay_writes: AtomicBool,
         writes: Mutex<Vec<Reply<()>>>,
@@ -772,6 +785,9 @@ mod tests {
         }
         fn load(&self, kind: StoreKind, name: &str, reply: Reply<Option<String>>) {
             assert_eq!(kind, StoreKind::Drawings);
+            if self.fail_loads.load(Ordering::Relaxed) {
+                return reply.send(Err(FeedError::Network("offline".into())));
+            }
             if self.delay_loads.load(Ordering::Relaxed) {
                 self.loads.lock().unwrap().push((name.into(), reply));
             } else {
@@ -1099,6 +1115,66 @@ mod tests {
         sorted(drawings.iter().map(|d| d.chart_points[0].price).collect())
     }
 
+    /// A chart of symbol A on ten one-minute bars, keeping its drawings in `storage` if given.
+    fn chart_on(storage: Option<Arc<dyn Storage>>) -> Chart {
+        let bars = (0..10)
+            .map(|i| {
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    10.0,
+                    11.0,
+                    9.0,
+                    10.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_symbol("A");
+        if let Some(storage) = storage {
+            chart.set_storage(storage);
+        }
+        chart
+    }
+
+    /// Shows `charts` in `layout` for three frames over `seconds` of input time: a write, the
+    /// read it causes, and a frame of rest.
+    fn show_frames(
+        ctx: &egui::Context,
+        layout: &mut ChartLayout,
+        charts: &mut [&mut Chart],
+        seconds: f64,
+    ) {
+        for _ in 0..3 {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 600.0))),
+                time: Some(ctx.input(|input| input.time) + seconds / 3.0),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| {
+                layout.show(ui, charts);
+            })
+            .drop_without_applying_deltas();
+        }
+    }
+
+    /// The prices of the drawings stored as A.
+    fn stored_prices(host: &Host) -> Vec<f64> {
+        prices_in(&host.documents.lock().unwrap()["A"])
+    }
+
+    /// The prices of the drawings in a stored `document`.
+    fn prices_in(document: &str) -> Vec<f64> {
+        let (stored, _) = DrawingStorage::from_json(document).unwrap();
+        sorted(
+            stored
+                .drawings()
+                .iter()
+                .map(|d| d.points[0].price)
+                .collect(),
+        )
+    }
+
     /// Guards #1463 and #1604: two clients on a storage that keeps revisions, where the later
     /// write is refused and the user's choice settles it, and the copy kept is offered to load
     /// onto the chart or to discard.
@@ -1252,8 +1328,6 @@ mod tests {
     fn charts_of_one_layout_follow_each_others_stored_drawings() {
         use crate::services::document::tests::Revised;
         use crate::studies::{CustomIndicator, IndicatorValue};
-        use crate::widget::{ChartLayout, ChartLayoutMode};
-        use egui::{Pos2, RawInput, Rect, vec2};
 
         let unwatched = Revised::default();
         unwatched.2.store(true, Ordering::Relaxed);
@@ -1363,6 +1437,161 @@ mod tests {
                 assert_eq!(count(chart, 8.5), 1);
                 assert_eq!(count(chart, 77.0), 1);
             }
+        }
+    }
+
+    /// Guards #1614: a drawing read again never takes the local id of a drawing that is not
+    /// saved, so removing that one by its id leaves the read drawing on both charts and stored.
+    #[test]
+    fn a_drawing_read_again_never_takes_the_id_of_one_that_is_not_saved() {
+        let host = Arc::new(Host::default());
+        let storage: Arc<dyn Storage> = host.clone();
+        let (mut a, mut b) = (chart_on(Some(storage.clone())), chart_on(Some(storage)));
+        let mut layout = ChartLayout::default();
+        layout.mode = ChartLayoutMode::TwoHorizontal;
+        let ctx = egui::Context::default();
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        // The host marks a level on B that no document holds, and gets id 0.
+        let mut marker = line_at(4.0, 77.0);
+        marker.saveable = false;
+        let marker = b.drawings_mut().add_drawing(marker).unwrap();
+        // A's first drawing is stored as "0", and B reads it.
+        draw_line(&mut a, line_at(4.0, 10.5));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert_eq!(shown_prices(&b), [10.5, 77.0]);
+        b.drawings_mut().delete_drawing(marker);
+        assert_eq!(shown_prices(&b), [10.5]);
+        draw_line(&mut b, line_at(4.0, 9.0));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert_eq!(
+            [shown_prices(&a), shown_prices(&b)],
+            [[9.0, 10.5], [9.0, 10.5]]
+        );
+        assert_eq!(stored_prices(&host), [9.0, 10.5]);
+    }
+
+    /// Guards #1615: an edit made while the chart reads its drawings again is not written before
+    /// the read is answered, and the read answered after it does not replace the edit.
+    #[test]
+    fn an_edit_made_while_the_drawings_are_read_again_waits_for_the_read() {
+        let host = Arc::new(Host::default());
+        let storage: Arc<dyn Storage> = host.clone();
+        let (mut a, mut b) = (chart_on(Some(storage.clone())), chart_on(Some(storage)));
+        let mut layout = ChartLayout::default();
+        layout.mode = ChartLayoutMode::TwoHorizontal;
+        let ctx = egui::Context::default();
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        draw_line(&mut a, line_at(4.0, 10.0));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert_eq!(shown_prices(&b), [10.0]);
+        // A draws a line and undoes it, so A writes and B reads the drawings again; the host
+        // has not answered that read yet.
+        host.delay_loads.store(true, Ordering::Relaxed);
+        draw_line(&mut a, line_at(4.0, 12.0));
+        assert!(a.undo());
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        let (_, read) = host.loads.lock().unwrap().pop().expect("B reads again");
+        let before = host.documents.lock().unwrap()["A"].clone();
+        draw_line(&mut b, line_at(4.0, 11.0));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert_eq!(stored_prices(&host), [10.0], "written during the read");
+        host.delay_loads.store(false, Ordering::Relaxed);
+        read.send(Ok(Some(before)));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert_eq!(shown_prices(&b), [10.0, 11.0]);
+        assert_eq!(stored_prices(&host), [10.0, 11.0]);
+        assert!(b.can_undo(), "B read its own write again");
+    }
+
+    /// Guards #1617: a failed read of drawings another chart wrote is reported once and tried
+    /// again each second, so the chart's next edit keeps them.
+    #[test]
+    fn a_failed_read_of_drawings_another_chart_wrote_is_reported_once_and_tried_again() {
+        let host = Arc::new(Host::default());
+        let storage: Arc<dyn Storage> = host.clone();
+        let (mut a, mut b) = (chart_on(Some(storage.clone())), chart_on(Some(storage)));
+        let mut layout = ChartLayout::default();
+        layout.mode = ChartLayoutMode::TwoHorizontal;
+        let ctx = egui::Context::default();
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        host.fail_loads.store(true, Ordering::Relaxed);
+        draw_line(&mut a, line_at(4.0, 10.0));
+        // A writes; B's read of it fails, and fails again a second later.
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 3.0);
+        assert_eq!(
+            b.take_storage_error().as_deref(),
+            Some("Could not read A: network error: offline")
+        );
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 3.0);
+        assert_eq!(
+            b.take_storage_error(),
+            None,
+            "a run of failed reads is reported once"
+        );
+        host.fail_loads.store(false, Ordering::Relaxed);
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 3.0);
+        assert_eq!(shown_prices(&b), [10.0]);
+        draw_line(&mut b, line_at(4.0, 11.0));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert_eq!(stored_prices(&host), [10.0, 11.0]);
+        // A write of B ends a run of failed reads, so the next failure is reported again.
+        host.fail_loads.store(true, Ordering::Relaxed);
+        draw_line(&mut a, line_at(4.0, 12.0));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert!(b.take_storage_error().is_some());
+        draw_line(&mut b, line_at(4.0, 13.0));
+        draw_line(&mut a, line_at(4.0, 14.0));
+        show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+        assert!(b.take_storage_error().is_some(), "a new run is reported");
+    }
+
+    /// Guards #1619 and #1650: with drawing sync on, a chart outside the charts' shared storage
+    /// shows each of their drawings once, and its own drawing, mirrored onto them but not
+    /// stored, stays as it is while they read each other's writes. A storage that reports
+    /// changes has a chart read another's write in the frame that write is made.
+    #[test]
+    fn a_chart_outside_the_storage_shows_each_drawing_once_and_keeps_its_own() {
+        use crate::services::document::tests::Revised;
+
+        for revised in [false, true] {
+            let host = Arc::new(Host::default());
+            let watched = Arc::new(Revised::default());
+            let storage: Arc<dyn Storage> = if revised {
+                watched.clone()
+            } else {
+                host.clone()
+            };
+            let (mut a, mut b) = (chart_on(Some(storage.clone())), chart_on(Some(storage)));
+            let mut c = chart_on(None);
+            let mut layout = ChartLayout::default();
+            layout.mode = ChartLayoutMode::Three;
+            layout.sync.sync_drawings = true;
+            let ctx = egui::Context::default();
+            let mut show = |a: &mut Chart, b: &mut Chart, c: &mut Chart| {
+                show_frames(&ctx, &mut layout, &mut [a, b, c], 0.1);
+            };
+            show(&mut a, &mut b, &mut c);
+            draw_line(&mut a, line_at(4.0, 10.5));
+            show(&mut a, &mut b, &mut c);
+            assert_eq!([shown_prices(&b), shown_prices(&c)], [[10.5], [10.5]]);
+            let own = draw_line(&mut c, line_at(4.0, 9.0));
+            show(&mut a, &mut b, &mut c);
+            draw_line(&mut a, line_at(4.0, 8.0));
+            show(&mut a, &mut b, &mut c);
+            for chart in [&a, &b, &c] {
+                assert_eq!(shown_prices(chart), [8.0, 9.0, 10.5]);
+            }
+            let own = c.drawings().drawings.iter().find(|d| d.id == own).unwrap();
+            assert_eq!(own.chart_points[0].price, 9.0);
+            assert_eq!(
+                if revised {
+                    prices_in(&watched.get("A").unwrap())
+                } else {
+                    stored_prices(&host)
+                },
+                [8.0, 10.5],
+                "a mirrored drawing is not stored"
+            );
         }
     }
 }

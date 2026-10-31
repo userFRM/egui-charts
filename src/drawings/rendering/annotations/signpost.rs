@@ -1,10 +1,10 @@
 //! Signpost rendering
 
-use super::labels::{facing_point, label_text_color};
+use super::labels::facing_point;
 use crate::drawings::domain::Drawing;
 use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Pos2, Rect, Stroke};
+use egui::{Pos2, Rect, Stroke, epaint::StrokeKind};
 
 /// Height of a label above its bar for a signpost saved with one anchor, in egui logical points.
 const DEFAULT_LABEL_HEIGHT: f32 = 40.0;
@@ -17,10 +17,9 @@ impl Drawing {
             return;
         };
         let color = self.color32();
-        let fill = self.fill_color32().unwrap_or(color);
-        let text_color = label_text_color(fill);
+        let colors = self.text_box_colors(painter.ctx());
         let text = self.text.as_deref().unwrap_or("Event");
-        let galley = painter.layout_no_wrap(text.to_string(), self.annotation_font(), text_color);
+        let galley = self.annotation_galley(painter, text.to_owned(), colors.text);
         let padding = egui::vec2(
             DESIGN_TOKENS.sizing.annotation.callout_padding_x,
             DESIGN_TOKENS.sizing.annotation.text_padding_y,
@@ -37,7 +36,13 @@ impl Drawing {
                 Stroke::new(stroke::HAIRLINE, color),
             );
         }
-        painter.rect_filled(plate, DESIGN_TOKENS.rounding.md, fill);
-        painter.galley(plate.min + padding, galley, text_color);
+        painter.rect(
+            plate,
+            DESIGN_TOKENS.rounding.md,
+            colors.fill,
+            colors.border,
+            StrokeKind::Inside,
+        );
+        painter.galley(plate.min + padding, galley, colors.text);
     }
 }

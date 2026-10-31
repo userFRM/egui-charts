@@ -546,6 +546,8 @@ pub mod icons {
     pub const MAXIMIZE: Icon = crate::icon_from_path!("ui/maximize.svg");
     /// A square with a plus.
     pub const SQUARE_PLUS: Icon = crate::icon_from_path!("ui/square-plus.svg");
+    /// An open folder, for opening a saved layout.
+    pub const FOLDER_OPEN: Icon = crate::icon_from_path!("ui/folder-open.svg");
     /// Move pane SVG icon.
     pub const MOVE_PANE: Icon = crate::icon_from_path!("ui/move-pane.svg");
     /// An arrow into a price axis, for pinning a study to a scale.

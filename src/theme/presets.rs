@@ -67,6 +67,8 @@ impl Theme {
                 crosshair_label_text: rgb(209, 212, 220),
                 candle_up: rgb(8, 153, 129),
                 candle_down: rgb(242, 54, 69),
+                order_notable: rgb(255, 193, 7),
+                order_large: rgb(179, 136, 255),
                 volume_alpha: 128,
             },
             text: TextSizes::default(),
@@ -119,6 +121,8 @@ impl Theme {
                 crosshair_label_text: Color32::WHITE,
                 candle_up: rgb(8, 153, 129),
                 candle_down: rgb(242, 54, 69),
+                order_notable: rgb(180, 130, 0),
+                order_large: rgb(146, 74, 250),
                 volume_alpha: 128,
             },
             ..dark
@@ -179,9 +183,57 @@ impl Theme {
                 crosshair_label_text: Color32::WHITE,
                 candle_up: rgb(0, 220, 130),
                 candle_down: rgb(255, 95, 95),
+                order_notable: dark.chart.order_notable,
+                order_large: dark.chart.order_large,
                 volume_alpha: 128,
             },
             ..dark
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::contrast;
+
+    /// Guards the order size tier colours of every preset: each reads at 3:1 or more on the chart
+    /// and the panel background, and stays at least 100 sRGB units from the candle colours and
+    /// from the other tier, so a marked order is neither faint nor taken for a candle.
+    #[test]
+    fn order_tiers_read_on_every_preset_and_differ_from_the_candles() {
+        let distance = |a: Color32, b: Color32| {
+            [(a.r(), b.r()), (a.g(), b.g()), (a.b(), b.b())]
+                .map(|(a, b)| (i32::from(a) - i32::from(b)).pow(2))
+                .iter()
+                .sum::<i32>()
+        };
+        for (name, theme) in presets() {
+            let chart = theme.chart;
+            for (tier, color, other) in [
+                ("notable", chart.order_notable, chart.order_large),
+                ("large", chart.order_large, chart.order_notable),
+            ] {
+                for (surface, bg) in [("chart", chart.bg), ("panel", theme.ui.panel_bg)] {
+                    let ratio = contrast(color, bg);
+                    assert!(
+                        ratio >= 3.0,
+                        "{name} {tier} {color:?} on the {surface} background: {ratio:.2}:1"
+                    );
+                }
+                for (role, near) in [
+                    ("up candle", chart.candle_up),
+                    ("down candle", chart.candle_down),
+                    ("other tier", other),
+                ] {
+                    let squared = distance(color, near);
+                    assert!(
+                        squared >= 100 * 100,
+                        "{name} {tier} {color:?} is {:.1} from the {role} {near:?}",
+                        f64::from(squared).sqrt()
+                    );
+                }
+            }
         }
     }
 }

@@ -5,7 +5,7 @@ use crate::data::{
     OrderFilter, OrderFilterUnavailable, OrderQueue, OrderSizeTier, OrderSizeTiers, RestingOrder,
 };
 use crate::model::{OrderBook, OrderSide};
-use crate::tokens::DESIGN_TOKENS;
+use crate::theme::{ChartColors, ThemeExt};
 use egui::{Color32, Painter, Rect, pos2};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -25,7 +25,7 @@ pub enum BookProfile {
 /// heatmap's cells. The defaults show the aggregate book as the feed sends it. Serializable, so a
 /// host can keep it with its chart settings; fields missing from older documents take their
 /// defaults.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OrderBookView {
     /// The orders that count. Anything but the default needs a feed that sends order events,
@@ -38,22 +38,10 @@ pub struct OrderBookView {
     /// liquidity heatmap marks its cells by the largest order its history recorded in the row, see
     /// [`DepthColumn::largest_bid_orders`](crate::data::DepthColumn::largest_bid_orders).
     pub tiers: Option<OrderSizeTiers>,
-    /// Colours of the notable and the large tier.
-    pub tier_colors: [Color32; 2],
-}
-
-impl Default for OrderBookView {
-    fn default() -> Self {
-        Self {
-            filter: OrderFilter::default(),
-            profile: BookProfile::Total,
-            tiers: None,
-            tier_colors: [
-                DESIGN_TOKENS.semantic.status.caution,
-                DESIGN_TOKENS.semantic.status.error,
-            ],
-        }
-    }
+    /// Colours of the notable and the large tier, or `None`, the default, for the
+    /// [`ChartColors::order_notable`] and [`order_large`](ChartColors::order_large) of the theme
+    /// the view is drawn with, so the marks follow a change of theme.
+    pub tier_colors: Option<[Color32; 2]>,
 }
 
 impl OrderBookView {
@@ -62,16 +50,25 @@ impl OrderBookView {
         self.filter != OrderFilter::default() || self.profile == BookProfile::LargestOrder
     }
 
-    /// The colour of a tier.
-    pub fn tier_color(&self, tier: OrderSizeTier) -> Color32 {
-        self.tier_colors[usize::from(tier == OrderSizeTier::Large)]
+    /// The colour of a tier: from [`tier_colors`](Self::tier_colors) when set, otherwise from
+    /// `colors`, the chart colours of the theme the view is drawn with.
+    pub fn tier_color(&self, tier: OrderSizeTier, colors: &ChartColors) -> Color32 {
+        let [notable, large] = self
+            .tier_colors
+            .unwrap_or([colors.order_notable, colors.order_large]);
+        if tier == OrderSizeTier::Large {
+            large
+        } else {
+            notable
+        }
     }
 }
 
 /// Draws the profile of `queue`'s orders, or of `book` when the feed sends aggregate depth only,
 /// as bars growing left from the right edge of `mapping.rect`, longest 60 points, `tick` high at
 /// each price, centred on it. Bids use `colors[0]` and asks `colors[1]`, unless the largest
-/// order at the price reaches a tier of the view. Fails, drawing nothing, when the view needs
+/// order at the price reaches a tier of the view, drawn in [`OrderBookView::tier_color`] with the
+/// painter's active theme. Fails, drawing nothing, when the view needs
 /// individual orders and the feed has none, so that the host can say the filtering is
 /// unavailable.
 pub fn render_book_profile(
@@ -126,9 +123,12 @@ pub fn render_book_profile(
     if max <= 0.0 {
         return Ok(());
     }
+    let theme = painter.ctx().active_theme().chart;
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
     for (price, bid, size, tier) in bars {
-        let color = tier.map_or(colors[usize::from(!bid)], |tier| view.tier_color(tier));
+        let color = tier.map_or(colors[usize::from(!bid)], |tier| {
+            view.tier_color(tier, &theme)
+        });
         let (y0, y1) = (
             mapping.price_to_y(price - tick * 0.5),
             mapping.price_to_y(price + tick * 0.5),
@@ -200,7 +200,8 @@ mod tests {
             }),
             ..Default::default()
         };
-        let notable = view(BookProfile::Total).tier_color(OrderSizeTier::Notable);
+        let notable = view(BookProfile::Total)
+            .tier_color(OrderSizeTier::Notable, &crate::theme::Theme::dark().chart);
         let draw = |view: &OrderBookView, queue, book| {
             let ctx = egui::Context::default();
             let mut result = Ok(());

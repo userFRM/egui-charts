@@ -22,6 +22,9 @@ pub use custom::CustomTimeframeDialog;
 /// Height of the interval menu's rows and section headers.
 const ROW_H: f32 = 32.0;
 
+/// Text size of the interval labels.
+const LABEL_SIZE: f32 = 16.0;
+
 /// Width reserved while the custom interval form is expanded.
 const CUSTOM_FORM_W: f32 = 232.0;
 
@@ -348,7 +351,7 @@ impl TimeframeSelector {
             .id(id)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .align_alternatives(&[])
-            .frame(egui::Frame::popup(ui.style()).fill(theme.ui.panel_bg))
+            .frame(menu_frame(ui, &theme))
             .gap(theme.spacing.xs)
             .show(|ui| self.menu_ui(ui, &theme, max_height))
             .map_or(TimeframeAction::None, |menu| menu.inner);
@@ -383,7 +386,7 @@ impl TimeframeSelector {
 
     /// Width of the widest interval label in the menu.
     fn label_width(&self, ui: &Ui) -> f32 {
-        let font = egui::FontId::proportional(14.0);
+        let font = egui::FontId::proportional(LABEL_SIZE);
         let width = |text: String| {
             ui.painter()
                 .layout_no_wrap(
@@ -405,21 +408,22 @@ impl TimeframeSelector {
     fn menu_ui(&mut self, ui: &mut Ui, theme: &Theme, max_height: f32) -> TimeframeAction {
         let mut action = TimeframeAction::None;
         // Rows sit edge to edge, and the scroll bar is visible whenever the list overflows.
-        let spacing = ui.spacing_mut();
-        spacing.item_spacing.y = 0.0;
-        spacing.scroll.floating = false;
-        spacing.scroll.bar_width = 3.0;
-        spacing.scroll.fade.strength = 0.0;
-        let bar = spacing.scroll.allocated_width();
+        ui.spacing_mut().item_spacing.y = 0.0;
+        crate::styles::menu_scroll_bar(ui);
+        let bar = ui.spacing().scroll.allocated_width();
 
+        // Room for the star; the hide button shows over a long label only on a hovered row.
         let desc_w = self.label_width(ui);
-        ui.set_width((desc_w + 92.0 + bar).max(self.config.dropdown_width).max(
-            if self.show_custom_input {
-                CUSTOM_FORM_W
-            } else {
-                0.0
-            },
-        ));
+        let reserved = desc_w + 2.0 * theme.spacing.lg + STAR_SLOT_W + bar;
+        ui.set_width(
+            reserved
+                .max(self.config.dropdown_width)
+                .max(if self.show_custom_input {
+                    CUSTOM_FORM_W
+                } else {
+                    0.0
+                }),
+        );
         ui.visuals_mut().selection.bg_fill = theme.ui.text;
         ui.visuals_mut().selection.stroke.color = theme.ui.panel_bg;
         // A popup is first measured inside a 400 px high area; this lets the list use the room below.
@@ -455,6 +459,34 @@ impl TimeframeSelector {
             .max_height(max_height)
             .auto_shrink([false, true])
             .show(ui, |ui| {
+                let custom = ListItem::new().height(ROW_H).show(
+                    ui,
+                    LabelContent::new("Custom interval\u{2026}").with_icon(&embedded_icons::PLUS),
+                );
+                if custom.clicked() {
+                    self.show_custom_input = !self.show_custom_input;
+                }
+                if self.show_custom_input
+                    && let Some(tf) = self.custom_dialog.show(ui)
+                {
+                    if self.supports(tf) {
+                        self.hidden_timeframes.remove(&tf);
+                        if !PRESETS.contains(&tf) && !self.custom_timeframes.contains(&tf) {
+                            self.custom_timeframes.push(tf);
+                        }
+                        action = TimeframeAction::Select(tf);
+                    } else {
+                        self.custom_dialog.error =
+                            Some("Interval unavailable from this source".to_owned());
+                    }
+                }
+                let (rule, _) = ui.allocate_exact_size(
+                    vec2(ui.available_width(), DESIGN_TOKENS.stroke.hairline),
+                    egui::Sense::hover(),
+                );
+                ui.painter().rect_filled(rule, 0.0, theme.ui.border);
+
+                let mut first = true;
                 for (unit, header) in [
                     (TimeframeUnit::Tick, "Ticks"),
                     (TimeframeUnit::Volume, "Volume"),
@@ -480,7 +512,11 @@ impl TimeframeSelector {
                     if available.is_empty() {
                         continue;
                     }
-                    section_header(ui, theme, header);
+                    let separated = !first;
+                    first = false;
+                    if !section_header(ui, theme, header, separated) {
+                        continue;
+                    }
                     for tf in available {
                         let picked = row(ui, tf, self.favorites.contains(&tf), current);
                         if picked != TimeframeAction::None {
@@ -494,8 +530,7 @@ impl TimeframeSelector {
                     .copied()
                     .filter(|tf| self.supports(*tf) && !self.hidden_timeframes.contains(tf))
                     .collect();
-                if !custom.is_empty() {
-                    section_header(ui, theme, "Custom");
+                if !custom.is_empty() && section_header(ui, theme, "Custom", !first) {
                     for tf in &custom {
                         let picked = row(ui, *tf, self.favorites.contains(tf), current);
                         if picked != TimeframeAction::None {
@@ -511,27 +546,6 @@ impl TimeframeSelector {
                         .clicked()
                 {
                     action = TimeframeAction::RestoreHidden;
-                }
-                let custom = ListItem::new().height(ROW_H).show(
-                    ui,
-                    LabelContent::new("Custom interval\u{2026}").with_icon(&embedded_icons::PLUS),
-                );
-                if custom.clicked() {
-                    self.show_custom_input = !self.show_custom_input;
-                }
-                if self.show_custom_input
-                    && let Some(tf) = self.custom_dialog.show(ui)
-                {
-                    if self.supports(tf) {
-                        self.hidden_timeframes.remove(&tf);
-                        if !PRESETS.contains(&tf) && !self.custom_timeframes.contains(&tf) {
-                            self.custom_timeframes.push(tf);
-                        }
-                        action = TimeframeAction::Select(tf);
-                    } else {
-                        self.custom_dialog.error =
-                            Some("Interval unavailable from this source".to_owned());
-                    }
                 }
             });
 
@@ -555,6 +569,16 @@ impl TimeframeSelector {
         }
         action
     }
+}
+
+/// The frame of a toolbar menu, whose row tiles sit 6 px inside its outline.
+pub(super) fn menu_frame(ui: &Ui, theme: &Theme) -> egui::Frame {
+    egui::Frame::popup(ui.style())
+        .fill(theme.ui.panel_bg)
+        .inner_margin(egui::Margin::symmetric(
+            (theme.spacing.md - DESIGN_TOKENS.stroke.hairline) as i8,
+            theme.spacing.sm as i8,
+        ))
 }
 
 /// Height of a menu list that ends on a whole row above the window's bottom edge, so the last
@@ -687,30 +711,59 @@ pub(super) fn favorite_star(
     clicked
 }
 
-/// A section title on the menu's row grid, with its text on the bottom of the row.
-fn section_header(ui: &mut Ui, theme: &Theme, text: &str) {
-    if ui.cursor().top() > ui.max_rect().top() + 1.0 {
+/// A section title on the menu's row grid, with its text on the bottom of the row and a chevron
+/// at its end that folds the section for the session. With `separated`, a rule sets it apart
+/// from the section above. Returns whether the section is unfolded.
+fn section_header(ui: &mut Ui, theme: &Theme, text: &str, separated: bool) -> bool {
+    if separated {
         ui.add_space(12.0);
         ui.separator();
     }
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), egui::Sense::hover());
+    // Named by its text, so the fold holds while the custom form above opens and closes.
+    let response = ui.interact(rect, ui.make_persistent_id(text), egui::Sense::click());
+    let folded_id = response.id.with("folded");
+    let mut folded = ui.data(|d| d.get_temp::<bool>(folded_id).unwrap_or(false));
+    if response.clicked() {
+        folded = !folded;
+        ui.data_mut(|d| d.insert_temp(folded_id, folded));
+    }
+    let translated_label = l10n::text(ui.ctx(), text);
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &translated_label));
+    ui.ctx()
+        .accesskit_node_builder(response.id, |node| node.set_expanded(!folded));
+    let inner = rect.shrink2(vec2(theme.spacing.lg, theme.spacing.sm));
     // A child Ui, so that the row keeps its full height in the parent's layout.
     let mut title = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(rect.shrink2(vec2(theme.spacing.lg, theme.spacing.sm)))
+            .max_rect(inner)
             .layout(egui::Layout::bottom_up(egui::Align::Min)),
     );
-    title.add(
+    let label = title.add(
         egui::Label::new(
             RichText::new(l10n::text(ui.ctx(), text.to_uppercase()))
                 .size(theme.text.small)
-                .color(theme.ui.text_secondary),
+                .color(theme.ui.text_muted),
         )
-        .selectable(false),
+        .selectable(false)
+        .sense(egui::Sense::hover()),
     );
+    // An 8x5 chevron, pointing up while the section is open.
+    let tip = if folded { 2.5 } else { -2.5 };
+    let center = pos2(inner.right() - 4.0, label.rect.center().y);
+    ui.painter().line(
+        vec![
+            center + vec2(-4.0, -tip),
+            center + vec2(0.0, tip),
+            center + vec2(4.0, -tip),
+        ],
+        egui::Stroke::new(DESIGN_TOKENS.stroke.medium, theme.ui.text_muted),
+    );
+    menu_row_focus(ui, &response);
+    !folded
 }
 
-/// One interval row with trailing hide and favourite buttons.
+/// One interval row with hide and favourite buttons, shown while the row is hovered or focused.
 struct TimeframeRow<'a> {
     tf: Timeframe,
     favorite: bool,
@@ -750,21 +803,37 @@ impl ListItemContent for TimeframeRow<'_> {
         let label = l10n::text(ui.ctx(), "Hide interval");
         hide.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &label));
         *self.hide = hide.clicked();
-        embedded_icons::CLOSE
-            .as_image_tinted(vec2(icon_sizes::SM, icon_sizes::SM), text)
-            .paint_at(
-                ui,
-                Rect::from_center_size(hide_rect.center(), vec2(icon_sizes::SM, icon_sizes::SM)),
-            );
+        // Like the star, shown on the hovered row or while a key has focus in it.
+        let shown = ui.rect_contains_pointer(context.response.rect)
+            || context.response.has_focus()
+            || hide.has_focus()
+            || ui.memory(|m| m.has_focus(context.response.id.with("favorite")));
+        if shown {
+            embedded_icons::CLOSE
+                .as_image_tinted(vec2(icon_sizes::SM, icon_sizes::SM), text)
+                .paint_at(
+                    ui,
+                    Rect::from_center_size(
+                        hide_rect.center(),
+                        vec2(icon_sizes::SM, icon_sizes::SM),
+                    ),
+                );
+        }
         menu_row_focus(ui, &hide);
         hide.on_hover_text(label);
 
-        *self.toggle_favorite = favorite_star(ui, context, self.favorite, false, text);
-        ui.painter().text(
+        *self.toggle_favorite = favorite_star(ui, context, self.favorite, true, text);
+        // A long label ends before the buttons it would run under.
+        let label_rect = if shown {
+            rect.with_max_x(hide_rect.left())
+        } else {
+            rect
+        };
+        ui.painter().with_clip_rect(label_rect).text(
             pos2(rect.min.x, rect.center().y),
             egui::Align2::LEFT_CENTER,
             l10n::text(ui.ctx(), display_long(self.tf)),
-            egui::FontId::proportional(14.0),
+            egui::FontId::proportional(LABEL_SIZE),
             text,
         );
         menu_row_focus(ui, context.response);
@@ -1012,6 +1081,14 @@ mod tests {
                     frame(selector, vec![event(false)]).0
                 };
                 frame(&mut selector, vec![]);
+                // A section header folds its section and unfolds it again.
+                for unfolded in [false, true] {
+                    let (_, labels, _) = frame(&mut selector, vec![]);
+                    let header = labels.iter().find(|(label, _)| label == "TICKS").unwrap().1;
+                    assert_eq!(click(&mut selector, header), TimeframeAction::None);
+                    let (_, labels, _) = frame(&mut selector, vec![]);
+                    assert_eq!(labels.iter().any(|(label, _)| label == "1 tick"), unfolded);
+                }
                 let (_, labels, _) = frame(&mut selector, vec![]);
                 let add = labels.iter().find(|(label, _)| label == "Add").unwrap().1;
                 assert_eq!(click(&mut selector, add), TimeframeAction::Select(custom));

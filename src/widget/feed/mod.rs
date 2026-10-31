@@ -16,6 +16,7 @@ use crate::data::{
     Reply, SubscriptionId, TradeRequest,
 };
 use crate::model::{BarClock, Instrument, OrderBook, Tick, Timeframe};
+use crate::theme::ThemeExt;
 use egui::ViewportId;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -655,7 +656,7 @@ impl Chart {
                     )],
                 ),
                 egui::FontId::proportional(11.0),
-                crate::tokens::DESIGN_TOKENS.semantic.status.caution,
+                painter.ctx().active_theme().ui.warning,
             );
         }
     }

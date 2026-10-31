@@ -42,6 +42,7 @@ Some interface icons under `assets/icons/` are taken from [Lucide](https://githu
 | `ui/events.svg` | `calendar-clock.svg` |
 | `ui/eye-off.svg` | `eye-off.svg` |
 | `ui/eye.svg` | `eye.svg` |
+| `ui/folder-open.svg` | `folder-open.svg` |
 | `ui/fullscreen.svg` | `maximize.svg` |
 | `ui/go-to-date.svg` | `calendar-search.svg` |
 | `ui/help.svg` | `circle-question-mark.svg` |

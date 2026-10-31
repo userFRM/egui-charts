@@ -58,8 +58,9 @@ enum Slot {
 
 use Slot as S;
 
-/// Glyph of the snapshot menu's download entry.
-const DOWNLOAD_ICON: Icon = Icon::new("top-toolbar-download.svg", include_bytes!("download.svg"));
+/// Glyph of the snapshot menu's download entry, and of the save menu's.
+pub(super) const DOWNLOAD_ICON: Icon =
+    Icon::new("top-toolbar-download.svg", include_bytes!("download.svg"));
 /// Glyph of the snapshot menu's new tab entry.
 const OPEN_NEW_ICON: Icon = Icon::new("top-toolbar-open-new.svg", include_bytes!("open-new.svg"));
 /// Glyph of the snapshot menu's link entry.

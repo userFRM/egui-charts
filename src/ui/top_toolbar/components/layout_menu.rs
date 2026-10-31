@@ -3,15 +3,17 @@
 use crate::config::KeyboardAction;
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
-use crate::icons::icons;
+use crate::icons::{Icon, icons};
 use crate::localization as l10n;
 use crate::services::{ShareKind, Sharing, Storage, StoreKind};
 use crate::theme::ThemeExt;
+use crate::ui::dialogs::keyboard_shortcuts::shortcut_key_labels;
 use crate::ui::share_controls::ShareControls;
+use crate::ui::top_toolbar::toolbar::DOWNLOAD_ICON;
 use crate::ui_kit::buttons::{ButtonSize, IconButton};
-use crate::ui_kit::list_item::{LabelContent, ListItem};
+use crate::ui_kit::list_item::{ContentContext, ListItem, ListItemContent};
 use crate::widget::SavedLayout;
-use egui::Ui;
+use egui::{Rect, Role, Ui, WidgetInfo, pos2, vec2};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
@@ -471,39 +473,37 @@ impl LayoutMenu {
                 || KeyboardAction::SaveLayout.shortcut(),
                 |map| map.shortcut(KeyboardAction::SaveLayout),
             );
-        let save = egui::Button::new(l10n::text(ui.ctx(), "Save layout")).shortcut_text(
-            shortcut
-                .map(|s| ctx.format_shortcut(&s))
-                .unwrap_or_default(),
-        );
-        if ui.add_sized([ui.available_width(), 32.0], save).clicked() {
+        // Keys as the toolbar's hover labels name them: "Ctrl + S".
+        let shortcut = shortcut.map(|shortcut| {
+            let font = egui::FontId::proportional(LABEL_SIZE);
+            let keys: Vec<_> = shortcut_key_labels(&ctx, &font, &shortcut)
+                .iter()
+                .map(|key| l10n::text(&ctx, key))
+                .collect();
+            keys.join(" + ")
+        });
+        if menu_row(ui, None, "Save layout", shortcut.as_deref(), None).clicked() {
             action = LayoutAction::Save;
             ui.close();
         }
-        for (label, value) in [
-            ("Download chart data", LayoutAction::DownloadData),
-            ("Create new layout", LayoutAction::CreateNew),
-            ("Open layout", LayoutAction::OpenLayout),
+        for (icon, label, value) in [
+            (
+                &DOWNLOAD_ICON,
+                "Download chart data",
+                LayoutAction::DownloadData,
+            ),
+            (&icons::PLUS, "Create new layout", LayoutAction::CreateNew),
+            (&icons::FOLDER_OPEN, "Open layout", LayoutAction::OpenLayout),
         ] {
-            if ListItem::new()
-                .height(32.0)
-                .show(ui, LabelContent::new(label))
-                .clicked()
-            {
+            if menu_row(ui, Some(icon), label, None, None).clicked() {
                 action = value;
                 ui.close();
             }
         }
         ui.separator();
         let curr = self.curr_layout.clone().unwrap_or_default();
-        let rename = ListItem::new()
-            .height(32.0)
-            .show(ui, LabelContent::new("Rename…"))
-            .clicked();
-        let save_as = ListItem::new()
-            .height(32.0)
-            .show(ui, LabelContent::new("Save layout as…"))
-            .clicked();
+        let rename = menu_row(ui, None, "Rename…", None, None).clicked();
+        let save_as = menu_row(ui, None, "Save layout as…", None, None).clicked();
         if rename {
             self.editing = Some(true);
             self.new_name = curr.clone();
@@ -512,15 +512,18 @@ impl LayoutMenu {
             self.editing = Some(false);
             self.new_name.clear();
         }
-        if ui
-            .button(l10n::text(ui.ctx(), "Download chart image"))
-            .clicked()
-        {
+        ui.separator();
+        let image = menu_row(ui, Some(&icons::CAMERA), "Download chart image", None, None);
+        if image.clicked() {
             action = LayoutAction::DownloadImage;
             ui.close();
         }
-        ui.toggle_value(&mut self.autosave, l10n::text(ui.ctx(), "Autosave"))
-            .on_hover_text(l10n::text(ui.ctx(), "Save the layout after each change"));
+        if menu_row(ui, None, "Autosave", None, Some(self.autosave))
+            .on_hover_text(l10n::text(ui.ctx(), "Save the layout after each change"))
+            .clicked()
+        {
+            self.autosave = !self.autosave;
+        }
         if let Some(is_rename) = self.editing {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.new_name).desired_width(ui.available_width()),
@@ -634,6 +637,96 @@ impl LayoutMenu {
             }
         }
         action
+    }
+}
+
+/// Text size of the save menu's labels and shortcut.
+const LABEL_SIZE: f32 = 15.0;
+/// Size of the glyphs before the save menu's labels.
+const GLYPH_SIZE: f32 = 17.0;
+
+/// A 32 px save menu entry: an optional glyph, the label after the glyph column, and at the end a
+/// muted `shortcut` or, for an on and off entry, a `switch` showing its state.
+fn menu_row(
+    ui: &mut Ui,
+    icon: Option<&Icon>,
+    label: &str,
+    shortcut: Option<&str>,
+    switch: Option<bool>,
+) -> egui::Response {
+    ListItem::new().height(32.0).show(
+        ui,
+        MenuRow {
+            icon,
+            label,
+            shortcut,
+            switch,
+        },
+    )
+}
+
+struct MenuRow<'a> {
+    icon: Option<&'a Icon>,
+    label: &'a str,
+    shortcut: Option<&'a str>,
+    switch: Option<bool>,
+}
+
+impl ListItemContent for MenuRow<'_> {
+    fn ui(self, ui: &mut Ui, context: &ContentContext<'_>) -> egui::Response {
+        let theme = ui.active_theme();
+        let rect = context.rect;
+        let response = context.response;
+        let label = l10n::text(ui.ctx(), self.label);
+        response.widget_info(|| match self.switch {
+            Some(on) => WidgetInfo::selected(Role::Switch, response.enabled(), on, &label),
+            None => WidgetInfo::labeled(Role::MenuItem, response.enabled(), &label),
+        });
+        if let Some(icon) = self.icon {
+            let glyph = Rect::from_center_size(
+                pos2(rect.left() + GLYPH_SIZE / 2.0, rect.center().y),
+                vec2(GLYPH_SIZE, GLYPH_SIZE),
+            );
+            icon.as_image_tinted(glyph.size(), context.visuals.icon_tint(ui.visuals()))
+                .paint_at(ui, glyph);
+        }
+        let font = egui::FontId::proportional(LABEL_SIZE);
+        ui.painter().text(
+            pos2(rect.left() + GLYPH_SIZE + theme.spacing.lg, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            font.clone(),
+            context.visuals.text_color(ui.visuals()),
+        );
+        if let Some(shortcut) = self.shortcut {
+            ui.painter().text(
+                rect.right_center(),
+                egui::Align2::RIGHT_CENTER,
+                shortcut,
+                font,
+                theme.ui.text_muted,
+            );
+        }
+        if let Some(on) = self.switch {
+            let switch = Rect::from_min_size(
+                pos2(rect.right() - 38.0, rect.center().y - 10.0),
+                vec2(38.0, 20.0),
+            );
+            let track = if on {
+                theme.ui.text
+            } else {
+                theme.ui.border_control
+            };
+            ui.painter().rect_filled(switch, 10.0, track);
+            let knob = if on {
+                switch.right() - 10.0
+            } else {
+                switch.left() + 10.0
+            };
+            ui.painter()
+                .circle_filled(pos2(knob, switch.center().y), 7.0, theme.ui.panel_bg);
+        }
+        response.clone()
     }
 }
 
@@ -758,10 +851,21 @@ mod tests {
 
     #[test]
     fn long_layout_names_keep_menu_actions_inside_both_theme_windows() {
+        let entries = [
+            "Save layout",
+            "Download chart data",
+            "Create new layout",
+            "Open layout",
+            "Rename…",
+            "Save layout as…",
+            "Download chart image",
+            "Autosave",
+        ];
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for size in [egui::vec2(320.0, 360.0), egui::vec2(1440.0, 900.0)] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.enable_accesskit();
                 let mut menu = LayoutMenu::new();
                 menu.layouts = (0..20)
                     .map(|i| format!("{i} {}", "Long layout ".repeat(30)))
@@ -769,8 +873,8 @@ mod tests {
                 menu.curr_layout = Some(menu.layouts[0].clone());
                 menu.editing = Some(true);
                 menu.new_name = menu.layouts[0].clone();
-                for _ in 0..2 {
-                    ctx.run_ui(
+                for pass in 0..2 {
+                    let output = ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                             ..Default::default()
@@ -785,8 +889,33 @@ mod tests {
                                     assert!(ui.min_rect().bottom() <= size.y);
                                 });
                         },
-                    )
-                    .drop_without_applying_deltas();
+                    );
+                    if pass == 1 {
+                        // Every entry is a 32 px row with its label at one indent.
+                        let label_x: Vec<_> = entries
+                            .iter()
+                            .map(|entry| {
+                                output.shapes.iter().find_map(|shape| match &shape.shape {
+                                    egui::Shape::Text(text) if text.galley.text() == *entry => {
+                                        Some(text.pos.x)
+                                    }
+                                    _ => None,
+                                })
+                            })
+                            .collect();
+                        assert!(label_x.iter().all(|x| x.is_some() && *x == label_x[0]));
+                        let rows: Vec<_> = output
+                            .platform_output
+                            .accesskit_update
+                            .iter()
+                            .flat_map(|update| &update.nodes)
+                            .filter(|(_, node)| node.label().is_some_and(|l| entries.contains(&l)))
+                            .filter_map(|(_, node)| node.bounds())
+                            .collect();
+                        assert_eq!(rows.len(), entries.len());
+                        assert!(rows.iter().all(|row| row.height() == 32.0), "{rows:?}");
+                    }
+                    output.drop_without_applying_deltas();
                 }
             }
         }
