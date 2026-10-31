@@ -1262,7 +1262,7 @@ mod rendering_tests {
     }
 
     /// A box that starts at the pane's left edge, under the chart legend, keeps its source note
-    /// at the right, short of the POC badge and the value area labels.
+    /// at the right, short of the value area labels.
     #[test]
     fn profile_from_the_left_edge_notes_its_source_clear_of_the_legend() {
         let bars: Vec<_> = (0..10)

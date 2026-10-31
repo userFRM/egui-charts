@@ -563,7 +563,7 @@ fn draw_session_profile(
         coords.price_to_y((low + high) * 0.5)
     };
     let readable = column_width.min(measured_height) >= LETTER_MIN_COLUMN_PX;
-    // Bare letters; the other displays paint cells, which `Both` letters while they stay readable.
+    // `Both` paints the cells of `Blocks` and adds the letters while they stay readable.
     let use_letters = readable && config.display_mode == TPODisplayMode::Letters;
     let letters_in_cells = readable && config.display_mode == TPODisplayMode::Both;
 

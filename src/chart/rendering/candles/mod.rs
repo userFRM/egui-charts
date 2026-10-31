@@ -415,10 +415,7 @@ pub fn render_chart_type(
 
         // === Advanced Types ===
         ChartType::TimePriceOpportunity => {
-            let tpo_config = crate::model::TPOConfig {
-                display_mode: crate::model::TPODisplayMode::Blocks,
-                ..params.type_params.tpo_config(ctx.tick_size)
-            };
+            let tpo_config = params.type_params.tpo_config(ctx.tick_size);
             tpo::render_live_tpo(
                 painter,
                 price_rect,
