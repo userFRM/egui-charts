@@ -82,10 +82,10 @@ impl Chart {
     /// changes through [`Storage::watch`]. It does so once nothing of its own is unsaved and no
     /// drawing is being drawn, dragged, measured or edited: the stored drawings replace its
     /// saveable drawings, selection and undo history, each keeping its local id, and a document
-    /// deleted elsewhere leaves none. A drawing whose study the chart does not show appears in the price
-    /// pane and is written back in its study's pane. If `storage` keeps revisions, a write over
-    /// drawings changed elsewhere since they were read is refused and waits, with the chart's
-    /// drawings unchanged, until [`Self::resolve_storage_conflict`] settles it; without
+    /// deleted elsewhere leaves none. A drawing whose study the chart does not show appears in
+    /// the price pane and is written back in its study's pane. If `storage` keeps revisions, a
+    /// write over drawings changed elsewhere since they were read is refused and waits, with the
+    /// chart's drawings unchanged, until [`Self::resolve_storage_conflict`] settles it; without
     /// revisions, the later write replaces the earlier one, including edits on two charts within
     /// the time one write takes.
     ///
