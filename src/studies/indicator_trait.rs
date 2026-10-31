@@ -504,6 +504,22 @@ pub trait Indicator: Send {
         &[]
     }
 
+    /// Text beside study values, in order of `bar`. The chart draws the labels near the visible
+    /// bars, in the colour of their plot, inside the plot area, so they never run under the
+    /// price axis. Empty by default. Keep the text from the last calculation: it is drawn every
+    /// frame.
+    fn labels(&self) -> &[super::StudyLabel] {
+        &[]
+    }
+
+    /// The decimal places the study's presentation settings set for the prices in
+    /// [`labels`](Self::labels), `None` when they set none and the instrument's decimals apply.
+    /// The text is written when the study calculates, so calculate again afterwards, as a chart
+    /// does after any settings edit. Studies without price labels keep the default.
+    fn set_label_precision(&mut self, precision: Option<usize>) {
+        let _ = precision;
+    }
+
     /// Price-row volume profiles intersecting a half-open visible source-bar range.
     /// Fixed and calendar profiles include their whole selected span, even offscreen bars.
     /// Visible-range studies recompute for this range; ordinary studies return no profiles.

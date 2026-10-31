@@ -726,6 +726,7 @@ impl Indicator for ConfiguredStudy {
         }
         self.study.set_colors(snapshot.colors.clone());
         self.study.set_visible(snapshot.visible);
+        self.study.set_label_precision(snapshot.settings.precision);
         self.settings = snapshot.settings.clone();
         self.timeframe = snapshot.timeframe;
         self.overlay = snapshot.overlay;
@@ -786,6 +787,7 @@ impl Indicator for ConfiguredStudy {
             }
         }
         self.study = edited.study;
+        self.study.set_label_precision(settings.precision);
         self.source = edited.source;
         self.calculation_symbol = edited.calculation_symbol;
         self.calculation_timeframe = edited.calculation_timeframe;
@@ -858,6 +860,17 @@ impl Indicator for ConfiguredStudy {
     }
     fn zones(&self) -> &[super::StudyZone] {
         self.study.zones()
+    }
+    fn labels(&self) -> &[super::StudyLabel] {
+        // Source bars of a study on another interval or symbol are not chart bars.
+        if self.aligned.is_some() {
+            &[]
+        } else {
+            self.study.labels()
+        }
+    }
+    fn set_label_precision(&mut self, precision: Option<usize>) {
+        self.study.set_label_precision(precision);
     }
     fn extend_right(&self) -> bool {
         self.study.extend_right()

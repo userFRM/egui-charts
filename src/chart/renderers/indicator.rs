@@ -595,6 +595,7 @@ impl IndicatorRenderer {
             ];
             painter.add(egui::Shape::convex_polygon(triangle, color, Stroke::NONE));
         }
+        crate::chart::indicators::plots::paint_labels(&painter, indicator, price_scale, coords);
     }
 
     fn draw_line(
@@ -673,6 +674,60 @@ mod tests {
     use egui::{RawInput, Rect, Vec2};
 
     use crate::studies::{BollingerBands, SMA, StandardErrorBands};
+
+    /// Each study's labels, in its plot's colour and with `chosen` text, as painted rectangles.
+    fn painted_labels(
+        shapes: &[Shape],
+        color: Color32,
+        chosen: impl Fn(&str) -> bool,
+    ) -> Vec<(String, Rect)> {
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text)
+                    if chosen(text.galley.text())
+                        && text
+                            .galley
+                            .job
+                            .sections
+                            .iter()
+                            .all(|s| s.format.color == color) =>
+                {
+                    Some((
+                        text.galley.text().to_owned(),
+                        Rect::from_min_size(text.pos, text.galley.size()),
+                    ))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The label at the last bar reaches past the plot unless it is moved back, and the axis tags
+    /// start right of the plot.
+    #[test]
+    fn study_labels_stay_in_the_plot() {
+        let mut chart = chart(&[100.0, 101.0], &[110.0, 111.0]);
+        chart.add_indicator(Box::new(
+            crate::studies::PivotPoints::new()
+                .with_timeframe(crate::studies::PivotTimeframe::Daily)
+                .with_labels(true, true),
+        ));
+        let ctx = Context::default();
+        let shapes = shapes(&ctx, &mut chart, 0.0, Vec::new());
+        let price = chart.get_rendered_price_rect();
+        let labels = painted_labels(&shapes, crate::studies::palette::DARK_ORANGE, |text| {
+            text.split_once(" (")
+                .is_some_and(|(name, _)| name.len() <= 2)
+        });
+        assert!(!labels.is_empty());
+        for (text, rect) in labels {
+            assert!(
+                rect.left() >= price.left() && rect.right() <= price.right(),
+                "{text} at {rect:?} leaves {price:?}"
+            );
+        }
+    }
 
     #[test]
     fn patterned_study_plots_only_walk_visible_lengths() {

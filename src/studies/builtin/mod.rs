@@ -388,7 +388,7 @@ pub use key_levels::KeyLevels;
 pub use knoxville_divergence::KnoxvilleDivergence;
 pub use lunar_phases::{LunarPhase, LunarPhases, MoonPhase, lunar_phases};
 pub use missed_pivots::MissedPivots;
-pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
+pub use pivot_points::{PivotLabelSide, PivotMethod, PivotPoints, PivotTimeframe};
 pub use pivot_points_high_low::PivotPointsHighLow;
 pub use projected_pivot_points::ProjectedPivotPoints;
 pub use reversal::Reversal;
