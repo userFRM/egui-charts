@@ -6,12 +6,17 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Directional Movement Index (DMI / DI+ / DI-)
-/// Shows the positive and negative directional indicators and the ADX
-/// of the same length (Wilder 1978)
+/// Shows the positive and negative directional indicators and the ADX, Wilder's average of DX
+/// over the ADX smoothing period (Wilder 1978)
+///
+/// The `period` input sets both lengths, as studies saved with a single length expect;
+/// `adx_smoothing`, which follows it in `inputs()`, then sets the smoothing alone.
 #[derive(Clone)]
 pub struct DirectionalMovement {
-    /// Period for smoothing (typically 14)
+    /// Period of the directional indicators (typically 14)
     period: usize,
+    /// Length of Wilder's average of DX that forms the ADX line.
+    adx_smoothing: usize,
     values: IndicatorValues,
     stepper: Stepper<State>,
     adx: ADX,
@@ -35,6 +40,7 @@ impl DirectionalMovement {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            adx_smoothing: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             adx: ADX::new(period),
@@ -45,6 +51,14 @@ impl DirectionalMovement {
             ],
             visible: true,
         }
+    }
+
+    /// Set the length of Wilder's average of DX that forms the ADX line, clamped to at least one.
+    /// `new` sets it to the DI period.
+    pub fn with_smoothing(mut self, smoothing: usize) -> Self {
+        self.adx_smoothing = smoothing.max(1);
+        self.adx = ADX::new(self.period).with_smoothing(self.adx_smoothing);
+        self
     }
 
     /// Set plot colors in the order returned by [`Indicator::line_names`].
@@ -62,8 +76,14 @@ impl Default for DirectionalMovement {
 
 impl Indicator for DirectionalMovement {
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
-    ; {});
+        period: length("DI period", 1, usize::MAX),
+        adx_smoothing: length("ADX smoothing period", 1, usize::MAX)
+    ; changed => {
+        // Before the smoothing input existed, `period` set both lengths; saved studies still do.
+        if changed == "period" {
+            self.adx_smoothing = self.period;
+        }
+    });
 
     fn name(&self) -> &str {
         "DMI"
@@ -79,7 +99,7 @@ impl Indicator for DirectionalMovement {
 
     fn update(&mut self, data: &[Bar], from: usize) {
         if from == 0 {
-            self.adx = ADX::new(self.period);
+            self.adx = ADX::new(self.period).with_smoothing(self.adx_smoothing);
         }
         self.adx.update(data, from);
         self.stepper
@@ -167,7 +187,11 @@ impl Indicator for DirectionalMovement {
         vec![
             format!("+DI({})", self.period),
             format!("-DI({})", self.period),
-            format!("ADX({})", self.period),
+            if self.adx_smoothing == self.period {
+                format!("ADX({})", self.period)
+            } else {
+                format!("ADX({},{})", self.period, self.adx_smoothing)
+            },
         ]
     }
 }

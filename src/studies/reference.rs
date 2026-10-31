@@ -540,6 +540,10 @@ fn staple_studies_match_published_definitions() {
         ("ADX(14)", Box::new(ADX::default())),
         ("DMI(14)", Box::new(DirectionalMovement::default())),
         (
+            "DMI(14,20)",
+            Box::new(DirectionalMovement::new(14).with_smoothing(20)),
+        ),
+        (
             "CSI(14,50,3000,25)",
             Box::new(
                 CommoditySelectionIndex::new(14)

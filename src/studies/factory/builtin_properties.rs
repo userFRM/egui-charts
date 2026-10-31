@@ -79,10 +79,12 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(SMIErgodicOscillator::new(l(0), l(1), l(2))),
         Box::new(WoodiesCCI::new(l(0), l(1))),
         Box::new(ADX::new(l(0))),
+        Box::new(ADX::new(l(0)).with_smoothing(l(1))),
         Box::new(SuperTrend::new(l(0), x(3.0))),
         Box::new(IchimokuCloud::new(l(0), l(1), l(2))),
         Box::new(ParabolicSAR::new(x(0.02), x(0.02), x(0.2))),
         Box::new(DirectionalMovement::new(l(0))),
+        Box::new(DirectionalMovement::new(l(0)).with_smoothing(l(1))),
         Box::new(VortexIndicator::new(l(0))),
         Box::new(
             SqueezeMomentum::new()

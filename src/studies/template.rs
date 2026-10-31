@@ -312,7 +312,19 @@ mod tests {
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
         use InputValue::Length;
-        let rows = [("SMA", vec![("period", Length(20))], vec![("period", Length(20))])];
+        let rows = [
+            ("SMA", vec![("period", Length(20))], vec![("period", Length(20))]),
+            (
+                "ADX",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("adx_smoothing", Length(20))],
+            ),
+            (
+                "DMI",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("adx_smoothing", Length(20))],
+            ),
+        ];
         let factory = IndicatorFactory::new();
         for (name, saved, restored) in rows {
             let mut settings = factory.create(name).unwrap().settings();
