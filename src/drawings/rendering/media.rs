@@ -28,6 +28,31 @@ struct Card {
     open: Option<(Pos2, Arc<Galley>)>,
 }
 
+/// Paints the picture at `uri`, loaded through the host's egui image loaders, fitted inside
+/// `frame` without stretching, and returns where; otherwise the line saying that it is loading or
+/// could not be loaded. The loaders repaint once a pending load finishes.
+fn paint_fitted(painter: &egui::Painter, uri: &str, frame: Rect) -> Result<Rect, &'static str> {
+    match painter.ctx().try_load_texture(
+        uri,
+        egui::TextureOptions::LINEAR,
+        egui::SizeHint::default(),
+    ) {
+        Ok(TexturePoll::Ready { texture }) if texture.size.min_elem() > 0.0 => {
+            let scale = (frame.width() / texture.size.x).min(frame.height() / texture.size.y);
+            let rect = Rect::from_center_size(frame.center(), texture.size * scale);
+            painter.image(
+                texture.id,
+                rect,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
+            Ok(rect)
+        }
+        Ok(TexturePoll::Pending { .. }) => Err("Loading image…"),
+        _ => Err("Could not load image"),
+    }
+}
+
 impl Drawing {
     /// Renders the image whose URI is the drawing's text, fitted inside the frame between its
     /// anchors, or the empty frame with a line saying that the image is missing, loading or could
@@ -67,30 +92,13 @@ impl Drawing {
             .map_or(pos, |p2| Pos2::new(pos.x.min(p2.x), pos.y.min(p2.y)));
         let frame_rect = Rect::from_min_size(origin, egui::vec2(width, height));
 
-        // The host's image loaders resolve the URI; they repaint once a pending load finishes.
         let uri = self
             .text
             .as_deref()
             .map(str::trim)
             .filter(|uri| !uri.is_empty());
-        let poll = uri.map(|uri| {
-            painter.ctx().try_load_texture(
-                uri,
-                egui::TextureOptions::LINEAR,
-                egui::SizeHint::default(),
-            )
-        });
-        let status = match poll {
-            Some(Ok(TexturePoll::Ready { texture })) if texture.size.min_elem() > 0.0 => {
-                let scale =
-                    (frame_rect.width() / texture.size.x).min(frame_rect.height() / texture.size.y);
-                let rect = Rect::from_center_size(frame_rect.center(), texture.size * scale);
-                painter.image(
-                    texture.id,
-                    rect,
-                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                    Color32::WHITE,
-                );
+        let status = match uri.map(|uri| paint_fitted(painter, uri, frame_rect)) {
+            Some(Ok(rect)) => {
                 painter.rect_stroke(
                     rect,
                     0.0,
@@ -99,9 +107,8 @@ impl Drawing {
                 );
                 return;
             }
+            Some(Err(status)) => status,
             None => "Double-click to add",
-            Some(Ok(TexturePoll::Pending { .. })) => "Loading image…",
-            Some(_) => "Could not load image",
         };
         let theme = painter.ctx().active_theme();
 
@@ -374,42 +381,22 @@ impl Drawing {
         let theme = painter.ctx().active_theme();
         painter.galley(card.first.0, card.first.1, theme.ui.text);
         painter.galley(card.rest.0, card.rest.1, theme.ui.text_secondary);
-        if let Some((box_rect, uri)) = card.picture {
-            let status = match painter.ctx().try_load_texture(
-                &uri,
-                egui::TextureOptions::LINEAR,
-                egui::SizeHint::default(),
-            ) {
-                Ok(TexturePoll::Ready { texture }) if texture.size.min_elem() > 0.0 => {
-                    let scale =
-                        (box_rect.width() / texture.size.x).min(box_rect.height() / texture.size.y);
-                    let rect = Rect::from_center_size(box_rect.center(), texture.size * scale);
-                    painter.image(
-                        texture.id,
-                        rect,
-                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                        Color32::WHITE,
-                    );
-                    None
-                }
-                Ok(TexturePoll::Pending { .. }) => Some("Loading image…"),
-                _ => Some("Could not load image"),
-            };
-            if let Some(status) = status {
-                painter.rect_stroke(
-                    box_rect,
-                    0.0,
-                    Stroke::new(stroke::HAIRLINE, theme.ui.border),
-                    StrokeKind::Outside,
-                );
-                painter.text(
-                    box_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    l10n::text(painter.ctx(), status),
-                    egui::FontId::proportional(typography::XS),
-                    theme.ui.text_secondary,
-                );
-            }
+        if let Some((box_rect, uri)) = card.picture
+            && let Err(status) = paint_fitted(painter, &uri, box_rect)
+        {
+            painter.rect_stroke(
+                box_rect,
+                0.0,
+                Stroke::new(stroke::HAIRLINE, theme.ui.border),
+                StrokeKind::Outside,
+            );
+            painter.text(
+                box_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                l10n::text(painter.ctx(), status),
+                egui::FontId::proportional(typography::XS),
+                theme.ui.text_secondary,
+            );
         }
         if let Some((pos, galley)) = card.open {
             painter.galley(pos, galley, theme.ui.info);

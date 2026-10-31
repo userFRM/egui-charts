@@ -3,10 +3,11 @@
 //! The host owns accounts, storage and the network. It fills the feed with
 //! [`add_page`](IdeasPanel::add_page), answers [`IdeasAction::Publish`] with
 //! [`publish_succeeded`](IdeasPanel::publish_succeeded) or
-//! [`publish_failed`](IdeasPanel::publish_failed) and opens what the user selects, or places it on a chart. A control
-//! whose service the host did not enable with [`set_publishing`](IdeasPanel::set_publishing) or
-//! [`set_browsing`](IdeasPanel::set_browsing) is not shown. The draft survives a failed
-//! publish, and the panel needs no other part of the library.
+//! [`publish_failed`](IdeasPanel::publish_failed) and opens what the user selects, or places it
+//! on a chart. A control whose service the host did not enable with
+//! [`set_publishing`](IdeasPanel::set_publishing) or [`set_browsing`](IdeasPanel::set_browsing)
+//! is not shown. The draft survives a failed publish, and the panel needs no other part of the
+//! library.
 
 use crate::localization as l10n;
 use crate::model::{PostContent, PostLink};
