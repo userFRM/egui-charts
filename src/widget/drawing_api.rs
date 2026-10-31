@@ -129,13 +129,7 @@ impl Chart {
             .iter()
             .find(|pane| pane.id != PaneId::MAIN && pane.rect.contains(pos))
             .map(|pane| pane.members.first().map_or(pane.id.0, |id| id.0));
-        drawing.z_order = self
-            .drawings
-            .drawings
-            .iter()
-            .map(|d| d.z_order)
-            .max()
-            .unwrap_or(0);
+        drawing.z_order = self.drawings.top_z_order();
         let bar = self.get_chart_mapping().x_to_idx_f64(pos.x).round() as f32;
         drawing.chart_points = vec![ChartPoint::new(bar, price)];
         let id = self.drawings.add_drawing(drawing).ok()?;

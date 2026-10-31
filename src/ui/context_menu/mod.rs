@@ -258,7 +258,7 @@ impl ChartContextMenu {
             )),
             MenuEntry::Separator,
         ];
-        // Price items. Alert, watchlist and order rows need an instrument, so they need a symbol.
+        // Trading items need an instrument, so they are offered only with a symbol, but the line row.
         let mut trading = Vec::new();
         if !symbol.is_empty() && !self.hidden.contains(&Control::Alerts) {
             trading.push(MenuEntry::Item(

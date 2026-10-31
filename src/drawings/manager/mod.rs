@@ -591,7 +591,7 @@ impl DrawingManager {
     }
 
     /// The z-order that puts a drawing added now on top of the others.
-    fn top_z_order(&self) -> i32 {
+    pub(crate) fn top_z_order(&self) -> i32 {
         self.drawings.iter().map(|d| d.z_order).max().unwrap_or(0)
     }
 
