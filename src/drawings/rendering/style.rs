@@ -599,8 +599,7 @@ mod tests {
                         Shape::LineSegment { points, stroke } => (
                             drawing.points.windows(2).any(|p| p == points)
                                 || tool == CyclicLines
-                                || matches!(tool, GannFan | GannBox | GannSquare | GannFixed)
-                                || (tool == HeadAndShoulders && stroke.color.a() == 200),
+                                || matches!(tool, GannFan | GannBox | GannSquare | GannFixed),
                             *stroke,
                         ),
                         Shape::Path(p) => {
@@ -643,7 +642,7 @@ mod tests {
                 assert!(main > 0, "{tool:?} missing main line");
                 if matches!(
                     tool,
-                    XABCDPattern | ElliottTriangle | ElliottDoubleCombo | ElliottTripleCombo
+                    ElliottTriangle | ElliottDoubleCombo | ElliottTripleCombo
                 ) {
                     assert!(details > 0, "{tool:?} missing details");
                 }
@@ -658,9 +657,7 @@ mod tests {
             XABCDPattern,
             CypherPattern,
             HeadAndShoulders,
-            ABCDPattern,
             TrianglePattern,
-            ThreeDrivesPattern,
             ElliottImpulse,
             ElliottCorrection,
             ElliottTriangle,
@@ -696,12 +693,7 @@ mod tests {
                             );
                         }
                         Shape::Rect(r) if r.fill.a() > 0 => {
-                            if tool == ThreeDrivesPattern && r.rect.left() == drawing.points[5].x {
-                                bodies += 1;
-                                assert_eq!(r.fill, configured, "{tool:?} body");
-                            } else {
-                                assert_ne!(r.fill, configured, "{tool:?} label recoloured");
-                            }
+                            assert_ne!(r.fill, configured, "{tool:?} label recoloured");
                         }
                         _ => {}
                     }

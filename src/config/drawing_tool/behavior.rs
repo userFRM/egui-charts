@@ -31,6 +31,8 @@ impl DrawingToolType {
                 | Self::TrendLine
                 | Self::TrendAngle
                 | Self::InfoLine
+                | Self::ABCDPattern
+                | Self::ThreeDrivesPattern
                 | Self::ElliottDoubleCombo
                 | Self::ElliottTripleCombo
                 | Self::GannFan

@@ -233,10 +233,8 @@ impl Drawing {
             fill_color: match tool_type {
                 DrawingToolType::XABCDPattern
                 | DrawingToolType::CypherPattern
-                | DrawingToolType::ABCDPattern
                 | DrawingToolType::TrianglePattern => Some([242, 54, 69, 25]),
                 DrawingToolType::HeadAndShoulders
-                | DrawingToolType::ThreeDrivesPattern
                 | DrawingToolType::ElliottImpulse
                 | DrawingToolType::ElliottTriangle => Some([242, 54, 69, 20]),
                 DrawingToolType::ElliottCorrection => Some(
