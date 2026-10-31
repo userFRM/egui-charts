@@ -382,6 +382,10 @@ fn dialogs_expose_titles_and_label_their_fields() {
             &[
                 (Role::MultilineTextInput, "Label"),
                 (Role::ComboBox, "Font size"),
+                (Role::CheckBox, "Bold"),
+                (Role::CheckBox, "Italic"),
+                (Role::CheckBox, "Background"),
+                (Role::CheckBox, "Border"),
             ],
         ),
         (
