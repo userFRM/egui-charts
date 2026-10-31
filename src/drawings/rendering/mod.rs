@@ -447,7 +447,7 @@ impl Drawing {
             DrawingToolType::Note => self.render_note(painter),
             DrawingToolType::AnchoredNote => self.render_anchored_note(painter, selected),
             DrawingToolType::Callout => self.render_callout(painter),
-            DrawingToolType::PriceLabel => self.render_price_label(painter),
+            DrawingToolType::PriceLabel => self.render_price_label(painter, view),
             DrawingToolType::FlagNote => self.render_flag_note(painter),
 
             // Brushes (2 tools)
@@ -1413,6 +1413,76 @@ mod tests {
             ["Fill"]
         );
         assert!(selected.texts[0].visual_bounding_rect().max.y <= 274.0);
+
+        let comment = draw(DrawingToolType::Comment, &[(100., 300.)], "Hi", false);
+        let [bubble] = &comment.rects[..] else {
+            panic!("one bubble");
+        };
+        assert_eq!((bubble.rect.min.x, bubble.rect.max.y), (100.0, 300.0));
+        assert_eq!(
+            bubble.corner_radius,
+            egui::CornerRadius {
+                nw: 8,
+                ne: 8,
+                sw: 0,
+                se: 8
+            }
+        );
+        assert!(comment.circles.is_empty());
+        assert!(
+            bubble
+                .rect
+                .contains_rect(comment.texts[0].visual_bounding_rect())
+        );
+
+        // Black on this yellow has the better contrast: white has only 1.05 / 0.860 = 1.22.
+        let mut pale = Drawing::new(7, DrawingToolType::Comment);
+        pale.points = vec![pos(100.0, 300.0)];
+        pale.fill_color = Some([255, 235, 59, 255]);
+        let mut painted = Painted::default();
+        collect(&paint(&pale), &mut painted);
+        assert_eq!(
+            painted.texts[0].galley.job.sections[0].format.color,
+            Color32::BLACK
+        );
+
+        let callout = draw(
+            DrawingToolType::Callout,
+            &[(100., 300.), (200., 100.)],
+            "Hi",
+            false,
+        );
+        assert!(callout.rects.is_empty());
+        let [outline] = &callout.paths[..] else {
+            panic!("box and pointer are one shape");
+        };
+        assert!(outline.closed && outline.points.contains(&pos(100.0, 300.0)));
+        assert_eq!(outline.stroke.width, 1.0);
+        let inside = draw(
+            DrawingToolType::Callout,
+            &[(205., 105.), (200., 100.)],
+            "Hi",
+            false,
+        );
+        assert!(inside.paths.is_empty());
+        assert_eq!(inside.rects.len(), 1);
+
+        let label = draw(
+            DrawingToolType::PriceLabel,
+            &[(100., 300.)],
+            "Ignored",
+            false,
+        );
+        assert_eq!(
+            label.texts.iter().map(text_of).collect::<Vec<_>>(),
+            ["200.00"]
+        );
+        let [badge] = &label.paths[..] else {
+            panic!("badge and pointer are one shape");
+        };
+        assert!(badge.closed && badge.points.contains(&pos(100.0, 300.0)));
+        let text = label.texts[0].visual_bounding_rect();
+        assert!(text.min.x > 108.0 && text.max.y < 292.0, "{text:?}");
     }
 
     /// A pattern's projected target and selection handles can cross the pane edge;

@@ -298,13 +298,30 @@ impl DrawingManager {
             if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
                 if let (Some(origin), Some(old)) = (self.drag_origin, &self.drag_old_state) {
                     let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
-                    for (point, before) in drawing.chart_points.iter_mut().zip(&old.chart_points) {
+                    // Dragging a label leaves the point it annotates; a selection or a copy moves
+                    // whole.
+                    let skip = usize::from(
+                        self.drag_group.is_empty()
+                            && !self.drag_copy
+                            && matches!(
+                                drawing.tool_type,
+                                DrawingToolType::Callout
+                                    | DrawingToolType::Note
+                                    | DrawingToolType::PriceNote
+                            ),
+                    );
+                    for (point, before) in drawing
+                        .chart_points
+                        .iter_mut()
+                        .zip(&old.chart_points)
+                        .skip(skip)
+                    {
                         *point = ChartPoint::new(
                             before.bar_idx + bars,
                             translate_price(before.price, origin.y, snapped.y),
                         );
                     }
-                    for (point, before) in drawing.points.iter_mut().zip(&old.points) {
+                    for (point, before) in drawing.points.iter_mut().zip(&old.points).skip(skip) {
                         *point = *before + (snapped - origin);
                     }
                 } else {
@@ -880,6 +897,61 @@ mod tests {
         assert!(manager.undo());
         assert_eq!(manager.drawings[0].text, None);
         assert!(!manager.undo());
+    }
+
+    /// Dragging the label of a tool that annotates a point leaves that point on its bar and price,
+    /// in one undo step. Other drawings, a selection and a copy move whole.
+    #[test]
+    fn annotation_boxes_move_without_their_anchor() {
+        let x_to_bar = |x: f32| x / 10.0;
+        let y_to_price = |y: f32| 1000.0 - f64::from(y);
+        let translate = |price: f64, from: f32, to: f32| price - f64::from(to - from);
+        let start_points = vec![Pos2::new(100.0, 200.0), Pos2::new(200.0, 100.0)];
+        let start_chart = vec![ChartPoint::new(10.0, 800.0), ChartPoint::new(20.0, 900.0)];
+        let label = (
+            vec![Pos2::new(100.0, 200.0), Pos2::new(250.0, 140.0)],
+            vec![ChartPoint::new(10.0, 800.0), ChartPoint::new(25.0, 860.0)],
+        );
+        let whole = (
+            vec![Pos2::new(150.0, 240.0), Pos2::new(250.0, 140.0)],
+            vec![ChartPoint::new(15.0, 760.0), ChartPoint::new(25.0, 860.0)],
+        );
+        for (tool, group, copy, expected) in [
+            (DrawingToolType::Callout, false, false, &label),
+            (DrawingToolType::Note, false, false, &label),
+            (DrawingToolType::PriceNote, false, false, &label),
+            (DrawingToolType::TrendLine, false, false, &whole),
+            (DrawingToolType::Callout, true, false, &whole),
+            (DrawingToolType::Callout, false, true, &whole),
+        ] {
+            let mut manager = DrawingManager::new();
+            for id in [7, 8] {
+                let mut drawing = Drawing::new(id, tool);
+                drawing.points = start_points.clone();
+                drawing.chart_points = start_chart.clone();
+                manager.drawings.push(drawing);
+            }
+            if group {
+                manager.select_drawings([7, 8]);
+            }
+            manager.start_drag_body(7, Pos2::new(205.0, 105.0));
+            if copy {
+                manager.copy_dragged_drawings();
+            }
+            manager.update_drag_handle(Pos2::new(255.0, 145.0), x_to_bar, y_to_price, translate);
+            manager.end_drag_handle();
+            let moved = manager
+                .drawings
+                .last()
+                .filter(|_| copy)
+                .unwrap_or(&manager.drawings[0]);
+            assert_eq!(&moved.points, &expected.0, "{tool:?} {group} {copy}");
+            assert_eq!(&moved.chart_points, &expected.1, "{tool:?} {group} {copy}");
+            if !copy {
+                assert!(manager.undo());
+                assert_eq!(manager.drawings[0].chart_points, start_chart, "{tool:?}");
+            }
+        }
     }
 
     #[test]

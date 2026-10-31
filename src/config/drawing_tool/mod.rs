@@ -255,9 +255,9 @@ pub enum DrawingToolType {
     Table,
     /// Callout with arrow pointing to a chart location.
     Callout,
-    /// Comment bubble annotation.
+    /// Comment: its text in one bubble with a corner on the anchor.
     Comment,
-    /// Price label badge shown on the price axis.
+    /// Price label: the anchor's price in a badge beside the point, with a pointer to it.
     PriceLabel,
     /// Signpost marker with directional indicator.
     Signpost,

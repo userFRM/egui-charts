@@ -105,7 +105,6 @@ impl DrawingToolType {
                 | Self::Note
                 | Self::AnchoredNote
                 | Self::Callout
-                | Self::Comment
                 | Self::FlagNote
                 | Self::Signpost
                 | Self::Table
@@ -120,6 +119,7 @@ impl DrawingToolType {
             || matches!(
                 self,
                 Self::PriceNote
+                    | Self::Comment
                     | Self::TrendLine
                     | Self::Ray
                     | Self::InfoLine
@@ -170,8 +170,7 @@ impl DrawingToolType {
 
     /// Whether a double click edits the drawing's text in place instead of opening its settings.
     pub fn edits_text_inline(&self) -> bool {
-        self.is_text_annotation()
-            || matches!(self, Self::Image | Self::PriceLabel | Self::PriceNote)
+        self.is_text_annotation() || matches!(self, Self::Image | Self::PriceNote | Self::Comment)
     }
 
     /// Returns the [`DrawingInteractionMode`] that governs how mouse input is

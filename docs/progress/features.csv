@@ -284,9 +284,9 @@ Drawings,Drawings,Arrow mark up,done,library,src/drawings/rendering/lines.rs;src
 Drawings,Drawings,Arrow marker,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/style.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs
 Drawings,Drawings,Bars pattern,done,library,src/drawings/rendering/trading/bars_pattern.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Brush,done,library,src/drawings/rendering/shapes.rs;src/widget/tool_interaction/interaction.rs
-Drawings,Drawings,Callout,done,library,src/drawings/rendering/annotations/callout.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs
+Drawings,Drawings,Callout,done,library,src/drawings/rendering/annotations/callout.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/annotations/labels.rs;src/drawings/manager/interaction.rs
 Drawings,Drawings,Circle,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Comment,done,library,src/drawings/rendering/annotations/callout.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs
+Drawings,Drawings,Comment,done,library,src/drawings/rendering/annotations/callout.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/annotations/labels.rs
 Drawings,Drawings,Cross line,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs
 Drawings,Drawings,Curve,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Cyclic lines,done,library,src/drawings/rendering/cycles.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/style.rs
@@ -351,7 +351,7 @@ Drawings,Drawings,Pitchfan,done,library,src/drawings/rendering/pitchfork.rs;src/
 Drawings,Drawings,Pitchfork,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/pitchfork.rs
 Drawings,Drawings,Polyline,done,library,src/drawings/rendering/lines.rs;src/drawings/manager/mod.rs;src/widget/tool_interaction/interaction.rs;src/drawings/manager/edit.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/style.rs;src/painting/dashed_line.rs
 Drawings,Drawings,Position forecast,done,library,src/drawings/rendering/trading/forecast.rs;src/drawings/rendering/measurements.rs;src/drawings/rendering/trading/projection.rs
-Drawings,Drawings,Price label,done,library,src/drawings/rendering/annotations/labels.rs
+Drawings,Drawings,Price label,done,library,src/drawings/rendering/annotations/labels.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Price note,done,library,src/drawings/rendering/annotations/labels.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/manager/interaction.rs
 Drawings,Drawings,Price range,done,library,src/drawings/rendering/measurements.rs
 Drawings,Drawings,Projection,done,library,src/drawings/rendering/trading/projection.rs;src/drawings/rendering/measurements.rs;src/config/drawing_tool/behavior.rs

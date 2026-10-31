@@ -389,6 +389,29 @@ mod tests {
         }
     }
 
+    /// A price label shows the price and nothing typed, so placing one asks for no text.
+    #[test]
+    fn placing_a_price_label_opens_no_editor() {
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart
+            .drawings_mut()
+            .set_active_tool(Some(DrawingToolType::PriceLabel));
+        let pos = chart.get_rendered_price_rect().center();
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        frame(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
+        frame(&ctx, &mut chart, 0.2, vec![button(true)]);
+        frame(&ctx, &mut chart, 0.3, vec![button(false)]);
+        assert_eq!(chart.drawings().drawings.len(), 1);
+        assert!(chart.drawings().text_editor.is_none());
+    }
+
     /// Pane-relative anchors survive pan and zoom, and scale with pane size rather than data. A
     /// pin saved with one appears where it was shown, and then stays on its bar.
     #[test]
