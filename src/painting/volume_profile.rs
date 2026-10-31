@@ -159,8 +159,8 @@ pub(crate) fn paint_profile(
 }
 
 /// Notes at the top of `rect`, in the colour of the value area lines, a profile that does not hold
-/// every execution of its span, when the note fits inside `rect`. It takes the left corner, or
-/// with `right` the room left of the value area labels.
+/// every execution of its span, when the note fits inside the part of `rect` the painter shows. It
+/// takes the left corner of that part, or with `right` the room left of the value area labels.
 fn paint_source_note(
     painter: &egui::Painter,
     source: ProfileSource,
@@ -173,6 +173,11 @@ fn paint_source_note(
         ProfileSource::Executions { complete: false } => "Partial executions",
         ProfileSource::Executions { complete: true } | ProfileSource::Options => return,
     };
+    if !rect.is_finite() {
+        return;
+    }
+    // The rows of an anchored drawing stay at the pane's edge once its anchor is scrolled away.
+    let rect = rect.intersect(painter.clip_rect());
     // No narrower profile has room for a note, so its text is never laid out.
     if rect.width() < 60.0 {
         return;
@@ -184,7 +189,7 @@ fn paint_source_note(
         color,
     );
     let size = galley.size();
-    if rect.is_finite() && size.x + 6.0 <= rect.width() && size.y <= rect.height() {
+    if size.x + 6.0 <= rect.width() && size.y <= rect.height() {
         let left = rect.left() + 3.0;
         let x = if right {
             (rect.right() - 50.0 - size.x).max(left)
@@ -373,5 +378,48 @@ mod tests {
         let shapes: usize = output.shapes.iter().map(|s| leaves(&s.shape)).sum();
         output.drop_without_applying_deltas();
         assert!(shapes < 5_000, "{shapes} shapes in an 800 x 600 frame");
+    }
+
+    /// An anchored volume profile whose anchor bar is scrolled off the left of the pane keeps its
+    /// rows at the pane's right edge, so it keeps its source note inside the pane too.
+    #[test]
+    fn anchored_profile_notes_its_source_in_view_with_its_anchor_off_screen() {
+        let bars = (0..200)
+            .map(|i| {
+                let time = Utc.timestamp_opt(i * 60, 0).unwrap();
+                Bar::new(time, 100.0, 101.0, 99.0, 100.5, 1.0)
+            })
+            .collect();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        chart.set_symbol("A");
+        let mut profile = Drawing::new(1, DrawingToolType::AnchoredVolumeProfile);
+        profile.chart_points = vec![ChartPoint::new(0.0, 100.0)];
+        profile.completed = true;
+        chart.drawings_mut().drawings.push(profile);
+        let saved = chart.save_drawings().unwrap().to_json().unwrap();
+        chart.load_drawings(&saved).unwrap();
+        let ctx = Context::default();
+        let mut note = None;
+        for _ in 0..2 {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                chart.show(ui);
+            });
+            note = output.shapes.iter().find_map(|s| match &s.shape {
+                Shape::Text(text) if text.galley.text() == "Estimated from bars" => Some((
+                    s.clip_rect,
+                    Rect::from_min_size(text.pos, text.galley.size()),
+                )),
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+        }
+        let anchor = chart.index_to_x(0.0).unwrap();
+        let (pane, note) = note.expect("source note");
+        assert!(anchor < pane.left(), "anchor bar at {anchor}, pane {pane:?}");
+        assert!(pane.contains_rect(note), "note at {note:?}, pane {pane:?}");
     }
 }
