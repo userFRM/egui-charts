@@ -14,6 +14,27 @@ pub use responsive::LayoutContext;
 pub mod sizing;
 pub mod typography;
 
+/// Give the scroll areas of `ui` the menus' thin scroll bar: 3 px at the right edge, in its own
+/// column beside the rows, with a handle at 43 % of the text colour.
+///
+/// Floating bars are the ones egui draws with the handle opacities; the column they allocate
+/// keeps the bar off the rows.
+#[cfg(feature = "ui")]
+pub(crate) fn menu_scroll_bar(ui: &mut egui::Ui) {
+    let scroll = &mut ui.spacing_mut().scroll;
+    scroll.floating = true;
+    scroll.bar_width = 3.0;
+    scroll.floating_width = 3.0;
+    scroll.floating_allocated_width = 3.0 + scroll.bar_inner_margin;
+    scroll.foreground_color = true;
+    scroll.dormant_handle_opacity = 0.43;
+    scroll.active_handle_opacity = 0.43;
+    scroll.dormant_background_opacity = 0.0;
+    scroll.active_background_opacity = 0.0;
+    scroll.interact_background_opacity = 0.0;
+    scroll.fade.strength = 0.0;
+}
+
 // =============================================================================
 // Stroke Helpers
 // =============================================================================

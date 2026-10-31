@@ -413,10 +413,8 @@ fn draw_item<A>(
         (c.danger_text, c.danger_text, c.danger_text)
     } else if item.danger {
         (c.error, c.error, c.text_secondary)
-    } else if hovered {
-        (c.text, c.text, c.text_secondary)
     } else {
-        (c.text, c.text_secondary, c.text_secondary)
+        (c.text, c.text, c.text_secondary)
     };
     if hovered {
         let fill = if item.danger {

@@ -35,8 +35,8 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::ext::UiExt;
 use egui::{
-    Align2, FontId, Frame, Id, Key, Modifiers, Popup, PopupCloseBehavior, Pos2, Rect, RectAlign,
-    Response, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo,
+    Align2, FontId, Frame, Id, Key, Margin, Modifiers, Popup, PopupCloseBehavior, Pos2, Rect,
+    RectAlign, Response, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo,
 };
 
 /// Height of a flyout row.
@@ -455,7 +455,11 @@ pub(super) fn show_flyout<R>(
         .align(RectAlign::RIGHT_START)
         .align_alternatives(&[])
         .gap(ui.active_theme().spacing.sm)
-        .frame(Frame::menu(ui.style()))
+        // With the outline, the row tiles sit 7 px inside the flyout's edge.
+        .frame(Frame::menu(ui.style()).inner_margin(Margin::symmetric(
+            ui.active_theme().spacing.md as i8,
+            ui.active_theme().spacing.sm as i8,
+        )))
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside);
     // Known from the last frame: how far down the flyout reaches from the button's top.
     let height = popup.get_expected_size().map_or(0.0, |size| size.y);
