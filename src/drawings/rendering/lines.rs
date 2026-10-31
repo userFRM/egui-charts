@@ -37,12 +37,7 @@ impl Drawing {
         if !(a.is_finite() && b.is_finite()) {
             return;
         }
-        let mut angle = (b.y - a.y).atan2(b.x - a.x);
-        if angle >= std::f32::consts::FRAC_PI_2 {
-            angle -= std::f32::consts::PI;
-        } else if angle < -std::f32::consts::FRAC_PI_2 {
-            angle += std::f32::consts::PI;
-        }
+        let angle = upright_angle(a, b);
         // The side the text's top faces once it is turned by `angle`.
         let up = egui::vec2(angle.sin(), -angle.cos());
         let gap = self.stroke_width.max(0.0) / 2.0 + DESIGN_TOKENS.spacing.sm;
@@ -157,8 +152,11 @@ impl Drawing {
             let start = self.points[0];
             let end = Pos2::new(rect.max.x, start.y);
             self.styled_segment(painter, start, end, stroke);
-            let visible_start = Pos2::new(start.x.max(rect.min.x), start.y);
-            self.render_line_text(painter, visible_start, end, true);
+            // A ray starting right of the pane has no part in view to carry its text.
+            if start.x < rect.max.x {
+                let visible_start = Pos2::new(start.x.max(rect.min.x), start.y);
+                self.render_line_text(painter, visible_start, end, true);
+            }
         }
     }
 
@@ -612,6 +610,19 @@ impl Drawing {
     }
 }
 
+/// The angle of the segment from `a` to `b`, turned by half a turn where needed so that text along
+/// it reads upright; a vertical segment gives the angle of reading from bottom to top.
+pub(super) fn upright_angle(a: Pos2, b: Pos2) -> f32 {
+    let angle = (b.y - a.y).atan2(b.x - a.x);
+    if angle >= std::f32::consts::FRAC_PI_2 {
+        angle - std::f32::consts::PI
+    } else if angle < -std::f32::consts::FRAC_PI_2 {
+        angle + std::f32::consts::PI
+    } else {
+        angle
+    }
+}
+
 /// Where a ray from `start` through `end` leaves `rect`: on the side `end` is
 /// towards, or at the top or bottom when it is vertical. Keep the defining
 /// segment when its endpoint is already beyond that edge, so panning never reverses it.
@@ -819,6 +830,13 @@ mod tests {
                 assert_eq!(strings(&texts(&plain)), others, "{tool:?} without text");
             }
         }
+
+        // A horizontal ray starting 40 pt right of the pane is out of view, text and all.
+        let mut ray = Drawing::new(1, T::HorizontalRay);
+        ray.text = Some(LABEL.into());
+        ray.points = vec![Pos2::new(540., 120.)];
+        ray.chart_points = vec![ChartPoint::new(4.4, 38.0)];
+        assert!(strings(&texts(&ray)).iter().all(|t| t != LABEL));
     }
 
     /// Screen y points down: equal rise and run give 45 degrees, and a 3-4-5

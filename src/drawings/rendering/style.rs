@@ -179,9 +179,10 @@ impl Drawing {
         }
         if let Shape::Text(t) = shape {
             if self.font_weight == FontWeight::Bold {
-                // Synthetic weight keeps host font families and fallback glyphs intact.
+                // Synthetic weight keeps host font families and fallback glyphs intact. The copy
+                // moves along the baseline, which text turned along a line turns with it.
                 let mut weighted = t.clone();
-                weighted.pos.x += 0.6;
+                weighted.pos += egui::Vec2::angled(t.angle) * 0.6;
                 *shape = Shape::Vec(vec![Shape::Text(t.clone()), Shape::Text(weighted)]);
             }
             return;
@@ -1023,6 +1024,33 @@ mod tests {
             let shapes: usize = output.shapes.iter().map(|s| leaves(&s.shape)).sum();
             output.drop_without_applying_deltas();
             assert!((1..1_000).contains(&shapes), "{tool:?}: {shapes} shapes");
+        }
+    }
+
+    /// Bold text paints a second copy 0.6 pt along its own baseline, so text turned along a
+    /// horizontal, a 45 degree and a vertical line thickens its stems alike.
+    #[test]
+    fn bold_text_thickens_along_its_baseline() {
+        for end in [(300.0, 300.0), (300.0, 100.0), (100.0, 100.0)] {
+            let mut drawing = Drawing::new(1, DrawingToolType::TrendLine);
+            drawing.points = vec![Pos2::new(100.0, 300.0), Pos2::new(end.0, end.1)];
+            drawing.text = Some("Weekly support".into());
+            drawing.font_weight = FontWeight::Bold;
+            let texts: Vec<_> = paint(&drawing)
+                .into_iter()
+                .filter_map(|s| match s {
+                    Shape::Text(t) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            let [text, copy] = texts.as_slice() else {
+                panic!("{end:?}: {} texts", texts.len());
+            };
+            let offset = egui::emath::Rot2::from_angle(-text.angle) * (copy.pos - text.pos);
+            assert!(
+                (offset - egui::vec2(0.6, 0.0)).length() < 1e-4,
+                "{end:?}: {offset:?}"
+            );
         }
     }
 }
