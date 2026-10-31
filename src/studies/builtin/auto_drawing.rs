@@ -173,7 +173,7 @@ impl AutoDrawing {
     }
 
     fn fork_config(&self) -> crate::drawings::PitchforkConfig {
-        let mut config = crate::drawings::PitchforkConfig::default();
+        let mut config = crate::drawings::PitchforkConfig::legacy();
         let colors = [
             self.zigzag.colors()[0],
             self.fork_colors[0],

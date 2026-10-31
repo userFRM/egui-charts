@@ -333,13 +333,9 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             ..LINE
         },
         // Measure keeps its fill unset, which tints it by the direction of the move.
-        T::Measure => DefaultStyle {
+        T::Measure | T::PriceRange => DefaultStyle {
             font_size: 12.0,
             ..LINE
-        },
-        T::PriceRange => DefaultStyle {
-            font_size: 12.0,
-            ..filled(BLUE, 38)
         },
         T::DateRange | T::DateAndPriceRange => DefaultStyle {
             font_size: 12.0,
@@ -460,7 +456,14 @@ impl Drawing {
             )
             .then(VolumeProfileConfig::drawing_default),
             regression_trend: None,
-            pitchfork: None,
+            pitchfork: matches!(
+                tool_type,
+                DrawingToolType::Pitchfork
+                    | DrawingToolType::SchiffPitchfork
+                    | DrawingToolType::ModifiedSchiffPitchfork
+                    | DrawingToolType::InsidePitchfork
+            )
+            .then(PitchforkConfig::default),
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
             gann: None,
             ghost_feed: None,
