@@ -983,6 +983,7 @@ mod tests {
         for (slot, button, label, keys) in [
             (S::Indicators, "Indicators", "Indicators", &["/"][..]),
             (S::Alert, "Alert", "Create alert", &["Alt", "A"]),
+            (S::Save, "Layout options", "Layout options", &[]),
         ] {
             let mut harness = Harness::builder()
                 .with_size(vec2(400.0, 200.0))
