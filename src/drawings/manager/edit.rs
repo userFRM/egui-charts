@@ -3,6 +3,7 @@
 use super::{DrawingManager, DrawingSyncAction, queue_sync, sync_id};
 use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::drawings::services::{ZOrderService, in_z_order};
+use crate::model::PostContent;
 use egui::Rect;
 use std::collections::HashSet;
 
@@ -233,6 +234,31 @@ impl DrawingManager {
                 .unwrap_or_else(|e| e.into_inner())
                 .retain(|p| p.id != id);
         }
+    }
+
+    /// Gives the drawings whose post waits for `link` the host's answer: its content, or `None`
+    /// when the host could not resolve it. Not an undoable edit, also on locked drawings;
+    /// queues each drawing that received content to be saved. Returns whether any did.
+    pub(crate) fn resolve_link(&mut self, link: &str, content: Option<&PostContent>) -> bool {
+        let mut updated = Vec::new();
+        for drawing in &mut self.drawings {
+            if let Some(post) = &mut drawing.post
+                && post.link == link
+                && post.content.is_none()
+            {
+                if let Some(content) = content {
+                    post.content = Some(content.clone());
+                    post.failed = false;
+                    updated.push(drawing.id);
+                } else {
+                    post.failed = true;
+                }
+            }
+        }
+        for &id in &updated {
+            self.queue_update(id);
+        }
+        !updated.is_empty()
     }
 
     /// Edits live drawing ids as one undo step and queues their saved changes.

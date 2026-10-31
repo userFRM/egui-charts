@@ -1077,6 +1077,8 @@ impl Chart {
 
         self.pump_signals(ui.ctx());
         self.pump_targets(ui.ctx());
+        #[cfg(feature = "drawings")]
+        self.pump_posts(ui.ctx());
 
         // Draw watermark overlay (if enabled)
         self.draw_watermark(ui, &painter, chart_rect);

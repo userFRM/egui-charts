@@ -193,6 +193,8 @@ impl Chart {
             frozen_source_events: 0,
             event_visibility: Default::default(),
             mark_source: None,
+            #[cfg(feature = "drawings")]
+            post_source: None,
             signal_sources: Vec::new(),
             targets: Default::default(),
             show_price_targets: false,

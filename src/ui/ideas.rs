@@ -3,12 +3,13 @@
 //! The host owns accounts, storage and the network. It fills the feed with
 //! [`add_page`](IdeasPanel::add_page), answers [`IdeasAction::Publish`] with
 //! [`publish_succeeded`](IdeasPanel::publish_succeeded) or
-//! [`publish_failed`](IdeasPanel::publish_failed) and opens what the user selects. A control
+//! [`publish_failed`](IdeasPanel::publish_failed) and opens what the user selects, or places it on a chart. A control
 //! whose service the host did not enable with [`set_publishing`](IdeasPanel::set_publishing) or
 //! [`set_browsing`](IdeasPanel::set_browsing) is not shown. The draft survives a failed
 //! publish, and the panel needs no other part of the library.
 
 use crate::localization as l10n;
+use crate::model::{PostContent, PostLink};
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 use crate::ui_kit::{EmptyState, PanelHeader};
@@ -93,6 +94,13 @@ pub enum IdeasAction {
         /// The interval, as the host names it.
         interval: String,
     },
+    /// Place the entry on the chart as an idea card: pass the link to
+    /// [`DrawingManager::start_post_insertion`](crate::drawings::DrawingManager::start_post_insertion)
+    /// with [`DrawingToolType::Idea`](crate::drawings::DrawingToolType::Idea), and the next
+    /// click on the chart places it. The link is the entry's identifier, already resolved to its
+    /// title, author, time, text and attachment; the attachment shows as the card's picture when
+    /// the host's egui image loaders resolve it.
+    Place(PostLink),
 }
 
 /// Where a publish stands.
@@ -318,6 +326,13 @@ impl IdeasPanel {
                             interval: idea.interval.clone(),
                         };
                     }
+                    if ui.link(l10n::text(ui.ctx(), "Place on chart")).clicked() {
+                        let mut content =
+                            PostContent::new(idea.author.clone(), idea.time, idea.body.clone());
+                        content.title = idea.title.clone();
+                        content.picture = idea.attachment.clone();
+                        action = IdeasAction::Place(PostLink::resolved(idea.id.clone(), content));
+                    }
                 });
             });
         }
@@ -333,6 +348,79 @@ impl IdeasPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Placement carries the entry's identifier and all its content, including the picture.
+    #[test]
+    fn place_on_chart_reports_the_entry_as_a_resolved_link() {
+        use chrono::TimeZone;
+        use egui::{Context, Event, Modifiers, PointerButton, RawInput, Rect, Shape};
+        let time = Utc.with_ymd_and_hms(2026, 10, 30, 9, 30, 0).unwrap();
+        let mut panel = IdeasPanel::new();
+        panel.set_browsing(true);
+        panel.add_page(
+            IdeaPage {
+                items: vec![Idea {
+                    id: "42".into(),
+                    kind: IdeaKind::Idea,
+                    title: "Breakout".into(),
+                    body: "Above the range".into(),
+                    author: "Ada".into(),
+                    time,
+                    symbol: "AAPL".into(),
+                    interval: "1D".into(),
+                    attachment: Some("https://example.invalid/42.png".into()),
+                }],
+                next: None,
+            },
+            true,
+        );
+        let ctx = Context::default();
+        let mut action = IdeasAction::None;
+        let mut step = |events| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    action = panel.show(ui);
+                },
+            )
+        };
+        let output = step(vec![]);
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                Shape::Text(text) if text.galley.text() == "Place on chart" => {
+                    Some(Rect::from_min_size(text.pos, text.galley.size()).center())
+                }
+                _ => None,
+            })
+            .unwrap();
+        output.drop_without_applying_deltas();
+        step(vec![Event::PointerMoved(pos)]).drop_without_applying_deltas();
+        for pressed in [true, false] {
+            step(vec![Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            }])
+            .drop_without_applying_deltas();
+        }
+        let mut content = PostContent::new("Ada", time, "Above the range");
+        content.title = "Breakout".into();
+        content.picture = Some("https://example.invalid/42.png".into());
+        assert_eq!(
+            action,
+            IdeasAction::Place(PostLink::resolved("42", content))
+        );
+    }
 
     #[test]
     fn a_failed_publish_keeps_the_draft_and_a_successful_one_clears_it() {
