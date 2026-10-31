@@ -140,6 +140,7 @@ impl DemoSymbol {
                 let mut instrument = Instrument::new(s.symbol)
                     .with_description(s.company_name)
                     .with_exchange(s.exchange)
+                    .with_currency("USD")
                     .with_symbol_type(kind);
                 if kind == SymbolType::Futures {
                     instrument = instrument.with_root("ES");
