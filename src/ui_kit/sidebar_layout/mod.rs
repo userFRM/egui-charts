@@ -18,7 +18,7 @@
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Pos2, Rect, Role, Sense, Ui, Vec2, WidgetInfo};
+use egui::{Color32, Pos2, Rect, Role, Sense, Ui, Vec2, WidgetInfo};
 use egui_extras::{Size, StripBuilder};
 
 /// Two-column layout: fixed-width sidebar + flexible content area.
@@ -87,6 +87,7 @@ pub struct SidebarTab<'a> {
     label: &'a str,
     icon: Option<&'a crate::icons::Icon>,
     is_active: bool,
+    fill: Option<Color32>,
 }
 
 impl<'a> SidebarTab<'a> {
@@ -96,12 +97,19 @@ impl<'a> SidebarTab<'a> {
             label,
             icon: None,
             is_active,
+            fill: None,
         }
     }
 
     /// Set the tab's optional icon.
     pub fn icon(mut self, icon: &'a crate::icons::Icon) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// Set the fill of the selected tile, in place of the theme's neutral fill.
+    pub(crate) fn fill(mut self, fill: Color32) -> Self {
+        self.fill = Some(fill);
         self
     }
 
@@ -125,7 +133,9 @@ impl<'a> SidebarTab<'a> {
             ui.painter().rect_filled(
                 rect,
                 theme.radius.md,
-                if self.is_active && !theme.dark {
+                if let Some(fill) = self.fill.filter(|_| self.is_active) {
+                    fill
+                } else if self.is_active && !theme.dark {
                     theme.ui.text.gamma_multiply(0.06)
                 } else {
                     ui.style().visuals.widgets.hovered.bg_fill
