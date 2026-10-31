@@ -166,6 +166,8 @@ pub enum ProfileSource {
         /// Whether executions are held from the start of the span.
         complete: bool,
     },
+    /// Call and put contract volume at each strike, from [`VolumeProfile::from_options`].
+    Options,
 }
 
 /// The executions behind an exact profile, whose POC and value area follow [`FootprintBar`].
@@ -192,6 +194,8 @@ pub struct VolumeProfile {
     pub(crate) up: Vec<f64>,
     pub(crate) down: Vec<f64>,
     executions: Option<Executions>,
+    /// Built from option strikes by [`Self::from_options`].
+    options: bool,
 }
 
 fn valid_bar(bar: &Bar) -> bool {
@@ -256,6 +260,7 @@ impl VolumeProfile {
             up: vec![0.0; count as usize],
             down: vec![0.0; count as usize],
             executions: None,
+            options: true,
         };
         let mut total = 0.0;
         for v in data {
@@ -320,6 +325,7 @@ impl VolumeProfile {
                 bar: bar.clone(),
                 complete,
             }),
+            options: false,
         };
         for (&level, row) in &bar.levels {
             let i = (level - first) as usize;
@@ -330,8 +336,11 @@ impl VolumeProfile {
         Some(profile)
     }
 
-    /// Whether the volumes are estimated from bars or executed.
+    /// Whether the volumes are estimated from bars, executed or option turnover.
     pub fn source(&self) -> ProfileSource {
+        if self.options {
+            return ProfileSource::Options;
+        }
         self.executions
             .as_ref()
             .map_or(ProfileSource::Estimated, |e| ProfileSource::Executions {
@@ -404,6 +413,7 @@ impl VolumeProfile {
             up: vec![0.0; rows],
             down: vec![0.0; rows],
             executions: None,
+            options: false,
         };
         bars.iter().for_each(|bar| profile.add(bar));
         Some(profile)
@@ -809,6 +819,7 @@ mod tests {
         })
         .collect();
         let profile = VolumeProfile::from_options(&data, 4.0).unwrap();
+        assert_eq!(profile.source(), ProfileSource::Options);
         assert_eq!(
             (profile.low(), profile.high(), profile.row_height()),
             (98.0, 110.0, 4.0)

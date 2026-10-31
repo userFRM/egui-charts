@@ -8,6 +8,8 @@
 //! instrument suggests for the length of its profiles,
 //! [`Instrument::profile_resolutions`](crate::model::Instrument::profile_resolutions).
 //! [`ProfileInput`] tells how much of a profile the finer bars cover.
+//! The chart notes each profile "Estimated from bars", also when finer bars cover all of it:
+//! they narrow the estimate without making it exact.
 
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
@@ -1201,7 +1203,18 @@ mod rendering_tests {
             egui::Shape::Rect(r) if (r.rect.height() - 49.0).abs() < 0.01)
             })
             .count();
+        // The rows are estimated from the bar, as noted at the top left of the
+        // right-aligned box: x from 280 (400 less 30%) plus 3, y of 12 = 50.
+        let notes: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text() == "Estimated from bars" => Some(t.pos),
+                _ => None,
+            })
+            .collect();
         output.drop_without_applying_deltas();
+        assert_eq!(notes, [egui::pos2(283.0, 50.0)]);
         assert!(poc && rows >= 2, "profile rows {rows}, POC {poc}");
         // Equal row volumes put the POC at y=125; its line extends past the row fill.
         for (x, y, expected) in [
@@ -1250,6 +1263,54 @@ mod rendering_tests {
             )
             .is_some()
         );
+    }
+
+    /// A box that starts at the pane's left edge, under the chart legend, keeps its source note
+    /// at the right, short of the POC badge and the value area labels.
+    #[test]
+    fn profile_from_the_left_edge_notes_its_source_clear_of_the_legend() {
+        let bars: Vec<_> = (0..10)
+            .map(|i| {
+                let time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(i);
+                Bar::new(time, 10.0, 12.0, 10.0, 11.0, 20.0)
+            })
+            .collect();
+        let mut study = VolProfileFixed::new(2);
+        study.calculate(&bars);
+        let indicators: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 200.0));
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(9.0, 13.0),
+            0.0,
+            200.0,
+            false,
+        );
+        let coords = ChartMapping {
+            base_idx: 9,
+            ..ChartMapping::new(rect, 40.0, 0, 0, 0.0, price)
+        };
+        let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            IndicatorRenderer::render(
+                &RenderContext::new(ui.painter(), rect),
+                &indicators,
+                &bars,
+                &price,
+                &coords,
+            );
+        });
+        let note = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(t) if t.galley.text() == "Estimated from bars" => {
+                Some((t.pos.x + t.galley.size().x, t.pos.y))
+            }
+            _ => None,
+        });
+        output.drop_without_applying_deltas();
+        // Last bar's right edge at 399 (400 less half a 40-point bar, 1, plus half a bar), first
+        // bar's left edge clamped to 0; the note ends 50 short of 399, at the y of 12 = 50.
+        let (right, top) = note.expect("source note");
+        assert!((right - 349.0).abs() < 0.01, "note ends at {right}");
+        assert_eq!(top, 50.0);
     }
 
     /// A finer source interval is requested only when it is shorter than the chart's; its bars
