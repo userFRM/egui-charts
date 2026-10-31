@@ -686,8 +686,8 @@ mod tests {
     use crate::drawings::rendering::{ChartView, sample_bars};
 
     /// Expected points by hand, with a gap of 1 + 4 pt and s = 5 / sqrt(2) = 3.5355 along a 45
-    /// degree normal. The rising line has midpoint (200, 200): up = (-s, -s) from it, and its info
-    /// line goes the other way, since its box is above. Closes 10, 14, 12 fit y = 11 + x, ending at
+    /// degree normal. The rising line has midpoint (200, 200): up = (-s, -s) from it.
+    /// Closes 10, 14, 12 fit y = 11 + x, ending at
     /// (100, 390) and (300, 370): midpoint (200, 380), angle atan(-0.1), up = (-0.0995, -0.9950).
     /// Up and down marks have their base 6.5 pt from the anchor, side marks their tail 14 pt.
     #[test]
@@ -743,7 +743,7 @@ mod tests {
         const MARK: &[(f32, f32)] = &[(200., 200.)];
         type Case = (T, &'static [(f32, f32)], f32, A, (f32, f32));
         #[rustfmt::skip]
-        let cases: [Case; 22] = [
+        let cases: [Case; 20] = [
             (T::TrendLine, RISING, -FRAC_PI_4, A::CENTER_BOTTOM, (196.4645, 196.4645)),
             (T::TrendLine, &[(300., 300.), (100., 100.)], FRAC_PI_4, A::CENTER_BOTTOM, (203.5355, 196.4645)),
             (T::Ray, &[(100., 200.), (200., 200.)], 0.0, A::CENTER_BOTTOM, (150., 195.)),
@@ -751,8 +751,6 @@ mod tests {
             (T::HorizontalRay, &[(300., 120.)], 0.0, A::CENTER_BOTTOM, (400., 115.)),
             (T::VerticalLine, &[(150., 50.)], -FRAC_PI_2, A::CENTER_BOTTOM, (145., 200.)),
             (T::CrossLine, &[(150., 120.)], 0.0, A::CENTER_BOTTOM, (250., 115.)),
-            (T::InfoLine, RISING, -FRAC_PI_4, A::CENTER_TOP, (203.5355, 203.5355)),
-            (T::InfoLine, &[(100., 100.), (300., 300.)], FRAC_PI_4, A::CENTER_BOTTOM, (203.5355, 196.4645)),
             (T::ParallelChannel, CHANNEL, -FRAC_PI_4, A::CENTER_BOTTOM, (196.4645, 196.4645)),
             (T::FlatTopBottom, CHANNEL, -FRAC_PI_4, A::CENTER_BOTTOM, (196.4645, 196.4645)),
             (T::DisjointChannel, CHANNEL, -FRAC_PI_4, A::CENTER_BOTTOM, (196.4645, 196.4645)),

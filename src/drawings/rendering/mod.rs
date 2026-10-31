@@ -222,7 +222,7 @@ impl Drawing {
                     outline.areas.push(vec![a, b, c]);
                 }
             }
-            T::Measure | T::DateAndPriceRange | T::GannBox => {
+            T::Measure | T::DateRange | T::GannBox => {
                 boxed(&mut outline, Rect::from_two_pos(first, second));
             }
             T::GannSquare | T::GannFixed => {
@@ -237,23 +237,13 @@ impl Drawing {
                 }
             }
             T::Rect => boxed(&mut outline, self.rectangle_bounds(rect)?),
-            T::PriceRange => {
-                let mid_x = (first.x + second.x) / 2.0;
-                outline.lines = vec![
-                    across(first.y),
-                    across(second.y),
-                    [Pos2::new(mid_x, first.y), Pos2::new(mid_x, second.y)],
-                ];
-            }
-            T::DateRange => {
-                let band = Rect::from_x_y_ranges(
-                    first.x.min(second.x)..=first.x.max(second.x),
-                    rect.y_range(),
+            T::PriceRange | T::DateAndPriceRange => {
+                boxed(&mut outline, Rect::from_two_pos(first, second));
+                let edges = self.rectangle_bounds(rect)?;
+                outline.lines.extend(
+                    [first.y, second.y]
+                        .map(|y| [Pos2::new(edges.min.x, y), Pos2::new(edges.max.x, y)]),
                 );
-                outline.lines = [first.x, second.x]
-                    .map(|x| [Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)])
-                    .into();
-                outline.areas.push(corners(band));
             }
             T::Circle => {
                 let radius = first.distance(second);
@@ -447,9 +437,9 @@ impl Drawing {
 
             // Measurers (4 tools)
             DrawingToolType::Measure => self.render_measure(painter, view),
-            DrawingToolType::PriceRange => self.render_price_range(painter, rect, view),
-            DrawingToolType::DateRange => self.render_date_range(painter, rect, view),
-            DrawingToolType::DateAndPriceRange => self.render_date_and_price_range(painter, view),
+            DrawingToolType::PriceRange
+            | DrawingToolType::DateRange
+            | DrawingToolType::DateAndPriceRange => self.render_range(painter, rect, stroke, view),
 
             // Annotations (7 tools)
             DrawingToolType::TextLabel => self.render_text_label(painter),
@@ -549,6 +539,8 @@ impl Drawing {
                 | T::BarsPattern
                 | T::FixedRangeVolumeProfile
                 | T::Measure
+                | T::PriceRange
+                | T::DateRange
                 | T::DateAndPriceRange
                 | T::Arrow
                 | T::ArrowMarker
@@ -667,6 +659,9 @@ mod tests {
             DrawingToolType::CyclicLines,
             DrawingToolType::TimeCycles,
             DrawingToolType::XABCDPattern,
+            DrawingToolType::PriceRange,
+            DrawingToolType::DateRange,
+            DrawingToolType::DateAndPriceRange,
         ] {
             let mut drawing = Drawing::new(7, tool);
             drawing.points = [
@@ -724,6 +719,9 @@ mod tests {
                     | DrawingToolType::Triangle
                     | DrawingToolType::TimeCycles
                     | DrawingToolType::XABCDPattern
+                    | DrawingToolType::PriceRange
+                    | DrawingToolType::DateRange
+                    | DrawingToolType::DateAndPriceRange
             ) {
                 fn has_fill(shapes: &[Shape], color: egui::Color32) -> bool {
                     shapes.iter().any(|s| match s {
@@ -738,6 +736,108 @@ mod tests {
                     has_fill(&shapes, drawing.fill_color32().unwrap()),
                     "{tool:?} ignored fill"
                 );
+            }
+        }
+    }
+
+    /// For the box (100, 100) to (300, 300), the arrows end at the second anchor's
+    /// coordinate on each axis. Cards sit beyond that end in the tooltip colours.
+    #[test]
+    fn measurer_arrows_point_to_the_second_anchor_and_stats_sit_on_cards() {
+        use crate::drawings::ChartPoint;
+        use DrawingToolType as T;
+        let chart = crate::theme::Theme::dark().chart;
+        for tool in [
+            T::Measure,
+            T::PriceRange,
+            T::DateRange,
+            T::DateAndPriceRange,
+            T::InfoLine,
+        ] {
+            for (first, second) in [
+                ((300., 100.), (100., 300.)),
+                ((100., 300.), (300., 100.)),
+                ((100., 100.), (300., 300.)),
+                ((300., 300.), (100., 100.)),
+                ((100., 200.), (300., 200.)),
+                ((200., 100.), (200., 300.)),
+                ((200., 200.), (200., 200.)),
+            ] {
+                let mut drawing = Drawing::new(1, tool);
+                drawing.points = [first, second].map(|(x, y)| Pos2::new(x, y)).to_vec();
+                drawing.chart_points = drawing
+                    .points
+                    .iter()
+                    .map(|p| ChartPoint::new(p.x / 10.0, 500.0 - f64::from(p.y)))
+                    .collect();
+                let shapes = paint(&drawing);
+                let bounds = Rect::from_two_pos(drawing.points[0], drawing.points[1]);
+                let card = shapes
+                    .iter()
+                    .find_map(|s| match s {
+                        Shape::Rect(r) if r.fill == chart.bg_tooltip => Some(r.rect),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{tool:?}: no tooltip card"));
+                assert!(
+                    shapes.iter().any(|s| matches!(s, Shape::Text(t)
+                    if t.galley.job.sections.iter().all(|s| s.format.color == chart.axis_text
+                        && s.format.font_id.size == crate::styles::typography::SM_MD))),
+                    "{tool:?}: card text"
+                );
+                if tool == T::InfoLine {
+                    assert!(card.min.x >= bounds.center().x && card.min.y >= bounds.center().y);
+                    assert_eq!(
+                        shapes
+                            .iter()
+                            .filter(|s| matches!(s, Shape::LineSegment { .. }))
+                            .count(),
+                        1,
+                        "info line has no connector"
+                    );
+                    continue;
+                }
+                if second.1 <= first.1 {
+                    assert!(card.max.y < bounds.min.y, "{tool:?}: card above");
+                } else {
+                    assert!(card.min.y > bounds.max.y, "{tool:?}: card below");
+                }
+                let mut tips = Vec::new();
+                if tool != T::DateRange && first.1 != second.1 {
+                    tips.push(Pos2::new(bounds.center().x, second.1));
+                }
+                if tool != T::PriceRange && first.0 != second.0 {
+                    tips.push(Pos2::new(second.0, bounds.center().y));
+                }
+                let heads: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Path(p) if p.closed && p.fill.a() > 0 => Some(p),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    heads.len(),
+                    tips.len(),
+                    "{tool:?}: heads for {first:?} to {second:?}"
+                );
+                for tip in tips {
+                    let head = heads
+                        .iter()
+                        .find(|p| p.points[0] == tip)
+                        .unwrap_or_else(|| panic!("{tool:?}: no arrow at {tip:?}"));
+                    // Both base corners lie behind the tip along the drag direction.
+                    let direction = if tip.y == bounds.center().y {
+                        egui::vec2(second.0 - first.0, 0.0)
+                    } else {
+                        egui::vec2(0.0, second.1 - first.1)
+                    };
+                    assert!(
+                        head.points[1..]
+                            .iter()
+                            .all(|p| (*p - tip).dot(direction) < 0.0)
+                    );
+                }
             }
         }
     }
