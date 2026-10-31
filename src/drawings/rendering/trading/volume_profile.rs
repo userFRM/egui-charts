@@ -1,10 +1,9 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
-use crate::data::{ProfileSource, VolumeProfile};
+use crate::data::VolumeProfile;
 use crate::drawings::domain::Drawing;
 use crate::drawings::domain::DrawingToolType;
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
-use crate::localization as l10n;
 use crate::model::{Bar, SpanCache};
 use crate::painting::volume_profile::ProfileStyle;
 use crate::styles::{stroke, typography};
@@ -184,20 +183,6 @@ impl Drawing {
             },
             view.price_to_y,
         );
-        let note = match profile.source() {
-            ProfileSource::Estimated => "Estimated from bars",
-            ProfileSource::Executions { complete: false } => "Partial executions",
-            ProfileSource::Executions { complete: true } => return,
-        };
-        if right - left >= 60.0 {
-            painter.text(
-                Pos2::new(left + 3.0, (view.price_to_y)(profile.high())),
-                egui::Align2::LEFT_TOP,
-                l10n::text(painter.ctx(), note),
-                egui::FontId::proportional(typography::XS),
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 200),
-            );
-        }
     }
 
     /// The profile of `bars`, the span that starts at bar `first`: the executed volume at each
@@ -529,6 +514,7 @@ mod tests {
                     }
                     let mut lines = Vec::new();
                     let mut labels = 0;
+                    let mut notes = 0;
                     for shape in &shapes {
                         match &shape.shape {
                             egui::Shape::LineSegment { points, .. } => lines.push(points.to_vec()),
@@ -539,6 +525,11 @@ mod tests {
                             egui::Shape::Text(text) => {
                                 let label = text.galley.job.text.as_str();
                                 assert_ne!(label, "POC");
+                                if label == "Estimated from bars" {
+                                    notes += 1;
+                                    // The tint's top left corner on either scale, inset 3 points.
+                                    assert_eq!(text.pos, Pos2::new(103.0, 50.0));
+                                }
                                 if ["VAH", "VAL"].contains(&label) {
                                     assert!(va_lines);
                                     labels += 1;
@@ -565,6 +556,8 @@ mod tests {
                     // Labels need 50 px between the first anchor and the rows' far edge.
                     let reach = if anchored { 800.0 - 100.0 } else { width };
                     assert_eq!(labels, if va_lines && reach >= 50.0 { 2 } else { 0 });
+                    // The note fits in every span but the 24-point one.
+                    assert_eq!(notes, usize::from(width > 24.0));
                     assert!(
                         lines
                             .iter()
