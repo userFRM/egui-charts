@@ -122,7 +122,7 @@ impl Default for SeriesStyle {
             price_line_source: PriceLineSource::LastBar,
             price_line_color: None,
             price_line_width: 1.0,
-            price_line_style: LineStyle::Dotted,
+            price_line_style: LineStyle::Dashed,
             base_line_visible: false,
             autoscale: None,
             hit_tolerance: 5.0,
