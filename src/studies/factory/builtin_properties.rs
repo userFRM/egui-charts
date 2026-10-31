@@ -418,6 +418,8 @@ fn every_update_equals_a_fresh_calculate() {
             }
             0
         } else {
+            // The hourly bars span a day and a half, over which every default trading session
+            // opens and closes.
             let time =
                 data.last()
                     .map_or(Utc.with_ymd_and_hms(2023, 9, 15, 23, 0, 0).unwrap(), |b| {
@@ -425,7 +427,7 @@ fn every_update_equals_a_fresh_calculate() {
                             + if len < 60 {
                                 Duration::weeks(1)
                             } else {
-                                Duration::minutes(1)
+                                Duration::hours(1)
                             }
                     });
             let close =
