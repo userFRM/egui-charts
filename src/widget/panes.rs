@@ -1220,10 +1220,10 @@ impl Chart {
         }
         match pending_series_action {
             Some((id, true, _)) => {
-                self.remove_series(id);
+                self.user_action(|chart| chart.remove_series(id));
             }
             Some((id, _, true)) => {
-                self.set_series_visible(id, false);
+                self.user_action(|chart| chart.set_series_visible(id, false));
             }
             Some((id, ..)) => self.indicator_settings_request = Some(id),
             None => {}
@@ -1730,6 +1730,60 @@ mod tests {
         assert!(chart.move_series_to_pane(series, pane));
         assert!(chart.move_series_to_pane(series, PaneId::MAIN));
         assert_eq!(chart.panes(), [PaneId::MAIN]);
+    }
+
+    /// The Hide and Remove controls in an added series' legend are one undo step each, and undo
+    /// brings the series back with its price formatter and bar limit.
+    #[test]
+    fn added_series_legend_controls_undo_as_one_step() {
+        use crate::scales::PriceScaleMode;
+        use crate::widget::{SeriesId, SeriesOptions};
+        let limit = std::num::NonZeroUsize::new(1000);
+        // A name wider than the pane holds the controls at their rightmost place: 120 px from
+        // the plot's right edge, 20 px each, in the order hide, settings, remove.
+        for (control, removed) in [(110.0, false), (70.0, true)] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[110.0]);
+            let series = chart.add_series(SeriesOptions {
+                name: "S".repeat(200),
+                ..Default::default()
+            });
+            chart.set_data(series, chart.bars(SeriesId::MAIN).to_vec());
+            chart.set_bar_limit(series, limit);
+            assert!(chart.set_series_formatter(
+                series,
+                Some(std::sync::Arc::new(crate::scales::CurrencyFormatter::usd())),
+            ));
+            let pane = chart.add_pane();
+            assert!(chart.move_series_to_pane(series, pane));
+            crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, Vec::new());
+            let state = |chart: &crate::widget::Chart| {
+                (
+                    chart.is_series_visible(series),
+                    chart.bars(series).len(),
+                    chart.bar_limit(series),
+                    chart
+                        .series_label_formatter(series, PriceScaleMode::Normal)
+                        .is_some(),
+                )
+            };
+            let before = state(&chart);
+            assert_eq!(before, (true, 100, limit, true));
+
+            let row = chart.pane_layout.panes.iter().find(|item| item.id == pane);
+            let target = Pos2::new(
+                chart.get_rendered_price_rect().right() - control,
+                row.unwrap().rect.top() + 12.0,
+            );
+            click(&ctx, &mut chart, target);
+            assert!(!chart.is_series_visible(series), "control {control}");
+            assert_eq!(chart.series().any(|(id, _)| id == series), !removed);
+
+            assert!(chart.undo(), "control {control} left no undo step");
+            assert_eq!(state(&chart), before);
+            assert_eq!(chart.pane_series(pane), [series]);
+            assert!(!chart.can_undo(), "control {control} took more than a step");
+        }
     }
 
     #[test]
