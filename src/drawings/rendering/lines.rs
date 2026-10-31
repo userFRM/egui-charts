@@ -157,8 +157,11 @@ impl Drawing {
             let start = self.points[0];
             let end = Pos2::new(rect.max.x, start.y);
             self.styled_segment(painter, start, end, stroke);
-            let visible_start = Pos2::new(start.x.max(rect.min.x), start.y);
-            self.render_line_text(painter, visible_start, end, true);
+            // A ray starting right of the pane has no part in view to carry its text.
+            if start.x < rect.max.x {
+                let visible_start = Pos2::new(start.x.max(rect.min.x), start.y);
+                self.render_line_text(painter, visible_start, end, true);
+            }
         }
     }
 
@@ -819,6 +822,13 @@ mod tests {
                 assert_eq!(strings(&texts(&plain)), others, "{tool:?} without text");
             }
         }
+
+        // A horizontal ray starting 40 pt right of the pane is out of view, text and all.
+        let mut ray = Drawing::new(1, T::HorizontalRay);
+        ray.text = Some(LABEL.into());
+        ray.points = vec![Pos2::new(540., 120.)];
+        ray.chart_points = vec![ChartPoint::new(4.4, 38.0)];
+        assert!(strings(&texts(&ray)).iter().all(|t| t != LABEL));
     }
 
     /// Screen y points down: equal rise and run give 45 degrees, and a 3-4-5
