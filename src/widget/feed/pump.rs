@@ -709,9 +709,12 @@ impl Chart {
         link.feed.depth_history(request, reply);
     }
 
+    /// Whether the main series holds as many bars as its limit keeps after an eviction. Paging
+    /// stops there, since older bars that took the series past the limit would be evicted first.
     fn bar_limit_reached(&self) -> bool {
-        self.bar_limit(SeriesId::MAIN)
-            .is_some_and(|limit| self.bars(SeriesId::MAIN).len() >= limit.get())
+        self.bar_limit(SeriesId::MAIN).is_some_and(|limit| {
+            self.bars(SeriesId::MAIN).len() >= crate::widget::series::kept_bars(limit)
+        })
     }
 
     /// Asks for the page before the oldest bar once the view nears it.

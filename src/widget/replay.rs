@@ -150,7 +150,7 @@ impl Chart {
             let count = replay
                 .bars
                 .get(&id)
-                .map_or(0, |bars| bars.len().saturating_sub(limit.get()));
+                .map_or(0, |bars| super::series::evicted_bars(bars.len(), limit));
             if count > 0 {
                 replay.remove_oldest_bars(id, count, &clock);
                 if id == SeriesId::MAIN {
