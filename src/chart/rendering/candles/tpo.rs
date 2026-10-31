@@ -18,6 +18,7 @@ use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
 use crate::localization as l10n;
 use crate::scales::PriceMap;
 use egui::emath::GuiRounding as _;
+use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
 use crate::model::{
@@ -25,7 +26,7 @@ use crate::model::{
     TPODisplayMode, TPOProfile, derive_tick_size, to_tpo_profiles,
 };
 use crate::styles::typography;
-use crate::theme::{ChartColors, ThemeExt, readable_color};
+use crate::theme::{ChartColors, ThemeExt, contrast, readable_color};
 use crate::tokens::DESIGN_TOKENS;
 
 /// Target number of price rows when auto-deriving the TPO bin (tick) size.
@@ -561,11 +562,10 @@ fn draw_session_profile(
         let (low, high) = profile.row_span(price);
         coords.price_to_y((low + high) * 0.5)
     };
-    let use_letters = column_width.min(measured_height) >= LETTER_MIN_COLUMN_PX
-        && matches!(
-            config.display_mode,
-            TPODisplayMode::Letters | TPODisplayMode::Both
-        );
+    let readable = column_width.min(measured_height) >= LETTER_MIN_COLUMN_PX;
+    // Bare letters; the other displays paint cells, which `Both` letters while they stay readable.
+    let use_letters = readable && config.display_mode == TPODisplayMode::Letters;
+    let letters_in_cells = readable && config.display_mode == TPODisplayMode::Both;
 
     let row_height = measured_height.min(render_config.row_height * 1.5);
     let column_width = column_width.min(row_height);
@@ -575,6 +575,9 @@ fn draw_session_profile(
     let max_right = anchor_x + widest as f32 * column_width;
     let block_width = (column_width - gap).max(gap);
     let block_height = (row_height - gap).max(gap);
+    // About 9 px of cap height in a 20 px cell, shrinking with the cell to the bare letters' size.
+    let cell_font_size =
+        (column_width * 0.65).clamp(render_config.letter_font_size, typography::MD);
     let poc_color = readable_color(
         render_config.poc_color,
         chart.axis_text,
@@ -628,12 +631,7 @@ fn draw_session_profile(
         if use_letters {
             letter_color(render_config, config, period_idx, price, profile, &chart)
         } else {
-            readable_color(
-                entry_color(render_config, config, period_idx, price, profile),
-                chart.axis_text,
-                &[chart.bg],
-                3.0,
-            )
+            block_color(render_config, config, period_idx, price, profile, &chart)
         }
     };
     let dim = |color: Color32| chart.bg.lerp_to_gamma(color, 0.45);
@@ -690,11 +688,20 @@ fn draw_session_profile(
             } else {
                 let left = (x - block_width * 0.5).round_to_pixels(pixels_per_point);
                 let right = (x + block_width * 0.5).round_to_pixels(pixels_per_point);
-                painter.rect_filled(
-                    Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom)),
-                    0.0,
-                    color,
-                );
+                let cell = Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom));
+                painter.rect_filled(cell, 0.0, color);
+                if letters_in_cells {
+                    let letter_tone = cell_letter_color(color, &chart);
+                    let mut format =
+                        TextFormat::simple(FontId::proportional(cell_font_size), letter_tone);
+                    format.coords.push("wght", 700.0);
+                    let galley = painter
+                        .layout_job(LayoutJob::single_section(letter.letter.to_string(), format));
+                    let origin = egui::Align2::CENTER_CENTER
+                        .anchor_size(cell.center(), galley.size())
+                        .min;
+                    painter.galley(origin, galley, letter_tone);
+                }
             }
         }
     }
@@ -871,6 +878,32 @@ fn letter_color(
     )
 }
 
+/// Pick the fill of one TPO cell, which reads on the chart at 3:1 as other graphics do.
+fn block_color(
+    render_config: &TpoRenderConfig,
+    config: &TPOConfig,
+    period_idx: usize,
+    price: f64,
+    profile: &TPOProfile,
+    chart: &ChartColors,
+) -> Color32 {
+    readable_color(
+        entry_color(render_config, config, period_idx, price, profile),
+        chart.axis_text,
+        &[chart.bg],
+        3.0,
+    )
+}
+
+/// White where it reaches 4.5:1 on the `cell`, else black, which always does there.
+fn cell_letter_color(cell: Color32, chart: &ChartColors) -> Color32 {
+    if contrast(Color32::WHITE, chart.bg.blend(cell)) >= 4.5 {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
+}
+
 fn entry_color(
     render_config: &TpoRenderConfig,
     config: &TPOConfig,
@@ -991,8 +1024,18 @@ mod tests {
                             theme.chart.bg.blend(config.value_area_color),
                         ] {
                             assert!(
-                                crate::theme::contrast(color, bg) >= 4.5,
+                                contrast(color, bg) >= 4.5,
                                 "{name}: {mode:?}, period {period}, price {price}"
+                            );
+                        }
+                        // TPODisplayMode::Both: a letter on its cell, dimmed or not.
+                        let cell =
+                            block_color(&config, &model, period, price, &profile, &theme.chart);
+                        for fill in [cell, theme.chart.bg.lerp_to_gamma(cell, 0.45)] {
+                            let letter = cell_letter_color(fill, &theme.chart);
+                            assert!(
+                                contrast(letter, theme.chart.bg.blend(fill)) >= 4.5,
+                                "{name}: {mode:?}, period {period}, price {price} in a cell"
                             );
                         }
                     }
@@ -1056,6 +1099,8 @@ mod tests {
                     (TPODisplayMode::Letters, 12.0),
                     (TPODisplayMode::Letters, 3.5),
                     (TPODisplayMode::Blocks, 12.0),
+                    (TPODisplayMode::Both, 12.0),
+                    (TPODisplayMode::Both, 3.5),
                 ] {
                     for (show_poc, show_value_area) in [(false, false), (false, true), (true, true)]
                     {
@@ -1091,9 +1136,15 @@ mod tests {
                                 .iter()
                                 .filter(|s| matches!(s.shape, Shape::Rect(_) | Shape::Text(_)))
                                 .collect();
-                            assert_eq!(painted.len(), cells.len());
-                            let letters = display_mode == TPODisplayMode::Letters && column >= 7.0;
-                            for (shape, (price, period, col)) in painted.iter().zip(cells) {
+                            let readable = column >= 7.0;
+                            let letters = display_mode == TPODisplayMode::Letters && readable;
+                            let in_cells = display_mode == TPODisplayMode::Both && readable;
+                            let shapes_per_cell = if in_cells { 2 } else { 1 };
+                            assert_eq!(painted.len(), cells.len() * shapes_per_cell);
+                            for (shapes, (price, period, col)) in
+                                painted.chunks(shapes_per_cell).zip(cells)
+                            {
+                                let shape = shapes[0];
                                 let mut color = if letters {
                                     letter_color(
                                         &render,
@@ -1104,11 +1155,13 @@ mod tests {
                                         &theme.chart,
                                     )
                                 } else {
-                                    readable_color(
-                                        entry_color(&render, &config, period, price, &profile),
-                                        theme.chart.axis_text,
-                                        &[theme.chart.bg],
-                                        3.0,
+                                    block_color(
+                                        &render,
+                                        &config,
+                                        period,
+                                        price,
+                                        &profile,
+                                        &theme.chart,
                                     )
                                 };
                                 if show_poc && price == 101.0 {
@@ -1134,6 +1187,19 @@ mod tests {
                                         )
                                         .round_to_pixels(density);
                                         assert_eq!(block.rect, expected);
+                                        if in_cells {
+                                            let Shape::Text(text) = &shapes[1].shape else {
+                                                panic!("no letter: {:?}", shapes[1].shape);
+                                            };
+                                            assert_eq!(
+                                                text.fallback_color,
+                                                cell_letter_color(color, &theme.chart)
+                                            );
+                                            let center = text.pos + text.galley.size() / 2.0;
+                                            let error = center - block.rect.center();
+                                            // The text position is snapped to physical pixels.
+                                            assert!(error.length() <= 1.0, "{error:?}");
+                                        }
                                     }
                                     Shape::Text(text) if letters => {
                                         assert_eq!(text.fallback_color, color)
