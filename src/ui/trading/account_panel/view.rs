@@ -42,7 +42,8 @@ impl Trading {
             0.0,
             theme.ui.btn_bg_hover,
         );
-        // Tab strip: the broker's tab with a Trade button, then minimize and maximize.
+        // Tab strip: maximize and minimize from the right edge, then the broker's tab with a Trade
+        // button in the rest of the row.
         ui.horizontal(|ui| {
             ui.set_height(TAB_HEIGHT);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

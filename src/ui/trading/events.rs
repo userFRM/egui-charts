@@ -723,9 +723,6 @@ mod tests {
         }
     }
 
-    /// Each fill's triangles sit under its own bar, also among fills on the bars beside it, with
-    /// labels on or off: a run of one-lot buys on ten bars in a row, and four buys on each of two
-    /// neighbouring bars, three triangles and "+1" each.
     /// What a broker pushes as the account's state when a stream starts, on connecting, on
     /// connecting again after a disconnect and after the stream lagged, raises no notification
     /// and asks for no sound; a fill, a working order and a rejection pushed later are each
@@ -789,6 +786,9 @@ mod tests {
         );
     }
 
+    /// Each fill's triangles sit under its own bar, also among fills on the bars beside it, with
+    /// labels on or off: a run of one-lot buys on ten bars in a row, and four buys on each of two
+    /// neighbouring bars, three triangles and "+1" each.
     #[test]
     fn fills_on_nearby_bars_stay_on_their_bars() {
         use crate::theme::ThemeExt;
