@@ -17,21 +17,17 @@ const PIN_HEAD_HEIGHT: f32 = 16.0;
 const PIN_POPUP_OFFSET: f32 = PIN_HEAD_HEIGHT + PIN_HEAD_RADIUS + 4.0;
 
 impl Drawing {
-    /// Paints a card holding `galley`: the theme's panel colour unless the drawing has a fill, with
-    /// a border and text in the drawing's colour.
+    /// Paints a card holding `galley` in the colours of [`Drawing::text_box_colors`].
     fn paint_card(&self, painter: &egui::Painter, rect: Rect, galley: Arc<Galley>) {
-        let color = self.color32();
-        let fill = self
-            .fill_color32()
-            .unwrap_or(painter.ctx().active_theme().ui.panel_bg);
+        let colors = self.text_box_colors(painter.ctx());
         painter.rect(
             rect,
             DESIGN_TOKENS.rounding.sm,
-            fill,
-            Stroke::new(stroke::HAIRLINE, color),
+            colors.fill,
+            colors.border,
             StrokeKind::Inside,
         );
-        painter.galley(rect.min + card_padding(), galley, color);
+        painter.galley(rect.min + card_padding(), galley, colors.text);
     }
 
     /// Renders a note: a label at the second anchor, joined to the anchor it annotates by a thin
@@ -45,7 +41,8 @@ impl Drawing {
             _ => l10n::text(painter.ctx(), "Text"),
         };
         let color = self.color32();
-        let galley = painter.layout_no_wrap(text, self.annotation_font(), color);
+        let galley =
+            self.annotation_galley(painter, text, self.text_box_colors(painter.ctx()).text);
         let corner = self.points.get(1).copied().unwrap_or(anchor);
         let label = Rect::from_min_size(corner, galley.size() + card_padding() * 2.0);
         paint_anchor_line(painter, label, anchor, color);
@@ -76,7 +73,8 @@ impl Drawing {
         painter.circle_filled(head, 2.0, painter.ctx().active_theme().chart.bg);
 
         if selected && let Some(text) = self.text.as_deref().filter(|text| !text.is_empty()) {
-            let galley = painter.layout_no_wrap(text.to_owned(), self.annotation_font(), color);
+            let text_color = self.text_box_colors(painter.ctx()).text;
+            let galley = self.annotation_galley(painter, text.to_owned(), text_color);
             let size = galley.size() + card_padding() * 2.0;
             let popup = Rect::from_min_size(
                 Pos2::new(tip.x - size.x / 2.0, tip.y - PIN_POPUP_OFFSET - size.y),
@@ -142,8 +140,8 @@ impl Drawing {
         if let Some(text) = &self.text
             && !text.is_empty()
         {
-            let font = self.annotation_font();
-            let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
+            let colors = self.text_box_colors(painter.ctx());
+            let galley = self.annotation_galley(painter, text.clone(), colors.text);
             let text_size = galley.size();
 
             let note_rect = Rect::from_min_size(
@@ -154,27 +152,19 @@ impl Drawing {
                 text_size + egui::vec2(8.0, 6.0),
             );
 
-            painter.rect_filled(
+            painter.rect(
                 note_rect,
                 DESIGN_TOKENS.rounding.sm,
-                DESIGN_TOKENS
-                    .semantic
-                    .extended
-                    .chart_axis_bg
-                    .gamma_multiply(0.86),
-            );
-            painter.rect_stroke(
-                note_rect,
-                DESIGN_TOKENS.rounding.sm,
-                Stroke::new(stroke::HAIRLINE, color),
+                colors.fill,
+                colors.border,
                 StrokeKind::Outside,
             );
-            painter.text(
-                note_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                text,
-                font,
-                color,
+            painter.galley(
+                egui::Align2::CENTER_CENTER
+                    .anchor_size(note_rect.center(), text_size)
+                    .min,
+                galley,
+                colors.text,
             );
         }
     }

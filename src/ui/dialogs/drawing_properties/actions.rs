@@ -212,6 +212,11 @@ impl DrawingProps {
             {
                 let settings = &template.settings;
                 drawing.font_weight = settings.font_weight;
+                drawing.italic = settings.italic;
+                drawing.text_color = settings.text_color;
+                drawing.background = settings.background;
+                drawing.border = settings.border;
+                drawing.border_color = settings.border_color;
                 drawing.arrow_start_style = settings.arrow_start_style;
                 drawing.arrow_end_style = settings.arrow_end_style;
                 drawing.custom_settings = settings.custom_settings.clone();
@@ -496,6 +501,11 @@ mod tests {
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
+            settings.italic = true;
+            settings.text_color = Some([1, 2, 3, 255]);
+            settings.background = false;
+            settings.border = false;
+            settings.border_color = Some([4, 5, 6, 255]);
             settings.arrow_start_style = crate::drawings::ArrowStyle::Arrow;
             settings.arrow_end_style = crate::drawings::ArrowStyle::None;
             let expected = format!("{:?}", settings.fib_config);
@@ -524,9 +534,15 @@ mod tests {
             assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
+            assert!(saved.italic && !saved.background && !saved.border);
+            assert_eq!(saved.text_color, Some([1, 2, 3, 255]));
+            assert_eq!(saved.border_color, Some([4, 5, 6, 255]));
             assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);
             assert_eq!(saved.arrow_end_style, crate::drawings::ArrowStyle::None);
             assert!(chart.drawings().drawings[1].fib_config.is_none());
+            let peer = &chart.drawings().drawings[1];
+            assert!(!peer.italic && peer.background && peer.border);
+            assert_eq!((peer.text_color, peer.border_color), (None, None));
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
             assert_eq!(

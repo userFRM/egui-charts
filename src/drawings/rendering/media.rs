@@ -87,17 +87,10 @@ impl Drawing {
             Some(Ok(TexturePoll::Pending { .. })) => "Loading image…",
             Some(_) => "Could not load image",
         };
+        let theme = painter.ctx().active_theme();
 
         // Background with subtle pattern (checkerboard for transparency indication)
-        painter.rect_filled(
-            frame_rect,
-            DESIGN_TOKENS.rounding.md,
-            DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_axis_bg
-                .gamma_multiply(0.9),
-        );
+        painter.rect_filled(frame_rect, DESIGN_TOKENS.rounding.md, theme.ui.panel_bg);
 
         // Checkerboard pattern (simplified), only the squares the painter can show: the anchors may
         // make the frame far larger than the screen.
@@ -173,11 +166,11 @@ impl Drawing {
         );
         painter.add(mountain2_shape);
 
-        // White reads on the dark frame and its checkers in every theme.
+        // The theme's text reads on its panel colour and on the grey checkers.
         let status = painter.layout(
             l10n::text(painter.ctx(), status),
             egui::FontId::proportional(typography::XS),
-            Color32::WHITE,
+            theme.ui.text,
             frame_rect.width() - 2.0 * DESIGN_TOKENS.spacing.sm,
         );
         painter.galley(
@@ -186,7 +179,7 @@ impl Drawing {
                 frame_rect.max.y - DESIGN_TOKENS.spacing.sm - status.size().y,
             ),
             status,
-            Color32::WHITE,
+            theme.ui.text,
         );
     }
 
