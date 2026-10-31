@@ -762,8 +762,8 @@ mod tests {
         let ctx = egui::Context::default();
         let mut chart = test_frames::chart(&[1.0, 5.0, 9.0], &[2.0, 6.0, 10.0]);
         test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
-        let time = chart.state.shown()[70].time;
-        chart.add_indicator(Box::new(
+        let time = chart.state.data().bars[70].time;
+        let id = chart.add_indicator(Box::new(
             VolumeWeightedAvgPrice::new().with_anchor(VwapAnchor::Earnings),
         ));
         chart.set_mark_source(Some(Arc::new(Source(MarksPage {
@@ -782,7 +782,10 @@ mod tests {
         let mut snapshot = chart.export_snapshot();
         assert_eq!(snapshot.time_scale_events.len(), 1);
         test_frames::frame(&ctx, &mut snapshot, 0.1, vec![]);
-        let value = |chart: &Chart| chart.indicators().next().unwrap().1.values().value(0, 80);
+        let value = |chart: &Chart| {
+            let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
+            study.values().value(0, 80)
+        };
         assert!(value(&chart).is_some());
         assert_eq!(value(&snapshot), value(&chart));
     }
