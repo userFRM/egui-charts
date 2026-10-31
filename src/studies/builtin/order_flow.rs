@@ -696,19 +696,16 @@ mod tests {
             study.calculate(&data[..11_000]);
             push(&study, 11_000, &[(1.0, Some(OrderSide::Buy))]);
             study.update(&data, 11_000);
-            let line = study.values().line(0);
-            results.push((line[11_000], line[1_001..1_010].iter().all(|v| v.is_nan())));
             let mut fresh = study.clone();
             fresh.calculate(&data);
-            // Compare all outputs, including dropped history and warm-up gaps.
+            let line = study.values().line(0);
             results.push((
-                0.0,
+                line[11_000],
+                line[1_001..1_010].iter().all(|v| v.is_nan()),
+                // All outputs, including dropped history and warm-up gaps.
                 format!("{:?}", lines(&study)) == format!("{:?}", lines(&fresh)),
             ));
         }
-        assert_eq!(
-            results,
-            [(10_000.0, false), (0.0, true), (10.0, true), (0.0, true)]
-        );
+        assert_eq!(results, [(10_000.0, false, true), (10.0, true, true)]);
     }
 }
