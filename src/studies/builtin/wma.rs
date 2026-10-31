@@ -54,7 +54,7 @@ impl WMA {
 /// Construct with the conventional default parameters.
 impl Default for WMA {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(9)
     }
 }
 

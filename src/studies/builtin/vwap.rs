@@ -36,7 +36,7 @@
 //! ```
 
 use super::clamp_param;
-use crate::model::{Bar, Session, SessionWindow, Timeframe, TimezoneId};
+use crate::model::{Bar, EventKind, Session, SessionWindow, TimeScaleEvent, Timeframe, TimezoneId};
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
@@ -60,17 +60,32 @@ pub enum VwapAnchor {
     Quarter,
     /// Each calendar year of trading days.
     Year,
-    /// Restart at timestamps supplied by the host with `with_event_anchors`.
+    /// Restart at timestamps the host supplies with `with_event_anchors` or types into the inputs.
     Events,
+    /// Each decade of trading days, 2020 to 2029 for example.
+    Decade,
+    /// Each century of trading days, 2000 to 2099 for example.
+    Century,
+    /// Restart at each earnings event the host gives the chart for its symbol.
+    Earnings,
+    /// Restart at each dividend event the host gives the chart for its symbol.
+    Dividends,
+    /// Restart at each split event the host gives the chart for its symbol.
+    Splits,
 }
 
-const VWAP_ANCHORS: [VwapAnchor; 6] = [
+const VWAP_ANCHORS: [VwapAnchor; 11] = [
     VwapAnchor::Session,
     VwapAnchor::Week,
     VwapAnchor::Month,
     VwapAnchor::Quarter,
     VwapAnchor::Year,
     VwapAnchor::Events,
+    VwapAnchor::Decade,
+    VwapAnchor::Century,
+    VwapAnchor::Earnings,
+    VwapAnchor::Dividends,
+    VwapAnchor::Splits,
 ];
 
 /// The most bands that the study inputs can hold.
@@ -120,7 +135,9 @@ impl VwapAnchor {
             Self::Month => (day.year(), day.month()),
             Self::Quarter => (day.year(), (day.month() - 1) / 3),
             Self::Year => (day.year(), 0),
-            Self::Events => (0, 0),
+            Self::Decade => (day.year().div_euclid(10), 0),
+            Self::Century => (day.year().div_euclid(100), 0),
+            Self::Events | Self::Earnings | Self::Dividends | Self::Splits => (0, 0),
         }
     }
 }
@@ -178,6 +195,8 @@ pub struct VolumeWeightedAvgPrice {
     event_anchors: Vec<DateTime<Utc>>,
     /// The zone in which the event anchor inputs are written.
     event_zone: TimezoneId,
+    /// The earnings, dividends and splits the chart holds for its symbol.
+    chart_events: Vec<(EventKind, DateTime<Utc>)>,
 }
 
 #[derive(Clone, Default)]
@@ -208,6 +227,7 @@ impl VolumeWeightedAvgPrice {
             percentage_bands: false,
             event_anchors: Vec::new(),
             event_zone: TimezoneId::utc(),
+            chart_events: Vec::new(),
         }
     }
 
@@ -487,8 +507,22 @@ impl Indicator for VolumeWeightedAvgPrice {
             (&self.time_zone, self.windows.as_slice()),
             |(zone, windows)| (zone, windows.as_slice()),
         );
+        let chart_kind = match self.anchor {
+            VwapAnchor::Earnings => Some(EventKind::Earnings),
+            VwapAnchor::Dividends => Some(EventKind::Dividend),
+            VwapAnchor::Splits => Some(EventKind::Split),
+            _ => None,
+        };
         // Inputs keep the events in the order they were written.
-        let mut events = self.event_anchors.clone();
+        let mut events: Vec<_> = if self.anchor == VwapAnchor::Events {
+            self.event_anchors.clone()
+        } else {
+            self.chart_events
+                .iter()
+                .filter(|(kind, _)| Some(*kind) == chart_kind)
+                .map(|(_, time)| *time)
+                .collect()
+        };
         events.sort_unstable();
         events.dedup();
         self.stepper
@@ -506,11 +540,7 @@ impl Indicator for VolumeWeightedAvgPrice {
                     trading_day(bar.time, zone, windows)
                 };
                 let current = Some(self.anchor.period(day));
-                let events = if self.anchor == VwapAnchor::Events {
-                    events.partition_point(|time| *time <= bar.time)
-                } else {
-                    0
-                };
+                let events = events.partition_point(|time| *time <= bar.time);
                 if current != state.period || events != state.events {
                     state.events = events;
                     state.period = current;
@@ -579,6 +609,30 @@ impl Indicator for VolumeWeightedAvgPrice {
         }
         self.instrument_session = session.map(|(zone, windows)| (zone, windows.to_vec()));
         true
+    }
+
+    fn set_time_scale_events(&mut self, events: &[TimeScaleEvent]) -> bool {
+        let corporate = |event: &&TimeScaleEvent| {
+            matches!(
+                event.kind,
+                EventKind::Earnings | EventKind::Dividend | EventKind::Split
+            )
+        };
+        let pairs = || {
+            events
+                .iter()
+                .filter(corporate)
+                .map(|event| (event.kind, event.time))
+        };
+        // Called every frame: no allocation while the events are unchanged.
+        if self.chart_events.iter().copied().eq(pairs()) {
+            return false;
+        }
+        self.chart_events = pairs().collect();
+        matches!(
+            self.anchor,
+            VwapAnchor::Earnings | VwapAnchor::Dividends | VwapAnchor::Splits
+        )
     }
 
     fn is_incremental(&self) -> bool {
@@ -835,6 +889,34 @@ mod tests {
                 ],
             },
             Case {
+                // No restart at the year, a restart at the decade.
+                name: "UTC decade",
+                zone: None,
+                window: None,
+                anchor: VwapAnchor::Decade,
+                bands: &[],
+                bars: &[
+                    ("2028-12-29 00:00", [101.0, 99.0, 100.0, 1000.0]),
+                    ("2029-01-02 00:00", [103.0, 101.0, 102.0, 1000.0]),
+                    ("2030-01-02 00:00", [111.0, 109.0, 110.0, 1000.0]),
+                ],
+                want: &[&[100.0], &[101.0], &[110.0]],
+            },
+            Case {
+                // No restart at the decade, a restart at the century.
+                name: "UTC century",
+                zone: None,
+                window: None,
+                anchor: VwapAnchor::Century,
+                bands: &[],
+                bars: &[
+                    ("2089-12-30 00:00", [101.0, 99.0, 100.0, 1000.0]),
+                    ("2090-01-03 00:00", [103.0, 101.0, 102.0, 1000.0]),
+                    ("2100-01-04 00:00", [111.0, 109.0, 110.0, 1000.0]),
+                ],
+                want: &[&[100.0], &[101.0], &[110.0]],
+            },
+            Case {
                 // The second day opens on a bar without volume: its typical price.
                 name: "bands",
                 zone: None,
@@ -1066,6 +1148,80 @@ mod tests {
             chart.indicators().next().unwrap().1.values().to_rows()[2],
             IndicatorValue::Single(v) if v == 14.0
         ));
+    }
+
+    /// Daily bars from 2 March with typical prices 100, 102, 104, 106 and volumes 1000, 1000,
+    /// 2000, 1000; earnings on the third bar's time and a dividend inside the first bar's day, so
+    /// restarting on the second bar, the first at or after it.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn vwap_restarts_at_the_chart_events_of_its_anchor() {
+        use crate::model::BarData;
+        use crate::widget::{Chart, test_frames::shapes};
+        let bars: Vec<_> = [
+            (100.0, 1000.0),
+            (102.0, 1000.0),
+            (104.0, 2000.0),
+            (106.0, 1000.0),
+        ]
+        .into_iter()
+        .zip(2..)
+        .map(|((price, volume), day)| {
+            let time = Utc.with_ymd_and_hms(2026, 3, day, 0, 0, 0).unwrap();
+            Bar::new(time, price, price, price, price, volume)
+        })
+        .collect();
+        let event = |kind, time| TimeScaleEvent {
+            id: format!("{kind:?}"),
+            time,
+            kind,
+            title: String::new(),
+            details: String::new(),
+        };
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_time_scale_events(vec![
+            event(
+                EventKind::Earnings,
+                Utc.with_ymd_and_hms(2026, 3, 4, 0, 0, 0).unwrap(),
+            ),
+            event(
+                EventKind::Dividend,
+                Utc.with_ymd_and_hms(2026, 3, 2, 12, 0, 0).unwrap(),
+            ),
+        ]);
+        let id = chart.add_indicator(
+            crate::studies::IndicatorFactory::new()
+                .create("VWAP")
+                .unwrap(),
+        );
+        let ctx = egui::Context::default();
+        let values = |chart: &Chart| -> Vec<f64> {
+            let study = chart.indicators().next().unwrap().1;
+            (0..4)
+                .map(|bar| study.values().value(0, bar).unwrap())
+                .collect()
+        };
+        let assert_close = |got: Vec<f64>, want: [f64; 4]| {
+            for (got, want) in got.iter().zip(want) {
+                assert!((got - want).abs() < 1e-9, "{got} != {want}");
+            }
+        };
+        let earnings = [100.0, 101.0, 104.0, 314000.0 / 3000.0];
+        let dividends = [100.0, 102.0, 310000.0 / 3000.0, 104.0];
+        let none = [100.0, 101.0, 102.5, 103.2];
+        for (anchor, want, now) in [(9, dividends, 1.0), (10, none, 2.0), (8, earnings, 3.0)] {
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("anchor", InputValue::Choice(anchor))
+                .unwrap();
+            shapes(&ctx, &mut chart, now, Vec::new());
+            assert_close(values(&chart), want);
+        }
+        // Earnings are the anchor from the last round; a change of events recalculates.
+        chart.set_time_scale_events(Vec::new());
+        shapes(&ctx, &mut chart, 4.0, Vec::new());
+        assert_close(values(&chart), none);
     }
 
     /// The local time of a bar at either end of the representable range is out of range

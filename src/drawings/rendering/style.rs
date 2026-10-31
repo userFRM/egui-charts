@@ -587,10 +587,15 @@ mod tests {
             GannBox,
             GannSquare,
             GannFixed,
+            Brush,
+            Highlighter,
         ] {
             for width in [1.0, 2.0, 3.0] {
                 let mut drawing = pattern(tool);
                 drawing.stroke_width = width;
+                if matches!(tool, Brush | Highlighter) {
+                    drawing.color = [41, 98, 255, 60];
+                }
                 let shapes = paint(&drawing);
                 let mut main = 0;
                 let mut details = 0;
@@ -627,6 +632,9 @@ mod tests {
                     if is_main {
                         main += 1;
                         assert_eq!(stroke.width, width, "{tool:?} main at {width}");
+                        if matches!(tool, Brush | Highlighter) {
+                            assert_eq!(stroke.color, drawing.color32(), "{tool:?} colour");
+                        }
                     } else if stroke.color != Color32::WHITE
                         && (stroke.color.a() < 255
                             || matches!(shape, Shape::Path(p) if p.closed && p.points.len() >= 8))

@@ -240,6 +240,8 @@ impl IndicatorFactory {
             "Volume" => [
                 Volume,
                 UpDownVolume,
+                VolumeDelta,
+                CumulativeVolumeDelta,
                 OnBalanceVolume,
                 VolumeWeightedAvgPrice,
                 AnchoredVWAP,

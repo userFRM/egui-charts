@@ -5,7 +5,7 @@ use crate::model::{Bar, PriceSource};
 use crate::studies::stepper::Stepper;
 use crate::studies::{
     CrossDirection, Indicator, IndicatorFill, IndicatorLineStyle, IndicatorMarker, IndicatorValue,
-    IndicatorValues, StudyInput,
+    IndicatorValues, InputKind, StudyInput,
 };
 use egui::Color32;
 
@@ -178,9 +178,14 @@ impl MACombination {
         .unwrap();
         study.directional = true;
         study.default_directional = true;
-        study.cross = [0, 0];
-        study.default_cross = [0, 0];
-        study
+        study.without_crossings()
+    }
+
+    /// Mark no crossings until a pair is chosen.
+    pub(super) fn without_crossings(mut self) -> Self {
+        self.cross = [0, 0];
+        self.default_cross = [0, 0];
+        self
     }
 
     /// A single-hue ribbon, all lines 1 px, without a fill or crossing markers.
@@ -210,15 +215,23 @@ impl MACombination {
         }
     }
 
-    /// The inputs a preset offers: those of its averages and, for a ribbon, its colouring by
-    /// direction. A preset keeps its number of averages and its crossing pair.
+    /// The inputs a preset offers: those of its averages, its crossing pair among them or None,
+    /// and, for a ribbon, its colouring by direction. A preset keeps its number of averages.
     pub(super) fn preset_inputs(&self, ribbon: bool) -> Vec<StudyInput> {
         self.inputs()
             .into_iter()
             .filter(|input| match input.id.as_str() {
-                "average_count" | "cross_first" | "cross_second" => false,
+                "average_count" => false,
                 "directional" => ribbon,
                 _ => true,
+            })
+            .map(|mut input| {
+                if let ("cross_first" | "cross_second", InputKind::Choice(picks)) =
+                    (input.id.as_str(), &mut input.kind)
+                {
+                    picks.truncate(self.lines.len() + 1);
+                }
+                input
             })
             .collect()
     }
@@ -226,7 +239,7 @@ impl MACombination {
 
 impl Indicator for MACombination {
     fn inputs(&self) -> Vec<crate::studies::StudyInput> {
-        use crate::studies::{InputKind, InputValue};
+        use crate::studies::InputValue;
         let kinds = [
             AverageType::Simple,
             AverageType::Exponential,
@@ -548,8 +561,13 @@ macro_rules! impl_ma_preset {
                 id: &str,
                 value: crate::studies::InputValue,
             ) -> Result<(), &'static str> {
-                if !self.inputs().iter().any(|input| input.id == id) {
-                    return Err("unknown study input");
+                let schema = self
+                    .inputs()
+                    .into_iter()
+                    .find(|input| input.id == id)
+                    .ok_or("unknown study input")?;
+                if !schema.accepts(&value) {
+                    return Err("study input is outside its accepted values");
                 }
                 self.inner.set_input(id, value)
             }
@@ -613,3 +631,60 @@ macro_rules! impl_ma_preset {
     };
 }
 pub(super) use impl_ma_preset;
+
+#[cfg(test)]
+mod tests {
+    use crate::model::Bar;
+    use crate::studies::test_support::make_bar;
+    use crate::studies::{IndicatorFactory, InputKind, InputValue};
+
+    /// Closes rise from 0 to 59, then fall from 60 to 1. At bar 59 the 9-bar mean (55) is above the
+    /// 21-bar mean (49) and the 20-bar (49.5) above the 50-bar (34.5); at bar 119 the 9-bar (5) is
+    /// below the 21-bar (11) and the 20-bar (10.5) below the 50-bar (25.5). So the first two
+    /// averages of every preset cross.
+    #[test]
+    fn presets_offer_their_crossing_pair_with_none() {
+        use InputValue::Choice;
+        let bars: Vec<Bar> = (0..60)
+            .chain((1..=60).rev())
+            .map(|close| make_bar(f64::from(close)))
+            .collect();
+        for (name, averages, marked) in [
+            ("MA Cross", 2, true),
+            ("EMA Cross", 2, true),
+            ("SMA/EMA Cross", 2, true),
+            ("Triple MA", 3, true),
+            ("Multi MA", 4, false),
+            ("MA Ribbon", 12, false),
+        ] {
+            let mut study = IndicatorFactory::new().create(name).unwrap();
+            let inputs = study.inputs();
+            for id in ["cross_first", "cross_second"] {
+                let input = inputs.iter().find(|input| input.id == id).unwrap();
+                let InputKind::Choice(picks) = &input.kind else {
+                    panic!("{name} {id}: {:?}", input.kind)
+                };
+                assert_eq!(
+                    (picks.len(), picks[0].as_str()),
+                    (averages + 1, "None"),
+                    "{name}"
+                );
+            }
+            study.calculate(&bars);
+            assert_eq!(!study.markers().is_empty(), marked, "{name} by default");
+            study.set_input("cross_first", Choice(1)).unwrap();
+            study.set_input("cross_second", Choice(2)).unwrap();
+            study.calculate(&bars);
+            assert!(!study.markers().is_empty(), "{name} with its first two");
+            study.set_input("cross_first", Choice(0)).unwrap();
+            study.calculate(&bars);
+            assert!(study.markers().is_empty(), "{name} with None");
+            assert!(
+                study
+                    .set_input("cross_first", Choice(averages + 1))
+                    .is_err(),
+                "{name} past its averages"
+            );
+        }
+    }
+}

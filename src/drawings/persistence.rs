@@ -34,7 +34,7 @@
 //!
 //! Drawings are grouped by symbol into a `DrawingStorage` container that
 //! includes a format version, metadata, and an optional timeframe filter.
-//! Loading migrates versions 1 and 2, rejects versions it does not know and
+//! Loading migrates versions 1 to 3, rejects versions it does not know and
 //! skips any drawing it cannot read
 //! (see [`from_json`](crate::drawings::persistence::DrawingStorage::from_json)).
 
@@ -317,9 +317,11 @@ impl Default for StorageMetadata {
 }
 
 impl DrawingStorage {
-    /// Current storage format version. Version 3 preserves editable ray and extended-line
-    /// extensions; versions 1 and 2 migrate to their former rendered reach when loaded.
-    pub const CURRENT_VERSION: u32 = 3;
+    /// Current storage format version. Version 4 draws brushes and highlighters at their stored
+    /// width and opacity; earlier versions load at the width and opacity their strokes were drawn
+    /// at. Version 3 preserves editable ray and extended-line extensions; versions 1 and 2 migrate
+    /// to their former rendered reach when loaded.
+    pub const CURRENT_VERSION: u32 = 4;
 
     /// Create new storage for a symbol
     pub fn new(symbol: impl Into<String>) -> Self {
@@ -429,7 +431,7 @@ impl DrawingStorage {
         serde_json::to_string_pretty(self).map_err(SaveError::Json)
     }
 
-    /// Deserialize from JSON, migrating versions 1 and 2 to the current format.
+    /// Deserialize from JSON, migrating versions 1 to 3 to the current format.
     ///
     /// Fails as a whole on invalid JSON, on a version this release does not
     /// know and on a missing or invalid symbol, timeframe or metadata. A
@@ -460,7 +462,7 @@ impl DrawingStorage {
         let load: fn(serde_json::Value) -> Result<StoredDrawing, serde_json::Error> = match version
         {
             1 => v1::load,
-            2 | Self::CURRENT_VERSION => |value| {
+            2..=Self::CURRENT_VERSION => |value| {
                 // Checked here, not in `Drawing`'s serde, which other formats share:
                 // serde's own error lists every variant.
                 if let Some(name) = value.pointer("/drawing/tool_type").and_then(|t| t.as_str()) {
@@ -523,6 +525,22 @@ impl DrawingStorage {
                             return Err(serde::de::Error::custom(format!(
                                 "non-finite or out-of-range {field}"
                             )));
+                        }
+                        if version < 4 {
+                            // Earlier renderers drew brushes at twice and highlighters at eight
+                            // times the stored width, highlighters at alpha 100 whatever the
+                            // colour's.
+                            let settings = &mut drawing.drawing;
+                            let factor = match tool {
+                                DrawingToolType::Brush => 2.0,
+                                DrawingToolType::Highlighter => {
+                                    settings.color[3] = 100;
+                                    8.0
+                                }
+                                _ => 1.0,
+                            };
+                            settings.stroke_width = (settings.stroke_width * factor)
+                                .min(super::validation::MAX_STROKE_WIDTH);
                         }
                         // Earlier placements stored fewer anchors. Keep their endpoints and
                         // supply editable controls before checking the current construction.
@@ -1243,8 +1261,43 @@ mod tests {
             }
         }
 
+        // Strokes saved before version 4 were drawn at twice (brush) and eight times
+        // (highlighter) their width, the highlighter at alpha 100. They load as drawn, once.
+        for (version, tool, width, alpha, want_width, want_alpha) in [
+            (2, DrawingToolType::Brush, 3.0, 200, 6.0, 200),
+            (3, DrawingToolType::Brush, 3.0, 200, 6.0, 200),
+            (3, DrawingToolType::Highlighter, 2.0, 255, 16.0, 100),
+            (3, DrawingToolType::Highlighter, 20.0, 40, 100.0, 100),
+            (4, DrawingToolType::Highlighter, 2.0, 40, 2.0, 40),
+        ] {
+            let mut saved: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+            saved["version"] = version.into();
+            let records = saved["drawings"].as_array_mut().unwrap();
+            records.truncate(1);
+            let settings = &mut records[0]["drawing"];
+            settings["tool_type"] = serde_json::to_value(tool).unwrap();
+            settings["stroke_width"] = width.into();
+            settings["color"] = serde_json::json!([10, 20, 30, alpha]);
+            let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool:?} v{version}: {skipped:?}");
+            let drawing = &loaded.drawings[0].drawing;
+            assert_eq!(
+                (drawing.stroke_width, drawing.color),
+                (want_width, [10, 20, 30, want_alpha]),
+                "{tool:?} v{version}"
+            );
+            let (again, _) = DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
+            assert_eq!(
+                again.drawings[0].drawing.stroke_width, want_width,
+                "{tool:?} v{version}: converted twice"
+            );
+        }
+
         // Settings from a file saved before the new fields and placement counts.
         for (tool, count, origins) in [
+            (DrawingToolType::Note, 1, &[0][..]),
+            (DrawingToolType::Signpost, 1, &[0][..]),
             (DrawingToolType::PriceNote, 1, &[0, 0][..]),
             (DrawingToolType::ArrowMarker, 1, &[0, 0][..]),
             (DrawingToolType::RotatedRect, 2, &[0, 1, 1][..]),
@@ -1457,11 +1510,11 @@ mod tests {
         assert!(!visibility.show_on_all);
         assert!(visibility.is_visible_on("2h") && !visibility.is_visible_on("1D"));
 
-        let got = DrawingStorage::from_json(&current.replace("\"version\": 3", "\"version\": 4"))
+        let got = DrawingStorage::from_json(&current.replace("\"version\": 4", "\"version\": 5"))
             .unwrap_err()
             .to_string();
         assert!(
-            got.contains("unsupported drawing storage version 4"),
+            got.contains("unsupported drawing storage version 5"),
             "{got}"
         );
     }

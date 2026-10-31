@@ -553,7 +553,8 @@ impl Chart {
 
     /// Caps the studies at `limit`, or lifts the cap with `None`. The cap applies to
     /// [`try_add_indicator`](Self::try_add_indicator) and to pasting a copied study, which the
-    /// terminal's dialogs and shortcuts use; studies already on the chart stay.
+    /// terminal's dialogs and shortcuts use, and to applying a study template set; studies
+    /// already on the chart stay.
     pub fn set_study_limit(&mut self, limit: Option<usize>) {
         self.study_limit = limit;
     }
@@ -599,6 +600,10 @@ impl Chart {
             indicator.set_value_formatter(self.volume_formatter.clone());
         }
         indicator.set_instrument(self.instrument());
+        indicator.set_time_scale_events(held_events(
+            &self.time_scale_events,
+            self.frozen_source_events,
+        ));
         indicator.set_bar_clock(&self.bar_clock());
         if let Some(crate::studies::StudySource::Study { id, plot }) = indicator.source() {
             let source = self
@@ -795,10 +800,12 @@ impl Chart {
         let instrument = self.instrument().cloned();
         let clock = self.bar_clock();
         let bars = &self.state.data().bars;
+        let events = held_events(&self.time_scale_events, self.frozen_source_events);
         for (at, study) in self.studies.indicators_mut().iter_mut().enumerate() {
             let instrument_changed = study.set_instrument(instrument.as_ref());
             let clock_changed = study.set_bar_clock(&clock);
-            if instrument_changed || clock_changed {
+            let events_changed = study.set_time_scale_events(events);
+            if instrument_changed || clock_changed || events_changed {
                 self.pending_from[at] = Some(0);
                 self.element_studies.dirty = true;
             }
@@ -965,6 +972,15 @@ struct Edge {
     near_live: bool,
     len: usize,
     tail: Option<Bar>,
+}
+
+/// The typed events studies read, without the mark source page an export froze at their end: a page
+/// covers only the visible range, so restarts on it would move while scrolling.
+fn held_events(
+    events: &[crate::model::TimeScaleEvent],
+    frozen: usize,
+) -> &[crate::model::TimeScaleEvent] {
+    &events[..events.len().saturating_sub(frozen)]
 }
 
 /// `bars` without the invalid ones, sorted by time, with the last of several bars of one slot of

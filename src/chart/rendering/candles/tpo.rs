@@ -815,7 +815,7 @@ fn draw_session_profile(
     }
 
     // Initial balance: a bar beside the profile from its low to its high.
-    if config.show_initial_balance && config.initial_balance_minutes > 0 {
+    if config.show_initial_balance && profile.initial_balance_high >= profile.initial_balance_low {
         let top = coords.price_to_y(profile.initial_balance_high);
         let bottom = coords.price_to_y(profile.initial_balance_low);
         painter.rect_filled(

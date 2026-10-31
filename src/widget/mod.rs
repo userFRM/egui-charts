@@ -113,6 +113,9 @@ mod snapshot;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod stored_drawings;
 mod studies;
+#[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
+mod study_templates;
 mod svg;
 
 #[cfg(feature = "drawings")]
@@ -352,6 +355,8 @@ pub struct Chart {
     pub(crate) indicator_source_request: Option<crate::studies::StudySource>,
     events: marks::TimeOrdered<crate::model::Marker>,
     time_scale_events: marks::TimeOrdered<crate::model::TimeScaleEvent>,
+    /// How many of `time_scale_events`, at their end, an export froze from a mark source.
+    frozen_source_events: usize,
     event_visibility: crate::model::EventVisibility,
     mark_source: Option<marks::MarkSource>,
     signal_sources: Vec<signals::SignalSource>,

@@ -5,10 +5,13 @@ use crate::chart::decimals;
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
+use crate::ui::connection_status::show_connection_status_with_label;
 use crate::ui::trading::widgets::{SECTION_TITLE_SIZE, hit, side_fill, side_name, text, track};
 use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
-use egui::{Align, Align2, Layout, Rect, RichText, Role, Sense, Ui, WidgetInfo, vec2};
+use egui::{
+    Align, Align2, Label, Layout, Rect, RichText, Role, Sense, Ui, UiBuilder, WidgetInfo, vec2,
+};
 
 impl OrderTicket {
     /// Draws the ticket's contents into `ui`, the panel the host gives it. Returns what the user
@@ -140,7 +143,8 @@ impl OrderTicket {
         action
     }
 
-    /// The symbol, the menu of presets and one-click trading, and the close button.
+    /// The symbol with the broker's status while it is not live, the menu of presets and
+    /// one-click trading, and the close button.
     fn header(
         &mut self,
         ui: &mut Ui,
@@ -150,11 +154,6 @@ impl OrderTicket {
     ) {
         ui.horizontal(|ui| {
             ui.set_min_height(32.0);
-            ui.label(
-                RichText::new(&self.symbol)
-                    .strong()
-                    .size(SECTION_TITLE_SIZE),
-            );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if IconButton::new(&icons::CLOSE)
                     .icon_scale(1.0)
@@ -171,6 +170,30 @@ impl OrderTicket {
                 egui::Popup::menu(&more)
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                     .show(|ui| self.more(ui, market, presets, one_click));
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    // A long symbol gives way, so that the status stays clear of the buttons.
+                    let status = market.offline.as_ref().map_or(0.0, |state| {
+                        let mut measure = ui.new_child(UiBuilder::new().invisible());
+                        show_connection_status_with_label(&mut measure, state)
+                            .rect
+                            .width()
+                            + ui.spacing().item_spacing.x
+                    });
+                    let width = (ui.available_width() - status).max(0.0);
+                    ui.allocate_ui(vec2(width, ui.available_height()), |ui| {
+                        ui.add(
+                            Label::new(
+                                RichText::new(&self.symbol)
+                                    .strong()
+                                    .size(SECTION_TITLE_SIZE),
+                            )
+                            .truncate(),
+                        );
+                    });
+                    if let Some(state) = &market.offline {
+                        show_connection_status_with_label(ui, state);
+                    }
+                });
             });
         });
     }
@@ -386,6 +409,7 @@ mod tests {
                     balance: None,
                     rules: &rules,
                     rules_ready: true,
+                    offline: None,
                     capabilities: Capabilities {
                         market: true,
                         limit: true,
@@ -497,6 +521,7 @@ mod tests {
             capabilities,
             rules: &rules,
             rules_ready: true,
+            offline: None,
             ladder: None,
             ladder_unavailable: None,
             highlights: Vec::new(),

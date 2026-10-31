@@ -75,7 +75,7 @@ impl SMA {
 /// Construct with the conventional default parameters.
 impl Default for SMA {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(9)
     }
 }
 

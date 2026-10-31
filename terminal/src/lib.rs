@@ -221,11 +221,39 @@ impl Terminal {
         self
     }
 
-    /// Keeps drawings, settings, layouts and templates in `service`.
+    /// Keeps drawings, settings, layouts and templates in `service`. Before the application
+    /// closes, wait until [`flush_storage`](Self::flush_storage) returns `true`, or edits still
+    /// being written are lost.
     pub fn with_storage(mut self, service: Arc<dyn Storage>) -> Self {
         self.settings = Some(SettingsStore::new(service.clone()));
         self.services.storage = Some(service);
         self
+    }
+
+    /// Writes changed drawings and settings now and retries failed writes, taking in the answers
+    /// storage gave already without waiting for others. Returns `true` once storage has
+    /// acknowledged the drawings of every chart and the settings, and at once without
+    /// [`with_storage`](Self::with_storage).
+    ///
+    /// Dropping the terminal does this once without waiting, so a write queued behind an
+    /// unanswered one is lost. To keep every edit, a host waits for `true` before it lets the
+    /// application close: when the window is asked to close
+    /// ([`egui::ViewportInfo::close_requested`]), it cancels with
+    /// [`egui::ViewportCommand::CancelClose`] and keeps showing the terminal, calling this every
+    /// frame. Bound the wait: a storage that keeps failing, drawings or settings that could not be
+    /// read and a storage conflict the user has not settled keep it `false`.
+    pub fn flush_storage(&mut self) -> bool {
+        let mut flushed = true;
+        if self.settings.is_some() {
+            let current = self.user_settings();
+            if let Some(settings) = &mut self.settings {
+                flushed &= settings.flush(&current);
+            }
+        }
+        for chart in &mut self.charts {
+            flushed &= chart.flush_stored_drawings();
+        }
+        flushed
     }
 
     /// Keeps and evaluates alerts through `service`.
@@ -374,17 +402,10 @@ impl Terminal {
 }
 
 impl Drop for Terminal {
-    /// Writes changed settings and drawings, as an application does when it exits.
+    /// Writes changed settings and drawings without waiting for storage, as an application does
+    /// when it exits; [`Terminal::flush_storage`] lets the host wait.
     fn drop(&mut self) {
-        if self.settings.is_some() {
-            let current = self.user_settings();
-            if let Some(settings) = &mut self.settings {
-                settings.flush(&current);
-            }
-        }
-        for chart in &mut self.charts {
-            chart.flush_stored_drawings();
-        }
+        self.flush_storage();
     }
 }
 
@@ -493,10 +514,13 @@ mod tests {
                 .expect("the dialog asks");
             assert!(screen.text_at("Drawings changed elsewhere").is_some());
             click(&mut mine, SIZE, screen.text_at(button).unwrap());
-            for _ in 0..3 {
-                frame(&mut mine, SIZE, vec![]);
-            }
-            assert_eq!(frame(&mut mine, SIZE, vec![]).text_at(button), None);
+            // Only a kept copy is offered, to load or discard.
+            let screens: Vec<_> = (0..5).map(|_| frame(&mut mine, SIZE, vec![])).collect();
+            let offered = screens
+                .iter()
+                .any(|screen| screen.text_at("Load").is_some());
+            assert_eq!(offered, button == "Keep both", "{button}");
+            assert_eq!(screens[4].text_at(button), None);
             let prices = |name: &str| {
                 let json = storage.get(StoreKind::Drawings, name)?;
                 let (stored, _) = DrawingStorage::from_json(&json).unwrap();

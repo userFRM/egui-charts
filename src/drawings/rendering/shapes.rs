@@ -2,7 +2,7 @@
 //!
 //! Includes: rotated rect, double curve, brush, highlighter, path, curve, and sine line.
 
-use crate::drawings::domain::{Drawing, DrawingToolType};
+use crate::drawings::domain::Drawing;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Shape, Stroke};
 
@@ -109,43 +109,11 @@ impl Drawing {
         )
     }
 
-    /// The width a brush is drawn at: twice the stroke width for the brush,
-    /// eight times for the highlighter; `None` for other tools.
-    pub(crate) fn brush_width(&self) -> Option<f32> {
-        match self.tool_type {
-            DrawingToolType::Brush => Some(self.stroke_width * 2.0),
-            DrawingToolType::Highlighter => Some(self.stroke_width * 8.0),
-            _ => None,
-        }
-    }
-
+    /// Brush and highlighter strokes: one path through the samples at the drawing's width and
+    /// colour, so a translucent stroke does not darken where its segments meet.
     pub(crate) fn render_brush(&self, painter: &egui::Painter) {
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-        for (i, &point) in self.points.iter().enumerate() {
-            if i > 0 {
-                painter.line_segment(
-                    [self.points[i - 1], point],
-                    Stroke::new(self.brush_width().unwrap_or(self.stroke_width), color),
-                );
-            }
-        }
-    }
-
-    pub(crate) fn render_highlighter(&self, painter: &egui::Painter) {
-        let color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 100);
-        for (i, &point) in self.points.iter().enumerate() {
-            if i > 0 {
-                painter.line_segment(
-                    [self.points[i - 1], point],
-                    Stroke::new(self.brush_width().unwrap_or(self.stroke_width), color),
-                );
-            }
+        if self.points.len() >= 2 {
+            painter.add(Shape::line(self.points.clone(), self.stroke()));
         }
     }
 
@@ -243,6 +211,7 @@ pub(super) fn curve_points(p0: Pos2, p1: Pos2, p2: Pos2) -> Vec<Pos2> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drawings::domain::DrawingToolType;
 
     #[test]
     fn shape_and_fan_geometry_uses_the_placed_controls() {

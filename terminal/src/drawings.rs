@@ -10,7 +10,7 @@ use egui_charts::ui::Control;
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
 use egui_charts::ui::dialogs::{
     DrawingContextMenuAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
-    StudyContextMenuAction,
+    LocalCopiesDialog, StudyContextMenuAction,
 };
 use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
 use egui_charts::ui::drawing_toolbar::{
@@ -49,6 +49,8 @@ pub(super) struct State {
     selection_toolbar: FloatingSelectionToolbar,
     object_tree: ObjectTreePanel,
     properties: DrawingPropertiesDialog,
+    /// The copies of the active chart's drawings that the user kept in a conflict.
+    local_copies: LocalCopiesDialog,
     /// Whether the data window is folded in its own panel.
     data_window_folded: bool,
     /// The last pointer position a chart reported, with its slot, which the data window reads
@@ -92,6 +94,9 @@ impl Terminal {
                     self.emit(Action::ChartMenu(ChartContextAction::Drawing(action)));
                 }
                 self.show_drawing_properties(ui.ctx());
+                self.drawings
+                    .local_copies
+                    .show(ui.ctx(), &mut self.charts[self.active]);
             }
             Region::Top | Region::Bottom => {}
         }
@@ -196,7 +201,15 @@ impl Terminal {
     }
 
     pub(super) fn drawings_modal(&self) -> bool {
-        self.drawings.properties.is_open
+        self.drawings.properties.is_open || self.drawings.local_copies.is_open()
+    }
+
+    /// Offers the copies kept of the drawings of `symbol`, if the active chart shows it.
+    pub(super) fn offer_local_copies(&mut self, symbol: &str) {
+        let chart = &mut self.charts[self.active];
+        if chart.symbol() == symbol {
+            self.drawings.local_copies.open(chart);
+        }
     }
 
     /// Shows the drawing toolbar in line with the active chart and queues what it emitted.
@@ -1345,37 +1358,57 @@ mod tests {
     #[test]
     fn drawings_and_drawing_defaults_survive_a_restart() {
         use super::super::test_support::MemoryStorage;
-        let storage = Arc::new(MemoryStorage::default());
-        let mut terminal = Terminal::new(Arc::new(TestFeed))
-            .with_symbol("AAPL")
-            .with_storage(storage.clone());
-        for _ in 0..6 {
-            frame(&mut terminal, SIZE, vec![]);
+        // Whether the storage holds its writes until the host has waited for them.
+        for held in [false, true] {
+            let storage = Arc::new(MemoryStorage::default());
+            let mut terminal = Terminal::new(Arc::new(TestFeed))
+                .with_symbol("AAPL")
+                .with_storage(storage.clone());
+            for _ in 0..6 {
+                frame(&mut terminal, SIZE, vec![]);
+            }
+            let mut template = DrawingTemplate::from_drawing(&line(0));
+            template.settings.stroke_width = 4.0;
+            terminal
+                .chart_mut()
+                .drawings_mut()
+                .tool_defaults
+                .insert(DrawingToolType::TrendLine, template);
+            let draw = |terminal: &mut Terminal| {
+                terminal
+                    .chart_mut()
+                    .user_action(|chart| chart.drawings_mut().add_drawing(line(0)).unwrap());
+            };
+            if held {
+                // The first line's write is unanswered when the second line is drawn.
+                storage.hold();
+                draw(&mut terminal);
+                frame(&mut terminal, SIZE, vec![]);
+            }
+            // Written when the terminal closes, with no frame after the edit.
+            draw(&mut terminal);
+            if held {
+                assert!(!terminal.flush_storage(), "a write is unanswered");
+                storage.release();
+                assert!(terminal.flush_storage());
+            }
+            drop(terminal);
+            let mut restored = Terminal::new(Arc::new(TestFeed))
+                .with_symbol("AAPL")
+                .with_storage(storage);
+            for _ in 0..6 {
+                frame(&mut restored, SIZE, vec![]);
+            }
+            assert_eq!(
+                restored.chart().drawings().drawings.len(),
+                1 + usize::from(held)
+            );
+            let defaults = &restored.chart().drawings().tool_defaults;
+            assert_eq!(defaults.len(), 1);
+            assert_eq!(
+                defaults[&DrawingToolType::TrendLine].settings.stroke_width,
+                4.0
+            );
         }
-        let mut template = DrawingTemplate::from_drawing(&line(0));
-        template.settings.stroke_width = 4.0;
-        terminal
-            .chart_mut()
-            .drawings_mut()
-            .tool_defaults
-            .insert(DrawingToolType::TrendLine, template);
-        // Written when the terminal closes, with no frame after the edit.
-        terminal
-            .chart_mut()
-            .user_action(|chart| chart.drawings_mut().add_drawing(line(0)).unwrap());
-        drop(terminal);
-        let mut restored = Terminal::new(Arc::new(TestFeed))
-            .with_symbol("AAPL")
-            .with_storage(storage);
-        for _ in 0..6 {
-            frame(&mut restored, SIZE, vec![]);
-        }
-        assert_eq!(restored.chart().drawings().drawings.len(), 1);
-        let defaults = &restored.chart().drawings().tool_defaults;
-        assert_eq!(defaults.len(), 1);
-        assert_eq!(
-            defaults[&DrawingToolType::TrendLine].settings.stroke_width,
-            4.0
-        );
     }
 }

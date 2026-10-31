@@ -709,7 +709,7 @@ mod tests {
         for finish in ["Ok", "Cancel", "Escape", "close", "reopen"] {
             let ctx = Context::default();
             let mut chart = Chart::new(BarData::new());
-            for (id, width) in [(7, 2.0), (8, 4.0), (9, 6.0)] {
+            for (id, width) in [(7, 20.0), (8, 4.0), (9, 6.0)] {
                 let mut drawing = Drawing::new(id, Tool::TrendLine);
                 drawing.stroke_width = width;
                 drawing.chart_points =
@@ -730,6 +730,11 @@ mod tests {
                 chart.drawings().drawings[1].stroke_width,
                 4.0,
                 "opening a selection is not an edit"
+            );
+            assert_eq!(
+                chart.drawings().drawings[0].stroke_width,
+                20.0,
+                "opening keeps a wide stroke"
             );
             assert!(!chart.can_undo());
             for width in [3.0, 5.0] {
@@ -774,7 +779,7 @@ mod tests {
                     if finish == "reopen" {
                         dialog.open_for_chart(&chart, DrawingId(9));
                         frame(&mut dialog, &mut chart, &ctx, vec![]);
-                        assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0);
+                        assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0);
                         assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0);
                     }
                     dialog.close();
@@ -790,7 +795,7 @@ mod tests {
             let restored = &chart.drawings().drawings[0];
             assert_eq!(restored.position_target_color, None, "{finish}");
             assert_eq!(restored.position_stop_color, None, "{finish}");
-            assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0, "{finish}");
+            assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");
             assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0, "{finish}");
             assert_eq!(
                 chart.drawings().drawings[0].chart_points[1].price,
@@ -804,7 +809,7 @@ mod tests {
             } else {
                 assert!(chart.redo(), "{finish}: cancellation retains existing redo");
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 8.0);
-                assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0);
+                assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0);
             }
         }
     }

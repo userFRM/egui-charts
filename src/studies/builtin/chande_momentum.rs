@@ -36,7 +36,7 @@ impl ChandeMomentumOscillator {
 
 impl Default for ChandeMomentumOscillator {
     fn default() -> Self {
-        Self::new(14)
+        Self::new(9)
     }
 }
 

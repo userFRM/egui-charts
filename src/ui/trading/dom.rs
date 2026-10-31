@@ -182,6 +182,9 @@ impl Ladder {
         let numbers = market.numbers();
         let wanted = *quantity;
         let order = |side, order_type| -> Result<OrderRequest, String> {
+            if market.offline.is_some() {
+                return Err("Waiting for the broker to connect".into());
+            }
             if !market.rules_ready {
                 return Err("Waiting for the symbol's trading rules".into());
             }
@@ -1231,6 +1234,7 @@ mod tests {
                             },
                             rules: &rules,
                             rules_ready: true,
+                            offline: None,
                             ladder: Some(std::borrow::Cow::Borrowed(&book)),
                             ladder_unavailable: None,
                             highlights: Vec::new(),
@@ -1410,6 +1414,7 @@ mod tests {
                 capabilities: Capabilities::default(),
                 rules: &rules,
                 rules_ready: true,
+                offline: None,
                 ladder: book.as_ref().map(std::borrow::Cow::Borrowed),
                 ladder_unavailable: None,
                 highlights: Vec::new(),

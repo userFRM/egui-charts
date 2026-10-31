@@ -68,9 +68,10 @@ pub struct TPOProfile {
     pub value_area_high: f64,
     /// Price of its lowest row.
     pub value_area_low: f64,
-    /// Highest price during the configured initial balance period.
+    /// Highest price of the bars that open within the configured initial balance period, or
+    /// `f64::MIN` when none does, so the profile has no initial balance.
     pub initial_balance_high: f64,
-    /// Lowest price during the configured initial balance period.
+    /// Lowest price of those bars, or `f64::MAX` when none does.
     pub initial_balance_low: f64,
     /// Profile high
     pub profile_high: f64,
@@ -202,8 +203,8 @@ impl TPOProfile {
             poc_price: 0.0,
             value_area_high: 0.0,
             value_area_low: 0.0,
-            initial_balance_high: 0.0,
-            initial_balance_low: 0.0,
+            initial_balance_high: f64::MIN,
+            initial_balance_low: f64::MAX,
             profile_high: f64::MIN,
             profile_low: f64::MAX,
             opening_price: 0.0,
@@ -380,8 +381,13 @@ pub(crate) fn session_starts(
 /// extended and regular hours with `config.split_sessions` and combined over
 /// `config.composites`. A session's periods are whole multiples of
 /// `config.period_minutes`, or of the clock's interval when longer, since its
-/// first bar, so a gap leaves empty periods, and each period places one letter
-/// on every row its bars touched.
+/// open: that of its trading day with intraday bars and trading hours, or of
+/// its stretch of extended or regular hours when split, whatever time its
+/// first bar has. Calendar days, daily and longer bars and bars split off
+/// outside the hours count from their first bar, since their open is not
+/// known. A gap leaves empty periods, and each period places one letter on
+/// every row its bars touched. The initial balance covers the bars that open
+/// within `config.initial_balance_minutes` of the same instant.
 ///
 /// Rows are `config.tick_size` widened so the bars cover at most about 1,000
 /// rows (see [`TPOProfile::tick_size`]). With `config.instrument_tick` rows are
@@ -411,13 +417,14 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
 
     let mut profiles: Vec<TPOProfile> = Vec::new();
     let mut current_profile: Option<TPOProfile> = None;
-    let mut current_session_start: Option<DateTime<Utc>> = None;
+    let mut session_open = bars[0].time;
     // The open period: its index, first bar time and row-range endpoints
     let mut period_idx = 0;
     let mut period_ts = bars[0].time;
     let interval_minutes = clock.timeframe().map_or(0, |t| t.duration_ms() / 60_000);
     let period_minutes = i64::from(config.period_minutes.max(1)).max(interval_minutes);
-    let mut starts = session_starts(bars, &clock.sessions(), config.split_sessions)
+    let sessions = clock.sessions();
+    let mut starts = session_starts(bars, &sessions, config.split_sessions)
         .into_iter()
         .peekable();
     let grid = level_grid(bars, config.tick_size);
@@ -449,12 +456,13 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
         while starts.next_if(|&start| start <= i).is_some() {
             is_new_session = true;
         }
-        let bar_period = match current_session_start {
-            Some(start) if !is_new_session => {
-                ((bar.time - start).num_minutes().max(0) / period_minutes) as usize
-            }
-            _ => 0,
-        };
+        if is_new_session {
+            session_open = sessions
+                .session_open(bar.time, config.split_sessions)
+                .unwrap_or(bar.time);
+        }
+        let elapsed = (bar.time - session_open).num_minutes().max(0);
+        let bar_period = (elapsed / period_minutes) as usize;
 
         if is_new_session || bar_period != period_idx {
             if let Some(ref mut profile) = current_profile {
@@ -482,18 +490,9 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
             current_profile = Some(TPOProfile {
                 instrument_tick: tick,
                 row_ticks,
+                opening_price: bar.open,
                 ..TPOProfile::new(bar.time, row)
             });
-            current_session_start = Some(bar.time);
-
-            // The opening price, and the initial balance from the session's first bar
-            if let Some(ref mut profile) = current_profile {
-                profile.opening_price = bar.open;
-                if config.initial_balance_minutes > 0 {
-                    profile.initial_balance_high = bar.high;
-                    profile.initial_balance_low = bar.low;
-                }
-            }
         }
 
         let (lo, hi) = (
@@ -510,14 +509,9 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
             profile.profile_low = profile.profile_low.min(bar.low);
 
             // Update initial balance (first N minutes)
-            if let Some(session_start) = current_session_start {
-                let elapsed = (bar.time - session_start).num_minutes();
-                if config.initial_balance_minutes > 0
-                    && elapsed < config.initial_balance_minutes as i64
-                {
-                    profile.initial_balance_high = profile.initial_balance_high.max(bar.high);
-                    profile.initial_balance_low = profile.initial_balance_low.min(bar.low);
-                }
+            if elapsed < i64::from(config.initial_balance_minutes) {
+                profile.initial_balance_high = profile.initial_balance_high.max(bar.high);
+                profile.initial_balance_low = profile.initial_balance_low.min(bar.low);
             }
         }
     }
@@ -906,7 +900,7 @@ mod tests {
             false,
         );
         let stock = BarClock::new(Timeframe::Min30).with_session(
-            new_york,
+            new_york.clone(),
             Session::new([SessionWindow::new(weekdays, at(9, 30), at(16, 0))])
                 .with_extended_windows([
                     SessionWindow::new(weekdays, at(4, 0), at(9, 30)),
@@ -926,7 +920,7 @@ mod tests {
             Vec<RangeInclusive<DateTime<Utc>>>,
             &'a [(i64, &'a str)],
         );
-        let cases: [Case; 6] = [
+        let cases: [Case; 8] = [
             (
                 "exchange day across UTC midnight",
                 overnight,
@@ -941,7 +935,8 @@ mod tests {
                 (0..19).map(|i| i * 30).collect(),
                 false,
                 vec![],
-                &[(0, "ABCDEFGHIJKLMNOPQRS")],
+                // Pre-market opens at 04:00, eight periods before the first bar at 08:00
+                &[(0, "IJKLMNOPQRSTUVWXYZa")],
             ),
             (
                 "split at extended hours",
@@ -949,7 +944,37 @@ mod tests {
                 (0..19).map(|i| i * 30).collect(),
                 true,
                 vec![],
-                &[(0, "ABC"), (90, "ABCDEFGHIJKLM"), (480, "ABC")],
+                &[(0, "IJK"), (90, "ABCDEFGHIJKLM"), (480, "ABC")],
+            ),
+            // Post-market opens where regular hours close, inside its all-day extended window
+            (
+                "split inside an extended window spanning regular hours",
+                BarClock::new(Timeframe::Min30).with_session(
+                    new_york.clone(),
+                    Session::new([SessionWindow::new(weekdays, at(9, 30), at(16, 0))])
+                        .with_extended_windows([SessionWindow::new(weekdays, at(4, 0), at(20, 0))]),
+                    true,
+                ),
+                vec![540, 570],
+                true,
+                vec![],
+                &[(540, "CD")],
+            ),
+            // No extended hours divide a lunch break, so 13:00 counts from the 09:00 open
+            (
+                "split across a lunch break",
+                BarClock::new(Timeframe::Min30).with_session(
+                    new_york.clone(),
+                    Session::new([
+                        SessionWindow::new(weekdays, at(9, 0), at(11, 30)),
+                        SessionWindow::new(weekdays, at(12, 30), at(15, 0)),
+                    ]),
+                    false,
+                ),
+                vec![300],
+                true,
+                vec![],
+                &[(300, "I")],
             ),
             (
                 "hourly bars take one period each",
@@ -998,6 +1023,82 @@ mod tests {
                 .collect();
             let expected: Vec<_> = expected.iter().map(|&(m, l)| (m, l.to_owned())).collect();
             assert_eq!(profiles, expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn periods_and_initial_balance_count_from_the_session_open() {
+        use crate::model::{Session, SessionWindow, TimezoneId};
+        use chrono::{NaiveTime, Weekday::*};
+        let at = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        // Regular hours 09:30 to 16:00 New York (UTC-5); 2024-03-05 opens at 14:30 UTC.
+        let clock = BarClock::new(Timeframe::Min5).with_session(
+            TimezoneId::fixed_offset(-5 * 3600).unwrap(),
+            Session::new([SessionWindow::new(
+                [Mon, Tue, Wed, Thu, Fri],
+                at(9, 30),
+                at(16, 0),
+            )]),
+            false,
+        );
+        let open = Utc.with_ymd_and_hms(2024, 3, 5, 14, 30, 0).unwrap();
+        // (case, bars as (minutes after the open, low, high), letters as (letter, row), initial
+        // balance as (high, low)), tick 1, 30-minute periods
+        type Case<'a> = (
+            &'a str,
+            &'a [(i64, f64, f64)],
+            &'a [(char, f64)],
+            (f64, f64),
+        );
+        let cases: [Case; 2] = [
+            // First trade at 09:45. A is 09:30 to 10:00, B 10:00 to 10:30, C 10:30 to 11:00: the
+            // 10:05 bar prints B and the 10:40 bar C, after the 09:30 to 10:30 initial balance.
+            (
+                "late first bar",
+                &[(15, 100.0, 101.0), (35, 101.0, 102.0), (70, 103.0, 104.0)],
+                &[
+                    ('A', 100.0),
+                    ('A', 101.0),
+                    ('B', 101.0),
+                    ('B', 102.0),
+                    ('C', 103.0),
+                    ('C', 104.0),
+                ],
+                (102.0, 100.0),
+            ),
+            // History that starts at 11:00, 90 minutes after the open: the fourth period, D, past
+            // the initial balance.
+            (
+                "history from 11:00",
+                &[(90, 100.0, 100.0), (125, 101.0, 101.0)],
+                &[('D', 100.0), ('E', 101.0)],
+                (f64::MIN, f64::MAX),
+            ),
+        ];
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        for (case, bars, letters, initial_balance) in cases {
+            let bars: Vec<_> = bars
+                .iter()
+                .map(|&(m, low, high)| bar_at(open, m, low, high, low, high))
+                .collect();
+            let profiles = to_tpo_profiles(&bars, &config, &clock);
+            assert_eq!(profiles.len(), 1, "{case}");
+            let profile = &profiles[0];
+            let mut placed: Vec<_> = profile
+                .letters
+                .iter()
+                .map(|l| (l.letter, l.price))
+                .collect();
+            placed.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            assert_eq!(placed, letters, "{case}");
+            assert_eq!(
+                (profile.initial_balance_high, profile.initial_balance_low),
+                initial_balance,
+                "{case}"
+            );
         }
     }
 

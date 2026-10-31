@@ -444,10 +444,6 @@ pub struct AnnotationSizingTokens {
     pub callout_padding_y: f32,
     /// Pointer size, in egui logical points.
     pub pointer_size: f32,
-    /// Note size, in egui logical points.
-    pub note_size: f32,
-    /// Note fold size, in egui logical points.
-    pub note_fold_size: f32,
     /// Table cell width, in egui logical points.
     pub table_cell_width: f32,
     /// Table cell height, in egui logical points.
@@ -456,10 +452,6 @@ pub struct AnnotationSizingTokens {
     pub table_header_height: f32,
     /// Horizontal signpost padding, in egui logical points.
     pub signpost_padding_x: f32,
-    /// Vertical signpost padding, in egui logical points.
-    pub signpost_padding_y: f32,
-    /// Signpost bracket, in egui logical points.
-    pub signpost_bracket: f32,
     /// Vertical text padding, in egui logical points.
     pub text_padding_y: f32,
 }

@@ -637,6 +637,15 @@ impl Indicator for ConfiguredStudy {
             false
         }
     }
+    fn set_time_scale_events(&mut self, events: &[crate::model::TimeScaleEvent]) -> bool {
+        // A study calculated on another symbol has none of the chart's events.
+        self.study
+            .set_time_scale_events(if self.calculation_symbol.is_empty() {
+                events
+            } else {
+                &[]
+            })
+    }
     fn set_timeframe(&mut self, timeframe: Timeframe) {
         self.timeframe = Some(timeframe);
         self.clock = crate::model::BarClock::new(timeframe);
