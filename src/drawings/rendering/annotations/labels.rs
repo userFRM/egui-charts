@@ -33,11 +33,7 @@ pub(super) fn facing_point(rect: Rect, target: Pos2) -> Pos2 {
 /// White or black, whichever reads on `fill`, by the rule the price axis tags use. The chart
 /// behind a translucent fill is not known here, so the colour the user picked decides.
 pub(super) fn label_text_color(fill: Color32) -> Color32 {
-    if crate::theme::contrast(Color32::WHITE, fill.to_opaque()) >= 2.0 {
-        Color32::WHITE
-    } else {
-        Color32::BLACK
-    }
+    crate::chart::rendering::axes::tag_text_color(fill.to_opaque())
 }
 
 /// Outline of `rect`, rounded by `radius`, with a pointer from `from` through `tip` to `to`, as one
@@ -289,7 +285,7 @@ mod tests {
                 revision: 0,
                 bar_to_x: &|bar| bar,
                 price_to_y: &|price| price as f32,
-                y_to_price: &|_| f64::NAN,
+                y_to_price: &|y| f64::from(y),
                 time_axis: true,
                 executions: None,
             };
@@ -302,8 +298,12 @@ mod tests {
             );
             // Standalone renders hold screen points only.
             drawing.chart_points.clear();
-            drawing.points.push(Pos2::new(0.0, 0.0));
-            assert_eq!(drawing.anchor_price_text(&view), None, "{price}");
+            drawing.points.push(Pos2::new(0.0, price as f32));
+            assert_eq!(
+                drawing.anchor_price_text(&view).as_deref(),
+                expected,
+                "{price}"
+            );
         }
     }
 }
