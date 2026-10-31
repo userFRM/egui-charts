@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(visible, [2.0, 1.0, 0.5]);
         assert_eq!(square.fan_ratios.len(), 11);
         let radii = [
-            1.0, 1.4142135, 2.0, 2.236068, 3.0, 3.1622777, 4.0, 4.1231055, 5.0, 5.0990195,
+            1.0, SQRT_2, 2.0, 2.236068, 3.0, 3.1622777, 4.0, 4.1231055, 5.0, 5.0990195,
         ];
         assert_eq!(square.arc_ratios.len(), radii.len());
         for (arc, radius) in square.arc_ratios.iter().zip(radii) {
