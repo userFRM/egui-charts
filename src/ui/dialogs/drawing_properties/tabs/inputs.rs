@@ -2,8 +2,8 @@
 
 use crate::drawings::domain::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
 use crate::drawings::{
-    Drawing, DrawingToolType as Tool, FibonacciLevel, GannConfig, GannFanDirection, GannLevel,
-    PitchforkConfig, PitchforkLevel, PositionSize, RegressionTrendConfig,
+    Drawing, DrawingToolType as Tool, ElliottDegree, FibonacciLevel, GannConfig, GannFanDirection,
+    GannLevel, PitchforkConfig, PitchforkLevel, PositionSize, RegressionTrendConfig,
 };
 
 use crate::data::{ProfileDisplay, VolumeProfileConfig};
@@ -44,6 +44,11 @@ impl InputsTab {
                 | Tool::FixedRangeVolumeProfile
                 | Tool::AnchoredVolumeProfile
                 | Tool::RegressionTrend
+                | Tool::ElliottImpulse
+                | Tool::ElliottCorrection
+                | Tool::ElliottTriangle
+                | Tool::ElliottDoubleCombo
+                | Tool::ElliottTripleCombo
         )
     }
 
@@ -301,6 +306,31 @@ impl InputsTab {
                 if deviations != config.deviations() {
                     drawing.regression_trend = RegressionTrendConfig::new(deviations);
                 }
+            }
+            Tool::ElliottImpulse
+            | Tool::ElliottCorrection
+            | Tool::ElliottTriangle
+            | Tool::ElliottDoubleCombo
+            | Tool::ElliottTripleCombo => {
+                FormGrid::new("elliott_inputs").show(ui, |ui| {
+                    let label = ui.label(l10n::text(ui.ctx(), "Degree"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        ui.combo_select(
+                            "elliott_degree",
+                            &mut drawing.elliott_degree,
+                            ElliottDegree::ALL,
+                            |degree| {
+                                format!(
+                                    "{}: {}, {}",
+                                    degree.name(),
+                                    degree.label('1'),
+                                    degree.label('A')
+                                )
+                            },
+                        );
+                    });
+                    ui.end_row();
+                });
             }
             _ => {}
         }

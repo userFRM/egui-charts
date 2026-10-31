@@ -9,8 +9,8 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS,
-    GannConfig, GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing,
+    ArrowStyle, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig, FontWeight,
+    GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing,
     RegressionTrendConfig, TimeframeVisibility,
 };
 
@@ -193,6 +193,9 @@ pub struct Drawing {
     /// Level lines and band fill of the pitchfork tools.
     #[serde(default)]
     pub pitchfork: Option<PitchforkConfig>,
+    /// Notation of the wave labels of the Elliott wave tools. Older drawings use the default.
+    #[serde(default)]
+    pub elliott_degree: ElliottDegree,
 
     // === Z-Order (rendering layer) ===
     /// Z-order for rendering priority (higher = drawn on top)
@@ -467,6 +470,7 @@ impl Drawing {
                     | DrawingToolType::InsidePitchfork
             )
             .then(PitchforkConfig::default),
+            elliott_degree: ElliottDegree::default(),
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
             gann: None,
             ghost_feed: None,

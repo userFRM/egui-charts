@@ -265,6 +265,7 @@ impl DrawingProps {
                     volume_profile,
                     regression_trend,
                     channel_midline,
+                    elliott_degree,
                 );
             }
             if drawing.id == id.0
@@ -538,6 +539,7 @@ mod tests {
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
+            settings.elliott_degree = crate::drawings::ElliottDegree::Minute;
             settings.italic = true;
             settings.text_color = Some([1, 2, 3, 255]);
             settings.background = false;
@@ -571,6 +573,7 @@ mod tests {
             assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
+            assert_eq!(saved.elliott_degree, crate::drawings::ElliottDegree::Minute);
             assert!(saved.italic && !saved.background && !saved.border);
             assert_eq!(saved.text_color, Some([1, 2, 3, 255]));
             assert_eq!(saved.border_color, Some([4, 5, 6, 255]));
@@ -616,6 +619,57 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Editing another property keeps each count's degree; editing the degree reaches matching tools.
+    #[test]
+    fn selection_preserves_wave_degrees_until_the_degree_is_edited() {
+        use crate::drawings::{DrawingToolType::*, ElliottDegree::*};
+        let mut chart = Chart::new(crate::model::BarData::new());
+        chart.drawings_mut().drawings = [
+            (ElliottImpulse, Minor),
+            (ElliottImpulse, Minute),
+            (ElliottCorrection, Cycle),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(id, (tool, degree))| {
+            let mut drawing = Drawing::new(id, tool);
+            drawing.elliott_degree = degree;
+            drawing
+        })
+        .collect();
+        chart.drawings_mut().select_drawings([0, 1, 2]);
+        let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+        // A colour edit keeps the degrees of the other selected counts.
+        props.color = Color32::GREEN;
+        props.apply_to_chart(DrawingId(0), &mut chart).unwrap();
+        assert_eq!(
+            chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.elliott_degree)
+                .collect::<Vec<_>>(),
+            [Minor, Minute, Cycle]
+        );
+        // A degree edit reaches the other impulse, leaving the correction's degree alone.
+        props
+            .tool_settings
+            .as_mut()
+            .unwrap()
+            .settings
+            .elliott_degree = Minuette;
+        props.apply_to_chart(DrawingId(0), &mut chart).unwrap();
+        assert_eq!(
+            chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.elliott_degree)
+                .collect::<Vec<_>>(),
+            [Minuette, Minuette, Cycle]
+        );
     }
 
     /// Confirming the dialog of one drawing in a selection changes the others only where it was

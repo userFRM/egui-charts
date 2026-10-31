@@ -141,15 +141,15 @@ pub enum DrawingToolType {
     ThreeDrivesPattern,
 
     // ============ ELLIOTT WAVES (5 tools) ============
-    /// Elliott impulse wave labels (1-2-3-4-5, 6 points).
+    /// Elliott impulse wave: a start point and waves 1 to 5 (6 points).
     ElliottImpulse,
-    /// Elliott correction wave labels (A-B-C, 4 points).
+    /// Elliott correction wave: a start point and waves A, B and C (4 points).
     ElliottCorrection,
-    /// Elliott triangle wave labels (A-B-C-D-E, 5 points).
+    /// Elliott triangle: a start point and waves A to E (6 points).
     ElliottTriangle,
-    /// Elliott double combination wave labels (W-X-Y, 5 points).
+    /// Elliott double combination: a start point and waves W, X and Y (4 points).
     ElliottDoubleCombo,
-    /// Elliott triple combination wave labels (W-X-Y-X-Z, 7 points).
+    /// Elliott triple combination: a start point and waves W, X, Y, X and Z (6 points).
     ElliottTripleCombo,
 
     // ============ CYCLES (3 tools) ============

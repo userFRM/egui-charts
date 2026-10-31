@@ -416,11 +416,11 @@ impl Drawing {
             DrawingToolType::ThreeDrivesPattern => self.render_three_drives_pattern(painter),
 
             // Elliott Wave (5 tools)
-            DrawingToolType::ElliottImpulse => self.render_elliott_impulse(painter, view),
-            DrawingToolType::ElliottCorrection => self.render_elliott_correction(painter),
-            DrawingToolType::ElliottTriangle => self.render_elliott_triangle(painter),
-            DrawingToolType::ElliottDoubleCombo => self.render_elliott_double_combo(painter),
-            DrawingToolType::ElliottTripleCombo => self.render_elliott_triple_combo(painter),
+            DrawingToolType::ElliottImpulse
+            | DrawingToolType::ElliottCorrection
+            | DrawingToolType::ElliottTriangle
+            | DrawingToolType::ElliottDoubleCombo
+            | DrawingToolType::ElliottTripleCombo => self.render_elliott_waves(painter),
 
             // Cycles (3 tools)
             DrawingToolType::CyclicLines => self.render_cyclic_lines(painter, rect),
@@ -612,7 +612,6 @@ impl Drawing {
                 | T::FixedRangeVolumeProfile
                 | T::HeadAndShoulders
                 | T::TrianglePattern
-                | T::ElliottTriangle
         );
         Some(if time_only {
             Rect::from_x_y_ranges(bounds.x_range(), egui::Rangef::EVERYTHING)
@@ -1268,7 +1267,7 @@ mod tests {
         }
     }
 
-    fn paint(drawing: &Drawing) -> Vec<Shape> {
+    pub(super) fn paint(drawing: &Drawing) -> Vec<Shape> {
         paint_with(drawing, false)
     }
 
