@@ -254,8 +254,8 @@ impl Chart {
     /// deleted elsewhere leaves none. A write waits for such a read, and one that fails is tried
     /// again a second of input time later. Drawing sync of a [`ChartLayout`](super::ChartLayout)
     /// shows drawings of charts outside `storage` on this chart without saving them here. A
-    /// drawing whose study the chart does not show appears
-    /// in the price pane and is written back in its study's pane. If `storage` keeps revisions, a
+    /// drawing whose study the chart does not show appears in the price pane and is written back
+    /// in its study's pane. If `storage` keeps revisions, a
     /// write over drawings changed elsewhere since they were read is refused and waits, with the
     /// chart's drawings unchanged, until [`Self::resolve_storage_conflict`] settles it; without
     /// revisions, the later write replaces the earlier one, including edits on two charts within

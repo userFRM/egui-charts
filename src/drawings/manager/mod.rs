@@ -613,7 +613,8 @@ impl DrawingManager {
     /// Gives drawings just read from storage the local ids they had before, so that what refers
     /// to a drawing by its local id, such as an open properties dialog, keeps referring to it.
     /// Every other read drawing gets an id that no drawing of the manager has or had, so that it
-    /// is not taken for one removed elsewhere. Drawings that are never stored stay, since no document holds them.
+    /// is not taken for one removed elsewhere. Drawings that are never stored stay, since no
+    /// document holds them.
     pub(crate) fn keep_across_read(&mut self, previous: BeforeRead) {
         let BeforeRead {
             ids,
