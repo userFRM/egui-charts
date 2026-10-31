@@ -907,8 +907,8 @@ mod tests {
         let x_to_bar = |x: f32| x / 10.0;
         let y_to_price = |y: f32| 1000.0 - f64::from(y);
         let translate = |price: f64, from: f32, to: f32| price - f64::from(to - from);
-        let start_points = vec![Pos2::new(100.0, 200.0), Pos2::new(200.0, 100.0)];
-        let start_chart = vec![ChartPoint::new(10.0, 800.0), ChartPoint::new(20.0, 900.0)];
+        let start_points = [Pos2::new(100.0, 200.0), Pos2::new(200.0, 100.0)];
+        let start_chart = [ChartPoint::new(10.0, 800.0), ChartPoint::new(20.0, 900.0)];
         let label = (
             vec![Pos2::new(100.0, 200.0), Pos2::new(250.0, 140.0)],
             vec![ChartPoint::new(10.0, 800.0), ChartPoint::new(25.0, 860.0)],
