@@ -451,8 +451,8 @@ impl Chart {
 
     /// Draws a footprint in place of the price series, below studies, cursor and legend.
     /// Supply executions aggregated with the same clock as the chart's source bars.
-    /// Bars without complete executions are drawn as candles, as are all bars, merged per pixel
-    /// column when zoomed out, while cells would be too narrow to read.
+    /// Bars without complete executions are drawn as candles. While cells would be too narrow to
+    /// read, every bar is, merged per pixel column when zoomed out.
     /// Price-based chart types keep their normal series because their x-axis is not time.
     pub fn show_footprint(
         &mut self,
