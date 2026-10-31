@@ -32,6 +32,9 @@ pub struct UserSettings {
     /// The top-left corner of the favourites strip, in logical points, where the user left it;
     /// `None` until it has been shown, when it starts beside the drawing toolbar.
     pub drawing_favorites_pos: Option<(f32, f32)>,
+    /// Whether the user dismissed the drawing toolbar's card that explains the magnet; a document
+    /// without it reads as not dismissed.
+    pub magnet_hint_dismissed: bool,
     /// The layout open last, to open again on start.
     pub layout: Option<String>,
     /// Whether the open layout is saved after each change.
@@ -489,6 +492,7 @@ mod tests {
         settings.drawing_favorites = vec![DrawingToolType::TrendLine];
         settings.market_heatmap.size = Some("cap".into());
         settings.drawing_favorites_pos = Some((12.0, 34.0));
+        settings.magnet_hint_dismissed = true;
         for time in [0.5, 1.0, 1.4] {
             assert_eq!(poll(&mut store, time, &settings), None);
         }
@@ -509,6 +513,14 @@ mod tests {
         store.flush(&settings);
         let written = host.0.lock().unwrap().clone().unwrap();
         assert_eq!(UserSettings::from_json(&written).unwrap(), settings);
+
+        // Settings saved before the magnet card existed restore unchanged, with the card not
+        // dismissed.
+        let older = written.replace(",\"magnet_hint_dismissed\":true", "");
+        assert_ne!(older, written);
+        let mut expected = settings.clone();
+        expected.magnet_hint_dismissed = false;
+        assert_eq!(UserSettings::from_json(&older).unwrap(), expected);
 
         // A favourite tool from a newer release is left out; the rest is restored.
         let document = written.replace("\"TrendLine\"", "\"TrendLine\",\"FutureTool\"");

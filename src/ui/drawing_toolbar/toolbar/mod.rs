@@ -98,6 +98,10 @@ pub struct DrawingToolbar {
     hidden: HashSet<Control>,
     /// The egui pass the favourites strip was last drawn in.
     strip_pass: Option<u64>,
+    /// The user switched the magnet on from the toolbar, so its card may show.
+    magnet_hint_open: bool,
+    /// The magnet button's rect in the last pass, while it is in view.
+    magnet_rect: Option<Rect>,
 }
 
 impl DrawingToolbar {
@@ -287,6 +291,17 @@ impl DrawingToolbar {
             && let Some(tool_action) = self.draw_submenu(ui, category)
         {
             action = tool_action;
+        }
+
+        // === MAGNET CARD (outside scroll area) ===
+        self.magnet_hint_open &= self.state.magnet_mode;
+        if self.magnet_hint_open
+            && !self.state.magnet_hint_dismissed
+            && self.state.expanded_category.is_none()
+            && let Some(anchor) = self.magnet_rect
+            && MagnetButton::show_hint(ui, anchor)
+        {
+            self.state.magnet_hint_dismissed = true;
         }
 
         // === FAVOURITE TOOLS STRIP ===
@@ -545,8 +560,10 @@ impl DrawingToolbar {
 
         // Magnet: a click switches snapping, a secondary click opens the strength menu.
         let response = MagnetButton::show(ui, self.state.magnet_mode);
+        self.magnet_rect = ui.is_rect_visible(response.rect).then_some(response.rect);
         if response.clicked() {
             self.state.magnet_mode = !self.state.magnet_mode;
+            self.magnet_hint_open |= self.state.magnet_mode;
             action = DrawingToolbarAction::ToggleMagnet;
         }
         if response.secondary_clicked() {
@@ -709,6 +726,7 @@ impl DrawingToolbar {
             A::SetMagnetType(kind) => {
                 self.state.magnet_type = *kind;
                 self.state.magnet_mode = true;
+                self.magnet_hint_open = true;
             }
             // "Off" while the magnet is already off changes nothing, and the host's toggle would
             // switch it on.
@@ -749,6 +767,13 @@ impl DrawingToolbar {
 mod tests {
     use super::*;
     use egui::{Context, Event, Key, Modifiers, Pos2, RawInput};
+
+    fn label(shapes: &[egui::Shape], value: &str) -> Option<Rect> {
+        shapes.iter().find_map(|s| match s {
+            egui::Shape::Text(t) if t.galley.job.text == value => Some(t.visual_bounding_rect()),
+            _ => None,
+        })
+    }
 
     /// The floating strip lists the favorite tools as they change, stays where it was first put
     /// and where the host moves it, and hides until shown again.
@@ -826,14 +851,6 @@ mod tests {
                     .to_vec(),
             )
             .0
-        }
-        fn label(shapes: &[egui::Shape], value: &str) -> Option<Rect> {
-            shapes.iter().find_map(|s| match s {
-                egui::Shape::Text(t) if t.galley.job.text == value => {
-                    Some(t.visual_bounding_rect())
-                }
-                _ => None,
-            })
         }
         for dark in [false, true] {
             for (width, height) in [(240.0, 320.0), (320.0, 400.0), (1440.0, 900.0)] {
@@ -1137,6 +1154,102 @@ mod tests {
             }
             output.drop_without_applying_deltas();
         }
+    }
+
+    /// The card follows a switch-on from the toolbar, beside the magnet, never a restored magnet,
+    /// and stays away once its button dismissed it.
+    #[test]
+    fn magnet_card_shows_after_the_first_switch_on_until_dismissed() {
+        use egui::{PointerButton, Shape, vec2};
+        const EXPLANATION: &str =
+            "Drawing points snap to the open, high, low or close of the nearest bar.";
+        let ctx = Context::default();
+        let frame = |toolbar: &mut DrawingToolbar, events| {
+            let mut origin = Pos2::ZERO;
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 1200.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                    origin = ui.cursor().min;
+                    toolbar.show_with_action(ui);
+                },
+            );
+            let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
+            output.drop_without_applying_deltas();
+            (shapes, origin)
+        };
+        // A newly shown area may stay invisible in its first pass, so one more pass follows.
+        let click = |toolbar: &mut DrawingToolbar, pos| {
+            frame(toolbar, vec![Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    toolbar,
+                    vec![Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    }],
+                );
+            }
+            frame(toolbar, vec![]).0
+        };
+
+        // A magnet the host restored switched on brings no card.
+        let mut toolbar = DrawingToolbar::new();
+        toolbar.sync_from_domain_state(&DrawingToolbarDomainState {
+            magnet_mode: true,
+            ..toolbar.get_domain_state()
+        });
+        frame(&mut toolbar, vec![]);
+        let (shapes, origin) = frame(&mut toolbar, vec![]);
+        assert!(label(&shapes, "Got it").is_none());
+
+        // Off, then on: the card sits right of the 52 x 38 button at (0, 418), past a gap of 4
+        // and its margin of 12.
+        let magnet = origin + vec2(26.0, 437.0);
+        let shapes = click(&mut toolbar, magnet);
+        assert!(!toolbar.state.magnet_mode);
+        assert!(label(&shapes, "Got it").is_none());
+        let shapes = click(&mut toolbar, magnet);
+        assert!(toolbar.state.magnet_mode);
+        let text_pos = shapes.iter().find_map(|s| match s {
+            Shape::Text(t) if t.galley.job.text == EXPLANATION => Some(t.pos),
+            _ => None,
+        });
+        assert_eq!(text_pos, Some(origin + vec2(68.0, 430.0)));
+
+        // The button dismisses it for good, also for the next switch-on.
+        let got_it = label(&shapes, "Got it").unwrap().center();
+        let shapes = click(&mut toolbar, got_it);
+        assert!(toolbar.state.magnet_hint_dismissed);
+        assert!(label(&shapes, "Got it").is_none());
+        click(&mut toolbar, magnet);
+        let shapes = click(&mut toolbar, magnet);
+        assert!(toolbar.state.magnet_mode);
+        assert!(label(&shapes, "Got it").is_none());
+
+        // A strength picked from the menu switches the magnet on as well.
+        let mut toolbar = DrawingToolbar::new();
+        toolbar.apply_pick(DrawingToolbarAction::SetMagnetType(MagnetType::Weak));
+        frame(&mut toolbar, vec![]);
+        let (shapes, _) = frame(&mut toolbar, vec![]);
+        assert!(label(&shapes, "Got it").is_some());
+
+        // Switched off, then restored on by the host, it brings no card.
+        toolbar.apply_pick(DrawingToolbarAction::ToggleMagnet);
+        frame(&mut toolbar, vec![]);
+        toolbar.sync_from_domain_state(&DrawingToolbarDomainState {
+            magnet_mode: true,
+            ..toolbar.get_domain_state()
+        });
+        frame(&mut toolbar, vec![]);
+        let (shapes, _) = frame(&mut toolbar, vec![]);
+        assert!(label(&shapes, "Got it").is_none());
     }
 
     /// The bar keeps its grid and utility order, with distinct selection and magnet fills.
