@@ -33,7 +33,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Width of the category sidebar.
-const SIDEBAR_WIDTH: f32 = 228.0;
+const SIDEBAR_WIDTH: f32 = 200.0;
 
 /// Indicator Dialog
 ///
@@ -95,7 +95,9 @@ impl IndicatorDialog {
         let factory = IndicatorFactory::new();
         Self {
             is_open: false,
-            search: FilterWidget::new().placeholder("Search indicators"),
+            search: FilterWidget::new()
+                .placeholder("Search indicators")
+                .icon_size(DESIGN_TOKENS.sizing.icon_md),
             focus_search: false,
             focus_first_row: false,
             active_tab: IndicatorTab::Indicators,
@@ -305,6 +307,7 @@ impl IndicatorDialog {
         config: &IndicatorDialogConfig,
         theme: &Theme,
     ) -> IndicatorDialogAction {
+        ui.add_space(theme.spacing.xxl);
         if let Some(error) = &self.metric_error {
             ui.label(l10n::format_text(
                 ui.ctx(),
@@ -380,15 +383,23 @@ impl IndicatorDialog {
                         continue;
                     }
                     ui.add_space(theme.spacing.xxl);
-                    ui.label(
-                        RichText::new(l10n::text(ui.ctx(), heading))
-                            .size(theme.text.small)
-                            .color(theme.ui.text_secondary),
-                    );
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin {
+                            left: theme.spacing.xl as i8,
+                            ..Default::default()
+                        })
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(l10n::text(ui.ctx(), heading))
+                                    .size(theme.text.small)
+                                    .color(theme.ui.text_muted),
+                            )
+                        });
                     ui.add_space(theme.spacing.lg);
                     for &item in items {
                         if SidebarTab::new(item.name(), category.get() == item)
                             .icon(item.icon())
+                            .fill(theme.ui.panel_bg_secondary)
                             .show(ui)
                         {
                             category.set(item);
@@ -503,9 +514,25 @@ impl IndicatorDialog {
             return IndicatorDialogAction::None;
         }
 
+        // The column header stays in place above the scrolled rows.
+        let (_, header) = ui.allocate_space(Vec2::new(
+            ui.available_width(),
+            DESIGN_TOKENS.sizing.button_sm,
+        ));
+        let label = ui.painter().layout_no_wrap(
+            l10n::text(ui.ctx(), "NAME"),
+            FontId::proportional(theme.text.small),
+            theme.ui.text_muted,
+        );
+        let label_pos = Pos2::new(
+            header.min.x + DESIGN_TOKENS.sizing.button_md,
+            header.center().y - label.size().y / 2.0,
+        );
+        ui.painter().galley(label_pos, label, theme.ui.text_muted);
+
         let mut action = IndicatorDialogAction::None;
-        // The scroll bar takes its own gutter, so it never covers the badges.
-        ui.spacing_mut().scroll.floating = false;
+        // The scroll bar takes its own column, so it never covers the badges.
+        crate::styles::menu_scroll_bar(ui);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -569,7 +596,13 @@ impl IndicatorDialog {
             ui.painter()
                 .rect_filled(rect, theme.radius.md, config.hover_color);
         }
-        let star_res = Self::draw_favorite_star(ui, config, rect, is_favorite);
+        let star_res = Self::draw_favorite_star(
+            ui,
+            config,
+            rect,
+            is_favorite,
+            response.hovered() || response.has_focus(),
+        );
         let text_right = Self::draw_item_badges(ui, theme, rect, indicator, config.muted_color);
         Self::draw_item_text(ui, rect, text_right, indicator, config.text_color);
         draw_focus_ring(ui, &response, theme.radius.md);
@@ -585,11 +618,14 @@ impl IndicatorDialog {
         )
     }
 
+    /// The star shows on a favourite and on the row under the pointer or with the focus; the
+    /// toggle stays clickable and focusable while hidden.
     fn draw_favorite_star(
         ui: &mut Ui,
         config: &IndicatorDialogConfig,
         rect: Rect,
         is_favorite: bool,
+        row_active: bool,
     ) -> Response {
         let star_rect = Self::star_rect(ui, rect);
         let star_res = ui.allocate_rect(star_rect, Sense::click());
@@ -615,9 +651,11 @@ impl IndicatorDialog {
         } else {
             (&icons::STAR_EMPTY, ui.visuals().weak_text_color())
         };
-        let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_sm);
-        icon.as_image_tinted(size, tint)
-            .paint_at(ui, Rect::from_center_size(star_rect.center(), size));
+        if is_favorite || row_active || star_res.hovered() || star_res.has_focus() {
+            let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_sm);
+            icon.as_image_tinted(size, tint)
+                .paint_at(ui, Rect::from_center_size(star_rect.center(), size));
+        }
         draw_focus_ring(ui, &star_res, 0.0);
         star_res.on_hover_text(l10n::text(ui.ctx(), tooltip))
     }

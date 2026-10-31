@@ -45,6 +45,7 @@ pub struct FilterWidget {
     placeholder: String,
     show_clear_button: bool,
     show_icon: bool,
+    icon_size: Option<f32>,
 }
 
 impl FilterWidget {
@@ -55,6 +56,7 @@ impl FilterWidget {
             placeholder: "Filter...".to_string(),
             show_clear_button: true,
             show_icon: true,
+            icon_size: None,
         }
     }
 
@@ -81,6 +83,12 @@ impl FilterWidget {
     /// Set whether to show the search icon
     pub fn show_icon(mut self, show: bool) -> Self {
         self.show_icon = show;
+        self
+    }
+
+    /// Set the side of the search icon, `DESIGN_TOKENS.sizing.icon_sm` by default
+    pub(crate) fn icon_size(mut self, size: f32) -> Self {
+        self.icon_size = Some(size);
         self
     }
 
@@ -119,7 +127,8 @@ impl FilterWidget {
             ui,
             &mut self.query,
             &self.placeholder,
-            self.show_icon,
+            self.show_icon
+                .then(|| self.icon_size.unwrap_or(DESIGN_TOKENS.sizing.icon_sm)),
             self.show_clear_button,
         );
         FilterResponse {
@@ -132,26 +141,33 @@ impl FilterWidget {
 /// Stateless filter input that operates on an external string
 pub fn filter_input(ui: &mut Ui, query: &mut String) -> FilterResponse {
     let old_query = query.clone();
-    let response = search_field(ui, query, "Filter...", true, true);
+    let response = search_field(
+        ui,
+        query,
+        "Filter...",
+        Some(DESIGN_TOKENS.sizing.icon_sm),
+        true,
+    );
     FilterResponse {
         response,
         changed: *query != old_query,
     }
 }
 
-/// A full-width text field with the search icon and the clear button inside its frame.
-/// Escape clears the query while the field has focus.
+/// A full-width text field with the search icon, of side `icon` when shown, and the clear
+/// button inside its frame. Escape clears the query while the field has focus.
 fn search_field(
     ui: &mut Ui,
     query: &mut String,
     placeholder: &str,
-    show_icon: bool,
+    icon: Option<f32>,
     show_clear: bool,
 ) -> Response {
-    let icon_size = DESIGN_TOKENS.sizing.icon_sm;
+    let clear_size = DESIGN_TOKENS.sizing.icon_sm;
     let inset = ui.active_theme().spacing.lg;
-    let icon_slot = inset + icon_size + ui.active_theme().spacing.sm;
-    let tint = ui.visuals().widgets.noninteractive.fg_stroke.color;
+    let gap = ui.active_theme().spacing.sm;
+    // The glyph takes the placeholder's colour.
+    let tint = ui.visuals().weak_text_color();
 
     let response = ui
         .scope(|ui| {
@@ -160,15 +176,15 @@ fn search_field(
             widgets.hovered.expansion = 0.0;
             widgets.active.expansion = 0.0;
 
-            let margin = |icon: bool| (if icon { icon_slot } else { inset }) as i8;
+            let margin = |icon: Option<f32>| icon.map_or(inset, |size| inset + size + gap) as i8;
             TextEdit::singleline(query)
                 .hint_text(l10n::text(ui.ctx(), placeholder))
                 .desired_width(f32::INFINITY)
                 .min_size(Vec2::new(0.0, ui.spacing().interact_size.y))
                 .align(Align2::LEFT_CENTER)
                 .margin(Margin {
-                    left: margin(show_icon),
-                    right: margin(show_clear),
+                    left: margin(icon),
+                    right: margin(show_clear.then_some(clear_size)),
                     ..Margin::symmetric(0, 2)
                 })
                 .ui(ui)
@@ -176,22 +192,19 @@ fn search_field(
         .inner
         .accessible_name(l10n::text(ui.ctx(), placeholder));
 
-    let icon_rect = |center_x: f32| {
-        Rect::from_center_size(
-            pos2(center_x, response.rect.center().y),
-            Vec2::splat(icon_size),
-        )
+    let icon_rect = |center_x: f32, size: f32| {
+        Rect::from_center_size(pos2(center_x, response.rect.center().y), Vec2::splat(size))
     };
-    if show_icon {
+    if let Some(size) = icon {
         icons::QUICK_SEARCH
-            .as_image_tinted(Vec2::splat(icon_size), tint)
+            .as_image_tinted(Vec2::splat(size), tint)
             .paint_at(
                 ui,
-                icon_rect(response.rect.left() + inset + icon_size / 2.0),
+                icon_rect(response.rect.left() + inset + size / 2.0, size),
             );
     }
     if show_clear && !query.is_empty() {
-        let rect = icon_rect(response.rect.right() - inset - icon_size / 2.0);
+        let rect = icon_rect(response.rect.right() - inset - clear_size / 2.0, clear_size);
         let clear = ui
             .scope_builder(UiBuilder::new().max_rect(rect.expand(4.0)), |ui| {
                 IconButton::new(&icons::CLOSE)
