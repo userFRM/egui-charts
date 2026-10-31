@@ -12,11 +12,11 @@
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
+use crate::tokens::DESIGN_TOKENS;
 use crate::ui::drawing_toolbar::DrawingToolbarAction;
 use crate::ui::drawing_toolbar::components::icon_button::draw_latched_button;
 use crate::ui::drawing_toolbar::state::MagnetType;
 use crate::ui::drawing_toolbar::submenu_builder::SubmenuBuilder;
-use crate::tokens::DESIGN_TOKENS;
 use egui::{Align, Align2, Id, Layout, Rect, Response, RichText, Ui, Vec2};
 
 /// Width of the magnet card's text: about three even lines at the 13 point interface size.
