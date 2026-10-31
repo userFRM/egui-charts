@@ -64,7 +64,9 @@ unfiltered sizes as filtered ones. `OrderFilterUnavailable` names the reason.
 (`BookProfile::Total`) and the largest known individual order there (`LargestOrder`).
 `OrderBookView::tiers` sets two sizes, notable and large: a price whose largest known order
 reaches one is drawn in that tier's colour, in the profile and in the ladder's size cell. A price
-without order data is not highlighted.
+without order data is not highlighted. The colours are the active theme's
+`ChartColors::order_notable` and `order_large`, so they follow a change of theme;
+`OrderBookView::tier_colors` sets others.
 
 The heatmap marks its cells with the same tiers and colours. A history of individual orders
 (`DepthHistoryConfig::orders`, `Some(OrderFilter::default())` for every order) records the largest
