@@ -892,37 +892,38 @@ mod tests {
         let linear = |p: f64| 300.0 - p as f32;
         let log = |p: f64| 300.0 - 100.0 * p.ln() as f32;
         let eight = crate::model::Instrument::new("TEST").with_price_decimals(8);
-        let cases: [(_, _, _, &dyn Fn(f64) -> f32, _); 4] = [
+        let cases = [
             (
                 DrawingToolType::GannSquare,
                 [(0.0, 100.0), (10.0, 120.0)],
                 None,
-                &linear,
+                false,
                 "20.00\n10 bars\n2.0000/bar",
             ),
             (
                 DrawingToolType::GannFixed,
                 [(0.0, 100.0), (2.0, 104.0)],
                 None,
-                &linear,
+                false,
                 "20.00\n10 bars\n2.0000/bar",
             ),
             (
                 DrawingToolType::GannFixed,
                 [(0.0, 100.0), (2.0, 110.0)],
                 None,
-                &log,
+                true,
                 "50.00\n10 bars\n5.0000/bar",
             ),
             (
                 DrawingToolType::GannSquare,
                 [(0.0, 0.0000120), (100.0, 0.0000123)],
                 Some(&eight),
-                &linear,
+                false,
                 "0.00000030\n100 bars\n0.0000000030/bar",
             ),
         ];
-        for (tool, [(b0, p0), (b1, p1)], instrument, price_to_y, want) in cases {
+        for (tool, [(b0, p0), (b1, p1)], instrument, logarithmic, want) in cases {
+            let price_to_y: &dyn Fn(f64) -> f32 = if logarithmic { &log } else { &linear };
             let mut drawing = Drawing::new(0, tool);
             drawing.chart_points = vec![ChartPoint::new(b0, p0), ChartPoint::new(b1, p1)];
             drawing.update_screen_coords(|b| b * 10.0, price_to_y);

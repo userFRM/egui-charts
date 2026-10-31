@@ -721,19 +721,12 @@ impl<'de> Deserialize<'de> for Drawing {
     /// A saved `gann` object takes the fields it leaves out from [`GannConfig::for_tool`] of the
     /// drawing's tool, which a drawing without one draws.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let mut value = serde_json::Value::deserialize(deserializer)?;
-        let tool = value
-            .get("tool_type")
-            .and_then(|tool| DrawingToolType::deserialize(tool).ok());
-        if let (Some(tool), Some(serde_json::Value::Object(gann))) = (tool, value.get_mut("gann"))
-            && let Ok(serde_json::Value::Object(defaults)) =
-                serde_json::to_value(GannConfig::for_tool(tool))
-        {
-            for (field, default) in defaults {
-                gann.entry(field).or_insert(default);
-            }
+        GannConfig::forget_left_out();
+        let mut drawing = Self::deserialize(deserializer)?;
+        if let Some(gann) = &mut drawing.gann {
+            gann.fill_left_out(drawing.tool_type);
         }
-        Self::deserialize(value).map_err(serde::de::Error::custom)
+        Ok(drawing)
     }
 }
 
