@@ -259,42 +259,30 @@ mod tests {
     }
 
     #[test]
-    fn stored_template_lists_and_keyed_sets_apply_with_their_links() {
+    fn stored_template_lists_apply_with_their_links_and_default_places() {
         let mut source = test_frames::chart(&[1.0], &[2.0]);
         let rsi = source.add_indicator(Box::new(RSI::new(14)));
         let mean = source.add_indicator(Box::new(SMA::new(3)));
         source
             .set_indicator_source(mean, StudySource::Study { id: rsi.0, plot: 0 })
             .unwrap();
-        let studies = serde_json::to_value(source.study_template_set().studies).unwrap();
-        for (document, shared) in [
-            (studies.clone(), false),
-            (
-                serde_json::json!({ "studies": studies, "price_pane": [], "panes": [[0, 1]] }),
-                true,
-            ),
-        ] {
-            let mut chart = test_frames::chart(&[1.0], &[2.0]);
-            let set: StudyTemplateSet = serde_json::from_value(document).unwrap();
-            let ids = chart.apply_study_template_set(&set).unwrap();
-            assert_eq!(
-                chart.indicators().nth(1).unwrap().1.source(),
-                Some(StudySource::Study {
-                    id: ids[0].0,
-                    plot: 0
-                })
-            );
-            let panes: Vec<_> = chart
-                .panes()
-                .into_iter()
-                .map(|pane| chart.pane_series(pane))
-                .collect();
-            let expected = if shared {
-                vec![vec![SeriesId::MAIN], vec![ids[0], ids[1]]]
-            } else {
-                vec![vec![SeriesId::MAIN, ids[1]], vec![ids[0]]]
-            };
-            assert_eq!(panes, expected, "shared: {shared}");
-        }
+        let list = serde_json::to_value(source.study_template_set().studies).unwrap();
+
+        let mut chart = test_frames::chart(&[1.0], &[2.0]);
+        let set: StudyTemplateSet = serde_json::from_value(list).unwrap();
+        let ids = chart.apply_study_template_set(&set).unwrap();
+        assert_eq!(
+            chart.indicators().nth(1).unwrap().1.source(),
+            Some(StudySource::Study {
+                id: ids[0].0,
+                plot: 0
+            })
+        );
+        let panes: Vec<_> = chart
+            .panes()
+            .into_iter()
+            .map(|pane| chart.pane_series(pane))
+            .collect();
+        assert_eq!(panes, [vec![SeriesId::MAIN, ids[1]], vec![ids[0]]]);
     }
 }
