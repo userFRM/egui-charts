@@ -2,7 +2,8 @@ use super::ma_combination::impl_ma_preset;
 use super::{AverageLine, AverageType, MACombination};
 use egui::Color32;
 
-/// Simple averages of lengths 20, 50, 100 and 200, as a combination preset.
+/// Simple averages of lengths 20, 50, 100 and 200, as a combination preset, without crossing
+/// markers until a pair is chosen.
 #[derive(Clone)]
 pub struct MultipleMA {
     inner: MACombination,
@@ -25,7 +26,8 @@ impl MultipleMA {
                     .map(|(period, color)| AverageLine::new(AverageType::Simple, period, color))
                     .collect(),
             )
-            .unwrap(),
+            .unwrap()
+            .without_crossings(),
         }
     }
 }

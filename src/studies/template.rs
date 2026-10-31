@@ -311,9 +311,13 @@ mod tests {
     /// study offered it.
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
-        use InputValue::{Length, Number};
+        use InputValue::{Choice, Length, Number};
         let rows = [
-            ("SMA", vec![("period", Length(20))], vec![("period", Length(20))]),
+            (
+                "SMA",
+                vec![("period", Length(20))],
+                vec![("period", Length(20))],
+            ),
             (
                 "ADX",
                 vec![("period", Length(20))],
@@ -332,6 +336,20 @@ mod tests {
                     ("atr_period", Length(10)),
                     ("multiplier", Number(2.0)),
                 ],
+            ),
+            (
+                "MA Cross",
+                vec![("period_0", Length(5))],
+                vec![
+                    ("period_0", Length(5)),
+                    ("cross_first", Choice(1)),
+                    ("cross_second", Choice(2)),
+                ],
+            ),
+            (
+                "Multi MA",
+                vec![("period_0", Length(30))],
+                vec![("period_0", Length(30)), ("cross_first", Choice(0))],
             ),
         ];
         let factory = IndicatorFactory::new();
