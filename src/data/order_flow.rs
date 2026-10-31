@@ -463,10 +463,10 @@ impl OrderFlowInput {
         };
     }
 
-    /// Sets the instrument tick size that footprint levels and range intervals count in. A size that is not finite
-    /// and positive counts as none, and a footprint source keeps nothing without one. Another
-    /// size clears the footprint, whose levels no longer apply. Other sources only report it. The
-    /// chart sets its instrument's when it connects the source and when it subscribes.
+    /// Sets the instrument tick size that footprint levels and range intervals count in. A size
+    /// that is not finite and positive counts as none; a footprint source keeps nothing without
+    /// one. Another size clears the footprint, whose levels no longer apply. Fixed sources use it
+    /// for range bars. The chart sets its instrument's when connecting or subscribing the source.
     pub fn set_tick_size(&self, tick_size: Option<f64>) {
         let tick_size = tick_size.filter(|size| size.is_finite() && *size > 0.0);
         let mut state = self.state();
@@ -765,8 +765,42 @@ impl OrderFlowInput {
     ) {
         let mut state = self.state();
         let replay = cutoff.map(|cutoff| {
-            let trade_based = clock.timeframe().is_some_and(|tf| tf.is_trade_based());
-            let open = if trade_based {
+            let trade_timeframe = clock.timeframe().filter(|tf| tf.is_trade_based());
+            // shortcut: scan the held executions per input per seek; index them by time if
+            // replay playback profiles show it.
+            let partial = if let Some(timeframe) = trade_timeframe
+                && let Source::Fixed(kind) = state.source
+                && let Some(trades) = trades.filter(|trades| trades.lost_until().is_none())
+            {
+                let mut part = State::new(Source::Fixed(kind));
+                let mut open = None;
+                let mut sorted: Vec<_> = trades.iter().collect();
+                sorted.sort_by_key(|trade| trade.ts);
+                for trade in sorted {
+                    let Ok(parts) = part.trade_bars.push(timeframe, trade, state.tick_size) else {
+                        continue;
+                    };
+                    for (i, (bar, size)) in parts.into_iter().enumerate() {
+                        if bar.time <= cutoff {
+                            open = Some(bar.time);
+                        }
+                        if trade.ts < cutoff {
+                            part.add_trade(trade, bar.time, size, i == 0);
+                        }
+                    }
+                    // The first excluded execution can open a bar exactly at the cutoff.
+                    if trade.ts >= cutoff {
+                        break;
+                    }
+                }
+                Some((open.unwrap_or(cutoff), part))
+            } else {
+                None
+            };
+            let trade_based = trade_timeframe.is_some();
+            let open = if let Some((open, _)) = &partial {
+                *open
+            } else if trade_based {
                 state
                     .bars
                     .range(..=cutoff)
@@ -775,8 +809,6 @@ impl OrderFlowInput {
             } else {
                 clock.bar_open(cutoff)
             };
-            // shortcut: one scan of the store per input per seek; index the store by time if
-            // replay playback profiles show it.
             let held = trades
                 .filter(|trades| {
                     (trades.lost_until())
@@ -793,15 +825,21 @@ impl OrderFlowInput {
                 book: None,
             };
             match state.source {
-                Source::Fixed(
-                    kind @ (OrderFlowKind::SizeDelta { .. }
-                    | OrderFlowKind::FlowSum { .. }
-                    | OrderFlowKind::FilteredCvd { .. }),
-                ) => {
-                    let part = OrderFlowInput::new(kind);
-                    part.set_tick_size(state.tick_size);
-                    held.for_each(|trade| part.push_trade(clock, trade));
-                    replay.row = part.state().bars.get(&open).map(|(row, _)| *row);
+                Source::Fixed(kind) => {
+                    if let Some((_, part)) = &partial {
+                        replay.row = part.bars.get(&open).map(|(row, _)| *row);
+                    } else if !trade_based
+                        && matches!(
+                            kind,
+                            OrderFlowKind::SizeDelta { .. }
+                                | OrderFlowKind::FlowSum { .. }
+                                | OrderFlowKind::FilteredCvd { .. }
+                        )
+                    {
+                        let part = OrderFlowInput::new(kind);
+                        held.for_each(|trade| part.push_trade(clock, trade));
+                        replay.row = part.state().bars.get(&open).map(|(row, _)| *row);
+                    }
                 }
                 Source::Footprint => {
                     if let Some(tick_size) = state.tick_size.filter(|_| time_based(clock))
@@ -819,7 +857,6 @@ impl OrderFlowInput {
                         .filter(|book| book.time < cutoff)
                         .cloned();
                 }
-                Source::Fixed(_) => {}
             }
             replay
         });
@@ -1334,6 +1371,32 @@ mod tests {
         assert!(
             book.values().is_empty(),
             "past depth cannot be reconstructed"
+        );
+        for input in [&spread, &book, &flow] {
+            input.set_replay(&clock, Some(opens[1]), Some(&updates.trades));
+        }
+        assert_eq!(spread.values().keys().copied().collect::<Vec<_>>(), [start]);
+        assert_eq!(book.values().keys().copied().collect::<Vec<_>>(), [start]);
+        assert_eq!(flow.values(), BTreeMap::from([(start, [3.0, 3.0, 0.0])]));
+        let mut trades = updates.trades;
+        for second in [6, 7] {
+            let trade = Tick::new(
+                start + TimeDelta::seconds(second),
+                100.0,
+                1.0,
+                Some(OrderSide::Buy),
+            );
+            sink.push_tick(trade.clone());
+            trades.push(trade);
+        }
+        for input in [&spread, &book, &flow] {
+            input.set_replay(&clock, Some(start + TimeDelta::seconds(7)), Some(&trades));
+        }
+        assert_eq!(spread.values().keys().copied().collect::<Vec<_>>(), opens);
+        assert_eq!(book.values().keys().copied().collect::<Vec<_>>(), opens);
+        assert_eq!(
+            flow.values()[&(start + TimeDelta::seconds(6))],
+            [1.0, 1.0, 0.0]
         );
     }
 
