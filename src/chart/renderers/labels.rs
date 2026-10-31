@@ -181,8 +181,8 @@ fn under_tag(tags: &[Option<Rect>], rect: Rect) -> bool {
 /// like the ticks.
 pub(crate) fn tick_decimals(price_scale: &PriceMap, y: f32) -> usize {
     price_scale
-        .marks()
-        .into_iter()
+        .shared_marks()
+        .iter()
         .min_by(|a, b| (a.y_coord - y).abs().total_cmp(&(b.y_coord - y).abs()))
         // Percentage labels end in a sign, which is not a decimal.
         .map_or(2, |mark| {
@@ -346,7 +346,9 @@ pub(crate) fn render_time_grid(
             Pos2::new(x, context.rect.bottom()),
         ])
     });
-    let price_marks = horizontal.map(|_| coords.price.marks()).unwrap_or_default();
+    let price_marks = horizontal
+        .map(|_| coords.price.shared_marks())
+        .unwrap_or_default();
     let price_lines = price_marks.iter().map(|mark| {
         [
             Pos2::new(context.rect.left(), mark.y_coord),
