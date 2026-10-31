@@ -381,7 +381,7 @@ mod tests {
                 assert!(manager.curr_drawing.is_none());
                 assert_eq!(
                     manager.drawings[0].chart_points[0],
-                    if magnet {
+                    if magnet && tool == DrawingToolType::Rect {
                         ChartPoint::new(52.0, 51.0)
                     } else {
                         ChartPoint::new(50.0, 50.0)

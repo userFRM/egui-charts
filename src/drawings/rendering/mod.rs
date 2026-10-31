@@ -103,8 +103,8 @@ impl ChartView<'_> {
 pub(crate) struct Outline {
     pub(crate) lines: Vec<[Pos2; 2]>,
     pub(crate) areas: Vec<Vec<Pos2>>,
-    /// The width the lines are stroked at, where it is wider than the
-    /// drawing's own stroke (the brushes).
+    /// The width the freehand brushes are stroked at, which can exceed the
+    /// hit distance; zero for the other tools.
     pub(crate) width: f32,
 }
 
@@ -181,7 +181,9 @@ impl Drawing {
             | T::ElliottDoubleCombo
             | T::ElliottTripleCombo => {
                 outline.lines = path(false);
-                outline.width = self.brush_width().unwrap_or(0.0);
+                if matches!(self.tool_type, T::Brush | T::Highlighter) {
+                    outline.width = self.stroke_width;
+                }
             }
             T::HeadAndShoulders => {
                 outline.lines = path(false);
@@ -459,8 +461,7 @@ impl Drawing {
             DrawingToolType::FlagNote => self.render_flag_note(painter),
 
             // Brushes (2 tools)
-            DrawingToolType::Brush => self.render_brush(painter),
-            DrawingToolType::Highlighter => self.render_highlighter(painter),
+            DrawingToolType::Brush | DrawingToolType::Highlighter => self.render_brush(painter),
 
             // Arrows (6 tools)
             DrawingToolType::Arrow => self.render_arrow(painter, color, stroke),

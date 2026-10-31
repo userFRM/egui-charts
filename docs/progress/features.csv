@@ -284,7 +284,7 @@ Drawings,Drawings,Arrow mark right,done,library,src/drawings/rendering/lines.rs;
 Drawings,Drawings,Arrow mark up,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Arrow marker,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/style.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs
 Drawings,Drawings,Bars pattern,done,library,src/drawings/rendering/trading/bars_pattern.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Brush,done,library,src/drawings/rendering/shapes.rs;src/widget/tool_interaction/interaction.rs
+Drawings,Drawings,Brush,done,library,src/drawings/rendering/shapes.rs;src/widget/tool_interaction/interaction.rs;src/drawings/manager/interaction.rs;src/drawings/services/handle.rs
 Drawings,Drawings,Callout,done,library,src/drawings/rendering/annotations/callout.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/annotations/labels.rs;src/drawings/manager/interaction.rs
 Drawings,Drawings,Circle,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Comment,done,library,src/drawings/rendering/annotations/callout.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/annotations/labels.rs
@@ -332,7 +332,7 @@ Drawings,Drawings,Gann square,done,library,src/drawings/rendering/gann.rs;src/dr
 Drawings,Drawings,Gann square fixed,done,library,src/drawings/rendering/gann.rs;src/drawings/domain/gann.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/drawing.rs
 Drawings,Drawings,Ghost feed,done,library,src/ui/dialogs/drawing_properties/actions.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/persistence.rs;src/drawings/rendering/trading/ghost_feed.rs;src/drawings/categories.rs;src/drawings/domain/ghost_feed.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
 Drawings,Drawings,Head and shoulders,done,library,src/drawings/rendering/patterns.rs;src/painting/dashed_line.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs
-Drawings,Drawings,Highlighter,done,library,src/drawings/rendering/shapes.rs;src/widget/tool_interaction/interaction.rs
+Drawings,Drawings,Highlighter,done,library,src/drawings/rendering/shapes.rs;src/widget/tool_interaction/interaction.rs;src/drawings/manager/interaction.rs;src/drawings/services/handle.rs
 Drawings,Drawings,Horizontal line,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/painting/dashed_line.rs
 Drawings,Drawings,Horizontal ray,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/painting/dashed_line.rs
 Drawings,Drawings,Icons and emojis,done,library,src/ui/drawing_toolbar/glyph_picker.rs;src/drawings/manager/mod.rs;src/drawings/rendering/media.rs;src/drawings/glyphs.rs;src/drawings/manager/interaction.rs;src/drawings/services/handle.rs

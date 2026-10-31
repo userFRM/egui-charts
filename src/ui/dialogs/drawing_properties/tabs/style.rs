@@ -137,7 +137,8 @@ fn color_swatch(
     ColorPicker::new(state, id).show(ui).inner
 }
 
-/// Swatches that draw each preset width, then a stepper for any width from 1 to 10 px.
+/// Swatches that draw each preset width, then a stepper for any width from 1 to 100 px; opening
+/// it keeps a width outside that range until it is edited.
 fn line_width_row(ui: &mut Ui, width: &mut f32) {
     let theme = ui.active_theme();
     ui.horizontal_wrapped(|ui| {
@@ -188,7 +189,8 @@ fn line_width_row(ui: &mut Ui, width: &mut f32) {
         ui.add_space(theme.spacing.lg - theme.spacing.xs);
         ui.add(
             egui::DragValue::new(width)
-                .range(1.0..=10.0)
+                .range(1.0..=crate::drawings::validation::MAX_STROKE_WIDTH)
+                .clamp_existing_to_range(false)
                 .speed(0.5)
                 .max_decimals(1)
                 .custom_formatter(|v, _| v.to_string())
