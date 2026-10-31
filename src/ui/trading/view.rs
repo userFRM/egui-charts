@@ -1764,7 +1764,10 @@ mod tests {
         confirm(&mut trading);
         trading.poll(&ctx, &mut toasts);
         assert_eq!(*broker.placed.lock().unwrap(), [place]);
-        assert_eq!(*broker.cancelled.lock().unwrap(), [working.id.clone()]);
+        assert_eq!(
+            *broker.cancelled.lock().unwrap(),
+            std::slice::from_ref(&working.id)
+        );
         assert_eq!(*broker.modified.lock().unwrap(), [(working.id, moved)]);
         assert_eq!(toasts.toasts().len(), 4, "the broker accepted them");
     }
