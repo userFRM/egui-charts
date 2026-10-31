@@ -6455,7 +6455,7 @@ mod tests {
             );
             assert_eq!(
                 app.chart.drawings().drawings[1].stroke_width,
-                Drawing::new(7, tool).stroke_width
+                Drawing::new(8, DrawingToolType::TrendLine).stroke_width
             );
         }
     }
