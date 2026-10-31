@@ -8,8 +8,8 @@ use std::fmt::Write;
 
 /// Renders `shapes` as an SVG document of `size` points, embedding the textures that `delta`
 /// sets as PNG. Fails on shapes the format cannot take over unchanged: host callbacks, host
-/// textures without supplied pixels, underlined text, gradient strokes and non-linear
-/// mesh colours.
+/// textures without supplied pixels, underlined text, gradient strokes and non-linear mesh
+/// colours.
 pub(super) fn svg(
     size: [u32; 2],
     shapes: &[ClippedShape],

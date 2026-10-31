@@ -491,10 +491,10 @@ impl Drawing {
 
     /// The screen area this drawing paints in, for tools that paint within three times the
     /// diagonal of their anchors plus [`PAINT_MARGIN`] and the room its text needs around them, so
-    /// a drawing outside the pane can be skipped. Tools that also paint at prices taken from the bars, such as positions and
-    /// volume profiles, or run a leg on a fixed time past its anchor, which a steep leg carries to
-    /// any price, are bounded in time only. `None` for tools that can reach the pane's edges, as
-    /// lines extended left or right do.
+    /// a drawing outside the pane can be skipped. Tools that also paint at prices taken from the
+    /// bars, such as positions and volume profiles, or run a leg on a fixed time past its anchor,
+    /// which a steep leg carries to any price, are bounded in time only. `None` for tools that can
+    /// reach the pane's edges, as lines extended left or right do.
     pub(crate) fn paint_bounds(&self) -> Option<Rect> {
         use DrawingToolType as T;
         let bounded = matches!(
