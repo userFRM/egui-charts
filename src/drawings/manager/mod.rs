@@ -691,7 +691,7 @@ fn queue_sync(
 }
 
 /// The id a drawing is stored under.
-fn sync_id(drawing: &Drawing) -> String {
+pub(crate) fn sync_id(drawing: &Drawing) -> String {
     drawing
         .stored_id
         .clone()

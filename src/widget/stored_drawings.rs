@@ -252,7 +252,9 @@ impl Chart {
     /// drawing is being drawn, dragged, measured or edited: the stored drawings replace its
     /// saveable drawings, selection and undo history, each keeping its local id, and a document
     /// deleted elsewhere leaves none. A write waits for such a read, and one that fails is tried
-    /// again a second of input time later. A drawing whose study the chart does not show appears
+    /// again a second of input time later. Drawing sync of a [`ChartLayout`](super::ChartLayout)
+    /// shows drawings of charts outside `storage` on this chart without saving them here. A
+    /// drawing whose study the chart does not show appears
     /// in the price pane and is written back in its study's pane. If `storage` keeps revisions, a
     /// write over drawings changed elsewhere since they were read is refused and waits, with the
     /// chart's drawings unchanged, until [`Self::resolve_storage_conflict`] settles it; without
@@ -479,6 +481,11 @@ impl Chart {
             (Some(own), Some(other)) => Arc::ptr_eq(&own.storage, &other.storage),
             _ => false,
         }
+    }
+
+    /// Whether this chart keeps its drawings in a storage.
+    pub(super) fn keeps_stored_drawings(&self) -> bool {
+        self.drawing_store.is_some()
     }
 
     /// Tells each chart in `charts` which documents the others that keep drawings in the same
@@ -1522,5 +1529,41 @@ mod tests {
         draw_line(&mut b, line_at(4.0, 11.0));
         show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
         assert_eq!(stored_prices(&host), [10.0, 11.0]);
+    }
+
+    /// Guards #1619 and #1650: with drawing sync on, a chart outside the charts' shared storage
+    /// shows each of their drawings once, and its own drawing, mirrored onto them but not
+    /// stored, stays as it is while they read each other's writes.
+    #[test]
+    fn a_chart_outside_the_storage_shows_each_drawing_once_and_keeps_its_own() {
+        let host = Arc::new(Host::default());
+        let storage: Arc<dyn Storage> = host.clone();
+        let (mut a, mut b) = (chart_on(Some(storage.clone())), chart_on(Some(storage)));
+        let mut c = chart_on(None);
+        let mut layout = ChartLayout::default();
+        layout.mode = ChartLayoutMode::Three;
+        layout.sync.sync_drawings = true;
+        let ctx = egui::Context::default();
+        let mut show = |a: &mut Chart, b: &mut Chart, c: &mut Chart| {
+            show_frames(&ctx, &mut layout, &mut [a, b, c], 0.1);
+        };
+        show(&mut a, &mut b, &mut c);
+        draw_line(&mut a, line_at(4.0, 10.5));
+        show(&mut a, &mut b, &mut c);
+        assert_eq!([shown_prices(&b), shown_prices(&c)], [[10.5], [10.5]]);
+        let own = draw_line(&mut c, line_at(4.0, 9.0));
+        show(&mut a, &mut b, &mut c);
+        draw_line(&mut a, line_at(4.0, 8.0));
+        show(&mut a, &mut b, &mut c);
+        for chart in [&a, &b, &c] {
+            assert_eq!(shown_prices(chart), [8.0, 9.0, 10.5]);
+        }
+        let own = c.drawings().drawings.iter().find(|d| d.id == own).unwrap();
+        assert_eq!(own.chart_points[0].price, 9.0);
+        assert_eq!(
+            stored_prices(&host),
+            [8.0, 10.5],
+            "a mirrored drawing is not stored"
+        );
     }
 }

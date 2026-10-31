@@ -1,5 +1,6 @@
 //! Propagate drawing changes without consuming the host's persistence queue.
 
+use crate::drawings::manager::sync_id;
 use crate::drawings::{ChartPoint, Drawing};
 use crate::widget::{Chart, PaneId};
 use std::collections::{HashMap, HashSet};
@@ -57,7 +58,11 @@ impl DrawingLinks {
                 changes.push((key, None));
             }
         }
+        let joined = self.join_read_drawings(charts, count, groups, &changes);
         for (key, drawing) in changes {
+            if joined.contains(&key) {
+                continue;
+            }
             let origin = *self.origins.entry(key).or_insert(key);
             let symbol = charts[key.0].symbol().to_owned();
             for slot in 0..count {
@@ -91,11 +96,15 @@ impl DrawingLinks {
                             copy.id = target.id;
                             copy.stored_id.clone_from(&target.stored_id);
                             copy.created_at = target.created_at;
+                            copy.saveable = target.saveable;
                             *target = copy;
                         });
                     } else {
                         copy.stored_id = None;
                         copy.created_at = None;
+                        // Not saved where it is mirrored: the chart it was drawn on keeps it, and
+                        // a drawing that is not saveable stays when this chart reads its storage.
+                        copy.saveable &= !charts[slot].keeps_stored_drawings();
                         charts[slot].drawings_mut().add_synced_drawing(copy);
                         if let Some(added) = charts[slot].drawings().drawings.last() {
                             self.origins.insert((slot, added.id), origin);
@@ -134,6 +143,48 @@ impl DrawingLinks {
             .retain(|key, _| self.previous.contains_key(key));
         self.retry.retain(|key| self.previous.contains_key(key));
         changed
+    }
+
+    /// Links each drawing that a chart has just read from storage to the drawing stored under the
+    /// same id on another chart of that storage, group and symbol, once that one is linked, and
+    /// returns their keys: the read drawing is that drawing, whose copies exist already. A read
+    /// drawing without such a drawing starts a link, which the same drawing read on another
+    /// chart joins.
+    fn join_read_drawings(
+        &mut self,
+        charts: &[&mut Chart],
+        count: usize,
+        groups: &[Option<String>; 16],
+        changes: &[(Key, Option<Drawing>)],
+    ) -> HashSet<Key> {
+        let mut joined = HashSet::new();
+        for (key, drawing) in changes {
+            let Some(drawing) = drawing else { continue };
+            if !drawing.saveable || drawing.stored_id.is_none() || self.origins.contains_key(key) {
+                continue;
+            }
+            let record = sync_id(drawing);
+            let origin = (0..count)
+                .filter(|&slot| {
+                    slot != key.0
+                        && groups[slot] == groups[key.0]
+                        && charts[slot].symbol() == charts[key.0].symbol()
+                        && charts[slot].shares_stored_drawings(charts[key.0])
+                })
+                .find_map(|slot| {
+                    let other = charts[slot]
+                        .drawings()
+                        .drawings
+                        .iter()
+                        .find(|d| d.saveable && sync_id(d) == record)?;
+                    self.origins.get(&(slot, other.id)).copied()
+                });
+            if origin.is_some() {
+                joined.insert(*key);
+            }
+            self.origins.insert(*key, origin.unwrap_or(*key));
+        }
+        joined
     }
 }
 
