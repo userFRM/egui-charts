@@ -905,3 +905,71 @@ fn heartbeats_after_whitespace_keep_the_last_real_close() {
         }
     }
 }
+
+/// A heartbeat opens a candle only inside the windows the subscription selected, whatever the
+/// interval, and the first one of the next session opens that session's slot at the last close.
+/// The candles are worked out by hand from a Mon-Fri 09:30-16:00 UTC session and a trade at 100.
+#[test]
+fn heartbeat_outside_the_session_opens_no_candle() {
+    use crate::model::{Session, SessionWindow, TimezoneId};
+    use chrono::Weekday::{Fri, Mon, Thu, Tue, Wed};
+    use chrono::{NaiveDate, NaiveTime};
+    let time = |s: &str| s.parse::<DateTime<Utc>>().unwrap();
+    let hm = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+    let days = [Mon, Tue, Wed, Thu, Fri];
+    let regular = Session::new([SessionWindow::new(days, hm(9, 30), hm(16, 0))])
+        .with_holidays(["2024-03-14".parse::<NaiveDate>().unwrap()]);
+    let with_break = Session::new([
+        SessionWindow::new(days, hm(9, 30), hm(12, 0)),
+        SessionWindow::new(days, hm(13, 0), hm(16, 0)),
+    ]);
+    let with_premarket = Session::new([SessionWindow::new(days, hm(9, 30), hm(16, 0))])
+        .with_extended_windows([SessionWindow::new(days, hm(4, 0), hm(9, 30))]);
+    #[rustfmt::skip]
+    let cases = [
+        ("after the close, overnight, on a holiday and a weekend", Timeframe::Min1,
+            regular.clone(), false, "2024-03-12T15:59:30Z",
+            vec![("2024-03-12T16:00:00Z", None),
+                ("2024-03-12T16:05:00Z", None),
+                ("2024-03-13T03:00:00Z", None),
+                ("2024-03-13T09:30:05Z", Some("2024-03-13T09:30:00Z")),
+                ("2024-03-14T10:00:00Z", None),
+                ("2024-03-16T12:00:00Z", None),
+                ("2024-03-18T09:31:00Z", Some("2024-03-18T09:31:00Z"))]),
+        ("in the break between two windows", Timeframe::Min1, with_break, false,
+            "2024-03-12T11:59:30Z",
+            vec![("2024-03-12T12:30:00Z", None),
+                ("2024-03-12T13:00:05Z", Some("2024-03-12T13:00:00Z"))]),
+        ("a daily bar on a weekend", Timeframe::Day1, regular, false, "2024-03-15T15:59:30Z",
+            vec![("2024-03-16T12:00:00Z", None),
+                ("2024-03-18T03:00:00Z", None),
+                ("2024-03-18T09:30:05Z", Some("2024-03-18T00:00:00Z"))]),
+        ("an extended window left out", Timeframe::Min1, with_premarket.clone(), false,
+            "2024-03-12T15:59:30Z",
+            vec![("2024-03-13T08:00:00Z", None),
+                ("2024-03-13T09:30:05Z", Some("2024-03-13T09:30:00Z"))]),
+        ("an extended window selected", Timeframe::Min1, with_premarket, true,
+            "2024-03-12T15:59:30Z",
+            vec![("2024-03-13T03:00:00Z", None),
+                ("2024-03-13T08:00:00Z", Some("2024-03-13T08:00:00Z"))]),
+    ];
+    for (name, timeframe, session, extended, trade, heartbeats) in cases {
+        let clock = BarClock::new(timeframe).with_session(TimezoneId::utc(), session, extended);
+        let inbox = Arc::new(Inbox::default());
+        let sink = inbox.subscribe("ES".into(), clock, 10, None);
+        sink.push_tick(tick(time(trade), 100.0, 1.0));
+        inbox.drain();
+        for (now, expected) in heartbeats {
+            sink.advance_time(time(now));
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            let opened: Vec<_> = updates.bars.into_values().map(|(bar, _)| bar).collect();
+            let expected: Vec<_> = expected
+                .into_iter()
+                .map(|open| Bar::new(time(open), 100.0, 100.0, 100.0, 100.0, 0.0))
+                .collect();
+            assert_eq!(opened, expected, "{name}: heartbeat at {now}");
+            // The chart's clock keeps running while the market is closed.
+            assert_eq!(updates.time, Some(time(now)), "{name}: heartbeat at {now}");
+        }
+    }
+}
