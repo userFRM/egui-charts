@@ -86,8 +86,8 @@ impl SeriesSet {
     }
 }
 
-/// An added series that one state of the chart lacks, with the price formatter and bar limit
-/// that the chart keeps apart from it.
+/// An added series that one state of the chart lacks, with all its bars, whatever the replay
+/// cutoff, and the price formatter and bar limit that the chart keeps apart from it.
 struct HeldSeries {
     series: PriceSeries,
     formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
@@ -462,8 +462,10 @@ impl Chart {
         }
     }
 
-    /// Takes `series`, which has left the chart, with its price formatter and bar limit.
-    fn hold_series(&mut self, series: PriceSeries) -> HeldSeries {
+    /// Takes `series`, which has left the chart, with all its bars, its price formatter and its
+    /// bar limit.
+    fn hold_series(&mut self, mut series: PriceSeries) -> HeldSeries {
+        self.replay_release(&mut series);
         let mut held = HeldSeries {
             series,
             formatter: None,
@@ -473,9 +475,11 @@ impl Chart {
         held
     }
 
-    /// Gives a held series its price formatter and bar limit back as it enters the chart.
+    /// Gives a held series its price formatter and bar limit back as it enters the chart, under
+    /// the cutoff of a running replay.
     fn restore_series(&mut self, mut held: HeldSeries) -> PriceSeries {
         self.swap_series_settings(held.series.id, &mut held.formatter, &mut held.bar_limit);
+        self.replay_admit(&mut held.series);
         held.series
     }
 

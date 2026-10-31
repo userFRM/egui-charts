@@ -1,5 +1,6 @@
 //! Retained history and a shared, exclusive replay cutoff.
 
+use super::price_series::PriceSeries;
 use super::{Chart, ChartLayout, SeriesId};
 use crate::data::merge::{Origin, merge};
 use crate::model::{Bar, BarClock};
@@ -232,6 +233,30 @@ impl Chart {
         removed
     }
 
+    /// Gives `series`, which has left the chart, its retained bars. The window only holds series
+    /// in the chart, so the history leaves with the series and is dropped with it.
+    pub(super) fn replay_release(&mut self, series: &mut PriceSeries) {
+        if let Some(bars) = self
+            .replay
+            .as_mut()
+            .and_then(|replay| replay.bars.remove(&series.id))
+        {
+            series.bars = bars;
+        }
+    }
+
+    /// Retains the bars of `series` as it enters the chart, leaving it those the cutoff completed.
+    pub(super) fn replay_admit(&mut self, series: &mut PriceSeries) {
+        let clock = self
+            .timeframe
+            .map_or_else(BarClock::exact, |_| self.bar_clock());
+        if let Some(replay) = &mut self.replay {
+            let bars = std::mem::take(&mut series.bars);
+            series.bars = completed(&bars, &clock, replay.time).to_vec();
+            replay.bars.insert(series.id, bars);
+        }
+    }
+
     fn count_replay_rejections(&mut self, id: SeriesId, rejected: u64) {
         if id == SeriesId::MAIN {
             self.feed.rejected_bars += rejected;
@@ -389,6 +414,38 @@ mod tests {
             );
             chart.set_replay_time(Some(time(10)));
             assert_eq!(chart.bars(SeriesId::MAIN), &a.bars(SeriesId::MAIN)[1..]);
+        }
+    }
+
+    /// An added series brought back by undo shows what it would have shown had it never left:
+    /// the bars completed at the cutoff during replay, and all of them after the exit. A cutoff
+    /// at minute 2 completes the bars of minutes 0 and 1.
+    #[test]
+    fn undoing_a_series_removal_across_replay_keeps_its_history_and_the_cutoff() {
+        let minutes: Vec<_> = (0..5).map(|i| bar(i, [10.0; 5])).collect();
+        for removed_in_replay in [true, false] {
+            let mut chart = Chart::new(BarData::from_bars(minutes.clone()));
+            chart.set_timeframe(Timeframe::Min1);
+            let id = chart.add_series(Default::default());
+            chart.set_data(id, minutes.clone());
+            if removed_in_replay {
+                chart.set_replay_time(Some(time(2)));
+            }
+            assert!(chart.user_action(|chart| chart.remove_series(id)));
+            if removed_in_replay {
+                chart.set_replay_time(None);
+                assert!(chart.undo());
+            } else {
+                chart.set_replay_time(Some(time(2)));
+                assert!(chart.undo());
+                assert_eq!(chart.bars(id), &minutes[..2], "undone during replay");
+                chart.set_replay_time(None);
+            }
+            assert_eq!(
+                chart.bars(id),
+                minutes,
+                "removed_in_replay={removed_in_replay}"
+            );
         }
     }
 
