@@ -905,6 +905,12 @@ mod tests {
                 vec![(0.0, 0.0), (100.0, 0.0)],
             ),
             (
+                T::Highlighter,
+                (50.0, 9.0),
+                None,
+                vec![(0.0, 0.0), (100.0, 0.0)],
+            ),
+            (
                 T::DateRange,
                 (150.0, 400.0),
                 Some(7),
@@ -926,6 +932,10 @@ mod tests {
         let mut wrong = Vec::new();
         for (tool, (x, y), want, anchors) in cases {
             let mut drawing = Drawing::new(7, tool);
+            if tool == T::Highlighter {
+                // A 16 px stroke: hit within 8 px.
+                drawing.stroke_width = 16.0;
+            }
             drawing.points = anchors.iter().map(|&(x, y)| Pos2::new(x, y)).collect();
             (drawing.extend_left, drawing.extend_right) = (true, true);
             let got = interaction.hit_test(Pos2::new(x, y), std::slice::from_ref(&drawing), "1D");

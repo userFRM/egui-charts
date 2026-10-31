@@ -57,6 +57,7 @@ impl HandleService {
     /// - **Rectangle and Gann box**: Four corner handles and four edge handles
     /// - **Single-point tools** (HorizontalLine, VerticalLine): One Start handle
     /// - **Glyphs**: Four resize corners around the centre and a Middle move handle
+    /// - **Brushes**: One Middle handle on the stroke, which moves it whole
     /// - **Three-anchor channels**: Four indexed handles, one at each line end
     /// - **Multi-point tools**: Indexed handles at each anchor
     pub fn get_handles(drawing: &Drawing) -> Vec<(HandlePos, Pos2)> {
@@ -154,6 +155,12 @@ impl HandleService {
             DrawingToolType::RegressionTrend => {
                 for (i, &point) in drawing.points.iter().take(2).enumerate() {
                     handles.push((HandlePos::Point(i), point));
+                }
+            }
+            // A freehand stroke moves as a whole from the sample halfway along it.
+            DrawingToolType::Brush | DrawingToolType::Highlighter => {
+                if let Some(&point) = drawing.points.get(drawing.points.len() / 2) {
+                    handles.push((HandlePos::Middle, point));
                 }
             }
             // Multi-point tools - show indexed handles
@@ -764,12 +771,28 @@ mod tests {
                     (Point(2), pos2(0.0, 60.0)),
                 ],
             ),
+            (
+                DrawingToolType::Brush,
+                vec![
+                    pos2(0.0, 0.0),
+                    pos2(30.0, 20.0),
+                    pos2(60.0, 40.0),
+                    pos2(90.0, 60.0),
+                    pos2(120.0, 80.0),
+                ],
+                vec![(Middle, pos2(60.0, 40.0))],
+            ),
+            (
+                DrawingToolType::Highlighter,
+                vec![pos2(0.0, 0.0), pos2(30.0, 20.0)],
+                vec![(Middle, pos2(30.0, 20.0))],
+            ),
         ];
         for (tool, points, expected) in cases {
             let drawing = create_test_drawing(tool, points);
             assert_eq!(HandleService::get_handles(&drawing), expected, "{tool:?}");
         }
-        // Renderer control counts, including generated position stops and freehand samples.
+        // Renderer control counts, including generated position stops.
         let anchor_counts: &[(&[DrawingToolType], usize)] = &[
             (
                 &[
@@ -879,8 +902,6 @@ mod tests {
                     DrawingToolType::XABCDPattern,
                     DrawingToolType::CypherPattern,
                     DrawingToolType::ElliottTripleCombo,
-                    DrawingToolType::Brush,
-                    DrawingToolType::Highlighter,
                     DrawingToolType::Polyline,
                     DrawingToolType::Path,
                 ],

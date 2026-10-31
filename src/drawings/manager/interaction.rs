@@ -1,7 +1,9 @@
 //! Pointer interaction: handles and drags, tool selection and drawing creation.
 
 use super::{DrawingManager, DrawingSyncAction};
-use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType, HandlePos};
+use crate::drawings::domain::{
+    ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType, HandlePos,
+};
 use crate::drawings::services::HandleService;
 use egui::Pos2;
 
@@ -547,6 +549,17 @@ impl DrawingManager {
 
     // === Drawing lifecycle ===
 
+    /// `point` with the magnet applied, except for freehand samples, which follow the pointer.
+    fn snap_placement(&self, tool: Option<DrawingToolType>, point: Pos2) -> Pos2 {
+        if tool
+            .is_some_and(|tool| tool.interaction_mode() == DrawingInteractionMode::ContinuousDraw)
+        {
+            point
+        } else {
+            self.snap_point(point, &self.drawings)
+        }
+    }
+
     /// Starts a new drawing of the given tool type at the given screen position, or places the
     /// drawing [`Self::start_icon_insertion`] prepared for it.
     ///
@@ -567,7 +580,7 @@ impl DrawingManager {
         if self.active_custom_tool.is_none() && !self.registry.availability(tool_type).enabled {
             return;
         }
-        let point = self.snap_point(point, &self.drawings);
+        let point = self.snap_placement(Some(tool_type), point);
         // A drawing prepared before its first anchor, such as a picked icon, starts here.
         let mut drawing = match self.curr_drawing.take() {
             Some(prepared) if prepared.tool_type == tool_type && prepared.points.is_empty() => {
@@ -576,6 +589,11 @@ impl DrawingManager {
             _ => {
                 let mut drawing =
                     Drawing::with_color(self.take_id(), tool_type, self.options.default_color);
+                // The highlighter's default look: a wide, translucent stroke in the toolbar colour.
+                if tool_type == DrawingToolType::Highlighter {
+                    drawing.stroke_width = 16.0;
+                    drawing.color[3] = drawing.color[3].min(100);
+                }
                 if let Some(defaults) = self.tool_defaults.get(&tool_type) {
                     let _ = defaults.apply_to(&mut drawing);
                 }
@@ -633,7 +651,9 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
-        let point = self.constrain_preview(self.snap_point(point, &self.drawings));
+        let point = self.constrain_preview(
+            self.snap_placement(self.curr_drawing.as_ref().map(|d| d.tool_type), point),
+        );
         if let Some(ref mut drawing) = self.curr_drawing {
             // The click takes the place of the pointer preview.
             if std::mem::take(&mut self.preview_point) {
@@ -663,7 +683,9 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
-        let point = self.constrain_preview(self.snap_point(point, &self.drawings));
+        let point = self.constrain_preview(
+            self.snap_placement(self.curr_drawing.as_ref().map(|d| d.tool_type), point),
+        );
         if let Some(ref mut drawing) = self.curr_drawing
             && !drawing.points.is_empty()
             && !drawing.completed
