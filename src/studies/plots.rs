@@ -38,7 +38,8 @@ pub struct StudyCandle {
 /// A price band between two source bars, stored once instead of as a value on every bar.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StudyZone {
-    /// Source bars the band spans, from the centre of the first to the centre of the last.
+    /// Source bars the band spans, from the centre of the first to the centre of the last, or
+    /// from edge to edge when its study's zones cover whole bars.
     pub bars: std::ops::Range<usize>,
     /// Upper price.
     pub top: f64,

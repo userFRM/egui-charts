@@ -534,6 +534,13 @@ pub trait Indicator: Send {
         &[]
     }
 
+    /// Whether each of [`zones`](Self::zones) spans its bars from the left edge of the first to
+    /// the right edge of the last, as study candles do, rather than from the centre of the first
+    /// to the centre of the last. Off by default.
+    fn zones_cover_whole_bars(&self) -> bool {
+        false
+    }
+
     /// Text beside study values, in order of `bar`. The chart draws the labels near the visible
     /// bars, in the colour of their plot, inside the plot area, so they never run under the
     /// price axis. Empty by default. Keep the text from the last calculation: it is drawn every

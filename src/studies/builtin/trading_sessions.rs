@@ -668,6 +668,10 @@ impl Indicator for TradingSessions {
         &self.study_zones
     }
 
+    fn zones_cover_whole_bars(&self) -> bool {
+        true
+    }
+
     fn labels(&self) -> &[StudyLabel] {
         &self.labels
     }

@@ -4,6 +4,7 @@ use crate::studies::{StudyCandle, StudyZone};
 
 pub(crate) fn zone_rect(
     zone: &StudyZone,
+    whole_bars: bool,
     coords: &crate::chart::coords::ChartMapping,
     price_to_y: impl Fn(f64) -> f32,
 ) -> Option<egui::Rect> {
@@ -12,9 +13,17 @@ pub(crate) fn zone_rect(
         .end
         .checked_sub(1)
         .filter(|&l| l >= zone.bars.start)?;
+    let half = if whole_bars {
+        coords.bar_spacing * 0.5
+    } else {
+        0.0
+    };
     let rect = egui::Rect::from_two_pos(
-        egui::pos2(coords.idx_to_x(zone.bars.start), price_to_y(zone.top)),
-        egui::pos2(coords.idx_to_x(last), price_to_y(zone.bottom)),
+        egui::pos2(
+            coords.idx_to_x(zone.bars.start) - half,
+            price_to_y(zone.top),
+        ),
+        egui::pos2(coords.idx_to_x(last) + half, price_to_y(zone.bottom)),
     );
     (rect.min.is_finite() && rect.max.is_finite()).then_some(rect)
 }
@@ -93,7 +102,8 @@ pub(crate) fn paint_zones(
     let clip = painter.clip_rect();
     for zone in study.zones() {
         let style = study.plot_style(zone.plot);
-        let Some(rect) = zone_rect(zone, coords, |p| price.price_to_y(p))
+        let whole_bars = study.zones_cover_whole_bars();
+        let Some(rect) = zone_rect(zone, whole_bars, coords, |p| price.price_to_y(p))
             .filter(|rect| style.visible && rect.intersects(clip.expand(style.width)))
         else {
             continue;
@@ -218,6 +228,58 @@ pub(crate) fn paint_drawings(
             &context.painter.with_clip_rect(context.rect),
             context.rect,
             &view,
+        );
+    }
+}
+
+#[cfg(all(test, feature = "studies", feature = "timezones"))]
+mod tests {
+    use super::*;
+    use crate::chart::coords::ChartMapping;
+    use crate::scales::{PriceMap, PriceRange, PriceTransform};
+    use crate::studies::{Indicator, TradingSessions};
+    use egui::{Pos2, Rect};
+
+    /// On six 4-hour bars of 2024-07-15 from 00:00 UTC, the default New York session holds only
+    /// the bar of 16:00, and its box covers that bar from edge to edge, as the Tokyo and London
+    /// boxes cover their two bars. At 100 pixels a bar, bar `i` spans `100 * i - 1` to
+    /// `100 * i + 99`.
+    #[test]
+    fn session_boxes_cover_their_bars_from_edge_to_edge() {
+        let start: chrono::DateTime<chrono::Utc> = "2024-07-15T00:00:00Z".parse().unwrap();
+        let bars: Vec<_> = (0..6)
+            .map(|i| {
+                let time = start + chrono::TimeDelta::hours(4 * i);
+                crate::model::Bar::new(time, 10.0, 11.0, 9.0, 10.0, 1.0)
+            })
+            .collect();
+        let mut sessions = TradingSessions::new();
+        sessions.calculate(&bars);
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(600.0, 100.0));
+        let coords = ChartMapping::new(rect, 100.0, 0, 5, 0.0, price);
+        let spans: Vec<_> = sessions
+            .zones()
+            .iter()
+            .map(|zone| {
+                let whole_bars = sessions.zones_cover_whole_bars();
+                let rect = zone_rect(zone, whole_bars, &coords, |price| price as f32).unwrap();
+                (zone.bars.clone(), zone.plot, rect.left(), rect.right())
+            })
+            .collect();
+        assert_eq!(
+            spans,
+            [
+                (0..2, 3, -1.0, 199.0),
+                (2..4, 4, 199.0, 399.0),
+                (4..5, 5, 399.0, 499.0)
+            ]
         );
     }
 }

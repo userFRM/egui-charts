@@ -933,6 +933,9 @@ impl Indicator for ConfiguredStudy {
     fn zones(&self) -> &[super::StudyZone] {
         self.study.zones()
     }
+    fn zones_cover_whole_bars(&self) -> bool {
+        self.study.zones_cover_whole_bars()
+    }
     fn labels(&self) -> &[super::StudyLabel] {
         // Source bars of a study on another interval or symbol are not chart bars.
         if self.aligned.is_some() {
