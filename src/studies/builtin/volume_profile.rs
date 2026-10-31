@@ -277,13 +277,14 @@ impl ProfileStudy {
     /// that serves the profile length while the source follows the chart; the held one while
     /// emptied for a recompute.
     fn finer(&self) -> Option<Timeframe> {
-        if let Some((timeframe, _)) = self.held.filter(|_| self.data.is_empty()) {
-            return timeframe;
-        }
         let shorter = |source: &Timeframe| {
             !matches!(source, Timeframe::Ticks(_))
                 && source.duration_ms() < self.interval.duration_ms()
         };
+        // The chart interval may have changed since.
+        if let Some((timeframe, _)) = self.held.filter(|_| self.data.is_empty()) {
+            return timeframe.filter(shorter);
+        }
         if self.source.is_some() || !self.feed_source || self.resolutions.is_empty() {
             return self.source.filter(shorter);
         }
@@ -925,7 +926,8 @@ mod tests {
         assert_eq!(profiles[0].profile.volume(), [10.0]);
     }
 
-    /// Suggestions serve an inclusive profile length; explicit choices and the opt-out win.
+    /// Suggestions serve an inclusive profile length; explicit choices and the opt-out win. A
+    /// profile emptied to wait for its recompute drops a held interval the chart has reached.
     #[test]
     fn feed_suggested_interval_follows_the_profile_length() {
         let start: DateTime<Utc> = "2026-03-02T09:00:00Z".parse().unwrap();
@@ -951,7 +953,7 @@ mod tests {
                 None,
             ),
         ]);
-        for case in 0..10 {
+        for case in 0..11 {
             let mut study: Box<dyn Indicator> = match case {
                 1 => Box::new(VolProfileFixed::new(4).with_range(bars[0].time, bars[1].time)),
                 2..=4 => Box::new(VolProfileVisible::new(4)),
@@ -985,6 +987,11 @@ mod tests {
                 4 => 4..9,
                 _ => 0..4,
             });
+            if case == 10 {
+                // Emptied to wait for a recompute, then the chart moves to the held interval.
+                study.update(&[], 0);
+                study.set_timeframe(Timeframe::Min5);
+            }
             let expected = match case {
                 0 | 3 => Some(Timeframe::Min5),
                 1 | 2 => Some(Timeframe::Min1),
