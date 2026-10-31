@@ -192,24 +192,28 @@ fn dialog_key(ui: &Ui, key: egui::Key) -> bool {
 pub(crate) fn title_row(ui: &mut Ui, title: &str, closable: bool) -> bool {
     // Fix the row height before placing the title so the title centres on the button.
     let row = Vec2::new(ui.available_width(), ButtonSize::MD.pixels());
+    // The close button first, so a long title is elided in the width left rather than widening
+    // the dialog past a narrow window.
     let close = ui
-        .allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
-            ui.label(
-                RichText::new(l10n::text(ui.ctx(), title))
-                    .strong()
-                    .size(ui.active_theme().text.dialog_title)
-                    .variation("wght", 600.0),
-            );
-            closable
-                && ui
-                    .with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        IconButton::new(&icons::CLOSE)
-                            .icon_scale(1.0)
-                            .tooltip("Close")
-                            .show(ui)
-                            .clicked()
-                    })
-                    .inner
+        .allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+            let close = closable
+                && IconButton::new(&icons::CLOSE)
+                    .icon_scale(1.0)
+                    .tooltip("Close")
+                    .show(ui)
+                    .clicked();
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(l10n::text(ui.ctx(), title))
+                            .strong()
+                            .size(ui.active_theme().text.dialog_title)
+                            .variation("wght", 600.0),
+                    )
+                    .truncate(),
+                );
+            });
+            close
         })
         .inner;
     ui.add_space(ui.active_theme().spacing.sm);

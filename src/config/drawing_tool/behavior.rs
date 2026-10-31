@@ -33,6 +33,9 @@ impl DrawingToolType {
                 | Self::InfoLine
                 | Self::ABCDPattern
                 | Self::ThreeDrivesPattern
+                | Self::ElliottImpulse
+                | Self::ElliottCorrection
+                | Self::ElliottTriangle
                 | Self::ElliottDoubleCombo
                 | Self::ElliottTripleCombo
                 | Self::GannFan
@@ -367,7 +370,6 @@ impl DrawingToolType {
                     | Self::DisjointChannel
                     | Self::FibonacciChannel
                     | Self::BarsPattern
-                    | Self::ElliottDoubleCombo
                     | Self::Triangle
                     | Self::ParallelChannel
                     | Self::Pitchfork
@@ -376,10 +378,13 @@ impl DrawingToolType {
                     | Self::InsidePitchfork => Some(3),
                     Self::ABCDPattern
                     | Self::ElliottCorrection
+                    | Self::ElliottDoubleCombo
                     | Self::TrianglePattern
                     | Self::DoubleCurve => Some(4),
-                    Self::XABCDPattern | Self::CypherPattern | Self::ElliottTripleCombo => Some(5),
-                    Self::ElliottImpulse | Self::ElliottTriangle => Some(6),
+                    Self::XABCDPattern | Self::CypherPattern => Some(5),
+                    Self::ElliottImpulse | Self::ElliottTriangle | Self::ElliottTripleCombo => {
+                        Some(6)
+                    }
                     Self::HeadAndShoulders | Self::ThreeDrivesPattern => Some(7),
                     // Polyline, Path and Ghost Feed have no fixed limit
                     _ => None,
@@ -417,9 +422,9 @@ mod tests {
             (DoubleCurve, DrawingInteractionMode::MultiPoint, 4),
             (TrianglePattern, DrawingInteractionMode::MultiPoint, 4),
             (ThreeDrivesPattern, DrawingInteractionMode::MultiPoint, 7),
-            (ElliottDoubleCombo, DrawingInteractionMode::MultiPoint, 3),
+            (ElliottDoubleCombo, DrawingInteractionMode::MultiPoint, 4),
             (ElliottTriangle, DrawingInteractionMode::MultiPoint, 6),
-            (ElliottTripleCombo, DrawingInteractionMode::MultiPoint, 5),
+            (ElliottTripleCombo, DrawingInteractionMode::MultiPoint, 6),
             (Note, DrawingInteractionMode::ClickClick, 2),
             (Signpost, DrawingInteractionMode::ClickClick, 2),
             (PriceNote, DrawingInteractionMode::ClickClick, 2),

@@ -9,9 +9,9 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig,
-    GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing, RegressionTrendConfig,
-    TimeframeVisibility,
+    ArrowStyle, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig, FontWeight,
+    GannConfig, GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing,
+    RegressionTrendConfig, TimeframeVisibility,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -190,6 +190,9 @@ pub struct Drawing {
     /// Level lines and band fill of the pitchfork tools.
     #[serde(default)]
     pub pitchfork: Option<PitchforkConfig>,
+    /// Notation of the wave labels of the Elliott wave tools. Older drawings use the default.
+    #[serde(default)]
+    pub elliott_degree: ElliottDegree,
 
     // === Z-Order (rendering layer) ===
     /// Z-order for rendering priority (higher = drawn on top)
@@ -256,17 +259,7 @@ impl Drawing {
                 DrawingToolType::XABCDPattern
                 | DrawingToolType::CypherPattern
                 | DrawingToolType::TrianglePattern => Some([242, 54, 69, 25]),
-                DrawingToolType::HeadAndShoulders
-                | DrawingToolType::ElliottImpulse
-                | DrawingToolType::ElliottTriangle => Some([242, 54, 69, 20]),
-                DrawingToolType::ElliottCorrection => Some(
-                    crate::tokens::DESIGN_TOKENS
-                        .semantic
-                        .extended
-                        .bearish
-                        .gamma_multiply(20.0 / 255.0)
-                        .to_srgba_unmultiplied(),
-                ),
+                DrawingToolType::HeadAndShoulders => Some([242, 54, 69, 20]),
                 _ => None,
             },
             locked: false,
@@ -320,6 +313,7 @@ impl Drawing {
             volume_profile: None,
             regression_trend: None,
             pitchfork: None,
+            elliott_degree: ElliottDegree::default(),
             channel_midline: false,
             gann: None,
             ghost_feed: None,
@@ -340,9 +334,7 @@ impl Drawing {
     pub fn with_color(id: usize, tool_type: DrawingToolType, color: [u8; 4]) -> Self {
         let mut drawing = Self::new(id, tool_type);
         drawing.color = color;
-        if tool_type != DrawingToolType::ElliottCorrection
-            && let Some(fill) = &mut drawing.fill_color
-        {
+        if let Some(fill) = &mut drawing.fill_color {
             fill[..3].copy_from_slice(&color[..3]);
         }
         drawing

@@ -231,6 +231,7 @@ impl DrawingProps {
                 drawing.volume_profile = settings.volume_profile;
                 drawing.regression_trend = settings.regression_trend;
                 drawing.channel_midline = settings.channel_midline;
+                drawing.elliott_degree = settings.elliott_degree;
             }
             if drawing.id == id.0
                 && !points.is_empty()
@@ -501,6 +502,7 @@ mod tests {
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
+            settings.elliott_degree = crate::drawings::ElliottDegree::Minute;
             settings.italic = true;
             settings.text_color = Some([1, 2, 3, 255]);
             settings.background = false;
@@ -534,6 +536,7 @@ mod tests {
             assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
+            assert_eq!(saved.elliott_degree, crate::drawings::ElliottDegree::Minute);
             assert!(saved.italic && !saved.background && !saved.border);
             assert_eq!(saved.text_color, Some([1, 2, 3, 255]));
             assert_eq!(saved.border_color, Some([4, 5, 6, 255]));

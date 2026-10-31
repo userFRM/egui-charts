@@ -34,7 +34,7 @@
 //!
 //! Drawings are grouped by symbol into a `DrawingStorage` container that
 //! includes a format version, metadata, and an optional timeframe filter.
-//! Loading migrates versions 1 to 3, rejects versions it does not know and
+//! Loading migrates versions 1 to 4, rejects versions it does not know and
 //! skips any drawing it cannot read
 //! (see [`from_json`](crate::drawings::persistence::DrawingStorage::from_json)).
 
@@ -317,11 +317,13 @@ impl Default for StorageMetadata {
 }
 
 impl DrawingStorage {
-    /// Current storage format version. Version 4 draws brushes and highlighters at their stored
-    /// width and opacity; earlier versions load at the width and opacity their strokes were drawn
-    /// at. Version 3 preserves editable ray and extended-line extensions; versions 1 and 2 migrate
-    /// to their former rendered reach when loaded.
-    pub const CURRENT_VERSION: u32 = 4;
+    /// Current storage format version. Version 5 gives Elliott double and triple combinations an
+    /// unlabelled start point; earlier versions load with a start point on their first anchor.
+    /// Version 4 draws brushes and highlighters at their stored width and opacity; earlier
+    /// versions load at the width and opacity their strokes were drawn at. Version 3 preserves
+    /// editable ray and extended-line extensions; versions 1 and 2 migrate to their former
+    /// rendered reach when loaded.
+    pub const CURRENT_VERSION: u32 = 5;
 
     /// Create new storage for a symbol
     pub fn new(symbol: impl Into<String>) -> Self {
@@ -431,7 +433,7 @@ impl DrawingStorage {
         serde_json::to_string_pretty(self).map_err(SaveError::Json)
     }
 
-    /// Deserialize from JSON, migrating versions 1 to 3 to the current format.
+    /// Deserialize from JSON, migrating versions 1 to 4 to the current format.
     ///
     /// Fails as a whole on invalid JSON, on a version this release does not
     /// know and on a missing or invalid symbol, timeframe or metadata. A
@@ -545,6 +547,15 @@ impl DrawingStorage {
                         // Earlier placements stored fewer anchors. Keep their endpoints and
                         // supply editable controls before checking the current construction.
                         use DrawingToolType as T;
+                        // Combinations saved before version 5 had no start point: their first
+                        // anchor ends wave W. A combination finished early since then can hold
+                        // as many anchors, so only the version tells them apart.
+                        if version < 5
+                            && matches!(tool, T::ElliottDoubleCombo | T::ElliottTripleCombo)
+                            && let Some(first) = drawing.points.first().cloned()
+                        {
+                            drawing.points.insert(0, first);
+                        }
                         match (tool, drawing.points.as_slice()) {
                             (T::PriceNote | T::ArrowMarker, [a]) => {
                                 drawing.points.push(a.clone());
@@ -1008,6 +1019,7 @@ mod tests {
             fork.show_background = false;
             drawing.pitchfork = Some(fork);
             drawing.channel_midline = true;
+            drawing.elliott_degree = ElliottDegree::Minuette;
             drawing.selectable = false;
             drawing.listed = false;
             drawing.group = Some("levels".into());
@@ -1305,7 +1317,7 @@ mod tests {
             );
         }
 
-        // Settings from a file saved before the new fields and placement counts.
+        // Settings from a file saved by version 4, before the new fields and placement counts.
         for (tool, count, origins) in [
             (DrawingToolType::Note, 1, &[0][..]),
             (DrawingToolType::Signpost, 1, &[0][..]),
@@ -1316,13 +1328,23 @@ mod tests {
             (DrawingToolType::FibonacciWedge, 2, &[0, 1, 1][..]),
             (DrawingToolType::Pitchfan, 2, &[0, 1, 1][..]),
             (DrawingToolType::BarsPattern, 2, &[0, 1][..]),
+            (DrawingToolType::ElliottDoubleCombo, 3, &[0, 0, 1, 2][..]),
+            (
+                DrawingToolType::ElliottTripleCombo,
+                5,
+                &[0, 0, 1, 2, 3, 4][..],
+            ),
+            (DrawingToolType::ElliottDoubleCombo, 2, &[0, 0, 1][..]),
         ] {
             let mut saved: serde_json::Value =
                 serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+            saved["version"] = 4.into();
             let records = saved["drawings"].as_array_mut().unwrap();
             records.truncate(1);
             records[0]["drawing"]["tool_type"] = serde_json::to_value(tool).unwrap();
-            records[0]["points"].as_array_mut().unwrap().truncate(count);
+            let points = records[0]["points"].as_array_mut().unwrap();
+            let first = points[0].clone();
+            points.resize(count, first);
             for (at, point) in records[0]["points"]
                 .as_array_mut()
                 .unwrap()
@@ -1521,11 +1543,11 @@ mod tests {
         assert!(!visibility.show_on_all);
         assert!(visibility.is_visible_on("2h") && !visibility.is_visible_on("1D"));
 
-        let got = DrawingStorage::from_json(&current.replace("\"version\": 4", "\"version\": 5"))
+        let got = DrawingStorage::from_json(&current.replace("\"version\": 5", "\"version\": 6"))
             .unwrap_err()
             .to_string();
         assert!(
-            got.contains("unsupported drawing storage version 5"),
+            got.contains("unsupported drawing storage version 6"),
             "{got}"
         );
     }
