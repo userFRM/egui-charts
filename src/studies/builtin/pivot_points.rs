@@ -2,8 +2,8 @@
 //!
 //! Support and resistance levels for each calendar period (day, week, month, quarter, year or
 //! several years of exchange trading days) from the open, high, low and close of the previous
-//! period in the data. With H, L, C and O the previous period's high, low, close and open, R = H - L and
-//! P = (H + L + C) / 3:
+//! period in the data. With H, L, C and O the previous period's high, low, close and open,
+//! R = H - L and P = (H + L + C) / 3:
 //!
 //! | Type        | Levels |
 //! |-------------|--------|
@@ -1044,7 +1044,7 @@ mod tests {
                 );
             }
         }
-        // A new close of the newest daily bar leaves the levels; a corrected earlier week moves them.
+        // A tick on the newest daily bar keeps the levels; a corrected earlier week moves them.
         let mut ticked = daily.clone();
         ticked[6].close = 44.0;
         let mut corrected = daily.clone();

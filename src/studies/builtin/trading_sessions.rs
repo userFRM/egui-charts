@@ -179,7 +179,8 @@ impl TradingSessions {
         self
     }
 
-    /// Whether each session is drawn as a box from its high to its low over its bars. On by default.
+    /// Whether each session is drawn as a box from its high to its low over its bars. On by
+    /// default.
     pub fn with_boxes(mut self, boxes: bool) -> Self {
         self.boxes = boxes;
         self
@@ -194,7 +195,8 @@ impl TradingSessions {
         self
     }
 
-    /// Which lines cross each session: at its open, its close and its average price. Off by default.
+    /// Which lines cross each session: at its open, its close and its average price. Off by
+    /// default.
     pub fn with_lines(mut self, opens: bool, closes: bool, averages: bool) -> Self {
         self.open_lines = opens;
         self.close_lines = closes;
