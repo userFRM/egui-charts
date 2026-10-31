@@ -50,8 +50,10 @@ fn trade_bar_thresholds_survive_drains_and_keep_raw_fills() {
 
 /// Guards that one filter gives one answer: the book size study, the heatmap's depth columns and
 /// the ladder's book (`OrderQueue::filtered`) sum the same orders, leaving out a small order, a
-/// young one, one of an excluded participant and one whose age is unknown, and that a feed with
-/// aggregate depth only gives no value or column instead of an unfiltered one.
+/// young one, one of an excluded participant and one whose age is unknown, that a maximum age keeps
+/// the orders younger than it, so a minimum and a maximum of the same age split the orders that
+/// carry a placement time, and that a feed with aggregate depth only gives no value or column
+/// instead of an unfiltered one.
 #[test]
 fn one_order_filter_gives_book_size_heatmap_and_ladder_the_same_sizes() {
     use crate::data::{OrderFilter, OrderFilterUnavailable, OrderFlowInput, OrderFlowKind};
@@ -76,6 +78,7 @@ fn one_order_filter_gives_book_size_heatmap_and_ladder_the_same_sizes() {
     let filter = OrderFilter {
         min_size: 2.0,
         min_age: Some(TimeDelta::seconds(10)),
+        max_age: None,
         exclude_participants: vec![2],
     };
     let config = DepthHistoryConfig {
@@ -171,6 +174,13 @@ fn one_order_filter_gives_book_size_heatmap_and_ladder_the_same_sizes() {
         ),
         (
             OrderFilter {
+                max_age: Some(TimeDelta::seconds(1)),
+                ..Default::default()
+            },
+            Err(OrderFilterUnavailable::PlacementTimes),
+        ),
+        (
+            OrderFilter {
                 min_size: 1.0,
                 ..Default::default()
             },
@@ -178,6 +188,36 @@ fn one_order_filter_gives_book_size_heatmap_and_ladder_the_same_sizes() {
         ),
     ] {
         assert_eq!(queue.filtered("A", &filter).map(|_| ()), expected);
+    }
+
+    // A minimum and a maximum of the same age split the orders that carry a placement time: 2 s
+    // is fresh, 10 s and 30 s persistent, and the order without one is in neither.
+    let mut queue = crate::data::OrderQueue::new(Some(0.25));
+    let orders = vec![
+        RestingOrder::new(1, Buy, 99.0, 1.0).with_placed(ago(2)),
+        RestingOrder::new(2, Buy, 99.0, 2.0).with_placed(ago(10)),
+        RestingOrder::new(3, Buy, 99.0, 4.0).with_placed(ago(30)),
+        RestingOrder::new(4, Buy, 99.0, 8.0),
+    ];
+    queue.snapshot(1, time, orders).unwrap();
+    let ten = Some(TimeDelta::seconds(10));
+    for (filter, expected) in [
+        (
+            OrderFilter {
+                max_age: ten,
+                ..Default::default()
+            },
+            vec![1.0],
+        ),
+        (
+            OrderFilter {
+                min_age: ten,
+                ..Default::default()
+            },
+            vec![6.0],
+        ),
+    ] {
+        assert_eq!(sizes(&queue.filtered("A", &filter).unwrap().bids), expected);
     }
 }
 
