@@ -342,7 +342,8 @@ fn fold_source(bars: &[Bar], source: &BarClock, chart: &BarClock) -> Option<Vec<
         folded.push(bar);
         rest = &rest[end..];
     }
-    // shortcut: every step refolds all trades before the cutoff; keep the folded complete chart bars if long trade sources make playback slow.
+    // shortcut: every step refolds all trades before the cutoff; keep the folded complete chart
+    // bars if long trade sources make playback slow.
     Some(folded)
 }
 

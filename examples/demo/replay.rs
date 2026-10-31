@@ -312,7 +312,8 @@ fn replay_source(
     {
         let from = BarClock::new(Timeframe::Min1).bar_open(first.time);
         let chart_clock = chart.bar_clock();
-        // shortcut: a bar whose first minute had no trades is left out too; expose the feed's retention start if that shows.
+        // shortcut: a bar whose first minute had no trades is left out too; expose the feed's
+        // retention start if that shows.
         let end = bars.partition_point(|bar| chart_clock.bar_open(bar.time) < from);
         bars.drain(..end);
     }
