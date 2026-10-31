@@ -247,9 +247,12 @@ impl Sink {
     /// current clock boundary when there has been no execution. Empty candles have zero volume
     /// and carry the close of the newest bar before them that is not whitespace, whether this
     /// stream or a history page delivered it, before or after the heartbeat; their first trade
-    /// sets the real open, high and low. Count bars never advance without trades. Call from a
-    /// trusted feed heartbeat, after seeding a bar or execution; invalid or future clock values
-    /// obey the same rule as trade timestamps.
+    /// sets the real open, high and low. Count bars never advance without trades. A clock with a
+    /// session opens a candle only inside the windows the subscription selected: a heartbeat
+    /// outside them only advances the stream's time, and the first one inside the next session
+    /// opens that session's slot at the last close. Call from a trusted feed heartbeat, after
+    /// seeding a bar or execution; invalid or future clock values obey the same rule as trade
+    /// timestamps.
     pub fn advance_time(&self, now: DateTime<Utc>) {
         let system = Utc::now();
         self.inbox.push(|state| {
@@ -271,7 +274,7 @@ impl Sink {
             let Some(close) = live.last_close else {
                 return !live.study_inputs.is_empty();
             };
-            if live.forming.is_none_or(|last| open <= last) {
+            if !live.clock.is_open(now) || live.forming.is_none_or(|last| open <= last) {
                 return !live.study_inputs.is_empty();
             }
             live.updates.bars.insert(

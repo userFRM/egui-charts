@@ -303,6 +303,12 @@ impl BarClock {
             .with_timeframe(self.timeframe.unwrap_or(Timeframe::Min1))
     }
 
+    /// Whether `t` is inside a window of this clock's session, always without a session.
+    /// [`with_session`](Self::with_session) keeps only the windows the subscription selected.
+    pub(crate) fn is_open(&self, t: DateTime<Utc>) -> bool {
+        self.session.as_ref().is_none_or(|s| s.is_open(t, true))
+    }
+
     /// Whether `a` and `b` fall in the same bar, so a feed may stamp a bar with any instant
     /// inside it.
     pub fn same_bar(&self, a: DateTime<Utc>, b: DateTime<Utc>) -> bool {
