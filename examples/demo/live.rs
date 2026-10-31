@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::market::Market;
+use super::orders::Orders;
 use crate::sampledata::{
     DemoSymbol, dividend_date, dividend_factor, latest_open_end, session_bars, us_equity_hours,
     us_equity_session, us_equity_zone,
@@ -28,6 +29,9 @@ const RETAINED_TRADES: usize = 100_000;
 
 /// Orders added or cancelled in the book after each trade.
 const CHURN_PER_TRADE: usize = 6;
+
+/// The instrument whose feed sends individual orders instead of aggregate depth.
+pub(super) const ORDER_LEVEL_SYMBOL: &str = "ESZ2026";
 
 /// Driven by the UI timer on both native and web; there is no background worker.
 pub(super) struct LiveFeed(Mutex<Simulation>);
@@ -56,6 +60,8 @@ struct Simulation {
     metrics: Vec<MetricSubscription>,
     /// The order book of the subscription, around the last price it was shown.
     market: Option<Market>,
+    /// The individual orders behind `market`, on [`ORDER_LEVEL_SYMBOL`] only.
+    orders: Option<Orders>,
 }
 
 impl LiveFeed {
@@ -89,6 +95,7 @@ impl LiveFeed {
             options: Vec::new(),
             metrics: Vec::new(),
             market: None,
+            orders: None,
         };
         while sim.next_trade <= now {
             sim.trade();
@@ -125,6 +132,7 @@ impl LiveFeed {
             options: Vec::new(),
             metrics: Vec::new(),
             market: None,
+            orders: None,
         }))
     }
 
@@ -670,15 +678,22 @@ impl Simulation {
             // A subscription made while no trade was shown gets its book with the first one.
             let market = self.market.get_or_insert_with(|| {
                 let market = Market::new(&self.symbol, self.tick_size, price, self.random);
-                let (sequence, book) = market.snapshot(trade.ts);
-                sub.sink.push_depth_snapshot(sequence, book);
+                self.orders =
+                    order_level(&self.symbol, &market, trade.ts, self.tick_size, self.random);
+                push_snapshot(sub, &market, self.orders.as_ref(), trade.ts);
                 market
             });
             let (sequence, delta) = market.trade(trade.ts, price, side, size);
-            sub.sink.push_depth_delta(sequence, delta);
+            match &mut self.orders {
+                Some(orders) => orders.apply(&sub.sink, delta, Some((side, price))),
+                None => sub.sink.push_depth_delta(sequence, delta),
+            }
             for _ in 0..CHURN_PER_TRADE {
                 let (sequence, delta) = market.churn(trade.ts);
-                sub.sink.push_depth_delta(sequence, delta);
+                match &mut self.orders {
+                    Some(orders) => orders.apply(&sub.sink, delta, None),
+                    None => sub.sink.push_depth_delta(sequence, delta),
+                }
             }
             sub.sink.push_quote(market.quote(trade.ts));
         }
@@ -738,6 +753,32 @@ impl Simulation {
         let intensity = session * (0.25 + 3.0 * ((burst >> 32) as f64 / u32::MAX as f64).powi(3));
         let delay = (delay as f64 / intensity).round().max(1.0) as i64;
         self.next_trade += TimeDelta::milliseconds(delay);
+    }
+}
+
+/// The individual orders behind `market`, a new book of `symbol`, when its feed sends them.
+fn order_level(
+    symbol: &str,
+    market: &Market,
+    ts: DateTime<Utc>,
+    tick_size: f64,
+    seed: u64,
+) -> Option<Orders> {
+    (symbol == ORDER_LEVEL_SYMBOL).then(|| Orders::new(&market.snapshot(ts).1, tick_size, seed))
+}
+
+/// Pushes the whole book of `sub`: its individual orders when the feed sends them, otherwise
+/// the aggregate depth. An aggregate push would discard the order queue.
+fn push_snapshot(sub: &Subscription, market: &Market, orders: Option<&Orders>, ts: DateTime<Utc>) {
+    match orders {
+        Some(orders) => {
+            let (sequence, orders) = orders.snapshot();
+            sub.sink.push_order_snapshot(sequence, ts, orders);
+        }
+        None => {
+            let (sequence, book) = market.snapshot(ts);
+            sub.sink.push_depth_snapshot(sequence, book);
+        }
     }
 }
 
@@ -917,10 +958,11 @@ impl Datafeed for LiveFeed {
             }
         }
         sim.market = None;
+        sim.orders = None;
         if let Some(last) = sim.shown_ticks(sim.now, subscription.extended_hours) {
             let market = Market::new(&sim.symbol, sim.tick_size, last, sim.random);
-            let (sequence, book) = market.snapshot(sim.now);
-            subscription.sink.push_depth_snapshot(sequence, book);
+            sim.orders = order_level(&sim.symbol, &market, sim.now, sim.tick_size, sim.random);
+            push_snapshot(&subscription, &market, sim.orders.as_ref(), sim.now);
             subscription.sink.advance_time(sim.now);
             subscription.sink.push_quote(market.quote(sim.now));
             sim.market = Some(market);
@@ -935,6 +977,7 @@ impl Datafeed for LiveFeed {
         if sim.subscription.as_ref().is_some_and(|sub| sub.id == id) {
             sim.subscription = None;
             sim.market = None;
+            sim.orders = None;
         }
     }
 
@@ -943,8 +986,7 @@ impl Datafeed for LiveFeed {
         if let (Some(sub), Some(market)) = (&sim.subscription, &sim.market)
             && sub.id == id
         {
-            let (sequence, book) = market.snapshot(sim.now);
-            sub.sink.push_depth_snapshot(sequence, book);
+            push_snapshot(sub, market, sim.orders.as_ref(), sim.now);
         }
     }
 
@@ -1268,6 +1310,61 @@ mod tests {
             .order_book(SeriesId::MAIN)
             .expect("the opening trade starts depth");
         assert!(book.best_bid().is_some() && book.best_ask().is_some());
+    }
+
+    /// Guards the two kinds of demo feed: the futures contract keeps the chart's book of
+    /// individual orders without one rejected event, with orders in both demo size tiers and of
+    /// both recent and older placement, and the other instruments keep aggregate depth.
+    #[test]
+    fn the_futures_contract_streams_individual_orders_and_the_others_aggregate_depth() {
+        use egui_charts::data::OrderFilter;
+
+        let start: DateTime<Utc> = "2026-10-23T14:00:00Z".parse().unwrap();
+        for (symbol, order_level) in [(ORDER_LEVEL_SYMBOL, true), ("BTCUSD", false)] {
+            let feed = Arc::new(LiveFeed::new(symbol, start));
+            let mut chart = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol(symbol)
+                .with_initial_bars(100)
+                .build();
+            let ctx = egui::Context::default();
+            for step in 0..=240 {
+                feed.advance(start + TimeDelta::milliseconds(500 * step));
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    chart.show(ui);
+                })
+                .drop_without_applying_deltas();
+            }
+            let state = chart.feed_state(SeriesId::MAIN).unwrap();
+            assert_eq!(state.rejected_depth, 0, "{symbol}");
+            let queue = chart.order_queue(SeriesId::MAIN);
+            assert_eq!(queue.is_some(), order_level, "{symbol}");
+            let Some(queue) = queue else { continue };
+            let sizes = Vec::from_iter(
+                (queue.largest_orders(&OrderFilter::default()).into_iter()).map(|o| o.size),
+            );
+            let tiers = super::super::ORDER_TIERS;
+            assert!(sizes.iter().any(|&s| s >= tiers.large), "large: {sizes:?}");
+            assert!(
+                sizes
+                    .iter()
+                    .any(|&s| (tiers.notable..tiers.large).contains(&s)),
+                "notable: {sizes:?}"
+            );
+            for filter in [
+                OrderFilter {
+                    max_age: Some(TimeDelta::seconds(10)),
+                    ..Default::default()
+                },
+                OrderFilter {
+                    min_age: Some(TimeDelta::seconds(60)),
+                    ..Default::default()
+                },
+            ] {
+                let book = queue.filtered("", &filter).unwrap();
+                assert!(!book.bids.is_empty() && !book.asks.is_empty(), "{filter:?}");
+            }
+        }
     }
 
     /// Archiving executions must preserve their price path, volume and the bucket crossing
