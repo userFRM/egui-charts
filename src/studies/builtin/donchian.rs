@@ -218,7 +218,8 @@ mod tests {
             make_bar(2.0, 1.0, 1.5),
             make_bar(5.0, 2.0, 3.0),
         ];
-        let rows: [(usize, usize, fn(i32) -> Box<dyn Indicator>); 2] = [
+        type Build = fn(i32) -> Box<dyn Indicator>;
+        let rows: [(usize, usize, Build); 2] = [
             (1, 0, |offset| {
                 Box::new(DonchianChannels::new(2).with_offset(offset))
             }),

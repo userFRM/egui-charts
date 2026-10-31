@@ -744,6 +744,7 @@ mod tests {
 
     /// An export's studies read the events the chart holds, as on screen, not the mark source page
     /// frozen into its event badges.
+    #[cfg(feature = "studies")]
     #[test]
     fn exported_studies_do_not_restart_at_a_frozen_mark_source_page() {
         use crate::data::Reply;

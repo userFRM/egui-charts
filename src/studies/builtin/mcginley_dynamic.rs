@@ -5,8 +5,9 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// McGinley Dynamic: an average that speeds up when price falls away from it and slows down when
-/// price rises above it. MD = MD[1] + (close - MD[1]) / (N x (close / MD[1])^4) with N the period,
-/// starting at the first close. While MD is zero, or the divisor is zero, MD keeps its value.
+/// price rises above it. `MD = MD[1] + (close - MD[1]) / (N x (close / MD[1])^4)` with N the
+/// period, starting at the first close. While MD is zero, or the divisor is zero, MD keeps its
+/// value.
 #[derive(Clone)]
 pub struct McGinleyDynamic {
     /// Period (typically 10 or 14)

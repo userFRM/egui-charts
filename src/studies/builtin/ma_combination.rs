@@ -636,7 +636,7 @@ pub(super) use impl_ma_preset;
 mod tests {
     use crate::model::Bar;
     use crate::studies::test_support::make_bar;
-    use crate::studies::{Indicator, IndicatorFactory, InputKind, InputValue};
+    use crate::studies::{IndicatorFactory, InputKind, InputValue};
 
     /// Closes rise from 0 to 59, then fall from 60 to 1. At bar 59 the 9-bar mean (55) is above the
     /// 21-bar mean (49) and the 20-bar (49.5) above the 50-bar (34.5); at bar 119 the 9-bar (5) is
