@@ -585,7 +585,7 @@ impl PriceMap {
     }
 
     /// Tick marks for the visible range, spaced by the scale's
-    /// [`tick_marks`](PriceScaleOptions::tick_marks) settings. Maps a chart returns label
+    /// [`tick_marks`](PriceScaleOptions::tick_marks) settings. The labels of a chart's maps write
     /// prices of four or more integer digits with its `ChartConfig::thousands_sep`.
     pub fn marks(&self) -> Vec<PriceMark> {
         self.shared_marks().to_vec()
