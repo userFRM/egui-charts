@@ -71,7 +71,7 @@ impl Orders {
     /// Pushes the order events that turn the book into `delta`, a change of the aggregate book.
     /// `trade` is the aggressor and the price in ticks when a trade made the change: the levels
     /// it took are executed, oldest order first, rather than cancelled. Between trades a block
-    /// order is sometimes placed a few ticks behind the touch.
+    /// order is sometimes placed behind the touch.
     pub(super) fn apply(
         &mut self,
         sink: &Sink,
@@ -184,12 +184,13 @@ impl Orders {
         }
     }
 
-    /// Rests a block of 100 to 399 at a quoted level 3 to 30 ticks behind one side's touch,
-    /// cancelling the oldest block beyond [`BLOCKS`]. Only at a quoted level, so the aggregate
-    /// book removing that level removes the block too and the book cannot cross.
+    /// Rests a block of 100 to 399 at a quoted level 10 to 60 ticks behind one side's touch,
+    /// cancelling the oldest block beyond [`BLOCKS`]. The synthetic price moves up to 5 ticks a
+    /// trade, so a block nearer the touch is swept within seconds. Only at a quoted level, so the
+    /// aggregate book removing that level removes the block too and the book cannot cross.
     fn place_block(&mut self, sink: &Sink, ts: DateTime<Utc>) {
         let bid = self.random().is_multiple_of(2);
-        let distance = 3 + (self.random() % 28) as i64;
+        let distance = 10 + (self.random() % 51) as i64;
         let size = (100 + self.random() % 300) as f64;
         // Asks sort before bids, so the best ask is the first key and the best bid the last.
         let touch = if bid {
