@@ -442,7 +442,7 @@ Order flow,Order flow,Per-bar order-flow statistics table,done,library,src/data/
 Order flow,Order flow,"Profile POC, value area and VAH/VAL lines",done,library,src/data/footprint.rs;src/data/volume_profile.rs;src/chart/overlays/trade_profile.rs;src/painting/volume_profile.rs
 Order flow,Order flow,Profile peaks and valleys with sensitivity,partial,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs
 Order flow,Order flow,Proprietary order-flow models,partial,library,src/model/tpo.rs;src/chart/rendering/candles/tpo.rs
-Order flow,Order flow,Rolling volume/delta sum over N bars,done,library,src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/order_flow.rs;src/data/order_flow.rs
+Order flow,Order flow,Rolling volume/delta sum over N bars,done,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs
 Order flow,Order flow,"Session VWAP with daily, weekly or monthly reset",done,library,src/studies/builtin/vwap.rs;src/widget/series.rs
 Order flow,Order flow,Speed of tape,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs
 Order flow,Order flow,Split session profiles,done,library,src/studies/builtin/trade_profile.rs;src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs
@@ -456,7 +456,7 @@ Order flow,Order flow,Tick-count bars,done,library,src/model/timeframe.rs;src/ui
 Order flow,Order flow,Time and sales with size filters and sound alerts,done,library,src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs
 Order flow,Order flow,Time price opportunity profiles and single prints,done,library,src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs;src/widget/frame.rs;src/studies/builtin/time_price_opportunity.rs;src/tokens/mod.rs;src/tokens/semantic.rs
 Order flow,Order flow,"Trade-based session, composite and visible-range volume profiles",done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs
-Order flow,Order flow,Trade-size filtered CVD,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/order_flow.rs;src/data/order_flow.rs
+Order flow,Order flow,Trade-size filtered CVD,done,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs
 Order flow,Order flow,Unfinished auction detection with extension lines,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs
 Order flow,Order flow,"VWAP envelopes: standard deviation or percent bands, three pairs",done,library,src/studies/builtin/vwap.rs;src/chart/renderers/indicator.rs
 Order flow,Order flow,Value area per bar highlighted on the footprint,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs

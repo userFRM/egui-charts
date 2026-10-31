@@ -341,7 +341,6 @@ struct State {
     /// Price of the previous buy and sell execution.
     last_price: [Option<f64>; 2],
     revision: u64,
-    #[cfg(feature = "widget")]
     reset_revision: u64,
     changes: BTreeMap<DateTime<Utc>, u64>,
     filter: Option<OrderFilter>,
@@ -458,7 +457,6 @@ impl OrderFlowInput {
             tick_size: state.tick_size,
             replay,
             revision,
-            #[cfg(feature = "widget")]
             reset_revision: revision,
             ..State::new(state.source)
         };
@@ -478,11 +476,13 @@ impl OrderFlowInput {
         if state.footprint.take().is_some() {
             state.changes.clear();
             state.revision = state.revision.wrapping_add(1);
-            #[cfg(feature = "widget")]
-            {
-                state.reset_revision = state.revision;
-            }
+            state.reset_revision = state.revision;
         }
+    }
+
+    #[cfg(feature = "studies")]
+    pub(crate) fn reset_revision(&self) -> u64 {
+        self.state().reset_revision
     }
 
     #[cfg(feature = "widget")]
@@ -940,7 +940,6 @@ impl State {
             distinct: Default::default(),
             last_price: [None; 2],
             revision: 0,
-            #[cfg(feature = "widget")]
             reset_revision: 0,
             changes: BTreeMap::new(),
             filter: None,
@@ -1027,10 +1026,7 @@ impl State {
             if let Some(first) = first {
                 self.changes.retain(|bar, _| *bar >= first);
             }
-            #[cfg(feature = "widget")]
-            {
-                self.reset_revision = self.revision;
-            }
+            self.reset_revision = self.revision;
         }
     }
 
@@ -1085,10 +1081,7 @@ impl State {
                     self.book_rows -= book.bids.len() + book.asks.len();
                 }
             }
-            #[cfg(feature = "widget")]
-            {
-                self.reset_revision = self.revision;
-            }
+            self.reset_revision = self.revision;
         }
     }
 
@@ -1104,10 +1097,7 @@ impl State {
             if let Some((&first, _)) = self.bars.first_key_value() {
                 self.changes.retain(|bar, _| *bar >= first);
             }
-            #[cfg(feature = "widget")]
-            {
-                self.reset_revision = self.revision;
-            }
+            self.reset_revision = self.revision;
         }
     }
 }

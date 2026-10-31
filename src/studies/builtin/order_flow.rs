@@ -20,6 +20,7 @@ pub struct OrderFlowStudy {
     input: OrderFlowInput,
     clock: BarClock,
     values: IndicatorValues,
+    reset_revision: u64,
     colors: Vec<Color32>,
     visible: bool,
     /// Draw the rolling sums as a histogram rather than lines.
@@ -36,6 +37,7 @@ impl OrderFlowStudy {
             input: OrderFlowInput::new(kind),
             clock: BarClock::new(crate::model::Timeframe::Min1),
             values: IndicatorValues::new(),
+            reset_revision: 0,
             colors: vec![
                 Color32::from_rgb(38, 166, 154),
                 Color32::from_rgb(239, 83, 80),
@@ -63,7 +65,13 @@ impl OrderFlowStudy {
     /// from the last value before it. A bar without input leaves a gap, and a rolling sum
     /// over one is a gap, as is the warm-up.
     fn refresh(&mut self, data: &[Bar], from: usize) {
-        let from = from.min(data.len());
+        let reset_revision = self.input.reset_revision();
+        let from = if reset_revision != self.reset_revision {
+            0
+        } else {
+            from.min(data.len())
+        };
+        self.reset_revision = reset_revision;
         self.values.truncate(from);
         self.values
             .resize(data.len(), crate::studies::IndicatorValue::None);
@@ -126,6 +134,7 @@ impl OrderFlowStudy {
     fn reset(&mut self) {
         self.input = OrderFlowInput::new(self.kind).with_order_filter(self.filter.clone());
         self.values = IndicatorValues::new();
+        self.reset_revision = 0;
     }
 }
 
@@ -570,5 +579,52 @@ mod tests {
                 .unwrap_or_default();
             assert_eq!((filter.min_age, filter.max_age), ages, "{id} {value}");
         }
+    }
+
+    /// At 11,001 bars retention keeps bars 1,001..=11,000: 10,000 buys of one.
+    /// A ten-bar sum first has a complete window at bar 1,010.
+    #[test]
+    fn incremental_values_restart_after_input_retention() {
+        let data: Vec<_> = (0..11_001)
+            .map(|i| {
+                Bar::new(
+                    start() + TimeDelta::minutes(i),
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut results = Vec::new();
+        for kind in [
+            OrderFlowKind::FilteredCvd {
+                min: 0.0,
+                max: f64::MAX,
+            },
+            OrderFlowKind::FlowSum { bars: 10 },
+        ] {
+            let mut study = OrderFlowStudy::new(kind);
+            for i in 0..11_000 {
+                push(&study, i, &[(1.0, Some(OrderSide::Buy))]);
+            }
+            study.calculate(&data[..11_000]);
+            push(&study, 11_000, &[(1.0, Some(OrderSide::Buy))]);
+            study.update(&data, 11_000);
+            let line = study.values().line(0);
+            results.push((line[11_000], line[1_001..1_010].iter().all(|v| v.is_nan())));
+            let mut fresh = study.clone();
+            fresh.calculate(&data);
+            // Compare all outputs, including dropped history and warm-up gaps.
+            results.push((
+                0.0,
+                format!("{:?}", lines(&study)) == format!("{:?}", lines(&fresh)),
+            ));
+        }
+        assert_eq!(
+            results,
+            [(10_000.0, false), (0.0, true), (10.0, true), (0.0, true)]
+        );
     }
 }
