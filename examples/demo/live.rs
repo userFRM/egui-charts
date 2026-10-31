@@ -1343,9 +1343,10 @@ mod tests {
             let sizes = Vec::from_iter(
                 (queue.largest_orders(&OrderFilter::default()).into_iter()).map(|o| o.size),
             );
-            assert!(sizes.iter().any(|&s| s >= 250.0), "large: {sizes:?}");
+            let tiers = super::super::ORDER_TIERS;
+            assert!(sizes.iter().any(|&s| s >= tiers.large), "large: {sizes:?}");
             assert!(
-                sizes.iter().any(|&s| (100.0..250.0).contains(&s)),
+                sizes.iter().any(|&s| (tiers.notable..tiers.large).contains(&s)),
                 "notable: {sizes:?}"
             );
             for filter in [
