@@ -419,7 +419,10 @@ mod tests {
         }
         let anchor = chart.index_to_x(0.0).unwrap();
         let (pane, note) = note.expect("source note");
-        assert!(anchor < pane.left(), "anchor bar at {anchor}, pane {pane:?}");
+        assert!(
+            anchor < pane.left(),
+            "anchor bar at {anchor}, pane {pane:?}"
+        );
         assert!(pane.contains_rect(note), "note at {note:?}, pane {pane:?}");
     }
 }
