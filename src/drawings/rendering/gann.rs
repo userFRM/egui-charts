@@ -405,8 +405,12 @@ impl Drawing {
         let range = (b.price - a.price).abs() * units;
         let bars = f64::from((b.bar_idx - a.bar_idx).abs()) * units;
         if range.is_finite() && bars.is_finite() {
-            let decimals = crate::scales::price_decimals(a.price);
-            let mut label = format!("{range:.decimals$}\n{} bars", bars.round() as i64);
+            let decimals = super::measurements::change_decimals(view.instrument, a.price, range);
+            let range_text = view.price_formatter.map_or_else(
+                || format!("{range:.decimals$}"),
+                |formatter| formatter.format(range),
+            );
+            let mut label = format!("{range_text}\n{} bars", bars.round() as i64);
             if bars > 0.0 {
                 let ratio_decimals = decimals + 2;
                 label.push_str(&format!("\n{:.ratio_decimals$}/bar", range / bars));
@@ -883,35 +887,54 @@ mod tests {
         }
 
         // On a logarithmic scale a fixed square still spans five units of price: from 100 with a
-        // first unit of 10 over 2 bars its far corner is at 150, not 100 * 1.1^5 = 161.05.
+        // first unit of 10 over 2 bars its far corner is at 150, not 100 * 1.1^5 = 161.05. With 8
+        // price decimals, 0.0000003 over 100 bars reads in full.
         let linear = |p: f64| 300.0 - p as f32;
         let log = |p: f64| 300.0 - 100.0 * p.ln() as f32;
-        let cases: [(_, _, &dyn Fn(f64) -> f32, _); 3] = [
+        let eight = crate::model::Instrument::new("TEST").with_price_decimals(8);
+        let cases: [(_, _, _, &dyn Fn(f64) -> f32, _); 4] = [
             (
                 DrawingToolType::GannSquare,
-                ChartPoint::new(10.0, 120.0),
+                [(0.0, 100.0), (10.0, 120.0)],
+                None,
                 &linear,
                 "20.00\n10 bars\n2.0000/bar",
             ),
             (
                 DrawingToolType::GannFixed,
-                ChartPoint::new(2.0, 104.0),
+                [(0.0, 100.0), (2.0, 104.0)],
+                None,
                 &linear,
                 "20.00\n10 bars\n2.0000/bar",
             ),
             (
                 DrawingToolType::GannFixed,
-                ChartPoint::new(2.0, 110.0),
+                [(0.0, 100.0), (2.0, 110.0)],
+                None,
                 &log,
                 "50.00\n10 bars\n5.0000/bar",
             ),
+            (
+                DrawingToolType::GannSquare,
+                [(0.0, 0.0000120), (100.0, 0.0000123)],
+                Some(&eight),
+                &linear,
+                "0.00000030\n100 bars\n0.0000000030/bar",
+            ),
         ];
-        for (tool, second, price_to_y, want) in cases {
+        for (tool, [(b0, p0), (b1, p1)], instrument, price_to_y, want) in cases {
             let mut drawing = Drawing::new(0, tool);
-            drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), second];
+            drawing.chart_points = vec![ChartPoint::new(b0, p0), ChartPoint::new(b1, p1)];
             drawing.update_screen_coords(|b| b * 10.0, price_to_y);
-            let far = 100.0 + (second.price - 100.0) * 10.0 / f64::from(second.bar_idx);
-            let corner = Pos2::new(100.0, price_to_y(far));
+            let units = if tool == DrawingToolType::GannFixed {
+                5.0
+            } else {
+                1.0
+            };
+            let corner = Pos2::new(
+                (b0 + (b1 - b0) * units) * 10.0,
+                price_to_y(p0 + (p1 - p0) * f64::from(units)),
+            );
             let want_rect = Rect::from_two_pos(drawing.points[0], corner);
             let outline = drawing.outline(Rect::EVERYTHING).unwrap();
             assert_eq!(Rect::from_points(&outline.areas[0]), want_rect, "{want}");
@@ -924,7 +947,7 @@ mod tests {
                     pane,
                     &ChartView {
                         price_formatter: None,
-                        instrument: None,
+                        instrument,
                         bars: &[],
                         revision: 0,
                         bar_to_x: &|b| b * 10.0,
