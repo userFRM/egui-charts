@@ -1238,19 +1238,6 @@ impl Chart {
         // Get visible data
         let visible_data = self.state.visible_data();
 
-        if visible_data.is_empty()
-            && !self
-                .price_series
-                .iter()
-                .any(|item| item.visible && !item.bars.is_empty())
-        {
-            if let Some((nav, buttons)) = navigation {
-                self.paint_navigation(ui, nav, buttons);
-            }
-            self.show_realtime_button(ui, realtime_rect, shown.id);
-            return shown;
-        }
-
         let groups = (factor > 1).then(|| {
             let covering = self
                 .merge_groups
@@ -5225,25 +5212,103 @@ mod tests {
     }
 
     /// With fewer than two bars in view, on either side of the bars, time labels keep the daily
-    /// precision of the bars.
+    /// precision of the bars, and the legend, the price axis at its fitted range, the grid and
+    /// the scale settings button stay; after the last bar the whitespace keeps its time labels.
     #[test]
     fn views_past_the_bars_keep_the_chart_readable() {
-        use crate::model::LogicalRange;
+        use crate::model::{LineStyle, LogicalRange};
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        // Solid grid lines in a colour nothing else uses are line segments the test can find.
+        chart.config.grid_line_style = LineStyle::Solid;
+        chart.config.grid_color = egui::Color32::from_rgb(1, 2, 3);
+        let grid_color = chart.config.grid_color;
         frame(&ctx, &mut chart, 0.0, vec![]);
+        let fitted = chart.get_chart_mapping().price.range();
         // The first bar opens at 2023-11-14 22:13:20 UTC, and the bars are a day apart.
         let first = chart.state.data().bars[0].time;
-        // (left, right, bars in view)
-        for (left, right, in_view) in [
-            (40.5, 80.5, 42),
-            (-30.25, -0.25, 1),
-            (-60.0, -20.0, 0),
-            (110.0, 150.0, 0),
-        ] {
+        // (left, right, bars in view, time axis labelled in view)
+        for (row, (left, right, in_view, labelled)) in [
+            (40.5, 80.5, 42, true),
+            (-30.25, -0.25, 1, false),
+            (-60.0, -20.0, 0, false),
+            (110.0, 150.0, 0, true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let view = format!("{left}..{right}");
             assert!(chart.set_visible_logical_range(LogicalRange::new(left, right)));
-            assert_eq!(chart.state.visible_data().len(), in_view, "{left}..{right}");
-            assert_eq!(chart.format_time(first), "Nov 14, 2023", "{left}..{right}");
+            assert_eq!(chart.state.visible_data().len(), in_view, "{view}");
+            assert_eq!(chart.format_time(first), "Nov 14, 2023", "{view}");
+            let time = 1.0 + row as f64;
+            let painted = shapes(&ctx, &mut chart, time, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let texts: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) => Some((text.pos, text.galley.text().to_owned())),
+                    _ => None,
+                })
+                .collect();
+            let grid = |vertical: bool| {
+                painted.iter().any(|shape| {
+                    matches!(shape,
+                    Shape::LineSegment { points, stroke }
+                        if stroke.color == grid_color && (points[0].x == points[1].x) == vertical)
+                })
+            };
+            assert!(
+                texts.iter().any(|(pos, text)| pos.x < plot.right()
+                    && pos.y < plot.bottom()
+                    && text.starts_with("O ")),
+                "legend: {view}"
+            );
+            assert!(
+                texts
+                    .iter()
+                    .any(|(pos, _)| pos.x >= plot.right() && pos.y < plot.bottom()),
+                "price axis: {view}"
+            );
+            assert_eq!(chart.get_chart_mapping().price.range(), fitted, "{view}");
+            assert!(grid(false), "price grid: {view}");
+            if labelled {
+                assert!(
+                    texts
+                        .iter()
+                        .any(|(pos, _)| pos.x < plot.right() && pos.y > plot.bottom()),
+                    "time axis: {view}"
+                );
+                assert!(grid(true), "time grid: {view}");
+            }
+            #[cfg(feature = "icons")]
+            {
+                let corner = Pos2::new(
+                    plot.right() + chart.config.right_axis_width / 2.0,
+                    plot.bottom() + 14.0,
+                );
+                for (step, event) in [
+                    Event::PointerMoved(corner),
+                    navigation_press(corner, true),
+                    navigation_press(corner, false),
+                    Event::PointerGone,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    frame(
+                        &ctx,
+                        &mut chart,
+                        time + 0.1 * (step + 1) as f64,
+                        vec![event],
+                    );
+                }
+                assert!(
+                    chart.take_scale_settings_request(),
+                    "settings button: {view}"
+                );
+            }
         }
     }
 
