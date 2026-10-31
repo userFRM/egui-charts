@@ -181,6 +181,10 @@ impl SymbolTab {
                 ui.checkbox(&mut params.tpo_single_prints, "")
                     .labelled_by(label.id);
                 ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Letters"));
+                ui.checkbox(&mut params.tpo_letters, "")
+                    .labelled_by(label.id);
+                ui.end_row();
             }
             ChartType::Baseline => {
                 let label = ui.label(l10n::text(ui.ctx(), "Base level"));

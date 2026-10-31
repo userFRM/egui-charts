@@ -4,6 +4,18 @@ use crate::model::{Bar, Instrument, TPOConfig, TPODisplayMode};
 use crate::studies::{Indicator, IndicatorValues, InputKind, InputValue, StudyInput};
 use egui::Color32;
 
+/// Display choices of the study, in input order. Saved choices are indices, so new ones go last.
+const DISPLAYS: [TPODisplayMode; 3] = [
+    TPODisplayMode::Letters,
+    TPODisplayMode::Blocks,
+    TPODisplayMode::Both,
+];
+
+/// Index of `mode` among [`DISPLAYS`].
+fn display_choice(mode: TPODisplayMode) -> InputValue {
+    InputValue::Choice(DISPLAYS.iter().position(|d| *d == mode).unwrap())
+}
+
 /// Each session's TPO profile on the price pane, starting at the session's first bar, with its
 /// point of control, value area and initial balance.
 ///
@@ -99,14 +111,14 @@ impl Indicator for TimePriceOpportunity {
             StudyInput::new(
                 "display",
                 "Display",
-                InputValue::Choice(usize::from(
-                    self.config.display_mode == TPODisplayMode::Blocks,
-                )),
-                InputKind::Choice(vec!["Letters".into(), "Blocks".into()]),
+                display_choice(self.config.display_mode),
+                InputKind::Choice(vec![
+                    "Letters".into(),
+                    "Blocks".into(),
+                    "Letters and blocks".into(),
+                ]),
             )
-            .with_default(InputValue::Choice(usize::from(
-                defaults.display_mode == TPODisplayMode::Blocks,
-            ))),
+            .with_default(display_choice(defaults.display_mode)),
             StudyInput::new(
                 "sessions",
                 "Sessions",
@@ -132,8 +144,8 @@ impl Indicator for TimePriceOpportunity {
             }
             ("split_sessions", InputValue::Toggle(split)) => self.config.split_sessions = split,
             ("single_prints", InputValue::Toggle(show)) => self.config.show_single_prints = show,
-            ("display", InputValue::Choice(choice @ 0..=1)) => {
-                self.config.display_mode = [TPODisplayMode::Letters, TPODisplayMode::Blocks][choice]
+            ("display", InputValue::Choice(choice @ 0..=2)) => {
+                self.config.display_mode = DISPLAYS[choice]
             }
             ("sessions", InputValue::Choice(choice @ 0..=1)) => {
                 self.config.latest_session_only = choice == 1

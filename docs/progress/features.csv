@@ -132,7 +132,7 @@ Chart,Chart types,Range,done,library,src/chart/rendering/candles/mod.rs;src/char
 Chart,Chart types,Renko,done,library,src/chart/rendering/candles/price_based.rs;src/model/renko.rs;src/chart/rendering/candles/japanese.rs;src/ui/dialogs/series_settings/tabs/symbol.rs
 Chart,Chart types,Session volume profile,done,host,src/widget/feed/mod.rs;src/widget/frame.rs;src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/merge.rs
 Chart,Chart types,Step line,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/line.rs;src/painting/dashed_line.rs
-Chart,Chart types,Time Price Opportunity,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/tpo.rs;src/model/tpo.rs;src/widget/frame.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/chart/rendering/candles/line.rs;src/tokens/mod.rs;src/tokens/semantic.rs
+Chart,Chart types,Time Price Opportunity,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/tpo.rs;src/model/tpo.rs;src/widget/frame.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/chart/rendering/candles/line.rs;src/tokens/mod.rs;src/tokens/semantic.rs;src/model/chart_type.rs
 Chart,Chart types,Volume candles,done,library,src/widget/frame.rs;src/chart/rendering/candles/candlestick.rs
 Chart,Chart types,Volume footprint,done,host,src/widget/feed/mod.rs;src/data/footprint.rs;src/widget/frame.rs;src/chart/overlays/footprint.rs;src/widget/merge.rs;benches/frame_time.rs
 Chart,Compare and overlay,Compare on a new price scale,done,host,src/model/series_scale.rs;src/widget/price_series.rs
