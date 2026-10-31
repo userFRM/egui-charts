@@ -699,7 +699,9 @@ impl OrderFlowInput {
 
     /// Rebuilds the source from the executions the chart holds, in place of what it holds. A
     /// bar that lost an execution to the store's limit is left out, and a rolling window gives no
-    /// value while it reaches back to the loss, as when the window overflows.
+    /// value while it reaches back to the loss, as when the window overflows. On a trade-based
+    /// interval it rebuilds only a source the sink has not allocated an execution to yet, from the
+    /// executions that arrived live.
     #[cfg(feature = "widget")]
     pub(crate) fn replace_trades(&self, clock: &BarClock, trades: &super::trades::Trades) {
         let footprint = match self.state().source {
@@ -714,6 +716,11 @@ impl OrderFlowInput {
             Source::Footprint => true,
             _ => return,
         };
+        let trade_based = clock.timeframe().is_some_and(|tf| tf.is_trade_based());
+        // Only the sink knows how the chart split its executions into trade-based bars.
+        if trade_based && !footprint && self.state().trade_bars.forming.is_some() {
+            return;
+        }
         let as_of = self.state().last;
         self.clear();
         let lost = trades.lost_until();
@@ -735,7 +742,13 @@ impl OrderFlowInput {
                     distinct.lost_until = lost;
                 }
             }
-            let mut sorted: Vec<_> = trades.iter().collect();
+            let paged = trades.paged_until().filter(|_| trade_based);
+            // Paged executions belong to history bars, which the chart did not fold from them.
+            // shortcut: after the store evicts a live execution, a new source starts its trade
+            // bars at the oldest held one; keep the sink's allocations if hosts need it exact.
+            let mut sorted: Vec<_> = (trades.iter())
+                .filter(|trade| paged.is_none_or(|until| trade.ts > until))
+                .collect();
             sorted.sort_by_key(|trade| trade.ts);
             for trade in sorted {
                 self.push_trade(clock, trade);
@@ -1359,6 +1372,26 @@ mod tests {
             ]
         );
         let (_, updates) = inbox.drain().updates.pop().unwrap();
+        // An older page belongs to history bars: it neither shifts the live bars of a connected
+        // source nor those a new source rebuilds from the held executions.
+        let mut held = super::super::trades::Trades::new(100);
+        updates
+            .trades
+            .iter()
+            .for_each(|trade| held.push(trade.clone()));
+        let old = Tick::new(
+            start - TimeDelta::seconds(1),
+            100.0,
+            1.0,
+            Some(OrderSide::Buy),
+        );
+        held.prepend(vec![old], &mut |_, _| ());
+        let rebuilt = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+        for input in [&flow, &rebuilt] {
+            input.replace_trades(&clock, &held);
+        }
+        let live: BTreeMap<_, _> = got[2].iter().copied().collect();
+        assert_eq!([flow.values(), rebuilt.values()], [live.clone(), live]);
         let cutoff = start + TimeDelta::seconds(2);
         for input in [&spread, &book, &flow] {
             input.set_replay(&clock, Some(cutoff), Some(&updates.trades));
