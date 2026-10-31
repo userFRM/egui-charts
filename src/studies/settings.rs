@@ -711,9 +711,6 @@ impl Indicator for ConfiguredStudy {
         }
         plot
     }
-    fn plot_output(&self, line: usize) -> usize {
-        self.study.plot_output(line)
-    }
     fn plot_offset(&self, line: usize) -> isize {
         self.study
             .plot_offset(line)

@@ -333,6 +333,7 @@ impl TradingSessions {
     /// session that ends by `from`, after reading again the bars of one that reaches past it.
     fn update_sessions(&mut self, data: &[Bar], from: usize) {
         let from = from.min(self.source_len).min(data.len());
+        // The chart follows an update with `update(data, len)`, which must keep `before_last`.
         if from == data.len() && from == self.source_len {
             return;
         }
