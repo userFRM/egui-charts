@@ -1210,7 +1210,7 @@ mod tests {
         assert!(label(&shapes, "Got it").is_none());
 
         // Off, then on: the card sits right of the 52 x 38 button at (0, 418), past a gap of 4
-        // and its margin of 12.
+        // and its margin of 20, and is centred on the button.
         let magnet = origin + vec2(26.0, 437.0);
         let shapes = click(&mut toolbar, magnet);
         assert!(!toolbar.state.magnet_mode);
@@ -1218,14 +1218,18 @@ mod tests {
         let shapes = click(&mut toolbar, magnet);
         assert!(toolbar.state.magnet_mode);
         let text_pos = shapes.iter().find_map(|s| match s {
-            Shape::Text(t) if t.galley.job.text == EXPLANATION => Some(t.pos),
+            Shape::Text(t) if t.galley.job.text.starts_with(EXPLANATION) => Some(t.pos),
             _ => None,
         });
-        assert_eq!(text_pos, Some(origin + vec2(68.0, 430.0)));
+        let text_pos = text_pos.unwrap();
+        assert_eq!(text_pos.x, origin.x + 76.0);
+        let got_it = label(&shapes, "Got it").unwrap();
+        // The button is 34 high.
+        let card_centre = (text_pos.y - 20.0 + got_it.center().y + 17.0 + 20.0) / 2.0;
+        assert!((card_centre - magnet.y).abs() <= 1.0);
 
         // The button dismisses it for good, also for the next switch-on.
-        let got_it = label(&shapes, "Got it").unwrap().center();
-        let shapes = click(&mut toolbar, got_it);
+        let shapes = click(&mut toolbar, got_it.center());
         assert!(toolbar.state.magnet_hint_dismissed);
         assert!(label(&shapes, "Got it").is_none());
         click(&mut toolbar, magnet);
