@@ -174,9 +174,11 @@ accepted heartbeat when replaying retained executions. Quotes seed the movement 
 lost book breaks it so the next quote does not count an unobserved jump. A loss leaves book size missing until
 a new synchronized snapshot arrives, including recovery within the same bar.
 
-`Indicator::order_flow_input` returns the study's `OrderFlowInput`. Charts connect quote and
+`Indicator::order_flow_inputs` returns the study's `OrderFlowInput` sources. Charts connect quote and
 book inputs before feed updates are coalesced and feed rates from the deduplicated trade store.
-A historical page rebuilds rate inputs from retained trades in timestamp order. Custom hosts
+A historical page rebuilds rate inputs from retained trades in timestamp order; a bar that lost
+an execution to the store's limit is left out, and a rolling rate gives no value while its window
+reaches back to the loss. Custom hosts
 can push chronological events and book loss through the same handle, then call `calculate` or
 `update`. Cloned studies share their market-data source, which receives each event once.
 Replacing aggregation inputs creates a new source; hosts replay their history, while a chart replays the executions it still retains
@@ -197,3 +199,41 @@ Clearing a source or dropping its oldest bars invalidates the plotted history of
 earlier cached values cannot survive as stale data after a reset or retention change: the chart
 recalculates them in full, and Size-Filtered CVD starts again from the oldest retained bar.
 Drops come once per 1,001 new bars; between them a new bar updates the studies from that bar.
+
+### Footprints and books for host studies
+
+`OrderFlowInput::footprint()` holds each bar's executions by price, one level per instrument
+tick, as `Footprint` aggregates them. `OrderFlowInput::book(levels)` holds the nearest `levels` of
+each side of each bar's last synchronized book. A study returns them from
+`Indicator::order_flow_inputs` and reads them where it calculates, from the first bar that
+`update` names:
+
+```rust
+let flow = self.inputs[0].footprints_from(open);
+let books = self.inputs[1].books_from(open);
+let poc = flow.bars.get(&open).and_then(FootprintBar::poc); // level n lies at n * flow.tick_size
+let best_bid = books.bars.get(&open).and_then(|book| book.bids.first());
+```
+
+The chart gives both its instrument's tick size (hosts without a feed call `set_tick_size`),
+builds the footprint from the executions it receives and from the trades it still holds when the
+source is connected, and passes each synchronized book update before coalescing. Both keep only
+bars of an interval measured in time. `OrderFlowBars` says what a copy covers: `complete_from` is
+the oldest bar held in full, since a bar cut by retention or data loss is left out rather than
+shown short, and a later bar that is absent had no executions or no book; `cutoff` is the replay
+cutoff; `revision` changes whenever the bars may have. A bar's book is the one after its last
+synchronized update; a loss after it, or an update with an invalid level, leaves the bar without
+one. Footprint and book sources keep at most 11,000 bars and 110,000 price rows, then drop their
+oldest bars at once, down to 10,000 bars and 100,000 rows.
+
+### Replay
+
+While `Chart::set_replay_time` shows bars up to a cutoff, every input reads as of it: later bars
+are left out, and the bar containing the cutoff, drawn from `set_replay_source`, holds only what
+came before it. Multi-Range Delta, Rolling Volume and Delta, Size-Filtered CVD and footprint
+sources sum the held executions before the cutoff unless the trade store dropped one of that
+bar's; a book source shows that bar's book only when the bar's last update came before the
+cutoff; the other studies leave the bar empty. Leaving replay restores the live values. Studies
+added during replay are connected when the feed resumes. A feed that replays history through its
+`Sink` (`Sink::reset_replay`) clears the inputs at each seek and fills them again, so no cutoff
+applies.
