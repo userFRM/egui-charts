@@ -1012,6 +1012,18 @@ mod tests {
             }
             assert_eq!(shapes(&loaded), shapes(&drawing), "{tool:?}");
         }
+
+        // A field the object holds keeps its value; only the ones it leaves out take the tool's.
+        let mut saved = serde_json::to_value(Drawing::new(0, DrawingToolType::GannSquare)).unwrap();
+        saved["gann"] = serde_json::json!({"price_levels": [2.0]});
+        let gann = serde_json::from_value::<Drawing>(saved)
+            .unwrap()
+            .gann
+            .unwrap();
+        let defaults = GannConfig::for_tool(DrawingToolType::GannSquare);
+        assert_eq!(gann.price_levels.len(), 1);
+        assert_eq!(gann.price_levels[0].value, 2.0);
+        assert_eq!(gann.time_levels, defaults.time_levels);
     }
 
     #[test]

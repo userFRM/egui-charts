@@ -8,11 +8,10 @@
 //! Note: Rendering methods are in the rendering module, not here.
 //! This keeps the domain layer pure and testable.
 
-use super::gann::GANN_SQUARE_UNITS;
 use super::{
-    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig,
-    GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing, RegressionTrendConfig,
-    TimeframeVisibility,
+    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS,
+    GannConfig, GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing,
+    RegressionTrendConfig, TimeframeVisibility,
 };
 
 use crate::data::VolumeProfileConfig;
