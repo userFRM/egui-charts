@@ -5,7 +5,7 @@ use super::{Chart, ChartLayoutMode, PaneId, SeriesOptions};
 use crate::drawings::persistence::{DrawingStorage, SaveError, SkippedDrawing};
 use crate::model::{ChartType, ChartTypeParams, Marker, MarkerOptions, PriceLine, Timeframe};
 use crate::studies::{IndicatorFactory, StudyTemplate};
-use crate::widget::settings::ChartSettingsState;
+use crate::widget::settings::{ChartSettingsState, WatermarkMode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -284,6 +284,11 @@ impl Chart {
         snapshot.settings.apply_to_chart(self)?;
         if let Some(config) = &snapshot.config {
             self.config = config.clone();
+            // Layouts saved before the description followed the symbol held it as fixed text.
+            if snapshot.settings.watermark.mode == WatermarkMode::SymbolAndDescription {
+                self.config.watermark_text = None;
+                self.config.watermark_description = true;
+            }
             self.follow_restored_palette(snapshot.palette.as_ref());
         }
         if let Some(options) = &snapshot.options {
@@ -906,9 +911,18 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("show_volume_details");
+        let config = &mut legacy["charts"][0]["config"];
+        config["watermark_text"] = "A · Apple".into();
+        config
+            .as_object_mut()
+            .unwrap()
+            .remove("watermark_description");
+        legacy["charts"][0]["settings"]["watermark"]["mode"] = "SymbolAndDescription".into();
         let migrated = SavedLayout::from_json(&legacy.to_string()).unwrap();
         restored.restore(&migrated.charts[0]).unwrap();
         assert!(!restored.chart_options().tooltip.show_volume_details);
+        assert_eq!(restored.config().watermark_text, None);
+        assert!(restored.config().watermark_description);
         legacy["version"] = 1.into();
         for key in ["config", "options", "price_scale", "maximized"] {
             legacy["charts"][0].as_object_mut().unwrap().remove(key);
