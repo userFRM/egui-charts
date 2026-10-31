@@ -3701,10 +3701,13 @@ mod tests {
                 };
                 marked |= has_mark(app.theme.ui.accent) && has_mark(app.theme.chart.candle_down);
                 if pass == 2 {
-                    for toast in app.toasts.toasts().iter().rev().take(5) {
-                        let rect = ctx
-                            .memory(|m| m.area_rect(egui::Id::unique("toast").with(toast.id)))
-                            .expect("trade notice");
+                    // The fills queue several notices, so the stack shows the newest and its controls.
+                    let newest = app.toasts.toasts().last().expect("trade notice").id;
+                    for id in [
+                        egui::Id::unique("toast").with(newest),
+                        egui::Id::unique("toast_stack").with(egui::Align2::LEFT_BOTTOM),
+                    ] {
+                        let rect = ctx.memory(|m| m.area_rect(id)).expect("trade notice");
                         assert!(
                             rect.right() <= ticket_left,
                             "notice covers ticket at {width}"
