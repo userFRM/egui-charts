@@ -76,9 +76,11 @@ mod tests {
     #[cfg(feature = "ui")]
     #[test]
     fn restored_snapshots_follow_the_active_palette_and_keep_edited_colours() {
+        const LIGHT: egui::Color32 = egui::Color32::from_rgb(211, 212, 215);
+        const DARK: egui::Color32 = egui::Color32::from_gray(34);
         for (from, to, from_watermark, to_watermark) in [
-            (Theme::light(), Theme::dark(), 209, 34),
-            (Theme::dark(), Theme::light(), 34, 209),
+            (Theme::light(), Theme::dark(), LIGHT, DARK),
+            (Theme::dark(), Theme::light(), DARK, LIGHT),
         ] {
             for edited in [false, true] {
                 let ctx = egui::Context::default();
@@ -96,7 +98,7 @@ mod tests {
                 let watermark = if edited {
                     egui::Color32::RED
                 } else {
-                    egui::Color32::from_gray(from_watermark)
+                    from_watermark
                 };
                 assert_eq!(saved.config().watermark_color, watermark);
                 let snapshot = saved.snapshot().unwrap();
@@ -127,7 +129,7 @@ mod tests {
                         if edited {
                             egui::Color32::RED
                         } else {
-                            egui::Color32::from_gray(to_watermark)
+                            to_watermark
                         }
                     );
                     assert_eq!(reopened.config().bearish_color, egui::Color32::RED);
@@ -145,7 +147,7 @@ mod tests {
         shared.config_mut().bearish_color = egui::Color32::RED;
         local.set_theme_override(Some(Theme::high_contrast()));
         for (step, (theme, watermark)) in [
-            (Theme::light(), egui::Color32::from_gray(209)),
+            (Theme::light(), egui::Color32::from_rgb(211, 212, 215)),
             (Theme::dark(), egui::Color32::from_gray(34)),
             (Theme::high_contrast(), egui::Color32::from_white_alpha(40)),
         ]
