@@ -840,6 +840,37 @@ mod tests {
     }
 
     #[test]
+    fn hover_labels_name_the_control_and_show_keys_as_symbols() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for (slot, button, label, keys) in [
+            (S::Indicators, "Indicators", "Indicators", &["/"][..]),
+            (S::Alert, "Alert", "Create alert", &["Alt", "A"]),
+        ] {
+            let mut harness = Harness::builder()
+                .with_size(vec2(400.0, 200.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    move |ui, toolbar: &mut TopToolbar| {
+                        ui.horizontal(|ui| {
+                            toolbar.show_control(ui, slot, "SAMPLE", &mut TopToolbarAction::None);
+                        });
+                    },
+                    TopToolbar::new(),
+                );
+            harness.run();
+            harness
+                .get_by_role_and_label(egui::accesskit::Role::Button, button)
+                .hover();
+            harness.run_steps(4);
+            harness.get_by_role_and_label(egui::accesskit::Role::Label, label);
+            for key in keys {
+                let chip = harness.get_by_role_and_label(egui::accesskit::Role::Label, key);
+                assert_eq!(chip.rect().height(), 18.0, "the {key} chip of {label}");
+            }
+        }
+    }
+
+    #[test]
     fn save_and_layout_options_have_separate_hover_and_focus_targets() {
         use egui_kittest::{Harness, kittest::Queryable};
         for (_, theme) in crate::theme::presets() {

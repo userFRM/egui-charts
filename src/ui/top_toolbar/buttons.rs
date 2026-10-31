@@ -12,6 +12,7 @@ use egui::{Color32, Galley, Pos2, Rect, Response, Role, Sense, Ui, Vec2, WidgetI
 use super::TopToolbarConfig;
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui::dialogs::keyboard_shortcuts::shortcut_key_labels;
 use crate::ui_kit::ext::UiExt;
 
 /// Menu glyph with three 18 px bars spanning 14 px on the toolbar's 24 px icon grid.
@@ -599,6 +600,30 @@ impl Trigger<'_> {
     }
 }
 
+/// Fill of the hover labels, which stay dark in every preset.
+const HOVER_LABEL_FILL: Color32 = Color32::from_gray(28);
+/// Text of the hover labels.
+const HOVER_LABEL_TEXT: Color32 = Color32::from_gray(240);
+/// Key chips of the hover labels, and the rule before them.
+const HOVER_LABEL_KEY: Color32 = Color32::from_gray(99);
+/// Height of a hover label's row, which its 3 px margins bring to 24 px.
+const HOVER_LABEL_ROW: f32 = 18.0;
+/// Text size of the hover labels.
+const HOVER_LABEL_TEXT_SIZE: f32 = 13.0;
+
+/// One run of a hover label, as tall as the row whatever the font's line height.
+fn hover_label_run(ui: &mut Ui, text: String, padding: f32, fill: Color32, color: Color32) {
+    let font = egui::FontId::proportional(HOVER_LABEL_TEXT_SIZE);
+    let galley = ui.painter().layout_no_wrap(text, font, color);
+    let size = Vec2::new(galley.size().x + 2.0 * padding, HOVER_LABEL_ROW);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    response.widget_info(|| WidgetInfo::labeled(Role::Label, true, galley.text()));
+    ui.painter()
+        .rect_filled(rect, ui.active_theme().radius.xs, fill);
+    ui.painter()
+        .galley(rect.center() - galley.size() / 2.0, galley, color);
+}
+
 /// Attach a compact toolbar tooltip, with optional platform-specific shortcut chips.
 ///
 /// Uses the normal hover delay and stays below the trigger while there is room.
@@ -622,7 +647,6 @@ pub fn toolbar_tooltip(
             .unwrap_or_default()
             .shortcut(action)
     });
-    let fill = Color32::from_gray(28);
     egui::Popup::from_response(&response)
         .id(response.id.with("toolbar_tooltip"))
         .kind(egui::PopupKind::Tooltip)
@@ -633,36 +657,32 @@ pub fn toolbar_tooltip(
         .open(response.enabled() && egui::Tooltip::should_show_tooltip(&response, false))
         .frame(
             egui::Frame::new()
-                .fill(fill)
+                .fill(HOVER_LABEL_FILL)
                 .corner_radius(response.ctx.active_theme().radius.sm)
-                .inner_margin(egui::Margin::symmetric(8, 3)),
+                .inner_margin(egui::Margin::symmetric(9, 3)),
         )
         .show(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            ui.spacing_mut().interact_size.y = 17.0;
+            ui.spacing_mut().interact_size.y = HOVER_LABEL_ROW;
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(l10n::text(ui.ctx(), text))
-                        .size(14.0)
-                        .color(Color32::from_gray(240)),
-                );
+                let label = l10n::text(ui.ctx(), text);
+                hover_label_run(ui, label, 0.0, Color32::TRANSPARENT, HOVER_LABEL_TEXT);
                 if let Some(shortcut) = shortcut {
+                    // With the row's 4 px spacing, 9 px after the text and 8 px before the chip.
+                    ui.add_space(5.0);
+                    let (rule, _) =
+                        ui.allocate_exact_size(Vec2::new(1.0, HOVER_LABEL_ROW), Sense::hover());
+                    ui.painter().rect_filled(rule, 0.0, HOVER_LABEL_KEY);
                     ui.add_space(4.0);
-                    for (index, key) in ui.ctx().format_shortcut(&shortcut).split('+').enumerate() {
+                    let font = egui::FontId::proportional(HOVER_LABEL_TEXT_SIZE);
+                    let keys = shortcut_key_labels(ui.ctx(), &font, &shortcut);
+                    for (index, key) in keys.iter().enumerate() {
                         if index > 0 {
-                            ui.label(egui::RichText::new("+").size(14.0).color(Color32::WHITE));
+                            let plus = "+".to_owned();
+                            hover_label_run(ui, plus, 0.0, Color32::TRANSPARENT, Color32::WHITE);
                         }
-                        egui::Frame::new()
-                            .fill(Color32::from_gray(80))
-                            .corner_radius(ui.active_theme().radius.xs)
-                            .inner_margin(egui::Margin::symmetric(4, 0))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new(l10n::text(ui.ctx(), key))
-                                        .size(14.0)
-                                        .color(Color32::WHITE),
-                                );
-                            });
+                        let key = l10n::text(ui.ctx(), key);
+                        hover_label_run(ui, key, 4.0, HOVER_LABEL_KEY, Color32::WHITE);
                     }
                 }
             });
@@ -680,7 +700,7 @@ pub fn toolbar_tooltip(
                         egui::pos2(x, y - 5.0),
                         egui::pos2(x + 5.0, y),
                     ],
-                    fill,
+                    HOVER_LABEL_FILL,
                     egui::Stroke::NONE,
                 ));
         });
