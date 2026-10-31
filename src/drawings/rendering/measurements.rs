@@ -367,30 +367,50 @@ impl Drawing {
 
         // Draw the main line with proper stroke
         painter.line_segment([start, end], Stroke::new(self.stroke_width, color));
-        // On the side away from the measurement box, which is painted over it.
-        self.render_line_text(painter, start, end, end.y >= start.y);
 
-        let Some(info_text) = self.measurement_label(view.bars, view.instrument, view.time_axis)
+        let clip = painter.clip_rect();
+        // A line out of view leaves no box at the pane's edge.
+        let Some(info_text) = self
+            .measurement_label(view.bars, view.instrument, view.time_axis)
+            .filter(|_| crate::painting::dashed_line::clip_segment(start, end, clip).is_some())
         else {
+            self.render_line_text(painter, start, end, end.y >= start.y);
             return;
         };
         let is_positive = self.chart_points[1].price >= self.chart_points[0].price;
 
         // Calculate midpoint for info box positioning
-        let mid = Pos2::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
+        let mid = start.lerp(end, 0.5);
 
         // Info box styling
         let font = egui::FontId::proportional(typography::XS);
-        let galley = painter.layout_no_wrap(info_text.clone(), font.clone(), Color32::WHITE);
-        let text_size = galley.size();
+        let galley = painter.layout_no_wrap(info_text, font, Color32::WHITE);
+        let padding = egui::vec2(8.0, 6.0);
+        let size = galley.size() + padding * 2.0;
 
-        // Position box above or below the midpoint based on line direction
-        let box_offset = if end.y < start.y {
-            -text_size.y - 15.0
-        } else {
-            15.0
+        // The box sits 15 pt beside the line, moved inside the pane, and the text on the other
+        // side: above when the line rises, unless only the other side has room for it.
+        let angle = super::lines::upright_angle(start, end);
+        let up = egui::vec2(angle.sin(), -angle.cos());
+        let place = |side: egui::Vec2| {
+            let reach = 15.0 + (size.x * side.x.abs() + size.y * side.y.abs()) / 2.0;
+            let min = mid + side * reach - size / 2.0;
+            Rect::from_min_size(min.clamp(clip.min, clip.max - size.min(clip.size())), size)
         };
-        let box_pos = Pos2::new(mid.x - text_size.x / 2.0 - 8.0, mid.y + box_offset);
+        let clear = |side: egui::Vec2| {
+            let rect = place(side);
+            [rect.min, rect.max, rect.left_bottom(), rect.right_top()]
+                .into_iter()
+                .all(|corner| (corner - mid).dot(side) >= 0.0)
+        };
+        let mut box_up = end.y < start.y;
+        let side = |box_up| if box_up { up } else { -up };
+        if !clear(side(box_up)) && clear(side(!box_up)) {
+            box_up = !box_up;
+        }
+        let box_rect = place(side(box_up));
+        // On the side away from the measurement box, which is painted over it.
+        self.render_line_text(painter, start, end, !box_up);
 
         // Draw background box with color based on direction
         let bg_color = if is_positive {
@@ -398,37 +418,17 @@ impl Drawing {
         } else {
             DESIGN_TOKENS.semantic.extended.bearish // Red (down)
         };
-
-        let padding = egui::vec2(8.0, 6.0);
-        let size = text_size + padding * 2.0;
-        let clip = painter.clip_rect();
-        let box_pos = box_pos.clamp(clip.min, clip.max - size.min(clip.size()));
-        let box_rect = Rect::from_min_size(box_pos, size);
         painter.rect_filled(box_rect, DESIGN_TOKENS.rounding.md, bg_color);
 
         // Draw text
-        painter.text(
-            box_pos + padding,
-            egui::Align2::LEFT_TOP,
-            info_text,
-            font,
-            Color32::WHITE,
-        );
+        painter.galley(box_rect.min + padding, galley, Color32::WHITE);
 
         // Draw connecting line from box to midpoint (thin dashed)
-        let connector_start = Pos2::new(
-            box_rect.center().x,
-            if end.y < start.y {
-                box_rect.max.y
-            } else {
-                box_rect.min.y
-            },
-        );
         let connector_stroke = Stroke::new(
             stroke::HAIRLINE,
             Color32::from_rgba_unmultiplied(bg_color.r(), bg_color.g(), bg_color.b(), 150),
         );
-        painter.line_segment([connector_start, mid], connector_stroke);
+        painter.line_segment([box_rect.clamp(mid), mid], connector_stroke);
     }
 
     // Note: render_bars_pattern is now in trading.rs with full projection features
@@ -449,7 +449,7 @@ impl Drawing {
         };
         let change = b.price - a.price;
         let pct = percent_change(a.price, b.price);
-        let decimals = price_decimals(a.price);
+        let decimals = change_decimals(instrument, a.price, change);
         let mut change_label = format!("{change:+.decimals$} ({pct:+.2}%)");
         if let Some(instrument) = instrument {
             for (size, unit) in [
@@ -514,6 +514,28 @@ impl Drawing {
             _ => Vec::new(),
         }
     }
+}
+
+/// Decimals of a price change from `price`, as the chart writes prices: the instrument's price
+/// precision, or without one by the price's magnitude and enough to show a non-zero `change`.
+pub(super) fn change_decimals(
+    instrument: Option<&crate::model::Instrument>,
+    price: f64,
+    change: f64,
+) -> usize {
+    instrument
+        .and_then(crate::scales::instrument_price_precision)
+        .map_or_else(
+            || {
+                let first_digit = if change != 0.0 && change.is_finite() {
+                    (-change.abs().log10()).ceil().max(0.0) as usize
+                } else {
+                    0
+                };
+                price_decimals(price).max(first_digit)
+            },
+            usize::from,
+        )
 }
 
 /// Paints `text` over a `bg` box sized to it, placed at `pos` by `align`, and returns its bounds.
@@ -695,5 +717,101 @@ mod tests {
         let mut drawing = Drawing::new(1, DrawingToolType::Rect);
         drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(20.0, 110.0)];
         assert_eq!(drawing.size_labels(), ["20 bars", "10.00 (10.00%)"]);
+    }
+
+    /// In a 500 x 400 pane, info lines near its top and bottom edges and steep ones in either
+    /// direction keep their text clear of the measurement box, which stays in the pane, taking
+    /// the other side of the line where only that side has room. A line wholly above the pane
+    /// paints nothing in it, near or far and with or without text.
+    #[test]
+    fn info_line_box_stays_clear_of_its_text_and_out_of_view_with_its_line() {
+        use egui::{Shape, emath::Rot2};
+        const LABEL: &str = "Weekly support";
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.));
+        let bars = sample_bars();
+        let paint = |a: (f32, f32), b: (f32, f32), text: Option<&str>| {
+            let mut drawing = Drawing::new(1, DrawingToolType::InfoLine);
+            drawing.text = text.map(Into::into);
+            drawing.chart_points = [a, b]
+                .map(|(x, y)| ChartPoint::new(x, f64::from(y)))
+                .to_vec();
+            drawing.update_screen_coords(|b| b, |p| p as f32);
+            let output = egui::Context::default().run_ui(Default::default(), |ui| {
+                let view = ChartView {
+                    price_formatter: None,
+                    instrument: None,
+                    bars: &bars,
+                    executions: None,
+                    revision: 0,
+                    bar_to_x: &|b| b,
+                    price_to_y: &|p| p as f32,
+                    y_to_price: &f64::from,
+                    time_axis: true,
+                };
+                drawing.render(ui.painter(), pane, &view);
+            });
+            fn flatten(shape: &Shape, out: &mut Vec<Shape>) {
+                match shape {
+                    Shape::Vec(shapes) => shapes.iter().for_each(|s| flatten(s, out)),
+                    _ => out.push(shape.clone()),
+                }
+            }
+            let mut shapes = Vec::new();
+            for s in &output.shapes {
+                flatten(&s.shape, &mut shapes);
+            }
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        for (a, b) in [
+            ((100., 40.), (300., 20.)),
+            ((100., 360.), (300., 380.)),
+            ((200., 300.), (200., 100.)),
+            ((200., 100.), (200., 300.)),
+            ((100., 300.), (300., 100.)),
+            ((100., 100.), (300., 300.)),
+        ] {
+            let shapes = paint(a, b, Some(LABEL));
+            let boxes: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Rect(r) if r.fill.a() > 0 => Some(r.rect),
+                    _ => None,
+                })
+                .collect();
+            let [measurement] = boxes[..] else {
+                panic!("{a:?} {b:?}: {} boxes", boxes.len());
+            };
+            assert!(
+                pane.contains_rect(measurement),
+                "{a:?} {b:?}: {measurement:?}"
+            );
+            let Some(text) = shapes.iter().find_map(|s| match s {
+                Shape::Text(t) if t.galley.text() == LABEL => Some(t),
+                _ => None,
+            }) else {
+                panic!("{a:?} {b:?}: no text");
+            };
+            let glyphs = text.galley.rect;
+            for i in 0..=20 {
+                for j in 0..=4 {
+                    let point =
+                        glyphs.min + glyphs.size() * egui::vec2(i as f32 / 20., j as f32 / 4.);
+                    let point = text.pos + Rot2::from_angle(text.angle) * point.to_vec2();
+                    assert!(
+                        !measurement.contains(point),
+                        "{a:?} {b:?}: {point:?} under the box"
+                    );
+                }
+            }
+        }
+        for (offset, text) in [(350., None), (650., Some(LABEL))] {
+            for shape in paint((200., -50. - offset), (300., -offset), text) {
+                assert!(
+                    !shape.visual_bounding_rect().intersects(pane),
+                    "{offset} above: {shape:?}"
+                );
+            }
+        }
     }
 }

@@ -535,11 +535,7 @@ impl DrawingManager {
 
         // Create a new drawing with the icon name
         let id = self.take_id();
-        let mut drawing = Drawing::with_color(id, tool, self.options.default_color);
-
-        if let Some(defaults) = self.tool_defaults.get(&drawing.tool_type) {
-            let _ = defaults.apply_to(&mut drawing);
-        }
+        let mut drawing = self.new_drawing(id, tool);
         drawing.text = Some(icon_name);
         drawing.completed = false; // Not complete until user clicks
 
@@ -587,17 +583,8 @@ impl DrawingManager {
                 prepared
             }
             _ => {
-                let mut drawing =
-                    Drawing::with_color(self.take_id(), tool_type, self.options.default_color);
-                // The highlighter's default look: a wide, translucent stroke in the toolbar colour.
-                if tool_type == DrawingToolType::Highlighter {
-                    drawing.stroke_width = 16.0;
-                    drawing.color[3] = drawing.color[3].min(100);
-                }
-                if let Some(defaults) = self.tool_defaults.get(&tool_type) {
-                    let _ = defaults.apply_to(&mut drawing);
-                }
-                drawing
+                let id = self.take_id();
+                self.new_drawing(id, tool_type)
             }
         };
         if let Some(id) = &self.active_custom_tool {
@@ -1036,5 +1023,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A rectangle and a trend line start in their own colours, the rectangle filled with a tint
+    /// of its border; a host colour recolours both and the tint; a default saved for a tool wins.
+    #[test]
+    fn new_drawings_take_their_tool_style_then_the_saved_default() {
+        let place = |manager: &mut DrawingManager, tool| {
+            manager.start_drawing_with_coords(tool, Pos2::new(10.0, 10.0), |x| x, f64::from);
+            manager.curr_drawing.take().unwrap()
+        };
+        let mut manager = DrawingManager::new();
+        let line = place(&mut manager, DrawingToolType::TrendLine);
+        let rect = place(&mut manager, DrawingToolType::Rect);
+        assert_ne!(line.color, rect.color);
+        assert_eq!(line.fill_color, None);
+        assert_eq!(rect.fill_color.unwrap()[..3], rect.color[..3]);
+
+        manager.options.default_color = Some([1, 2, 3, 255]);
+        let rect = place(&mut manager, DrawingToolType::Rect);
+        assert_eq!(
+            (rect.color, rect.fill_color),
+            ([1, 2, 3, 255], Some([1, 2, 3, 51]))
+        );
+
+        let mut saved = Drawing::new(0, DrawingToolType::Rect);
+        (saved.color, saved.fill_color) = ([9, 9, 9, 255], None);
+        let saved = crate::drawings::DrawingTemplate::from_drawing(&saved);
+        manager.tool_defaults.insert(DrawingToolType::Rect, saved);
+        let rect = place(&mut manager, DrawingToolType::Rect);
+        assert_eq!((rect.color, rect.fill_color), ([9, 9, 9, 255], None));
     }
 }

@@ -34,8 +34,9 @@ pub struct PriceMarkGeneratorConfig {
     /// Max number of marks, capped at 1,000 during generation.
     pub max_marks: usize,
 
-    /// Target density (marks per 100 pixels): marks stay at least `100 / target_density`
-    /// pixels apart, and no closer than `min_spacing`
+    /// Target density (marks per 100 pixels): linear marks take the nice step nearest
+    /// `100 / target_density` pixels, logarithmic marks stay at least that far apart, and no
+    /// marks are closer than `min_spacing`
     pub target_density: f32,
 
     /// Minimum price tick size. Normal and logarithmic marks lie on its multiples;
@@ -234,8 +235,7 @@ impl PriceMarkGenerator {
             };
         }
 
-        // Apply spacing constraints
-        self.apply_spacing_constraints(marks)
+        self.apply_spacing_constraints(marks, self.config.min_spacing)
     }
 
     /// Generate marks for logarithmic price scale
@@ -319,8 +319,13 @@ impl PriceMarkGenerator {
             }
         }
 
-        // Apply spacing constraints
-        self.apply_spacing_constraints(marks)
+        // Logarithmic ticks can be closer at one end even when the average spacing fits.
+        self.apply_spacing_constraints(
+            marks,
+            self.config
+                .min_spacing
+                .max(100.0 / self.config.target_density),
+        )
     }
 
     fn round_up_to_multiple(step: f64, unit: f64) -> f64 {
@@ -334,8 +339,8 @@ impl PriceMarkGenerator {
         multiple.max(1.0) * unit
     }
 
-    /// Calculate "nice" step value using modified algorithm from Heckbert
-    /// Returns values like 1, 2, 2.5, 4, 5, 10, 20, 25, 40, 50, etc.
+    /// The "nice" step nearest `raw_step`, so the marks land nearest their target spacing in
+    /// pixels: 1, 2, 2.5, 4 or 5 times a power of ten.
     fn calculate_nice_step(&self, raw_step: f64) -> f64 {
         if raw_step <= 0.0 {
             return 1.0;
@@ -351,21 +356,11 @@ impl PriceMarkGenerator {
         let exponent = raw_step.log10().floor();
         let fraction = raw_step / 10f64.powf(exponent);
 
-        // Round fraction to nice value (1, 2, 5, or 10)
-        // Using standard Heckbert thresholds
-        let nice_fraction = if fraction <= 1.0 {
-            1.0
-        } else if fraction <= 2.0 {
-            2.0
-        } else if fraction <= 2.5 {
-            2.5
-        } else if fraction <= 4.0 {
-            4.0
-        } else if fraction <= 5.0 {
-            5.0
-        } else {
-            10.0
-        };
+        let distance = |nice: f64| (fraction - nice).abs();
+        let nice_fraction = [1.0, 2.0, 2.5, 4.0, 5.0, 10.0]
+            .into_iter()
+            .min_by(|a, b| distance(*a).total_cmp(&distance(*b)))
+            .unwrap_or(1.0);
 
         nice_fraction * 10f64.powf(exponent)
     }
@@ -430,13 +425,12 @@ impl PriceMarkGenerator {
         }
     }
 
-    /// Apply min spacing constraints
-    fn apply_spacing_constraints(&self, mut marks: Vec<PriceMark>) -> Vec<PriceMark> {
+    /// Keeps the roundest marks at least `spacing` pixels apart
+    fn apply_spacing_constraints(&self, mut marks: Vec<PriceMark>, spacing: f32) -> Vec<PriceMark> {
         if marks.is_empty() {
             return marks;
         }
 
-        // Logarithmic ticks can be closer at one end even when the average spacing fits.
         // Sort by weight descending, then by price
         marks.sort_by(|a, b| {
             b.weight
@@ -445,10 +439,6 @@ impl PriceMarkGenerator {
         });
 
         // Keep marks with sufficient spacing
-        let spacing = self
-            .config
-            .min_spacing
-            .max(100.0 / self.config.target_density);
         let mut filtered = vec![marks[0].clone()];
 
         for mark in marks.iter().skip(1) {
@@ -495,13 +485,13 @@ mod tests {
         let generator = PriceMarkGenerator::new();
 
         // Test various raw steps
-        assert_eq!(generator.calculate_nice_step(0.7), 1.0);
+        assert_eq!(generator.calculate_nice_step(0.7), 0.5);
         assert_eq!(generator.calculate_nice_step(1.8), 2.0);
-        assert_eq!(generator.calculate_nice_step(2.2), 2.5);
+        assert_eq!(generator.calculate_nice_step(2.2), 2.0);
         assert_eq!(generator.calculate_nice_step(3.6), 4.0);
-        assert_eq!(generator.calculate_nice_step(4.5), 5.0);
+        assert_eq!(generator.calculate_nice_step(4.6), 5.0);
         assert_eq!(generator.calculate_nice_step(8.0), 10.0);
-        assert_eq!(generator.calculate_nice_step(15.0), 20.0);
+        assert_eq!(generator.calculate_nice_step(16.0), 20.0);
         assert_eq!(generator.calculate_nice_step(35.0), 40.0);
     }
 
@@ -678,12 +668,10 @@ mod tests {
                     .all(|mark| (mark.label.parse::<f64>().unwrap() - mark.price).abs() < 1e-8)
             );
         }
+        // 0..70 on 500 pixels at 2.5 marks per 100 pixels wants a step of 5.6: the nearest nice
+        // step, 5, puts the marks 35.7 pixels apart, and all 15 stay.
         let marks = generator.generate_marks(&map(PriceScaleMode::Normal, 0.0, 70.0));
-        assert!(
-            marks
-                .windows(2)
-                .all(|pair| (pair[0].y_coord - pair[1].y_coord).abs() >= 40.0)
-        );
+        assert_eq!(marks.len(), 15);
         for (mode, min, max) in [
             (PriceScaleMode::Normal, 1e-10, 2e-10),
             (PriceScaleMode::Normal, -2e-18, 2e-18),
@@ -741,13 +729,13 @@ mod tests {
         assert_eq!(prices, [20.0, 50.0, 100.0, 200.0, 500.0]);
 
         // 18,200..22,800 holds one multiple of a power of ten (20,000), so the marks
-        // fall back to 400-unit price steps. Spacing drops the 22,400 mark near the top.
+        // fall back to 400-unit price steps.
         let (lo, hi) = (18_200f64.ln(), 22_800f64.ln());
         let marks = generator.generate_marks(&map(PriceScaleMode::Logarithmic, lo, hi));
         let labels: Vec<&str> = marks.iter().map(|m| m.label.as_str()).collect();
         let expected = [
             "18400.00", "18800.00", "19200.00", "19600.00", "20000.00", "20400.00", "20800.00",
-            "21200.00", "21600.00", "22000.00",
+            "21200.00", "21600.00", "22000.00", "22400.00",
         ];
         assert_eq!(labels, expected);
     }

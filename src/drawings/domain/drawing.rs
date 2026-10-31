@@ -9,9 +9,9 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig,
-    GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing, RegressionTrendConfig,
-    TimeframeVisibility,
+    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS,
+    GannConfig, GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing,
+    RegressionTrendConfig, TimeframeVisibility,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -40,6 +40,8 @@ use serde::{Deserialize, Serialize};
 /// timestamps by [`persistence`](crate::drawings::persistence). A field added
 /// later needs `#[serde(default)]`, so that saved version 2 files still load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// The trait impls below wrap the derived ones.
+#[serde(remote = "Self")]
 pub struct Drawing {
     /// Unique identifier for this drawing
     #[serde(skip)]
@@ -92,8 +94,9 @@ pub struct Drawing {
     /// Persistent chart coordinates (bar_idx, price) - stable across pan/zoom
     #[serde(skip)]
     pub chart_points: Vec<ChartPoint>,
-    /// Screen y of each visible level of a Fibonacci retracement or extension, in config order
-    /// (empty for other tools); rebuilt with `points` by [`Self::update_screen_coords`]
+    /// Screen y of each visible level of a Fibonacci retracement or extension, in config order,
+    /// or of the far corner of a fixed Gann square (empty for other tools); rebuilt with `points`
+    /// by [`Self::update_screen_coords`]
     #[serde(skip)]
     pub level_ys: Vec<f32>,
     /// Position as fractions of the pane width and height for anchored text.
@@ -200,9 +203,184 @@ fn enabled() -> bool {
     true
 }
 
+pub(super) const BLUE: [u8; 4] = [41, 98, 255, 255];
+pub(super) const RED: [u8; 4] = [242, 54, 69, 255];
+pub(super) const ORANGE: [u8; 4] = [255, 152, 0, 255];
+pub(super) const GREEN: [u8; 4] = [76, 175, 80, 255];
+pub(super) const TEAL: [u8; 4] = [8, 153, 129, 255];
+pub(super) const CYAN: [u8; 4] = [0, 188, 212, 255];
+pub(super) const PINK: [u8; 4] = [233, 30, 99, 255];
+pub(super) const PURPLE: [u8; 4] = [156, 39, 176, 255];
+const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
+pub(super) const GREY: [u8; 4] = [128, 128, 128, 255];
+const WHITE: [u8; 4] = [255, 255, 255, 255];
+
+/// `color` at `alpha` of 255.
+const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
+    [color[0], color[1], color[2], alpha]
+}
+
+/// Line, fill and text defaults of a new drawing, before any default the user saved for its tool.
+struct DefaultStyle {
+    color: [u8; 4],
+    width: f32,
+    line_style: LineStyle,
+    fill: Option<[u8; 4]>,
+    font_size: f32,
+}
+
+/// A 2 px solid blue line with 14 px text and no fill, the style most tools start from.
+const LINE: DefaultStyle = DefaultStyle {
+    color: BLUE,
+    width: 2.0,
+    line_style: LineStyle::Solid,
+    fill: None,
+    font_size: 14.0,
+};
+
+/// The default style of each tool, chosen for its role: areas start filled with a light tint
+/// (20%, 15% for chart patterns, 40% for date ranges), small labels take 12 px text.
+fn default_style(tool: DrawingToolType) -> DefaultStyle {
+    use DrawingToolType as T;
+    let filled = |color: [u8; 4], alpha: u8| DefaultStyle {
+        color,
+        fill: Some(tint(color, alpha)),
+        ..LINE
+    };
+    let colored = |color: [u8; 4]| DefaultStyle { color, ..LINE };
+    match tool {
+        T::HorizontalLine | T::HorizontalRay | T::CrossLine => DefaultStyle {
+            font_size: 12.0,
+            ..LINE
+        },
+        T::ParallelChannel => filled(BLUE, 51),
+        // The centre line and lower band take the line colour, the upper band the fill.
+        T::RegressionTrend => DefaultStyle {
+            color: RED,
+            fill: Some(tint(BLUE, 51)),
+            ..LINE
+        },
+        T::FlatTopBottom => filled(ORANGE, 51),
+        T::DisjointChannel | T::Triangle => filled(TEAL, 51),
+        T::DoubleCurve | T::ThreeDrivesPattern => colored(DEEP_PURPLE),
+        T::Rect => filled(PURPLE, 51),
+        T::RotatedRect => filled(GREEN, 51),
+        T::Circle | T::Ellipse => filled(RED, 51),
+        // Polylines and arcs paint no fill yet, so they start unfilled.
+        T::Polyline | T::Brush => colored(CYAN),
+        T::Arc => colored(PINK),
+        T::Sector => DefaultStyle {
+            color: [156, 156, 156, 255],
+            width: 1.0,
+            fill: Some(tint(BLUE, 51)),
+            ..LINE
+        },
+        T::Highlighter => DefaultStyle {
+            color: tint(RED, 51),
+            width: 20.0,
+            ..LINE
+        },
+        T::ArrowMarker => DefaultStyle {
+            color: [30, 83, 229, 255],
+            font_size: 16.0,
+            ..LINE
+        },
+        T::ArrowMarkUp => colored(TEAL),
+        T::ArrowMarkDown => colored([204, 47, 60, 255]),
+        T::Pitchfork
+        | T::SchiffPitchfork
+        | T::ModifiedSchiffPitchfork
+        | T::InsidePitchfork
+        | T::Pitchfan => colored(RED),
+        // The colour, width and pattern of the trend line; levels have their own.
+        T::FibonacciRetracement
+        | T::FibonacciExtension
+        | T::FibonacciChannel
+        | T::TrendBasedFibTime
+        | T::FibonacciCircles
+        | T::FibonacciSpeedResistanceArcs => DefaultStyle {
+            color: GREY,
+            line_style: LineStyle::Dashed,
+            ..LINE
+        },
+        T::FibonacciTimeZones => DefaultStyle {
+            color: GREY,
+            width: 1.0,
+            line_style: LineStyle::Dashed,
+            ..LINE
+        },
+        T::FibonacciWedge | T::FibonacciSpeedFan => colored(GREY),
+        T::FibonacciSpiral => DefaultStyle {
+            color: CYAN,
+            width: 1.0,
+            ..LINE
+        },
+        T::GhostFeed => DefaultStyle {
+            color: GREY,
+            width: 1.0,
+            ..LINE
+        },
+        T::XABCDPattern | T::CypherPattern => filled(BLUE, 38),
+        T::HeadAndShoulders => filled(TEAL, 38),
+        T::ABCDPattern | T::SineLine => colored(TEAL),
+        T::TrianglePattern => filled(DEEP_PURPLE, 38),
+        T::ElliottImpulse
+        | T::ElliottCorrection
+        | T::ElliottTriangle
+        | T::ElliottDoubleCombo
+        | T::ElliottTripleCombo => colored([61, 133, 198, 255]),
+        T::CyclicLines => colored([144, 202, 249, 255]),
+        T::TimeCycles => DefaultStyle {
+            color: [21, 153, 128, 255],
+            fill: Some([106, 168, 79, 128]),
+            ..LINE
+        },
+        // Measure keeps its fill unset, which tints it by the direction of the move.
+        T::Measure | T::PriceRange => DefaultStyle {
+            font_size: 12.0,
+            ..LINE
+        },
+        T::DateRange | T::DateAndPriceRange => DefaultStyle {
+            font_size: 12.0,
+            ..filled(BLUE, 102)
+        },
+        // Text boxes: the fill is the box colour, used once the background is on.
+        T::TextLabel | T::AnchoredText => DefaultStyle {
+            fill: Some(tint(BLUE, 64)),
+            ..LINE
+        },
+        T::Note => filled(BLUE, 179),
+        T::Callout => filled([0, 151, 167, 255], 179),
+        T::PriceNote | T::Signpost => DefaultStyle {
+            font_size: 12.0,
+            ..LINE
+        },
+        T::Comment => DefaultStyle {
+            font_size: 16.0,
+            ..LINE
+        },
+        T::Table => colored([219, 219, 219, 255]),
+        T::FontIcon => DefaultStyle {
+            font_size: 40.0,
+            ..LINE
+        },
+        T::Sticker => DefaultStyle {
+            font_size: 110.0,
+            ..LINE
+        },
+        _ => LINE,
+    }
+}
+
 impl Drawing {
     /// Create a new drawing with default properties
     pub fn new(id: usize, tool_type: DrawingToolType) -> Self {
+        let style = default_style(tool_type);
+        // Text starts without a box; switching one on shows the tinted fill and a grey border.
+        let plain_text = matches!(
+            tool_type,
+            DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+        );
         Self {
             id,
             stored_id: None,
@@ -222,69 +400,27 @@ impl Drawing {
             level_ys: Vec::new(),
             screen_anchor: None,
             pane: None,
-            color: [242, 54, 69, 255], // Default red (#F23645)
-            stroke_width: if matches!(
-                tool_type,
-                DrawingToolType::FibonacciRetracement
-                    | DrawingToolType::FibonacciExtension
-                    | DrawingToolType::FibonacciTimeZones
-                    | DrawingToolType::TrendBasedFibTime
-                    | DrawingToolType::FibonacciCircles
-                    | DrawingToolType::FibonacciSpeedResistanceArcs
-            ) {
-                1.0
-            } else {
-                2.0
-            },
+            color: style.color,
+            stroke_width: style.width,
             completed: false,
             text: (tool_type == DrawingToolType::Sticker).then(|| "sticker:bull".into()),
             // Styling defaults
-            line_style: if matches!(
-                tool_type,
-                DrawingToolType::FibonacciRetracement
-                    | DrawingToolType::FibonacciExtension
-                    | DrawingToolType::FibonacciTimeZones
-                    | DrawingToolType::TrendBasedFibTime
-                    | DrawingToolType::FibonacciCircles
-                    | DrawingToolType::FibonacciSpeedResistanceArcs
-            ) {
-                LineStyle::Dashed
-            } else {
-                LineStyle::Solid
-            },
-            fill_color: match tool_type {
-                DrawingToolType::XABCDPattern
-                | DrawingToolType::CypherPattern
-                | DrawingToolType::TrianglePattern => Some([242, 54, 69, 25]),
-                DrawingToolType::HeadAndShoulders
-                | DrawingToolType::ElliottImpulse
-                | DrawingToolType::ElliottTriangle => Some([242, 54, 69, 20]),
-                DrawingToolType::ElliottCorrection => Some(
-                    crate::tokens::DESIGN_TOKENS
-                        .semantic
-                        .extended
-                        .bearish
-                        .gamma_multiply(20.0 / 255.0)
-                        .to_srgba_unmultiplied(),
-                ),
-                _ => None,
-            },
+            line_style: style.line_style,
+            fill_color: style.fill,
             locked: false,
             visible: true,
-            font_size: if matches!(
-                tool_type,
-                DrawingToolType::FontIcon | DrawingToolType::Sticker
-            ) {
-                32.0
+            font_size: style.font_size,
+            font_weight: if tool_type == DrawingToolType::ArrowMarker {
+                FontWeight::Bold
             } else {
-                12.0
+                FontWeight::Normal
             },
-            font_weight: FontWeight::Normal,
             italic: false,
-            text_color: None,
-            background: true,
-            border: true,
-            border_color: None,
+            text_color: matches!(tool_type, DrawingToolType::Note | DrawingToolType::Callout)
+                .then_some(WHITE),
+            background: !plain_text,
+            border: !plain_text,
+            border_color: plain_text.then_some([112, 112, 112, 255]),
             extend_left: tool_type == DrawingToolType::ExtendedLine,
             extend_right: matches!(
                 tool_type,
@@ -317,10 +453,21 @@ impl Drawing {
                     | DrawingToolType::FibonacciSpeedResistanceArcs
             )
             .then(|| FibonacciConfig::for_tool(tool_type)),
-            volume_profile: None,
+            volume_profile: matches!(
+                tool_type,
+                DrawingToolType::FixedRangeVolumeProfile | DrawingToolType::AnchoredVolumeProfile
+            )
+            .then(VolumeProfileConfig::drawing_default),
             regression_trend: None,
-            pitchfork: None,
-            channel_midline: false,
+            pitchfork: matches!(
+                tool_type,
+                DrawingToolType::Pitchfork
+                    | DrawingToolType::SchiffPitchfork
+                    | DrawingToolType::ModifiedSchiffPitchfork
+                    | DrawingToolType::InsidePitchfork
+            )
+            .then(PitchforkConfig::default),
+            channel_midline: tool_type == DrawingToolType::ParallelChannel,
             gann: None,
             ghost_feed: None,
             // Z-order (default: 0, higher values render on top)
@@ -336,15 +483,17 @@ impl Drawing {
         drawing
     }
 
-    /// Create a new drawing with a specific color
+    /// Create a new drawing with a specific line colour; a fill tinted from the tool's default
+    /// line colour takes the same tint of `color`.
     pub fn with_color(id: usize, tool_type: DrawingToolType, color: [u8; 4]) -> Self {
         let mut drawing = Self::new(id, tool_type);
-        drawing.color = color;
-        if tool_type != DrawingToolType::ElliottCorrection
-            && let Some(fill) = &mut drawing.fill_color
+        // A fill tinted from the tool's line colour follows the new one; other fills stay.
+        if let Some(fill) = &mut drawing.fill_color
+            && fill[..3] == drawing.color[..3]
         {
             fill[..3].copy_from_slice(&color[..3]);
         }
+        drawing.color = color;
         drawing
     }
 
@@ -370,10 +519,18 @@ impl Drawing {
             let y = price_to_y(cp.price);
             self.points.push(egui::Pos2::new(x, y));
         }
-        self.level_ys = self
-            .fib_levels()
-            .map(|(_, prices)| prices.into_iter().map(&price_to_y).collect())
-            .unwrap_or_default();
+        self.level_ys = match (self.tool_type, &self.chart_points[..]) {
+            // Five of the first units in price, which a logarithmic scale does not keep linear.
+            (DrawingToolType::GannFixed, [a, b, ..]) => {
+                vec![price_to_y(
+                    a.price + (b.price - a.price) * f64::from(GANN_SQUARE_UNITS),
+                )]
+            }
+            _ => self
+                .fib_levels()
+                .map(|(_, prices)| prices.into_iter().map(&price_to_y).collect())
+                .unwrap_or_default(),
+        };
     }
 
     /// Rebuilds anchored text coordinates relative to the pane. Call after
@@ -720,6 +877,25 @@ impl Drawing {
 impl Default for Drawing {
     fn default() -> Self {
         Self::new(0, DrawingToolType::TrendLine)
+    }
+}
+
+impl Serialize for Drawing {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Drawing {
+    /// A saved `gann` object takes the fields it leaves out from [`GannConfig::for_tool`] of the
+    /// drawing's tool, which a drawing without one draws.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        GannConfig::forget_left_out();
+        let mut drawing = Self::deserialize(deserializer)?;
+        if let Some(gann) = &mut drawing.gann {
+            gann.fill_left_out(drawing.tool_type);
+        }
+        Ok(drawing)
     }
 }
 

@@ -1752,7 +1752,13 @@ impl DemoApp {
                 },
                 eraser_mode_enabled: dm.eraser_mode,
                 stay_in_drawing_mode: dm.stay_in_drawing_mode,
-                drawing_color: dm.options.default_color,
+                drawing_color: dm
+                    .new_drawing(
+                        0,
+                        dm.active_tool
+                            .unwrap_or(egui_charts::drawings::DrawingToolType::TrendLine),
+                    )
+                    .color,
             });
         let drawings = &self.chart.drawings().drawings;
         self.drawing_toolbar.state.lock_all =
@@ -1914,7 +1920,7 @@ impl DemoApp {
             DrawingToolbarAction::ToggleStayInDrawingMode => {
                 dm.stay_in_drawing_mode = !dm.stay_in_drawing_mode;
             }
-            DrawingToolbarAction::ColorChanged(rgba) => dm.options.default_color = rgba,
+            DrawingToolbarAction::ColorChanged(rgba) => dm.options.default_color = Some(rgba),
             DrawingToolbarAction::ClearAllDrawings | DrawingToolbarAction::RemoveAllDrawings => {
                 dm.clear_all()
             }
@@ -3600,7 +3606,8 @@ mod tests {
             let pos = if settings {
                 points[0].lerp(points[1], 0.5)
             } else {
-                points[0] + egui::vec2(10.0, -5.0)
+                // On the text, which starts without a box around it.
+                points[0] + egui::vec2(10.0, 5.0)
             };
             assert!(
                 ctx.content_rect().contains(pos),
@@ -6427,7 +6434,7 @@ mod tests {
                 .edit_drawing(7, |d| d.locked = true);
             props.font_size = 18.0;
             props.apply_to_chart(DrawingId(7), &mut app.chart).unwrap();
-            assert_eq!(app.chart.drawings().drawings[0].font_size, 12.0);
+            assert_eq!(app.chart.drawings().drawings[0].font_size, 14.0);
             assert_eq!(app.chart.drawings().drawings[1].font_size, 18.0);
             // A malformed ratio cannot partially change common style or another selected tool.
             props

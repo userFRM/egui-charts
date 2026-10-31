@@ -1,5 +1,5 @@
 use super::context::{ChartMapping, RenderContext, StyleColors};
-use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, axis_font};
+use crate::chart::rendering::axes::{PRICE_LABEL_GAP, axis_font};
 use crate::config::{PriceAxisOptions, TimeScaleOptions};
 use crate::model::Bar;
 use crate::scales::price_decimals;
@@ -181,8 +181,8 @@ fn under_tag(tags: &[Option<Rect>], rect: Rect) -> bool {
 /// like the ticks.
 pub(crate) fn tick_decimals(price_scale: &PriceMap, y: f32) -> usize {
     price_scale
-        .marks()
-        .into_iter()
+        .shared_marks()
+        .iter()
         .min_by(|a, b| (a.y_coord - y).abs().total_cmp(&(b.y_coord - y).abs()))
         // Percentage labels end in a sign, which is not a decimal.
         .map_or(2, |mark| {
@@ -346,7 +346,9 @@ pub(crate) fn render_time_grid(
             Pos2::new(x, context.rect.bottom()),
         ])
     });
-    let price_marks = horizontal.map(|_| coords.price.marks()).unwrap_or_default();
+    let price_marks = horizontal
+        .map(|_| coords.price.shared_marks())
+        .unwrap_or_default();
     let price_lines = price_marks.iter().map(|mark| {
         [
             Pos2::new(context.rect.left(), mark.y_coord),
@@ -399,6 +401,9 @@ pub fn render_time_labels(
     let min_label_spacing = min_time_label_spacing(options); // Min pixels between label centers
     let mut last_label_x: Option<f32> = None;
     let mut labels = Vec::new();
+    // Labels centre in the axis row below the plot.
+    let y = context.rect.max.y
+        + crate::styles::sizing::chart::BOTTOM_PADDING_WITH_TIME.max(options.minimum_height) / 2.0;
     if options.border_visible {
         let y = context.painter.round_to_pixel_center(context.rect.bottom());
         labels.push(Shape::hline(
@@ -428,7 +433,6 @@ pub fn render_time_labels(
             continue;
         }
 
-        let y = context.rect.max.y + TIME_LABEL_GAP;
         let galley = if options.allow_bold_labels && mark.bold {
             context
                 .painter
@@ -441,7 +445,7 @@ pub fn render_time_labels(
                 .painter
                 .layout_no_wrap(mark.label, font.clone(), text_color)
         };
-        let rect = egui::Align2::CENTER_TOP.anchor_size(Pos2::new(x, y), galley.size());
+        let rect = egui::Align2::CENTER_CENTER.anchor_size(Pos2::new(x, y), galley.size());
         if rect.left() >= context.rect.left()
             && rect.right() <= context.rect.right()
             && context.painter.clip_rect().contains_rect(rect)
@@ -964,7 +968,7 @@ mod tests {
                 );
                 if shown && side.is_some() {
                     for tag in &tags {
-                        assert_eq!(tag.height(), 15.0);
+                        assert_eq!(tag.height(), 17.0);
                         if side == Some(true) {
                             assert!((plot.left() - tag.right() - 5.0).abs() < 0.1);
                         } else {
@@ -1067,7 +1071,7 @@ mod tests {
                             })
                             .expect("custom price tag");
                         assert!((tag.left() - plot.right() - 5.0).abs() < 0.1);
-                        assert!((widget.right() - tag.right() - 8.0).abs() < 0.1);
+                        assert!((widget.right() - tag.right() - 6.0).abs() < 0.1);
                     }
                 }
             }

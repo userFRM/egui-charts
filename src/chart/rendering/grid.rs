@@ -17,7 +17,7 @@ pub fn render_grid(
     grid_color: Color32,
     style: LineStyle,
 ) {
-    let marks = price_map.marks();
+    let marks = price_map.shared_marks();
     render_grid_lines(
         painter,
         marks.iter().map(|mark| {

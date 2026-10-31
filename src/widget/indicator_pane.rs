@@ -1335,7 +1335,7 @@ impl IndicatorPane {
             )
         };
         for tag in tags.iter().flatten() {
-            width = width.max(tag.width() + 5.0 + 8.0);
+            width = width.max(tag.width() + 5.0 + 6.0);
         }
         self.axis_tags = tags.clone();
         if self.overlay {

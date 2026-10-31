@@ -2,7 +2,7 @@
 //!
 //! Includes: standard pitchfork, modified Schiff, inside pitchfork, and pitchfan.
 
-use crate::drawings::domain::{Drawing, DrawingToolType};
+use crate::drawings::domain::{Drawing, DrawingToolType, PitchforkConfig};
 use crate::drawings::validation::MAX_PITCHFORK_LEVEL;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
@@ -119,7 +119,10 @@ impl Drawing {
     /// All visible level lines, followed by the construction links, shared with selection.
     pub(super) fn pitchfork_lines(&self, rect: Rect) -> Option<Vec<[Pos2; 2]>> {
         let base = self.pitchfork_base_lines(rect)?;
-        let config = self.pitchfork.clone().unwrap_or_default();
+        let config = self
+            .pitchfork
+            .clone()
+            .unwrap_or_else(PitchforkConfig::legacy);
         let mut lines = Vec::new();
         for level in config
             .levels
@@ -137,7 +140,10 @@ impl Drawing {
         let Some(base) = self.pitchfork_base_lines(rect) else {
             return Vec::new();
         };
-        let mut config = self.pitchfork.clone().unwrap_or_default();
+        let mut config = self
+            .pitchfork
+            .clone()
+            .unwrap_or_else(PitchforkConfig::legacy);
         if !config.show_background {
             return Vec::new();
         }
@@ -166,7 +172,10 @@ impl Drawing {
         let Some(base) = self.pitchfork_base_lines(rect) else {
             return;
         };
-        let mut config = self.pitchfork.clone().unwrap_or_default();
+        let mut config = self
+            .pitchfork
+            .clone()
+            .unwrap_or_else(PitchforkConfig::legacy);
         config
             .levels
             .retain(|l| (0.0..=MAX_PITCHFORK_LEVEL).contains(&l.value));
@@ -444,6 +453,8 @@ mod tests {
             ),
         ] {
             let mut drawing = Drawing::new(12, tool);
+            // A fork saved without a config.
+            drawing.pitchfork = None;
             drawing.points = vec![Pos2::ZERO, Pos2::new(10.0, 100.0), Pos2::new(20.0, -50.0)];
             let lines = drawing.pitchfork_lines(rect).unwrap();
             assert!(lines.len() >= 7, "{tool:?}: {lines:?}");

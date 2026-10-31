@@ -639,10 +639,10 @@ mod tests {
                 DrawingToolType::FontIcon,
                 vec![pos2(100.0, 200.0)],
                 vec![
-                    (TopLeft, pos2(84.0, 184.0)),
-                    (TopRight, pos2(116.0, 184.0)),
-                    (BottomLeft, pos2(84.0, 216.0)),
-                    (BottomRight, pos2(116.0, 216.0)),
+                    (TopLeft, pos2(80.0, 180.0)),
+                    (TopRight, pos2(120.0, 180.0)),
+                    (BottomLeft, pos2(80.0, 220.0)),
+                    (BottomRight, pos2(120.0, 220.0)),
                     (Middle, pos2(100.0, 200.0)),
                 ],
             ),
@@ -650,10 +650,10 @@ mod tests {
                 DrawingToolType::Sticker,
                 vec![pos2(100.0, 200.0)],
                 vec![
-                    (TopLeft, pos2(84.0, 184.0)),
-                    (TopRight, pos2(116.0, 184.0)),
-                    (BottomLeft, pos2(84.0, 216.0)),
-                    (BottomRight, pos2(116.0, 216.0)),
+                    (TopLeft, pos2(45.0, 145.0)),
+                    (TopRight, pos2(155.0, 145.0)),
+                    (BottomLeft, pos2(45.0, 255.0)),
+                    (BottomRight, pos2(155.0, 255.0)),
                     (Middle, pos2(100.0, 200.0)),
                 ],
             ),
@@ -952,7 +952,7 @@ mod tests {
             ] {
                 let mut manager = DrawingManager::new();
                 let drawing = create_test_drawing(tool, vec![pos2(100.0, 200.0)]);
-                let anchors = drawing.chart_points.clone();
+                let (anchors, size_before) = (drawing.chart_points.clone(), drawing.font_size);
                 manager.drawings.push(drawing);
                 manager.start_drag_handle(1, handle);
                 // A corner is half a diagonal from the centre: side = radius * sqrt(2).
@@ -1005,7 +1005,7 @@ mod tests {
                 output.drop_without_applying_deltas();
                 manager.end_drag_handle();
                 assert!(manager.undo());
-                assert_eq!(manager.drawings[0].font_size, 32.0);
+                assert_eq!(manager.drawings[0].font_size, size_before);
                 assert!(!manager.undo(), "one undo for the whole drag");
                 assert!(manager.redo());
                 assert!((manager.drawings[0].font_size - 96.0).abs() < 1e-4);

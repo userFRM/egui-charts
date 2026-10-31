@@ -932,6 +932,10 @@ mod tests {
         let mut wrong = Vec::new();
         for (tool, (x, y), want, anchors) in cases {
             let mut drawing = Drawing::new(7, tool);
+            // These shapes start filled; their cases test the outline alone.
+            if matches!(tool, T::Triangle | T::Circle | T::Ellipse) {
+                drawing.fill_color = None;
+            }
             if tool == T::Highlighter {
                 // A 16 px stroke: hit within 8 px.
                 drawing.stroke_width = 16.0;

@@ -1,6 +1,8 @@
 //! The dashed-line painter and the clip bound its loops use, shared by the chart and the drawing tools.
 
-use egui::{Mesh, Pos2, Rect, Stroke, emath::GuiRounding};
+use egui::{Mesh, Pos2, Rect, Stroke};
+use std::cell::RefCell;
+use std::sync::Arc;
 
 /// The painter's clip rect, bounded by the viewport when it is unbounded, or `None` when neither is
 /// finite.
@@ -124,6 +126,7 @@ pub(crate) fn draw_dotted_segments(
     stroke: Stroke,
     spacing: f32,
 ) {
+    use egui::emath::GuiRounding;
     let size = stroke.width;
     let Some(clip) = finite_clip(painter) else {
         return;
@@ -157,12 +160,34 @@ pub(crate) fn draw_dashed_segments(
 ) {
     let segments = segments.into_iter();
     let mut dots = Mesh::default();
+    let mut key = None;
     if dash_len == 1.0
         && stroke.width == 1.0
         && gap_len.is_finite()
         && gap_len >= 0.0
         && let Some(clip) = finite_clip(painter)
     {
+        // Every line of the batch is dotted into the mesh, so the mesh depends on these alone.
+        key = segments
+            .clone()
+            .map(|(start, end, phase)| {
+                (start.x == end.x || start.y == end.y).then_some((
+                    [start.x, start.y, end.x, end.y].map(f32::to_bits),
+                    phase.to_bits(),
+                ))
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|segments| DotsKey {
+                clip: [clip.min.x, clip.min.y, clip.max.x, clip.max.y].map(f32::to_bits),
+                pixels_per_point: painter.pixels_per_point().to_bits(),
+                color: stroke.color,
+                gap: gap_len.to_bits(),
+                segments,
+            });
+        if let Some(mesh) = key.as_ref().and_then(|key| cached_dots(painter, key)) {
+            painter.add(egui::Shape::Mesh(mesh));
+            return;
+        }
         let clip = clip.expand(stroke.width * 0.5);
         // Bound each clipped span before painting so batching never copies a growing mesh.
         let count: usize = segments
@@ -184,19 +209,63 @@ pub(crate) fn draw_dashed_segments(
         dots.reserve_vertices(count * 4);
         dots.reserve_triangles(count * 2);
     }
+    let mut spans = DotSpans::default();
     for (start, end, phase) in segments {
         append_dashed_segment(
-            painter, &mut dots, start, end, stroke, dash_len, gap_len, phase,
+            painter, &mut dots, &mut spans, start, end, stroke, dash_len, gap_len, phase,
         );
     }
     if !dots.is_empty() {
-        painter.add(dots);
+        let mesh = Arc::new(dots);
+        if let Some(key) = key {
+            let pass = painter.ctx().cumulative_pass_nr();
+            DOTS.with_borrow_mut(|cache| cache.push((pass, key, mesh.clone())));
+        }
+        painter.add(egui::Shape::Mesh(mesh));
     }
+}
+
+/// What a batch of dotted lines is built from, compared by bits: the painter's clip, scale and
+/// the colour, gap and lines.
+#[derive(PartialEq)]
+struct DotsKey {
+    clip: [u32; 4],
+    pixels_per_point: u32,
+    color: egui::Color32,
+    gap: u32,
+    segments: Vec<([u32; 4], u64)>,
+}
+
+thread_local! {
+    /// The dotted meshes of the last two passes with what they were built from: a chart at rest
+    /// paints the same grid every pass, and laying out its dots costs more than painting them.
+    static DOTS: RefCell<Vec<(u64, DotsKey, Arc<Mesh>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The mesh built from `key` in this pass or the last, kept for the next pass.
+fn cached_dots(painter: &egui::Painter, key: &DotsKey) -> Option<Arc<Mesh>> {
+    let pass = painter.ctx().cumulative_pass_nr();
+    DOTS.with_borrow_mut(|cache| {
+        cache.retain(|(used, _, _)| used.saturating_add(1) >= pass);
+        let (used, _, mesh) = cache.iter_mut().find(|(_, cached, _)| cached == key)?;
+        *used = pass;
+        Some(mesh.clone())
+    })
+}
+
+/// The dots of the last axis-aligned dotted line along its axis, as pixel-snapped starts and
+/// lengths, with the axis, ends and phase they were laid out for. Parallel lines with the same
+/// ends and phase, such as grid lines, have the same dots and lay them out once.
+#[derive(Default)]
+struct DotSpans {
+    key: Option<(bool, f32, f32, f64)>,
+    spans: Vec<(f32, f32)>,
 }
 
 fn append_dashed_segment(
     painter: &egui::Painter,
     dots: &mut Mesh,
+    spans: &mut DotSpans,
     start: Pos2,
     end: Pos2,
     stroke: Stroke,
@@ -208,25 +277,55 @@ fn append_dashed_segment(
         return;
     };
     let clip = clip.expand(stroke.width * 0.5);
+    if dash_len != 1.0 || stroke.width != 1.0 || (start.x != end.x && start.y != end.y) {
+        // One paint list lock for all dashes, not one per dash.
+        let mut dashes = Vec::new();
+        visible_dashes(start, end, clip, dash_len, gap_len, phase, |a, b| {
+            dashes.push(egui::Shape::line_segment([a, b], stroke));
+        });
+        painter.extend(dashes);
+        return;
+    }
+    // A mesh keeps one-point dots square; thin rectangles are tessellated as lines. Callers
+    // reserve the mesh for the clipped spans, so adding dots never copies growing buffers.
+    let vertical = start.x == end.x;
+    let (across, across_clip) = if vertical {
+        (start.x, clip.x_range())
+    } else {
+        (start.y, clip.y_range())
+    };
+    // Where along the axis the dots fall does not depend on where across the clip the line is.
+    if !across_clip.contains(across) {
+        return;
+    }
     let pixels_per_point = painter.pixels_per_point();
-    // Callers reserve the mesh for the clipped spans, so adding dots never copies growing buffers.
-    let square_dots =
-        dash_len == 1.0 && stroke.width == 1.0 && (start.x == end.x || start.y == end.y);
-    visible_dashes(start, end, clip, dash_len, gap_len, phase, |a, b| {
-        if square_dots {
-            // A mesh keeps one-point dots square; thin rectangles are tessellated as lines.
-            let half_width = if start.x == end.x {
-                egui::vec2(stroke.width / 2.0, 0.0)
-            } else {
-                egui::vec2(0.0, stroke.width / 2.0)
-            };
-            let rect = Rect::from_two_pos(a, b).expand2(half_width);
-            let rect = Rect::from_min_size(rect.min.round_to_pixels(pixels_per_point), rect.size());
-            dots.add_colored_rect(rect, stroke.color);
+    let key = if vertical {
+        (true, start.y, end.y, phase)
+    } else {
+        (false, start.x, end.x, phase)
+    };
+    if spans.key != Some(key) {
+        spans.key = Some(key);
+        spans.spans.clear();
+        visible_dashes(start, end, clip, dash_len, gap_len, phase, |a, b| {
+            let (a, b) = if vertical { (a.y, b.y) } else { (a.x, b.x) };
+            let (min, max) = (a.min(b), a.max(b));
+            spans.spans.push((
+                (min * pixels_per_point).round() / pixels_per_point,
+                max - min,
+            ));
+        });
+    }
+    let edge = ((across - 0.5) * pixels_per_point).round() / pixels_per_point;
+    let width = (across + 0.5) - (across - 0.5);
+    for &(min, len) in &spans.spans {
+        let rect = if vertical {
+            Rect::from_min_size(Pos2::new(edge, min), egui::vec2(width, len))
         } else {
-            painter.line_segment([a, b], stroke);
-        }
-    });
+            Rect::from_min_size(Pos2::new(min, edge), egui::vec2(len, width))
+        };
+        dots.add_colored_rect(rect, stroke.color);
+    }
 }
 
 /// The dashes of a polyline whose strokes overlap `clip`, with the dash phase carried
@@ -302,7 +401,7 @@ fn visible_dashes(
 }
 
 /// Liang-Barsky: the parameter interval of the segment inside `clip`.
-fn clip_segment(start: Pos2, end: Pos2, clip: Rect) -> Option<(f64, f64)> {
+pub(crate) fn clip_segment(start: Pos2, end: Pos2, clip: Rect) -> Option<(f64, f64)> {
     let (x0, y0) = (f64::from(start.x), f64::from(start.y));
     let (dx, dy) = (f64::from(end.x) - x0, f64::from(end.y) - y0);
     let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
@@ -333,55 +432,64 @@ mod tests {
     #[test]
     fn batched_dots_preserve_individual_mesh_geometry() {
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 80.0));
+        // Parallel lines with the first one's ends share its dots only at its phase.
         let segments = [
             (Pos2::new(-50.0, 10.25), Pos2::new(150.0, 10.25), 0.0),
             (Pos2::new(f32::NAN, 0.0), Pos2::new(0.0, 0.0), 0.0),
             (Pos2::new(30.25, -10.0), Pos2::new(30.25, 100.0), 2.5),
             (Pos2::new(1e14, 40.0), Pos2::new(-1e14, 40.0), 1.0),
             (Pos2::new(0.0, 90.0), Pos2::new(100.0, 90.0), 0.0),
+            (Pos2::new(-50.0, 30.75), Pos2::new(150.0, 30.75), 0.0),
+            (Pos2::new(-50.0, 50.5), Pos2::new(150.0, 50.5), 1.0),
         ];
-        for scale in [1.0, 1.25, 2.0] {
-            for gap in [0.0, 3.0, 7.0] {
-                let render = |batch| {
-                    let ctx = Context::default();
-                    ctx.set_pixels_per_point(scale);
-                    let output = ctx.run_ui(
-                        RawInput {
-                            screen_rect: Some(rect),
-                            ..Default::default()
-                        },
-                        |_| {
-                            let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
-                            let stroke = Stroke::new(1.0, Color32::from_white_alpha(80));
-                            if batch {
-                                draw_dashed_segments(&painter, segments, stroke, 1.0, gap);
-                            } else {
-                                for (start, end, phase) in segments {
-                                    draw_dashed_segment(
-                                        &painter, start, end, stroke, 1.0, gap, phase,
-                                    );
+        // Batches repeat across scales, gaps and colours, so a kept mesh must match them all.
+        for color in [Color32::from_white_alpha(80), Color32::RED] {
+            for scale in [1.0, 1.25, 2.0] {
+                for gap in [0.0, 3.0, 7.0] {
+                    let render = |batch| {
+                        let ctx = Context::default();
+                        ctx.set_pixels_per_point(scale);
+                        let output = ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(rect),
+                                ..Default::default()
+                            },
+                            |_| {
+                                let painter =
+                                    Painter::new(ctx.clone(), LayerId::background(), rect);
+                                let stroke = Stroke::new(1.0, color);
+                                if batch {
+                                    draw_dashed_segments(&painter, segments, stroke, 1.0, gap);
+                                } else {
+                                    for (start, end, phase) in segments {
+                                        draw_dashed_segment(
+                                            &painter, start, end, stroke, 1.0, gap, phase,
+                                        );
+                                    }
                                 }
+                            },
+                        );
+                        let mut merged = Mesh::default();
+                        let mut count = 0;
+                        for shape in &output.shapes {
+                            if let egui::Shape::Mesh(mesh) = &shape.shape {
+                                assert_eq!(shape.clip_rect, rect);
+                                merged.append_ref(mesh);
+                                count += 1;
                             }
-                        },
-                    );
-                    let mut merged = Mesh::default();
-                    let mut count = 0;
-                    for shape in &output.shapes {
-                        if let egui::Shape::Mesh(mesh) = &shape.shape {
-                            assert_eq!(shape.clip_rect, rect);
-                            merged.append_ref(mesh);
-                            count += 1;
                         }
-                    }
-                    output.drop_without_applying_deltas();
-                    (merged, count)
-                };
-                let (batched, count) = render(true);
-                let (individual, individual_count) = render(false);
-                assert_eq!(count, 1);
-                assert_eq!(individual_count, 3);
-                assert_eq!(batched.vertices, individual.vertices);
-                assert_eq!(batched.indices, individual.indices);
+                        output.drop_without_applying_deltas();
+                        (merged, count)
+                    };
+                    let (batched, count) = render(true);
+                    // Another thread lays the reference out without kept meshes.
+                    let (individual, individual_count) =
+                        std::thread::scope(|scope| scope.spawn(|| render(false)).join().unwrap());
+                    assert_eq!(count, 1);
+                    assert_eq!(individual_count, 5);
+                    assert_eq!(batched.vertices, individual.vertices);
+                    assert_eq!(batched.indices, individual.indices);
+                }
             }
         }
     }

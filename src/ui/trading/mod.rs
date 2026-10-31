@@ -74,6 +74,9 @@ pub struct Trading {
     /// The connection status the broker last pushed on the current stream; `None`, which counts
     /// as connected, until it pushes one.
     connection: Option<FeedStatus>,
+    /// Set while the pushes the broker made during [`Broker::connect`] wait in the inbox: they
+    /// restate the account and raise no notification.
+    restating: bool,
     account: Option<Account>,
     orders: Vec<Order>,
     positions: Vec<Position>,
@@ -134,6 +137,7 @@ impl Default for Trading {
             listener: None,
             generation: 0,
             connection: None,
+            restating: false,
             account: None,
             orders: Vec::new(),
             positions: Vec::new(),
@@ -269,8 +273,11 @@ impl Trading {
         self.generation += 2;
         let (listener, events) = Listener::new(&self.inbox, self.generation);
         self.listener = Some(listener);
+        self.restating = self.service.is_some();
         if let Some(service) = &self.service {
             service.connect(events);
+            // Queued after what the broker pushed while connecting, this ends the restated state.
+            self.inbox.reply(self.generation).send(Ok(()));
         }
     }
 

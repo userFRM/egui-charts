@@ -476,6 +476,8 @@ mod tests {
             chart.drawings_mut().drawings.clear();
             chart.drawings_mut().drawings.push(Drawing::new(7, tool));
             let mut peer = Drawing::new(8, DrawingToolType::TextLabel);
+            // A boxed label, so that the settings below would show on it if they leaked.
+            (peer.background, peer.border, peer.border_color) = (true, true, None);
             peer.chart_points
                 .push(crate::drawings::ChartPoint::new(5.0, 75.0));
             chart.drawings_mut().drawings.push(peer);
@@ -588,7 +590,7 @@ mod tests {
             chart.drawings_mut().edit_drawing(7, |d| d.locked = true);
             props.font_size = 18.0;
             props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
-            assert_eq!(chart.drawings().drawings[0].font_size, 12.0);
+            assert_eq!(chart.drawings().drawings[0].font_size, 14.0);
             assert_eq!(chart.drawings().drawings[1].font_size, 18.0);
             // Malformed ratios or widths cannot partly change another selected drawing.
             for (ratio, width) in [(f32::NAN, 2.0), (1.0, 0.0), (1.0, 100.01), (1.0, f32::NAN)] {
