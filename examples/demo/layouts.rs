@@ -87,7 +87,7 @@ impl DemoApp {
         while self.extra_charts.len() + 1 < count {
             let mut copy =
                 self.copy_chart(&self.chart, &self.live, &self.comparisons, &self.spreads);
-            // New slots receive drawings through synchronization, which records their links.
+            // New slots read stored drawings and receive the others through synchronization.
             copy.chart.drawings_mut().drawings.clear();
             self.extra_charts.push(copy);
         }
@@ -1018,7 +1018,9 @@ mod tests {
         drawing
             .chart_points
             .push(egui_charts::drawings::ChartPoint::new(10.0, 42.0));
-        app.chart.drawings_mut().drawings.push(drawing);
+        app.chart
+            .user_action(|chart| chart.drawings_mut().add_synced_drawing(drawing));
+        assert!(app.chart.flush_stored_drawings());
         app.chart.drawings_mut().registry.set_availability(
             egui_charts::drawings::DrawingToolType::TrendLine,
             egui_charts::drawings::ToolAvailability {
