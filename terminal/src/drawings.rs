@@ -1358,37 +1358,57 @@ mod tests {
     #[test]
     fn drawings_and_drawing_defaults_survive_a_restart() {
         use super::super::test_support::MemoryStorage;
-        let storage = Arc::new(MemoryStorage::default());
-        let mut terminal = Terminal::new(Arc::new(TestFeed))
-            .with_symbol("AAPL")
-            .with_storage(storage.clone());
-        for _ in 0..6 {
-            frame(&mut terminal, SIZE, vec![]);
+        // Whether the storage holds its writes until the host has waited for them.
+        for held in [false, true] {
+            let storage = Arc::new(MemoryStorage::default());
+            let mut terminal = Terminal::new(Arc::new(TestFeed))
+                .with_symbol("AAPL")
+                .with_storage(storage.clone());
+            for _ in 0..6 {
+                frame(&mut terminal, SIZE, vec![]);
+            }
+            let mut template = DrawingTemplate::from_drawing(&line(0));
+            template.settings.stroke_width = 4.0;
+            terminal
+                .chart_mut()
+                .drawings_mut()
+                .tool_defaults
+                .insert(DrawingToolType::TrendLine, template);
+            let draw = |terminal: &mut Terminal| {
+                terminal
+                    .chart_mut()
+                    .user_action(|chart| chart.drawings_mut().add_drawing(line(0)).unwrap());
+            };
+            if held {
+                // The first line's write is unanswered when the second line is drawn.
+                storage.hold();
+                draw(&mut terminal);
+                frame(&mut terminal, SIZE, vec![]);
+            }
+            // Written when the terminal closes, with no frame after the edit.
+            draw(&mut terminal);
+            if held {
+                assert!(!terminal.flush_storage(), "a write is unanswered");
+                storage.release();
+                assert!(terminal.flush_storage());
+            }
+            drop(terminal);
+            let mut restored = Terminal::new(Arc::new(TestFeed))
+                .with_symbol("AAPL")
+                .with_storage(storage);
+            for _ in 0..6 {
+                frame(&mut restored, SIZE, vec![]);
+            }
+            assert_eq!(
+                restored.chart().drawings().drawings.len(),
+                1 + usize::from(held)
+            );
+            let defaults = &restored.chart().drawings().tool_defaults;
+            assert_eq!(defaults.len(), 1);
+            assert_eq!(
+                defaults[&DrawingToolType::TrendLine].settings.stroke_width,
+                4.0
+            );
         }
-        let mut template = DrawingTemplate::from_drawing(&line(0));
-        template.settings.stroke_width = 4.0;
-        terminal
-            .chart_mut()
-            .drawings_mut()
-            .tool_defaults
-            .insert(DrawingToolType::TrendLine, template);
-        // Written when the terminal closes, with no frame after the edit.
-        terminal
-            .chart_mut()
-            .user_action(|chart| chart.drawings_mut().add_drawing(line(0)).unwrap());
-        drop(terminal);
-        let mut restored = Terminal::new(Arc::new(TestFeed))
-            .with_symbol("AAPL")
-            .with_storage(storage);
-        for _ in 0..6 {
-            frame(&mut restored, SIZE, vec![]);
-        }
-        assert_eq!(restored.chart().drawings().drawings.len(), 1);
-        let defaults = &restored.chart().drawings().tool_defaults;
-        assert_eq!(defaults.len(), 1);
-        assert_eq!(
-            defaults[&DrawingToolType::TrendLine].settings.stroke_width,
-            4.0
-        );
     }
 }

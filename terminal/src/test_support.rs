@@ -96,22 +96,49 @@ impl Datafeed for TestFeed {
     }
 }
 
-/// Documents held in memory with a revision each, answered at once.
+/// Documents held in memory with a revision each, answered at once unless held.
 #[derive(Default)]
-pub(super) struct MemoryStorage(Mutex<HashMap<(StoreKind, String), Versioned>>);
+pub(super) struct MemoryStorage {
+    documents: Mutex<HashMap<(StoreKind, String), Versioned>>,
+    /// The writes made while held, applied and answered by [`MemoryStorage::release`].
+    held: Mutex<Option<Vec<HeldWrite>>>,
+}
+
+/// The arguments of a `save_versioned` call that [`MemoryStorage`] holds.
+type HeldWrite = (
+    StoreKind,
+    String,
+    String,
+    Option<Revision>,
+    Reply<SaveOutcome>,
+);
 
 impl MemoryStorage {
     /// The document `name` of `kind`.
     pub(super) fn get(&self, kind: StoreKind, name: &str) -> Option<String> {
-        let documents = self.0.lock().unwrap();
+        let documents = self.documents.lock().unwrap();
         documents
             .get(&(kind, name.into()))
             .map(|stored| stored.document.clone())
     }
 
+    /// Holds every write unapplied and unanswered until [`release`](Self::release), as a storage
+    /// that answers later does.
+    pub(super) fn hold(&self) {
+        *self.held.lock().unwrap() = Some(Vec::new());
+    }
+
+    /// Applies and answers the held writes in order, and answers writes at once again.
+    pub(super) fn release(&self) {
+        let held = self.held.lock().unwrap().take().unwrap_or_default();
+        for (kind, name, document, expected, reply) in held {
+            self.save_versioned(kind, &name, document, expected, reply);
+        }
+    }
+
     /// Stores `document` as `name` of `kind` at the next revision, and returns that revision.
     fn put(&self, kind: StoreKind, name: &str, document: String) -> Revision {
-        let mut documents = self.0.lock().unwrap();
+        let mut documents = self.documents.lock().unwrap();
         let key = (kind, name.to_owned());
         let next = documents
             .get(&key)
@@ -131,7 +158,7 @@ impl MemoryStorage {
 impl Storage for MemoryStorage {
     fn list(&self, kind: StoreKind, reply: Reply<Vec<String>>) {
         let names = self
-            .0
+            .documents
             .lock()
             .unwrap()
             .keys()
@@ -151,12 +178,17 @@ impl Storage for MemoryStorage {
     }
 
     fn delete(&self, kind: StoreKind, name: &str, reply: Reply<()>) {
-        self.0.lock().unwrap().remove(&(kind, name.into()));
+        self.documents.lock().unwrap().remove(&(kind, name.into()));
         reply.send(Ok(()));
     }
 
     fn load_versioned(&self, kind: StoreKind, name: &str, reply: Reply<Option<Versioned>>) {
-        let stored = self.0.lock().unwrap().get(&(kind, name.into())).cloned();
+        let stored = self
+            .documents
+            .lock()
+            .unwrap()
+            .get(&(kind, name.into()))
+            .cloned();
         reply.send(Ok(stored));
     }
 
@@ -168,7 +200,15 @@ impl Storage for MemoryStorage {
         expected: Option<Revision>,
         reply: Reply<SaveOutcome>,
     ) {
-        let stored = self.0.lock().unwrap().get(&(kind, name.into())).cloned();
+        if let Some(held) = self.held.lock().unwrap().as_mut() {
+            return held.push((kind, name.to_owned(), document, expected, reply));
+        }
+        let stored = self
+            .documents
+            .lock()
+            .unwrap()
+            .get(&(kind, name.into()))
+            .cloned();
         if stored.as_ref().map(|stored| &stored.revision) != expected.as_ref() {
             return reply.send(Ok(SaveOutcome::Conflict(stored)));
         }
