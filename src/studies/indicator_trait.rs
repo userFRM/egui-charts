@@ -449,10 +449,14 @@ pub trait Indicator: Send {
     /// any previous state so the indicator can be recalculated on new data.
     fn calculate(&mut self, data: &[Bar]);
 
-    /// Optional source for exact stream studies, connected before feed updates are coalesced.
-    /// Hosts supplying their own events can push them through the returned handle.
-    fn order_flow_input(&self) -> Option<crate::data::OrderFlowInput> {
-        None
+    /// Order-flow sources this study reads: [`OrderFlowInput`](crate::data::OrderFlowInput)s of
+    /// fixed aggregations, footprints or books. A chart with a feed connects them before its
+    /// updates are coalesced, gives them its instrument's tick size, applies the trade store's
+    /// retention and the replay cutoff, and updates the study from the first bar that changed.
+    /// Hosts without a feed push events through the handles and recalculate. Several studies may
+    /// return the same source; it receives each event once.
+    fn order_flow_inputs(&self) -> &[crate::data::OrderFlowInput] {
+        &[]
     }
 
     /// Bring [`values`](Indicator::values) up to date after `data[from..]` changed or grew,

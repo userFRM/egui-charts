@@ -362,7 +362,7 @@ impl ConfiguredStudy {
     /// alone, without data of its own to request or the chart's trades.
     fn runs_on_other_bars(&self) -> bool {
         self.study.source().is_some()
-            || (self.study.data_requests().is_empty() && self.study.order_flow_input().is_none())
+            || (self.study.data_requests().is_empty() && self.study.order_flow_inputs().is_empty())
     }
     fn update_price(&mut self, data: &[Bar], from: usize) {
         self.aligned = None;
@@ -606,8 +606,8 @@ impl Indicator for ConfiguredStudy {
         }
         self.aligned = Some(aligned);
     }
-    fn order_flow_input(&self) -> Option<crate::data::OrderFlowInput> {
-        self.study.order_flow_input()
+    fn order_flow_inputs(&self) -> &[crate::data::OrderFlowInput] {
+        self.study.order_flow_inputs()
     }
 
     fn calculate(&mut self, data: &[Bar]) {

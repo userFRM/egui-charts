@@ -285,10 +285,6 @@ impl Footprint {
 
     /// Keeps at most `bars` bars and `rows` price rows in all, dropping the oldest bars first.
     /// The newest bar is always kept, whole. Dropped bars are counted as incomplete.
-    #[cfg_attr(
-        all(not(feature = "widget"), not(test)),
-        expect(dead_code, reason = "only the chart widget bounds its footprint")
-    )]
     pub(crate) fn set_budget(&mut self, bars: usize, rows: usize) {
         self.max_bars = bars;
         self.max_rows = rows;
