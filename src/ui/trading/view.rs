@@ -1768,4 +1768,49 @@ mod tests {
         assert_eq!(*broker.modified.lock().unwrap(), [(working.id, moved)]);
         assert_eq!(toasts.toasts().len(), 4, "the broker accepted them");
     }
+
+    /// At the narrowest ticket a long symbol gives way, so that the broker's status stays clear of
+    /// the More and Close buttons. A regression covers the status with the buttons, the one sign
+    /// in the header of why the ticket does not send, or draws it twice.
+    #[test]
+    fn a_long_symbol_gives_way_to_the_tickets_status_and_buttons() {
+        use crate::data::FeedStatus;
+        let width = 320.0;
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+        chart.symbol = "EXCHANGE:A.VERY.LONG.SYMBOL.NAME.INDEED".into();
+        let mut trading = Trading::default();
+        trading.set_service(Arc::new(Recorder::default()));
+        trading.open_ticket(OrderRequest::new(
+            chart.symbol(),
+            OrderSide::Buy,
+            1.0,
+            OrderType::Market,
+        ));
+        trading.poll(&ctx, &mut Toasts::new());
+        trading.apply(
+            AccountEvent::Status(FeedStatus::Disconnected),
+            &mut Toasts::new(),
+        );
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 600.0),
+            )),
+            ..Default::default()
+        };
+        let output = ctx.run_ui(input, |ui| trading.show_ticket(ui, &chart));
+        let status: Vec<f32> = (output.shapes.iter())
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Offline" => {
+                    Some(text.visual_bounding_rect().right())
+                }
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        assert_eq!(status.len(), 1, "{status:?}");
+        // The panel's margin of 16 points, then the two buttons of the header.
+        assert!(status[0] <= width - 16.0 - 50.0, "{status:?}");
+    }
 }
