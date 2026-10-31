@@ -159,10 +159,9 @@ impl DrawingLinks {
     }
 
     /// Links each drawing that a chart has just read from storage to the drawing stored under the
-    /// same id on another chart of that storage, group and symbol, once that one is linked, and
-    /// returns their keys: the read drawing is that drawing, whose copies exist already. A read
-    /// drawing without such a drawing starts a link, which the same drawing read on another
-    /// chart joins.
+    /// same id on another chart of that storage, group and symbol, and returns their keys: the
+    /// read drawing is that drawing, whose copies exist or are made from it. A read drawing
+    /// without such a drawing starts a link, which the same drawing read on another chart joins.
     fn join_read_drawings(
         &mut self,
         charts: &[&mut Chart],
@@ -190,12 +189,15 @@ impl DrawingLinks {
                         .drawings
                         .iter()
                         .find(|d| d.saveable && sync_id(d) == record)?;
-                    self.origins.get(&(slot, other.id)).copied()
-                });
-            if origin.is_some() {
+                    // Not linked yet if it appeared this frame too: it starts its link below.
+                    let other = (slot, other.id);
+                    Some(self.origins.get(&other).copied().unwrap_or(other))
+                })
+                .unwrap_or(*key);
+            if origin != *key {
                 joined.insert(*key);
             }
-            self.origins.insert(*key, origin.unwrap_or(*key));
+            self.origins.insert(*key, origin);
         }
         joined
     }

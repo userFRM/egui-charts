@@ -1160,7 +1160,12 @@ mod tests {
 
     /// The prices of the drawings stored as A.
     fn stored_prices(host: &Host) -> Vec<f64> {
-        let (stored, _) = DrawingStorage::from_json(&host.documents.lock().unwrap()["A"]).unwrap();
+        prices_in(&host.documents.lock().unwrap()["A"])
+    }
+
+    /// The prices of the drawings in a stored `document`.
+    fn prices_in(document: &str) -> Vec<f64> {
+        let (stored, _) = DrawingStorage::from_json(document).unwrap();
         sorted(
             stored
                 .drawings()
@@ -1533,37 +1538,49 @@ mod tests {
 
     /// Guards #1619 and #1650: with drawing sync on, a chart outside the charts' shared storage
     /// shows each of their drawings once, and its own drawing, mirrored onto them but not
-    /// stored, stays as it is while they read each other's writes.
+    /// stored, stays as it is while they read each other's writes. A storage that reports
+    /// changes has a chart read another's write in the frame that write is made.
     #[test]
     fn a_chart_outside_the_storage_shows_each_drawing_once_and_keeps_its_own() {
+        use crate::services::document::tests::Revised;
+
         let host = Arc::new(Host::default());
-        let storage: Arc<dyn Storage> = host.clone();
-        let (mut a, mut b) = (chart_on(Some(storage.clone())), chart_on(Some(storage)));
-        let mut c = chart_on(None);
-        let mut layout = ChartLayout::default();
-        layout.mode = ChartLayoutMode::Three;
-        layout.sync.sync_drawings = true;
-        let ctx = egui::Context::default();
-        let mut show = |a: &mut Chart, b: &mut Chart, c: &mut Chart| {
-            show_frames(&ctx, &mut layout, &mut [a, b, c], 0.1);
-        };
-        show(&mut a, &mut b, &mut c);
-        draw_line(&mut a, line_at(4.0, 10.5));
-        show(&mut a, &mut b, &mut c);
-        assert_eq!([shown_prices(&b), shown_prices(&c)], [[10.5], [10.5]]);
-        let own = draw_line(&mut c, line_at(4.0, 9.0));
-        show(&mut a, &mut b, &mut c);
-        draw_line(&mut a, line_at(4.0, 8.0));
-        show(&mut a, &mut b, &mut c);
-        for chart in [&a, &b, &c] {
-            assert_eq!(shown_prices(chart), [8.0, 9.0, 10.5]);
+        let revised = Arc::new(Revised::default());
+        let stores: [(Arc<dyn Storage>, Box<dyn Fn() -> String>); 2] = [
+            (
+                host.clone(),
+                Box::new(move || host.documents.lock().unwrap()["A"].clone()),
+            ),
+            (revised.clone(), Box::new(move || revised.get("A").unwrap())),
+        ];
+        for (storage, stored) in stores {
+            let (mut a, mut b) = (chart_on(Some(storage.clone())), chart_on(Some(storage)));
+            let mut c = chart_on(None);
+            let mut layout = ChartLayout::default();
+            layout.mode = ChartLayoutMode::Three;
+            layout.sync.sync_drawings = true;
+            let ctx = egui::Context::default();
+            let mut show = |a: &mut Chart, b: &mut Chart, c: &mut Chart| {
+                show_frames(&ctx, &mut layout, &mut [a, b, c], 0.1);
+            };
+            show(&mut a, &mut b, &mut c);
+            draw_line(&mut a, line_at(4.0, 10.5));
+            show(&mut a, &mut b, &mut c);
+            assert_eq!([shown_prices(&b), shown_prices(&c)], [[10.5], [10.5]]);
+            let own = draw_line(&mut c, line_at(4.0, 9.0));
+            show(&mut a, &mut b, &mut c);
+            draw_line(&mut a, line_at(4.0, 8.0));
+            show(&mut a, &mut b, &mut c);
+            for chart in [&a, &b, &c] {
+                assert_eq!(shown_prices(chart), [8.0, 9.0, 10.5]);
+            }
+            let own = c.drawings().drawings.iter().find(|d| d.id == own).unwrap();
+            assert_eq!(own.chart_points[0].price, 9.0);
+            assert_eq!(
+                prices_in(&stored()),
+                [8.0, 10.5],
+                "a mirrored drawing is not stored"
+            );
         }
-        let own = c.drawings().drawings.iter().find(|d| d.id == own).unwrap();
-        assert_eq!(own.chart_points[0].price, 9.0);
-        assert_eq!(
-            stored_prices(&host),
-            [8.0, 10.5],
-            "a mirrored drawing is not stored"
-        );
     }
 }
