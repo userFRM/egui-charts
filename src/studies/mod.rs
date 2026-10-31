@@ -85,7 +85,7 @@ pub use chart_state::{ChartState, ZoomState};
 mod template;
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
-pub use template::StudyTemplate;
+pub use template::{StudyTemplate, StudyTemplateSet};
 
 use crate::model::Bar;
 

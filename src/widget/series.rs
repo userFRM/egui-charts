@@ -553,7 +553,8 @@ impl Chart {
 
     /// Caps the studies at `limit`, or lifts the cap with `None`. The cap applies to
     /// [`try_add_indicator`](Self::try_add_indicator) and to pasting a copied study, which the
-    /// terminal's dialogs and shortcuts use; studies already on the chart stay.
+    /// terminal's dialogs and shortcuts use, and to applying a study template set; studies
+    /// already on the chart stay.
     pub fn set_study_limit(&mut self, limit: Option<usize>) {
         self.study_limit = limit;
     }

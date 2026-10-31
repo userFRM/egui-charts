@@ -32,7 +32,7 @@ mod strategy;
 #[path = "templates.rs"]
 mod templates;
 use egui_charts::services::StoreKind;
-use egui_charts::studies::StudyTemplate;
+use egui_charts::studies::StudyTemplateSet;
 use egui_charts::ui::dialogs::templates::{DrawingTemplate, TemplateDialog};
 #[path = "feeds.rs"]
 mod feeds;
@@ -346,7 +346,7 @@ pub struct DemoApp {
     settings: egui_charts::services::SettingsStore,
     /// Changes of the chart arrangement, which autosave counts with the charts' edits.
     grid_edits: u64,
-    study_templates: TemplateDialog<Vec<StudyTemplate>>,
+    study_templates: TemplateDialog<StudyTemplateSet>,
     drawing_templates: TemplateDialog<DrawingTemplate>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     alert_dialog: AlertDialog,
@@ -1649,7 +1649,7 @@ impl DemoApp {
                 }
             }
             TopToolbarAction::SaveIndicatorTemplate => {
-                self.study_templates.open(self.current_study_template());
+                self.study_templates.open(self.chart.study_template_set());
             }
             TopToolbarAction::ApplyIndicatorTemplate(id) => {
                 if let Some(template) = self.study_templates.templates.entries().get(&id).cloned() {
@@ -4199,7 +4199,7 @@ mod tests {
             .unwrap();
         app.study_templates
             .templates
-            .save("Average", app.current_study_template())
+            .save("Average", app.chart.study_template_set())
             .unwrap();
         app.drawing_templates
             .templates
@@ -5345,9 +5345,10 @@ mod tests {
                         output.drop_without_applying_deltas();
                     }
                     assert!(painted, "comparison prices must be painted");
-                    let template = app.current_study_template();
+                    let template = app.chart.study_template_set();
                     assert_eq!(
                         template
+                            .studies
                             .iter()
                             .map(|study| study.name.as_str())
                             .collect::<Vec<_>>(),

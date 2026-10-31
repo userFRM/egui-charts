@@ -113,6 +113,9 @@ mod snapshot;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod stored_drawings;
 mod studies;
+#[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
+mod study_templates;
 mod svg;
 
 #[cfg(feature = "drawings")]
