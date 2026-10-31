@@ -98,6 +98,13 @@ pub trait Broker: MaybeSend + 'static {
     /// each stream starts from nothing, so push the whole current state again. The old stream is
     /// inactive from then on: push into the newest one only.
     ///
+    /// The terminal announces, with a notification and the execution sound for fills, a working
+    /// limit or stop order it has not seen on the stream, a rejected order and each execution,
+    /// when they are pushed after `connect` returned while the broker is live. What is pushed
+    /// before `connect` returns, or while the broker reports that it is not live, restates the
+    /// account and is not announced: push the current state then, before returning or between
+    /// [`FeedStatus::Connecting`] and [`FeedStatus::Live`].
+    ///
     /// A stream starts as connected. While the connection to the broker is not live, push
     /// [`AccountEvent::Status`] with [`FeedStatus::Connecting`] or [`FeedStatus::Disconnected`],
     /// on each new stream too, and [`FeedStatus::Live`] once it is live again; until then the
