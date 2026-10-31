@@ -240,8 +240,6 @@ pub struct DrawingOptions {
     pub handle_color: [u8; 4],
     /// Selected handle color (RGBA)
     pub handle_sel_color: [u8; 4],
-    /// Default drawing color (RGBA)
-    pub default_color: [u8; 4],
 }
 
 impl Default for DrawingOptions {
@@ -256,7 +254,6 @@ impl Default for DrawingOptions {
             handle_size: 6.0,
             handle_color: [255, 255, 255, 200],
             handle_sel_color: [242, 54, 69, 255], // Default red
-            default_color: [242, 54, 69, 255],    // Default red
         }
     }
 }

@@ -621,6 +621,11 @@ mod tests {
                 ];
                 for (case, setup, text_color, fills, strokes, italics) in cases {
                     let mut drawing = pattern(tool);
+                    // A red drawing with no text box settings of its own, whatever the tool's.
+                    drawing.color = red.to_array();
+                    (drawing.fill_color, drawing.text_color) = (None, None);
+                    (drawing.background, drawing.border) = (true, true);
+                    drawing.border_color = None;
                     drawing.points = vec![Pos2::new(100.0, 300.0), Pos2::new(200.0, 100.0)];
                     drawing.chart_points = (drawing.points.iter())
                         .map(|p| crate::drawings::ChartPoint::new(p.x, f64::from(p.y)))
@@ -890,14 +895,15 @@ mod tests {
             ElliottTriangle,
         ] {
             let mut drawing = pattern(tool);
-            if tool != ElliottImpulse {
-                assert!(
-                    drawing.fill_color.is_some(),
-                    "{tool:?} lost its default tint"
-                );
-            }
+            // Chart patterns start tinted; wave counts start unfilled.
+            let tinted = !matches!(tool, ElliottImpulse | ElliottCorrection | ElliottTriangle);
+            assert_eq!(
+                drawing.fill_color.is_some(),
+                tinted,
+                "{tool:?} default tint"
+            );
             let coloured = Drawing::with_color(1, tool, [67, 89, 123, 255]);
-            if tool != ElliottCorrection {
+            if tinted {
                 assert_eq!(
                     &coloured.fill_color.unwrap()[..3],
                     &[67, 89, 123],

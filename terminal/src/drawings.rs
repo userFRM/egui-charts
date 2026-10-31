@@ -240,7 +240,10 @@ impl Terminal {
             },
             eraser_mode_enabled: manager.eraser_mode,
             stay_in_drawing_mode: manager.stay_in_drawing_mode,
-            drawing_color: manager.options.default_color,
+            // The swatch shows the colour the active tool draws in, its saved default or its own.
+            drawing_color: manager
+                .new_drawing(0, manager.active_tool.unwrap_or(DrawingToolType::TrendLine))
+                .color,
         });
         let drawings = &manager.drawings;
         toolbar.state.lock_all = !drawings.is_empty() && drawings.iter().all(|d| d.locked);
@@ -351,7 +354,15 @@ impl Terminal {
                 manager.stay_in_drawing_mode = !manager.stay_in_drawing_mode;
             }
             DrawingToolbarAction::ColorChanged(rgba) => {
-                chart.drawings_mut().options.default_color = rgba;
+                // The colour becomes the active tool's saved default; other tools keep theirs.
+                let manager = chart.drawings_mut();
+                if let Some(tool) = manager.active_tool {
+                    let mut drawing = manager.new_drawing(0, tool);
+                    drawing.color = rgba;
+                    manager
+                        .tool_defaults
+                        .insert(tool, DrawingTemplate::from_drawing(&drawing));
+                }
             }
             DrawingToolbarAction::ClearAllDrawings | DrawingToolbarAction::RemoveAllDrawings => {
                 chart.drawings_mut().clear_all();
