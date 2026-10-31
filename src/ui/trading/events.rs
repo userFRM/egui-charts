@@ -21,8 +21,9 @@ impl Trading {
         }
         for (key, answer) in self.inbox.drain().answers {
             if key == self.generation {
-                if let Ok(event) = answer.downcast::<AccountEvent>() {
-                    self.apply(*event, toasts);
+                match answer.downcast::<AccountEvent>() {
+                    Ok(event) => self.apply(*event, toasts),
+                    Err(_) => self.restating = false,
                 }
                 continue;
             }
@@ -116,6 +117,9 @@ impl Trading {
         if !valid_event(&event) {
             return;
         }
+        // What the broker pushes while connecting or not live restates the account: only what
+        // happens on a live stream is news.
+        let announce = !self.restating && self.offline().is_none();
         let first_order = match &event {
             AccountEvent::Order(order) => !self.account_panel.fills.orders.contains_key(&order.id),
             _ => false,
@@ -150,7 +154,8 @@ impl Trading {
                     self.pending = None;
                 }
                 self.orders.retain(|working| working.id != order.id);
-                if first_order
+                if announce
+                    && first_order
                     && order.status == OrderStatus::Working
                     && order.request.order_type != OrderType::Market
                 {
@@ -172,7 +177,7 @@ impl Trading {
                 }
                 match &order.status {
                     OrderStatus::Working => self.orders.push(order),
-                    OrderStatus::Rejected(reason) => {
+                    OrderStatus::Rejected(reason) if announce => {
                         let toast = Toast::error(format!("Order rejected: {reason}"));
                         self.notify(toasts, toast);
                     }
@@ -197,7 +202,7 @@ impl Trading {
                     self.positions.push(position);
                 }
             }
-            AccountEvent::Execution(fill) => {
+            AccountEvent::Execution(fill) if announce => {
                 let order = self.account_panel.fills.orders.get(&fill.order);
                 let mut text = format!("{} {}", side_name(fill.side), fill.quantity);
                 if let Some(order) = order {
@@ -494,9 +499,12 @@ mod tests {
             trading.display.notifications = level;
             trading.display.play_execution_sound = sound;
             trading.display.execution_sound = "Bell".into();
-            trading.set_service(broker.clone());
+            trading.set_service(Arc::new(Recorder::default()));
+            trading.poll(&egui::Context::default(), &mut Toasts::new());
             let mut toasts = Toasts::new();
-            trading.poll(&egui::Context::default(), &mut toasts);
+            for event in broker.state.clone() {
+                trading.apply(event, &mut toasts);
+            }
             let messages: Vec<_> = toasts.toasts().iter().map(|t| t.message.as_str()).collect();
             assert_eq!(messages, expected, "{level:?}");
             assert_eq!(
@@ -718,6 +726,69 @@ mod tests {
     /// Each fill's triangles sit under its own bar, also among fills on the bars beside it, with
     /// labels on or off: a run of one-lot buys on ten bars in a row, and four buys on each of two
     /// neighbouring bars, three triangles and "+1" each.
+    /// What a broker pushes as the account's state when a stream starts, on connecting, on
+    /// connecting again after a disconnect and after the stream lagged, raises no notification
+    /// and asks for no sound; a fill, a working order and a rejection pushed later are each
+    /// announced once.
+    #[test]
+    fn a_new_stream_does_not_announce_the_accounts_state() {
+        use crate::data::inbox::Inbox;
+        use crate::model::TimeInForce;
+        use crate::services::{Broker, PaperAccount};
+        let ctx = egui::Context::default();
+        let paper = Arc::new(PaperAccount::new("USD", 100_000.0));
+        paper.set_price("SYM", 100.0);
+        let buy = |quantity, order_type| {
+            let mut request = OrderRequest::new("SYM", OrderSide::Buy, quantity, order_type);
+            request.time_in_force = TimeInForce::GoodTillCancelled;
+            paper.place(request, Arc::new(Inbox::default()).reply(0));
+        };
+        let announced = |trading: &mut Trading| {
+            let mut toasts = Toasts::new();
+            trading.poll(&ctx, &mut toasts);
+            let messages: Vec<_> = (toasts.toasts().iter())
+                .map(|toast| toast.message.clone())
+                .collect();
+            (messages, trading.take_execution_sound())
+        };
+        let mut trading = Trading::default();
+        trading.display.play_execution_sound = true;
+        trading.display.execution_sound = "Bell".into();
+        trading.set_service(paper.clone());
+        assert_eq!(announced(&mut trading), (vec![], None));
+        buy(1.0, OrderType::Market);
+        buy(1.0, OrderType::Limit(90.0));
+        buy(10_000.0, OrderType::Market);
+        let (messages, sound) = announced(&mut trading);
+        assert_eq!(
+            messages[..2],
+            ["Filled: Buy 1 SYM at 100.00", "Placed: Buy 1 SYM at 90.00"]
+        );
+        assert!(messages[2].starts_with("Order rejected: Insufficient buying power"));
+        assert_eq!((messages.len(), sound.as_deref()), (3, Some("Bell")));
+
+        trading.disconnect();
+        trading.set_service(paper.clone());
+        assert_eq!(announced(&mut trading), (vec![], None), "connected again");
+        // Revaluing the open position pushes it and the account twice per price, which overflows
+        // the stream between two frames.
+        let generation = trading.generation;
+        for price in [101.0, 100.0].repeat(2_501) {
+            paper.set_price("SYM", price);
+        }
+        assert_eq!(announced(&mut trading), (vec![], None), "lagged");
+        assert_ne!(trading.generation, generation);
+
+        paper.set_price("SYM", 90.0);
+        assert_eq!(
+            announced(&mut trading),
+            (
+                vec!["Filled: Buy 1 SYM at 90.00".to_owned()],
+                Some("Bell".to_owned())
+            )
+        );
+    }
+
     #[test]
     fn fills_on_nearby_bars_stay_on_their_bars() {
         use crate::theme::ThemeExt;
