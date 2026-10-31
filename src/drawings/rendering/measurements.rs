@@ -6,7 +6,7 @@ use super::{ChartView, bars_between};
 use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::model::{Bar, percent_change};
 use crate::scales::price_decimals;
-use crate::scales::{PriceFormatter, VolumeFormatter};
+use crate::scales::{DefaultPriceFormatter, PriceFormatter, VolumeFormatter};
 use crate::styles::{stroke, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -171,10 +171,11 @@ impl Drawing {
 
     // Note: render_bars_pattern is now in trading.rs with full projection features
 
-    /// Label of the measuring tools: the price change from the first anchor to the second and
-    /// its percentage, the bars between them and, on a `time_axis`, the time they span, the
-    /// volume traded over them, and for the info line the angle of the line on screen. Each
-    /// anchor counts at its nearest bar: anchors N bars apart span N bars of time and the volume
+    /// Label of the measuring tools: the price change from the first anchor to the second in
+    /// the instrument's price decimals (by magnitude without them), its percentage and its whole
+    /// number of pips, or else ticks, the bars between them and, on a `time_axis`, the time they
+    /// span, the volume traded over them, and for the info line the angle of the line on screen.
+    /// Volume drops trailing zeros. Each anchor counts at its nearest bar: anchors N bars apart span N bars of time and the volume
     /// of the N + 1 bars from one to the other, both included.
     pub(crate) fn measurement_label(
         &self,
@@ -188,21 +189,22 @@ impl Drawing {
         let change = b.price - a.price;
         let pct = percent_change(a.price, b.price);
         let decimals = change_decimals(instrument, a.price, change);
-        let mut change_label = format!("{change:+.decimals$} ({pct:+.2}%)");
-        if let Some(instrument) = instrument {
-            for (size, unit) in [
-                (instrument.tick_size, "ticks"),
-                (instrument.pip_size, "pips"),
-            ] {
-                if let Some(size) = size.filter(|s| s.is_finite() && *s > 0.0) {
-                    let count = change / size;
-                    if count.is_finite() {
-                        change_label.push_str(&format!("  {count:+.2} {unit}"));
-                    }
-                }
+        let text = DefaultPriceFormatter::with_precision(decimals).format(change);
+        let sign = if text.starts_with('-') { "" } else { "+" };
+        let mut change = format!("{sign}{text} ({pct:+.2}%)");
+        // Pips where the instrument quotes them, else ticks. Past 2^53 an f64 no longer holds
+        // every whole number, so such a count is left out.
+        if let Some((size, unit)) = instrument.and_then(|instrument| {
+            [(instrument.pip_size, "pip"), (instrument.tick_size, "tick")]
+                .into_iter()
+                .find_map(|(size, unit)| Some((size.filter(|s| s.is_finite() && *s > 0.0)?, unit)))
+        }) {
+            let count = ((b.price - a.price) / size).round() + 0.0;
+            if count.abs() <= 2f64.powi(53) {
+                let plural = if count.abs() == 1.0 { "" } else { "s" };
+                change.push_str(&format!("  {count:+.0} {unit}{plural}"));
             }
         }
-        let change = change_label;
         if self.tool_type == DrawingToolType::PriceRange {
             return Some(change);
         }
@@ -218,7 +220,12 @@ impl Drawing {
                     .map(|bar| bar.volume)
                     .filter(|v| v.is_finite())
                     .sum();
-                format!("\nVol {}", VolumeFormatter::default().format(volume))
+                let text = VolumeFormatter::default().format(volume);
+                let digits = text.trim_end_matches(char::is_alphabetic);
+                let unit = &text[digits.len()..];
+                // Precision 2 writes a point, so trimming zeros never eats an integer digit.
+                let digits = digits.trim_end_matches('0').trim_end_matches('.');
+                format!("\nVol {digits}{unit}")
             })
             .unwrap_or_default();
         Some(match self.tool_type {
@@ -434,7 +441,7 @@ mod tests {
                 DrawingToolType::Measure,
                 (1.0, 100.0),
                 (4.0, 95.0),
-                "-5.00 (-5.00%)\n3 bars, 3h\nVol 900.00",
+                "-5.00 (-5.00%)\n3 bars, 3h\nVol 900",
             ),
             (
                 DrawingToolType::InfoLine,
@@ -446,20 +453,26 @@ mod tests {
                 DrawingToolType::DateRange,
                 (2.0, 100.0),
                 (5.0, 100.0),
-                "3 bars, 3h\nVol 1.10K",
+                "3 bars, 3h\nVol 1.1K",
+            ),
+            (
+                DrawingToolType::DateRange,
+                (0.0, 100.0),
+                (0.0, 100.0),
+                "0 bars, 0s\nVol 100",
             ),
             // Fractional anchors count at their nearest bars, 1 and 4.
             (
                 DrawingToolType::DateRange,
                 (1.4, 100.0),
                 (3.6, 100.0),
-                "3 bars, 3h\nVol 900.00",
+                "3 bars, 3h\nVol 900",
             ),
             (
                 DrawingToolType::DateAndPriceRange,
                 (5.0, 200.0),
                 (2.0, 210.0),
-                "+10.00 (+5.00%)\n3 bars, 3h\nVol 1.10K",
+                "+10.00 (+5.00%)\n3 bars, 3h\nVol 1.1K",
             ),
         ];
         let mut wrong = Vec::new();
@@ -477,25 +490,64 @@ mod tests {
         // On a horizontal scale other than time the bar times are keys, not times.
         assert_eq!(
             drawing.measurement_label(&bars, None, false).as_deref(),
-            Some("-0.0005 (-0.05%)\n3 bars\nVol 900.00")
+            Some("-0.0005 (-0.05%)\n3 bars\nVol 900")
         );
-        for (tick, pip, want) in [
-            (Some(0.00001), Some(0.0001), "-50.00 ticks  -5.00 pips"),
-            (Some(0.0), Some(f64::NAN), ""),
-            (Some(-1.0), Some(f64::INFINITY), ""),
-            (None, None, ""),
+        for (tick, pip, precision, want) in [
+            (
+                Some(0.00001),
+                Some(0.0001),
+                None,
+                "-0.00050 (-0.05%)  -5 pips",
+            ),
+            (Some(0.00001), None, None, "-0.00050 (-0.05%)  -50 ticks"),
+            (
+                Some(0.00001),
+                Some(f64::NAN),
+                None,
+                "-0.00050 (-0.05%)  -50 ticks",
+            ),
+            (Some(0.0005), None, None, "-0.0005 (-0.05%)  -1 tick"),
+            (Some(25.0), None, None, "+0 (-0.05%)  +0 ticks"),
+            (Some(1e20), None, None, "+0 (-0.05%)  +0 ticks"),
+            (
+                Some(1e-10),
+                None,
+                None,
+                "-0.0005000000 (-0.05%)  -5000000 ticks",
+            ),
+            (Some(0.0), Some(f64::NAN), None, "-0.0005 (-0.05%)"),
+            (Some(-1.0), Some(f64::INFINITY), None, "-0.0005 (-0.05%)"),
+            (None, None, None, "-0.0005 (-0.05%)"),
+            (
+                Some(0.00001),
+                None,
+                Some(6),
+                "-0.000500 (-0.05%)  -50 ticks",
+            ),
         ] {
             let mut instrument = crate::model::Instrument::new("PAIR");
             instrument.tick_size = tick;
             instrument.pip_size = pip;
+            instrument.price_decimals = precision;
             let label = drawing
                 .measurement_label(&bars, Some(&instrument), true)
                 .unwrap();
-            if want.is_empty() {
-                assert!(!label.contains("ticks") && !label.contains("pips"));
-            } else {
-                assert!(label.contains(want), "{label}");
-            }
+            assert_eq!(
+                label.lines().next(),
+                Some(want),
+                "{tick:?}, {pip:?}, {precision:?}"
+            );
+        }
+        // Counts beyond the exactly representable integers, including overflow, are omitted.
+        for tick in [1e-300, f64::from_bits(1)] {
+            let instrument = crate::model::Instrument::new("PAIR").with_tick_size(tick);
+            let label = drawing
+                .measurement_label(&bars, Some(&instrument), true)
+                .unwrap();
+            assert!(
+                !label.contains("ticks") && !label.contains("pips"),
+                "{label}"
+            );
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
@@ -514,7 +566,7 @@ mod tests {
         ));
         let output = shapes(&ctx, &mut chart, 0.0, vec![]);
         assert!(output.iter().any(
-            |s| matches!(s,egui::Shape::Text(t) if t.galley.job.text.contains("-20.00 ticks"))
+            |s| matches!(s,egui::Shape::Text(t) if t.galley.job.text.contains("-5.00 (-5.00%)  -20 ticks"))
         ));
     }
 
