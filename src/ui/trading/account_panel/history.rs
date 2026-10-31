@@ -24,14 +24,18 @@ pub(super) enum Paging {
     Loading(u64, HistoryRequest),
     /// The request for the next page of the range.
     Next(HistoryRequest),
-    /// The broker keeps nothing older, keeps no history or failed.
+    /// The broker keeps nothing older or keeps no history, or the request failed for another
+    /// reason than the connection.
     Ended,
+    /// The request failed for want of a connection; [`resume`](AccountPanel::resume) asks it
+    /// again once the broker is live.
+    Deferred(HistoryRequest),
 }
 
 impl AccountPanel {
     /// Records the request for the page of `kind` before the oldest entry listed under `key` and
-    /// returns it; nothing while a page of `kind` is on its way, after its history ended, or once
-    /// it lists [`HISTORY_LIMIT`] entries.
+    /// returns it; nothing while a page of `kind` is on its way or waits for the broker to be
+    /// live, after its history ended, or once it lists [`HISTORY_LIMIT`] entries.
     pub(in crate::ui::trading) fn ask(
         &mut self,
         kind: HistoryKind,
@@ -51,7 +55,7 @@ impl AccountPanel {
                 request
             }
             Paging::Next(request) => request.clone(),
-            Paging::Loading(..) | Paging::Ended => return None,
+            Paging::Loading(..) | Paging::Deferred(_) | Paging::Ended => return None,
         };
         *paging = Paging::Loading(key, request.clone());
         Some(request)
@@ -96,6 +100,27 @@ impl AccountPanel {
     /// Stops paging through `kind` until the stream starts again.
     pub(in crate::ui::trading) fn end(&mut self, kind: HistoryKind) {
         self.paging.insert(kind, Paging::Ended);
+    }
+
+    /// Keeps the request for the page of `kind` that failed for want of a connection, for
+    /// [`resume`](Self::resume) to ask again.
+    pub(in crate::ui::trading) fn defer(&mut self, kind: HistoryKind) {
+        if let Some(Paging::Loading(_, request)) = self.paging.get(&kind) {
+            let request = request.clone();
+            self.paging.insert(kind, Paging::Deferred(request));
+        }
+    }
+
+    /// Asks again, at the next [`ask`](Self::ask), for the pages that failed for want of a
+    /// connection or were on their way when the broker stopped being live; a late answer to one
+    /// of those is dropped.
+    pub(in crate::ui::trading) fn resume(&mut self) {
+        for paging in self.paging.values_mut() {
+            *paging = match std::mem::take(paging) {
+                Paging::Loading(_, request) | Paging::Deferred(request) => Paging::Next(request),
+                other => other,
+            };
+        }
     }
 
     fn held(&self, kind: HistoryKind) -> usize {
@@ -440,7 +465,7 @@ mod tests {
         }
     }
 
-    /// Paging ends on an error, a repeated cursor or a full history, so the broker is not asked
+    /// Paging stops on an error, a repeated cursor or a full history, so the broker is not asked
     /// on every frame; only a real failure is shown; and a page that does not fit keeps its
     /// newest entries next to the listed ones.
     #[test]

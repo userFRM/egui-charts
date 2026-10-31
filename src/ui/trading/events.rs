@@ -84,8 +84,14 @@ impl Trading {
                             self.rules_ready = true;
                         }
                         Err(FeedError::NotSupported) => self.rules_ready = true,
-                        Err(error) => toasts.error(format!("Trading rules unavailable: {error}")),
-                        Ok(_) => toasts.error("The broker returned invalid trading rules"),
+                        Err(error) => {
+                            self.rules_failed = !self.connection_error(&error);
+                            toasts.error(format!("Trading rules unavailable: {error}"));
+                        }
+                        Ok(_) => {
+                            self.rules_failed = true;
+                            toasts.error("The broker returned invalid trading rules");
+                        }
                     }
                 }
                 continue;
@@ -228,12 +234,23 @@ impl Trading {
             AccountEvent::Status(status) => {
                 let was_connected = self.is_connected();
                 self.connection = Some(status);
-                if was_connected && !self.is_connected() {
+                match (was_connected, self.is_connected()) {
                     // Confirmed while the broker was live, these would be sent once their rules
                     // arrive, after it is back: refuse them now instead.
-                    for _ in std::mem::take(&mut self.placing) {
-                        self.refuse();
+                    (true, false) => {
+                        for _ in std::mem::take(&mut self.placing) {
+                            self.refuse();
+                        }
                     }
+                    // Ask once more for what the broker may not have answered meanwhile.
+                    (false, true) => {
+                        if !self.rules_ready && !self.rules_failed && !self.rules.symbol.is_empty()
+                        {
+                            self.ask_rules();
+                        }
+                        self.account_panel.resume();
+                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -253,12 +270,23 @@ impl Trading {
                 self.account_panel.page(kind, events, page.next);
             }
             Err(error) => {
-                self.account_panel.end(kind);
+                if error != FeedError::NotSupported && self.connection_error(&error) {
+                    // Asked again once the broker is live.
+                    self.account_panel.defer(kind);
+                } else {
+                    self.account_panel.end(kind);
+                }
                 if error != FeedError::NotSupported {
                     toasts.error(format!("Account history unavailable: {error}"));
                 }
             }
         }
+    }
+
+    /// Whether a request that failed with `error` may succeed once the broker is live again: the
+    /// error is recoverable, or the broker reported meanwhile that it is not live.
+    fn connection_error(&self, error: &FeedError) -> bool {
+        error.is_recoverable() || !self.is_connected()
     }
 
     /// The sound to play for the fills since the last call, when the user turned on
@@ -891,5 +919,118 @@ mod tests {
         check(&mut trading, "new stream", true, true, None);
         trading.disconnect();
         check(&mut trading, "disconnected", false, false, None);
+    }
+
+    /// Rules and older history wait while the broker reports that it is not live; one that was
+    /// on its way when it stopped being live, or failed meanwhile or with an error of the
+    /// connection, is asked again once when it is live again, and a refused or unsupported one
+    /// keeps its handling. A regression leaves the ticket waiting and the history stopped after
+    /// an outage, asks a broker that is not live, asks again on every frame or status, or asks
+    /// again for what the broker refused.
+    #[test]
+    fn rules_and_history_are_asked_again_once_the_broker_is_live() {
+        use crate::data::FeedStatus;
+        use crate::services::HistoryRequest;
+        let ctx = egui::Context::default();
+        let first = HistoryRequest::new(HistoryKind::Journal, 100);
+        let report = |trading: &mut Trading, status| {
+            trading.apply(AccountEvent::Status(status), &mut Toasts::new());
+        };
+        for (name, error, again) in [
+            ("asked while offline", None, true),
+            (
+                "failed while offline",
+                Some(FeedError::Other("not connected".into())),
+                true,
+            ),
+            (
+                "failed after reconnecting",
+                Some(FeedError::Unanswered),
+                true,
+            ),
+            (
+                "network error",
+                Some(FeedError::Network("reset".into())),
+                true,
+            ),
+            ("refused", Some(FeedError::Other("refused".into())), false),
+            ("unsupported", Some(FeedError::NotSupported), false),
+        ] {
+            let broker = Arc::new(Recorder::default());
+            let mut trading = Trading::default();
+            trading.set_service(broker.clone());
+            trading.poll(&ctx, &mut Toasts::new());
+            let ask = |trading: &mut Trading| {
+                trading.load_rules("ES");
+                trading.load_older(HistoryKind::Journal);
+            };
+            // Answers the oldest rules and history requests with `error`.
+            let fail = |trading: &mut Trading, error: FeedError| {
+                (broker.rules.lock().unwrap().remove(0).1).send(Err(error.clone()));
+                let (asked, page) = broker.histories.lock().unwrap().remove(0);
+                assert_eq!(asked, first, "{name}");
+                page.send(Err(error));
+                trading.poll(&ctx, &mut Toasts::new());
+            };
+            let counts = || {
+                (
+                    broker.rules.lock().unwrap().len(),
+                    broker.histories.lock().unwrap().len(),
+                )
+            };
+            match name {
+                "asked while offline" => {
+                    report(&mut trading, FeedStatus::Disconnected);
+                    ask(&mut trading);
+                    assert_eq!(counts(), (0, 0), "{name}");
+                }
+                "failed while offline" => {
+                    ask(&mut trading);
+                    report(&mut trading, FeedStatus::Disconnected);
+                    fail(&mut trading, error.clone().unwrap());
+                }
+                "failed after reconnecting" => {
+                    ask(&mut trading);
+                    report(&mut trading, FeedStatus::Disconnected);
+                }
+                _ => {
+                    ask(&mut trading);
+                    fail(&mut trading, error.clone().unwrap());
+                    report(&mut trading, FeedStatus::Disconnected);
+                }
+            }
+            // The view asks every frame; nothing goes out while the broker is not live.
+            let before = counts();
+            trading.load_older(HistoryKind::Journal);
+            assert_eq!(counts(), before, "{name}");
+            report(&mut trading, FeedStatus::Live);
+            if name == "failed after reconnecting" {
+                fail(&mut trading, error.clone().unwrap());
+            }
+            for _ in 0..2 {
+                trading.load_older(HistoryKind::Journal);
+                report(&mut trading, FeedStatus::Live);
+            }
+            let rules: Vec<_> = broker.rules.lock().unwrap().drain(..).collect();
+            let pages: Vec<_> = (broker.histories.lock().unwrap().drain(..))
+                .map(|(request, _)| request)
+                .collect();
+            let symbols: Vec<_> = rules.iter().map(|(symbol, _)| symbol.as_str()).collect();
+            assert_eq!(symbols, if again { vec!["ES"] } else { vec![] }, "{name}");
+            assert_eq!(
+                pages,
+                if again { vec![first.clone()] } else { vec![] },
+                "{name}"
+            );
+            for (_, reply) in rules {
+                reply.send(Ok(TradingRules::new("ES")));
+            }
+            trading.poll(&ctx, &mut Toasts::new());
+            assert_eq!(
+                trading.rules_ready,
+                name != "refused",
+                "{name}: the ticket's rules"
+            );
+        }
     }
 }

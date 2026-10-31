@@ -81,6 +81,9 @@ pub struct Trading {
     rules_key: u64,
     request_key: u64,
     rules_ready: bool,
+    /// Whether the rules of `rules.symbol` failed for another reason than the connection, or
+    /// came back invalid: they are not asked for again when the broker is live again.
+    rules_failed: bool,
     /// Confirmed position orders waiting for their symbol's trading rules.
     placing: Vec<(u64, Position, OrderRequest)>,
     ticket: OrderTicket,
@@ -138,6 +141,7 @@ impl Default for Trading {
             rules_key: 1,
             request_key: 1,
             rules_ready: false,
+            rules_failed: false,
             placing: Vec::new(),
             ticket: OrderTicket::default(),
             pending: None,
@@ -253,6 +257,7 @@ impl Trading {
         self.ticket = OrderTicket::default();
         self.rules = TradingRules::new("");
         self.rules_ready = false;
+        self.rules_failed = false;
         self.account = None;
         self.connection = None;
         self.orders.clear();
@@ -347,21 +352,30 @@ impl Trading {
             self.pending = None;
             self.rules = TradingRules::new(symbol);
             self.rules_ready = false;
-            self.request_key += 2;
-            self.rules_key = self.request_key;
-            if let Some(service) = &self.service {
-                service.rules(symbol, self.inbox.reply(self.rules_key));
-            }
+            self.rules_failed = false;
+            self.ask_rules();
+        }
+    }
+
+    /// Asks the broker for the rules of `rules.symbol` under a new key, so that the answer to an
+    /// earlier request is dropped; while the broker is not live, the request waits until it is.
+    fn ask_rules(&mut self) {
+        self.request_key += 2;
+        self.rules_key = self.request_key;
+        if self.is_connected()
+            && let Some(service) = &self.service
+        {
+            service.rules(&self.rules.symbol, self.inbox.reply(self.rules_key));
         }
     }
 
     /// Asks the broker for the page of `kind` before the oldest entry the account panel lists,
-    /// once the account arrived; see [`AccountPanel`].
+    /// once the account arrived and while the broker is live; see [`AccountPanel`].
     fn load_older(&mut self, kind: HistoryKind) {
         let Some(service) = &self.service else {
             return;
         };
-        if self.account.is_none() {
+        if self.account.is_none() || !self.is_connected() {
             return;
         }
         let key = self.request_key + 2;
