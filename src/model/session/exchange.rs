@@ -454,6 +454,43 @@ impl ExchangeSessionProvider {
         opens
     }
 
+    /// The instant the session holding the intraday bar at `time` opened: the open of its trading
+    /// day, or with `split` of the day's stretch of extended or regular hours holding it, which
+    /// starts where the other kind of hours last closed. `None` without trading hours, on daily
+    /// and longer bars, whose profiles span several days, and with `split` for a bar outside the
+    /// hours after the other kind of hours closed.
+    pub(crate) fn session_open(&self, time: DateTime<Utc>, split: bool) -> Option<DateTime<Utc>> {
+        self.session.as_ref()?;
+        if self.timeframe.duration_ms() >= Timeframe::Day1.duration_ms() {
+            return None;
+        }
+        let opens = self.opens([time]);
+        let last = opens
+            .partition_point(|(open, _)| *open <= time)
+            .checked_sub(1)?;
+        let (open, date) = opens[last];
+        if !split || self.continuous_on(date) {
+            return Some(open);
+        }
+        let extended = self.is_extended(time);
+        let hours = self.hours_on(date);
+        let spans = hours
+            .iter()
+            .filter_map(|hours| Some((hours.extended == extended, self.window_span(date, hours)?)));
+        let resumed = spans
+            .clone()
+            .filter(|&(same, (_, close))| !same && close <= time)
+            .map(|(_, (_, close))| close)
+            .max();
+        let first = spans
+            .filter(|&(same, (open, close))| {
+                same && open <= time && resumed.is_none_or(|resumed| close > resumed)
+            })
+            .map(|(_, (open, _))| open)
+            .min()?;
+        Some(resumed.map_or(first, |resumed| first.max(resumed)))
+    }
+
     /// The trading date of `time` among `opens`: that of the last open at or before it, or the
     /// calendar date in the time zone before the first.
     fn trading_date_in(
