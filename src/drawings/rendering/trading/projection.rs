@@ -5,6 +5,7 @@ use crate::drawings::rendering::ChartView;
 use crate::drawings::rendering::measurements::boxed_label;
 use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::styles::stroke;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
@@ -77,7 +78,7 @@ impl Drawing {
         }
 
         // Labels
-        self.draw_projection_labels(painter, start, end, proj_end, dy, color, dashed_color);
+        self.draw_projection_labels(painter, start, end, proj_end, dy, dashed_color);
     }
 
     pub(super) fn draw_projection_main_line(
@@ -137,7 +138,6 @@ impl Drawing {
         end: Pos2,
         proj_end: Pos2,
         dy: f32,
-        color: Color32,
         dashed_color: Color32,
     ) {
         // Price/percentage labels
@@ -161,17 +161,14 @@ impl Drawing {
         // Move label (at midpoint of AB)
         let mid_ab = Pos2::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
         let label_text = format!("{price_change:.2} ({pct_change:.1}%)");
+        let chart = painter.ctx().active_theme().chart;
         boxed_label(
             painter,
             egui::Align2::CENTER_CENTER,
             Pos2::new(mid_ab.x + 10.0, mid_ab.y - 10.0),
             label_text,
-            color,
-            DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_axis_bg
-                .gamma_multiply(0.86),
+            chart.axis_text,
+            chart.bg_axis,
         );
 
         // Projection target label
@@ -218,7 +215,6 @@ mod tests {
                     Pos2::new(300.0, 200.0),
                     Pos2::new(500.0, 100.0),
                     -100.0,
-                    Color32::BLUE,
                     Color32::BLUE,
                 );
             });
