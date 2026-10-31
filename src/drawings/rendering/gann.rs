@@ -483,7 +483,9 @@ impl Drawing {
             let pos = Pos2::new(x(level.value), rect.max.y + gap);
             (level, pos, egui::Align2::CENTER_TOP)
         });
-        let mut placed = Vec::<Rect>::new();
+        // A label gives way only to labels of its own kind, so the price and time labels at the
+        // bottom left corner both show.
+        let mut placed = Vec::<(egui::Align2, Rect)>::new();
         for (level, pos, align) in price_labels.chain(time_labels) {
             let color = level_color(level);
             let galley = painter.layout_no_wrap(
@@ -492,10 +494,13 @@ impl Drawing {
                 color,
             );
             let label = align.anchor_size(pos, galley.size());
-            if placed.iter().any(|r| r.intersects(label.expand(2.0))) {
+            if placed
+                .iter()
+                .any(|&(kind, r)| kind == align && r.intersects(label.expand(2.0)))
+            {
                 continue;
             }
-            placed.push(label);
+            placed.push((align, label));
             painter.galley(label.min, galley, color);
         }
     }
@@ -673,6 +678,26 @@ mod tests {
             rays.iter()
                 .all(|(_, stroke)| *stroke == Stroke::new(2.0, drawing.color32()))
         );
+
+        // A new box from (0, 200) to (400, 0) labels all seven levels at its side and below it,
+        // the price and time labels at its bottom left corner included.
+        drawing.gann = None;
+        drawing.points = vec![Pos2::new(0.0, 200.0), Pos2::new(400.0, 0.0)];
+        let shapes = box_shapes(&drawing);
+        let labels = |at: fn(Rect) -> bool| {
+            shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(t) if at(t.visual_bounding_rect()) => {
+                        Some(t.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let levels = ["0", "0.25", "0.382", "0.5", "0.618", "0.75", "1"];
+        assert_eq!(labels(|r| r.top() >= 200.0), levels);
+        assert_eq!(labels(|r| r.right() <= 0.0), levels);
 
         let saved: GannConfig =
             serde_json::from_value(serde_json::json!({"price_levels":[0.3],"time_levels":[0.7]}))
