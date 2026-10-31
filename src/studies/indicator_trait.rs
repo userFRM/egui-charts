@@ -199,6 +199,13 @@ pub trait Indicator: Send {
         }
     }
 
+    /// The output whose visibility in the style tab also applies to plot `line`, for a plot past
+    /// [`line_count`](Self::line_count) that draws zones or candles for one of the outputs. The
+    /// default is `line` itself.
+    fn plot_output(&self, line: usize) -> usize {
+        line
+    }
+
     /// Horizontal displacement in bars. Positive values draw into future whitespace.
     /// Values remain indexed by their source bar; missing bars still occupy a position.
     fn plot_offset(&self, line: usize) -> isize {
@@ -525,6 +532,13 @@ pub trait Indicator: Send {
     /// Empty by default.
     fn zones(&self) -> &[super::StudyZone] {
         &[]
+    }
+
+    /// Whether each of [`zones`](Self::zones) spans its bars from the left edge of the first to
+    /// the right edge of the last, as study candles do, rather than from the centre of the first
+    /// to the centre of the last. Off by default.
+    fn zones_cover_whole_bars(&self) -> bool {
+        false
     }
 
     /// Text beside study values, in order of `bar`. The chart draws the labels near the visible

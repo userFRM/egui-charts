@@ -151,7 +151,8 @@ impl StudyTemplate {
     }
 
     /// This template under the current input ids of a built-in study whose inputs changed after
-    /// it was saved, or `None` when it needs no change.
+    /// it was saved, with inputs added since set to draw what it drew, or `None` when it needs no
+    /// change.
     fn upgraded(&self) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
         let mut template = self.clone();
@@ -178,6 +179,22 @@ impl StudyTemplate {
                     if id == "offset_percent" {
                         *id = "percent".to_owned();
                     }
+                }
+            }
+            // Pivot levels had no labels before they could be labelled.
+            "Pivot Points Standard" | "Intraday Pivot Points" | "Projected Pivot Points"
+                if !has("show_labels") =>
+            {
+                template
+                    .inputs
+                    .push(("show_labels".to_owned(), InputValue::Toggle(false)));
+            }
+            // Sessions were only highlighted before they could be boxed and named.
+            "Trading Sessions" if !has("boxes") => {
+                for id in ["boxes", "name_labels"] {
+                    template
+                        .inputs
+                        .push((id.to_owned(), InputValue::Toggle(false)));
                 }
             }
             _ => return None,
@@ -385,7 +402,7 @@ mod tests {
     /// study offered it.
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
-        use InputValue::{Choice, Length, Number};
+        use InputValue::{Choice, Length, Number, Toggle};
         let rows = [
             (
                 "SMA",
@@ -424,6 +441,27 @@ mod tests {
                 "Multi MA",
                 vec![("period_0", Length(30))],
                 vec![("period_0", Length(30)), ("cross_first", Choice(0))],
+            ),
+            // Saved before levels were labelled and sessions boxed, both on by default since.
+            (
+                "Pivot Points Standard",
+                vec![("pivots_back", Length(2))],
+                vec![("pivots_back", Length(2)), ("show_labels", Toggle(false))],
+            ),
+            (
+                "Projected Pivot Points",
+                vec![("show_labels", Toggle(true))],
+                vec![("show_labels", Toggle(true))],
+            ),
+            (
+                "Trading Sessions",
+                vec![("show [0]", Toggle(true))],
+                vec![("boxes", Toggle(false)), ("name_labels", Toggle(false))],
+            ),
+            (
+                "Trading Sessions",
+                vec![("boxes", Toggle(true))],
+                vec![("boxes", Toggle(true)), ("name_labels", Toggle(true))],
             ),
         ];
         let factory = IndicatorFactory::new();
