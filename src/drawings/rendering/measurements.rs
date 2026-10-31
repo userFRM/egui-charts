@@ -449,7 +449,7 @@ impl Drawing {
         };
         let change = b.price - a.price;
         let pct = percent_change(a.price, b.price);
-        let decimals = price_decimals(a.price);
+        let decimals = change_decimals(instrument, a.price, change);
         let mut change_label = format!("{change:+.decimals$} ({pct:+.2}%)");
         if let Some(instrument) = instrument {
             for (size, unit) in [
@@ -514,6 +514,28 @@ impl Drawing {
             _ => Vec::new(),
         }
     }
+}
+
+/// Decimals of a price change from `price`, as the chart writes prices: the instrument's price
+/// precision, or without one by the price's magnitude and enough to show a non-zero `change`.
+pub(super) fn change_decimals(
+    instrument: Option<&crate::model::Instrument>,
+    price: f64,
+    change: f64,
+) -> usize {
+    instrument
+        .and_then(crate::scales::instrument_price_precision)
+        .map_or_else(
+            || {
+                let first_digit = if change != 0.0 && change.is_finite() {
+                    (-change.abs().log10()).ceil().max(0.0) as usize
+                } else {
+                    0
+                };
+                price_decimals(price).max(first_digit)
+            },
+            usize::from,
+        )
 }
 
 /// Paints `text` over a `bg` box sized to it, placed at `pos` by `align`, and returns its bounds.
