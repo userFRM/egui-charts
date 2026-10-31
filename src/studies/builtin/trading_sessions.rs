@@ -668,6 +668,9 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     type Row = (u32, u32, f64, f64, f64, f64);
+    type ZoneRow = (Range<usize>, f64, f64, usize);
+    // (name, study, zones, text of the label)
+    type Case<'a> = (&'a str, Box<dyn Indicator>, Vec<ZoneRow>, Option<&'a str>);
 
     /// The one session "Name" from `start` to `end` hours, UTC, over bars of (day, hour, open,
     /// high, low, close) of January 2024.
@@ -688,7 +691,7 @@ mod tests {
             .collect()
     }
 
-    fn zones(study: &dyn Indicator) -> Vec<(Range<usize>, f64, f64, usize)> {
+    fn zones(study: &dyn Indicator) -> Vec<ZoneRow> {
         let zones = study.zones().iter();
         zones
             .map(|zone| (zone.bars.clone(), zone.top, zone.bottom, zone.plot))
@@ -733,7 +736,7 @@ mod tests {
             .unwrap();
         let all_text = "Test\nRange: 4.50\nAvg: 10.83";
         let all_zones = vec![square.clone(), open.clone(), close.clone(), mean.clone()];
-        let rows: Vec<(&str, Box<dyn Indicator>, Vec<_>, Option<&str>)> = vec![
+        let rows: Vec<Case> = vec![
             (
                 "defaults",
                 Box::new(study("Test", 9, 12)),
