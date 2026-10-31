@@ -36,7 +36,7 @@ fn visible_levels(levels: &[GannLevel], range: std::ops::RangeInclusive<f32>) ->
 
 /// A level value with at most six decimals and no trailing zeros: 0, 0.25, 0.382, 2.236068.
 fn level_label(value: f32) -> String {
-    trim(format!("{:.6}", value + 0.0))
+    ((value * 1e6).round() / 1e6 + 0.0).to_string()
 }
 
 /// A fan ratio as price by time units: 2 is "2×1", 0.5 "1×2", one third "1×3".
@@ -161,30 +161,29 @@ fn gann_square_arc(start: Pos2, corner: Pos2, radius: f32, segments: usize) -> O
     })
 }
 
-/// The two edges of the band between arcs `inner` and `outer` (units) inside the square, sampled
-/// at the same `segments + 1` angles, each point cut at the square's edge, for `paint_band`.
-fn gann_square_ring(
+/// One edge of the bands between the arcs of a square: the arc of `radius` units around `start`,
+/// at each of the angles' sine and cosine, every point cut at the square's edge.
+fn gann_square_ring_edge(
     start: Pos2,
     corner: Pos2,
-    inner: f32,
-    outer: f32,
-    segments: usize,
-) -> (Vec<Pos2>, Vec<Pos2>) {
+    radius: f32,
+    angles: &[(f32, f32)],
+) -> impl Iterator<Item = Pos2> + '_ {
     let (dx, dy) = (corner.x - start.x, corner.y - start.y);
+    angles.iter().map(move |&(s, c)| {
+        // The square is convex and star-shaped from `start`, so the band along each ray ends
+        // at the edge. The far corner lies at half the sweep in units, whatever the square's
+        // proportions on screen, so an even number of segments samples it.
+        let r = radius.min(GANN_SQUARE_UNITS / c.max(s)) / GANN_SQUARE_UNITS;
+        start + egui::vec2(dx * r * c, dy * r * s)
+    })
+}
+
+/// The sine and cosine of `segments + 1` angles across a quarter circle.
+fn gann_square_ring_angles(segments: usize) -> Vec<(f32, f32)> {
     (0..=segments)
-        .map(|i| {
-            let (s, c) = (FRAC_PI_2 * i as f32 / segments as f32).sin_cos();
-            // The square is convex and star-shaped from `start`, so the band along each ray ends
-            // at the edge. The far corner lies at half the sweep in units, whatever the square's
-            // proportions on screen, so an even `segments` samples it.
-            let reach = GANN_SQUARE_UNITS / c.max(s);
-            let point = |radius: f32| {
-                let r = radius.min(reach) / GANN_SQUARE_UNITS;
-                start + egui::vec2(dx * r * c, dy * r * s)
-            };
-            (point(inner), point(outer))
-        })
-        .unzip()
+        .map(|i| (FRAC_PI_2 * i as f32 / segments as f32).sin_cos())
+        .collect()
 }
 
 /// Rays of a Gann box from each corner to the level points on the two edges away from it: the
@@ -328,22 +327,34 @@ impl Drawing {
 
         let mut arcs = visible_levels(&config.arc_ratios, 0.0..=GANN_MAX_ARC);
         arcs.retain(|arc| arc.value > 0.0);
-        if config.show_arcs && config.show_background && config.background_opacity > 0 {
-            for pair in arcs.windows(2) {
-                let (inner, outer) = gann_square_ring(
-                    start,
-                    corner,
-                    pair[0].value,
-                    pair[1].value,
-                    segments(pair[1].value),
-                );
-                super::fibonacci::paint_band(
-                    painter,
-                    &inner,
-                    &outer,
-                    band_color(&pair[1], config.background_opacity),
-                );
+        if config.show_arcs
+            && config.show_background
+            && config.background_opacity > 0
+            && let Some(outermost) = arcs.last()
+        {
+            // All rings in one mesh, each edge shared by the two rings it bounds, as a square
+            // repaints them every frame.
+            let angles = gann_square_ring_angles(segments(outermost.value));
+            let points = arcs.len() * angles.len();
+            let mut edges = Vec::with_capacity(points);
+            for arc in &arcs {
+                edges.extend(gann_square_ring_edge(start, corner, arc.value, &angles));
             }
+            let mut mesh = egui::Mesh::default();
+            mesh.reserve_vertices(points * 2);
+            mesh.reserve_triangles(points * 2);
+            let mut rings = edges.chunks_exact(angles.len());
+            let mut inner = rings.next().unwrap_or_default();
+            for (outer, arc) in rings.zip(&arcs[1..]) {
+                super::fibonacci::add_band(
+                    &mut mesh,
+                    inner,
+                    outer,
+                    band_color(arc, config.background_opacity),
+                );
+                inner = outer;
+            }
+            painter.add(egui::Shape::mesh(mesh));
         }
         if config.show_grid {
             let drawn = |l: &&GannLevel| l.visible && (0.0..=GANN_SQUARE_UNITS).contains(&l.value);
@@ -903,7 +914,10 @@ mod tests {
 
         // Radius 5 at 45 degrees is 70.711 on each axis, the square root of 26 is 72.111, and
         // both end on the square's edges at its two sides.
-        let (inner, outer) = gann_square_ring(start, corner, 5.0, 26f32.sqrt(), 16);
+        let angles = gann_square_ring_angles(16);
+        let inner: Vec<Pos2> = gann_square_ring_edge(start, corner, 5.0, &angles).collect();
+        let outer: Vec<Pos2> =
+            gann_square_ring_edge(start, corner, 26f32.sqrt(), &angles).collect();
         assert_eq!((inner.len(), outer.len()), (17, 17));
         let square = Rect::from_two_pos(start, corner).expand(1e-3);
         assert!(inner.iter().chain(&outer).all(|p| square.contains(*p)));
