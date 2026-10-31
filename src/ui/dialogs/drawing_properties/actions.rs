@@ -1,8 +1,9 @@
 //! Actions from the drawing properties dialog.
 
 use super::tabs::CoordinatesState;
+use crate::drawings::domain::GANN_SQUARE_UNITS;
 use crate::drawings::validation::{MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH};
-use crate::drawings::{Drawing, DrawingTemplate, TimeframeVisibility};
+use crate::drawings::{Drawing, DrawingTemplate, DrawingToolType, TimeframeVisibility};
 use crate::model::LineStyle;
 use crate::styles::typography::FONT_SIZES;
 use crate::widget::Chart;
@@ -280,21 +281,30 @@ impl DrawingProps {
             }) {
                 return Err("Pitchfork widths must be above 0 and at most 100");
             }
-            if settings.gann.as_ref().is_some_and(|c| {
-                c.price_levels
+            if let Some(c) = settings.gann.as_ref() {
+                let square = matches!(
+                    settings.tool_type,
+                    DrawingToolType::GannSquare | DrawingToolType::GannFixed
+                );
+                let max = if square { GANN_SQUARE_UNITS } else { 1.0 };
+                if c.price_levels
                     .iter()
                     .chain(&c.time_levels)
-                    .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
-            }) {
-                return Err("Gann divisions must be between 0 and 1");
-            }
-            if settings.gann.as_ref().is_some_and(|c| {
-                c.fan_ratios
+                    .any(|l| !(0.0..=max).contains(&l.value))
+                {
+                    return Err(if square {
+                        "Gann square levels must be between 0 and 5"
+                    } else {
+                        "Gann levels must be between 0 and 1"
+                    });
+                }
+                if c.fan_ratios
                     .iter()
                     .chain(&c.arc_ratios)
-                    .any(|v| !v.is_finite() || *v <= 0.0)
-            }) {
-                return Err("Gann fan and arc ratios must be positive and finite");
+                    .any(|l| !(l.value.is_finite() && l.value > 0.0))
+                {
+                    return Err("Gann fan and arc ratios must be positive and finite");
+                }
             }
             if settings.ghost_feed.is_some_and(|c| !c.is_valid()) {
                 return Err(
@@ -401,7 +411,7 @@ mod tests {
 
         use crate::data::VolumeProfileConfig;
         use crate::drawings::{
-            FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, PositionSizing,
+            FibonacciConfig, GannConfig, GannLevel, PitchforkConfig, PositionSize, PositionSizing,
             RegressionTrendConfig,
         };
         for tool in [
@@ -462,8 +472,12 @@ mod tests {
                 ..Default::default()
             });
             settings.gann = Some(GannConfig {
-                price_levels: vec![0.0, 0.5, 1.0],
-                time_levels: vec![0.25, 0.75],
+                price_levels: [0.0, 0.5, 1.0]
+                    .map(|v| GannLevel::new(v, [128, 128, 128, 255]))
+                    .to_vec(),
+                time_levels: [0.25, 0.75]
+                    .map(|v| GannLevel::new(v, [128, 128, 128, 255]))
+                    .to_vec(),
                 ..Default::default()
             });
             settings.position_size = Some(PositionSize::RiskPercent {
@@ -489,7 +503,17 @@ mod tests {
             let saved = &chart.drawings().drawings[0];
             assert_eq!(format!("{:?}", saved.fib_config), expected);
             assert_eq!(saved.pitchfork.as_ref().unwrap().background_opacity, 75);
-            assert_eq!(saved.gann.as_ref().unwrap().time_levels, [0.25, 0.75]);
+            assert_eq!(
+                saved
+                    .gann
+                    .as_ref()
+                    .unwrap()
+                    .time_levels
+                    .iter()
+                    .map(|l| l.value)
+                    .collect::<Vec<_>>(),
+                [0.25, 0.75]
+            );
             assert_eq!(
                 saved.position_size.unwrap().quantity(100.0, 98.0),
                 Some(50.0)

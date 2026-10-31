@@ -34,6 +34,9 @@ impl DrawingToolType {
                 | Self::ElliottDoubleCombo
                 | Self::ElliottTripleCombo
                 | Self::GannFan
+                | Self::GannBox
+                | Self::GannSquare
+                | Self::GannFixed
                 | Self::Ray
                 | Self::ExtendedLine
                 | Self::HorizontalLine

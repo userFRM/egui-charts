@@ -5928,9 +5928,10 @@ mod tests {
             (Tool::SchiffPitchfork, "Pitchfork levels"),
             (Tool::ModifiedSchiffPitchfork, "Pitchfork levels"),
             (Tool::InsidePitchfork, "Pitchfork levels"),
-            (Tool::GannBox, "Price divisions"),
-            (Tool::GannSquare, "Price divisions"),
-            (Tool::GannFixed, "Price divisions"),
+            (Tool::GannBox, "Price levels"),
+            (Tool::GannSquare, "Price levels"),
+            (Tool::GannFixed, "Price levels"),
+            (Tool::GannFan, "Fan lines"),
             (Tool::LongPos, "Entry price"),
             (Tool::ShortPos, "Entry price"),
             (Tool::FixedRangeVolumeProfile, "Rows"),
@@ -6273,7 +6274,7 @@ mod tests {
         assert!(!app.drawing_toolbar.state.lock_all);
         use egui_charts::data::VolumeProfileConfig;
         use egui_charts::drawings::{
-            FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, PositionSizing,
+            FibonacciConfig, GannConfig, GannLevel, PitchforkConfig, PositionSize, PositionSizing,
             RegressionTrendConfig,
         };
         for tool in [
@@ -6308,8 +6309,12 @@ mod tests {
                 ..Default::default()
             });
             settings.gann = Some(GannConfig {
-                price_levels: vec![0.0, 0.5, 1.0],
-                time_levels: vec![0.25, 0.75],
+                price_levels: [0.0, 0.5, 1.0]
+                    .map(|v| GannLevel::new(v, [128, 128, 128, 255]))
+                    .to_vec(),
+                time_levels: [0.25, 0.75]
+                    .map(|v| GannLevel::new(v, [128, 128, 128, 255]))
+                    .to_vec(),
                 ..Default::default()
             });
             settings.position_size = Some(PositionSize::RiskPercent {
@@ -6331,7 +6336,17 @@ mod tests {
             let saved = &app.chart.drawings().drawings[0];
             assert_eq!(format!("{:?}", saved.fib_config), expected);
             assert_eq!(saved.pitchfork.as_ref().unwrap().background_opacity, 75);
-            assert_eq!(saved.gann.as_ref().unwrap().time_levels, [0.25, 0.75]);
+            assert_eq!(
+                saved
+                    .gann
+                    .as_ref()
+                    .unwrap()
+                    .time_levels
+                    .iter()
+                    .map(|l| l.value)
+                    .collect::<Vec<_>>(),
+                [0.25, 0.75]
+            );
             assert_eq!(
                 saved.position_size.unwrap().quantity(100.0, 98.0),
                 Some(50.0)

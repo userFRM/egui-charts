@@ -237,28 +237,28 @@ impl StoredDrawing {
                 "gann.price_levels",
                 d.gann
                     .iter()
-                    .flat_map(|c| c.price_levels.iter().copied())
+                    .flat_map(|c| c.price_levels.iter().map(|l| l.value))
                     .collect(),
             ),
             (
                 "gann.time_levels",
                 d.gann
                     .iter()
-                    .flat_map(|c| c.time_levels.iter().copied())
+                    .flat_map(|c| c.time_levels.iter().map(|l| l.value))
                     .collect(),
             ),
             (
                 "gann.fan_ratios",
                 d.gann
                     .iter()
-                    .flat_map(|c| c.fan_ratios.iter().copied())
+                    .flat_map(|c| c.fan_ratios.iter().map(|l| l.value))
                     .collect(),
             ),
             (
                 "gann.arc_ratios",
                 d.gann
                     .iter()
-                    .flat_map(|c| c.arc_ratios.iter().copied())
+                    .flat_map(|c| c.arc_ratios.iter().map(|l| l.value))
                     .collect(),
             ),
         ] {
@@ -269,12 +269,7 @@ impl StoredDrawing {
                 f32::MAX
             };
             if let Some(i) = values.iter().position(|v| !(-limit..=limit).contains(v)) {
-                let suffix = if name.ends_with(".levels") {
-                    ".value"
-                } else {
-                    ""
-                };
-                return Some(format!("{name}[{i}]{suffix}"));
+                return Some(format!("{name}[{i}].value"));
             }
         }
         None
@@ -958,14 +953,26 @@ mod tests {
                 drawing.update_screen_coords(bar_to_x, price_to_y);
             }
             drawing.gann = Some(crate::drawings::GannConfig {
-                price_levels: vec![0.25, 0.75],
-                time_levels: vec![0.5],
+                price_levels: vec![
+                    GannLevel::new(0.25, [1, 2, 3, 255]),
+                    GannLevel::new(0.75, [4, 5, 6, 255]),
+                ],
+                time_levels: vec![GannLevel::new(0.5, [7, 8, 9, 255])],
                 show_grid: false,
                 show_fan: false,
-                fan_ratios: vec![0.5, 2.0],
+                fan_ratios: vec![
+                    GannLevel::new(0.5, [10, 11, 12, 255]),
+                    GannLevel {
+                        visible: false,
+                        ..GannLevel::new(2.0, [13, 14, 15, 255])
+                    },
+                ],
                 fan_direction: crate::drawings::GannFanDirection::Reverse,
                 show_arcs: false,
-                arc_ratios: vec![0.75],
+                arc_ratios: vec![GannLevel::new(0.75, [16, 17, 18, 255])],
+                show_background: false,
+                background_opacity: 7,
+                show_angles: true,
             });
             drawing.ghost_feed = Some(crate::drawings::GhostFeedConfig {
                 average_range_ticks: 2.5,
@@ -1574,9 +1581,10 @@ mod tests {
                         .drawing
                         .gann
                         .get_or_insert_with(Default::default)
-                        .price_levels[0] = f32::INFINITY
+                        .price_levels[0]
+                        .value = f32::INFINITY
                 },
-                "invalid gann.price_levels[0]",
+                "invalid gann.price_levels[0].value",
             ),
             (
                 |s| {
@@ -1584,9 +1592,10 @@ mod tests {
                         .drawing
                         .gann
                         .get_or_insert_with(Default::default)
-                        .time_levels[0] = f32::NAN
+                        .time_levels[0]
+                        .value = f32::NAN
                 },
-                "invalid gann.time_levels[0]",
+                "invalid gann.time_levels[0].value",
             ),
             (
                 |s| {
