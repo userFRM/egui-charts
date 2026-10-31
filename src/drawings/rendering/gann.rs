@@ -396,17 +396,14 @@ impl Drawing {
                 let ratio_decimals = decimals + 2;
                 label.push_str(&format!("\n{:.ratio_decimals$}/bar", range / bars));
             }
+            let chart = painter.ctx().active_theme().chart;
             super::measurements::boxed_label(
                 painter,
                 egui::Align2::LEFT_TOP,
                 Pos2::new(rect.max.x + DESIGN_TOKENS.rounding.lg, rect.min.y),
                 label,
-                self.color32(),
-                DESIGN_TOKENS
-                    .semantic
-                    .extended
-                    .chart_axis_bg
-                    .gamma_multiply(0.8),
+                chart.axis_text,
+                chart.bg_axis,
             );
         }
     }
