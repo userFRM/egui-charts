@@ -383,13 +383,13 @@ mod tests {
     use crate::widget::settings::TradingSettings;
     use std::sync::Arc;
 
-    /// The fills of one side in one bar are one mark: an arrow just under the bar's low for buys,
-    /// with a chevron per fill, and just over its high for sells; a fill of another symbol is not
-    /// drawn. Labels, off by default, give the total quantity at the quantity-weighted average
-    /// price; hovering a mark lists its fills; the position's label is drawn over the marks. A
-    /// partial fill, the fill that completes an order and a rejection each raise a notification,
-    /// the rejection with the broker's reason. The display options hide the fills, the orders and
-    /// the positions.
+    /// The fills of one side in one bar are one mark: filled triangles stacked outward just under
+    /// the bar's low for buys and just over its high for sells, up to three and then a "+N" line;
+    /// a fill of another symbol is not drawn. Labels, on by default, give the side and total
+    /// quantity; hovering a mark lists up to 20 of its fills; the position's label is drawn over
+    /// the marks. A partial fill, the fill that completes an order and a rejection each raise a
+    /// notification, the rejection with the broker's reason. The display options hide the fills,
+    /// the orders and the positions.
     #[test]
     fn fills_are_drawn_on_their_bar_and_announced() {
         use crate::theme::ThemeExt;
@@ -474,18 +474,29 @@ mod tests {
             show_executions: false,
             ..TradingSettings::default()
         };
-        let labelled = TradingSettings {
-            show_execution_labels: true,
+        let unlabelled = TradingSettings {
+            show_execution_labels: false,
             ..TradingSettings::default()
         };
         let mut clock = 0.0;
-        for (display, drawn, labels, neighbouring, inverted) in [
-            (TradingSettings::default(), true, false, false, false),
-            (labelled.clone(), true, true, false, false),
-            (labelled.clone(), true, true, true, false),
-            (labelled, true, true, false, true),
-            (hidden, false, false, false, false),
+        let crowd = trading.account_panel.fills.executions[0].clone();
+        let default = TradingSettings::default;
+        for (display, drawn, labels, neighbouring, inverted, crowded) in [
+            (default(), true, true, false, false, false),
+            (unlabelled.clone(), true, false, false, false, false),
+            (default(), true, true, true, false, false),
+            (default(), true, true, false, true, false),
+            (default(), true, true, false, false, true),
+            (unlabelled, true, false, false, false, true),
+            (hidden, false, false, false, false, false),
         ] {
+            let clones = if crowded { 20 } else { 0 };
+            let kept = trading.account_panel.fills.executions.len();
+            trading
+                .account_panel
+                .fills
+                .executions
+                .extend(std::iter::repeat_n(crowd.clone(), clones));
             trading.display = display;
             chart.price_scale_mut().options_mut().invert_scale = inverted;
             trading.account_panel.fills.executions[0].time =
@@ -517,35 +528,40 @@ mod tests {
                     ctx.active_theme().ui.accent,
                     ctx.active_theme().chart.candle_down,
                 );
-                let chevrons: Vec<_> = output
+                let triangles: Vec<_> = output
                     .shapes
                     .iter()
                     .enumerate()
                     .filter_map(|(at, shape)| match &shape.shape {
                         egui::Shape::Path(path)
-                            if path.points.len() == 3
-                                && (path.stroke.color == egui::epaint::ColorMode::Solid(buy)
-                                    || path.stroke.color
-                                        == egui::epaint::ColorMode::Solid(sell)) =>
+                            if path.closed
+                                && path.points.len() == 3
+                                && (path.fill == buy || path.fill == sell) =>
                         {
-                            Some((at, path.points[1]))
+                            Some((at, path.points.clone()))
                         }
                         _ => None,
                     })
                     .collect();
-                tips = chevrons.iter().map(|(_, tip)| *tip).collect();
+                tips = triangles.iter().map(|(_, points)| points.clone()).collect();
                 texts = output
                     .shapes
                     .iter()
                     .filter_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text().contains(" @ ") => {
+                        egui::Shape::Text(text)
+                            if !text.galley.text().contains(" at ")
+                                && (text.galley.text().starts_with("Buy ")
+                                    || text.galley.text().starts_with("Sell ")
+                                    || (text.galley.text().strip_prefix('+'))
+                                        .is_some_and(|more| more.parse::<usize>().is_ok())) =>
+                        {
                             Some(text.galley.text().to_owned())
                         }
                         _ => None,
                     })
                     .collect();
                 // 1_700_000_000 is 2023-11-14 22:13:20 UTC; 95 days and 12 hours later.
-                let tooltip = format!(
+                let mut tooltip = format!(
                     "Buy 1 at 95.00, {} 10:13:20\nBuy 2 at 98.00, Sun 18 Feb '24 10:13:20",
                     if neighbouring {
                         "Sat 17 Feb '24"
@@ -553,6 +569,10 @@ mod tests {
                         "Sun 18 Feb '24"
                     }
                 );
+                if crowded {
+                    tooltip += &"\nBuy 1 at 95.00, Sun 18 Feb '24 10:13:20".repeat(18);
+                    tooltip += "\nand 2 more";
+                }
                 hovered = output.shapes.iter().any(|shape| {
                     matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == tooltip)
                 });
@@ -561,7 +581,7 @@ mod tests {
                 let label = output.shapes.iter().rposition(
                     |shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == buy),
                 );
-                covered = chevrons
+                covered = triangles
                     .last()
                     .zip(label)
                     .is_some_and(|((mark, _), label)| *mark > label);
@@ -571,29 +591,41 @@ mod tests {
             let mapping = chart.get_chart_mapping();
             let (a, b) = (mapping.price_to_y(90.0), mapping.price_to_y(110.0));
             let (low, high) = (a.max(b), a.min(b));
-            // The two buys stack their chevrons 4 points apart from 4 points under the low; the
-            // sell hangs 4 points over the high.
-            let expected = [
-                egui::pos2(x, low + 4.0),
-                egui::pos2(x, low + 8.0),
-                egui::pos2(x, high - 4.0),
+            // Tip, then the base's corners: 14 wide and 17 tall, 4 points from the bar. The buys
+            // stack 19 points apart, leaving 2 points between them; the sell mirrors over the high.
+            let triangle = |tip: f32, base: f32| {
+                vec![
+                    egui::pos2(x, tip),
+                    egui::pos2(x + 7.0, base),
+                    egui::pos2(x - 7.0, base),
+                ]
+            };
+            let mut expected = vec![
+                triangle(low + 4.0, low + 21.0),
+                triangle(low + 23.0, low + 40.0),
             ];
-            assert_eq!(tips, if drawn { &expected[..] } else { &[] });
-            let labels_expected: &[&str] = if labels {
-                &["3 @ 97.00", "3 @ 95.00"]
-            } else {
-                &[]
+            if crowded {
+                expected.push(triangle(low + 42.0, low + 59.0));
+            }
+            expected.push(triangle(high - 4.0, high - 21.0));
+            assert_eq!(tips, if drawn { expected } else { Vec::new() });
+            // 22 buys with a total quantity of 23, 3 of them drawn.
+            let labels_expected: &[&str] = match (labels, crowded) {
+                (true, true) => &["+19", "Buy 23", "Sell 3"],
+                (false, true) => &["+19"],
+                (true, false) => &["Buy 3", "Sell 3"],
+                (false, false) => &[],
             };
             assert_eq!(texts, labels_expected);
             assert_eq!(hovered, drawn, "hovering a mark lists its fills");
             assert!(!covered, "the position's label is drawn over the marks");
             assert_eq!(chart.trading_tags.is_empty(), !drawn);
+            trading.account_panel.fills.executions.truncate(kept);
         }
 
         // A finer fill stays on the only revealed candle, with an exclusive replay cutoff.
         let time = chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap();
         trading.display.show_executions = true;
-        trading.display.show_execution_labels = true;
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for width in [1440.0, 320.0] {
                 let ctx = egui::Context::default();
@@ -625,7 +657,7 @@ mod tests {
                         );
                         marked |= output.shapes.iter().any(|shape| {
                             matches!(&shape.shape, egui::Shape::Text(text)
-                                if text.galley.text() == "3 @ 97.00")
+                                if text.galley.text() == "Buy 3")
                         });
                         output.drop_without_applying_deltas();
                         chart.fit_content();

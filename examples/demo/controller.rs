@@ -3644,7 +3644,6 @@ mod tests {
                 .any(|t| t.message == format!("Filled: Sell 1 {symbol} at 110.00"))
         );
         assert!(Arc::ptr_eq(&paper, &app.paper));
-        app.trading.display.show_execution_labels = true;
         app.chart.fit_content();
         for toast in app.toasts.toasts_mut() {
             toast.duration = 0.0;
@@ -3693,7 +3692,14 @@ mod tests {
                     })
                 };
                 value |= has_text("Trade value") && has_text("110.00");
-                marked |= has_text("1 @ 100.00") && has_text("1 @ 110.00");
+                // The notices write the sides too, so look for the triangles rather than a label.
+                let has_mark = |color| {
+                    output.shapes.iter().any(|shape| {
+                        matches!(&shape.shape, egui::Shape::Path(path)
+                        if path.closed && path.points.len() == 3 && path.fill == color)
+                    })
+                };
+                marked |= has_mark(app.theme.ui.accent) && has_mark(app.theme.chart.candle_down);
                 if pass == 2 {
                     for toast in app.toasts.toasts().iter().rev().take(5) {
                         let rect = ctx
@@ -5384,7 +5390,7 @@ mod tests {
         state.trading.show_positions = false;
         state.trading.show_orders = false;
         state.trading.show_executions = false;
-        state.trading.show_execution_labels = true;
+        state.trading.show_execution_labels = false;
         app.apply_chart_settings(state.clone());
         assert_eq!(app.trading.display, state.trading);
         assert_eq!(
