@@ -1,7 +1,7 @@
 //! The order ticket's Order tab: the quote, the order kinds, the quantity and price fields, and the
 //! exits.
 
-use super::{Bracket, BracketMode, Kind, Market, OrderTicket, Sizing};
+use super::{Bracket, BracketMode, Kind, Market, OrderTicket, Sizing, reward};
 use crate::chart::{decimals, to_step};
 use crate::icons::icons;
 use crate::localization as l10n;
@@ -12,6 +12,8 @@ use crate::ui::trading::widgets::{
     FIELD_HEIGHT, SECTION_TITLE_SIZE, chevron, dropdown, field, grouped, hit, info, muted, number,
     side_color, swap, text, time_in_force_menu, title, toggle, track,
 };
+use crate::ui_kit::IconButton;
+use crate::ui_kit::buttons::{Button, ButtonSize};
 use egui::{Align, Align2, FontId, Layout, Rect, Sense, Ui, pos2, vec2};
 
 /// Quote prices sit between the heading and dialog-title text roles.
@@ -291,8 +293,8 @@ impl OrderTicket {
             currency,
             theme.ui.text,
         );
-        if let Some(exit) = request.take_profit {
-            let reward = grouped((exit - entry).abs() * per_point, 2, false);
+        if let Some(reward) = reward(request, entry) {
+            let reward = grouped(reward * rules.point_value, 2, false);
             info(ui, "Reward", &reward, currency, theme.ui.take_profit);
         }
         if let Some(exit) = request.stop_loss {
@@ -435,7 +437,8 @@ impl OrderTicket {
     }
 
     /// The collapsible exits: a take profit and a stop loss, each with a toggle and the way its
-    /// distance is entered.
+    /// distance is entered, then for an account that accepts them the further take-profit levels,
+    /// each with its share of the quantity.
     fn exits(
         &mut self,
         ui: &mut Ui,
@@ -471,8 +474,8 @@ impl OrderTicket {
         );
         let ratio = request.and_then(|request| {
             let entry = entry?;
-            let reward = (request.take_profit? - entry).abs();
-            let risk = (request.stop_loss? - entry).abs();
+            let reward = reward(request, entry)?;
+            let risk = (request.stop_loss? - entry).abs() * request.quantity;
             (risk > 0.0).then(|| reward / risk)
         });
         if let Some(ratio) = ratio {
@@ -498,44 +501,48 @@ impl OrderTicket {
         }
         let side = self.side;
         let tick = market.tick;
-        for (label, profit) in [("Take profit", true), ("Stop loss", false)] {
-            let bracket = if profit {
-                &mut self.take_profit
-            } else {
-                &mut self.stop_loss
-            };
+        // An exit's title, with `control` at its right, and its field. `control` says whether the
+        // field is enabled.
+        let exit_fields = |ui: &mut Ui,
+                           per_point: f64,
+                           profit: bool,
+                           title: &str,
+                           index: usize,
+                           bracket: &mut Bracket,
+                           control: &mut dyn FnMut(&mut Ui) -> bool| {
             let exit = entry.map(|entry| {
-                let price = bracket.1.price(side, entry, tick, per_point, profit);
+                let price = bracket.price(side, entry, tick, per_point, profit);
                 (entry, to_step(price, tick, f64::round))
             });
-            let mut mode = bracket.1.mode;
-            ui.horizontal(|ui| {
-                let response = dropdown(
-                    ui,
-                    format!("{label}, {}", bracket.1.mode.name(market.currency)),
-                );
-                egui::Popup::menu(&response).show(|ui| {
-                    for option in BracketMode::ALL {
-                        ui.selectable_value(
-                            &mut mode,
-                            option,
-                            l10n::text(ui.ctx(), option.name(market.currency)),
-                        );
-                    }
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    toggle(ui, &mut bracket.0, label);
-                });
-            });
+            let mut mode = bracket.mode;
+            let enabled = ui
+                .horizontal(|ui| {
+                    let response = dropdown(
+                        ui,
+                        format!("{title}, {}", bracket.mode.name(market.currency)),
+                    );
+                    egui::Popup::menu(&response).show(|ui| {
+                        for option in BracketMode::ALL {
+                            ui.selectable_value(
+                                &mut mode,
+                                option,
+                                l10n::text(ui.ctx(), option.name(market.currency)),
+                            );
+                        }
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| control(ui))
+                        .inner
+                })
+                .inner;
             let mut swapped = false;
-            ui.add_enabled_ui(bracket.0, |ui| {
+            ui.add_enabled_ui(enabled, |ui| {
                 field(ui, |ui| {
-                    let places = match bracket.1.mode {
+                    let places = match bracket.mode {
                         BracketMode::Price => market.decimals,
                         BracketMode::Ticks => 0,
                         BracketMode::Percent | BracketMode::Money => 2,
                     };
-                    number(ui, label, &mut bracket.1.value, places);
+                    number(ui, (profit, index), &mut bracket.value, places);
                     let Some((entry, price)) = exit else {
                         return;
                     };
@@ -543,7 +550,7 @@ impl OrderTicket {
                         swapped = swap(ui, "Enter the price or its distance in ticks");
                         muted(
                             ui,
-                            &if bracket.1.mode == BracketMode::Price {
+                            &if bracket.mode == BracketMode::Price {
                                 format!("{} ticks", ((price - entry) / tick).abs().round())
                             } else {
                                 market.numbers().price(price)
@@ -559,15 +566,146 @@ impl OrderTicket {
                     BracketMode::Price
                 };
             }
-            if mode != bracket.1.mode {
+            if mode != bracket.mode {
                 // The exit stays where it is: its distance is written in the new way.
-                bracket.1 = match exit {
+                *bracket = match exit {
                     Some((entry, price)) => {
                         Bracket::at(mode, price, side, entry, tick, per_point, profit)
                     }
-                    None => Bracket { mode, ..bracket.1 },
+                    None => Bracket { mode, ..*bracket },
                 };
             }
+        };
+        let level_quantity =
+            |index: usize| request.and_then(|request| request.take_profit_levels.get(index));
+        // What a level earns per price unit, from its quantity in the order while there is one.
+        let level_per_point = |index: usize, share: f64| {
+            level_quantity(index).map_or(per_point * share / 100.0, |level| {
+                level.quantity * market.rules.point_value
+            })
+        };
+        // A level's share in percent, with the quantity it comes to at the right.
+        let share_field = |ui: &mut Ui, index: usize, share: &mut f64| {
+            field(ui, |ui| {
+                number(ui, ("take_profit_share", index), share, 2);
+                let Some(level) = level_quantity(index) else {
+                    return;
+                };
+                let quantity = market
+                    .numbers()
+                    .quantity(level.quantity, decimals(market.rules.quantity_step));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let text =
+                        l10n::format_text(ui.ctx(), "% of the quantity: {0}", &[("0", quantity)]);
+                    muted(ui, &text);
+                });
+            });
+        };
+
+        let offered = market.capabilities.take_profit_levels && self.take_profit.0;
+        let several = offered && !self.levels.is_empty();
+        let mut rest = 100.0 - self.levels.iter().map(|(_, share)| share).sum::<f64>();
+        let (title, first_per_point) = if several {
+            let title = l10n::format_text(ui.ctx(), "Take profit {0}", &[("0", "1".to_owned())]);
+            (title, level_per_point(0, rest))
+        } else {
+            ("Take profit".to_owned(), per_point)
+        };
+        let (on, bracket) = &mut self.take_profit;
+        exit_fields(
+            ui,
+            first_per_point,
+            true,
+            &title,
+            0,
+            bracket,
+            &mut |ui: &mut Ui| {
+                toggle(ui, on, "Take profit");
+                *on
+            },
+        );
+        if several {
+            ui.add_enabled_ui(false, |ui| share_field(ui, 0, &mut rest));
+        }
+        let (on, bracket) = &mut self.stop_loss;
+        exit_fields(
+            ui,
+            per_point,
+            false,
+            "Stop loss",
+            0,
+            bracket,
+            &mut |ui: &mut Ui| {
+                toggle(ui, on, "Stop loss");
+                *on
+            },
+        );
+        if !offered {
+            return;
+        }
+
+        let mut removed = None;
+        for (index, (bracket, share)) in self.levels.iter_mut().enumerate() {
+            let level = index + 1;
+            let title = l10n::format_text(
+                ui.ctx(),
+                "Take profit {0}",
+                &[("0", (level + 1).to_string())],
+            );
+            exit_fields(
+                ui,
+                level_per_point(level, *share),
+                true,
+                &title,
+                level,
+                bracket,
+                &mut |ui: &mut Ui| {
+                    if IconButton::new(&icons::TRASH)
+                        .size(ButtonSize::SM)
+                        .tooltip(l10n::text(ui.ctx(), "Remove level"))
+                        .show(ui)
+                        .clicked()
+                    {
+                        removed = Some(index);
+                    }
+                    true
+                },
+            );
+            share_field(ui, level, share);
+        }
+        if let Some(index) = removed {
+            self.levels.remove(index);
+        }
+        ui.add_space(4.0);
+        if Button::new("Add level").secondary().show(ui).clicked() {
+            let (last, ..) = self
+                .levels
+                .last()
+                .copied()
+                .unwrap_or((self.take_profit.1, 0.0));
+            let share = (rest / 2.0 * 100.0).round() / 100.0;
+            let price = request.and_then(|request| {
+                let last = request.take_profit_levels.last();
+                last.map(|level| level.price).or(request.take_profit)
+            });
+            // As far beyond the last take profit as the form puts the first from the entry.
+            let bracket = match price.zip(entry) {
+                Some((price, entry)) => Bracket::at(
+                    last.mode,
+                    to_step(
+                        price + Bracket::sign(side, true) * 100.0 * tick,
+                        tick,
+                        f64::round,
+                    ),
+                    side,
+                    entry,
+                    tick,
+                    per_point * share / 100.0,
+                    true,
+                ),
+                None => last,
+            };
+            self.levels.push((bracket, share));
         }
     }
 }

@@ -213,14 +213,29 @@ pub fn render_trading_lines<'a>(
             Some(PositionBracket::StopLoss) => Level::StopLoss,
             None => Level::Entry,
         };
-        let levels = [
-            (Level::Entry, entry_price(&request.order_type)),
-            (Level::TakeProfit, request.take_profit),
-            (Level::StopLoss, request.stop_loss),
-        ];
         let initial_entry = entry_price(&request.order_type);
+        // Each level: its kind, its index among the take-profit levels, its price and quantity.
+        let mut levels = vec![(Level::Entry, 0, initial_entry, open)];
+        if request.take_profit_levels.is_empty() {
+            levels.push((Level::TakeProfit, 0, request.take_profit, open));
+        }
+        levels.extend(
+            request
+                .take_profit_levels
+                .iter()
+                .enumerate()
+                .map(|(index, take_profit)| {
+                    (
+                        Level::TakeProfit,
+                        index,
+                        Some(take_profit.price),
+                        take_profit.quantity,
+                    )
+                }),
+        );
+        levels.push((Level::StopLoss, 0, request.stop_loss, open));
         let mut parent_price = initial_entry;
-        for (level, price) in levels {
+        for (level, index, price, quantity) in levels {
             let Some(price) = price.filter(|price| price.is_finite()) else {
                 continue;
             };
@@ -253,7 +268,7 @@ pub fn render_trading_lines<'a>(
                 (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
                     let gain = (price - entry)
                         * parent.map_or(direction(request.side), |p| p.quantity.signum());
-                    let money = gain * open * options.point_value;
+                    let money = gain * quantity * options.point_value;
                     pnl_text(&ctx, unit, money, gain, entry, options).0
                 }
                 _ => name.clone(),
@@ -271,14 +286,14 @@ pub fn render_trading_lines<'a>(
                 id: ("trading_order", &order.id.0),
                 body: &body,
                 body_color: color,
-                quantity: open,
+                quantity,
                 buttons: if cancel { &[Button::Cancel] } else { &[] },
                 draggable: options.modify,
                 submit: (options.submit && level == Level::Entry).then_some(request.side),
             };
             let first_tag = tags.len();
             let (dragged, pressed) = ui
-                .push_id(level as u8, |ui| {
+                .push_id((level as u8, index), |ui| {
                     label.show(ui, mapping, options, &line, &mut tags)
                 })
                 .inner;
@@ -338,10 +353,19 @@ pub fn render_trading_lines<'a>(
                             other => other,
                         };
                         changed.take_profit = changed.take_profit.map(shift);
+                        for take_profit in &mut changed.take_profit_levels {
+                            take_profit.price = shift(take_profit.price);
+                        }
                         changed.stop_loss = changed.stop_loss.map(shift);
                     }
                 }
-                Level::TakeProfit => changed.take_profit = price,
+                Level::TakeProfit if changed.take_profit_levels.is_empty() => {
+                    changed.take_profit = price;
+                }
+                Level::TakeProfit => match price {
+                    Some(price) => changed.take_profit_levels[index].price = price,
+                    None => remove_take_profit_level(&mut changed, index),
+                },
                 Level::StopLoss => changed.stop_loss = price,
             }
             action = action.or(Some(TradingLineAction::Modify(order.clone(), changed)));
@@ -352,6 +376,22 @@ pub fn render_trading_lines<'a>(
         tags,
         outlined,
         submitted,
+    }
+}
+
+/// Removes a take-profit level, adding its quantity to the level before it, or after it for the
+/// first. The last level left becomes the order's single take profit.
+fn remove_take_profit_level(request: &mut OrderRequest, index: usize) {
+    let levels = &mut request.take_profit_levels;
+    let removed = levels.remove(index);
+    if let Some(neighbour) = levels.get_mut(index.saturating_sub(1)) {
+        let places = decimals(removed.quantity).max(decimals(neighbour.quantity));
+        let scale = 10f64.powi(places as i32);
+        neighbour.quantity = ((neighbour.quantity + removed.quantity) * scale).round() / scale;
+    }
+    if let [only] = levels.as_slice() {
+        request.take_profit = Some(only.price);
+        levels.clear();
     }
 }
 

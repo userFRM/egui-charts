@@ -377,7 +377,14 @@ impl Trading {
             if finished {
                 cells.push(plain(optional(&request.symbol, order.fill_price)));
             } else {
-                cells.push(plain(optional(&request.symbol, request.take_profit)));
+                cells.push(plain(if request.take_profit_levels.is_empty() {
+                    optional(&request.symbol, request.take_profit)
+                } else {
+                    (request.take_profit_levels.iter())
+                        .map(|level| price(&request.symbol, level.price))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }));
                 cells.push(plain(optional(&request.symbol, request.stop_loss)));
             }
             cells.push(plain(status(&order.status)));
@@ -842,7 +849,11 @@ impl Trading {
                         ui.end_row();
                     };
                     ui.label(l10n::text(ui.ctx(), "Quantity"));
-                    ui.add(egui::DragValue::new(&mut request.quantity).range(0.0..=f64::MAX));
+                    // The levels' quantities add up to it; they are changed on the chart.
+                    ui.add_enabled(
+                        request.take_profit_levels.is_empty(),
+                        egui::DragValue::new(&mut request.quantity).range(0.0..=f64::MAX),
+                    );
                     ui.end_row();
                     match &mut request.order_type {
                         OrderType::Limit(limit) => price(ui, "Limit price", limit),
@@ -859,10 +870,22 @@ impl Trading {
                             OrderType::StopLimit { limit, .. } => limit,
                             _ => 0.0,
                         };
-                        for (label, bracket) in [
-                            ("Take profit", &mut request.take_profit),
-                            ("Stop loss", &mut request.stop_loss),
-                        ] {
+                        for (index, level) in request.take_profit_levels.iter_mut().enumerate() {
+                            let label = l10n::format_text(
+                                ui.ctx(),
+                                "Take profit {0}",
+                                &[("0", (index + 1).to_string())],
+                            );
+                            price(ui, &label, &mut level.price);
+                        }
+                        let single = request
+                            .take_profit_levels
+                            .is_empty()
+                            .then_some(("Take profit", &mut request.take_profit));
+                        for (label, bracket) in single
+                            .into_iter()
+                            .chain([("Stop loss", &mut request.stop_loss)])
+                        {
                             let mut on = bracket.is_some();
                             ui.checkbox(&mut on, label);
                             if on {
