@@ -33,6 +33,7 @@ pub enum ElliottDegree {
 
 impl ElliottDegree {
     /// Every degree, from the largest to the smallest.
+    #[cfg(feature = "ui")]
     pub(crate) const ALL: [Self; 9] = [
         Self::GrandSupercycle,
         Self::Supercycle,
@@ -46,6 +47,7 @@ impl ElliottDegree {
     ];
 
     /// The name of the degree, such as "Minor".
+    #[cfg(feature = "ui")]
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::GrandSupercycle => "Grand Supercycle",
