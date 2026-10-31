@@ -99,6 +99,49 @@ pub struct PlotStyle {
     pub visible: bool,
 }
 
+/// Editable presentation of one reference level in a study's pane, such as 70 for RSI.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct LevelStyle {
+    /// Value the level is drawn at, or `None` for the value the study declares, which can
+    /// follow its inputs.
+    pub value: Option<f64>,
+    /// Line colour.
+    pub color: Color32,
+    /// Stroke pattern.
+    pub pattern: LineStyle,
+    /// Whether the line is drawn. A hidden level still bounds the fill between the outer levels.
+    pub visible: bool,
+}
+
+/// The levels and fill a study declares, as the defaults of its level settings.
+pub(super) fn declared_levels<S: Indicator + ?Sized>(
+    study: &S,
+) -> (Vec<LevelStyle>, bool, Color32) {
+    let pane = study.pane();
+    let levels = pane
+        .levels
+        .iter()
+        .map(|&(value, color, _)| LevelStyle {
+            value: None,
+            color,
+            pattern: study.level_style(value),
+            visible: true,
+        })
+        .collect();
+    (levels, pane.fill_between_levels, study.level_fill_color())
+}
+
+/// Settings without one style per declared level take the study's own levels and fill.
+fn match_declared_levels(study: &dyn Indicator, settings: &mut StudySettings) {
+    let (levels, fill, color) = declared_levels(study);
+    if settings.levels.len() != levels.len() {
+        settings.levels = levels;
+        settings.fill_between_levels = fill;
+        settings.level_fill_color = color;
+    }
+}
+
 /// Interval visibility evaluated for every interval, including custom and trade-based ones.
 /// Ordered ranges compare nominal duration for time bars and thresholds within the same
 /// trade-based family. Other families are outside the range. `Only` matches the exact interval.
@@ -154,6 +197,17 @@ pub struct StudySettings {
     /// every interval except those in `hidden_intervals`.
     #[serde(default)]
     pub interval_range: StudyIntervalRange,
+    /// One style per level of the study's pane, in the order of
+    /// [`StudyPane::levels`](super::StudyPane::levels). Settings saved before levels were
+    /// editable, and settings with another number of levels, take the study's own levels and fill.
+    #[serde(default)]
+    pub levels: Vec<LevelStyle>,
+    /// Whether the band between the lowest and the highest level is filled.
+    #[serde(default)]
+    pub fill_between_levels: bool,
+    /// Colour of the band between the lowest and the highest level.
+    #[serde(default)]
+    pub level_fill_color: Color32,
 }
 
 /// An owned settings and input snapshot without calculated study data.
@@ -284,6 +338,7 @@ impl ConfiguredStudy {
         {
             plot.visible = true;
         }
+        match_declared_levels(study.as_ref(), &mut settings);
         Self {
             study,
             settings,
@@ -754,6 +809,10 @@ impl Indicator for ConfiguredStudy {
                 .plots
                 .iter()
                 .any(|plot| !plot.width.is_finite() || !(0.5..=10.0).contains(&plot.width))
+            || settings
+                .levels
+                .iter()
+                .any(|level| level.value.is_some_and(|value| !value.is_finite()))
         {
             return Err("invalid study presentation settings");
         }
@@ -780,6 +839,7 @@ impl Indicator for ConfiguredStudy {
         if settings.plots.len() != edited.line_count() {
             return Err("one style is required per study plot");
         }
+        match_declared_levels(edited.study.as_ref(), &mut settings);
         // Unchanged plot colours must retain any per-bar palette stored by the study.
         for (line, plot) in settings.plots.iter().enumerate() {
             if plot.color != edited.study.plot_style(line).color {
@@ -888,13 +948,33 @@ impl Indicator for ConfiguredStudy {
         self.study.is_volume()
     }
     fn level_style(&self, value: f64) -> LineStyle {
-        self.study.level_style(value)
+        // Levels moved onto one value draw with the pattern of the first visible one.
+        self.study
+            .pane()
+            .levels
+            .iter()
+            .zip(&self.settings.levels)
+            .find(|((declared, ..), style)| {
+                style.visible && style.value.unwrap_or(*declared) == value
+            })
+            .map_or_else(|| self.study.level_style(value), |(_, style)| style.pattern)
     }
     fn level_fill_color(&self) -> Color32 {
-        self.study.level_fill_color()
+        self.settings.level_fill_color
     }
     fn pane(&self) -> super::StudyPane {
-        self.study.pane()
+        let mut pane = self.study.pane();
+        for ((value, color, _), style) in pane.levels.iter_mut().zip(&self.settings.levels) {
+            *value = style.value.unwrap_or(*value);
+            // A hidden level still bounds the fill; its transparent line is not drawn.
+            *color = if style.visible {
+                style.color
+            } else {
+                Color32::TRANSPARENT
+            };
+        }
+        pane.fill_between_levels = self.settings.fill_between_levels;
+        pane
     }
     fn is_overlay(&self) -> bool {
         self.overlay.unwrap_or_else(|| self.study.is_overlay())
@@ -1112,5 +1192,63 @@ mod tests {
         let restored: StudySettings = serde_json::from_str(&saved).unwrap();
         assert!(!restored.plots[0].visible);
         assert_eq!(restored.hidden_intervals, [Timeframe::Min1]);
+    }
+
+    #[test]
+    fn rsi_levels_round_trip_and_older_settings_take_the_declared_levels() {
+        use crate::studies::{AdxBreakout, RSI, palette};
+        let values = |study: &ConfiguredStudy| -> Vec<f64> {
+            study.pane().levels.iter().map(|level| level.0).collect()
+        };
+        let mut study = ConfiguredStudy::new(Box::new(RSI::default()));
+        let declared = study.settings();
+        assert_eq!(
+            declared
+                .levels
+                .iter()
+                .map(|l| (l.value, l.color, l.pattern, l.visible))
+                .collect::<Vec<_>>(),
+            [(None, palette::MUTED, LineStyle::Dashed, true); 2]
+        );
+        assert!(declared.fill_between_levels);
+        assert_eq!(
+            declared.level_fill_color,
+            Color32::from_rgba_unmultiplied(126, 87, 194, 26)
+        );
+        let before = study.snapshot_settings();
+        let mut edited = declared.clone();
+        edited.levels[0].value = Some(80.0);
+        edited.levels[1].visible = false;
+        study.apply_settings(&[], edited.clone()).unwrap();
+        assert_eq!(values(&study), [80.0, 30.0]);
+        // Templates, copies and layouts rebuild a fresh study from the saved JSON.
+        let saved = serde_json::to_value(&edited).unwrap();
+        let mut loaded = ConfiguredStudy::new(Box::new(RSI::default()));
+        loaded
+            .apply_settings(&[], serde_json::from_value(saved.clone()).unwrap())
+            .unwrap();
+        assert_eq!(loaded.settings(), edited);
+        let mut older = saved;
+        for key in ["levels", "fill_between_levels", "level_fill_color"] {
+            older.as_object_mut().unwrap().remove(key);
+        }
+        loaded
+            .apply_settings(&[], serde_json::from_value(older).unwrap())
+            .unwrap();
+        assert_eq!(loaded.settings(), declared);
+        study.restore_settings(&before).unwrap();
+        assert_eq!(values(&study), [70.0, 30.0]);
+        let mut invalid = declared.clone();
+        invalid.levels[0].value = Some(f64::INFINITY);
+        assert_eq!(
+            study.apply_settings(&[], invalid),
+            Err("invalid study presentation settings")
+        );
+        assert_eq!(study.settings(), declared);
+        let mut adx = ConfiguredStudy::new(Box::new(AdxBreakout::default()));
+        let settings = adx.settings();
+        adx.apply_settings(&[("threshold".into(), InputValue::Length(25))], settings)
+            .unwrap();
+        assert_eq!(values(&adx), [25.0]);
     }
 }
