@@ -140,6 +140,8 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(Median::new(l(0), l(1), x(2.0))),
         Box::new(Volume::new(l(0))),
         Box::new(UpDownVolume::new()),
+        Box::new(VolumeDelta::new()),
+        Box::new(CumulativeVolumeDelta::new()),
         Box::new(OnBalanceVolume::new()),
         Box::new(VolumeWeightedAvgPrice::new().with_std_dev_bands([x(1.0), x(2.0)])),
         Box::new(AnchoredVWAP::new(0)),

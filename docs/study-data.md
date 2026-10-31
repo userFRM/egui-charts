@@ -17,11 +17,16 @@ only finite prices in that range contribute to the arithmetic mean. The resultin
 price remains available to the legend and last-value label when the latest bar is outside
 the viewport.
 
-Up/Down Volume needs actual intrabars from the host. Its `data_requests` declaration uses one
-second on second charts, one minute on minute and hour charts, five minutes on daily charts
-and one hour on longer intervals. A custom interval that cannot contain whole candles of
-that size uses one-second intrabars. Subsecond and tick-count charts have no request. Supply
-the same symbol and session as the chart. Read the request again after a symbol or interval change:
+Up/Down Volume, Volume Delta and Cumulative Volume Delta need actual intrabars from the host.
+Their `data_requests` declaration uses one second on second charts, one minute on minute and
+hour charts, five minutes on daily charts and one hour on longer intervals. A custom interval
+that cannot contain whole candles of that size uses one-second intrabars. The Lower interval
+input chooses another interval; one that is not shorter than the chart's or does not divide it
+reads the automatic one. Subsecond and tick-count charts have no request. 24-hour Volume
+requests the automatic interval only where chart bars cannot hold exactly 24 hours, on intervals
+longer than a day or that do not divide one, and sums chart bars until it is supplied. Supply
+the same symbol and session as the chart. Read the request again after a symbol, interval or
+input change:
 
 ```rust
 use egui_charts::{Chart, model::{Bar, Instrument}, studies::StudyDataRequest};
@@ -46,10 +51,10 @@ invalid prices, negative volume or unordered timestamps leave accepted values un
 Pass `from = 0` whenever a requested history changes. A nonzero `from` reuses those histories
 and updates the changed chart bars; the chart supplies this invalidation automatically.
 An unavailable or stale interval leaves gaps. Include the earlier intrabar when its close is
-needed to classify a doji. Empty history clears the values; missing parent intervals remain
-unavailable, while supplied zero volume produces zero. Accounts, feed selection, retrieval,
-subscriptions and retries belong to the host. No split is inferred from a parent candle's
-direction or total volume.
+needed to classify a doji. Empty history clears the values, and 24-hour Volume returns to
+summing chart bars; missing parent intervals remain unavailable, while supplied zero volume
+produces zero. Accounts, feed selection, retrieval, subscriptions and retries belong to the
+host. No split is inferred from a parent candle's direction or total volume.
 
 `Indicator::table` exposes labelled percentages independently of plots, including Performance's
 six periods and Seasonality's years and summary rows. The shared chart renderer paints them

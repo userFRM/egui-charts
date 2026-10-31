@@ -514,7 +514,7 @@ Studies,Indicator infrastructure,Settings dialog: Visibility tab,done,library,sr
 Studies,Indicator infrastructure,Show or hide a study,done,library,src/widget/series.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
 Studies,Indicator infrastructure,Source input,done,library,src/studies/settings.rs;src/widget/studies.rs;src/studies/indicator_trait.rs;src/ui/dialogs/indicator_dialog/settings.rs
 Studies,Indicator infrastructure,Study levels and the fill between them,done,library,src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/widget/indicator_pane.rs;src/studies/indicator_trait.rs
-Studies,Indicators,24-hour Volume,done,library,src/studies/builtin/volume_24h.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,24-hour Volume,done,library,src/studies/builtin/volume_24h.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/builtin/lower_interval.rs
 Studies,Indicators,52 Week High/Low,done,library,src/studies/builtin/week52_highlow.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Accelerator Oscillator,done,library,src/studies/builtin/accelerator_oscillator.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Accumulation Distribution,done,library,src/studies/builtin/acc_dist.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
@@ -624,7 +624,7 @@ Studies,Indicators,Correlation - Log,missing,library,
 Studies,Indicators,Correlation Coefficient,missing,library,
 Studies,Indicators,Crypto derivatives metrics,done,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Crypto on-chain and ETF metrics,done,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Cumulative Volume Delta,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs
+Studies,Indicators,Cumulative Volume Delta,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs;src/studies/builtin/volume_delta.rs;src/studies/builtin/lower_interval.rs
 Studies,Indicators,Cumulative Volume Index,done,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs
 Studies,Indicators,Detrended Price Oscillator,done,library,src/studies/builtin/dpo.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Directional Movement,done,library,src/studies/builtin/directional_movement.rs;src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
@@ -731,7 +731,7 @@ Studies,Indicators,True Strength Index,done,library,src/studies/builtin/true_str
 Studies,Indicators,Typical Price,done,library,src/studies/builtin/typical_price.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Ulcer Index,done,library,src/studies/builtin/ulcer_index.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Ultimate Oscillator,done,library,src/studies/builtin/ultimate_oscillator.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Up/Down Volume,done,library,src/studies/builtin/up_down_volume.rs;src/widget/studies_data.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Up/Down Volume,done,library,src/studies/builtin/up_down_volume.rs;src/widget/studies_data.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/builtin/lower_interval.rs
 Studies,Indicators,VWAP Auto Anchored,done,library,src/studies/builtin/vwap_auto_anchored.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Visible Average Price,done,library,src/studies/builtin/visible_average_price.rs;src/widget/series.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Visible Range Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/studies/data.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/settings.rs
@@ -741,7 +741,7 @@ Studies,Indicators,Volatility O-H-L-C,done,library,src/studies/builtin/ohlc_vola
 Studies,Indicators,Volatility Stop,done,library,src/studies/builtin/volatility_stop.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Volatility Zero Trend Close-to-Close,done,library,src/studies/builtin/zero_trend_vol.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Volume,done,library,src/studies/builtin/volume.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/widget/volume.rs;src/studies/palette.rs
-Studies,Indicators,Volume Delta,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs
+Studies,Indicators,Volume Delta,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs;src/studies/builtin/volume_delta.rs;src/studies/builtin/lower_interval.rs
 Studies,Indicators,Volume Weighted Average Price,done,library,src/studies/builtin/vwap.rs;src/studies/settings.rs;src/widget/series.rs
 Studies,Indicators,Volume-Weighted Moving Average,done,library,src/studies/builtin/vwma.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Vortex Indicator,done,library,src/studies/builtin/vortex.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
