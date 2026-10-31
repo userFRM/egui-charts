@@ -50,7 +50,8 @@
 //!   range (high minus low on the first bar) or Wilder's average of the bar range over the middle
 //!   line's length; the simple averages of the highs and of the lows for the MA Channel; and
 //!   separate upper and lower residual deviations for the regression channel.
-//! - McGinley for the McGinley Dynamic.
+//! - McGinley for the McGinley Dynamic; Appel's MACD over simple averages; Wilder's true range under
+//!   simple, exponential and weighted averages.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
@@ -72,11 +73,15 @@
 //! Median takes the nearest-rank median (the lower middle value for an even length) and seeds its EMA
 //! with the mean of the first medians, the Chop Zone seeds its EMA with the mean of the first 34 closes,
 //! and the Volatility Stop starts at the first close in an uptrend and uses the bar's true range as its
-//! band until its ATR has a full length. The McGinley Dynamic starts at the first close.
+//! band until its ATR has a full length. The McGinley Dynamic starts at the first close; a
+//! simple MACD signal averages the MACD values only, and an exponential one starts at the first; ATR's
+//! simple, exponential and weighted smoothings start on the period-th true range, the exponential one at
+//! their mean.
 
 use crate::model::Bar;
 use crate::studies::{
-    ADX, ATR, AccumulationDistribution, Aroon, AwesomeOscillator, BalanceOfPower, BollingerBands,
+    ADX, ATR, AccumulationDistribution, Aroon, AtrSmoothing, AwesomeOscillator, BalanceOfPower,
+    BollingerBands,
     BollingerBandsWidth, CCI, ChaikinMoneyFlow, ChaikinVolatility, ChandeMomentumOscillator,
     ChoppinessIndex, CommoditySelectionIndex, CoppockCurve, DEMA, DirectionalMovement,
     DonchianChannels, EMA, ElderRay, EnvelopeAverage, Envelopes, ForceIndex, HL2, HLC3, HMA,
@@ -535,8 +540,34 @@ fn staple_studies_match_published_definitions() {
         ("RSI(14)", Box::new(RSI::default())),
         ("StochRSI(14,14,3,3)", Box::new(StochasticRSI::default())),
         ("MACD(12,26,9)", Box::new(MACD::default())),
+        (
+            "MACD(12,26,9,SMA,SMA)",
+            Box::new(MACD::new(12, 26, 9).with_averages(
+                OscillatorAverage::Simple,
+                OscillatorAverage::Simple,
+            )),
+        ),
+        (
+            "MACD(12,26,9,SMA,EMA)",
+            Box::new(MACD::new(12, 26, 9).with_averages(
+                OscillatorAverage::Simple,
+                OscillatorAverage::Exponential,
+            )),
+        ),
         ("BB(20,2)", Box::new(BollingerBands::default())),
         ("ATR(14)", Box::new(ATR::default())),
+        (
+            "ATR(14,SMA)",
+            Box::new(ATR::new(14).with_smoothing(AtrSmoothing::Simple)),
+        ),
+        (
+            "ATR(14,EMA)",
+            Box::new(ATR::new(14).with_smoothing(AtrSmoothing::Exponential)),
+        ),
+        (
+            "ATR(14,WMA)",
+            Box::new(ATR::new(14).with_smoothing(AtrSmoothing::Weighted)),
+        ),
         ("ADX(14)", Box::new(ADX::default())),
         ("DMI(14)", Box::new(DirectionalMovement::default())),
         (

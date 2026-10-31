@@ -10,7 +10,8 @@ use std::collections::VecDeque;
 /// [`KeltnerChannels`](super::KeltnerChannels).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OscillatorAverage {
-    /// Alpha 2/(length+1), seeded with the mean of the first `length` values.
+    /// Alpha 2/(length+1). The Price and Percentage Volume Oscillators and Keltner's middle line
+    /// seed it with the mean of the first `length` values, MACD with the first value.
     Exponential,
     /// Arithmetic mean of the last `length` values.
     Simple,

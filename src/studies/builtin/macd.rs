@@ -1,9 +1,9 @@
 //! Moving Average Convergence Divergence (MACD) indicator.
 //!
 //! MACD is a trend-following momentum indicator that shows the
-//! relationship between two exponential moving averages of closing
-//! prices. It consists of three output lines plotted in a separate
-//! sub-pane.
+//! relationship between two moving averages of closing prices,
+//! exponential by default. It consists of three output lines plotted in
+//! a separate sub-pane.
 //!
 //! # Components
 //!
@@ -21,6 +21,12 @@
 //! - MACD crossing below signal: bearish momentum.
 //! - Histogram shrinking toward zero: momentum slowing.
 //! - Divergence between MACD and price: potential reversal.
+//!
+//! # Averages
+//!
+//! Each exponential average starts at its first value. With simple averages the MACD line starts
+//! once both have a full window; a simple signal is the mean of the last `signal_period` MACD
+//! values, and an exponential one starts at the first MACD value.
 //!
 //! # Default colours
 //!
@@ -42,6 +48,7 @@
 //! }
 //! ```
 
+use super::price_oscillator::{Mean, OscillatorAverage};
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
@@ -57,6 +64,10 @@ pub struct MACD {
     fast_period: usize,
     slow_period: usize,
     signal_period: usize,
+    /// Formula of the fast and slow averages.
+    oscillator_average: OscillatorAverage,
+    /// Formula of the signal line.
+    signal_average: OscillatorAverage,
     values: IndicatorValues,
     stepper: Stepper<State>,
     colors: Vec<Color32>,
@@ -66,9 +77,13 @@ pub struct MACD {
 #[derive(Clone, Default)]
 struct State {
     usable: usize,
+    /// Bars with a MACD value.
+    defined: usize,
     fast: f64,
     slow: f64,
     signal: f64,
+    /// The fast, slow and signal simple averages.
+    means: [Mean; 3],
 }
 
 impl MACD {
@@ -83,6 +98,8 @@ impl MACD {
             fast_period: fast_period.max(1),
             slow_period: slow_period.max(1),
             signal_period: signal_period.max(1),
+            oscillator_average: OscillatorAverage::Exponential,
+            signal_average: OscillatorAverage::Exponential,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
@@ -95,6 +112,18 @@ impl MACD {
             ],
             visible: true,
         }
+    }
+
+    /// Choose the formula of the fast and slow averages and of the signal line; both exponential
+    /// by default.
+    pub fn with_averages(
+        mut self,
+        oscillator: OscillatorAverage,
+        signal: OscillatorAverage,
+    ) -> Self {
+        self.oscillator_average = oscillator;
+        self.signal_average = signal;
+        self
     }
 }
 
@@ -115,7 +144,9 @@ impl Indicator for MACD {
     crate::studies::inputs::study_inputs!(self;
         fast_period: length("Fast period", 1, usize::MAX),
         slow_period: length("Slow period", 1, usize::MAX),
-        signal_period: length("Signal period", 1, usize::MAX)
+        signal_period: length("Signal period", 1, usize::MAX),
+        oscillator_average: choice("Oscillator MA", [OscillatorAverage::Exponential, OscillatorAverage::Simple]),
+        signal_average: choice("Signal MA", [OscillatorAverage::Exponential, OscillatorAverage::Simple])
     ; {});
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
@@ -171,21 +202,53 @@ impl Indicator for MACD {
                 if !bar.close.is_finite() {
                     return IndicatorValue::None;
                 }
-                if state.usable == 0 {
-                    state.fast = bar.close;
-                    state.slow = bar.close;
-                } else {
-                    state.fast = (bar.close - state.fast) * fast_mult + state.fast;
-                    state.slow = (bar.close - state.slow) * slow_mult + state.slow;
-                }
-                let macd = state.fast - state.slow;
-                state.signal = if state.usable == 0 {
-                    macd
-                } else {
-                    (macd - state.signal) * signal_mult + state.signal
+                let (fast, slow) = match self.oscillator_average {
+                    OscillatorAverage::Exponential => {
+                        if state.usable == 0 {
+                            state.fast = bar.close;
+                            state.slow = bar.close;
+                        } else {
+                            state.fast = (bar.close - state.fast) * fast_mult + state.fast;
+                            state.slow = (bar.close - state.slow) * slow_mult + state.slow;
+                        }
+                        (state.fast, state.slow)
+                    }
+                    OscillatorAverage::Simple => (
+                        state.means[0].next(
+                            OscillatorAverage::Simple,
+                            bar.close,
+                            self.fast_period,
+                        ),
+                        state.means[1].next(
+                            OscillatorAverage::Simple,
+                            bar.close,
+                            self.slow_period,
+                        ),
+                    ),
                 };
                 state.usable += 1;
-                IndicatorValue::Multiple(vec![macd, state.signal, macd - state.signal])
+                let macd = fast - slow;
+                // A simple average still filling its window.
+                if !macd.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let signal = match self.signal_average {
+                    OscillatorAverage::Exponential => {
+                        state.signal = if state.defined == 0 {
+                            macd
+                        } else {
+                            (macd - state.signal) * signal_mult + state.signal
+                        };
+                        state.signal
+                    }
+                    OscillatorAverage::Simple => state.means[2].next(
+                        OscillatorAverage::Simple,
+                        macd,
+                        self.signal_period,
+                    ),
+                };
+                state.defined += 1;
+                IndicatorValue::Multiple(vec![macd, signal, macd - signal])
             });
         if self.stepper.state().usable < threshold {
             self.values.fill(IndicatorValue::None);
