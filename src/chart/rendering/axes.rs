@@ -623,7 +623,7 @@ pub fn axis_settings_button(ui: &mut egui::Ui, corner: Rect) -> egui::Response {
         egui::Sense::click(),
     );
     crate::icons::icons::SETTINGS
-        .as_image_tinted(Vec2::splat(16.0), ui.ctx().active_theme().chart.axis_text)
+        .as_image_tinted(Vec2::splat(16.0), ui.ctx().active_theme().ui.text)
         .paint_at(
             ui,
             Rect::from_center_size(target.center(), Vec2::splat(16.0)),
