@@ -56,7 +56,7 @@ use crate::model::{
 /// holds, [`OncePerBar`](AlertFrequency::OncePerBar) at most once per bar open time, and
 /// [`OncePerBarClose`](AlertFrequency::OncePerBarClose) evaluates each completed bar once.
 /// [`OncePerMinute`](AlertFrequency::OncePerMinute) fires at most once per minute of the update
-/// time `now`.
+/// time `now`; moving the clock backwards does not repeat a minute.
 ///
 /// *Schedule.* An alert's `schedule` restricts triggers. Outside it the engine keeps observing
 /// values for crossings, but does not fire or consume an occurrence. A once alert stays armed.
@@ -519,9 +519,10 @@ fn evaluate<'a>(
         && match alert.frequency {
             AlertFrequency::Once => !run.done,
             AlertFrequency::EveryTime => true,
-            AlertFrequency::OncePerBar
-            | AlertFrequency::OncePerBarClose
-            | AlertFrequency::OncePerMinute => {
+            AlertFrequency::OncePerMinute => run
+                .fired
+                .is_none_or(|last| occurrence(alert.frequency, bar, now) > last),
+            AlertFrequency::OncePerBar | AlertFrequency::OncePerBarClose => {
                 run.fired != Some(occurrence(alert.frequency, bar, now))
             }
         };
@@ -1400,7 +1401,18 @@ mod tests {
         host.events();
         // UTC seconds -61, -60 and 0 belong to minutes 23:58, 23:59 and 00:00.
         // The chart bar never changes; neither boundaries nor occurrence counts use its time.
-        for (now, count) in [(-61, 2), (-60, 2), (-1, 0), (0, 2), (59, 0), (60, 2)] {
+        for (now, count) in [
+            (-61, 2),
+            (-60, 2),
+            (-1, 0),
+            (0, 2),
+            (59, 0),
+            (60, 2),
+            // A corrected clock must not fire a minute a second time.
+            (0, 0),
+            (60, 0),
+            (120, 2),
+        ] {
             for symbol in ["SYM", "OTHER"] {
                 host.engine.update(
                     symbol,
