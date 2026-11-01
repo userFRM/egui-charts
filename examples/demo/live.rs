@@ -55,7 +55,7 @@ struct Simulation {
     /// The ex-date and price factor stay fixed for the life of the feed.
     dividend: Option<(DateTime<Utc>, f64)>,
     subscription: Option<Subscription>,
-    /// Each chart subscription keeps its own symbol, session and order book.
+    /// Each subscription has its own book; one idle stream per symbol preserves reload history.
     streams: Vec<LiveFeed>,
     signals: Vec<Events<SignalEvent>>,
     options: Vec<(OptionsVolumeQuery, OptionsVolumeSink)>,
@@ -152,8 +152,15 @@ impl LiveFeed {
             let continuous = sim.continuous;
             let adjusted = sim.adjusted;
             let options = std::mem::take(&mut sim.options);
+            let source = sim
+                .streams
+                .iter()
+                .find(|feed| feed.state().symbol == symbol)
+                .map(LiveFeed::fork)
+                .unwrap_or_else(|| Self::new(symbol, sim.now));
+            source.advance(sim.now);
             let streams = std::mem::take(&mut sim.streams);
-            *sim = Self::new(symbol, sim.now)
+            *sim = source
                 .0
                 .into_inner()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -172,6 +179,11 @@ impl LiveFeed {
         let mut sim = self.state();
         sim.continuous = session == SessionType::Full24x7;
         sim.adjusted = adjusted;
+        for feed in &sim.streams {
+            if feed.state().subscription.is_none() {
+                feed.set_view(session, adjusted);
+            }
+        }
     }
 
     pub(super) fn snapshot(
@@ -383,12 +395,13 @@ impl LiveFeed {
             feed.state()
                 .subscription
                 .as_ref()
-                .is_some_and(|sub| sub.sink.is_active())
+                .is_none_or(|sub| sub.sink.is_active())
         });
         let mut to_stream = std::time::Duration::MAX;
         for feed in &sim.streams {
-            feed.set_paused(false);
-            to_stream = to_stream.min(feed.advance(now));
+            if feed.state().subscription.is_some() {
+                to_stream = to_stream.min(feed.advance(now));
+            }
         }
         let metric_changed = sim.now.timestamp().div_euclid(300) != now.timestamp().div_euclid(300);
         if metric_changed {
@@ -1019,6 +1032,8 @@ impl Datafeed for LiveFeed {
         feed.set_symbol(&subscription.symbol);
         let (session, adjusted) = self.view(subscription.extended_hours);
         feed.set_view(session, adjusted);
+        feed.set_paused(false);
+        feed.advance(self.now());
         let mut sim = feed.state();
         subscription.sink.set_server_time(sim.now);
         for trade in &sim.trades {
@@ -1026,8 +1041,6 @@ impl Datafeed for LiveFeed {
                 subscription.sink.push_tick(trade);
             }
         }
-        sim.market = None;
-        sim.orders = None;
         if let Some(last) = sim.shown_ticks(sim.now, subscription.extended_hours) {
             let market = Market::new(&sim.symbol, sim.tick_size, last, sim.random);
             sim.orders = order_level(&sim.symbol, &market, sim.now, sim.tick_size, sim.random);
@@ -1039,18 +1052,41 @@ impl Datafeed for LiveFeed {
         subscription.sink.set_status(FeedStatus::Live);
         sim.subscription = Some(subscription);
         drop(sim);
-        self.state().streams.push(feed);
+        let mut sim = self.state();
+        sim.streams.retain(|other| {
+            let other = other.state();
+            other.subscription.is_some() || other.symbol != feed.state().symbol
+        });
+        sim.streams.push(feed);
     }
 
     fn unsubscribe(&self, id: SubscriptionId) {
         let mut sim = self.state();
         sim.metrics.retain(|sub| sub.id != id);
-        sim.streams.retain(|feed| {
+        let Some(index) = sim.streams.iter().position(|feed| {
             feed.state()
                 .subscription
                 .as_ref()
-                .is_none_or(|sub| sub.id != id)
-        });
+                .is_some_and(|sub| sub.id == id)
+        }) else {
+            return;
+        };
+        let feed = sim.streams.remove(index);
+        let mut source = feed.state();
+        if sim
+            .streams
+            .iter()
+            .any(|other| other.state().symbol == source.symbol)
+        {
+            return;
+        }
+        source.subscription = None;
+        source.market = None;
+        source.orders = None;
+        source.continuous = sim.continuous;
+        source.adjusted = sim.adjusted;
+        drop(source);
+        sim.streams.push(feed);
     }
 
     fn request_depth_snapshot(&self, id: SubscriptionId) {
@@ -1127,64 +1163,81 @@ mod tests {
     use std::sync::Arc;
 
     /// Resolving and subscribing another symbol must leave the existing histories and streams
-    /// on their own symbols, including when one chart reloads its subscription.
+    /// on their own symbols and sessions, including reloads across an hour or the regular close.
     #[test]
     fn subscriptions_keep_their_symbols_after_a_third_symbol_resolves() {
-        let now = "2026-10-23T14:00:00Z".parse().unwrap();
-        let feed = Arc::new(LiveFeed::new("SAMPLE", now));
-        let ctx = egui::Context::default();
-        let frame = |chart: &mut egui_charts::Chart| {
-            ctx.run_ui(egui::RawInput::default(), |ui| {
-                chart.show(ui);
-            })
-            .drop_without_applying_deltas();
-        };
-        let mut charts = Vec::new();
-        let mut references = Vec::new();
-        for symbol in ["SAMPLE", "EURUSD", ORDER_LEVEL_SYMBOL] {
-            let mut chart = ChartBuilder::new()
-                .with_feed(feed.clone())
-                .with_symbol(symbol)
-                .with_initial_bars(100)
-                .build();
-            for _ in 0..4 {
-                frame(&mut chart);
-            }
-            charts.push(chart);
-            references.push(LiveFeed::new(symbol, now));
-        }
-        for seconds in [2, 4] {
-            if seconds == 4 {
-                charts[0].reload_feed();
+        for (now, session) in [
+            ("2026-10-23T14:59:59Z", SessionType::Full24x7),
+            ("2026-10-23T19:59:59Z", SessionType::ETH),
+        ] {
+            let now = now.parse().unwrap();
+            let feed = Arc::new(LiveFeed::new("SAMPLE", now));
+            feed.set_view(session, false);
+            let ctx = egui::Context::default();
+            let frame = |chart: &mut egui_charts::Chart| {
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    chart.show(ui);
+                })
+                .drop_without_applying_deltas();
+            };
+            let mut charts = Vec::new();
+            let mut references = Vec::new();
+            for (symbol, extended) in [
+                ("SAMPLE", false),
+                ("EURUSD", false),
+                (ORDER_LEVEL_SYMBOL, false),
+                ("SAMPLE", true),
+            ] {
+                let mut chart = ChartBuilder::new()
+                    .with_feed(feed.clone())
+                    .with_symbol(symbol)
+                    .with_initial_bars(100)
+                    .build();
+                chart.set_extended_hours(extended);
                 for _ in 0..4 {
-                    frame(&mut charts[0]);
+                    frame(&mut chart);
                 }
+                charts.push(chart);
+                let reference = LiveFeed::new(symbol, now);
+                reference.set_view(session, false);
+                references.push(reference);
             }
-            let at = now + TimeDelta::seconds(seconds);
-            feed.advance(at);
-            for (chart, reference) in charts.iter_mut().zip(&references) {
-                reference.advance(at);
-                frame(chart);
-                let expected = reference.snapshot(
-                    chart.timeframe().unwrap(),
-                    chart.bar_clock(),
-                    chart.extended_hours(),
-                );
-                let actual = chart.bars(SeriesId::MAIN);
-                assert!(!actual.is_empty(), "{}", chart.symbol());
-                assert_eq!(
-                    actual,
-                    &expected[expected.len() - actual.len()..],
-                    "{} at {at}",
-                    chart.symbol()
-                );
-                let state = chart.feed_state(SeriesId::MAIN).unwrap();
-                assert_eq!(state.rejected_depth, 0, "{}", chart.symbol());
-                assert!(chart.order_book(SeriesId::MAIN).is_some());
-                assert_eq!(
-                    chart.order_queue(SeriesId::MAIN).is_some(),
-                    chart.symbol() == ORDER_LEVEL_SYMBOL
-                );
+            for seconds in [2, 4, 6, 8, 10, 12] {
+                if seconds == 12 {
+                    charts.pop();
+                    references.pop();
+                } else if seconds >= 4 {
+                    let chart = &mut charts[(seconds / 2 - 2) as usize];
+                    chart.reload_feed();
+                    for _ in 0..4 {
+                        frame(chart);
+                    }
+                }
+                let at = now + TimeDelta::seconds(seconds);
+                feed.advance(at);
+                for (chart, reference) in charts.iter_mut().zip(&references) {
+                    reference.advance(at);
+                    frame(chart);
+                    let expected = reference.snapshot(
+                        chart.timeframe().unwrap(),
+                        chart.bar_clock(),
+                        chart.extended_hours(),
+                    );
+                    let actual = chart.bars(SeriesId::MAIN);
+                    assert!(!actual.is_empty(), "{}", chart.symbol());
+                    assert_eq!(
+                        actual,
+                        &expected[expected.len() - actual.len()..],
+                        "{} at {at}",
+                        chart.symbol()
+                    );
+                    let state = chart.feed_state(SeriesId::MAIN).unwrap();
+                    assert_eq!(state.rejected_depth, 0, "{}", chart.symbol());
+                    assert_eq!(
+                        chart.order_queue(SeriesId::MAIN).is_some(),
+                        chart.symbol() == ORDER_LEVEL_SYMBOL
+                    );
+                }
             }
         }
     }
