@@ -43,8 +43,6 @@ fn resolution(timeframe: Timeframe) -> Result<String, FeedError> {
 fn timeframe(text: &str) -> Result<Timeframe, FeedError> {
     if let Some(timeframe) = Timeframe::from_resolution(text) {
         Ok(timeframe)
-    } else if text.bytes().all(|byte| byte.is_ascii_digit()) {
-        format!("{text}min").parse().map_err(invalid)
     } else {
         text.parse().map_err(invalid)
     }
