@@ -540,13 +540,14 @@ Studies,Indicator infrastructure,Settings dialog: Style tab,partial,library,src/
 Studies,Indicator infrastructure,Settings dialog: Visibility tab,done,library,src/ui/dialogs/indicator_dialog/settings.rs;src/studies/settings.rs
 Studies,Indicator infrastructure,Show or hide a study,done,library,src/widget/studies.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
 Studies,Indicator infrastructure,Source input,done,library,src/studies/settings.rs;src/widget/studies.rs;src/studies/indicator_trait.rs;src/ui/dialogs/indicator_dialog/settings.rs
-Studies,Indicator infrastructure,Study levels and the fill between them,done,library,src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/studies/indicator_trait.rs
-Studies,Indicators,24-hour Volume,done,library,src/studies/builtin/volume_24h.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/builtin/lower_interval.rs;src/studies/settings.rs;src/studies/template.rs;src/widget/snapshot.rs;src/widget/export.rs
-Studies,Indicators,52 Week High/Low,done,library,src/studies/builtin/week52_highlow.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Accelerator Oscillator,done,library,src/studies/builtin/accelerator_oscillator.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Accumulation Distribution,done,library,src/studies/builtin/acc_dist.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Accumulative Swing Index,done,library,src/studies/builtin/accumulation_swing.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Advance/Decline,done,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicator infrastructure,Study levels and the fill between them,done,library,src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/studies/indicator_trait.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs
+Studies,Indicator infrastructure,Volume profile candle visibility,done,library,src/painting/volume_profile.rs;src/studies/builtin/volume_profile.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,24-hour Volume,done,library,src/studies/builtin/volume_24h.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/builtin/lower_interval.rs;src/studies/settings.rs;src/studies/template.rs;src/widget/snapshot.rs;src/widget/export.rs;src/widget/studies.rs
+Studies,Indicators,52 Week High/Low,done,library,src/studies/builtin/week52_highlow.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/widget/studies.rs
+Studies,Indicators,Accelerator Oscillator,done,library,src/studies/builtin/accelerator_oscillator.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/widget/studies.rs
+Studies,Indicators,Accumulation Distribution,done,library,src/studies/builtin/acc_dist.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/widget/studies.rs
+Studies,Indicators,Accumulative Swing Index,done,library,src/studies/builtin/accumulation_swing.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/widget/studies.rs
+Studies,Indicators,Advance/Decline,done,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/widget/studies.rs
 Studies,Indicators,Advance/Decline Line,done,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs
 Studies,Indicators,Advance/Decline Ratio,done,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs
 Studies,Indicators,Advance/Decline Ratio bars,done,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs

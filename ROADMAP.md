@@ -107,7 +107,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Momentum and trend studies include RSI, MACD, Stochastic, ADX, SuperTrend, Ichimoku and Parabolic SAR.
 - [x] Volatility and channel studies include Bollinger Bands, ATR, Keltner, Donchian and historical volatility.
 - [x] Volume studies include OBV, MFI, accumulation/distribution and VWAP; VWAP supports calendar/session and supplied event anchors with deviation or percentage bands.
-- [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles render chart-bar volume estimates with point of control and value area.
+- [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles render chart-bar volume estimates with translucent rows that keep candles readable, point of control and value area.
 - [x] Regression, rank correlation, pivot levels, ZigZag, candlestick patterns, seasonality and market-structure studies.
 - [x] Majority Rule reports +1, -1 or zero from the majority of rising versus falling closes over its lookback.
 - [x] Automatic trend-line, channel, Fibonacci and pitchfork studies use ZigZag pivots with the `drawings` feature.
