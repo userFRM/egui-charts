@@ -97,8 +97,6 @@ mod palette;
 pub(crate) mod pan_zoom;
 mod pane;
 pub use pane::{ChartLayoutRects, PaneId, PaneOptions, RenderedIndicatorPane};
-#[cfg(feature = "studies")]
-mod trade_profile;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod posts;
@@ -121,6 +119,8 @@ mod studies;
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 mod study_templates;
 mod svg;
+#[cfg(feature = "studies")]
+mod trade_profile;
 
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
