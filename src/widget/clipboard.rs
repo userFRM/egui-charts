@@ -36,19 +36,16 @@ impl Chart {
     }
 
     /// Paste drawing clipboard text as one undoable addition, with new identities and a
-    /// three-bar offset. Selects the copies. Before changing any drawing, rejects text that is
-    /// not drawing clipboard text ([`LoadError::NotClipboard`]), invalid data or a version from
-    /// a newer release, drawings of another symbol ([`LoadError::OtherSymbol`]), drawings that
-    /// could not all be read ([`LoadError::Skipped`]) and a chart without the history to place
-    /// them ([`LoadError::NeedsHistory`]). The host handles the system clipboard and forwards
-    /// its paste event here. Copies of a disabled tool, and copies that saving would refuse,
-    /// are left out.
+    /// three-bar offset. Copies belong to this chart's symbol; timestamps and study panes are
+    /// mapped against this chart. Selects the copies. Before changing any drawing, rejects text
+    /// that is not drawing clipboard text ([`LoadError::NotClipboard`]), invalid data or a
+    /// version from a newer release, drawings that could not all be read ([`LoadError::Skipped`])
+    /// and a chart without the history to place them ([`LoadError::NeedsHistory`]). The host
+    /// handles the system clipboard and forwards its paste event here. Copies of a disabled
+    /// tool, and copies that saving would refuse, are left out.
     pub fn paste_drawings(&mut self, text: &str) -> Result<(), LoadError> {
         let json = text.strip_prefix(PREFIX).ok_or(LoadError::NotClipboard)?;
         let (storage, skipped) = DrawingStorage::from_json(json)?;
-        if storage.symbol != self.symbol() {
-            return Err(LoadError::OtherSymbol);
-        }
         if !skipped.is_empty() {
             return Err(LoadError::Skipped(skipped));
         }
@@ -215,6 +212,121 @@ mod tests {
         );
     }
 
+    /// Clipboard paste maps times into the destination before offsetting, keeps properties,
+    /// and adds the whole selection to that symbol as one undo step.
+    #[test]
+    fn drawings_paste_across_symbols_with_destination_anchors_and_history() {
+        use crate::drawings::persistence::LoadError;
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType, ToolAvailability};
+        use crate::model::{BarData, LineStyle};
+        use crate::widget::{Chart, SeriesId};
+        use chrono::{Duration, TimeZone, Utc};
+
+        let mut source = test_frames::chart(&[100.0], &[110.0]);
+        source.set_symbol("SOURCE");
+        for (start, price) in [(20.5, 105.0), (40.0, 107.0)] {
+            let mut line = Drawing::new(0, DrawingToolType::TrendLine);
+            line.chart_points = vec![
+                ChartPoint::new(start, price),
+                ChartPoint::new(start + 10.0, price + 1.0),
+            ];
+            line.color = [20, 80, 160, 200];
+            line.stroke_width = 4.0;
+            line.line_style = LineStyle::Dashed;
+            line.label = Some("Copied line".into());
+            line.notes = Some("Keep these notes".into());
+            source.drawings_mut().add_drawing(line).unwrap();
+        }
+        let ids: Vec<_> = source.drawings().drawings.iter().map(|d| d.id).collect();
+        source.drawings_mut().select_drawings(ids);
+        let copied = source.copy_selected_drawings().unwrap().unwrap();
+        let saved = source.save_drawings().unwrap().to_json().unwrap();
+        let mut target = Chart::new(BarData::new());
+        target.set_symbol("DESTINATION");
+        assert!(matches!(
+            target.paste_drawings(&copied),
+            Err(LoadError::NeedsHistory)
+        ));
+        assert!(target.drawings().drawings.is_empty());
+        assert!(!target.can_undo());
+        // Destination starts ten days later: source index 20.5 maps to 10.5, then 13.5.
+        target.set_data(SeriesId::MAIN, source.state().data().bars[10..].to_vec());
+        assert!(matches!(
+            target.load_drawings(&saved),
+            Err(LoadError::OtherSymbol)
+        ));
+        target.paste_drawings(&copied).unwrap();
+        assert_eq!(target.drawings().drawings.len(), 2);
+        let epoch = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        for (original, pasted) in source
+            .drawings()
+            .drawings
+            .iter()
+            .zip(&target.drawings().drawings)
+        {
+            assert!(target.drawings().is_selected(pasted.id));
+            assert!(pasted.stored_id.is_none());
+            assert!(pasted.created_at.is_none());
+            assert_eq!(pasted.notes, original.notes);
+            let mut expected = original.clone();
+            expected.z_order = pasted.z_order;
+            assert_eq!(
+                serde_json::to_value(pasted).unwrap(),
+                serde_json::to_value(expected).unwrap()
+            );
+            for (from, to) in original.chart_points.iter().zip(&pasted.chart_points) {
+                assert_eq!(to.bar_idx, from.bar_idx - 10.0 + 3.0);
+                assert_eq!(to.price, from.price);
+                // Daily source bars start at epoch; the ordinary offset adds three days.
+                assert_eq!(
+                    target.drawing_point_time(to),
+                    Some(
+                        epoch + Duration::seconds(((from.bar_idx as f64 + 3.0) * 86_400.0) as i64)
+                    )
+                );
+            }
+        }
+        let pasted_ids: Vec<_> = target.drawings().drawings.iter().map(|d| d.id).collect();
+        assert_ne!(pasted_ids[0], pasted_ids[1]);
+        let pasted = serde_json::to_value(target.save_drawings().unwrap()).unwrap();
+        assert_eq!(pasted["symbol"], "DESTINATION");
+        assert!(target.undo());
+        assert!(target.drawings().drawings.is_empty());
+        assert!(!target.can_undo());
+        assert!(target.redo());
+        assert_eq!(
+            target
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.id)
+                .collect::<Vec<_>>(),
+            pasted_ids
+        );
+        assert!(target.undo());
+        target.drawings_mut().registry.set_availability(
+            DrawingToolType::TrendLine,
+            ToolAvailability {
+                visible: true,
+                enabled: false,
+            },
+        );
+        target.paste_drawings(&copied).unwrap();
+        assert!(target.drawings().drawings.is_empty());
+        assert!(!target.can_undo());
+        // The copies stay with the destination when navigating between symbol drawing sets.
+        target
+            .drawings_mut()
+            .registry
+            .set_availability(DrawingToolType::TrendLine, ToolAvailability::default());
+        target.paste_drawings(&copied).unwrap();
+        target.set_symbol("SOURCE");
+        assert!(target.drawings().drawings.is_empty());
+        target.set_symbol("DESTINATION");
+        assert_eq!(target.drawings().drawings.len(), 2);
+        assert_eq!(source.drawings().drawings.len(), 2);
+    }
+
     /// A drawing copied or saved in a study pane lands in the pane of the same study on a chart
     /// whose studies were added in another order, and in the price pane on a chart without it,
     /// although study ids are local to each chart.
@@ -234,6 +346,7 @@ mod tests {
             )
         };
         let mut source = test_frames::chart(&[10.0], &[20.0]);
+        source.set_symbol("SOURCE");
         let gamma = source.add_indicator(study("Gamma"));
         source.add_indicator(study("Delta"));
         let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
@@ -251,6 +364,7 @@ mod tests {
             (&["Delta"], false),
         ] {
             let mut target = test_frames::chart(&[10.0], &[20.0]);
+            target.set_symbol(if paste { "DESTINATION" } else { "SOURCE" });
             let ids: Vec<_> = studies
                 .iter()
                 .map(|name| target.add_indicator(study(name)))

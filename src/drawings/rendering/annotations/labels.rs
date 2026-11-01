@@ -287,6 +287,8 @@ mod tests {
                 y_to_price: &|y| f64::from(y),
                 time_axis: true,
                 executions: None,
+                timeframe: None,
+                finer: &[],
             };
             let mut drawing = Drawing::new(7, DrawingToolType::PriceLabel);
             drawing.chart_points.push(ChartPoint::new(0.0, price));
