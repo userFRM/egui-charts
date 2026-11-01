@@ -3969,7 +3969,7 @@ mod tests {
                 }) {
                     let bounds = Rect::from_min_size(text.pos, text.galley.size());
                     assert!(
-                        mesh.vertices.chunks_exact(4).any(|quad| {
+                        mesh.vertices.as_chunks::<4>().0.iter().any(|quad| {
                             let opaque = quad.iter().all(|v| v.color.a() == 255);
                             let backing = quad.iter().fold(Rect::NOTHING, |rect, vertex| {
                                 rect.union(Rect::from_min_max(vertex.pos, vertex.pos))
