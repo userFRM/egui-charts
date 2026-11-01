@@ -65,6 +65,9 @@ pub(crate) struct FeedLink {
     /// The trades as a footprint on the instrument's tick, while the chart type or a volume
     /// profile drawing reads them, within [`FOOTPRINT_BARS`] and [`FOOTPRINT_ROWS`].
     pub(super) footprint: Option<Footprint>,
+    /// The footprint of the trades before the replay cutoff, while a replay runs under a visible
+    /// volume profile drawing, rebuilt when the cutoff moves.
+    pub(super) replay_footprint: Option<(chrono::DateTime<chrono::Utc>, Option<Footprint>)>,
     order_book: Option<OrderBook>,
     order_queue: Option<crate::data::OrderQueue>,
     /// The order book over time, when the host turned it on.
@@ -154,6 +157,7 @@ impl FeedLink {
                 .is_some()
                 .then(|| self.footprint(None))
                 .flatten(),
+            replay_footprint: self.replay_footprint.clone(),
             order_book: self.order_book.clone(),
             order_queue: self.order_queue.clone(),
             depth_history: self.depth_history.clone(),
@@ -248,6 +252,7 @@ impl Chart {
             trades: Trades::new(TRADE_CAPACITY),
             bubbles: None,
             footprint: None,
+            replay_footprint: None,
             order_book: None,
             order_queue: None,
             depth_history: None,

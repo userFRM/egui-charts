@@ -55,6 +55,15 @@ impl Chart {
                 None
             };
         }
+        // Replay can stop inside a bar, so profile drawings sum only executions before the cutoff.
+        let cutoff = self.replay_time().filter(|_| self.profile_drawings());
+        if let Some(link) = self
+            .feed_link
+            .as_mut()
+            .filter(|link| link.replay_footprint.as_ref().map(|(time, _)| *time) != cutoff)
+        {
+            link.replay_footprint = cutoff.map(|time| (time, link.footprint(Some(time))));
+        }
         if self.feed_link.as_ref().is_some_and(|link| link.paused) {
             return;
         }

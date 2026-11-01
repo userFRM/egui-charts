@@ -357,17 +357,6 @@ impl Chart {
 
         drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y);
 
-        // Replay can stop inside a bar, so its drawings sum only executions before the cutoff.
-        let replay_executions = self
-            .replay_time()
-            .filter(|_| {
-                self.drawing_timeframe().is_some()
-                    && drawing_manager
-                        .drawings
-                        .iter()
-                        .any(|drawing| drawing.reads_profile())
-            })
-            .and_then(|time| self.feed_link.as_ref()?.footprint(Some(time)));
         let finer = self.study_data.data(
             self.profile_histories(drawing_manager)
                 .into_iter()
@@ -387,13 +376,13 @@ impl Chart {
             price_to_y: &price_to_y,
             y_to_price: &|y| price_map.y_to_price(y),
             time_axis: self.horizontal_scale.is_none(),
-            executions: if self.replay_time().is_some() {
-                replay_executions.as_ref()
-            } else {
-                self.feed_link
-                    .as_ref()
-                    .and_then(|link| link.footprint.as_ref())
-            },
+            executions: self.feed_link.as_ref().and_then(|link| {
+                if self.replay_time().is_some() {
+                    link.replay_footprint.as_ref()?.1.as_ref()
+                } else {
+                    link.footprint.as_ref()
+                }
+            }),
             timeframe: self.drawing_timeframe(),
             finer: &finer,
         };
