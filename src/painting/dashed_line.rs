@@ -34,6 +34,17 @@ pub(crate) fn draw_dashed_line(
     draw_dashed_segment(painter, start, end, stroke, dash_len, gap_len, 0.0);
 }
 
+/// Reuse the tessellation of long crosshair lines while their geometry stays unchanged.
+pub(crate) fn draw_cached_dashed_segments(
+    painter: &egui::Painter,
+    segments: impl IntoIterator<Item = (Pos2, Pos2, f64), IntoIter: Clone>,
+    stroke: Stroke,
+    dash_len: f32,
+    gap_len: f32,
+) {
+    draw_dashed_segments_inner(painter, segments, stroke, dash_len, gap_len, true);
+}
+
 /// Draw a polyline with a continuous dash phase, clipping each segment before walking dashes.
 pub(crate) fn draw_dashed_polyline(
     painter: &egui::Painter,
@@ -158,33 +169,62 @@ pub(crate) fn draw_dashed_segments(
     dash_len: f32,
     gap_len: f32,
 ) {
+    draw_dashed_segments_inner(painter, segments, stroke, dash_len, gap_len, false);
+}
+
+fn draw_dashed_segments_inner(
+    painter: &egui::Painter,
+    segments: impl IntoIterator<Item = (Pos2, Pos2, f64), IntoIter: Clone>,
+    stroke: Stroke,
+    dash_len: f32,
+    gap_len: f32,
+    cache_lines: bool,
+) {
+    if !painter.is_visible() || stroke.is_empty() {
+        return;
+    }
     let segments = segments.into_iter();
     let mut dots = Mesh::default();
     let mut key = None;
-    if dash_len == 1.0
-        && stroke.width == 1.0
+    let dotted = dash_len == 1.0 && stroke.width == 1.0;
+    if stroke.width.is_finite()
+        && stroke.width > 0.0
+        && dash_len.is_finite()
+        && dash_len > 0.0
         && gap_len.is_finite()
         && gap_len >= 0.0
         && let Some(clip) = finite_clip(painter)
+        // Short dashes cost less as ordinary shapes than as a cached mesh.
+        && (dotted
+            || (cache_lines
+                && dash_len > 1.0
+                && segments.clone().any(|(start, end, _)| {
+                    let span = Rect::from_two_pos(start, end).intersect(clip);
+                    span.width().max(span.height()) > 8.0 * (dash_len + gap_len)
+                })))
     {
-        // Every line of the batch is dotted into the mesh, so the mesh depends on these alone.
-        key = segments
-            .clone()
-            .map(|(start, end, phase)| {
-                (start.x == end.x || start.y == end.y).then_some((
-                    [start.x, start.y, end.x, end.y].map(f32::to_bits),
-                    phase.to_bits(),
-                ))
-            })
-            .collect::<Option<Vec<_>>>()
-            .map(|segments| DotsKey {
+        // Lines use the same tessellator and pixel rounding as ordinary segment shapes.
+        let tessellation =
+            (!dotted).then(|| painter.ctx().tessellation_options(|options| *options));
+        let mut lines = segments.clone().map(|(start, end, phase)| {
+            (start.x == end.x || start.y == end.y).then_some((
+                [start.x, start.y, end.x, end.y].map(f32::to_bits),
+                phase.to_bits(),
+            ))
+        });
+        key = lines.next().flatten().and_then(|first_segment| {
+            Some(DashesKey {
                 clip: [clip.min.x, clip.min.y, clip.max.x, clip.max.y].map(f32::to_bits),
                 pixels_per_point: painter.pixels_per_point().to_bits(),
-                color: stroke.color,
+                stroke,
+                dash: dash_len.to_bits(),
                 gap: gap_len.to_bits(),
-                segments,
-            });
-        if let Some(mesh) = key.as_ref().and_then(|key| cached_dots(painter, key)) {
+                first_segment,
+                other_segments: lines.collect::<Option<Vec<_>>>()?,
+                tessellation,
+            })
+        });
+        if let Some(mesh) = key.as_ref().and_then(|key| cached_dashes(painter, key)) {
             painter.add(egui::Shape::Mesh(mesh));
             return;
         }
@@ -203,49 +243,65 @@ pub(crate) fn draw_dashed_segments(
                 }
                 let length = (f64::from(bounds.right()) - f64::from(bounds.left()))
                     .max(f64::from(bounds.bottom()) - f64::from(bounds.top()));
-                Some((length / (1.0 + f64::from(gap_len))).ceil() as usize + 2)
+                Some((length / (f64::from(dash_len) + f64::from(gap_len))).ceil() as usize + 2)
             })
             .sum();
-        dots.reserve_vertices(count * 4);
-        dots.reserve_triangles(count * 2);
+        dots.reserve_vertices(count * if dotted { 4 } else { 16 });
+        dots.reserve_triangles(count * if dotted { 2 } else { 8 });
     }
+    let mut tessellator = key
+        .as_ref()
+        .and_then(|key| key.tessellation)
+        .map(|options| {
+            // Lines only use the white texel, so no font atlas or prepared discs are needed.
+            egui::epaint::Tessellator::new(painter.pixels_per_point(), options, [1, 1], Vec::new())
+        });
     let mut spans = DotSpans::default();
     for (start, end, phase) in segments {
-        append_dashed_segment(
-            painter, &mut dots, &mut spans, start, end, stroke, dash_len, gap_len, phase,
-        );
+        if let Some(tessellator) = &mut tessellator {
+            let clip = finite_clip(painter).unwrap().expand(stroke.width * 0.5);
+            visible_dashes(start, end, clip, dash_len, gap_len, phase, |a, b| {
+                tessellator.tessellate_line_segment([a, b], stroke, &mut dots);
+            });
+        } else {
+            append_dashed_segment(
+                painter, &mut dots, &mut spans, start, end, stroke, dash_len, gap_len, phase,
+            );
+        }
     }
     if !dots.is_empty() {
         let mesh = Arc::new(dots);
         if let Some(key) = key {
             let pass = painter.ctx().cumulative_pass_nr();
-            DOTS.with_borrow_mut(|cache| cache.push((pass, key, mesh.clone())));
+            DASHES.with_borrow_mut(|cache| cache.push((pass, key, mesh.clone())));
         }
         painter.add(egui::Shape::Mesh(mesh));
     }
 }
 
-/// What a batch of dotted lines is built from, compared by bits: the painter's clip, scale and
-/// the colour, gap and lines.
+/// The geometry, stroke and tessellation settings that determine a guide mesh.
 #[derive(PartialEq)]
-struct DotsKey {
+struct DashesKey {
     clip: [u32; 4],
     pixels_per_point: u32,
-    color: egui::Color32,
+    stroke: Stroke,
+    dash: u32,
     gap: u32,
-    segments: Vec<([u32; 4], u64)>,
+    // A lone guide needs no allocation to look up its retained mesh.
+    first_segment: ([u32; 4], u64),
+    other_segments: Vec<([u32; 4], u64)>,
+    tessellation: Option<egui::epaint::TessellationOptions>,
 }
 
 thread_local! {
-    /// The dotted meshes of the last two passes with what they were built from: a chart at rest
-    /// paints the same grid every pass, and laying out its dots costs more than painting them.
-    static DOTS: RefCell<Vec<(u64, DotsKey, Arc<Mesh>)>> = const { RefCell::new(Vec::new()) };
+    /// Keep only this pass and the previous one, so moving guides do not accumulate meshes.
+    static DASHES: RefCell<Vec<(u64, DashesKey, Arc<Mesh>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The mesh built from `key` in this pass or the last, kept for the next pass.
-fn cached_dots(painter: &egui::Painter, key: &DotsKey) -> Option<Arc<Mesh>> {
+fn cached_dashes(painter: &egui::Painter, key: &DashesKey) -> Option<Arc<Mesh>> {
     let pass = painter.ctx().cumulative_pass_nr();
-    DOTS.with_borrow_mut(|cache| {
+    DASHES.with_borrow_mut(|cache| {
         cache.retain(|(used, _, _)| used.saturating_add(1) >= pass);
         let (used, _, mesh) = cache.iter_mut().find(|(_, cached, _)| cached == key)?;
         *used = pass;
@@ -428,6 +484,102 @@ pub(crate) fn clip_segment(start: Pos2, end: Pos2, clip: Rect) -> Option<(f64, f
 mod tests {
     use super::*;
     use egui::{Color32, Context, LayerId, Painter, RawInput, emath::TSTransform};
+
+    /// Cached guides retain the ordinary strokes' caps, feathering, clipping and dash phase.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn cached_dashes_match_segment_tessellation() {
+        let ctx = Context::default();
+        let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        for scale in [1.0, 1.25, 2.0] {
+            ctx.set_pixels_per_point(scale);
+            for feathering in [true, false] {
+                ctx.tessellation_options_mut(|options| options.feathering = feathering);
+                for (points, clip, stroke, dash, gap) in [
+                    (
+                        [Pos2::new(-50.0, 30.25), Pos2::new(900.0, 30.25)],
+                        screen,
+                        Stroke::new(1.0, Color32::WHITE),
+                        6.0,
+                        6.0,
+                    ),
+                    (
+                        [Pos2::new(30.75, 650.0), Pos2::new(30.75, -50.0)],
+                        screen.shrink(20.0),
+                        Stroke::new(2.0, Color32::from_white_alpha(80)),
+                        10.0,
+                        4.0,
+                    ),
+                ] {
+                    let segments = [points, [Pos2::new(120.25, -50.0), Pos2::new(120.25, 650.0)]];
+                    let mut previous = None;
+                    for _ in 0..2 {
+                        let mut output = ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |_| {
+                                let painter =
+                                    Painter::new(ctx.clone(), LayerId::background(), clip);
+                                draw_cached_dashed_segments(
+                                    &painter,
+                                    segments.map(|[from, to]| (from, to, 0.0)),
+                                    stroke,
+                                    dash,
+                                    gap,
+                                );
+                            },
+                        );
+                        let mesh = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Mesh(mesh) => Some(mesh.clone()),
+                                _ => None,
+                            })
+                            .expect("long guides use a mesh");
+                        if let Some(previous) = previous {
+                            assert!(
+                                Arc::ptr_eq(&mesh, &previous),
+                                "unchanged guides reuse their mesh"
+                            );
+                        }
+                        previous = Some(mesh);
+                        let reference = segments
+                            .iter()
+                            .flat_map(|points| {
+                                dashed_polyline_shapes(points, stroke, dash, gap, clip)
+                            })
+                            .map(|shape| egui::epaint::ClippedShape::new(clip, shape))
+                            .collect();
+                        let expected = ctx.tessellate(reference, output.pixels_per_point);
+                        let actual = ctx.tessellate(
+                            std::mem::take(&mut output.shapes),
+                            output.pixels_per_point,
+                        );
+                        assert_eq!(actual.len(), expected.len());
+                        for (actual, expected) in actual.iter().zip(&expected) {
+                            assert_eq!(actual.clip_rect, expected.clip_rect);
+                            let (
+                                egui::epaint::Primitive::Mesh(actual),
+                                egui::epaint::Primitive::Mesh(expected),
+                            ) = (&actual.primitive, &expected.primitive)
+                            else {
+                                panic!("guides tessellate to meshes");
+                            };
+                            assert_eq!(
+                                actual.vertices, expected.vertices,
+                                "scale={scale}, feathering={feathering}"
+                            );
+                            assert_eq!(actual.indices, expected.indices);
+                        }
+                        output.drop_without_applying_deltas();
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn batched_dots_preserve_individual_mesh_geometry() {

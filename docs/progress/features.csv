@@ -100,12 +100,12 @@ Chart,Chart settings and themes,Background,done,library,src/widget/settings/appl
 Chart,Chart settings and themes,Candle colour customisation,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/rendering/candles/candlestick.rs;src/chart/renderers/candle.rs
 Chart,Chart settings and themes,Canvas tab,done,library,src/ui/dialogs/chart_settings/tabs/canvas.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
 Chart,Chart settings and themes,Chart settings dialog,done,library,src/ui/dialogs/chart_settings/mod.rs;src/widget/settings/apply.rs;src/ui_kit/modal/modal.rs;src/ui/dialogs/chart_settings/tabs/mod.rs;src/ui_kit/dialog/mod.rs;src/ui_kit/sidebar_layout/mod.rs;src/tokens/mod.rs
-Chart,Chart settings and themes,Crosshair appearance,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/crosshair.rs;src/painting/dashed_line.rs
+Chart,Chart settings and themes,Crosshair appearance,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/crosshair.rs;src/painting/dashed_line.rs;src/config/crosshair.rs;src/theme/presets.rs
 Chart,Chart settings and themes,Events tab,done,host,src/model/time_scale_event.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/dialogs/chart_settings/tabs/trading.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
 Chart,Chart settings and themes,Grid lines,done,library,src/widget/frame.rs;src/chart/rendering/grid.rs;src/widget/settings/apply.rs;src/widget/indicator_pane.rs;src/painting/dashed_line.rs;src/theme/presets.rs
 Chart,Chart settings and themes,Light and dark themes,done,library,src/widget/mod.rs;src/widget/palette.rs;src/widget/frame.rs;src/config/chart.rs;src/model/markers.rs;src/chart/renderers/markers.rs;src/theme/presets.rs;src/theme/style.rs;examples/demo/controller.rs
 Chart,Chart settings and themes,Navigation and pane buttons,done,library,src/widget/navigation.rs;src/widget/frame.rs;src/widget/pane_layout.rs;src/widget/settings/data.rs
-Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/dialogs/chart_settings/tabs/scales.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
+Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/dialogs/chart_settings/tabs/scales.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs;src/ui/dialogs/chart_settings/tabs/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Chart,Chart settings and themes,Scales text colour and size,done,library,src/widget/settings/data.rs;src/widget/settings/apply.rs;src/chart/rendering/axes.rs;src/chart/renderers/labels.rs
 Chart,Chart settings and themes,Session background shading,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs
 Chart,Chart settings and themes,Status line tab,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
@@ -144,7 +144,7 @@ Chart,Compare and overlay,Percent scale when comparing,done,library,src/widget/p
 Chart,Crosshair and interaction,Auto-scroll to realtime and jump-to-latest button,done,library,src/widget/series.rs;src/widget/frame.rs;src/widget/time_scale.rs
 Chart,Crosshair and interaction,"Chart, series and drawing context menus",partial,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/drawing.rs;src/widget/drawing_api.rs;terminal/src/drawings.rs;terminal/src/studies.rs;src/ui/floating_toolbar/toolbar.rs;examples/demo/controller.rs
 Chart,Crosshair and interaction,Crosshair across all panes,done,library,src/widget/panes.rs;src/widget/indicator_pane.rs;src/widget/frame.rs
-Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/painting/dashed_line.rs
+Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/painting/dashed_line.rs;src/config/crosshair.rs;src/chart/rendering/axes.rs;src/theme/presets.rs;src/widget/panes.rs
 Chart,Crosshair and interaction,Cursor types,done,library,src/widget/frame.rs;src/chart/cursor_modes/mod.rs;src/chart/cursor_modes/eraser.rs;src/widget/tool_interaction/selection.rs;src/widget/panes.rs;src/drawings/manager/interaction.rs
 Chart,Crosshair and interaction,Double-click on axes to reset,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs;src/widget/pane_layout.rs
 Chart,Crosshair and interaction,Drag on the time axis to zoom,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
@@ -189,7 +189,7 @@ Chart,Legend and data window,Status line values follow the crosshair,done,librar
 Chart,Legend and data window,Symbol status line,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/model/session/exchange.rs;src/painting/symbol_mark.rs
 Chart,Legend and data window,Volume in the status line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/scales/price_formatter.rs
 Chart,Multi-chart and sync,Grid layout presets,done,library,src/widget/layout.rs;src/ui/top_toolbar/components/chart_grid_selector.rs;src/ui/top_toolbar/toolbar.rs
-Chart,Multi-chart and sync,Multi-chart layout container,done,library,src/widget/layout.rs
+Chart,Multi-chart and sync,Multi-chart layout container,done,library,src/widget/layout.rs;src/widget/frame.rs;src/widget/mod.rs;src/chart/rendering/axes.rs
 Chart,Multi-chart and sync,Symbol and interval sync groups,done,library,src/widget/layout.rs
 Chart,Multi-chart and sync,Sync crosshair,done,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame.rs
 Chart,Multi-chart and sync,Sync date range,done,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs
@@ -814,7 +814,7 @@ Terminal,Alerts,Notification: in-app popup when an alert fires,done,library,src/
 Terminal,Alerts,Notification: mobile app push,missing,host,
 Terminal,Alerts,Notification: webhook,missing,host,
 Terminal,Alerts,"Price operators: crossing, crossing up, crossing down, greater than, less than",done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs
-Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,partial,library,src/ui/context_menu/mod.rs;src/chart/renderers/crosshair.rs;src/widget/frame.rs
+Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,done,library,src/ui/context_menu/mod.rs;src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/chart/rendering/axes.rs;src/config/chart.rs;src/widget/settings/apply.rs;src/ui/context_menu/chart_menus/mod.rs
 Terminal,Alerts,Server-side evaluation,done,host,src/services/alerts.rs;src/ui/widget_bar/panels/alerts_panel.rs
 Terminal,Alerts,Trigger frequency,done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs
 Terminal,Alerts,Watchlist alerts,done,host,src/ui/dialogs/alert_dialog/dialog.rs
