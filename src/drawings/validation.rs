@@ -5,6 +5,9 @@ use super::{Drawing, DrawingToolType};
 /// The widest stroke in points a drawing is drawn with; the properties editor offers 1 to 10.
 pub(crate) const MAX_STROKE_WIDTH: f32 = 100.0;
 
+/// Largest side of an image frame, in points.
+pub(crate) const MAX_IMAGE_SIDE: f32 = 10_000.0;
+
 /// The largest pitchfork level, as a multiple of the tines' distance from the median, that is
 /// drawn. Larger levels lie far outside the chart, and near `f32::MAX` overflow its geometry.
 pub(crate) const MAX_PITCHFORK_LEVEL: f32 = 100.0;

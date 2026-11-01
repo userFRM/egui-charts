@@ -33,7 +33,7 @@
 //!
 //! Drawings are grouped by symbol into a `DrawingStorage` container that
 //! includes a format version, metadata, and an optional timeframe filter.
-//! Loading migrates versions 1 to 4, rejects versions it does not know and
+//! Loading migrates versions 1 to 5, rejects versions it does not know and
 //! skips any drawing it cannot read
 //! (see [`from_json`](crate::drawings::persistence::DrawingStorage::from_json)).
 
@@ -158,7 +158,7 @@ impl StoredDrawing {
     /// The first field holding NaN or an infinity, which JSON cannot store, or a size or
     /// pitchfork level outside the range drawings are drawn at.
     pub(super) fn invalid_field(&self) -> Option<String> {
-        use super::validation::{MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH};
+        use super::validation::{MAX_IMAGE_SIDE, MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH};
         use crate::styles::typography::FONT_SIZES;
         let d = &self.drawing;
         let bad = |value: f64| !value.is_finite();
@@ -177,6 +177,12 @@ impl StoredDrawing {
             .is_some_and(|anchor| anchor.into_iter().any(|value| !value.is_finite()))
         {
             return Some("screen_anchor".into());
+        }
+        if d.image.and_then(|c| c.size).is_some_and(|size| {
+            size.into_iter()
+                .any(|side| !(1.0..=MAX_IMAGE_SIDE).contains(&side))
+        }) {
+            return Some("image.size".into());
         }
         if !FONT_SIZES.contains(&d.font_size) {
             return Some("font_size".into());
@@ -316,13 +322,15 @@ impl Default for StorageMetadata {
 }
 
 impl DrawingStorage {
-    /// Current storage format version. Version 5 gives Elliott double and triple combinations an
-    /// unlabelled start point; earlier versions load with a start point on their first anchor.
+    /// Current storage format version. Version 6 draws arrow marks in their own colour; earlier
+    /// versions load in the colour they were drawn in. Version 5 gives Elliott double and triple
+    /// combinations an unlabelled start point; earlier versions load with a start point on their
+    /// first anchor.
     /// Version 4 draws brushes and highlighters at their stored width and opacity; earlier
     /// versions load at the width and opacity their strokes were drawn at. Version 3 preserves
     /// editable ray and extended-line extensions; versions 1 and 2 migrate to their former
     /// rendered reach when loaded.
-    pub const CURRENT_VERSION: u32 = 5;
+    pub const CURRENT_VERSION: u32 = 6;
 
     /// Create new storage for a symbol
     pub fn new(symbol: impl Into<String>) -> Self {
@@ -432,7 +440,7 @@ impl DrawingStorage {
         serde_json::to_string_pretty(self).map_err(SaveError::Json)
     }
 
-    /// Deserialize from JSON, migrating versions 1 to 4 to the current format.
+    /// Deserialize from JSON, migrating versions 1 to 5 to the current format.
     /// Fails as a whole with a [`LoadError`]: [`LoadError::Json`] for invalid JSON or a missing
     /// or invalid version, symbol, timeframe or metadata, and [`LoadError::UnsupportedVersion`]
     /// for a version this release does not know. A
@@ -561,6 +569,26 @@ impl DrawingStorage {
                             && let Some(first) = drawing.points.first().cloned()
                         {
                             drawing.points.insert(0, first);
+                        }
+                        if version < 6 {
+                            // Earlier renderers drew up and down marks green and red whatever
+                            // their colour, and every mark's body in its fill when one was set.
+                            let settings = &mut drawing.drawing;
+                            if matches!(
+                                tool,
+                                DrawingToolType::ArrowMarkUp
+                                    | DrawingToolType::ArrowMarkDown
+                                    | DrawingToolType::ArrowMarkLeft
+                                    | DrawingToolType::ArrowMarkRight
+                            ) {
+                                if let Some(fill) = settings.fill_color.take() {
+                                    settings.color = fill;
+                                } else if tool == DrawingToolType::ArrowMarkUp {
+                                    settings.color = [8, 153, 129, 255];
+                                } else if tool == DrawingToolType::ArrowMarkDown {
+                                    settings.color = [242, 54, 69, 255];
+                                }
+                            }
                         }
                         match (tool, drawing.points.as_slice()) {
                             (T::PriceNote | T::ArrowMarker, [a]) => {
@@ -1209,6 +1237,12 @@ mod tests {
                 average_range_ticks: 2.5,
                 noise_ticks: 0.5,
             });
+            if tool == DrawingToolType::Image {
+                drawing.image = Some(crate::drawings::ImageConfig {
+                    size: Some([240.0, 135.0]),
+                    opacity: 128,
+                });
+            }
             drawing.bars_pattern = Some(crate::drawings::BarsPatternConfig {
                 mode: crate::drawings::BarsPatternMode::Line,
                 mirrored: true,
@@ -1493,6 +1527,64 @@ mod tests {
                     assert!(!again.drawings[0].drawing.extend_right);
                 }
             }
+        }
+
+        // Before version 6 up and down marks were drawn green and red; a fill replaced
+        // every mark's body colour. Loading keeps that colour once, including its alpha.
+        for (version, tool, fill, want) in [
+            (1, DrawingToolType::ArrowMarkUp, None, [8, 153, 129, 255]),
+            (3, DrawingToolType::ArrowMarkUp, None, [8, 153, 129, 255]),
+            (4, DrawingToolType::ArrowMarkDown, None, [242, 54, 69, 255]),
+            (5, DrawingToolType::ArrowMarkLeft, None, [10, 20, 30, 255]),
+            (
+                5,
+                DrawingToolType::ArrowMarkUp,
+                Some([1, 2, 3, 90]),
+                [1, 2, 3, 90],
+            ),
+            (
+                2,
+                DrawingToolType::ArrowMarkRight,
+                Some([1, 2, 3, 90]),
+                [1, 2, 3, 90],
+            ),
+            (6, DrawingToolType::ArrowMarkUp, None, [10, 20, 30, 255]),
+        ] {
+            let fixture = if version == 1 {
+                include_str!("fixtures/storage_v1.json")
+            } else {
+                include_str!("fixtures/storage_v2.json")
+            };
+            let mut saved: serde_json::Value = serde_json::from_str(fixture).unwrap();
+            saved["version"] = version.into();
+            let records = saved["drawings"].as_array_mut().unwrap();
+            records.truncate(1);
+            records[0]["points"].as_array_mut().unwrap().truncate(1);
+            if version == 1 {
+                records[0]["tool_type"] = tool.to_string().into();
+                records[0]["color"] = serde_json::json!({"r": 10, "g": 20, "b": 30, "a": 255});
+            } else {
+                let settings = &mut records[0]["drawing"];
+                settings["tool_type"] = serde_json::to_value(tool).unwrap();
+                settings["color"] = serde_json::json!([10, 20, 30, 255]);
+                settings["fill_color"] = serde_json::to_value(fill).unwrap();
+            }
+            let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool:?} v{version}: {skipped:?}");
+            let drawing = &loaded.drawings[0].drawing;
+            assert_eq!(
+                (drawing.color, drawing.fill_color),
+                (want, None),
+                "{tool:?} v{version}"
+            );
+            let (again, skipped) = DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
+            assert!(skipped.is_empty());
+            let drawing = &again.drawings[0].drawing;
+            assert_eq!(
+                (drawing.color, drawing.fill_color),
+                (want, None),
+                "{tool:?} v{version}: converted twice"
+            );
         }
 
         // Old forks ignored Extend, so loading their saved flags must keep that reach.
@@ -1820,10 +1912,10 @@ mod tests {
         assert!(!visibility.show_on_all);
         assert!(visibility.is_visible_on("2h") && !visibility.is_visible_on("1D"));
 
-        let error = DrawingStorage::from_json(&current.replace("\"version\": 5", "\"version\": 6"))
+        let error = DrawingStorage::from_json(&current.replace("\"version\": 6", "\"version\": 7"))
             .unwrap_err();
         assert!(
-            matches!(&error, LoadError::UnsupportedVersion { found: 6, supported } if *supported == (1..=5)),
+            matches!(&error, LoadError::UnsupportedVersion { found: 7, supported } if *supported == (1..=6)),
             "{error}"
         );
     }
@@ -1834,7 +1926,27 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 24] = [
+        let cases: [(Spoil, &str); 26] = [
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .image
+                        .get_or_insert_with(Default::default)
+                        .size = Some([f32::NAN, 1.0])
+                },
+                "invalid image.size",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .image
+                        .get_or_insert_with(Default::default)
+                        .size = Some([0.0, 1.0])
+                },
+                "invalid image.size",
+            ),
             (
                 |s| {
                     first(s)

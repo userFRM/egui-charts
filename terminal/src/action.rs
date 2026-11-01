@@ -19,7 +19,7 @@ use egui_charts::ui::widget_bar::{
     AlertPanelAction, CalendarAction, HotlistsAction, NewsAction, NotificationsAction,
     ProductsAction, ScreenerAction, WatchlistAction, WidgetBarAction,
 };
-use egui_charts::widget::ShortcutRequest;
+use egui_charts::widget::{ImageRequest, ShortcutRequest};
 
 /// What a terminal control emitted: the component's own action, unchanged.
 ///
@@ -42,6 +42,10 @@ pub enum Action {
     ChartMenu(ChartContextAction),
     /// A key the chart hands to its host, from `Chart::take_shortcut_requests`.
     Shortcut(ShortcutRequest),
+    /// An image drawing of the active chart waiting for its picture. The terminal opens no
+    /// file chooser; answer with `terminal.chart_mut().set_drawing_image(..)` while the same
+    /// chart slot is active.
+    Image(ImageRequest),
     /// The layout menu.
     Layout(LayoutAction),
     /// The floating replay control.

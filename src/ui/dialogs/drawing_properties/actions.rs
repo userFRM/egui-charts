@@ -271,6 +271,11 @@ impl DrawingProps {
                     time_axis_label,
                     elliott_degree,
                 );
+                // Only the image's opacity: each picture keeps its own frame size.
+                let opacity = settings.image.map_or(255, |c| c.opacity);
+                if opacity != target.image.map_or(255, |c| c.opacity) {
+                    drawing.image.get_or_insert_with(Default::default).opacity = opacity;
+                }
             }
             if drawing.id == id.0
                 && !points.is_empty()
@@ -766,6 +771,47 @@ mod tests {
             let mut expected = drawings.clone();
             expected.iter_mut().for_each(change);
             assert_eq!(format!("{edits:?}"), format!("{expected:?}"), "{case}");
+        }
+        // An image's opacity is independent of its frame and of the other selected pictures.
+        for opacity in [None, Some(128)] {
+            let mut chart = Chart::new(crate::model::BarData::new());
+            for (id, size, opacity) in [(1, [240.0, 120.0], 255), (2, [120.0, 240.0], 64)] {
+                let mut picture = Drawing::new(id, DrawingToolType::Image);
+                picture.image = Some(crate::drawings::ImageConfig {
+                    size: Some(size),
+                    opacity,
+                });
+                chart.drawings_mut().drawings.push(picture);
+            }
+            chart.drawings_mut().select_drawings([1, 2]);
+            let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+            // The picture was resized after the dialog opened.
+            chart.drawings_mut().drawings[0]
+                .image
+                .as_mut()
+                .unwrap()
+                .size = Some([480.0, 240.0]);
+            props.color = Color32::BLUE;
+            if let Some(opacity) = opacity {
+                props
+                    .tool_settings
+                    .as_mut()
+                    .unwrap()
+                    .settings
+                    .image
+                    .as_mut()
+                    .unwrap()
+                    .opacity = opacity;
+            }
+            let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+            for (drawing, size, original_opacity) in [
+                (&edits[0], [480.0, 240.0], 255),
+                (&edits[1], [120.0, 240.0], 64),
+            ] {
+                let config = drawing.image.unwrap();
+                assert_eq!(config.size, Some(size));
+                assert_eq!(config.opacity, opacity.unwrap_or(original_opacity));
+            }
         }
     }
 }

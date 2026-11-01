@@ -233,6 +233,10 @@ impl DrawingPropertiesDialog {
                 drawing.gann = old.gann;
                 drawing.ghost_feed = old.ghost_feed;
                 drawing.bars_pattern = old.bars_pattern;
+                // Only the opacity is previewed; a corner drag may have resized the frame since.
+                if let Some(image) = &mut drawing.image {
+                    image.opacity = old.image.map_or(255, |c| c.opacity);
+                }
                 drawing.position_size = old.position_size;
                 drawing.position_sizing = old.position_sizing;
                 drawing.position_target_color = old.position_target_color;
@@ -836,6 +840,46 @@ mod tests {
 
     /// Templates act on this tool's style, remain usable after cancelling a preview and can be
     /// deleted from the menu.
+    /// A previewed image opacity is restored by Cancel and committed by Ok as one undo step,
+    /// without touching a frame resized while the dialog is open.
+    #[test]
+    fn image_opacity_preview_restores_or_commits_once() {
+        for finish in ["Ok", "Cancel"] {
+            let ctx = Context::default();
+            let mut chart = Chart::new(BarData::new());
+            let mut picture = Drawing::new(7, Tool::Image);
+            picture.chart_points = vec![ChartPoint::new(2.0, 100.0)];
+            chart.drawings_mut().drawings.push(picture);
+            let mut dialog = DrawingPropertiesDialog::new();
+            dialog.open_for_chart(&chart, DrawingId(7));
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+            chart.drawings_mut().drawings[0]
+                .image
+                .get_or_insert_with(Default::default)
+                .size = Some([200.0, 100.0]);
+            let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;
+            settings.image.get_or_insert_with(Default::default).opacity = 64;
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+            assert_eq!(chart.drawings().drawings[0].image.unwrap().opacity, 64);
+            click(&mut dialog, &mut chart, &ctx, finish);
+            let image = chart.drawings().drawings[0].image.unwrap();
+            assert_eq!(image.size, Some([200.0, 100.0]), "{finish}");
+            if finish == "Ok" {
+                assert_eq!(image.opacity, 64);
+                assert!(chart.undo());
+            }
+            assert_eq!(
+                chart.drawings().drawings[0]
+                    .image
+                    .map_or(255, |c| c.opacity),
+                255,
+                "{finish}"
+            );
+            assert!(!chart.can_undo(), "{finish}");
+        }
+    }
+
     #[test]
     fn footer_templates_apply_save_defaults_and_reset() {
         let ctx = Context::default();
