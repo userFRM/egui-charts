@@ -38,7 +38,8 @@ use crate::model::{
 /// and volume the volume of a bar; the `value` function of `update` resolves the other sources.
 ///
 /// *Change.* An update whose evaluated bar, its close and volume and the value of every source
-/// equal those of the previous update does nothing, so repeated frames never fire. An update
+/// equal those of the previous update does nothing, unless a per-minute alert enters a new
+/// minute or its schedule opens. An update
 /// whose evaluated bar is older than the newest one already evaluated for the alert is ignored:
 /// reloading history, rewinding a replay or switching to a coarser timeframe never fires an
 /// alert again.
@@ -57,10 +58,8 @@ use crate::model::{
 /// [`OncePerMinute`](AlertFrequency::OncePerMinute) fires at most once per minute of the update
 /// time `now`.
 ///
-/// *Schedule.* An alert's `schedule` restricts the delivery of a trigger only: the alert is still
-/// evaluated, it still fires and pushes its [`AlertEvent::TriggeredForSymbol`], and
-/// [`on_trigger`](Self::on_trigger) is not called for a trigger whose time the schedule does not
-/// allow.
+/// *Schedule.* An alert's `schedule` restricts triggers. Outside it the engine keeps observing
+/// values for crossings, but does not fire or consume an occurrence. A once alert stays armed.
 ///
 /// *Expiry.* Every `update` and [`tick`](Self::tick) first marks active alerts whose expiry has
 /// passed as [`Expired`](AlertStatus::Expired), so an alert never fires at or after its expiry
@@ -124,6 +123,8 @@ struct Run {
 #[derive(Clone, PartialEq)]
 struct Seen {
     time: DateTime<Utc>,
+    scheduled: bool,
+    minute: Option<DateTime<Utc>>,
     /// The bits of the close and volume, so that a value that is not a number equals itself.
     bar: (u64, u64),
     rules: Vec<(Option<f64>, Option<f64>)>,
@@ -145,10 +146,10 @@ impl AlertEngine {
         }
     }
 
-    /// Calls `deliver` with the alert and its [`AlertEvent::TriggeredForSymbol`] on every trigger
-    /// the alert's schedule allows, after the event is pushed, so that the host can send it by email, push notification or web
-    /// request. The call comes from the thread that fed the engine and must return at once; it
-    /// may use the engine.
+    /// Calls `deliver` with the alert and its [`AlertEvent::TriggeredForSymbol`] on every trigger,
+    /// after the event is pushed, so the host can send email, push notifications or web requests.
+    /// The call comes from the thread that fed the engine and must return at once; it may use
+    /// the engine.
     pub fn on_trigger(
         mut self,
         deliver: impl Fn(&Alert, &AlertEvent) + MaybeSend + 'static,
@@ -271,13 +272,7 @@ impl AlertEngine {
             if let Some(events) = events {
                 events.push(event.clone());
             }
-            if alert
-                .schedule
-                .as_ref()
-                .is_none_or(|schedule| schedule.allows(now))
-            {
-                fired.push((alert.clone(), event));
-            }
+            fired.push((alert.clone(), event));
         }
         runs.retain(|(id, _), _| {
             alerts
@@ -416,6 +411,12 @@ fn evaluate<'a>(
         .collect();
     let seen = Seen {
         time: bar.time,
+        scheduled: alert
+            .schedule
+            .as_ref()
+            .is_none_or(|schedule| schedule.allows(now)),
+        minute: (alert.frequency == AlertFrequency::OncePerMinute)
+            .then(|| occurrence(alert.frequency, bar, now)),
         bar: (bar.close.to_bits(), bar.volume.to_bits()),
         rules: rules
             .iter()
@@ -430,32 +431,33 @@ fn evaluate<'a>(
     if run.seen.as_ref() == Some(&seen) {
         return None;
     }
-    let holds = rules.iter().enumerate().all(|(n, (src, condition))| {
-        let (current, other) = seen.rules[n];
-        let previous = match &run.seen {
-            Some(last) => last.rules[n],
-            None => (
-                index.checked_sub(1).and_then(|at| source(src, at)),
-                partner(condition)
-                    .zip(index.checked_sub(1))
-                    .and_then(|(other, at)| source(other, at)),
-            ),
-        };
-        current.is_some_and(|current| {
-            condition_holds(
-                condition,
-                current,
-                previous,
-                other,
-                &bars[..=index],
-                |back| {
-                    index
-                        .checked_sub(back as usize)
-                        .and_then(|at| source(src, at))
-                },
-            )
-        })
-    });
+    let holds = seen.scheduled
+        && rules.iter().enumerate().all(|(n, (src, condition))| {
+            let (current, other) = seen.rules[n];
+            let previous = match &run.seen {
+                Some(last) => last.rules[n],
+                None => (
+                    index.checked_sub(1).and_then(|at| source(src, at)),
+                    partner(condition)
+                        .zip(index.checked_sub(1))
+                        .and_then(|(other, at)| source(other, at)),
+                ),
+            };
+            current.is_some_and(|current| {
+                condition_holds(
+                    condition,
+                    current,
+                    previous,
+                    other,
+                    &bars[..=index],
+                    |back| {
+                        index
+                            .checked_sub(back as usize)
+                            .and_then(|at| source(src, at))
+                    },
+                )
+            })
+        });
     run.newest = Some(bar.time);
     run.seen = Some(seen);
     let fires = holds
@@ -763,6 +765,28 @@ mod tests {
                 [110.0, 111.0, 105.0, 99.0].map(|c| (c, 10.0, n)).to_vec(),
                 vec![1, 3],
             ),
+            (
+                AlertCondition::InsideChannel {
+                    lower: 100.0,
+                    upper: 110.0,
+                },
+                vec![],
+                [100.0, 105.0, 110.0, 111.0, 99.0]
+                    .map(|c| (c, 10.0, n))
+                    .to_vec(),
+                vec![0, 1, 2],
+            ),
+            (
+                AlertCondition::OutsideChannel {
+                    lower: 100.0,
+                    upper: 110.0,
+                },
+                vec![],
+                [99.0, 100.0, 105.0, 110.0, 111.0]
+                    .map(|c| (c, 10.0, n))
+                    .to_vec(),
+                vec![0, 4],
+            ),
             // Moving by reads the value `bars` bars before the evaluated bar, not the previous tick.
             (
                 AlertCondition::MovingBy {
@@ -879,6 +903,98 @@ mod tests {
             }
             assert_eq!(fired, expected, "{frequency}");
             assert_eq!(host.engine.alerts()[0].status, status, "{frequency}");
+        }
+    }
+
+    #[test]
+    fn schedules_gate_channel_states_without_consuming_occurrences() {
+        use crate::model::{AlertRule, NotificationSchedule, NotificationWindow, TimezoneId};
+        use chrono::{NaiveTime, Weekday};
+
+        for condition in [
+            AlertCondition::InsideChannel {
+                lower: 100.0,
+                upper: 110.0,
+            },
+            AlertCondition::OutsideChannel {
+                lower: 90.0,
+                upper: 99.0,
+            },
+        ] {
+            for frequency in [
+                AlertFrequency::Once,
+                AlertFrequency::EveryTime,
+                AlertFrequency::OncePerBar,
+                AlertFrequency::OncePerBarClose,
+                AlertFrequency::OncePerMinute,
+            ] {
+                let mut watching = alert(condition.clone(), frequency);
+                watching.additional_conditions.push(AlertRule {
+                    source: AlertSource::Volume,
+                    condition: AlertCondition::Above(5.0),
+                });
+                watching.schedule = Some(Box::new(NotificationSchedule {
+                    timezone: TimezoneId::utc(),
+                    days: vec![Weekday::Thu],
+                    windows: vec![NotificationWindow {
+                        start: NaiveTime::from_hms_opt(0, 1, 0).unwrap(),
+                        end: NaiveTime::from_hms_opt(0, 2, 0).unwrap(),
+                    }],
+                }));
+                let host = Host::new(vec![watching]);
+                host.events();
+                let bars = [bar(-2, 100.0, 10.0), bar(-1, 100.0, 10.0)];
+                feed(&host, &bars, &[], 59);
+                assert!(host.events().is_empty(), "{condition:?}, {frequency}");
+                assert_eq!(host.engine.alerts()[0].status, AlertStatus::Active);
+                assert!(host.delivered.lock().unwrap().is_empty());
+
+                // At the opening, the same forming bar may fire. A completed bar needs a new close.
+                let next = if frequency == AlertFrequency::OncePerBarClose {
+                    vec![bars[0].clone(), bars[1].clone(), bar(0, 100.0, 10.0)]
+                } else {
+                    bars.to_vec()
+                };
+                feed(&host, &next, &[], 60);
+                assert_eq!(host.fired(), [100.0], "{condition:?}, {frequency}");
+                feed(&host, &next, &[], 61);
+                assert!(host.fired().is_empty());
+                assert_eq!(host.delivered.lock().unwrap().len(), 1);
+
+                let closed = [bar(0, 101.0, 10.0), bar(1, 102.0, 10.0)];
+                feed(&host, &closed, &[], 120);
+                assert!(host.fired().is_empty(), "the end of a window is excluded");
+            }
+        }
+    }
+
+    #[test]
+    fn minute_frequency_uses_clock_minutes_per_watchlist_member() {
+        let mut watching = alert(
+            AlertCondition::InsideChannel {
+                lower: 100.0,
+                upper: 110.0,
+            },
+            AlertFrequency::OncePerMinute,
+        );
+        watching.watchlist = Some("list".into());
+        let host = Host::new(vec![watching]);
+        host.engine
+            .set_watchlist("list", vec!["SYM".into(), "OTHER".into()]);
+        host.events();
+        // UTC seconds -61, -60 and 0 belong to minutes 23:58, 23:59 and 00:00.
+        // The chart bar never changes; neither boundaries nor occurrence counts use its time.
+        for (now, count) in [(-61, 2), (-60, 2), (-1, 0), (0, 2), (59, 0), (60, 2)] {
+            for symbol in ["SYM", "OTHER"] {
+                host.engine.update(
+                    symbol,
+                    Timeframe::Min1,
+                    &[bar(-5, 100.0, 1.0)],
+                    time(now),
+                    |_, _| None,
+                );
+            }
+            assert_eq!(host.fired().len(), count, "second {now}");
         }
     }
 

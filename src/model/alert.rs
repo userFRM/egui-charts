@@ -51,8 +51,8 @@ pub struct Alert {
     /// The alert expires at this time; `None` never expires.
     #[serde(default)]
     pub expires: Option<DateTime<Utc>>,
-    /// When notifications may be delivered; `None` delivers at any time. The schedule restricts
-    /// delivery only: the alert is still evaluated, and fires, outside it.
+    /// When the alert may trigger; `None` allows any time. Outside the schedule, evaluation keeps
+    /// observing values for crossings without firing or consuming an occurrence.
     #[serde(default)]
     pub schedule: Option<Box<NotificationSchedule>>,
     /// Text the host shows or sends when the alert fires. [`Alert::expand_message`] fills in the

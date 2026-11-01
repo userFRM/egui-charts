@@ -28,10 +28,10 @@ use crate::model::{Alert, AlertId};
 /// entering and exiting hold only on the evaluation that crosses a boundary.
 /// [`AlertFrequency::OncePerMinute`](crate::model::AlertFrequency::OncePerMinute) allows one
 /// trigger per UTC clock minute, from `hh:mm:00` up to but excluding the next minute, whatever the
-/// chart's interval. An alert's [`schedule`](crate::model::Alert::schedule) limits notifications
-/// only: evaluate and trigger the alert as usual, and deliver the notification when
+/// chart's interval. An alert's [`schedule`](crate::model::Alert::schedule) allows triggers only when
 /// [`NotificationSchedule::allows`](crate::model::NotificationSchedule::allows) accepts the
-/// trigger time.
+/// trigger time. Outside it, keep observing values for crossings without consuming an occurrence
+/// or disarming an alert that fires once.
 ///
 /// These methods are called on the UI thread, while the terminal shows a frame or runs a command,
 /// and must return at once. Do the work elsewhere and answer through the [`Reply`] or push through
