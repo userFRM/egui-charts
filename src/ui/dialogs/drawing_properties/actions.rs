@@ -271,11 +271,10 @@ impl DrawingProps {
                     time_axis_label,
                     elliott_degree,
                 );
-                if drawing.tool_type == DrawingToolType::Image {
-                    let opacity = settings.image.map_or(255, |c| c.opacity);
-                    if opacity != target.image.map_or(255, |c| c.opacity) {
-                        drawing.image.get_or_insert_with(Default::default).opacity = opacity;
-                    }
+                // Only the image's opacity: each picture keeps its own frame size.
+                let opacity = settings.image.map_or(255, |c| c.opacity);
+                if opacity != target.image.map_or(255, |c| c.opacity) {
+                    drawing.image.get_or_insert_with(Default::default).opacity = opacity;
                 }
             }
             if drawing.id == id.0
