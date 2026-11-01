@@ -54,20 +54,32 @@ pub fn clear_translator(ctx: &Context) {
 /// original form. Numeric and date formatting use the chart's formatters.
 pub fn text(ctx: &Context, english: impl AsRef<str>) -> String {
     let english = english.as_ref();
-    let translator = ctx.data(|data| data.get_temp::<Translator>(translator_id()));
-    translator
-        .and_then(|lookup| (lookup.0)(english))
-        .unwrap_or_else(|| english.to_owned())
+    lookup(ctx, english).unwrap_or_else(|| english.to_owned())
 }
 
 /// Translate a message template and substitute its named, already-formatted values.
 ///
 /// Unknown placeholders remain literal. Values are inserted once, so braces in
 /// a symbol, name or error message cannot become another substitution.
-pub fn format_text(ctx: &Context, english: &str, values: &[(&str, String)]) -> String {
-    let template = text(ctx, english);
-    let mut rest = template.as_str();
-    let mut output = String::with_capacity(template.len());
+/// Values may be borrowed or owned strings.
+pub fn format_text(ctx: &Context, english: &str, values: &[(&str, impl AsRef<str>)]) -> String {
+    substitute(lookup(ctx, english).as_deref().unwrap_or(english), values)
+}
+
+/// The host's translation of `english`, or `None` to keep the English text.
+fn lookup(ctx: &Context, english: &str) -> Option<String> {
+    let translator = ctx.data(|data| data.get_temp::<Translator>(translator_id()));
+    translator.and_then(|lookup| (lookup.0)(english))
+}
+
+/// `template` with each `{name}` that names one of `values` replaced once; other braces stay
+/// literal.
+pub(crate) fn substitute(template: &str, values: &[(&str, impl AsRef<str>)]) -> String {
+    // Room for every value once: one allocation unless a translation repeats a placeholder.
+    let mut output = String::with_capacity(
+        template.len() + values.iter().map(|(_, value)| value.as_ref().len()).sum::<usize>(),
+    );
+    let mut rest = template;
     while let Some(open) = rest.find('{') {
         output.push_str(&rest[..open]);
         rest = &rest[open..];
@@ -76,7 +88,7 @@ pub fn format_text(ctx: &Context, english: &str, values: &[(&str, String)]) -> S
         };
         let key = &rest[1..close];
         if let Some((_, value)) = values.iter().find(|(name, _)| *name == key) {
-            output.push_str(value);
+            output.push_str(value.as_ref());
         } else {
             output.push_str(&rest[..=close]);
         }
@@ -114,17 +126,17 @@ mod tests {
         for (english, values, expected) in [
             (
                 "Copy price {price_str}",
-                vec![("price_str", "12.50".into())],
+                vec![("price_str", "12.50".to_owned())],
                 "12.50 kopieren (12.50)",
             ),
             (
                 "Name {name}, price {price}",
-                vec![("name", "{price}".into()), ("price", "12.50".into())],
+                vec![("name", "{price}".to_owned()), ("price", "12.50".to_owned())],
                 "12.50: {price}; {missing}; {",
             ),
             (
                 "Missing {name}",
-                vec![("name", "TEST".into())],
+                vec![("name", "TEST".to_owned())],
                 "Missing TEST",
             ),
         ] {
