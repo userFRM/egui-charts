@@ -50,7 +50,7 @@ const tables = areas.map((area) => {
     {table.groups.filter((group) => group.incomplete.length).map((group) => (
       <details>
         <summary>{group.name}: {group.partial} partial, {group.missing} missing</summary>
-        <ul>{group.incomplete.map((feature) => <li>{feature.feature} ({feature.status})</li>)}</ul>
+        <ul>{group.incomplete.map((feature) => <li>{feature.feature} ({feature.status}){feature.issues && <>: {feature.issues.split(';').map((issue, index) => <>{index > 0 && ', '}<a href={`https://github.com/userFRM/egui-charts/issues/${issue}`}>#{issue}</a></>)}</>}</li>)}</ul>
       </details>
     ))}
   </section>

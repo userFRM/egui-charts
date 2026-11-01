@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node --test remark-docs.test.mjs && node prepare-guides.mjs && astro build",
+    "build": "node --test remark-docs.test.mjs && node prepare-guides.mjs && astro build && node --test progress.test.mjs",
     "dev": "node prepare-guides.mjs && astro dev"
   },
   "dependencies": {
