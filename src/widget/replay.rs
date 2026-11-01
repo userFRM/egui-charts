@@ -2,10 +2,12 @@
 
 use super::price_series::PriceSeries;
 use super::{Chart, ChartLayout, SeriesId};
+use crate::data::ReplayDriver;
 use crate::data::merge::{Origin, fold, merge};
 use crate::model::{Bar, BarClock, Timeframe};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 pub(super) struct ReplayWindow {
     pub(super) time: DateTime<Utc>,
@@ -15,6 +17,12 @@ pub(super) struct ReplayWindow {
     feed_paused: bool,
     pub quote: Option<crate::model::Level1Quote>,
     pub session_quote: Option<crate::model::quote::SessionQuote>,
+}
+
+pub(super) struct MarketReplay {
+    driver: Arc<ReplayDriver>,
+    feed: Option<super::feed::FeedLink>,
+    window: ReplayWindow,
 }
 
 impl ReplayWindow {
@@ -44,7 +52,65 @@ impl ReplayWindow {
 impl Chart {
     /// The exclusive replay cutoff, or `None` when showing live data.
     pub fn replay_time(&self) -> Option<DateTime<Utc>> {
-        self.replay.as_ref().map(|replay| replay.time)
+        self.market_replay
+            .as_ref()
+            .map(|replay| {
+                replay
+                    .driver
+                    .time()
+                    .checked_add_signed(chrono::TimeDelta::nanoseconds(1))
+                    .unwrap_or(chrono::DateTime::<Utc>::MAX_UTC)
+            })
+            .or_else(|| self.replay.as_ref().map(|replay| replay.time))
+    }
+
+    /// The shared event driver attached with [`Self::set_market_replay`], if any.
+    pub fn replay_driver(&self) -> Option<&Arc<ReplayDriver>> {
+        self.market_replay.as_ref().map(|replay| &replay.driver)
+    }
+
+    /// Replaces the live feed with a shared recording-backed driver, or restores it with `None`.
+    /// Retains the live bars, quotes, pause state and feed configuration for exit. Recorded trades
+    /// build partial bars through the normal feed path, alongside quotes, orders and depth.
+    /// Attach the same driver to every participating chart, then advance it once per frame before
+    /// drawing. Its time is inclusive; [`Self::replay_time`] reports the exclusive cutoff one
+    /// nanosecond later. An interval change resubscribes at the same shared position.
+    pub fn set_market_replay(&mut self, driver: Option<Arc<ReplayDriver>>) {
+        if let Some(replay) = self.market_replay.take() {
+            self.feed_link = replay.feed;
+            self.replay = Some(replay.window);
+            self.set_replay_time(None);
+        }
+        let Some(driver) = driver else { return };
+        let history = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.depth_history.as_ref())
+            .map(|history| {
+                crate::data::DepthHistory::new(history.config().clone())
+                    .expect("existing depth history configuration")
+            });
+        let view = self.order_book_view();
+        self.set_replay_time(Some(driver.time()));
+        let window = self.replay.take().expect("replay window");
+        let feed = self.feed_link.take();
+        self.attach_feed(driver.clone(), 1);
+        if let (Some(live), Some(replay)) = (&feed, &mut self.feed_link) {
+            replay.heatmap = live.heatmap.as_ref().map(|_| Default::default());
+        }
+        self.set_volume_bubbles(
+            feed.as_ref()
+                .and_then(|link| link.bubbles.as_ref())
+                .map(|bubbles| bubbles.config.clone()),
+        );
+        self.set_depth_history(history);
+        self.set_order_book_view(view);
+        self.replace_main_data(Vec::new());
+        self.market_replay = Some(MarketReplay {
+            driver,
+            feed,
+            window,
+        });
     }
 
     /// Enters or seeks replay, retaining the full history inside the chart. Only bars completed
@@ -54,10 +120,27 @@ impl Chart {
     /// strictly before `time` are available. Supply finer bars with `set_replay_source` to build
     /// the unfinished chart bar. No future OHLC is inferred from a completed coarse bar.
     ///
-    /// The main feed is suspended and current quotes are hidden. `set_data` and `update` retain
+    /// The main feed is suspended and current quotes and book views are hidden. Use
+    /// [`Self::set_market_replay`] to replay recorded trades, quotes and depth together.
+    /// `set_data` and `update` retain
     /// host corrections behind the window. `None` exits, restores all retained bars and quotes,
     /// and restores the feed's previous pause state. Hosts own source data and session storage.
+    /// With a market driver attached this dispatches a seek; call outside egui context locks,
+    /// as with [`ReplayDriver::seek`].
     pub fn set_replay_time(&mut self, time: Option<DateTime<Utc>>) {
+        if let Some(replay) = &self.market_replay {
+            if let Some(time) = time {
+                let inclusive = time
+                    .checked_sub_signed(chrono::TimeDelta::nanoseconds(1))
+                    .unwrap_or(DateTime::<Utc>::MIN_UTC);
+                if replay.driver.time() != inclusive {
+                    replay.driver.seek(inclusive);
+                }
+            } else {
+                self.set_market_replay(None);
+            }
+            return;
+        }
         let Some(time) = time else {
             if let Some(replay) = self.replay.take() {
                 for (id, bars) in replay.bars {
@@ -626,5 +709,221 @@ mod tests {
         let pairs = crate::data::aggregate_trades(&trades, two_trades.clone()).unwrap();
         assert!(!chart.set_replay_source(pairs, two_trades));
         assert_eq!(chart.bars(SeriesId::MAIN), shown);
+    }
+
+    #[test]
+    fn market_replay_rebuilds_chart_state_and_restores_the_live_feed() {
+        use crate::data::{MarketEvent, ReplayDriver, ReplayEvent};
+        use crate::model::{Instrument, Tick};
+        let mut events: Vec<_> = [(0, 10.0), (1, 12.0), (2, 99.0)]
+            .into_iter()
+            .enumerate()
+            .map(|(sequence, (minute, price))| {
+                ReplayEvent::new(
+                    "A",
+                    time(minute),
+                    sequence as u64,
+                    MarketEvent::Trade(Tick::new(time(minute), price, 1.0, None)),
+                )
+            })
+            .collect();
+        events.push(ReplayEvent::new(
+            "A",
+            time(0),
+            99,
+            MarketEvent::DepthSnapshot {
+                sequence: 0,
+                book: crate::model::OrderBook {
+                    ts: time(0),
+                    symbol: "A".into(),
+                    bids: vec![crate::model::OrderBookLevel {
+                        price: 9.0,
+                        size: 5.0,
+                        order_cnt: None,
+                    }],
+                    asks: Vec::new(),
+                },
+            },
+        ));
+        let load = || {
+            Arc::new(
+                ReplayDriver::new(
+                    events.clone(),
+                    vec![Instrument::new("A").with_tick_size(1.0)],
+                )
+                .unwrap(),
+            )
+        };
+        let live = load();
+        live.seek(time(2));
+        let mut chart = super::super::ChartBuilder::new()
+            .with_feed(live)
+            .with_symbol("A")
+            .with_timeframe(Timeframe::Min1)
+            .build();
+        let ctx = egui::Context::default();
+        for _ in 0..4 {
+            chart.pump(&ctx);
+        }
+        assert!(chart.order_book(SeriesId::MAIN).is_some());
+        chart.set_replay_time(Some(time(1)));
+        assert!(
+            chart.order_book(SeriesId::MAIN).is_none(),
+            "bar-only replay cannot expose a live book"
+        );
+        chart.set_replay_time(None);
+        assert!(chart.order_book(SeriesId::MAIN).is_some());
+        chart.set_volume_bubbles(Some(crate::chart::overlays::VolumeBubblesConfig {
+            min_size_filter: Some(2.0),
+            ..Default::default()
+        }));
+        chart.set_chart_type(crate::model::ChartType::VolumeFootprint);
+        for _ in 0..4 {
+            chart.pump(&ctx);
+        }
+        let original = chart.bars(SeriesId::MAIN).to_vec();
+        assert_eq!(original.len(), 3);
+        let replay = load();
+        replay.set_speed(0.0).unwrap();
+        replay.seek(time(0));
+        chart.set_market_replay(Some(replay.clone()));
+        for _ in 0..4 {
+            chart.pump(&ctx);
+        }
+        assert_eq!(chart.bars(SeriesId::MAIN), &original[..1]);
+        assert_eq!(
+            chart
+                .feed_link
+                .as_ref()
+                .unwrap()
+                .bubbles
+                .as_ref()
+                .map(|bubbles| bubbles.config.min_size_filter),
+            Some(Some(2.0)),
+            "market replay keeps the configured trade bubbles"
+        );
+        assert_eq!(
+            chart
+                .feed_link
+                .as_ref()
+                .unwrap()
+                .footprint
+                .as_ref()
+                .unwrap()
+                .bars()
+                .len(),
+            1,
+            "a seek cannot retain future footprint rows"
+        );
+        replay.seek(time(1));
+        chart.pump(&ctx);
+        assert_eq!(chart.bars(SeriesId::MAIN), &original[..2]);
+        chart.set_timeframe(Timeframe::Min5);
+        for _ in 0..4 {
+            chart.pump(&ctx);
+        }
+        assert_eq!(
+            chart.bars(SeriesId::MAIN),
+            [bar(0, [10.0, 12.0, 10.0, 12.0, 2.0])]
+        );
+        chart.set_timeframe(Timeframe::Min1);
+        for _ in 0..4 {
+            chart.pump(&ctx);
+        }
+        chart.set_market_replay(None);
+        for _ in 0..4 {
+            chart.pump(&ctx);
+        }
+        assert_eq!(chart.bars(SeriesId::MAIN), original);
+        assert!(chart.replay_time().is_none());
+        assert!(chart.replay_driver().is_none());
+
+        // A seek must also rebuild the coarser history that ordinary frames accumulated.
+        let books = (0..8)
+            .map(|minute| {
+                ReplayEvent::new(
+                    "A",
+                    time(minute),
+                    minute as u64,
+                    MarketEvent::DepthSnapshot {
+                        sequence: minute as u64,
+                        book: crate::model::OrderBook {
+                            ts: time(minute),
+                            symbol: "A".into(),
+                            bids: vec![crate::model::OrderBookLevel {
+                                price: 99.0,
+                                size: (minute + 1) as f64,
+                                order_cnt: None,
+                            }],
+                            asks: Vec::new(),
+                        },
+                    },
+                )
+            })
+            .collect();
+        let driver = Arc::new(
+            ReplayDriver::new(books, vec![Instrument::new("A").with_tick_size(1.0)]).unwrap(),
+        );
+        let mut chart = super::super::ChartBuilder::new()
+            .with_feed(driver.clone())
+            .with_symbol("A")
+            .with_timeframe(Timeframe::Min1)
+            .build();
+        chart.set_depth_history(Some(
+            crate::data::DepthHistory::new(crate::data::DepthHistoryConfig {
+                columns: 2,
+                cadence: chrono::TimeDelta::minutes(1),
+                ..Default::default()
+            })
+            .unwrap(),
+        ));
+        for _ in 0..4 {
+            chart.pump(&ctx);
+        }
+        driver.advance(std::time::Duration::ZERO).unwrap();
+        chart.pump(&ctx);
+        for _ in 1..8 {
+            driver.advance(std::time::Duration::from_secs(60)).unwrap();
+            chart.pump(&ctx);
+        }
+        let expected: Vec<_> = chart
+            .depth_history(SeriesId::MAIN)
+            .unwrap()
+            .columns()
+            .cloned()
+            .collect();
+        assert!(expected.len() > 2);
+        driver.seek(time(0));
+        chart.pump(&ctx);
+        driver.seek(time(7));
+        chart.pump(&ctx);
+        assert_eq!(
+            chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .columns()
+                .cloned()
+                .collect::<Vec<_>>(),
+            expected
+        );
+        let config = chart
+            .depth_history(SeriesId::MAIN)
+            .unwrap()
+            .config()
+            .clone();
+        chart.set_depth_history(Some(crate::data::DepthHistory::new(config).unwrap()));
+        for _ in 0..4 {
+            chart.pump(&ctx);
+        }
+        assert_eq!(
+            chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .columns()
+                .cloned()
+                .collect::<Vec<_>>(),
+            expected[expected.len() - 2..],
+            "enabling history at a paused cursor must load its latest recording page"
+        );
     }
 }

@@ -135,11 +135,12 @@ mod tests {
                     "watchlist",
                     "details",
                     "tape",
+                    "tape_combined",
                     "hotlist",
                     "screener",
                     "news",
                 ] {
-                    let tape = panel == "tape";
+                    let tape = matches!(panel, "tape" | "tape_combined");
                     let ctx = egui::Context::default();
                     apply_to_egui(&ctx, &theme);
                     let symbol = "EXCHANGE:LONG_SYMBOL_NAME";
@@ -170,6 +171,7 @@ mod tests {
                     details.set_feed(std::sync::Arc::new(Feed));
                     details.poll(&ctx);
                     let mut trades = TimeAndSalesPanel::default();
+                    trades.combine_fills = panel == "tape_combined";
                     trades.config.price_decimals = Some(2);
                     trades.push(Tick::new(
                         "2026-10-23T12:34:55Z".parse().unwrap(),
@@ -183,6 +185,14 @@ mod tests {
                         123456.0,
                         Some(OrderSide::Buy),
                     ));
+                    if trades.combine_fills {
+                        trades.push(Tick::new(
+                            "2026-10-23T12:34:56Z".parse().unwrap(),
+                            123456789.12,
+                            0.0,
+                            Some(OrderSide::Buy),
+                        ));
+                    }
                     trades.filters = vec![
                         TradeSizeFilter {
                             min_size: 1.0,
@@ -280,13 +290,14 @@ mod tests {
                         .filter(|(text, _)| {
                             if tape {
                                 matches!(text.as_str(), "12:34:56" | "123456789.12" | "123.46K")
+                                    || (panel == "tape_combined" && text == "2")
                             } else {
                                 [symbol, "123,456.789", "+23,456.789", "+23.46%"]
                                     .contains(&text.as_str())
                             }
                         })
                         .collect();
-                    assert_eq!(row.len(), if tape { 3 } else { 4 }, "{texts:?}");
+                    assert_eq!(row.len(), if panel == "tape" { 3 } else { 4 }, "{texts:?}");
                     // The last match, so a symbol's name wins over its mark's initial.
                     let bounds = |label: &str| {
                         texts
