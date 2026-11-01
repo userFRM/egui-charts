@@ -17,21 +17,52 @@ use crate::widget::{Chart, SeriesId};
 use std::sync::Arc;
 
 impl Chart {
+    /// Whether a visible profile drawing reads the trades on this time-based chart.
+    #[cfg(feature = "drawings")]
+    fn profile_drawings(&self) -> bool {
+        self.drawing_timeframe().is_some()
+            && self
+                .drawings
+                .drawings
+                .iter()
+                .any(|drawing| drawing.reads_profile())
+    }
+
+    #[cfg(not(feature = "drawings"))]
+    fn profile_drawings(&self) -> bool {
+        false
+    }
+
     /// Issues what the feed must be asked and applies what it sent since the last call. Called
     /// first in [`show`](Self::show); does nothing without a feed.
     pub(crate) fn pump(&mut self, ctx: &egui::Context) {
-        // Session profiles are summed by the studies' code.
-        let executions = (self.chart_type == ChartType::VolumeFootprint
-            || (self.chart_type == ChartType::SessionVolumeProfile && cfg!(feature = "studies")))
-            && self
-                .timeframe
-                .is_none_or(|timeframe| !timeframe.is_trade_based());
+        // Profile drawings read held trades on every time-based chart type.
+        let executions = self
+            .timeframe
+            .is_none_or(|timeframe| !timeframe.is_trade_based())
+            && (self.chart_type == ChartType::VolumeFootprint
+                || (self.chart_type == ChartType::SessionVolumeProfile
+                    && cfg!(feature = "studies"))
+                || (self.feed_link.is_some() && self.profile_drawings()));
         if let Some(link) = self
             .feed_link
             .as_mut()
             .filter(|link| executions != link.footprint.is_some())
         {
-            link.footprint = if executions { link.footprint() } else { None };
+            link.footprint = if executions {
+                link.footprint(None)
+            } else {
+                None
+            };
+        }
+        // Replay can stop inside a bar, so profile drawings sum only executions before the cutoff.
+        let cutoff = self.replay_time().filter(|_| self.profile_drawings());
+        if let Some(link) = self
+            .feed_link
+            .as_mut()
+            .filter(|link| link.replay_footprint.as_ref().map(|(time, _)| *time) != cutoff)
+        {
+            link.replay_footprint = cutoff.map(|time| (time, link.footprint(Some(time))));
         }
         if self.feed_link.as_ref().is_some_and(|link| link.paused) {
             return;
@@ -621,7 +652,7 @@ impl Chart {
             }
         }
         if (changed || reached_start) && link.footprint.is_some() {
-            link.footprint = link.footprint();
+            link.footprint = link.footprint(None);
         }
         link.trade_cursor = continuation;
         link.trades_complete |=

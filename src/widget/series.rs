@@ -677,6 +677,7 @@ impl Chart {
         if let Some(at) = self.price_series.iter().position(|item| item.id == id) {
             let removed = self.price_series.remove(at);
             self.retain_removed_series(removed);
+            self.host_events.push(super::ChartEvent::SeriesRemoved(id));
             if self.selection.selected_id() == Some(ChartElementId::Series(id)) {
                 self.selection.deselect();
             }
