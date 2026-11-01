@@ -781,7 +781,7 @@ Studies,Strategy tester,Backtest engine,done,library,src/strategies/backtest.rs;
 Studies,Strategy tester,Built-in Bollinger Bands strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/bollinger_bands.rs
 Studies,Strategy tester,Built-in Bollinger Bands strategy Directed,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/bollinger_bands.rs
 Studies,Strategy tester,Built-in Consecutive Up/Down strategy,done,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs
-Studies,Strategy tester,Built-in Greedy strategy,done,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs
+Studies,Strategy tester,Built-in gap continuation strategy,done,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs
 Studies,Strategy tester,Built-in Keltner Channels strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/keltner.rs
 Studies,Strategy tester,Built-in MACD strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/macd.rs
 Studies,Strategy tester,Built-in Momentum strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/momentum.rs
