@@ -5,7 +5,7 @@ use super::layout::Region;
 use super::{Action, Terminal};
 use egui_charts::scales::{DefaultPriceFormatter, PriceFormatter, instrument_price_precision};
 use egui_charts::services::UserSettings;
-use egui_charts::studies::{Indicator, InputKind, InputValue, StudySource};
+use egui_charts::studies::{Indicator, IndicatorFactory, InputKind, InputValue, StudySource};
 use egui_charts::ui::Control;
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
 use egui_charts::ui::dialogs::{
@@ -55,6 +55,17 @@ fn study_input_summary(study: &dyn Indicator) -> String {
 }
 
 impl Terminal {
+    /// Uses `factory` for the study browser and toolbar additions by name. Without this,
+    /// the terminal offers the built-in catalogue.
+    ///
+    /// Studies registered in [`IndicatorFactory::PERSONAL`] appear under My scripts, those
+    /// in [`IndicatorFactory::COMMUNITY`] under Community, and other studies under Built-ins.
+    pub fn with_indicator_factory(mut self, factory: IndicatorFactory) -> Self {
+        self.studies.indicators =
+            std::mem::take(&mut self.studies.indicators).with_factory(factory);
+        self
+    }
+
     pub(super) fn studies_init(&mut self) {
         for control in [
             Control::Indicators,
@@ -489,6 +500,60 @@ mod tests {
             map.idx_to_x(index),
             map.price_to_y(chart.state().shown()[index].close),
         )
+    }
+
+    /// Guards that the terminal lists and adds the host's constructors through both entry
+    /// points, in their categories, while the default terminal keeps the built-in catalogue.
+    #[test]
+    fn host_factory_reaches_the_browser_and_toolbar() {
+        for (category, section) in [
+            (None, "Built-ins"),
+            (Some(IndicatorFactory::PERSONAL), "My scripts"),
+            (Some(IndicatorFactory::COMMUNITY), "Community"),
+            (Some(IndicatorFactory::CUSTOM), "Built-ins"),
+        ] {
+            for browser in [true, false] {
+                let mut terminal = Terminal::new(Arc::new(TestFeed)).with_symbol("AAPL");
+                let (name, query, period) = if let Some(category) = category {
+                    let mut factory = IndicatorFactory::new();
+                    factory.register_in(category, "Host average", || Box::new(SMA::new(42)));
+                    terminal = terminal.with_indicator_factory(factory);
+                    ("Host average", "Host average", 42)
+                } else {
+                    ("SMA", "Simple Moving Avg", 9)
+                };
+                for _ in 0..4 {
+                    frame(&mut terminal, SIZE, vec![]);
+                }
+                let before = terminal.chart().indicators().count();
+                if browser {
+                    terminal.run(Action::TopToolbar(TopToolbarAction::OpenIndicators));
+                    frame(&mut terminal, SIZE, vec![]);
+                    frame(&mut terminal, SIZE, vec![Event::Text(query.into())]);
+                    let tab = frame(&mut terminal, SIZE, vec![])
+                        .text_at(section)
+                        .expect("the browser offers the study's category");
+                    click(&mut terminal, SIZE, tab);
+                    let row = frame(&mut terminal, SIZE, vec![])
+                        .text_at("Simple Moving Avg")
+                        .expect("the browser lists the study in its category");
+                    click(&mut terminal, SIZE, row);
+                } else {
+                    terminal.run(Action::TopToolbar(TopToolbarAction::AddIndicator(
+                        name.into(),
+                    )));
+                }
+                let studies: Vec<_> = terminal.chart().indicators().collect();
+                assert_eq!(studies.len(), before + 1, "{category:?}, browser={browser}");
+                assert_eq!(
+                    studies.last().unwrap().1.inputs()[0].value,
+                    InputValue::Length(period)
+                );
+                if category.is_some() {
+                    assert!(terminal.studies.indicators.factory().has("RSI"));
+                }
+            }
+        }
     }
 
     /// Guards the study menu's host part: a study added from another study's menu takes that
