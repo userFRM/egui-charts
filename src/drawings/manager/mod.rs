@@ -17,6 +17,7 @@ mod edit;
 mod interaction;
 mod paint;
 
+pub(crate) use paint::DrawingAxisTag;
 use paint::Tessellated;
 
 /// A change to the stored drawings, queued in [`DrawingManager::pending_sync`].

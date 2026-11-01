@@ -1097,6 +1097,8 @@ mod tests {
         d.arrow_start_style = ArrowStyle::Diamond;
         d.arrow_end_style = ArrowStyle::Circle;
         d.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
+        d.price_axis_label = false;
+        d.time_axis_label = false;
         d.position_sizing = PositionSizing {
             point_value: 50.0,
             lot_size: 10.0,
@@ -1351,6 +1353,9 @@ mod tests {
             want.label = None; // Earlier files have no object name.
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
             want.vwap = None; // Earlier files use the default bands.
+            // Earlier files show their axis labels.
+            want.price_axis_label = true;
+            want.time_axis_label = true;
             // Earlier files draw text and borders in the drawing colour, boxed and upright.
             want.italic = false;
             want.text_color = None;
