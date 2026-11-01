@@ -452,11 +452,13 @@ Order flow,Order flow,Spoofing and pulled-liquidity detection,missing,host,
 Order flow,Order flow,Stacked imbalances shown as zones,done,library,src/data/footprint.rs;src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/studies/builtin/mod.rs
 Order flow,Order flow,Stop spotter,missing,host,
 Order flow,Order flow,Stop-run detection from bursts of same-side market orders within milliseconds,missing,host,
+Order flow,Order flow,TPO initial balance period and extension levels,done,library,src/model/tpo.rs;src/model/chart_type.rs;src/chart/rendering/candles/tpo.rs;src/ui/dialogs/series_settings/tabs/symbol.rs
+Order flow,Order flow,TPO poor high and poor low marks,done,library,src/model/tpo.rs;src/model/chart_type.rs;src/chart/rendering/candles/tpo.rs;src/ui/dialogs/series_settings/tabs/symbol.rs
 Order flow,Order flow,Tape reconstruction and passive fill details,done,library,src/data/trades.rs;src/data/orders.rs;src/model/quote.rs;src/widget/feed/mod.rs;src/ui/widget_bar/panels/time_and_sales.rs
 Order flow,Order flow,Tick-by-tick trade replay with speed control and multi-symbol sessions,done,library,src/data/replay.rs;src/data/mod.rs
 Order flow,Order flow,Tick-count bars,done,library,src/model/timeframe.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Order flow,Order flow,Time and sales with size filters and sound alerts,done,library,src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs
-Order flow,Order flow,Time price opportunity profiles and structural levels,done,library,src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs;src/widget/frame.rs;src/studies/builtin/time_price_opportunity.rs;src/tokens/mod.rs;src/tokens/semantic.rs;src/model/chart_type.rs;src/ui/dialogs/series_settings/tabs/symbol.rs
+Order flow,Order flow,Time price opportunity profiles and single prints,done,library,src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs;src/widget/frame.rs;src/studies/builtin/time_price_opportunity.rs;src/tokens/mod.rs;src/tokens/semantic.rs;src/model/chart_type.rs;src/ui/dialogs/series_settings/tabs/symbol.rs
 Order flow,Order flow,"Trade-based session, composite and visible-range volume profiles",done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs
 Order flow,Order flow,Trade-size filtered CVD,done,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
 Order flow,Order flow,Unfinished auction detection with extension lines,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs

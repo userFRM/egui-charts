@@ -415,6 +415,16 @@ fn place_profiles(
     idx_to_coord: impl Fn(usize) -> f32,
     mut visit: impl FnMut(&TPOProfile, f32, f32, bool),
 ) {
+    let balance_room = if config.show_initial_balance_extensions {
+        10.0
+    } else {
+        0.0
+    };
+    let poor_room = if config.show_poor_highs_lows {
+        12.0
+    } else {
+        0.0
+    };
     // Each profile with its left edge, its session's width, its widest row and whether it starts
     // out of view.
     let mut placed = Vec::new();
@@ -445,7 +455,8 @@ fn place_profiles(
             };
             // A session that opened left of the plot keeps its profile at the plot's edge.
             let open_x = idx_to_coord(span[0]);
-            let anchor_x = open_x.max(price_rect.left());
+            // Leave the extension strokes inside the plot when the session opens out of view.
+            let anchor_x = open_x.max(price_rect.left() + balance_room);
             let widest = profile.price_tpo_count.values().max().copied().unwrap_or(0);
             if end_x > anchor_x && widest > 0 {
                 placed.push((
@@ -453,7 +464,7 @@ fn place_profiles(
                     anchor_x,
                     end_x - anchor_x,
                     widest,
-                    open_x < anchor_x,
+                    open_x < price_rect.left(),
                 ));
             }
         }
@@ -464,7 +475,7 @@ fn place_profiles(
         .iter()
         .filter(|(.., cut)| !cut)
         .all(|&(_, _, width, ..)| width >= 2.0 * LABEL_ROOM_PX);
-    let room = if labels { LABEL_ROOM_PX } else { 0.0 };
+    let room = (if labels { LABEL_ROOM_PX } else { 0.0 }).max(balance_room + poor_room);
     let fit = |width: f32, widest: usize| (width - room) / widest as f32;
     // One column width for every profile that fits its whole session, so all show letters or
     // all show blocks; a profile cut by the plot's edge narrows further on its own.
@@ -1526,7 +1537,7 @@ mod tests {
     }
 
     #[test]
-    fn level_labels_show_only_when_sessions_leave_room_for_them() {
+    fn level_labels_and_extremes_fit_between_sessions() {
         // Three UTC days of four half-hour bars each
         let bars: Vec<_> = (0..12)
             .map(|i| {
@@ -1548,7 +1559,19 @@ mod tests {
             false,
         );
         // (pixels per bar, sessions labelled): the first session has no room left of the plot.
-        for (spacing, expected) in [(30.0, 2), (10.0, 0)] {
+        for (spacing, expected, extremes, offset) in [
+            (30.0, 2, false, 0.0),
+            (10.0, 0, false, 0.0),
+            (30.0, 2, true, 0.0),
+            (10.0, 0, true, 0.0),
+            (10.0, 0, true, -4.0),
+        ] {
+            let config = TPOConfig {
+                show_poor_highs_lows: extremes,
+                show_initial_balance_extensions: extremes,
+                display_mode: TPODisplayMode::Blocks,
+                ..config.clone()
+            };
             let ctx = egui::Context::default();
             ctx.begin_pass(egui::RawInput::default());
             render_live_tpo(
@@ -1561,7 +1584,7 @@ mod tests {
                 &config,
                 None,
                 &BarClock::new(Timeframe::Min30),
-                |i, _| i as f32 * spacing,
+                |i, _| i as f32 * spacing + offset,
                 0.0,
                 Color32::GREEN,
                 Color32::RED,
@@ -1574,6 +1597,27 @@ mod tests {
                 .filter(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "VAH"))
                 .count();
             assert_eq!(labelled, expected, "{spacing} px per bar");
+            let mut extensions = 0;
+            let mut poor = 0;
+            for shape in &output.shapes {
+                let Shape::LineSegment { points, .. } = &shape.shape else {
+                    continue;
+                };
+                let width = points[1].x - points[0].x;
+                if width == 10.0 {
+                    assert!(points.iter().all(|p| rect.contains(*p)), "{points:?}");
+                    extensions += 1;
+                } else if width == 8.0 {
+                    let session = poor / 2;
+                    if session < 2 {
+                        let next_balance = (session + 1) as f32 * 4.0 * spacing + offset - 10.0;
+                        assert!(points[1].x <= next_balance, "{points:?}");
+                    }
+                    poor += 1;
+                }
+            }
+            assert_eq!(extensions, if extremes { 12 } else { 0 });
+            assert_eq!(poor, if extremes { 6 } else { 0 });
         }
     }
 
