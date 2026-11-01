@@ -150,6 +150,17 @@ pub enum ChartEvent {
         /// The time of the mark; on price-based chart types, of the element it sits on.
         time: DateTime<Utc>,
     },
+    /// A primary click on the Open row of a post or idea card with a link. Open the post or
+    /// idea it names; the link may be any text the user typed, so check it, such as its
+    /// scheme, before opening it. The click also selects the card, as any click on it does.
+    #[cfg(feature = "drawings")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+    LinkClick {
+        /// Id of the drawing.
+        drawing: usize,
+        /// Its [`PostLink::link`](crate::model::PostLink::link).
+        link: String,
+    },
     /// A successful history page or `set_data` completed, including an empty result.
     /// Live updates emit `DataUpdated` instead; failed or obsolete feed replies emit nothing.
     DataLoaded {
@@ -431,6 +442,11 @@ impl Chart {
                 });
                 if button == PointerButton::Primary {
                     self.click_mark(position.pos);
+                    // The second click of a double click edits the card; the first opened it.
+                    #[cfg(feature = "drawings")]
+                    if !response.double_clicked() && !response.triple_clicked() {
+                        self.click_link(ui.ctx(), position.pos);
+                    }
                 }
             }
         }

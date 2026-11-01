@@ -20,6 +20,7 @@ pub struct OrderFlowStudy {
     input: OrderFlowInput,
     clock: BarClock,
     values: IndicatorValues,
+    reset_revision: u64,
     colors: Vec<Color32>,
     visible: bool,
     /// Draw the rolling sums as a histogram rather than lines.
@@ -36,6 +37,7 @@ impl OrderFlowStudy {
             input: OrderFlowInput::new(kind),
             clock: BarClock::new(crate::model::Timeframe::Min1),
             values: IndicatorValues::new(),
+            reset_revision: 0,
             colors: vec![
                 Color32::from_rgb(38, 166, 154),
                 Color32::from_rgb(239, 83, 80),
@@ -63,7 +65,13 @@ impl OrderFlowStudy {
     /// from the last value before it. A bar without input leaves a gap, and a rolling sum
     /// over one is a gap, as is the warm-up.
     fn refresh(&mut self, data: &[Bar], from: usize) {
-        let from = from.min(data.len());
+        let reset_revision = self.input.reset_revision();
+        let from = if reset_revision != self.reset_revision {
+            0
+        } else {
+            from.min(data.len())
+        };
+        self.reset_revision = reset_revision;
         self.values.truncate(from);
         self.values
             .resize(data.len(), crate::studies::IndicatorValue::None);
@@ -126,6 +134,7 @@ impl OrderFlowStudy {
     fn reset(&mut self) {
         self.input = OrderFlowInput::new(self.kind).with_order_filter(self.filter.clone());
         self.values = IndicatorValues::new();
+        self.reset_revision = 0;
     }
 }
 
@@ -570,5 +579,133 @@ mod tests {
                 .unwrap_or_default();
             assert_eq!((filter.min_age, filter.max_age), ages, "{id} {value}");
         }
+    }
+
+    /// Signed sizes give -1 then +24 on three-tick/range bars. A sell of eight
+    /// splits 4/4 on volume bars; a buy of sixteen splits 12/4 on delta bars.
+    #[test]
+    fn trade_intervals_allocate_every_fill_to_its_chart_bar() {
+        use OrderSide::{Buy, Sell};
+        let six = [
+            (1.0, Buy),
+            (2.0, Buy),
+            (4.0, Sell),
+            (8.0, Buy),
+            (16.0, Sell),
+            (32.0, Buy),
+        ];
+        let mut results = Vec::new();
+        let mut expected = Vec::new();
+        for (interval, fills, same_time, want) in [
+            ("3t", six.to_vec(), false, vec![-1.0, 23.0]),
+            ("2r", six.to_vec(), false, vec![-1.0, 23.0]),
+            (
+                "10v",
+                vec![(6.0, Buy), (8.0, Sell), (6.0, Buy)],
+                false,
+                vec![2.0, 4.0],
+            ),
+            (
+                "10delta",
+                vec![(6.0, Buy), (8.0, Sell), (16.0, Buy)],
+                false,
+                vec![10.0, 14.0],
+            ),
+            (
+                "1t",
+                six.to_vec(),
+                true,
+                vec![1.0, 3.0, -1.0, 7.0, -9.0, 23.0],
+            ),
+        ] {
+            let clock = BarClock::new(interval.parse().unwrap());
+            let ticks: Vec<_> = fills
+                .into_iter()
+                .enumerate()
+                .map(|(i, (size, side))| {
+                    let second = if same_time { 0 } else { i as i64 };
+                    Tick::new(
+                        start() + TimeDelta::seconds(second),
+                        100.0 + i as f64,
+                        size,
+                        Some(side),
+                    )
+                })
+                .collect();
+            let data =
+                crate::data::aggregate_trades_with_tick_size(&ticks, clock.clone(), Some(1.0))
+                    .unwrap();
+            let (size, filtered) = match interval {
+                "10v" => (8.0, vec![-4.0, -8.0]),
+                "10delta" => (16.0, vec![12.0, 16.0]),
+                "1t" => (8.0, vec![0.0, 0.0, 0.0, 8.0, 8.0, 8.0]),
+                _ => (8.0, vec![0.0, 8.0]),
+            };
+            for (min, max, want) in [(0.0, f64::MAX, want), (size, size, filtered)] {
+                let mut study = OrderFlowStudy::new(OrderFlowKind::FilteredCvd { min, max });
+                study.set_bar_clock(&clock);
+                let input = study.order_flow_inputs()[0].clone();
+                input.set_tick_size(Some(1.0));
+                for tick in &ticks {
+                    input.push_trade(&clock, tick);
+                }
+                study.calculate(&data);
+                results.push((
+                    interval,
+                    study.values().line(0).to_vec(),
+                    input.values().keys().copied().collect::<Vec<_>>(),
+                ));
+                expected.push((
+                    interval,
+                    want,
+                    data.iter().map(|bar| bar.time).collect::<Vec<_>>(),
+                ));
+            }
+        }
+        assert_eq!(results, expected);
+    }
+
+    /// At 11,001 bars retention keeps bars 1,001..=11,000: 10,000 buys of one.
+    /// A ten-bar sum first has a complete window at bar 1,010.
+    #[test]
+    fn incremental_values_restart_after_input_retention() {
+        let data: Vec<_> = (0..11_001)
+            .map(|i| {
+                Bar::new(
+                    start() + TimeDelta::minutes(i),
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut results = Vec::new();
+        for kind in [
+            OrderFlowKind::FilteredCvd {
+                min: 0.0,
+                max: f64::MAX,
+            },
+            OrderFlowKind::FlowSum { bars: 10 },
+        ] {
+            let mut study = OrderFlowStudy::new(kind);
+            for i in 0..11_000 {
+                push(&study, i, &[(1.0, Some(OrderSide::Buy))]);
+            }
+            study.calculate(&data[..11_000]);
+            push(&study, 11_000, &[(1.0, Some(OrderSide::Buy))]);
+            study.update(&data, 11_000);
+            let mut fresh = study.clone();
+            fresh.calculate(&data);
+            let line = study.values().line(0);
+            results.push((
+                line[11_000],
+                line[1_001..1_010].iter().all(|v| v.is_nan()),
+                // All outputs, including dropped history and warm-up gaps.
+                format!("{:?}", lines(&study)) == format!("{:?}", lines(&fresh)),
+            ));
+        }
+        assert_eq!(results, [(10_000.0, false, true), (10.0, true, true)]);
     }
 }

@@ -176,6 +176,15 @@ impl Trades {
         self.lost_until
     }
 
+    /// Time of the newest trade a page added: newer held trades arrived live.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
+    pub(crate) fn paged_until(&self) -> Option<DateTime<Utc>> {
+        self.paged_until
+    }
+
     /// An empty store of the same capacity, for the next drain.
     pub(crate) fn empty(&self) -> Self {
         Self::new(self.capacity)

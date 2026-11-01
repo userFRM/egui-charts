@@ -30,6 +30,7 @@
 //!
 //! chart.set_replay_time(controller.cutoff(&BarClock::new(Timeframe::Min1)));
 //! // Supply finer history with chart.set_replay_source when it is available.
+//! // One-trade bars from data::aggregate_trades advance it trade by trade.
 //! // Store controller.session() in host storage and restore it after fetching source history.
 //! ```
 

@@ -33,6 +33,7 @@ mod markers;
 #[cfg(any(feature = "studies", feature = "drawings"))]
 pub(crate) mod math;
 pub mod point_figure;
+mod post;
 mod price_source;
 pub mod quote;
 pub mod range_bar;
@@ -85,6 +86,7 @@ pub use markers::{
     PriceLine,
 };
 pub use point_figure::{ColumnDirection, PnfColumn, PointFigureConfig, to_pnf_columns};
+pub use post::{PostContent, PostLink};
 pub use price_source::PriceSource;
 pub use quote::{
     ExtendedHoursQuote, ExtendedSession, Level1Quote, OrderBook, OrderBookLevel, Quote, Tick,

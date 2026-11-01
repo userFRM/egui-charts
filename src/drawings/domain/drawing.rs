@@ -15,7 +15,7 @@ use super::{
 };
 
 use crate::data::VolumeProfileConfig;
-use crate::model::{AlertSource, LineStyle};
+use crate::model::{AlertSource, LineStyle, PostLink};
 use crate::scales::PriceScaleMode;
 use serde::{Deserialize, Serialize};
 
@@ -115,8 +115,15 @@ pub struct Drawing {
     pub completed: bool,
     /// Optional annotation content, preserved with the drawing. Tables use one row per line
     /// and tab-separated cells. Images use an image URI resolved by the host's egui image
-    /// loaders. Posts and ideas use the first line as author or title and the rest as body.
+    /// loaders. Posts and ideas use the first line as author or title and the rest as body,
+    /// when they have no [`post`](Self::post).
     pub text: Option<String>,
+    /// The post or idea a post or idea drawing shows: its link and the content the host
+    /// resolved it to through [`Posts`](crate::services::Posts). The content is saved with the
+    /// drawing, so it shows without asking the host again. While it is set, the card shows it
+    /// instead of [`text`](Self::text). Other tools ignore it.
+    #[serde(default)]
+    pub post: Option<PostLink>,
 
     // === Styling properties ===
     /// Line style (Solid, Dashed, Dotted)
@@ -410,6 +417,7 @@ impl Drawing {
             stroke_width: style.width,
             completed: false,
             text: (tool_type == DrawingToolType::Sticker).then(|| "sticker:bull".into()),
+            post: None,
             // Styling defaults
             line_style: style.line_style,
             fill_color: style.fill,

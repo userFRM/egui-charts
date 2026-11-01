@@ -106,6 +106,7 @@ pub(crate) fn render_study_axis(
         for line in 0..member.line_count() {
             let plot = member.plot_style(line);
             if plot.visible
+                && member.plot_tagged(line)
                 && !matches!(
                     plot.plot_type,
                     PlotType::BarColor | PlotType::BackgroundColor
@@ -189,7 +190,7 @@ mod tests {
     use super::*;
     use crate::chart::renderers::{IndicatorRenderer, RenderContext};
     use crate::scales::StudyFormat;
-    use crate::studies::{CustomIndicator, IndicatorValue};
+    use crate::studies::{ConfiguredStudy, CustomIndicator, IndicatorValue};
 
     #[test]
     fn independent_and_hidden_scales_map_volume_without_price_units() {
@@ -202,7 +203,11 @@ mod tests {
             false,
         );
         let coords = ChartMapping::new(rect, 40.0, 0, 1, 0.0, main);
-        for scale in [StudyScale::Independent, StudyScale::None] {
+        for (scale, tagged) in [
+            (StudyScale::Independent, true),
+            (StudyScale::Independent, false),
+            (StudyScale::None, true),
+        ] {
             let mut study = CustomIndicator::new("Volume overlay", |_| {
                 vec![
                     IndicatorValue::Single(1000.0),
@@ -213,7 +218,16 @@ mod tests {
             .with_value_format(StudyFormat::Volume)
             .with_scale(scale);
             study.calculate(&[]);
-            let mapping = study_mapping(&study, &coords);
+            let study: Box<dyn Indicator> = if tagged {
+                Box::new(study)
+            } else {
+                let mut study = ConfiguredStudy::new(Box::new(study));
+                let mut settings = study.settings();
+                settings.untagged_plots = vec![0];
+                study.apply_settings(&[], settings).unwrap();
+                Box::new(study)
+            };
+            let mapping = study_mapping(study.as_ref(), &coords);
             // Visible values 1000..3000 plus 10% padding give 800..3200.
             assert!((mapping.price_to_y(1000.0) - 110.0).abs() < 0.001);
             assert!((mapping.price_to_y(3000.0) - 10.0).abs() < 0.001);
@@ -222,7 +236,7 @@ mod tests {
                     crate::model::Bar::new(chrono::Utc::now(), 150.0, 150.0, 150.0, 150.0, 1.0);
                     2
                 ];
-            let indicators: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
+            let indicators = vec![study];
             let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                 IndicatorRenderer::render(
                     &RenderContext::new(ui.painter(), rect),
@@ -258,8 +272,12 @@ mod tests {
                     _ => None,
                 })
                 .collect();
+            let tag = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == egui::Color32::BLUE)
+            });
             output.drop_without_applying_deltas();
             assert!(painted);
+            assert_eq!(tag, scale == StudyScale::Independent && tagged);
             assert_eq!(
                 labels.iter().any(|label| label == "3.00K"),
                 scale == StudyScale::Independent,

@@ -7,6 +7,8 @@
 
 mod sink;
 
+pub(crate) use sink::TradeBars;
+
 pub use sink::{Sink, aggregate_trades, aggregate_trades_with_tick_size};
 
 use super::depth::Book;
@@ -182,7 +184,7 @@ impl Inbox {
         inputs: Vec<crate::data::OrderFlowInput>,
     ) {
         if let Some(live) = self.state().subscriptions.get_mut(&id) {
-            live.study_inputs = inputs;
+            live.connect_study_inputs(inputs);
         }
     }
 

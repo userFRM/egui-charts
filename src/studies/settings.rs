@@ -208,6 +208,13 @@ pub struct StudySettings {
     /// Colour of the band between the lowest and the highest level.
     #[serde(default)]
     pub level_fill_color: Color32,
+    /// Plots, as indices into [`plots`](Self::plots), whose last value has no tag on the price
+    /// scale while the chart shows study values; the legend still shows it. A study starts
+    /// with the plots its [`Indicator::plot_tagged`] leaves out, every plot of a study with more
+    /// than four. An empty list, as in settings saved before this field, tags every plot.
+    /// Applying settings drops indices without a plot and sorts the rest.
+    #[serde(default)]
+    pub untagged_plots: Vec<usize>,
 }
 
 /// An owned settings and input snapshot without calculated study data.
@@ -711,6 +718,13 @@ impl Indicator for ConfiguredStudy {
         }
         plot
     }
+    fn plot_tagged(&self, line: usize) -> bool {
+        if line < self.settings.plots.len() {
+            !self.settings.untagged_plots.contains(&line)
+        } else {
+            self.study.plot_tagged(line)
+        }
+    }
     fn plot_offset(&self, line: usize) -> isize {
         self.study
             .plot_offset(line)
@@ -837,17 +851,26 @@ impl Indicator for ConfiguredStudy {
         for (id, value) in inputs {
             edited.set_input(id, value.clone())?;
         }
-        // Styles of the plots before the inputs changed their number keep their place, and
-        // plots they add start with the study's own style.
+        // Styles and tags of the plots before the inputs changed their number keep their place,
+        // and plots they add start with the study's own style and tag.
         if settings.plots.len() == self.line_count() && edited.line_count() != self.line_count() {
-            let defaults = edited.study.settings().plots;
-            let kept = settings.plots.len().min(defaults.len());
+            let defaults = edited.study.settings();
+            let kept = settings.plots.len().min(defaults.plots.len());
             settings.plots.truncate(kept);
-            settings.plots.extend_from_slice(&defaults[kept..]);
+            settings.plots.extend_from_slice(&defaults.plots[kept..]);
+            settings.untagged_plots.retain(|&line| line < kept);
+            settings
+                .untagged_plots
+                .extend(defaults.untagged_plots.iter().filter(|&&line| line >= kept));
         }
         if settings.plots.len() != edited.line_count() {
             return Err("one style is required per study plot");
         }
+        settings
+            .untagged_plots
+            .retain(|&line| line < settings.plots.len());
+        settings.untagged_plots.sort_unstable();
+        settings.untagged_plots.dedup();
         match_declared_levels(edited.study.as_ref(), &mut settings);
         // Unchanged plot colours must retain any per-bar palette stored by the study.
         for (line, plot) in settings.plots.iter().enumerate() {
@@ -1019,6 +1042,62 @@ impl Indicator for ConfiguredStudy {
 mod tests {
     use super::*;
     use crate::studies::BollingerBands;
+
+    #[test]
+    fn value_tags_default_by_plot_count_and_persist() {
+        use crate::studies::{
+            CustomIndicator, IndicatorValue, MARibbon, StudyTemplate, VolumeWeightedAvgPrice,
+        };
+        for (lines, untagged) in [(4, vec![]), (5, vec![0, 1, 2, 3, 4])] {
+            let study = ConfiguredStudy::new(Box::new(
+                CustomIndicator::new("Lines", |bars| vec![IndicatorValue::None; bars.len()])
+                    .with_line_count(lines),
+            ));
+            assert_eq!(study.settings().untagged_plots, untagged, "{lines} plots");
+        }
+
+        let mut ribbon = ConfiguredStudy::new(Box::new(MARibbon::new()));
+        assert_eq!(
+            ribbon.settings().untagged_plots,
+            (0..12).collect::<Vec<_>>()
+        );
+        let mut settings = ribbon.settings();
+        settings.untagged_plots = (1..11).collect();
+        ribbon.apply_settings(&[], settings).unwrap();
+        let template = StudyTemplate::from_study(&ribbon);
+        let json = serde_json::to_string(&template).unwrap();
+        let restored = serde_json::from_str::<StudyTemplate>(&json)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert_eq!(
+            restored.settings().untagged_plots,
+            (1..11).collect::<Vec<_>>()
+        );
+        assert!(restored.plot_tagged(0) && restored.plot_tagged(11) && !restored.plot_tagged(5));
+        // Settings saved before the field existed tag every plot, as they did.
+        let mut old = serde_json::to_value(&template).unwrap();
+        old["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("untagged_plots");
+        let restored = serde_json::from_value::<StudyTemplate>(old)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert!((0..12).all(|line| restored.plot_tagged(line)));
+
+        // Two bands take VWAP from one plot to five: the kept VWAP line stays tagged.
+        let mut vwap = ConfiguredStudy::new(Box::new(VolumeWeightedAvgPrice::new()));
+        let settings = vwap.settings();
+        vwap.apply_settings(&[("band_count".into(), InputValue::Length(2))], settings)
+            .unwrap();
+        assert_eq!(vwap.settings().untagged_plots, [1, 2, 3, 4]);
+        let mut settings = vwap.settings();
+        settings.untagged_plots = vec![3, 1, 3, 7];
+        vwap.apply_settings(&[], settings).unwrap();
+        assert_eq!(vwap.settings().untagged_plots, [1, 3]);
+    }
 
     #[test]
     fn automatic_precision_tracks_metadata_and_preserves_study_overrides() {
