@@ -167,7 +167,6 @@ impl Drawing {
             | T::InfoLine
             | T::Arrow
             | T::ArrowMarker
-            | T::Polyline
             | T::Path
             | T::Brush
             | T::Highlighter
@@ -185,6 +184,7 @@ impl Drawing {
                     outline.width = self.stroke_width;
                 }
             }
+            T::Polyline => outline.lines = path(self.closed),
             T::HeadAndShoulders => {
                 outline.lines = path(false);
                 if let Some((neckline, regions)) = patterns::head_and_shoulders_outline(p) {

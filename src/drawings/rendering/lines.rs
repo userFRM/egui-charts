@@ -494,7 +494,8 @@ impl Drawing {
             .collect()
     }
 
-    /// Render polyline - connected line segments through all points
+    /// Render polyline: connected line segments through all points, joined back to the first
+    /// when closed.
     pub(crate) fn render_polyline(&self, painter: &egui::Painter, color: Color32, stroke: Stroke) {
         for (i, &point) in self.points.iter().enumerate() {
             if i > 0 {
@@ -503,6 +504,9 @@ impl Drawing {
             if !self.completed {
                 painter.circle_filled(point, DESIGN_TOKENS.rounding.sm, color);
             }
+        }
+        if self.closed && self.points.len() >= 3 {
+            painter.line_segment([self.points[self.points.len() - 1], self.points[0]], stroke);
         }
     }
 

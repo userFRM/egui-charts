@@ -539,6 +539,72 @@ mod tests {
         }
     }
 
+    /// Closing uses placed anchors, and Escape keeps only a path with at least two of them.
+    #[test]
+    fn multi_point_shapes_close_finish_on_escape_and_curves_take_two_clicks() {
+        use DrawingToolType::{Path, Polyline};
+        let a = (30, 16.0);
+        let b = (50, 14.0);
+        let c = (40, 12.0);
+        for (tool, clicks, escape, kept) in [
+            (Polyline, vec![a, b, c, a], false, Some((3, true, 40.0))),
+            (Polyline, vec![a, b, a], true, Some((3, false, 30.0))),
+            (Polyline, vec![a], true, None),
+            (Path, vec![a, b], true, Some((2, false, 50.0))),
+            (Path, vec![a], true, None),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.drawings_mut().set_active_tool(Some(tool));
+            let map = chart.get_chart_mapping();
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            for (i, (bar, price)) in clicks.into_iter().enumerate() {
+                let pos = egui::pos2(map.idx_to_x(bar), map.price_to_y(price));
+                let time = 1.0 + i as f64;
+                frame(&ctx, &mut chart, time, vec![Event::PointerMoved(pos)]);
+                frame(&ctx, &mut chart, time + 0.1, vec![button(pos, true)]);
+                frame(&ctx, &mut chart, time + 0.2, vec![button(pos, false)]);
+            }
+            if escape {
+                frame(
+                    &ctx,
+                    &mut chart,
+                    6.0,
+                    vec![Event::Key {
+                        key: Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::NONE,
+                    }],
+                );
+            }
+            assert!(chart.drawings().curr_drawing.is_none(), "{tool:?}");
+            let Some((count, closed, last_bar)) = kept else {
+                assert!(chart.drawings().drawings.is_empty(), "{tool:?}");
+                continue;
+            };
+            assert_eq!(chart.drawings().drawings.len(), 1, "{tool:?}");
+            let drawing = &chart.drawings().drawings[0];
+            assert_eq!(drawing.chart_points.len(), count, "{tool:?}");
+            assert_eq!(drawing.closed, closed, "{tool:?}");
+            assert!((drawing.chart_points[0].bar_idx - 30.0).abs() < 1e-3);
+            assert!((drawing.chart_points.last().unwrap().bar_idx - last_bar).abs() < 1e-3);
+            let id = drawing.id;
+            assert!(
+                chart
+                    .set_drawing_points(id, &chart.drawing_points(id).unwrap())
+                    .is_ok()
+            );
+        }
+    }
+
     /// Shift-click on empty space uses the ruler without persisting it or bypassing availability.
     #[test]
     fn shift_click_on_empty_space_measures_until_the_next_click() {
