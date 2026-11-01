@@ -45,22 +45,19 @@ use crate::model::Timeframe;
 use crate::model::{ChartType, ChartTypeParams};
 use crate::studies::ChartState;
 
-use crate::scales::{PriceMap, PriceScale};
-use crate::studies::IndicatorRegistry;
-use chrono::{DateTime, Utc};
-use std::collections::BTreeMap;
-mod indicator_pane;
 pub use crate::chart::renderers::{
     Legend, LegendStatus, QuoteSide, StudyAction, StudyValue, ValueFormatters, Watermark,
     WatermarkLine,
 };
 pub use crate::chart::selection::{ChartElementId, SeriesId};
+use crate::scales::{PriceMap, PriceScale};
+use crate::studies::IndicatorRegistry;
 pub use builder::ChartBuilder;
+use chrono::{DateTime, Utc};
 use egui::{Pos2, Rect, Vec2};
 pub use export::{ChartImage, DataTable, ImageExportOptions};
-pub use indicator_pane::{
-    IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction,
-};
+pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
+use std::collections::BTreeMap;
 
 // Re-export from logic layer
 use crate::chart::state;
@@ -98,11 +95,8 @@ mod layout;
 mod navigation;
 mod palette;
 pub(crate) mod pan_zoom;
-mod pane_layout;
-#[cfg(feature = "studies")]
-mod trade_profile;
-pub use pane_layout::{PaneId, PaneOptions};
-mod panes;
+mod pane;
+pub use pane::{ChartLayoutRects, PaneId, PaneOptions, RenderedIndicatorPane};
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod posts;
@@ -125,6 +119,8 @@ mod studies;
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 mod study_templates;
 mod svg;
+#[cfg(feature = "studies")]
+mod trade_profile;
 
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
@@ -133,7 +129,7 @@ mod studies_data;
 pub use crate::chart::primitives::{
     PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
 };
-pub use pane_layout::VisualOrder;
+pub use pane::VisualOrder;
 pub use price_series::SeriesOptions;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId};
 #[cfg(feature = "ui")]
@@ -212,6 +208,7 @@ pub struct Chart {
     /// Backend state holding OHLCV data and coordinate system (time scale, price range).
     pub(crate) state: ChartState,
     replay: Option<replay::ReplayWindow>,
+    market_replay: Option<replay::MarketReplay>,
     /// Visual configuration controlling colors, padding, grid visibility, and more.
     pub(crate) config: ChartConfig,
     applied_config_scale_mode: crate::scales::PriceScaleMode,
@@ -226,7 +223,7 @@ pub struct Chart {
     pub(crate) chart_options: ChartOptions,
     pub(crate) keyboard: keyboard::KeyboardState,
     history: history::ChartHistory,
-    pane_layout: pane_layout::PaneLayout,
+    pane_layout: pane::PaneLayout,
     pane_options: PaneOptions,
     /// Starting index of visible range (for backward compatibility)
     pub(crate) start_idx: usize,
@@ -509,64 +506,6 @@ pub enum RightClickTarget {
     },
 }
 
-/// Information about a rendered indicator pane, used for hit testing and coordinate mapping.
-///
-/// After calling [`Chart::show`], each visible separate-pane indicator
-/// (RSI, MACD, etc.) produces a `RenderedIndicatorPane` entry stored in the chart.
-/// Platform code can use these to implement click-on-indicator-line selection,
-/// tooltip display, or other interactive features.
-///
-/// Retrieve with [`Chart::get_rendered_indicator_panes`].
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub struct RenderedIndicatorPane {
-    /// Position of the study in [`Chart::indicators`] when the pane was drawn. After a pane's
-    /// close button removed its study, that pane stays in the list until the next frame, and it
-    /// and the panes after it point one position too far.
-    pub indicator_idx: usize,
-    /// Full panel rect (including y-axis labels)
-    pub panel_rect: Rect,
-    /// Chart drawing area rect (excluding y-axis labels)
-    pub chart_rect: Rect,
-    /// Y-axis minimum value
-    pub y_min: f64,
-    /// Y-axis maximum value
-    pub y_max: f64,
-    /// Coordinate parameters for x-axis calculation
-    pub coords: IndicatorCoordParams,
-    /// Full mapping, including manual ranges, scale modes and inversion.
-    pub mapping: crate::chart::coords::ChartMapping,
-}
-
-/// Pre-computed layout rectangles for the chart's sub-regions.
-///
-/// Use [`Chart::calculate_layout_rects`] to obtain these rects for a given
-/// widget area. They are useful for external hit-testing (e.g., determining
-/// whether a click landed on the price area, volume area, or legend).
-#[derive(Clone, Copy, Debug)]
-#[non_exhaustive]
-pub struct ChartLayoutRects {
-    /// The overall widget rect (entire chart area including axes and padding).
-    pub widget_rect: Rect,
-    /// The main price/candle area where OHLC data is rendered.
-    pub price_rect: Rect,
-    /// The volume area inside the price pane (empty if volume is hidden).
-    pub volume_rect: Rect,
-    /// The legend/OHLC info area at the top of the chart.
-    pub legend_rect: Rect,
-}
-
-impl Default for ChartLayoutRects {
-    fn default() -> Self {
-        Self {
-            widget_rect: Rect::NOTHING,
-            price_rect: Rect::NOTHING,
-            volume_rect: Rect::NOTHING,
-            legend_rect: Rect::NOTHING,
-        }
-    }
-}
-
 impl Chart {
     /// Supplies instrument metadata for a chart without a feed, including price precision.
     /// Pass `None` to clear the metadata. Feed metadata takes precedence when available.
@@ -683,105 +622,6 @@ impl Chart {
     /// Takes the last legend quote click. No order is submitted by the chart.
     pub fn take_quote_action(&mut self) -> Option<QuoteSide> {
         self.quote_action.take()
-    }
-
-    /// Calculate the layout sub-rects for a given widget rect.
-    ///
-    /// Given the overall widget area, this computes where the price chart,
-    /// volume bars, and legend/OHLC header will be drawn. Useful for
-    /// external hit-testing, overlay placement, or custom drawing on top
-    /// of specific chart regions.
-    ///
-    /// The layout respects current config flags like `show_ohlc_info`,
-    /// `show_time_labels`, and `show_volume`.
-    pub fn calculate_layout_rects(&self, widget_rect: Rect) -> ChartLayoutRects {
-        self.pane_layout_rects(widget_rect, self.config.show_time_labels)
-    }
-
-    fn pane_layout_rects(&self, widget_rect: Rect, show_time_labels: bool) -> ChartLayoutRects {
-        let padding = self
-            .config
-            .padding
-            .max(0.0)
-            .min(widget_rect.width().min(widget_rect.height()).max(0.0) / 2.0);
-        let study_axes = if self.config.show_left_axis || self.config.show_right_axis {
-            self.studies
-                .indicators()
-                .iter()
-                .filter(|study| {
-                    study.is_visible()
-                        && study.is_overlay()
-                        && !study.is_volume()
-                        && study.scale() == crate::studies::StudyScale::Independent
-                })
-                .count() as f32
-                * self
-                    .measured_axis_width
-                    .max(self.config.right_axis_width)
-                    .max(self.config.left_axis_width)
-        } else {
-            0.0
-        };
-        let series_axes = self.series_axis_keys();
-        let series_left = series_axes
-            .iter()
-            .filter(|key| **key != crate::model::SeriesScale::Right)
-            .count() as f32
-            * self
-                .measured_axis_width
-                .max(self.config.right_axis_width)
-                .max(self.config.left_axis_width);
-        let series_right = if series_axes.contains(&crate::model::SeriesScale::Right) {
-            self.measured_axis_width.max(self.config.right_axis_width)
-        } else {
-            0.0
-        };
-        let study_axes = study_axes + series_left;
-        let left_axis = if self.config.show_left_axis {
-            self.config.left_axis_width.max(self.measured_axis_width)
-        } else {
-            0.0
-        };
-        let right_axis = if self.config.show_right_axis {
-            self.config.right_axis_width.max(self.measured_axis_width)
-        } else {
-            0.0
-        } + series_right;
-        let study_axes = study_axes
-            .min((widget_rect.width() - 2.0 * padding - left_axis - right_axis).max(0.0) * 0.5);
-        let left_axis = left_axis + study_axes;
-        let bottom_padding = if show_time_labels {
-            self.time_axis_height()
-        } else {
-            0.0
-        };
-        let price_rect = Rect::from_min_size(
-            widget_rect.min + Vec2::new((padding + left_axis).min(widget_rect.width()), padding),
-            Vec2::new(
-                (widget_rect.width() - 2.0 * padding - left_axis - right_axis).max(0.0),
-                (widget_rect.height() - 2.0 * padding - bottom_padding).max(0.0),
-            ),
-        );
-        let legend_rect = if self.config.show_ohlc_info {
-            price_rect.shrink(8.0).intersect(Rect::from_min_size(
-                price_rect.min + Vec2::splat(8.0),
-                Vec2::new(price_rect.width(), 24.0),
-            ))
-        } else {
-            Rect::NOTHING
-        };
-        let volume_rect = if self.shows_volume() {
-            volume::overlay_rect(price_rect, &self.config)
-        } else {
-            Rect::ZERO
-        };
-
-        ChartLayoutRects {
-            widget_rect,
-            price_rect,
-            volume_rect,
-            legend_rect,
-        }
     }
 
     /// Activates or deactivates box-zoom mode.

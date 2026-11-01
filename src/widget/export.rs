@@ -199,12 +199,9 @@ impl Chart {
             .iter()
             .flat_map(|study| study.data_requests())
             .collect();
-        let sources = self.study_data.data(
-            requests,
-            &self.symbol,
-            self.timeframe,
-            self.replay.as_ref().map(|replay| replay.time),
-        );
+        let sources =
+            self.study_data
+                .data(requests, &self.symbol, self.timeframe, self.replay_time());
         super::studies::calculate(&mut studies, &self.study_ids, bars, &sources);
         for (index, study) in studies
             .iter_mut()

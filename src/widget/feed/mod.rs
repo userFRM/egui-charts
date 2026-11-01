@@ -71,7 +71,7 @@ pub(crate) struct FeedLink {
     order_book: Option<OrderBook>,
     order_queue: Option<crate::data::OrderQueue>,
     /// The order book over time, when the host turned it on.
-    depth_history: Option<DepthHistory>,
+    pub(super) depth_history: Option<DepthHistory>,
     depth_complete: bool,
     /// Where older history continues after an empty page, by source: bars, trades, depth. The
     /// bar cursor keeps the oldest bar held when the feed named it and lapses once that bar goes.
@@ -86,7 +86,8 @@ pub(crate) struct FeedLink {
     /// A trade page reported that nothing exists before its oldest trade, or came back empty
     /// without `continue_before`: no trade before the oldest held one was missed.
     trades_from_start: bool,
-    heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
+    pub(super) heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
+    heatmap_config: crate::chart::overlays::LiquidityHeatmapConfig,
     /// How the live book is shown by the heatmap's profile and the depth ladder.
     book_view: crate::chart::overlays::OrderBookView,
     study_inputs: Vec<(crate::data::OrderFlowInput, u64)>,
@@ -168,6 +169,7 @@ impl FeedLink {
             trades_complete: false,
             trades_from_start: false,
             heatmap: self.heatmap.is_some().then(Default::default),
+            heatmap_config: self.heatmap_config,
             book_view: self.book_view.clone(),
             study_inputs: Vec::new(),
             time: self.time,
@@ -263,6 +265,7 @@ impl Chart {
             trades_complete: false,
             trades_from_start: false,
             heatmap: None,
+            heatmap_config: Default::default(),
             book_view: Default::default(),
             study_inputs: Vec::new(),
             time: None,
@@ -566,23 +569,25 @@ impl Chart {
         }
     }
 
-    /// The order book of `series` the feed sent, if it holds one.
+    /// The order book of `series` the feed sent, if it holds one. Unavailable during candle-only
+    /// replay; attach a market replay driver for recorded book state.
     pub fn order_book(&self, series: SeriesId) -> Option<&OrderBook> {
         let link = self
             .feed_link
             .as_ref()
-            .filter(|_| series == SeriesId::MAIN)?;
+            .filter(|_| series == SeriesId::MAIN && self.replay.is_none())?;
         link.order_book.as_ref()
     }
 
     /// Individual resting orders and their queue priority, when the feed sends order-level data.
     /// Use `OrderQueue::aggregate` with a minimum size for filtered ladders or heatmaps, and
     /// `largest_order` for the largest resting order at a level. Aggregated-only feeds return
-    /// `None`; a lost order book has no orders until a replacement snapshot arrives.
+    /// `None`; a lost order book has no orders until a replacement snapshot arrives. Candle-only
+    /// replay hides the live queue.
     pub fn order_queue(&self, series: SeriesId) -> Option<&crate::data::OrderQueue> {
         self.feed_link
             .as_ref()
-            .filter(|_| series == SeriesId::MAIN)?
+            .filter(|_| series == SeriesId::MAIN && self.replay.is_none())?
             .order_queue
             .as_ref()
     }
@@ -636,17 +641,48 @@ impl Chart {
 
     /// Shows resting liquidity behind the price series. A feed and instrument tick size are
     /// required. Enabling starts the default depth history if none is configured; disabling
-    /// releases textures and retains that history. Trade bubbles and best bid/ask lines can be
+    /// releases textures and retains that history and the appearance settings. Re-enabling an
+    /// enabled heatmap keeps its textures. Trade bubbles and best bid/ask lines can be
     /// enabled independently through the existing chart options.
     pub fn set_liquidity_heatmap(&mut self, enabled: bool) {
-        if enabled && self.depth_history(SeriesId::MAIN).is_none() {
+        if enabled
+            && self
+                .feed_link
+                .as_ref()
+                .is_none_or(|link| link.depth_history.is_none())
+        {
             self.set_depth_history(Some(
                 DepthHistory::new(Default::default()).expect("default depth history"),
             ));
         }
         if let Some(link) = &mut self.feed_link {
-            link.heatmap = enabled.then(|| std::cell::RefCell::new(Default::default()));
+            if enabled {
+                link.heatmap.get_or_insert_with(Default::default);
+            } else {
+                link.heatmap = None;
+            }
         }
+    }
+
+    /// Sets the heatmap's cell brightness and resting-size range from the next frame. A changed
+    /// appearance redraws the held columns once; an unchanged effective setting uploads nothing.
+    /// Retained while disabled and in exported images. Does nothing without a feed; enable the
+    /// heatmap separately with [`set_liquidity_heatmap`](Self::set_liquidity_heatmap).
+    pub fn set_liquidity_heatmap_config(
+        &mut self,
+        config: crate::chart::overlays::LiquidityHeatmapConfig,
+    ) {
+        if let Some(link) = &mut self.feed_link {
+            link.heatmap_config = config;
+        }
+    }
+
+    /// The heatmap appearance supplied by the host, or its default without a feed.
+    pub fn liquidity_heatmap_config(&self) -> crate::chart::overlays::LiquidityHeatmapConfig {
+        self.feed_link
+            .as_ref()
+            .map(|link| link.heatmap_config)
+            .unwrap_or_default()
     }
 
     pub(super) fn paint_liquidity(
@@ -654,6 +690,9 @@ impl Chart {
         painter: &egui::Painter,
         mapping: &crate::chart::coords::ChartMapping,
     ) {
+        if self.replay.is_some() {
+            return;
+        }
         let Some(link) = &self.feed_link else { return };
         let (Some(heatmap), Some(history), Some(tick)) = (
             &link.heatmap,
@@ -662,7 +701,9 @@ impl Chart {
         ) else {
             return;
         };
-        heatmap.borrow_mut().render(
+        let mut heatmap = heatmap.borrow_mut();
+        heatmap.config = link.heatmap_config;
+        heatmap.render(
             painter,
             mapping,
             history,
@@ -704,12 +745,12 @@ impl Chart {
     }
 
     /// The order book history of `series`, if [`set_depth_history`](Self::set_depth_history)
-    /// turned it on.
+    /// turned it on. Candle-only replay hides the live history.
     pub fn depth_history(&self, series: SeriesId) -> Option<&DepthHistory> {
         let link = self
             .feed_link
             .as_ref()
-            .filter(|_| series == SeriesId::MAIN)?;
+            .filter(|_| series == SeriesId::MAIN && self.replay.is_none())?;
         link.depth_history.as_ref()
     }
 
