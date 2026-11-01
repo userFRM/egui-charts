@@ -8,4 +8,6 @@
 
 mod backtest;
 
-pub use backtest::{Backtest, Strategy, StrategyContext};
+pub use backtest::{
+    Backtest, BacktestSettings, Commission, OrderSize, Slippage, Strategy, StrategyContext,
+};
