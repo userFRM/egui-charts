@@ -164,10 +164,13 @@ impl Groups {
         self.key.map_or(1, |(_, factor, _)| factor)
     }
 
-    /// The groups covering bars `range`.
+    /// The groups covering bars `range`; an empty range covers no groups.
     pub fn covering(&self, range: Range<usize>) -> Range<usize> {
         let factor = self.factor();
         let end = range.end.div_ceil(factor).min(self.groups.len());
+        if range.is_empty() {
+            return end..end;
+        }
         (range.start / factor).min(end)..end
     }
 

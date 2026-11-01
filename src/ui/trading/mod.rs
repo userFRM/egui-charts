@@ -99,6 +99,8 @@ pub struct Trading {
     /// The metadata of the symbols the host described with
     /// [`set_instrument`](Self::set_instrument), by symbol.
     instruments: HashMap<String, Instrument>,
+    /// The chart symbol and its logo at the last [`show`](Self::show), for rows and notices.
+    chart_logo: Option<(String, Option<String>)>,
     formatter: Option<Arc<dyn TradingFormatter>>,
     /// The latest quote of a symbol, from [`set_quote`](Self::set_quote).
     quote: Option<(String, Quote)>,
@@ -152,6 +154,7 @@ impl Default for Trading {
             preview: None,
             decimals: 2,
             instruments: HashMap::new(),
+            chart_logo: None,
             formatter: None,
             quote: None,
             quantity: 1.0,
@@ -176,7 +179,8 @@ impl Trading {
     /// symbol in the account tables, and its pip size gives the ticket a pip value when the
     /// broker's [`TradingRules::pip_value`] is absent. The chart's own instrument is used for the
     /// symbol it shows, so call this for the other symbols of the account, such as those of
-    /// positions and working orders. A symbol without an instrument shows two decimals.
+    /// positions and working orders. Its logo marks the symbol in the account tables and notices.
+    /// A symbol without an instrument shows two decimals.
     pub fn set_instrument(&mut self, instrument: Instrument) {
         self.instruments
             .insert(instrument.symbol.clone(), instrument);
@@ -187,6 +191,15 @@ impl Trading {
     /// text.
     pub fn set_formatter(&mut self, formatter: Option<Arc<dyn TradingFormatter>>) {
         self.formatter = formatter;
+    }
+
+    /// The logo of `symbol`: the chart instrument's for the chart symbol, else that of the
+    /// instrument the host described.
+    fn logo(&self, symbol: &str) -> Option<&str> {
+        match &self.chart_logo {
+            Some((chart, logo)) if chart == symbol => logo.as_deref(),
+            _ => self.instruments.get(symbol)?.logo.as_deref(),
+        }
     }
 
     /// How the numbers of `symbol` are written, with the decimals of the instrument the host

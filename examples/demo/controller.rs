@@ -12,6 +12,8 @@ mod alert_monitor;
 mod audio;
 #[path = "commands.rs"]
 mod commands;
+#[path = "images.rs"]
+mod images;
 #[path = "interval.rs"]
 mod interval;
 #[path = "layouts.rs"]
@@ -343,6 +345,7 @@ pub struct DemoApp {
     pub chart: Chart,
     pub(crate) layout: ChartLayout,
     layout_slot: usize,
+    images: images::Images,
     extra_charts: Vec<DemoChart>,
     layout_tabs: Vec<LayoutTab>,
     layout_tab: usize,
@@ -610,6 +613,7 @@ impl DemoApp {
             live,
             layout: ChartLayout::default(),
             layout_slot: 0,
+            images: images::Images::default(),
             extra_charts: Vec::new(),
             layout_tabs: vec![LayoutTab::unnamed()],
             layout_tab: 0,
@@ -1333,6 +1337,9 @@ impl eframe::App for DemoApp {
 
         // Fulfil requests from the previous frame, before a dialog can submit another.
         self.handle_screenshot(&ctx);
+        for error in self.images.poll(&ctx, &mut self.chart, self.layout_slot) {
+            self.notify(error);
+        }
         let alerts = &self.settings_state.alerts;
         self.alerts
             .set_sound(alerts.play_sound.then(|| alerts.sound.clone()));
@@ -2828,6 +2835,9 @@ impl DemoApp {
         let mut drawing_settings = None;
         for event in self.chart.drain_events() {
             match event {
+                egui_charts::widget::ChartEvent::ImageRequested(request) => {
+                    self.images.request(ctx, self.layout_slot, request);
+                }
                 egui_charts::widget::ChartEvent::CrosshairMoved(pointer) => {
                     if pointer.is_some() {
                         self.pointer_readout = pointer.clone();

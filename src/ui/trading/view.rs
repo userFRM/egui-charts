@@ -94,6 +94,7 @@ impl Trading {
             trades: &[],
             session_open: None,
             last_fill: self.account_panel.fills.price(symbol),
+            logo: instrument.and_then(|instrument| instrument.logo.as_deref()),
         }
     }
 
@@ -313,6 +314,8 @@ impl Trading {
         let symbol = symbol.as_str();
         let market = self.market(chart, &colors);
         let (decimals, tick, last) = (market.decimals, market.tick, market.last);
+        let logo = market.logo.map(str::to_owned);
+        self.chart_logo = Some((symbol.to_owned(), logo));
         self.decimals = decimals;
         if self.account_panel.editing.is_none() {
             self.load_rules(symbol);
@@ -801,9 +804,10 @@ mod tests {
 
     /// Rows of differently formatted symbols keep their own price decimals, host text and pip
     /// value instead of the chart symbol's decimals or a fixed two. A regression writes every
-    /// symbol with the chart's decimals, ignores the host's formatter or loses the pip value.
+    /// symbol with the chart's decimals, ignores the host's formatter, loses the pip value or shows
+    /// another symbol's logo.
     #[test]
-    fn symbols_keep_their_own_decimals_host_text_and_pip_values() {
+    fn symbols_keep_their_own_decimals_host_text_pip_values_and_logos() {
         struct Host;
         impl TradingFormatter for Host {
             fn quantity(&self, symbol: &str, quantity: f64) -> Option<String> {
@@ -812,14 +816,21 @@ mod tests {
         }
         let mut trading = Trading {
             decimals: 5,
+            chart_logo: Some(("EURUSD".into(), Some("bytes://chart.svg".into()))),
             ..Trading::default()
         };
         trading.set_instrument(
             Instrument::new("USDJPY")
                 .with_price_decimals(3)
-                .with_pip_size(0.01),
+                .with_pip_size(0.01)
+                .with_logo("bytes://usdjpy.svg"),
         );
+        trading.set_instrument(Instrument::new("EURUSD").with_logo("bytes://host.svg"));
         trading.set_formatter(Some(Arc::new(Host)));
+        assert_eq!(
+            ["EURUSD", "USDJPY", "UNKNOWN"].map(|symbol| trading.logo(symbol)),
+            [Some("bytes://chart.svg"), Some("bytes://usdjpy.svg"), None]
+        );
         let price = |trading: &Trading, symbol| trading.numbers(symbol, "EURUSD").price(1234.5);
         assert_eq!(price(&trading, "EURUSD"), "1,234.50000");
         assert_eq!(price(&trading, "USDJPY"), "1,234.500");
@@ -835,6 +846,10 @@ mod tests {
         trading.rules = TradingRules::new("USDJPY");
         trading.rules.point_value = 1000.0;
         let colors = crate::theme::Theme::dark().chart;
+        assert_eq!(
+            trading.market(&chart, &colors).logo,
+            Some("bytes://usdjpy.svg")
+        );
         assert_eq!(trading.market(&chart, &colors).pip_value, Some(10.0));
         trading.rules.pip_value = Some(0.5);
         assert_eq!(trading.market(&chart, &colors).pip_value, Some(0.5));

@@ -10,6 +10,7 @@ mod drawing;
 mod elliott;
 mod gann;
 mod ghost_feed;
+mod image;
 mod options;
 mod pitchfork;
 mod template;
@@ -23,6 +24,7 @@ pub use elliott::ElliottDegree;
 pub(crate) use gann::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
 pub use gann::{GannConfig, GannFanDirection, GannLevel};
 pub use ghost_feed::{GhostCandle, GhostFeedConfig, MAX_GHOST_CANDLES};
+pub use image::ImageConfig;
 pub use options::{
     ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos,
     PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility,
