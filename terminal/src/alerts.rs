@@ -474,6 +474,7 @@ impl Terminal {
                 let mut action = AlertPanelAction::None;
                 egui::Panel::right("terminal_alerts")
                     .default_size(340.0)
+                    .max_size(ui.available_width() * 0.5)
                     .show(ui, |ui| {
                         action = self.alerts.panel.show(ui);
                     });
@@ -1018,6 +1019,10 @@ mod tests {
             for _ in 0..5 {
                 frame(&mut terminal, size, vec![]);
             }
+            assert!(
+                terminal.chart().get_rendered_price_rect().width() >= 100.0,
+                "the alerts panel must leave room to read the chart at {size:?}"
+            );
             let screen = frame(&mut terminal, size, vec![]);
             click(&mut terminal, size, screen.text_at("Quick alert").unwrap());
             for _ in 0..5 {
