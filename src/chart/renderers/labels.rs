@@ -289,10 +289,10 @@ pub(crate) fn time_axis_marks(
         last.saturating_sub(15)..=last,
         last as f64 + 1.0,
         &time_at,
-        &weekday,
+        weekday,
     );
     let before = if shift > 0 {
-        closed_weekdays(0..=last.min(15), -1.0, &time_at, &weekday)
+        closed_weekdays(0..=last.min(15), -1.0, &time_at, weekday)
     } else {
         [false; 7]
     };
