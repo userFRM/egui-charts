@@ -4,7 +4,7 @@ use crate::chart::rendering::axes::{axis_font, paint_crosshair_tag};
 use crate::config::{CrosshairMode, CrosshairOptions, CrosshairStyle};
 use crate::model::Bar;
 use crate::model::LineStyle;
-use crate::painting::dashed_line::draw_dashed_line;
+use crate::painting::dashed_line::{draw_cached_dashed_segments, draw_dashed_segments};
 use crate::scales::{HorizontalScale, PriceFormatter, PriceMap, PriceScaleMode};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -140,37 +140,72 @@ pub(crate) fn render_crosshair_lines(
     options: &CrosshairOptions,
     chart_bottom: f32,
 ) {
-    let line = |from, to, color, width, style| {
+    // Pointerless image exports keep vector strokes for the vector writer.
+    let cache_lines = context
+        .painter
+        .ctx()
+        .input(|input| input.pointer.has_pointer());
+    let line = |segments: &[[Pos2; 2]], color, width, style| {
         let stroke = Stroke::new(width, color);
-        match style {
-            LineStyle::Solid => {
-                context.painter.line_segment([from, to], stroke);
+        let pattern = match style {
+            LineStyle::Solid => None,
+            LineStyle::Dashed => Some((6.0, 6.0)),
+            LineStyle::Dotted => Some((1.0, 3.0)),
+            LineStyle::LargeDashed => Some((10.0, 10.0)),
+            LineStyle::SparseDotted => Some((1.0, 7.0)),
+        };
+        if let Some((dash, gap)) = pattern {
+            let segments = segments.iter().map(|&[from, to]| (from, to, 0.0));
+            if cache_lines {
+                draw_cached_dashed_segments(context.painter, segments, stroke, dash, gap);
+            } else {
+                draw_dashed_segments(context.painter, segments, stroke, dash, gap);
             }
-            LineStyle::Dashed => draw_dashed_line(context.painter, from, to, stroke, 6.0, 6.0),
-            LineStyle::Dotted => draw_dashed_line(context.painter, from, to, stroke, 1.0, 3.0),
-            LineStyle::LargeDashed => {
-                draw_dashed_line(context.painter, from, to, stroke, 10.0, 10.0)
-            }
-            LineStyle::SparseDotted => {
-                draw_dashed_line(context.painter, from, to, stroke, 1.0, 7.0)
+        } else {
+            for &points in segments {
+                context.painter.line_segment(points, stroke);
             }
         }
     };
     match options.style {
         CrosshairStyle::Full => {
+            let vertical = [
+                Pos2::new(pos.x, context.rect.top()),
+                Pos2::new(pos.x, chart_bottom),
+            ];
+            let horizontal = [
+                Pos2::new(context.rect.left(), pos.y),
+                Pos2::new(context.rect.right(), pos.y),
+            ];
+            let show_horizontal =
+                options.horz_line_visible && context.rect.y_range().contains(pos.y);
+            if cache_lines
+                && options.vert_line_visible
+                && show_horizontal
+                && options.vert_line_style == options.horz_line_style
+                && options.vert_line_color == options.horz_line_color
+                && options.vert_line_width == options.horz_line_width
+            {
+                // One mesh avoids growing and copying the frame mesh again for the other axis.
+                line(
+                    &[vertical, horizontal],
+                    options.vert_line_color,
+                    options.vert_line_width,
+                    options.vert_line_style,
+                );
+                return;
+            }
             if options.vert_line_visible {
                 line(
-                    Pos2::new(pos.x, context.rect.top()),
-                    Pos2::new(pos.x, chart_bottom),
+                    &[vertical],
                     options.vert_line_color,
                     options.vert_line_width,
                     options.vert_line_style,
                 );
             }
-            if options.horz_line_visible && context.rect.y_range().contains(pos.y) {
+            if show_horizontal {
                 line(
-                    Pos2::new(context.rect.left(), pos.y),
-                    Pos2::new(context.rect.right(), pos.y),
+                    &[horizontal],
                     options.horz_line_color,
                     options.horz_line_width,
                     options.horz_line_style,
