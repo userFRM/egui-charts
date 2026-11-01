@@ -2316,7 +2316,7 @@ impl DemoApp {
         if let Some(trade) = alert {
             let decimals = instrument.and_then(|i| i.price_decimals).unwrap_or(2);
             self.toasts.info(format!(
-                "Large trade: {} at {:.*}",
+                "Size filter matched on fill: {} at {:.*}",
                 trade.size,
                 usize::from(decimals),
                 trade.price
