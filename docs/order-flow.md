@@ -240,3 +240,23 @@ cutoff; the other studies leave the bar empty. Leaving replay restores the live 
 added during replay are connected when the feed resumes. A feed that replays history through its
 `Sink` (`Sink::reset_replay`) clears the inputs at each seek and fills them again, so no cutoff
 applies.
+
+## Execution detectors
+
+Enable `detectors` and connect `services::OrderFlowDetectors` through `Chart::set_signal_source`.
+Track each instrument with its tick size, then push the same symbol-tagged `MarketEvent` to the
+chart and the service. Historical trades go through `push_history`; the host supplies all data.
+Settings hold separate enable, alert and sound choices for each detector. Alert delivery is a
+host integration; these choices do not themselves send notifications.
+
+Stop runs require five same-side fills, each no more than 20 ms after its predecessor, travelling
+at least three ticks without reversing. When any aggressor ids are known, three distinct ids are
+required. A continuing burst updates its marker at the last fill, with fill count, distance,
+size and duration in the tooltip. Unknown-side fills break the burst.
+
+Stop sweeps use closed bars of the latest subscribed time interval: directional delta at least
+25% of volume, three diagonal imbalances at 3:1, a body at least 60% of range, and volume at least
+1.5 times the mean of the previous ten traded bars. Unknown-side fills are excluded. The service
+retains the latest 100,000 sided executions and rebuilds this category on interval changes;
+the first retained bar is excluded because it may be partial. Trade-based intervals have no
+stop sweeps. Another feed event at or after the next boundary closes a bar; no wall clock runs.

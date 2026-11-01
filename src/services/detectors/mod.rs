@@ -1,6 +1,7 @@
 //! A signal service that finds order-flow events in the executions and depth the host streams.
 
 mod big_trades;
+mod stops;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
@@ -13,6 +14,8 @@ use crate::data::{FeedError, MarketEvent, OrderQueue};
 use crate::model::{BarClock, Instrument, Signal, Tick, Timeframe, TimezoneId};
 pub use big_trades::BigTradeRule;
 use big_trades::BigTrades;
+pub use stops::{StopRunRule, StopSweepRule};
+use stops::{StopRuns, StopSweeps};
 
 /// Detections of a symbol kept for the next subscription, most recent last.
 const RETAINED: usize = 5_000;
@@ -78,6 +81,10 @@ pub enum DetectionKind {
     BigTrade,
     /// The prices a large aggressive execution traded at, as a zone: see [`BigTradeRule`].
     BigTradeZone,
+    /// A rapid sequence of same-side aggressive fills.
+    StopRun,
+    /// A closed bar meeting the stop sweep rule.
+    StopSweep,
 }
 
 impl DetectionKind {
@@ -86,6 +93,8 @@ impl DetectionKind {
         match self {
             Self::BigTrade => "Big trades",
             Self::BigTradeZone => "Big trade zones",
+            Self::StopRun => "Stop runs",
+            Self::StopSweep => "Stop sweeps",
         }
     }
 }
@@ -96,6 +105,10 @@ impl DetectionKind {
 pub struct DetectorSettings {
     /// Large aggressive executions and their zones.
     pub big_trades: Detector<BigTradeRule>,
+    /// Rapid same-side execution bursts.
+    pub stop_runs: Detector<StopRunRule>,
+    /// Directional footprint bars with exceptional volume.
+    pub stop_sweeps: Detector<StopSweepRule>,
 }
 
 /// The settings of one detector.
@@ -159,6 +172,8 @@ struct Tracked {
     seen_ids: HashSet<u64>,
     detections: VecDeque<Signal>,
     big_trades: BigTrades,
+    stop_runs: StopRuns,
+    stop_sweeps: StopSweeps,
 }
 
 impl Default for OrderFlowDetectors {
@@ -278,6 +293,9 @@ impl OrderFlowDetectors {
                 }
             }
         }
+        tracked
+            .stop_sweeps
+            .advance(time, settings.stop_sweeps.enabled, &mut out);
         deliver(Some(tracked), subscriptions.get_mut(symbol), out);
     }
 
@@ -308,7 +326,7 @@ impl Signals for OrderFlowDetectors {
         let State {
             symbols,
             subscriptions,
-            ..
+            settings,
         } = &mut *state;
         let new = !subscriptions.contains_key(symbol);
         let subscription = subscriptions
@@ -318,6 +336,20 @@ impl Signals for OrderFlowDetectors {
                 streams: Vec::new(),
             });
         if let Some(tracked) = symbols.get_mut(symbol) {
+            if new || subscription.timeframe != timeframe {
+                let mut changes: Vec<_> = tracked
+                    .detections
+                    .iter()
+                    .filter(|signal| signal.category == DetectionKind::StopSweep.category())
+                    .map(|signal| SignalEvent::Remove(signal.id.clone()))
+                    .collect();
+                tracked.stop_sweeps.set_clock(
+                    clock(&tracked.instrument, timeframe),
+                    &settings.stop_sweeps,
+                    &mut changes,
+                );
+                deliver(Some(tracked), Some(subscription), changes);
+            }
             for signal in &tracked.detections {
                 events.push(SignalEvent::Upsert(signal.clone()));
             }
@@ -345,9 +377,16 @@ impl State {
             seen_ids: HashSet::new(),
             detections: VecDeque::new(),
             big_trades: BigTrades::new(tick, instrument.volume_decimals),
+            stop_runs: StopRuns::default(),
+            stop_sweeps: StopSweeps::new(tick),
         };
         let timeframe = subscription.as_ref().map(|s| s.timeframe);
         (tracked.big_trades).set_clock(timeframe.and_then(|tf| clock(instrument, tf)));
+        tracked.stop_sweeps.set_clock(
+            timeframe.and_then(|tf| clock(instrument, tf)),
+            &self.settings.stop_sweeps,
+            &mut Vec::new(),
+        );
         if self
             .symbols
             .insert(instrument.symbol.clone(), tracked)
@@ -374,6 +413,9 @@ impl Tracked {
                 self.seen_ids.remove(&old);
             }
         }
+        self.stop_runs
+            .trade(trade, self.tick, settings.stop_runs.enabled, out);
+        self.stop_sweeps.trade(trade, &settings.stop_sweeps, out);
         let big = &settings.big_trades;
         (self.big_trades).trade(trade, &big.rule, big.enabled, out);
     }
@@ -503,6 +545,8 @@ mod tests {
             instrument.tick_size = Some(0.25);
             detectors.track(&instrument).unwrap();
             let mut settings = DetectorSettings::default();
+            settings.stop_runs.enabled = false;
+            settings.stop_sweeps.enabled = false;
             if let Some(size) = threshold {
                 settings.big_trades.rule.threshold = Threshold::Fixed(size);
             }
@@ -832,5 +876,175 @@ mod tests {
 
         host.subscribe();
         assert_eq!(host.events(), detections);
+    }
+    #[test]
+    fn stop_runs_require_a_fast_monotone_burst_and_distinct_known_aggressors() {
+        for (name, ids, gap, prices, known, expected) in [
+            (
+                "three aggressors",
+                vec![1, 1, 2, 2, 3],
+                20,
+                vec![400, 401, 401, 402, 403],
+                true,
+                true,
+            ),
+            (
+                "no ids",
+                vec![],
+                10,
+                vec![400, 401, 401, 402, 403],
+                true,
+                true,
+            ),
+            (
+                "one aggressor",
+                vec![1; 5],
+                10,
+                vec![400, 401, 401, 402, 403],
+                true,
+                false,
+            ),
+            (
+                "gap",
+                vec![],
+                21,
+                vec![400, 401, 401, 402, 403],
+                true,
+                false,
+            ),
+            (
+                "reversal",
+                vec![],
+                10,
+                vec![400, 401, 400, 402, 403],
+                true,
+                false,
+            ),
+            (
+                "unknown side",
+                vec![],
+                10,
+                vec![400, 401, 401, 402, 403],
+                false,
+                false,
+            ),
+        ] {
+            for side in [OrderSide::Buy, OrderSide::Sell] {
+                let host = Host::new(Some(1_000.0));
+                let mut settings = host.detectors.settings();
+                settings.stop_runs.enabled = true;
+                host.detectors.set_settings(settings);
+                let mut events = Vec::new();
+                for (i, price) in prices.iter().enumerate() {
+                    let price = if side == OrderSide::Buy {
+                        *price
+                    } else {
+                        800 - price
+                    };
+                    let mut fill = Tick::new(
+                        time(0) + chrono::TimeDelta::milliseconds(i as i64 * gap),
+                        price as f64 * 0.25,
+                        2.0,
+                        known.then_some(side),
+                    );
+                    fill.aggressor_order_id = ids.get(i).copied();
+                    events.extend(host.push(MarketEvent::Trade(fill)));
+                }
+                let signals: Vec<_> = events
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        SignalEvent::Upsert(signal) if signal.category == "Stop runs" => {
+                            Some(signal)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(signals.len(), usize::from(expected), "{name} {side:?}");
+                if let Some(signal) = signals.first() {
+                    assert_eq!(
+                        signal.tooltip.as_deref(),
+                        Some(format!("5 fills, 3 ticks, size 10, {} ms", gap * 4).as_str())
+                    );
+                    assert_eq!(
+                        signal.shape,
+                        SignalShape::Marker {
+                            time: time(0) + chrono::TimeDelta::milliseconds(gap * 4),
+                            price: Some(if side == OrderSide::Buy {
+                                100.75
+                            } else {
+                                99.25
+                            }),
+                            direction: stops::direction(side),
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stop_sweeps_use_closed_footprints_and_rebuild_on_interval_changes() {
+        for (name, buy_size, close, expected) in [
+            ("qualifies", 10.0, 100.75, true),
+            ("ratio below three", 2.0, 100.75, false),
+            ("small body", 10.0, 100.25, false),
+            ("low volume", 3.0, 100.75, false),
+        ] {
+            let mut host = Host::new(Some(1_000.0));
+            let mut settings = host.detectors.settings();
+            settings.stop_sweeps.enabled = true;
+            host.detectors.set_settings(settings);
+            // Eleven preceding bars: the first may be partial, the next ten each have volume 20.
+            for minute in 0..11 {
+                host.push(MarketEvent::Trade(fill(
+                    minute * 60,
+                    100.0,
+                    20.0,
+                    OrderSide::Buy,
+                    None,
+                )));
+            }
+            // Bid at 100, 100.25, 100.5 is 1 each. Ask at the next three ticks is 10 each:
+            // diagonal ratios 10:1, volume 33, delta 27 (81.8%), full-range body, baseline 20.
+            for (second, price, size, side) in [
+                (660, 100.0, 1.0, OrderSide::Sell),
+                (661, 100.25, 1.0, OrderSide::Sell),
+                (662, 100.5, 1.0, OrderSide::Sell),
+                (663, 100.25, buy_size, OrderSide::Buy),
+                (664, 100.5, buy_size, OrderSide::Buy),
+                (665, 100.75, buy_size, OrderSide::Buy),
+                (666, close, 0.1, OrderSide::Buy),
+            ] {
+                host.push(MarketEvent::Trade(fill(second, price, size, side, None)));
+            }
+            let events = host.push(MarketEvent::Trade(fill(
+                720,
+                100.75,
+                1.0,
+                OrderSide::Buy,
+                None,
+            )));
+            let sweeps: Vec<_> = events
+                .into_iter()
+                .filter(|event| {
+                    matches!(event,
+                SignalEvent::Upsert(signal) if signal.category == "Stop sweeps")
+                })
+                .collect();
+            assert_eq!(sweeps.len(), usize::from(expected), "{name}");
+            let (listener, events) = Listener::new(&host.inbox, 1);
+            host.listeners.push(listener);
+            host.detectors.subscribe("ES", Timeframe::Min5, events);
+            let events = host.events();
+            assert!(
+                !events.iter().any(|event| matches!(event,
+                SignalEvent::Upsert(signal) if signal.category == "Stop sweeps")),
+                "{name}: rebuilt five-minute bars"
+            );
+            if expected {
+                assert!(events.iter().any(|event| matches!(event,
+                    SignalEvent::Remove(id) if id.0 == "stop-sweep-660000")));
+            }
+        }
     }
 }
