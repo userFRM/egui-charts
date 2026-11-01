@@ -1584,6 +1584,94 @@ impl Chart {
             self.config.price_source,
         );
 
+        let host = footprint.filter(|_| time_based);
+        let feed = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.footprint.as_ref())
+            .filter(|_| {
+                time_based
+                    && self.replay.is_none()
+                    && (self.chart_type == ChartType::VolumeFootprint
+                        || (self.chart_type == ChartType::SessionVolumeProfile
+                            && cfg!(feature = "studies")))
+            });
+        let feed_config = feed.map(|_| FootprintConfig {
+            text_color: colors.text,
+            neutral_color: colors.text,
+            ask_color: colors.bullish,
+            bid_color: colors.bearish,
+            ..Default::default()
+        });
+        let session_profiles = host.is_none() && self.chart_type == ChartType::SessionVolumeProfile;
+        // Bars from the first execution on are drawn from executions, those before as
+        // candles, and all of them as candles while their cells would not be readable.
+        let executions = host
+            .or_else(|| feed.zip(feed_config.as_ref()))
+            .filter(|(_, config)| {
+                session_profiles
+                    || crate::chart::overlays::footprint_column_width(bar_spacing, config).is_some()
+            })
+            .map(|(flow, config)| {
+                let first = flow.complete_from();
+                let candles = first.map_or(visible_data.len(), |first| {
+                    visible_data.partition_point(|bar| bar.time < first)
+                });
+                (flow, config, candles)
+            });
+
+        let style = &self.main_series_style;
+        // Last price line & label, from the newest bar even when it is scrolled out of view, or
+        // from the newest bar in view
+        let last = match style.price_line_source {
+            crate::model::PriceLineSource::LastBar => {
+                crate::model::last_with_value(&self.state.data().bars)
+            }
+            crate::model::PriceLineSource::LastVisible => {
+                crate::model::last_with_value(visible_data)
+            }
+        };
+        let last_price_line = last.filter(|_| self.main_series_visible).map(|last| {
+            let color = style
+                .price_line_color
+                .or_else(|| last.colors.as_ref().and_then(|own| own.color))
+                .unwrap_or(if last.close >= last.open {
+                    self.config.bullish_color
+                } else {
+                    self.config.bearish_color
+                });
+            PriceLine::new(last.close, color)
+                .with_width(if self.config.show_price_line && style.price_line_visible {
+                    style.price_line_width
+                } else {
+                    0.0
+                })
+                .with_style(style.price_line_style)
+                .with_axis_label(
+                    (self.config.show_right_axis || self.config.show_left_axis)
+                        && self.config.show_symbol_last_val
+                        && style.last_value_visible,
+                )
+        });
+        // Footprint fills and glyphs must cover the current-price stroke.
+        let price_line_below = !session_profiles
+            && executions.is_some_and(|(flow, _, candles)| {
+                visible_data[candles..]
+                    .iter()
+                    .any(|bar| flow.bar_at(bar.time).is_some())
+            });
+        if price_line_below && let Some(line) = &last_price_line {
+            rendering::render_price_line(
+                &painter,
+                price_rect,
+                &price_map,
+                line,
+                price_rect.left(),
+                false,
+                price_rect.right(),
+            );
+        }
+
         self.paint_primitives(&painter, &coords, PrimitivePass::Below);
         let studies = if self.chart_type.is_time_independent() {
             &self.element_studies.studies
@@ -1837,43 +1925,6 @@ impl Chart {
                         &render_params,
                     ),
                 };
-                let host = footprint.filter(|_| time_based);
-                let feed = self
-                    .feed_link
-                    .as_ref()
-                    .and_then(|link| link.footprint.as_ref())
-                    .filter(|_| {
-                        time_based
-                            && self.replay.is_none()
-                            && (self.chart_type == ChartType::VolumeFootprint
-                                || (self.chart_type == ChartType::SessionVolumeProfile
-                                    && cfg!(feature = "studies")))
-                    });
-                let feed_config = feed.map(|_| FootprintConfig {
-                    text_color: colors.text,
-                    neutral_color: colors.text,
-                    ask_color: colors.bullish,
-                    bid_color: colors.bearish,
-                    ..Default::default()
-                });
-                let session_profiles =
-                    host.is_none() && self.chart_type == ChartType::SessionVolumeProfile;
-                // Bars from the first execution on are drawn from executions, those before as
-                // candles, and all of them as candles while their cells would not be readable.
-                let executions = host
-                    .or_else(|| feed.zip(feed_config.as_ref()))
-                    .filter(|(_, config)| {
-                        session_profiles
-                            || crate::chart::overlays::footprint_column_width(bar_spacing, config)
-                                .is_some()
-                    })
-                    .map(|(flow, config)| {
-                        let first = flow.complete_from();
-                        let candles = first.map_or(visible_data.len(), |first| {
-                            visible_data.partition_point(|bar| bar.time < first)
-                        });
-                        (flow, config, candles)
-                    });
                 if let Some((_, _, candles)) = executions {
                     data.visible_data = match &merged {
                         // Merged candles end before the group of the first execution.
@@ -2290,35 +2341,12 @@ impl Chart {
             );
         }
 
-        // Last price line & label, from the newest bar even when it is scrolled out of view, or
-        // from the newest bar in view
-        let last = match style.price_line_source {
-            crate::model::PriceLineSource::LastBar => {
-                crate::model::last_with_value(&self.state.data().bars)
-            }
-            crate::model::PriceLineSource::LastVisible => {
-                crate::model::last_with_value(visible_data)
-            }
-        };
-        let last_price_tag = if let Some(last) = last.filter(|_| self.main_series_visible) {
-            let color = style
-                .price_line_color
-                .or_else(|| last.colors.as_ref().and_then(|own| own.color))
-                .unwrap_or(if last.close >= last.open {
-                    self.config.bullish_color
-                } else {
-                    self.config.bearish_color
-                });
-            let line = PriceLine::new(last.close, color)
-                .with_width(if self.config.show_price_line && style.price_line_visible {
-                    style.price_line_width
-                } else {
-                    0.0
-                })
-                .with_style(style.price_line_style)
-                .with_axis_label(
-                    show_price_axis && self.config.show_symbol_last_val && style.last_value_visible,
-                );
+        let last_price_tag = if let Some((last, line)) = last.zip(last_price_line) {
+            let line = if price_line_below {
+                line.with_width(0.0)
+            } else {
+                line
+            };
             // Only a countdown drawn on the axis needs the once-a-second repaint.
             let countdown = self.current_bar_countdown().filter(|_| {
                 line.axis_label
@@ -3585,25 +3613,24 @@ mod tests {
             for (width, pane) in [(1440.0, false), (600.0, false), (600.0, true)] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
-                let mut chart = chart(&[100.0], &[110.0]);
+                let mut chart = chart(&[100.0], &[101.0]);
                 chart.set_symbol("FLOW");
+                chart.apply_synced_time_scale(100.0, 1.0);
+                let line_color = egui::Color32::from_rgb(191, 72, 216);
+                chart.main_series_style.price_line_color = Some(line_color);
                 #[cfg(feature = "studies")]
                 if pane {
                     chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
                 }
                 let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
-                flow.push(&Tick::new(
-                    chart
-                        .bars(crate::widget::SeriesId::MAIN)
-                        .last()
-                        .unwrap()
-                        .time,
-                    100.0,
-                    2.0,
-                    Some(OrderSide::Buy),
-                ))
-                .unwrap();
+                for (i, bar) in chart.bars(crate::widget::SeriesId::MAIN).iter().enumerate() {
+                    for (price, size) in [(100.0, 2.0), (101.0, if i == 0 { 1.0 } else { 4.0 })] {
+                        flow.push(&Tick::new(bar.time, price, size, Some(OrderSide::Buy)))
+                            .unwrap();
+                    }
+                }
                 let config = FootprintConfig {
+                    auto_row_height: None,
                     color_by: FootprintColor::Volume,
                     neutral_color: egui::Color32::from_rgb(21, 45, 78),
                     ..Default::default()
@@ -3639,6 +3666,45 @@ mod tests {
                         _ => false,
                     })
                     .expect("footprint cells");
+                let strokes: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, shape)| {
+                        let is_line = match &shape.shape {
+                            Shape::LineSegment { stroke, .. } => stroke.color == line_color,
+                            Shape::Mesh(mesh) => {
+                                mesh.vertices.iter().any(|v| v.color == line_color)
+                            }
+                            _ => false,
+                        };
+                        is_line.then_some(i)
+                    })
+                    .collect();
+                assert!(!strokes.is_empty(), "current-price line remains visible");
+                assert!(
+                    strokes.iter().all(|i| *i < cells),
+                    "current-price line covers footprint cells"
+                );
+                assert!(
+                    output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    Shape::Text(text) if text.galley.text() == "0 × 2")),
+                    "populated close rows retain their values"
+                );
+                let badge = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Rect(rect) if rect.fill == line_color => Some(rect.rect),
+                        _ => None,
+                    })
+                    .expect("current-price badge retains its fill");
+                assert!(
+                    output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    Shape::Text(text) if text.galley.text().starts_with("101")
+                        && badge.contains(text.pos + text.galley.size() * 0.5))),
+                    "current-price badge retains its value at width {width}, pane {pane}"
+                );
                 let legend = output
                     .shapes
                     .iter()
