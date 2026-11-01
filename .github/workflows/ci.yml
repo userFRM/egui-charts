@@ -259,6 +259,9 @@ jobs:
             sed -i 's/HistoryPage::new(self\.0\.clone(), true)/HistoryPage { bars: self.0.clone(), end_of_history: true }/' \
               performance-base/benches/frame_time.rs
           fi
+          if ! grep -q 'fn add_synced_drawing.*-> Result' performance-base/src/drawings/manager/edit.rs; then
+            sed -i 's/\.expect("bench drawings are valid")//' performance-base/benches/frame_time.rs
+          fi
           cargo build --release --locked --bench frame_time --message-format=json-render-diagnostics > performance-head.json
           cargo build --release --locked --manifest-path performance-base/Cargo.toml --bench frame_time --message-format=json-render-diagnostics > performance-base.json
       - name: Reject instruction growth over five percent

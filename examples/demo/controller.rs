@@ -1739,7 +1739,7 @@ impl DemoApp {
         };
         self.drawing_toolbar
             .sync_from_domain_state(&DrawingToolbarDomainState {
-                sel_tool: dm.active_tool,
+                sel_tool: dm.active_tool(),
                 magnet_mode: dm.options.magnet_mode,
                 snap_to_indicators: dm.options.snap_to_indicators,
                 magnet_type,
@@ -1750,12 +1750,12 @@ impl DemoApp {
                     CrosshairStyle::Demonstration => CursorType::Demonstration,
                     CrosshairStyle::Magic => CursorType::Magic,
                 },
-                eraser_mode_enabled: dm.eraser_mode,
+                eraser_mode_enabled: dm.is_eraser_mode(),
                 stay_in_drawing_mode: dm.stay_in_drawing_mode,
                 drawing_color: dm
                     .new_drawing(
                         0,
-                        dm.active_tool
+                        dm.active_tool()
                             .unwrap_or(egui_charts::drawings::DrawingToolType::TrendLine),
                     )
                     .color,
@@ -1889,7 +1889,9 @@ impl DemoApp {
 
         let dm = self.chart.drawings_mut();
         match action {
-            DrawingToolbarAction::SelectTool(tool) => dm.set_active_tool(Some(tool)),
+            DrawingToolbarAction::SelectTool(tool) => {
+                dm.set_active_tool(Some(tool));
+            }
             DrawingToolbarAction::ToggleMagnet => {
                 dm.options.magnet_mode = !dm.options.magnet_mode;
                 dm.options.strong_magnet = self.drawing_toolbar.state.magnet_type
@@ -1914,7 +1916,7 @@ impl DemoApp {
                     .set_crosshair_mode(egui_charts::config::CrosshairMode::Magnet);
             }
             DrawingToolbarAction::ToggleEraserMode => {
-                let on = !dm.eraser_mode;
+                let on = !dm.is_eraser_mode();
                 dm.set_eraser_mode(on);
             }
             DrawingToolbarAction::ToggleStayInDrawingMode => {
@@ -1928,7 +1930,7 @@ impl DemoApp {
             DrawingToolbarAction::LockAllDrawings => dm.toggle_lock_all(),
             DrawingToolbarAction::InsertGlyph { icon_name, size } => {
                 dm.start_icon_insertion(icon_name.to_string());
-                if let Some(drawing) = &mut dm.curr_drawing {
+                if let Some(drawing) = dm.curr_drawing_mut() {
                     drawing.font_size = size;
                 }
             }
@@ -3830,7 +3832,7 @@ mod tests {
             );
         }
         assert_eq!(
-            app.chart.drawings().active_tool,
+            app.chart.drawings().active_tool(),
             Some(DrawingToolType::TrendLine)
         );
     }
@@ -4843,7 +4845,7 @@ mod tests {
                     }
                 }
                 "Trend Line" => assert_eq!(
-                    app.chart.drawings().active_tool,
+                    app.chart.drawings().active_tool(),
                     Some(egui_charts::drawings::DrawingToolType::TrendLine)
                 ),
                 "Sample backtest" => {
@@ -4965,7 +4967,7 @@ mod tests {
             assert!(!app.keyboard_shortcuts.is_open);
             assert_eq!(app.chart.drawings().sel_drawing(), Some(7));
             assert_eq!(
-                app.chart.drawings().active_tool,
+                app.chart.drawings().active_tool(),
                 Some(DrawingToolType::TrendLine)
             );
             assert_eq!(app.replay.is_some(), replay);
@@ -5791,7 +5793,7 @@ mod tests {
                 f64::from,
             );
             dm.add_point_with_coords(egui::pos2(3.0, 4.0), |x| x, f64::from);
-            assert!(dm.active_tool.is_none());
+            assert!(dm.active_tool().is_none());
             frame(&mut app);
             assert!(app.drawing_toolbar.state.sel_tool.is_none());
             app.chart.drawings_mut().set_eraser_mode(true);
@@ -6203,19 +6205,13 @@ mod tests {
             |y| y as f64,
         );
         assert_eq!(
-            app.chart
-                .drawings()
-                .curr_drawing
-                .as_ref()
-                .unwrap()
-                .stroke_width,
+            app.chart.drawings().curr_drawing().unwrap().stroke_width,
             4.0
         );
         assert_eq!(
             app.chart
                 .drawings()
-                .curr_drawing
-                .as_ref()
+                .curr_drawing()
                 .unwrap()
                 .chart_points
                 .len(),
@@ -6223,7 +6219,7 @@ mod tests {
             "defaults cannot copy anchors"
         );
         assert!(
-            app.chart.drawings().curr_drawing.as_ref().unwrap().visible,
+            app.chart.drawings().curr_drawing().unwrap().visible,
             "a hidden source must not make new drawings invisible"
         );
         assert!(!app.chart.drawings().drawings[0].visible);
@@ -6466,12 +6462,10 @@ mod tests {
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
         app.chart.user_action(|chart| {
-            chart
-                .drawings_mut()
-                .add_synced_drawing(egui_charts::drawings::Drawing::new(
-                    0,
-                    egui_charts::drawings::DrawingToolType::TrendLine,
-                ));
+            use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+            let mut line = Drawing::new(0, DrawingToolType::TrendLine);
+            line.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 101.0)];
+            chart.drawings_mut().add_synced_drawing(line).unwrap();
         });
         app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
         app.drawing_toolbar.state.zoom_mode_active = true;
@@ -6511,7 +6505,10 @@ mod tests {
             let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
             drawing.chart_points = vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 200.0)];
             drawing.completed = true;
-            app.chart.drawings_mut().add_synced_drawing(drawing);
+            app.chart
+                .drawings_mut()
+                .add_synced_drawing(drawing)
+                .unwrap();
         }
         let ids: Vec<_> = app.chart.drawings().drawings.iter().map(|d| d.id).collect();
         app.chart

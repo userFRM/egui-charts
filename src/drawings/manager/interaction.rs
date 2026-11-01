@@ -99,6 +99,15 @@ impl DrawingManager {
                 self.drawings.iter().position(|d| d.id == copy.id),
             )
         });
+        // A copy that could not be created ends the gesture, as a grab of a locked drawing does.
+        if copies
+            .iter()
+            .any(|copy| self.validate_created(copy).is_err())
+        {
+            self.dragging_handle = None;
+            self.drag_origin = None;
+            return;
+        }
         let primary = copies.iter().position(|d| d.id == primary_id).unwrap();
         for copy in &mut copies {
             copy.id = self.take_id();
@@ -446,22 +455,57 @@ impl DrawingManager {
 
     // === Tool management ===
 
-    /// Sets the active drawing tool. Pass `None` to exit drawing mode and
-    /// return to selection/pointer mode. A tool cancels any in-progress drawing and leaves
-    /// eraser mode.
-    pub fn set_active_tool(&mut self, tool: Option<DrawingToolType>) {
+    /// Sets the active drawing tool and returns whether it is now active. Pass `None` to exit
+    /// drawing mode and return to selection/pointer mode. A tool cancels any in-progress
+    /// drawing and leaves eraser mode. A built-in tool the [`registry`](Self::registry)
+    /// disables is not set: the manager returns to selection mode, as with `None`, and the
+    /// call returns `false`.
+    pub fn set_active_tool(&mut self, tool: Option<DrawingToolType>) -> bool {
         self.active_custom_tool = None;
-        let tool = tool.filter(|tool| self.registry.availability(*tool).enabled);
-        self.active_tool = tool;
+        let set = tool.filter(|tool| self.registry.availability(*tool).enabled);
+        self.active_tool = set;
         self.cancel_curr_drawing();
-        if tool.is_some() {
+        if set.is_some() {
             self.eraser_mode = false;
         }
+        set == tool
     }
 
     /// The registered tool selected for the next placement, or `None` for a built-in tool.
     pub fn active_custom_tool(&self) -> Option<&str> {
         self.active_custom_tool.as_deref()
+    }
+
+    /// The built-in tool the next pointer placement uses, or `None` in selection mode. A
+    /// registered tool is active as [`DrawingToolType::Polyline`] with its id in
+    /// [`Self::active_custom_tool`]. Set it with [`Self::set_active_tool`] or
+    /// [`Self::set_custom_tool`].
+    pub fn active_tool(&self) -> Option<DrawingToolType> {
+        self.active_tool
+    }
+
+    /// Whether a click deletes the drawing under the pointer instead of selecting it. Switch
+    /// it with [`Self::set_eraser_mode`].
+    pub fn is_eraser_mode(&self) -> bool {
+        self.eraser_mode
+    }
+
+    /// The drawing being placed. It joins [`Self::drawings`] when completed, except for the
+    /// temporary [`DrawingToolType::Measure`] ruler.
+    pub fn curr_drawing(&self) -> Option<&Drawing> {
+        self.curr_drawing.as_ref()
+    }
+
+    /// The drawing being placed, to adjust its settings before it is completed, such as the
+    /// glyph size of an icon that [`Self::start_icon_insertion`] prepared.
+    pub fn curr_drawing_mut(&mut self) -> Option<&mut Drawing> {
+        self.curr_drawing.as_mut()
+    }
+
+    /// The drawing and handle being dragged, as `(drawing_id, handle)`, from
+    /// [`Self::start_drag_handle`] or [`Self::start_drag_body`] until [`Self::end_drag_handle`].
+    pub fn dragging_handle(&self) -> Option<(usize, HandlePos)> {
+        self.dragging_handle
     }
 
     /// Starts a registered tool's multi-click construction. One-anchor tools complete on the
@@ -576,7 +620,9 @@ impl DrawingManager {
     }
 
     /// Starts a new drawing of the given tool type at the given screen position, or places the
-    /// drawing [`Self::start_icon_insertion`] prepared for it.
+    /// drawing [`Self::start_icon_insertion`] prepared for it. Does nothing for a cursor tool
+    /// or a disabled built-in tool. A completed drawing that saving would refuse, such as one
+    /// whose anchor maps to a non-finite position, is dropped.
     ///
     /// The coordinate conversion closures (`x_to_bar`, `y_to_price`) convert
     /// screen coordinates to chart coordinates for persistent storage. If the
@@ -592,7 +638,9 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
-        if self.active_custom_tool.is_none() && !self.registry.availability(tool_type).enabled {
+        if tool_type.is_cursor()
+            || (self.active_custom_tool.is_none() && !self.registry.availability(tool_type).enabled)
+        {
             return;
         }
         let point = self.snap_placement(Some(tool_type), point);
@@ -709,7 +757,8 @@ impl DrawingManager {
 
     /// Manually completes the in-progress drawing (e.g., on double-click or Enter
     /// for multi-point tools), without its pointer preview. Requires at least 2 points, and
-    /// as many as the tool draws with, so that what it adds can be saved.
+    /// as many as the tool draws with, so that what it adds can be saved. A drawing that saving
+    /// would still refuse is dropped, and the tool stays active.
     pub fn complete_curr_drawing(&mut self) {
         if let Some(drawing) = &mut self.curr_drawing
             && std::mem::take(&mut self.preview_point)
@@ -732,17 +781,16 @@ impl DrawingManager {
         }
     }
 
-    /// Moves the completed current drawing to the drawing list and queues it to be saved,
-    /// or keeps the measurement until the next click.
+    /// Moves the completed current drawing to the drawing list and queues it to be saved, or
+    /// keeps the measurement until the next click. Drops a drawing when its tool was disabled
+    /// meanwhile or saving would refuse it.
     /// In keep-drawing mode the icon tool goes on placing the icon that was picked.
     fn finish_curr_drawing(&mut self) {
         if let Some(mut drawing) = self.curr_drawing.take() {
-            if drawing.custom_tool.is_none()
-                && !self.registry.availability(drawing.tool_type).enabled
-            {
+            drawing.update_pane_coords(self.pane_rect);
+            if self.validate_created(&drawing).is_err() {
                 return;
             }
-            drawing.update_pane_coords(self.pane_rect);
             // A measurement is a ruler for the moment: kept until the next click, never stored.
             if drawing.tool_type == DrawingToolType::Measure {
                 self.measurement = Some(drawing);
@@ -897,7 +945,7 @@ mod tests {
                         .unwrap()
                         .clone();
                     copy.stored_id = Some(id.to_string());
-                    peer.add_synced_drawing(copy);
+                    peer.add_synced_drawing(copy).unwrap();
                 }
             }
             peer.update_all_screen_coords(|bar| bar * 10.0, |price| (200.0 - price) as f32);
