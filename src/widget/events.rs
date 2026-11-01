@@ -186,6 +186,18 @@ pub enum ChartEvent {
     SymbolChanged(String),
     /// The interval setter accepted a different interval.
     TimeframeChanged(crate::model::Timeframe),
+    /// An added bar series joined the chart: through [`Chart::add_series`] or
+    /// [`Chart::add_comparison`], a restored snapshot, or undo or redo bringing back a series.
+    /// Undo and redo keep its id, options, visibility, pane, scale, markers, price lines,
+    /// price formatter, bar limit and bars, under the current replay cutoff. Supply current
+    /// bars with [`Chart::set_data`] and resume [`Chart::update`]. Snapshot restore assigns
+    /// new ids and leaves supplying bars to the host.
+    SeriesAdded(SeriesId),
+    /// An added bar series left the chart: through [`Chart::remove_series`] or
+    /// [`Chart::remove_pane`], the pane menu, a restored snapshot, or undo or redo of the edit
+    /// that added it. Data sent for it is ignored from then on. Undo or redo can bring it back
+    /// with the same id, so keep what the host needs to feed it again.
+    SeriesRemoved(SeriesId),
 }
 
 /// An image drawing waiting for its picture, from [`ChartEvent::ImageRequested`].
@@ -255,7 +267,7 @@ impl Chart {
 
     /// Drains host notifications in occurrence order. Call after `show` each frame.
     ///
-    /// Symbol, interval and data setters enqueue immediately; view and pointer changes are
+    /// Symbol, interval, data and series setters enqueue immediately; view and pointer changes are
     /// measured during `show`. Unchanged views and pointers emit nothing. Drain
     /// regularly: the newest 1024 notifications remain queued until taken; overflow is
     /// reported as `EventsDropped` before the retained events. A new chart's constructor data

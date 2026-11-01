@@ -1,7 +1,7 @@
 //! Chart history records UI actions, not ordinary host API calls.
 
 use super::price_series::{PriceSeries, SeriesOptions};
-use super::{Chart, ChartElementId, SeriesId};
+use super::{Chart, ChartElementId, ChartEvent, SeriesId};
 use crate::config::{ChartConfig, ChartOptions};
 #[cfg(feature = "drawings")]
 use crate::drawings::DrawingManager;
@@ -615,6 +615,17 @@ impl Chart {
         self.main_series_scale = set.main_scale;
         self.main_series_style.alerts = set.main_alerts;
         *set = SeriesSet { held, ..now };
+        // `set.props` now lists the series shown before the exchange, in draw order.
+        for (id, ..) in &set.props {
+            if self.price_series.iter().all(|item| item.id != *id) {
+                self.host_events.push(ChartEvent::SeriesRemoved(*id));
+            }
+        }
+        for item in &self.price_series {
+            if set.props.iter().all(|(id, ..)| *id != item.id) {
+                self.host_events.push(ChartEvent::SeriesAdded(item.id));
+            }
+        }
         if let Some(ChartElementId::Series(id)) = self.selection.selected_id()
             && self.price_series.iter().all(|item| item.id != id)
         {
@@ -646,6 +657,9 @@ impl Chart {
 
     /// Drain a notification that undo/redo changed chart state. Hosts that own the data must
     /// reload it if [`Self::timeframe`] or [`Self::bar_clock`] changed, and synchronize their UI.
+    /// Added series that the step removed or brought back are reported by
+    /// [`drain_events`](Self::drain_events) as [`ChartEvent::SeriesRemoved`] and
+    /// [`ChartEvent::SeriesAdded`].
     pub fn take_history_changed(&mut self) -> bool {
         std::mem::take(&mut self.history.changed)
     }
@@ -1487,6 +1501,24 @@ mod tests {
         });
         draw(&mut chart);
 
+        let series_events = |chart: &mut Chart| {
+            chart
+                .drain_events()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        ChartEvent::SeriesAdded(_) | ChartEvent::SeriesRemoved(_)
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        // Undo reverses removal then addition; redo follows the original edits.
+        let added_then_removed = [
+            ChartEvent::SeriesAdded(comparison),
+            ChartEvent::SeriesRemoved(comparison),
+        ];
+        assert_eq!(series_events(&mut chart), added_then_removed);
+
         let comparison_state = |chart: &Chart| {
             (
                 chart.series_scale(comparison),
@@ -1532,6 +1564,7 @@ mod tests {
         assert!(chart.drawings().drawings.is_empty());
         assert!(!chart.can_undo());
 
+        assert_eq!(series_events(&mut chart), added_then_removed);
         assert!(chart.redo());
         assert_eq!(
             (chart.symbol(), chart.drawings().drawings.len()),
@@ -1561,6 +1594,7 @@ mod tests {
             ("BBB", 1)
         );
         assert!(!chart.can_redo());
+        assert_eq!(series_events(&mut chart), added_then_removed);
     }
 
     #[test]
