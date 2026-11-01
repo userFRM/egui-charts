@@ -94,6 +94,14 @@ use crate::model::{Alert, AlertId};
 /// # let _ = alerts;
 /// ```
 pub trait Alerts: MaybeSend + 'static {
+    /// The local evaluator, when this service uses one. The assembled terminal feeds it from
+    /// its datafeed, including subjects that no live chart shows. Server-backed services keep
+    /// the default so evaluation remains on the server.
+    #[cfg(feature = "alert-engine")]
+    fn engine(&self) -> Option<&super::AlertEngine> {
+        None
+    }
+
     /// Pushes the host's alerts, then every change and trigger. Called when the terminal starts and
     /// again after a lagged stream, each time with a new stream that starts from no alerts: push
     /// the current list first, then keep pushing until `events` is inactive. On the first call,

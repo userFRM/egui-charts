@@ -183,6 +183,30 @@ impl AlertEngine {
         self.lock().alerts.clone()
     }
 
+    /// Active symbols still armed for `id`, including watchlist members. A once-per-member
+    /// alert omits symbols that already fired, so a host can release their subscriptions.
+    pub fn subjects(&self, id: &AlertId) -> Vec<String> {
+        let state = self.lock();
+        let Some(alert) = state.alerts.iter().find(|alert| {
+            alert.id.as_ref() == Some(id) && alert.status == AlertStatus::Active && alert.is_valid()
+        }) else {
+            return Vec::new();
+        };
+        let symbols = match &alert.watchlist {
+            Some(list) => state.watchlists.get(list).cloned().unwrap_or_default(),
+            None => vec![alert.symbol.clone()],
+        };
+        symbols
+            .into_iter()
+            .filter(|symbol| {
+                !state
+                    .runs
+                    .get(&(id.clone(), symbol.clone()))
+                    .is_some_and(|run| run.done)
+            })
+            .collect()
+    }
+
     /// Sets the members of the watchlist `id`, as the host's watchlist holds them. A member that
     /// leaves loses its evaluation state, so it starts afresh if it returns.
     pub fn set_watchlist(&self, id: &str, symbols: Vec<String>) {
@@ -210,6 +234,32 @@ impl AlertEngine {
         now: DateTime<Utc>,
         value: impl Fn(&AlertSource, usize) -> Option<f64>,
     ) {
+        self.update_matching(None, symbol, timeframe, bars, now, value);
+    }
+
+    /// Evaluates one alert with its retained source definitions. Other alerts may refer to
+    /// different study instances with the same chart-local identifiers.
+    pub fn update_alert(
+        &self,
+        id: &AlertId,
+        symbol: &str,
+        timeframe: Timeframe,
+        bars: &[Bar],
+        now: DateTime<Utc>,
+        value: impl Fn(&AlertSource, usize) -> Option<f64>,
+    ) {
+        self.update_matching(Some(id), symbol, timeframe, bars, now, value);
+    }
+
+    fn update_matching(
+        &self,
+        id: Option<&AlertId>,
+        symbol: &str,
+        timeframe: Timeframe,
+        bars: &[Bar],
+        now: DateTime<Utc>,
+        value: impl Fn(&AlertSource, usize) -> Option<f64>,
+    ) {
         let mut fired = Vec::new();
         let mut state = self.lock();
         state.expire(now);
@@ -220,10 +270,11 @@ impl AlertEngine {
             runs,
             ..
         } = &mut *state;
-        for alert in alerts
-            .iter_mut()
-            .filter(|alert| alert.status == AlertStatus::Active && alert.is_valid())
-        {
+        for alert in alerts.iter_mut().filter(|alert| {
+            alert.status == AlertStatus::Active
+                && alert.is_valid()
+                && id.is_none_or(|id| alert.id.as_ref() == Some(id))
+        }) {
             let Some(id) = alert.id.clone() else { continue };
             let subject = match &alert.watchlist {
                 Some(list) => watchlists
@@ -337,6 +388,10 @@ impl State {
 }
 
 impl Alerts for AlertEngine {
+    fn engine(&self) -> Option<&AlertEngine> {
+        Some(self)
+    }
+
     fn watch(&self, events: Events<AlertEvent>) {
         let mut state = self.lock();
         for alert in &state.alerts {
@@ -583,6 +638,367 @@ fn reaches(change: f64, target: f64) -> bool {
         change >= target
     } else {
         change <= target
+    }
+}
+
+/// Historical and streaming inputs for an alert without a rendered chart. Uses the same
+/// validation, trade aggregation and history/live merge rules as a chart. Dropping it stops
+/// its subscription and discards late replies. Available with `ui` and `alert-engine`.
+#[cfg(feature = "ui")]
+pub struct AlertFeed {
+    feed: std::sync::Arc<dyn crate::data::Datafeed>,
+    inbox: std::sync::Arc<crate::data::inbox::Inbox>,
+    request: crate::data::HistoryRequest,
+    metric: Option<String>,
+    instrument: Option<crate::model::Instrument>,
+    subscription: Option<crate::data::SubscriptionId>,
+    bars: Vec<Bar>,
+    origins: std::collections::BTreeMap<DateTime<Utc>, crate::data::merge::Origin>,
+    pending: bool,
+    ready: bool,
+    retry: Option<DateTime<Utc>>,
+    stopped: bool,
+    drawings: Option<(
+        std::sync::Arc<dyn super::Storage>,
+        super::document::StoredDocument,
+    )>,
+    stored: Option<crate::drawings::persistence::DrawingStorage>,
+}
+
+#[cfg(feature = "ui")]
+impl AlertFeed {
+    /// A latest-history request for 1,000 bars. Set its public calendar, session, conversion
+    /// and count fields before passing it to [`new`](Self::new) to match the source chart.
+    pub fn history_request(
+        symbol: impl Into<String>,
+        timeframe: Timeframe,
+    ) -> crate::data::HistoryRequest {
+        crate::data::HistoryRequest {
+            symbol: symbol.into(),
+            timeframe,
+            clock: crate::model::BarClock::new(timeframe),
+            before: None,
+            since: None,
+            count: 1000,
+            extended_hours: false,
+            conversion: None,
+        }
+    }
+
+    /// Requests the symbol's metadata, then its history and updates. `metric` selects a study's
+    /// metric series; `None` selects price bars. Calls return promptly as `Datafeed` requires.
+    pub fn new(
+        feed: std::sync::Arc<dyn crate::data::Datafeed>,
+        mut request: crate::data::HistoryRequest,
+        metric: Option<String>,
+    ) -> Self {
+        if metric.is_some() {
+            request.clock = crate::model::BarClock::exact();
+        }
+        let inbox = std::sync::Arc::<crate::data::inbox::Inbox>::default();
+        if let Some(conversion) = &request.conversion
+            && metric.is_none()
+        {
+            feed.resolve_converted(&request.symbol, conversion, inbox.reply(1));
+        } else {
+            feed.resolve(&request.symbol, inbox.reply(1));
+        }
+        Self {
+            feed,
+            inbox,
+            request,
+            metric,
+            instrument: None,
+            subscription: None,
+            bars: Vec::new(),
+            origins: Default::default(),
+            pending: true,
+            ready: false,
+            retry: None,
+            stopped: false,
+            drawings: None,
+            stored: None,
+        }
+    }
+
+    /// Follows this symbol's drawings in host storage, without writing to it.
+    pub fn set_storage(&mut self, storage: std::sync::Arc<dyn super::Storage>) {
+        if self
+            .drawings
+            .as_ref()
+            .is_some_and(|(current, _)| std::sync::Arc::ptr_eq(current, &storage))
+        {
+            return;
+        }
+        let mut document = super::document::StoredDocument::open(
+            storage.as_ref(),
+            super::StoreKind::Drawings,
+            &self.request.symbol,
+        );
+        document.follow_changes(storage.as_ref());
+        self.drawings = Some((storage, document));
+    }
+
+    /// Bars available after the initial history reply. Updates received before that reply
+    /// remain buffered so evaluation never mistakes an incomplete stream for history.
+    pub fn bars(&self) -> &[Bar] {
+        if self.ready { &self.bars } else { &[] }
+    }
+
+    /// Calendar shared by history, streaming aggregation and study calculation.
+    pub fn clock(&self) -> &crate::model::BarClock {
+        &self.request.clock
+    }
+
+    /// Metadata resolved by the host.
+    pub fn instrument(&self) -> Option<&crate::model::Instrument> {
+        self.instrument.as_ref()
+    }
+
+    /// A stored drawing's level on the evaluated bar, using the chart's interpolation and
+    /// price-scale geometry. `None` while drawings are loading or for an unavailable level.
+    pub fn drawing_value(
+        &self,
+        source: &AlertSource,
+        at: usize,
+        scale: crate::scales::PriceScaleMode,
+    ) -> Option<f64> {
+        let bars = self.bars();
+        bars.get(at)?;
+        self.stored
+            .as_ref()?
+            .drawings()
+            .iter()
+            .enumerate()
+            .find_map(|(id, stored)| {
+                let drawing = crate::drawings::persistence::stored_to_drawing(
+                    stored,
+                    |ms| {
+                        DateTime::from_timestamp_millis(ms)
+                            .and_then(|time| {
+                                crate::model::index_at_with_timeframe(
+                                    bars,
+                                    time,
+                                    Some(self.request.timeframe),
+                                    self.instrument
+                                        .as_ref()
+                                        .and_then(|instrument| instrument.time_zone.as_ref()),
+                                )
+                            })
+                            .unwrap_or(f64::NAN) as f32
+                    },
+                    id,
+                );
+                let level = drawing.alert_level(source)?;
+                drawing
+                    .alert_levels(at as f64, scale)
+                    .into_iter()
+                    .find(|(index, ..)| *index == level)
+                    .map(|(.., value)| value)
+                    .filter(|value| value.is_finite())
+            })
+    }
+
+    /// Applies replies and coalesced updates and wakes `ctx` when more arrive. Recoverable
+    /// failures retry after the host's delay, or five seconds. Errors are returned for display.
+    pub fn poll(&mut self, ctx: &egui::Context, now: DateTime<Utc>) -> Vec<FeedError> {
+        use crate::data::merge::{Origin, merge};
+        use crate::data::{
+            HistoryPage, MetricPage, MetricRequest, MetricSubscription, Subscription,
+        };
+        let wake = ctx.clone();
+        self.inbox.set_waker(move || wake.request_repaint());
+        let mut errors = Vec::new();
+        let drained = self.inbox.drain();
+        for (key, answer) in drained.answers {
+            self.pending = false;
+            let result = if key == 1 {
+                let result = *answer
+                    .downcast::<Result<crate::model::Instrument, FeedError>>()
+                    .expect("alert instrument");
+                result.map(|instrument| {
+                    if let Some(session) = &instrument.session
+                        && self.metric.is_none()
+                    {
+                        self.request.clock = self.request.clock.clone().with_session(
+                            instrument
+                                .time_zone
+                                .clone()
+                                .unwrap_or_else(crate::model::TimezoneId::utc),
+                            session.clone(),
+                            self.request.extended_hours,
+                        );
+                    }
+                    self.instrument = Some(instrument);
+                })
+            } else {
+                let result = if self.metric.is_some() {
+                    (*answer
+                        .downcast::<Result<MetricPage, FeedError>>()
+                        .expect("alert metric history"))
+                    .map(|page| page.points.into_iter().map(Bar::from).collect::<Vec<_>>())
+                } else {
+                    (*answer
+                        .downcast::<Result<HistoryPage, FeedError>>()
+                        .expect("alert history"))
+                    .map(|page| page.bars)
+                };
+                result.map(|bars| {
+                    let merged = merge(
+                        &mut self.bars,
+                        &mut self.origins,
+                        &self.request.clock,
+                        bars.into_iter().map(|bar| (bar, Origin::History)).collect(),
+                    );
+                    self.ready = true;
+                    if merged.rejected > 0 {
+                        errors.push(FeedError::InvalidData("Invalid alert history bars".into()));
+                    }
+                })
+            };
+            if let Err(error) = result {
+                if error.is_recoverable() {
+                    let delay = match &error {
+                        FeedError::RateLimited {
+                            retry_after: Some(delay),
+                        } => chrono::TimeDelta::from_std(*delay)
+                            .unwrap_or(chrono::TimeDelta::seconds(5)),
+                        _ => chrono::TimeDelta::seconds(5),
+                    };
+                    self.retry = now.checked_add_signed(delay);
+                } else {
+                    self.stopped = true;
+                }
+                errors.push(error);
+            }
+        }
+        for (_, updates) in drained.updates {
+            if updates.reset {
+                self.bars.clear();
+                self.origins.clear();
+            }
+            merge(
+                &mut self.bars,
+                &mut self.origins,
+                &self.request.clock,
+                updates.bars.into_values().collect(),
+            );
+            if let Some(error) = updates.error {
+                // A lost stream requires fresh history before evaluation resumes.
+                self.ready = false;
+                self.retry = Some(now);
+                errors.push(error);
+            }
+        }
+        if !self.pending && !self.stopped && !self.ready && self.retry.is_none_or(|at| at <= now) {
+            self.retry = None;
+            self.pending = true;
+            if self.instrument.is_none() {
+                if let Some(conversion) = &self.request.conversion
+                    && self.metric.is_none()
+                {
+                    self.feed.resolve_converted(
+                        &self.request.symbol,
+                        conversion,
+                        self.inbox.reply(1),
+                    );
+                } else {
+                    self.feed.resolve(&self.request.symbol, self.inbox.reply(1));
+                }
+            } else {
+                if self.subscription.is_none() {
+                    let clock = if self.metric.is_some() {
+                        crate::model::BarClock::exact()
+                    } else {
+                        self.request.clock.clone()
+                    };
+                    let sink = self.inbox.subscribe(
+                        self.request.symbol.clone(),
+                        clock,
+                        100_000,
+                        self.instrument
+                            .as_ref()
+                            .and_then(|instrument| instrument.tick_size),
+                    );
+                    let id = sink.id;
+                    self.subscription = Some(id);
+                    if let Some(metric) = &self.metric {
+                        self.feed.subscribe_metric(MetricSubscription {
+                            id,
+                            symbol: self.request.symbol.clone(),
+                            metric: metric.clone(),
+                            sink,
+                        });
+                    } else {
+                        self.feed.subscribe(Subscription {
+                            id,
+                            symbol: self.request.symbol.clone(),
+                            timeframe: self.request.timeframe,
+                            clock: self.request.clock.clone(),
+                            extended_hours: self.request.extended_hours,
+                            conversion: self.request.conversion.clone(),
+                            sink,
+                        });
+                    }
+                }
+                if let Some(metric) = &self.metric {
+                    self.feed.metric_history(
+                        MetricRequest {
+                            symbol: self.request.symbol.clone(),
+                            metric: metric.clone(),
+                            before: None,
+                            count: self.request.count,
+                        },
+                        self.inbox.reply(2),
+                    );
+                } else {
+                    self.feed.history(self.request.clone(), self.inbox.reply(2));
+                }
+            }
+        }
+        if let Some((storage, document)) = &mut self.drawings {
+            for received in document.poll(storage.as_ref(), ctx) {
+                match received {
+                    super::document::Received::Loaded(json) => {
+                        let loaded = json
+                            .as_deref()
+                            .map(crate::drawings::persistence::DrawingStorage::from_json)
+                            .transpose();
+                        match loaded {
+                            Ok(Some((stored, skipped)))
+                                if stored.symbol == self.request.symbol && skipped.is_empty() =>
+                            {
+                                self.stored = Some(stored)
+                            }
+                            Ok(None) => {
+                                self.stored =
+                                    Some(crate::drawings::persistence::DrawingStorage::new(
+                                        self.request.symbol.clone(),
+                                    ))
+                            }
+                            _ => errors.push(FeedError::InvalidData(
+                                "Could not read alert drawings".into(),
+                            )),
+                        }
+                    }
+                    super::document::Received::Failed(error) => {
+                        errors.push(FeedError::Other(error))
+                    }
+                    _ => {}
+                }
+            }
+        }
+        errors
+    }
+}
+
+#[cfg(feature = "ui")]
+impl Drop for AlertFeed {
+    fn drop(&mut self) {
+        if let Some(id) = self.subscription.take() {
+            self.inbox.unsubscribe(id);
+            self.feed.unsubscribe(id);
+        }
     }
 }
 

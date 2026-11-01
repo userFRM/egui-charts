@@ -46,6 +46,8 @@ mod storage;
 #[cfg(feature = "alert-engine")]
 #[cfg_attr(docsrs, doc(cfg(feature = "alert-engine")))]
 pub use alert_engine::AlertEngine;
+#[cfg(all(feature = "alert-engine", feature = "ui"))]
+pub use alert_engine::AlertFeed;
 pub use alerts::{AlertEvent, Alerts};
 pub use broker::{AccountEvent, Broker, HistoryKind, HistoryPage, HistoryRequest};
 pub use chats::{

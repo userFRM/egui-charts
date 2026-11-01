@@ -114,7 +114,6 @@ pub struct Terminal {
     time: time::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
     replay: replay::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     alerts: alerts::State,
     #[expect(dead_code, reason = "the group keeps its state here")]
     panels: panels::State,
