@@ -493,12 +493,7 @@ impl PriceScale {
     /// Mapping for one series for one frame, given the pane's vertical extent in points.
     pub fn map(&self, transform: PriceTransform, top: f32, bottom: f32) -> PriceMap {
         let mut tick_marks = self.options.tick_marks;
-        if matches!(
-            transform.mode,
-            PriceScaleMode::Normal | PriceScaleMode::Logarithmic
-        ) {
-            tick_marks.min_price_step = tick_marks.min_price_step.or(self.tick_size);
-        }
+        tick_marks.min_price_step = tick_marks.min_price_step.or(self.tick_size);
         PriceMap::new(
             transform,
             self.range,

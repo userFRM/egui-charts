@@ -131,6 +131,137 @@ fn capabilities_arrive_before_the_symbol_resolves() {
     assert!(feed.capabilities.lock().unwrap().is_empty(), "asked again");
 }
 
+#[test]
+fn instrument_ticks_supply_default_marks_and_preserve_host_overrides() {
+    use crate::scales::{PriceScaleMode, PriceTransform};
+
+    let marks = |chart: &mut Chart, mode, height| {
+        let scale = chart.price_scale_mut();
+        let transform = PriceTransform { mode, base: 6100.0 };
+        let (min, max) = if mode == PriceScaleMode::Logarithmic {
+            (6104.0_f64.ln(), 6111.0_f64.ln())
+        } else {
+            (6104.0, 6111.0)
+        };
+        scale.set_range(min, max);
+        scale.map(transform, 0.0, height).marks()
+    };
+    for feed in [false, true] {
+        let ctx = egui::Context::default();
+        let script = Arc::new(Script::default());
+        let mut chart = if feed {
+            fed(&script, Some("A"))
+        } else {
+            Chart::new(BarData::default())
+        };
+        if feed {
+            chart.pump(&ctx);
+            script.resolve().send(Ok(Instrument::new("A")
+                .with_tick_size(0.25)
+                .with_price_decimals(2)));
+            chart.pump(&ctx);
+        } else {
+            chart.set_instrument(Some(
+                Instrument::new("A")
+                    .with_tick_size(0.25)
+                    .with_price_decimals(2),
+            ));
+        }
+        let prices: Vec<_> = marks(&mut chart, PriceScaleMode::Normal, 800.0)
+            .iter()
+            .map(|mark| mark.price)
+            .collect();
+        // A 0.4 nice step rounds up to two quarter ticks, starting at 6104.
+        assert_eq!(
+            prices,
+            (0..=14)
+                .map(|i| 6104.0 + i as f64 * 0.5)
+                .collect::<Vec<_>>(),
+            "feed: {feed}"
+        );
+        for mode in [PriceScaleMode::Normal, PriceScaleMode::Logarithmic] {
+            for height in [500.0, 800.0] {
+                let marks = marks(&mut chart, mode, height);
+                assert!(marks.len() >= 3, "feed: {feed}, {mode:?}, height: {height}");
+                for mark in marks {
+                    assert!((mark.price * 4.0 - (mark.price * 4.0).round()).abs() < 1e-8);
+                }
+            }
+        }
+        if feed {
+            // Feed metadata takes precedence over a later host update.
+            chart.set_instrument(Some(Instrument::new("A").with_tick_size(1.0)));
+            assert_eq!(marks(&mut chart, PriceScaleMode::Normal, 800.0).len(), 15);
+        }
+
+        #[cfg(feature = "ui")]
+        {
+            let mut saved = chart.snapshot().unwrap();
+            saved.price_scale = Some(crate::scales::PriceScale::new(Default::default()));
+            chart.restore(&saved).unwrap();
+            chart.pump(&ctx);
+            assert_eq!(marks(&mut chart, PriceScaleMode::Normal, 800.0).len(), 15);
+        }
+
+        for (override_before, step, count) in [(false, 0.2, 18), (true, 1.0, 8)] {
+            if override_before {
+                chart
+                    .price_scale_mut()
+                    .options_mut()
+                    .tick_marks
+                    .min_price_step = Some(step);
+            }
+            chart.set_instrument(Some(Instrument::new("A").with_tick_size(0.25)));
+            if !override_before {
+                chart
+                    .price_scale_mut()
+                    .options_mut()
+                    .tick_marks
+                    .min_price_step = Some(step);
+            }
+            assert_eq!(
+                marks(&mut chart, PriceScaleMode::Normal, 800.0).len(),
+                count
+            );
+            chart
+                .price_scale_mut()
+                .options_mut()
+                .tick_marks
+                .min_price_step = None;
+            assert_eq!(marks(&mut chart, PriceScaleMode::Normal, 800.0).len(), 15);
+        }
+
+        chart.set_instrument(None);
+        if !feed {
+            assert!(
+                marks(&mut chart, PriceScaleMode::Normal, 800.0)
+                    .iter()
+                    .any(|mark| (mark.price - 6104.4).abs() < 1e-8)
+            );
+            chart.set_instrument(Some(Instrument::new("A").with_tick_size(0.25)));
+        }
+        chart.set_symbol("B");
+        assert!(
+            marks(&mut chart, PriceScaleMode::Normal, 800.0)
+                .iter()
+                .any(|mark| (mark.price - 6104.4).abs() < 1e-8)
+        );
+        if feed {
+            chart.pump(&ctx);
+            script
+                .resolve()
+                .send(Ok(Instrument::new("B").with_tick_size(50.0)));
+            chart.pump(&ctx);
+        } else {
+            chart.set_instrument(Some(Instrument::new("B").with_tick_size(50.0)));
+        }
+        // Instrument price units must not constrain percentage or index units.
+        for mode in [PriceScaleMode::Percentage, PriceScaleMode::IndexedTo100] {
+            assert!(marks(&mut chart, mode, 800.0).len() >= 15);
+        }
+    }
+}
+
 /// An empty window names where older bars continue, and the next request starts there
 /// instead of repeating itself; a continuation that does not lie before the request stops
 /// paging with an error; without one the empty page ends history.
