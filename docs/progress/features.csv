@@ -778,28 +778,28 @@ Studies,Indicators,Williams Fractal,done,library,src/studies/builtin/williams_fr
 Studies,Indicators,Woodies CCI,partial,library,src/studies/builtin/woodies_cci.rs
 Studies,Indicators,Zig Zag,done,library,src/studies/builtin/zigzag.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs
 Studies,Strategy tester,Backtest engine,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs;src/services/paper.rs;docs/strategy-report.md;
-Studies,Strategy tester,Built-in Bollinger Bands strategy,missing,library,
-Studies,Strategy tester,Built-in Bollinger Bands strategy Directed,missing,library,
-Studies,Strategy tester,Built-in Consecutive Up/Down strategy,missing,library,
-Studies,Strategy tester,Built-in Greedy strategy,missing,library,
-Studies,Strategy tester,Built-in Keltner Channels strategy,missing,library,
-Studies,Strategy tester,Built-in MACD strategy,missing,library,
-Studies,Strategy tester,Built-in Momentum strategy,missing,library,
-Studies,Strategy tester,Built-in Parabolic SAR strategy,missing,library,
-Studies,Strategy tester,Built-in Pivot Extension strategy,missing,library,
-Studies,Strategy tester,Built-in Pivot Reversal strategy,missing,library,
-Studies,Strategy tester,Built-in Price Channel strategy,missing,library,
-Studies,Strategy tester,Built-in RSI strategy,missing,library,
-Studies,Strategy tester,Built-in Stochastic Slow strategy,missing,library,
-Studies,Strategy tester,Built-in Supertrend strategy,missing,library,
-Studies,Strategy tester,Built-in Technical Ratings strategy,missing,library,
-Studies,Strategy tester,Built-in channel breakout strategy,missing,library,
-Studies,Strategy tester,Built-in inside bar strategy,missing,library,
-Studies,Strategy tester,Built-in outside bar strategy,missing,library,
-Studies,Strategy tester,Built-in price and moving average crossover strategy,missing,library,
-Studies,Strategy tester,Built-in two moving average crossover strategy,missing,library,
-Studies,Strategy tester,Built-in up and down bar strategy,missing,library,
-Studies,Strategy tester,Built-in volatility expansion close strategy,missing,library,
+Studies,Strategy tester,Built-in Bollinger Bands strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/bollinger_bands.rs
+Studies,Strategy tester,Built-in Bollinger Bands strategy Directed,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/bollinger_bands.rs
+Studies,Strategy tester,Built-in Consecutive Up/Down strategy,done,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs
+Studies,Strategy tester,Built-in Greedy strategy,done,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs
+Studies,Strategy tester,Built-in Keltner Channels strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/keltner.rs
+Studies,Strategy tester,Built-in MACD strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/macd.rs
+Studies,Strategy tester,Built-in Momentum strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/momentum.rs
+Studies,Strategy tester,Built-in Parabolic SAR strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/parabolic_sar.rs
+Studies,Strategy tester,Built-in Pivot Extension strategy,done,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs
+Studies,Strategy tester,Built-in Pivot Reversal strategy,done,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs
+Studies,Strategy tester,Built-in Price Channel strategy,done,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs
+Studies,Strategy tester,Built-in RSI strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/rsi.rs
+Studies,Strategy tester,Built-in Stochastic Slow strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/stochastic.rs
+Studies,Strategy tester,Built-in Supertrend strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/supertrend.rs
+Studies,Strategy tester,Built-in Technical Ratings strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/technical_ratings.rs
+Studies,Strategy tester,Built-in channel breakout strategy,done,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs
+Studies,Strategy tester,Built-in inside bar strategy,done,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs
+Studies,Strategy tester,Built-in outside bar strategy,done,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs
+Studies,Strategy tester,Built-in price and moving average crossover strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/sma.rs
+Studies,Strategy tester,Built-in two moving average crossover strategy,done,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/sma.rs
+Studies,Strategy tester,Built-in up and down bar strategy,done,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs
+Studies,Strategy tester,Built-in volatility expansion close strategy,done,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs
 Studies,Strategy tester,Commission models,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md
 Studies,Strategy tester,Deep backtesting and bar magnifier,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md
 Studies,Strategy tester,Equity curve and drawdown chart,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs;src/ui/strategy_report/plot.rs

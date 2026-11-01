@@ -169,7 +169,43 @@ impl BacktestSettings {
 pub trait Strategy {
     /// Named strategy inputs, copied to the report's properties before the run.
     fn inputs(&self) -> Vec<(String, String)> {
+        self.study_inputs()
+            .into_iter()
+            .map(|input| {
+                use crate::studies::{InputKind, InputValue};
+                let value = match input.value {
+                    InputValue::Length(value) => value.to_string(),
+                    InputValue::Integer(value) => value.to_string(),
+                    InputValue::Number(value) => value.to_string(),
+                    InputValue::Toggle(value) => value.to_string(),
+                    InputValue::Choice(index) => match input.kind {
+                        InputKind::Choice(choices) => {
+                            choices.get(index).cloned().unwrap_or_default()
+                        }
+                        _ => index.to_string(),
+                    },
+                    InputValue::Text(value) | InputValue::Symbol(value) => value,
+                    value => format!("{value:?}"),
+                };
+                (input.label, value)
+            })
+            .collect()
+    }
+
+    /// Editable calculation inputs, including defaults and accepted bounds.
+    fn study_inputs(&self) -> Vec<crate::studies::StudyInput> {
         Vec::new()
+    }
+
+    /// Changes a calculation input. Call `prepare` again before using cached calculations.
+    /// Implementations reject unknown ids, wrong types and values outside their schema.
+    fn set_input(
+        &mut self,
+        id: &str,
+        value: crate::studies::InputValue,
+    ) -> Result<(), &'static str> {
+        let _ = (id, value);
+        Err("strategy has no editable inputs")
     }
 
     /// Computes what the strategy needs from the whole run once, before the first bar, such as
@@ -276,6 +312,30 @@ impl StrategyContext<'_> {
         self.orders.retain(|order| order.id != id);
     }
 
+    /// Brackets entries on `side` at positive price distances from their average fill price.
+    /// The bracket can precede its entry and protects it on its execution bar, including gaps
+    /// and slippage. Adding an entry moves the bracket with the position's average price.
+    /// It closes the whole position, then protects any queued entries on that side. Without
+    /// a queued entry it is cancelled when the position closes or reverses.
+    pub fn exit_relative(
+        &mut self,
+        id: impl Into<String>,
+        side: OrderSide,
+        take_profit: f64,
+        stop_loss: f64,
+    ) {
+        if [take_profit, stop_loss]
+            .iter()
+            .all(|value| value.is_finite() && *value > 0.0)
+        {
+            self.place(
+                id.into(),
+                None,
+                Kind::RelativeExit(take_profit, stop_loss, side),
+            );
+        }
+    }
+
     fn place(&mut self, id: String, quantity: Option<f64>, kind: Kind) {
         if !self.trading {
             return;
@@ -315,6 +375,8 @@ enum Kind {
     Entry(OrderSide, OrderType),
     /// Take profit, stop loss and the exit's side, `None` until a position opens for it to reduce.
     Exit(Option<f64>, Option<f64>, Option<OrderSide>),
+    /// Distances from the position's average fill price and the entry side to protect.
+    RelativeExit(f64, f64, OrderSide),
 }
 
 /// An entry's quantity that is still open.
@@ -657,6 +719,28 @@ impl Run<'_> {
     /// Trigger price and whether the execution slips. Stop-limit triggers are not executions.
     fn fill_price(&self, order: &Working, start: f64, end: f64) -> Option<(f64, bool)> {
         let reached = match order.kind {
+            Kind::RelativeExit(profit, loss, side) => {
+                let quantity = self.position();
+                if quantity * sign(side) <= 0.0 {
+                    return None;
+                }
+                let average = self
+                    .lots
+                    .iter()
+                    .map(|lot| lot.price * (lot.quantity / quantity.abs()))
+                    .sum::<f64>();
+                let exit = Working {
+                    id: String::new(),
+                    quantity: None,
+                    kind: Kind::Exit(
+                        Some(average + sign(side) * profit),
+                        Some(average - sign(side) * loss),
+                        exit_side(quantity),
+                    ),
+                    deferred: order.deferred,
+                };
+                return self.fill_price(&exit, start, end);
+            }
             Kind::Entry(side, order_type) => order_type.fill_price(side, start, end).map(|price| {
                 (
                     price,
@@ -834,6 +918,13 @@ impl Run<'_> {
     fn fill(&mut self, order: Working, mark: f64, slips: bool, time: DateTime<Utc>) {
         let side = match order.kind {
             Kind::Entry(side, _) => side,
+            Kind::RelativeExit(_, _, side) => {
+                if side == OrderSide::Buy {
+                    OrderSide::Sell
+                } else {
+                    OrderSide::Buy
+                }
+            }
             Kind::Exit(.., Some(side)) => side,
             Kind::Exit(.., None) => return,
         };
@@ -887,7 +978,7 @@ impl Run<'_> {
                     fees: fee * (quantity / filled),
                 });
             }
-            Kind::Exit(..) => {
+            Kind::Exit(..) | Kind::RelativeExit(..) => {
                 let quantity = order.quantity.unwrap_or(held).min(held);
                 if quantity <= 0.0 {
                     return;
@@ -905,15 +996,30 @@ impl Run<'_> {
                     quantity,
                     time,
                 );
+                if let Kind::RelativeExit(_, _, side) = order.kind
+                    && self.orders.iter().any(|working| {
+                        matches!(working.kind, Kind::Entry(entry_side, _) if entry_side == side)
+                    })
+                {
+                    self.orders.push(order);
+                }
             }
         }
         let position = self.position();
+        let pending = [OrderSide::Buy, OrderSide::Sell].map(|side| {
+            self.orders
+                .iter()
+                .any(|order| matches!(order.kind, Kind::Entry(entry_side, _) if entry_side == side))
+        });
         self.orders.retain_mut(|order| match &mut order.kind {
             Kind::Exit(.., side) => {
                 *side = side.or(exit_side(position));
                 side.is_none_or(|side| side.reduces(position))
             }
             Kind::Entry(..) => true,
+            Kind::RelativeExit(_, _, side) => {
+                position * sign(*side) > 0.0 || pending[usize::from(*side == OrderSide::Sell)]
+            }
         });
         if self.settings.recalculate_after_fills {
             self.decide(price, true);
