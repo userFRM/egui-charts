@@ -9,7 +9,8 @@
 //! required. The chart calls the feed on the UI thread; implementations should
 //! return promptly, answer each request once through [`Reply`] and push live updates
 //! into the [`Sink`] of a [`Subscription`]. Replies and pushes can come from another
-//! thread, runtime or browser task. No network connection or data provider is built in.
+//! thread, runtime or browser task. The optional `http` adapter connects to a host's server;
+//! no market data provider is built in.
 //!
 //! [`Subscription::clock`] and [`HistoryRequest::clock`] carry the same bar boundaries
 //! so history and streaming aggregation agree. Symbol search is a separate
@@ -37,6 +38,8 @@ use std::time::Duration;
 pub(crate) mod depth;
 mod depth_history;
 mod footprint;
+#[cfg(feature = "http")]
+pub mod http;
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
