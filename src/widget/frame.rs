@@ -559,6 +559,7 @@ impl Chart {
             }
             response
         };
+        self.menu_open = false;
         if !self.chart_type.is_time_independent() {
             let source_marks = self.mark_source.as_ref().map(|source| &source.page);
             let mut coords = self.get_chart_mapping();
@@ -915,6 +916,16 @@ impl Chart {
                 time_axis_top + crate::styles::sizing::chart::BOTTOM_PADDING_WITH_TIME,
             ),
         );
+        #[cfg(feature = "drawings")]
+        let eraser_mode = self.drawings.eraser_mode;
+        #[cfg(not(feature = "drawings"))]
+        let eraser_mode = false;
+        #[cfg(feature = "drawings")]
+        let drawing_tool_active = self.drawings.active_tool.is_some();
+        #[cfg(not(feature = "drawings"))]
+        let drawing_tool_active = false;
+        let show_price_button =
+            self.config.show_plus_button && !eraser_mode && !drawing_tool_active;
         let show_axis_settings = !self.layout_inactive || ui.rect_contains_pointer(rect);
         let axis_interaction = cfg!(feature = "icons")
             && (self.config.show_right_axis || self.config.show_left_axis)
@@ -926,7 +937,7 @@ impl Chart {
                         .or(input.pointer.hover_pos())
                         .is_some_and(|pos| {
                             (show_axis_settings && axis_corner.contains(pos))
-                                || (self.config.show_plus_button
+                                || (show_price_button
                                     && self.axis_hover.is_some_and(|(_, tag)| {
                                         rendering::axes::crosshair_price_button_rect(tag)
                                             .contains(pos)
@@ -986,14 +997,6 @@ impl Chart {
 
         // Handle mouse wheel for zoom/scroll
         // Block pan/zoom when drawing tool is active OR when manipulating a drawing
-        #[cfg(feature = "drawings")]
-        let eraser_mode = self.drawings.eraser_mode;
-        #[cfg(not(feature = "drawings"))]
-        let eraser_mode = false;
-        #[cfg(feature = "drawings")]
-        let drawing_tool_active = self.drawings.active_tool.is_some();
-        #[cfg(not(feature = "drawings"))]
-        let drawing_tool_active = false;
         let time_based = !self.chart_type.is_time_independent();
         let show_volume = self.shows_volume();
         #[cfg(not(feature = "drawings"))]
@@ -2701,7 +2704,8 @@ impl Chart {
         let eraser_mode = self.drawings.eraser_mode;
         #[cfg(feature = "drawings")]
         let drawing_tool_active = self.drawings.active_tool.is_some();
-        let menu_open = std::mem::take(&mut self.menu_open) || response.secondary_clicked();
+        let menu_open = self.menu_open || response.secondary_clicked();
+        self.menu_open = menu_open;
         let mut crosshair_tags = [None; 2];
         #[cfg(feature = "drawings")]
         {
@@ -2748,7 +2752,7 @@ impl Chart {
                 ui.input(|input| {
                     input.pointer.hover_pos().is_some_and(|pos| {
                         cfg!(feature = "icons")
-                            && self.config.show_plus_button
+                            && show_price_button
                             && rendering::axes::crosshair_price_button_rect(*tag).contains(pos)
                     })
                 })
@@ -3143,9 +3147,7 @@ impl Chart {
         #[cfg(feature = "icons")]
         if show_price_axis {
             if let Some((pos, tag)) = self.axis_hover.filter(|(pos, _)| {
-                self.config.show_plus_button
-                    && price_rect.contains(*pos)
-                    && !volume_rect.contains(*pos)
+                show_price_button && price_rect.contains(*pos) && !volume_rect.contains(*pos)
             }) {
                 let price = if self.chart_options.crosshair.mode.snaps()
                     && let Some(index) = coords.local_idx_at_x(pos.x, visible_data.len())
@@ -3192,14 +3194,15 @@ impl Chart {
             &current_price.as_deref().into_iter().collect::<Vec<_>>(),
             price_formatter.as_deref(),
         );
-        self.measured_axis_width = self.measured_axis_width.max(independent_axis_width);
-        if self.config.show_left_axis
+        if cfg!(feature = "icons")
+            && self.config.show_left_axis
             && !self.config.show_right_axis
             && self.config.show_plus_button
-            && let Some(tag) = crosshair_tags[0]
         {
-            self.measured_axis_width = self.measured_axis_width.max(tag.width() + 26.0);
+            // Reserve the button before hover so entering the plot does not resize its panes.
+            self.measured_axis_width += 26.0;
         }
+        self.measured_axis_width = self.measured_axis_width.max(independent_axis_width);
         for tag in tags.iter().skip(usize::from(has_currency)).flatten() {
             self.measured_axis_width = self.measured_axis_width.max(tag.width() + 5.0 + 6.0);
         }
