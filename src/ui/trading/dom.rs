@@ -856,8 +856,8 @@ impl Ladder {
                     ui.make_persistent_id(("dom_cancel", index)),
                     Sense::click(),
                 )
-                .on_hover_text(l10n::text(ui.ctx(), &label));
-            let translated_label = l10n::text(ui.ctx(), &label);
+                .on_hover_text(l10n::text(ui.ctx(), label));
+            let translated_label = l10n::text(ui.ctx(), label);
             response.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::Role::Button, !ids.is_empty(), &translated_label)
             });
