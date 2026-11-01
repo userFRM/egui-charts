@@ -115,6 +115,29 @@ const DISPLAYS: [ProfileDisplay; 3] = [
     ProfileDisplay::Delta,
 ];
 
+/// UTC times in Inputs, with a fractional second only when one is present.
+const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.f";
+
+/// Saved milliseconds as text, empty for the unset endpoints.
+fn time_text(ms: f64) -> String {
+    if ms.abs() >= 8e15 {
+        return String::new();
+    }
+    DateTime::from_timestamp_millis(ms as i64)
+        .map_or_else(String::new, |time| time.format(TIME_FORMAT).to_string())
+}
+
+/// UTC date and time to the minute or finer, or `unset` for empty text.
+fn parse_time(text: &str, unset: f64) -> Result<f64, &'static str> {
+    if text.is_empty() {
+        return Ok(unset);
+    }
+    chrono::NaiveDateTime::parse_from_str(text, TIME_FORMAT)
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M"))
+        .map(|time| time.and_utc().timestamp_millis() as f64)
+        .map_err(|_| "time must read YYYY-MM-DD HH:MM:SS")
+}
+
 impl ProfileStudy {
     fn new(kind: Kind, rows: usize) -> Self {
         Self {
@@ -195,17 +218,17 @@ impl ProfileStudy {
         if matches!(self.kind, Kind::Fixed | Kind::Anchored) {
             inputs.push(StudyInput::new(
                 "start_time",
-                "Start (Unix ms)",
-                InputValue::Number(self.start_time),
-                InputKind::Number(-8e15, 8e15),
+                "Start (YYYY-MM-DD HH:MM:SS UTC)",
+                InputValue::Text(time_text(self.start_time)),
+                InputKind::Text,
             ));
         }
         if self.kind == Kind::Fixed {
             inputs.push(StudyInput::new(
                 "end_time",
-                "End (Unix ms)",
-                InputValue::Number(self.end_time),
-                InputKind::Number(-8e15, 8e15),
+                "End (YYYY-MM-DD HH:MM:SS UTC)",
+                InputValue::Text(time_text(self.end_time)),
+                InputKind::Text,
             ));
         }
         if self.kind == Kind::Periodic {
@@ -257,8 +280,8 @@ impl ProfileStudy {
             ("source_interval", InputValue::Timeframe(v)) => self.source = v,
             ("feed_source", InputValue::Toggle(v)) => self.feed_source = v,
             ("adaptive_rows", InputValue::Toggle(v)) => self.adaptive = v,
-            ("start_time", InputValue::Number(v)) => self.start_time = v,
-            ("end_time", InputValue::Number(v)) => self.end_time = v,
+            ("start_time", InputValue::Text(text)) => self.start_time = parse_time(&text, -8e15)?,
+            ("end_time", InputValue::Text(text)) => self.end_time = parse_time(&text, 8e15)?,
             ("period", InputValue::Choice(v)) => self.period = PERIODS[v],
             ("anchor", InputValue::Choice(v)) => self.anchor = ANCHORS[v],
             ("length", InputValue::Length(v)) => self.length = v,
@@ -1058,6 +1081,35 @@ mod tests {
                     input.id
                 );
             }
+            // Saved UTC times are displayed and accepted back without changing the range.
+            let times: Vec<_> = study
+                .inputs()
+                .into_iter()
+                .filter_map(|input| match input.value {
+                    InputValue::Text(text) => Some((input.id, text)),
+                    _ => None,
+                })
+                .collect();
+            let expected_times: &[(&str, &str)] = match study.name() {
+                "Vol Profile FR" => &[
+                    ("start_time", "2026-03-06 23:00:00"),
+                    ("end_time", "2026-03-07 00:00:00"),
+                ],
+                "Vol Profile Anchored" => &[("start_time", "2026-03-07 00:00:00")],
+                _ => &[],
+            };
+            assert_eq!(
+                times
+                    .iter()
+                    .map(|(id, text)| (id.as_str(), text.as_str()))
+                    .collect::<Vec<_>>(),
+                expected_times,
+                "{}",
+                study.name()
+            );
+            for (id, text) in times {
+                study.set_input(&id, InputValue::Text(text)).unwrap();
+            }
             study
                 .set_input("value_area", InputValue::Number(70.0))
                 .unwrap();
@@ -1120,6 +1172,42 @@ mod tests {
                 );
             }
         }
+        // Fractions survive the editor, junk changes nothing, and empty fields select all bars.
+        let mut fixed = VolProfileFixed::new(2).with_range(
+            bars[1].time + chrono::Duration::milliseconds(500),
+            bars[2].time,
+        );
+        let start = fixed
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == "start_time")
+            .unwrap();
+        assert_eq!(
+            start.value,
+            InputValue::Text("2026-03-06 23:00:00.500".into())
+        );
+        fixed.set_input("start_time", start.value).unwrap();
+        fixed.calculate(&bars);
+        assert_eq!(fixed.volume_profiles(0..4)[0].bars, 2..3);
+        assert!(
+            fixed
+                .set_input("start_time", InputValue::Text("23:00".into()))
+                .is_err()
+        );
+        assert_eq!(fixed.volume_profiles(0..4)[0].bars, 2..3);
+        fixed
+            .set_input("start_time", InputValue::Text("2026-03-06 23:00".into()))
+            .unwrap();
+        fixed.calculate(&bars);
+        assert_eq!(fixed.volume_profiles(0..4)[0].bars, 1..3);
+        fixed
+            .set_input("start_time", InputValue::Text(String::new()))
+            .unwrap();
+        fixed
+            .set_input("end_time", InputValue::Text(String::new()))
+            .unwrap();
+        fixed.calculate(&bars);
+        assert_eq!(fixed.volume_profiles(0..4)[0].bars, 0..4);
         let mut visible = VolProfileVisible::new(2);
         visible.calculate(&bars);
         assert_eq!(
