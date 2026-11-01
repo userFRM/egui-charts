@@ -434,7 +434,7 @@ Order flow,Order flow,Footprint price aggregation: automatic by zoom or manual t
 Order flow,Order flow,"Footprint single prints, extremes, clusters and pullbacks",done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Fresh liquidity detector,done,library,src/services/detectors/liquidity.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/model/signal.rs;src/widget/signals.rs;
 Order flow,Order flow,Footprint trade counts and average trade size,missing,library,
-Order flow,Order flow,Heatmap colour scaling,done,library,src/chart/overlays/liquidity_heatmap.rs;src/widget/feed/mod.rs
+Order flow,Order flow,Heatmap colour scaling and intensity controls,done,library,src/chart/overlays/liquidity_heatmap.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Heatmap depth source and order filters,done,library,src/data/orders.rs;src/data/depth_history.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/chart/overlays/book_profile.rs
 Order flow,Order flow,Heatmap history retention in memory with manual memory release,done,library,src/data/depth_history.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Heatmap rendering at scale,done,library,src/chart/overlays/liquidity_heatmap.rs;src/data/depth_history.rs;src/data/depth.rs;benches/heatmap.rs;docs/order-flow.md;benches/regression/mod.rs
