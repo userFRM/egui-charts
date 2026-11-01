@@ -1262,6 +1262,7 @@ mod tests {
                 assert!(events.iter().any(|event| matches!(event,
                     SignalEvent::Remove(id) if id.0 == "stop-sweep-660000")));
             }
+            host.listeners.clear();
             host.subscribe();
             assert_eq!(
                 of_kind(host.events(), "Stop sweeps").len(),
