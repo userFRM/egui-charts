@@ -331,7 +331,7 @@ impl Trading {
         if let Some(action) = &self.pending {
             let numbers = self.numbers(symbol, symbol);
             let money = |value: f64| numbers.price(value);
-            let (title, message, confirm) = describe(action, &money);
+            let (title, message, confirm) = describe(ui.ctx(), action, &money);
             let mut open = true;
             let result = ConfirmDialog::new("trading_confirm", title, message)
                 .confirm_text(confirm)
@@ -589,80 +589,146 @@ fn calculator(ui: &mut egui::Ui, text: &mut String, quantity: &mut f64, rules: &
 
 /// The title, question and confirm button text of the confirmation for `action`.
 fn describe(
+    ctx: &egui::Context,
     action: &TradingLineAction,
     price: &dyn Fn(f64) -> String,
 ) -> (&'static str, String, &'static str) {
     let order = |request: &OrderRequest| {
-        let mut text = format!(
-            "{} {} {}",
-            request.side.label(),
-            request.quantity,
-            request.symbol
-        );
-        match request.order_type {
-            OrderType::Limit(limit) => text += &format!(" limit {}", price(limit)),
-            OrderType::Stop(stop) => text += &format!(" stop {}", price(stop)),
-            OrderType::StopLimit { stop, limit } => {
-                text += &format!(" stop {} limit {}", price(stop), price(limit));
+        let quantity = request.quantity.to_string();
+        let values = [
+            ("quantity", quantity.as_str()),
+            ("symbol", request.symbol.as_str()),
+        ];
+        let key = match (request.side, request.order_type) {
+            (OrderSide::Buy, OrderType::Limit(_)) => "BUY {quantity} {symbol} limit {price}",
+            (OrderSide::Sell, OrderType::Limit(_)) => "SELL {quantity} {symbol} limit {price}",
+            (OrderSide::Buy, OrderType::Stop(_)) => "BUY {quantity} {symbol} stop {price}",
+            (OrderSide::Sell, OrderType::Stop(_)) => "SELL {quantity} {symbol} stop {price}",
+            (OrderSide::Buy, OrderType::StopLimit { .. }) => {
+                "BUY {quantity} {symbol} stop {stop} limit {limit}"
             }
-            _ => text += " at market",
-        }
+            (OrderSide::Sell, OrderType::StopLimit { .. }) => {
+                "SELL {quantity} {symbol} stop {stop} limit {limit}"
+            }
+            (OrderSide::Buy, _) => "BUY {quantity} {symbol} at market",
+            (OrderSide::Sell, _) => "SELL {quantity} {symbol} at market",
+        };
+        let mut text = match request.order_type {
+            OrderType::Limit(limit) | OrderType::Stop(limit) => l10n::format_text(
+                ctx,
+                key,
+                &[values[0], values[1], ("price", price(limit).as_str())],
+            ),
+            OrderType::StopLimit { stop, limit } => l10n::format_text(
+                ctx,
+                key,
+                &[
+                    values[0],
+                    values[1],
+                    ("stop", price(stop).as_str()),
+                    ("limit", price(limit).as_str()),
+                ],
+            ),
+            _ => l10n::format_text(ctx, key, &values),
+        };
         if let Some(take_profit) = request.take_profit {
-            text += &format!(", take profit {}", price(take_profit));
+            text.push_str(&l10n::format_text(
+                ctx,
+                ", take profit {price}",
+                &[("price", price(take_profit).as_str())],
+            ));
         }
         for level in &request.take_profit_levels {
-            text += &format!(
-                ", take profit {} for {}",
-                price(level.price),
-                level.quantity
-            );
+            text.push_str(&l10n::format_text(
+                ctx,
+                ", take profit {price} for {quantity}",
+                &[
+                    ("price", price(level.price).as_str()),
+                    ("quantity", level.quantity.to_string().as_str()),
+                ],
+            ));
         }
         if let Some(stop_loss) = request.stop_loss {
-            text += &format!(", stop loss {}", price(stop_loss));
+            text.push_str(&l10n::format_text(
+                ctx,
+                ", stop loss {price}",
+                &[("price", price(stop_loss).as_str())],
+            ));
         }
         text
     };
     let position = |position: &Position| {
-        format!(
-            "the {} position of {} {}",
+        l10n::format_text(
+            ctx,
             if position.quantity > 0.0 {
-                "long"
+                "the long position of {quantity} {symbol}"
             } else {
-                "short"
+                "the short position of {quantity} {symbol}"
             },
-            position.quantity.abs(),
-            position.symbol
+            &[
+                ("quantity", position.quantity.abs().to_string().as_str()),
+                ("symbol", position.symbol.as_str()),
+            ],
         )
     };
     match action {
         TradingLineAction::Cancel(working) => (
             "Cancel order",
-            format!("Cancel the order to {}?", order(&working.request)),
+            l10n::format_text(
+                ctx,
+                "Cancel the order to {order}?",
+                &[("order", order(&working.request).as_str())],
+            ),
             "Cancel order",
         ),
         TradingLineAction::Modify(_, changed) => (
             "Modify order",
-            format!("Change the order to {}?", order(changed)),
+            l10n::format_text(
+                ctx,
+                "Change the order to {order}?",
+                &[("order", order(changed).as_str())],
+            ),
             "Modify order",
         ),
         TradingLineAction::Close(open) => (
             "Close position",
-            format!("Close {} at market?", position(open)),
+            l10n::format_text(
+                ctx,
+                "Close {position} at market?",
+                &[("position", position(open).as_str())],
+            ),
             "Close position",
         ),
         TradingLineAction::Reverse(open) => (
             "Reverse position",
-            format!("Reverse {} at market?", position(open)),
+            l10n::format_text(
+                ctx,
+                "Reverse {position} at market?",
+                &[("position", position(open).as_str())],
+            ),
             "Reverse position",
         ),
         TradingLineAction::Exit(open, exit) => {
-            let (title, name) = match exit.order_type {
-                OrderType::Limit(_) => ("Place take profit", "take profit"),
-                _ => ("Place stop loss", "stop loss"),
+            let (title, key) = match exit.order_type {
+                OrderType::Limit(_) => (
+                    "Place take profit",
+                    "Protect {position} with a take profit: {order}?",
+                ),
+                _ => (
+                    "Place stop loss",
+                    "Protect {position} with a stop loss: {order}?",
+                ),
             };
             (
                 title,
-                format!("Protect {} with a {name}: {}?", position(open), order(exit)),
+                l10n::format_text(
+                    ctx,
+                    key,
+                    &[
+                        ("position", position(open).as_str()),
+                        ("order", order(exit).as_str()),
+                    ],
+                ),
                 title,
             )
         }
@@ -681,6 +747,57 @@ mod tests {
     use crate::ui_kit::notifications::Toasts;
     use crate::widget::settings::TradingSettings;
     use std::sync::Arc;
+
+    /// Confirmation sentences and their side and order descriptions use template keys.
+    #[test]
+    fn confirmations_reach_the_translator() {
+        let ctx = egui::Context::default();
+        l10n::mark_keys(&ctx);
+        let request = |side, kind| OrderRequest::new("1301", side, 2.0, kind);
+        let mut bracketed = request(OrderSide::Buy, OrderType::Limit(101.0));
+        bracketed.take_profit = Some(110.0);
+        bracketed.stop_loss = Some(95.0);
+        let working = Order::new(OrderId::new("7"), bracketed, OrderStatus::Working);
+        let long = Position::new("1301", 2.0, 100.0);
+        for (action, expected) in [
+            (
+                TradingLineAction::Cancel(working.clone()),
+                "~~2~1301~101.00~~110.00~~95.00~~",
+            ),
+            (
+                TradingLineAction::Modify(
+                    working,
+                    request(
+                        OrderSide::Sell,
+                        OrderType::StopLimit {
+                            stop: 99.0,
+                            limit: 98.0,
+                        },
+                    ),
+                ),
+                "~~2~1301~99.00~98.00~~",
+            ),
+            (TradingLineAction::Close(long.clone()), "~~2~1301~~"),
+            (
+                TradingLineAction::Reverse(Position::new("1301", -3.0, 100.0)),
+                "~~3~1301~~",
+            ),
+            (
+                TradingLineAction::Exit(
+                    long.clone(),
+                    request(OrderSide::Sell, OrderType::Limit(110.0)),
+                ),
+                "~~2~1301~~~2~1301~110.00~~",
+            ),
+            (
+                TradingLineAction::Exit(long, request(OrderSide::Sell, OrderType::Stop(95.0))),
+                "~~2~1301~~~2~1301~95.00~~",
+            ),
+        ] {
+            let (_, message, _) = describe(&ctx, &action, &|v| format!("{v:.2}"));
+            assert_eq!(message, expected, "{action:?}");
+        }
+    }
 
     /// Rows of differently formatted symbols keep their own price decimals, host text and pip
     /// value instead of the chart symbol's decimals or a fixed two. A regression writes every
@@ -1579,6 +1696,7 @@ mod tests {
                 ..Capabilities::default()
             };
             trading.apply(
+                &egui::Context::default(),
                 AccountEvent::Account(Account::new("USD", 0.0, capabilities)),
                 &mut toasts,
             );
@@ -1604,6 +1722,7 @@ mod tests {
         }
         // A refused preview clears the pending one and tells the user.
         trading.apply(
+            &egui::Context::default(),
             AccountEvent::Account(Account::new(
                 "USD",
                 0.0,
@@ -1744,7 +1863,11 @@ mod tests {
         };
 
         let mut toasts = Toasts::new();
-        trading.apply(AccountEvent::Status(FeedStatus::Disconnected), &mut toasts);
+        trading.apply(
+            &egui::Context::default(),
+            AccountEvent::Status(FeedStatus::Disconnected),
+            &mut toasts,
+        );
         assert_eq!(
             shown(&mut trading),
             ["Offline", "Waiting for the broker to connect"]
@@ -1758,7 +1881,11 @@ mod tests {
             .collect();
         assert_eq!(messages, ["Order refused: the broker is not connected"; 4]);
 
-        trading.apply(AccountEvent::Status(FeedStatus::Live), &mut toasts);
+        trading.apply(
+            &egui::Context::default(),
+            AccountEvent::Status(FeedStatus::Live),
+            &mut toasts,
+        );
         other.send(Ok(TradingRules::new("OTHER")));
         trading.poll(&ctx, &mut toasts);
         assert!(shown(&mut trading).is_empty());
@@ -1799,6 +1926,7 @@ mod tests {
         ));
         trading.poll(&ctx, &mut Toasts::new());
         trading.apply(
+            &egui::Context::default(),
             AccountEvent::Status(FeedStatus::Disconnected),
             &mut Toasts::new(),
         );

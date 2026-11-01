@@ -6,12 +6,14 @@
 use crate::chart::series::SeriesId;
 use crate::config::KeyboardAction;
 use crate::icons::icons as embedded_icons;
+use crate::localization as l10n;
 use crate::model::{Alert, AlertCondition, AlertSource, Timeframe};
 use crate::studies::StudyScale;
 use crate::ui::Control;
 use crate::ui::context_menu::{MenuEntry, MenuItem, trim_separators};
 use crate::widget::{Chart, PaneId, VisualOrder};
 
+use egui::Context;
 use std::collections::HashSet;
 
 /// Actions from the study context menu. [`ChartMenus`](crate::ui::context_menu::ChartMenus)
@@ -94,24 +96,46 @@ pub enum PaneTarget {
 
 /// The panes of `chart` other than the price pane and `current`, by their stable ids, with
 /// titles naming their first series or study.
-pub(crate) fn other_panes(chart: &Chart, current: Option<PaneId>) -> Vec<(PaneId, String)> {
+pub(crate) fn other_panes(
+    ctx: Option<&Context>,
+    chart: &Chart,
+    current: Option<PaneId>,
+) -> Vec<(PaneId, String)> {
     chart
         .panes()
         .into_iter()
         .filter(|other| *other != PaneId::MAIN && Some(*other) != current)
         .map(|other| {
-            let title = chart.pane_series(other).first().map_or("empty", |member| {
-                chart.indicators().find(|(id, _)| id == member).map_or_else(
-                    || {
-                        chart
-                            .series()
-                            .find(|(id, _)| id == member)
-                            .map_or("Series", |(_, options)| options.name.as_str())
-                    },
-                    |(_, study)| study.name(),
-                )
-            });
-            (other, format!("{title} pane"))
+            let (title, builtin) =
+                chart
+                    .pane_series(other)
+                    .first()
+                    .map_or(("empty", true), |member| {
+                        chart.indicators().find(|(id, _)| id == member).map_or_else(
+                            || {
+                                chart
+                                    .series()
+                                    .find(|(id, _)| id == member)
+                                    .map_or(("Series", true), |(_, options)| {
+                                        (options.name.as_str(), false)
+                                    })
+                            },
+                            |(_, study)| (study.name(), false),
+                        )
+                    });
+            let translated = if builtin {
+                ctx.and_then(|ctx| l10n::lookup(ctx, title))
+            } else {
+                None
+            };
+            let title = translated.as_deref().unwrap_or(title);
+            (
+                other,
+                match ctx {
+                    Some(ctx) => l10n::format_text(ctx, "{0} pane", &[("0", title)]),
+                    None => l10n::substitute("{0} pane", &[("0", title)]),
+                },
+            )
         })
         .collect()
 }
@@ -142,7 +166,7 @@ pub(crate) struct StudyContextMenu {
 
 impl StudyContextMenu {
     /// Open the menu on study `id` of `chart` at the rendered bar `bar`.
-    pub(crate) fn open(&mut self, chart: &Chart, id: SeriesId, bar: usize) {
+    pub(crate) fn open(&mut self, ctx: &Context, chart: &Chart, id: SeriesId, bar: usize) {
         let Some((_, study)) = chart.indicators().find(|(study, _)| *study == id) else {
             self.is_open = false;
             return;
@@ -199,7 +223,7 @@ impl StudyContextMenu {
         } else {
             "left"
         };
-        self.panes = other_panes(chart, chart.series_pane(id));
+        self.panes = other_panes(Some(ctx), chart, chart.series_pane(id));
         self.has_interval = chart.timeframe().is_some();
     }
 
@@ -213,19 +237,28 @@ impl StudyContextMenu {
 
     pub(crate) fn build_menu_items(
         &self,
+        ctx: &Context,
         shortcuts: &crate::widget::ShortcutMap,
     ) -> Vec<MenuEntry<StudyContextMenuAction>> {
         use StudyContextMenuAction as A;
         if !self.is_open {
             return Vec::new();
         }
-        let name = &self.name;
+        let name = if self.volume {
+            l10n::text(ctx, &self.name)
+        } else {
+            self.name.clone()
+        };
         let item = |label: &str, action| MenuEntry::Item(MenuItem::new(label, action));
         let mut items = Vec::new();
         if let Some((alert, value)) = &self.alert {
             items.push(MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add alert on {name} at {value}…"),
+                    l10n::format_text(
+                        ctx,
+                        "Add alert on {name} at {price}…",
+                        &[("name", name.as_str()), ("price", value.as_str())],
+                    ),
                     A::AddAlert(Box::new(alert.clone())),
                 )
                 .with_icon(&embedded_icons::ALERTS)
@@ -234,8 +267,11 @@ impl StudyContextMenu {
         }
         items.extend([
             MenuEntry::Item(
-                MenuItem::new(format!("Add indicator on {name}…"), A::AddIndicator)
-                    .with_icon(&embedded_icons::INDICATORS),
+                MenuItem::new(
+                    l10n::format_text(ctx, "Add indicator on {name}…", &[("name", name.as_str())]),
+                    A::AddIndicator,
+                )
+                .with_icon(&embedded_icons::INDICATORS),
             ),
             MenuEntry::Item(
                 MenuItem::new(
@@ -290,15 +326,21 @@ impl StudyContextMenu {
         });
         let side = self.axis_side;
         let now = match self.scale.unwrap_or(StudyScale::None) {
-            StudyScale::Main => side.to_owned(),
-            StudyScale::Independent if self.overlay && self.volume => "no scale".into(),
-            StudyScale::Independent if self.overlay && !self.volume => "independent left".into(),
-            StudyScale::Independent => "independent".into(),
-            StudyScale::None => "no scale".into(),
-            StudyScale::Shared(crate::model::SeriesScale::Right) => "right".into(),
-            StudyScale::Shared(crate::model::SeriesScale::Left) => "left".into(),
-            StudyScale::Shared(crate::model::SeriesScale::Separate(key)) => format!("scale {key}"),
-            StudyScale::Shared(crate::model::SeriesScale::Overlay(_)) => "no scale".into(),
+            StudyScale::Main => l10n::text(ctx, side),
+            StudyScale::Independent if self.overlay && self.volume => l10n::text(ctx, "no scale"),
+            StudyScale::Independent if self.overlay && !self.volume => {
+                l10n::text(ctx, "independent left")
+            }
+            StudyScale::Independent => l10n::text(ctx, "independent"),
+            StudyScale::None => l10n::text(ctx, "no scale"),
+            StudyScale::Shared(crate::model::SeriesScale::Right) => l10n::text(ctx, "right"),
+            StudyScale::Shared(crate::model::SeriesScale::Left) => l10n::text(ctx, "left"),
+            StudyScale::Shared(crate::model::SeriesScale::Separate(key)) => {
+                l10n::format_text(ctx, "scale {key}", &[("key", key.to_string().as_str())])
+            }
+            StudyScale::Shared(crate::model::SeriesScale::Overlay(_)) => {
+                l10n::text(ctx, "no scale")
+            }
         };
         let mut entries = vec![
             item(
@@ -318,7 +360,11 @@ impl StudyContextMenu {
         ];
         for key in &self.shared_scales {
             entries.push(item(
-                &format!("Pin to scale {key}"),
+                &l10n::format_text(
+                    ctx,
+                    "Pin to scale {key}",
+                    &[("key", key.to_string().as_str())],
+                ),
                 A::PinTo(StudyScale::Shared(crate::model::SeriesScale::Separate(
                     *key,
                 ))),
@@ -326,7 +372,7 @@ impl StudyContextMenu {
         }
         entries.push(item("No scale", A::PinTo(StudyScale::None)));
         items.push(MenuEntry::Submenu {
-            label: format!("Pin to scale (now {now})"),
+            label: l10n::format_text(ctx, "Pin to scale (now {now})", &[("now", now.as_str())]),
             icon: Some(&embedded_icons::PIN_TO_SCALE),
             entries,
         });

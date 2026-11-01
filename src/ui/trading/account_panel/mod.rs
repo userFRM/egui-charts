@@ -385,12 +385,16 @@ fn kind(order_type: &OrderType) -> &'static str {
     }
 }
 
-fn status(status: &OrderStatus) -> String {
+fn status(ctx: &egui::Context, status: &OrderStatus) -> String {
     match status {
         OrderStatus::Working => "Working".to_owned(),
         OrderStatus::Filled => "Filled".to_owned(),
         OrderStatus::Cancelled => "Cancelled".to_owned(),
-        OrderStatus::Rejected(reason) => format!("Rejected: {reason}"),
+        OrderStatus::Rejected(reason) => crate::localization::format_text(
+            ctx,
+            "Rejected: {reason}",
+            &[("reason", reason.as_str())],
+        ),
     }
 }
 
@@ -541,7 +545,11 @@ mod tests {
                 trading.set_service(Arc::new(Recorder::default()));
                 trading.poll(&egui::Context::default(), &mut Toasts::new());
                 if let Some(status) = status {
-                    trading.apply(AccountEvent::Status(status), &mut Toasts::new());
+                    trading.apply(
+                        &egui::Context::default(),
+                        AccountEvent::Status(status),
+                        &mut Toasts::new(),
+                    );
                 }
                 trading.account_panel.broker = "Paper Trading".into();
                 // The harness keeps an 8 point margin around the panel.

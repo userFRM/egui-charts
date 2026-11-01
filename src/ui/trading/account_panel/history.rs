@@ -341,7 +341,7 @@ mod tests {
             trading.poll(&ctx, &mut Toasts::new());
             let replay = |trading: &mut Trading| {
                 for event in stream.clone() {
-                    trading.apply(event, &mut Toasts::new());
+                    trading.apply(&egui::Context::default(), event, &mut Toasts::new());
                 }
                 trading.take_execution_sound();
             };
@@ -518,7 +518,11 @@ mod tests {
             trading.poll(&ctx, &mut Toasts::new());
             let mut toasts = Toasts::new();
             for seconds in listed {
-                trading.apply(AccountEvent::Journal(line(seconds)), &mut toasts);
+                trading.apply(
+                    &egui::Context::default(),
+                    AccountEvent::Journal(line(seconds)),
+                    &mut toasts,
+                );
             }
             let mut asked = Vec::new();
             for answer in answers {

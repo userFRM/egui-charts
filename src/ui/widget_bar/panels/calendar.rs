@@ -13,7 +13,7 @@ use crate::data::{CalendarEvent, CalendarKind, CalendarQuery, Datafeed, FeedErro
 use crate::icons::icons;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::Button;
-use crate::ui_kit::status_message::{MessageKind, status_message};
+use crate::ui_kit::status_message::{MessageKind, status_message, translated_status_message};
 use crate::ui_kit::{EmptyState, LoadingIndicator, PanelHeader};
 
 /// The days a calendar lists, in UTC.
@@ -239,7 +239,11 @@ impl CalendarPanel {
             let text = if chosen == 0 {
                 "All countries".to_owned()
             } else {
-                format!("{chosen} countries")
+                l10n::format_text(
+                    ui.ctx(),
+                    "{count} countries",
+                    &[("count", chosen.to_string().as_str())],
+                )
             };
             dropdown(ui, "calendar_countries", &text, |ui| {
                 for (code, on) in &mut self.countries {
@@ -262,10 +266,14 @@ impl CalendarPanel {
                 status_message(ui, MessageKind::Info, "This feed supplies no calendar.");
             }
             Some(error) => {
-                status_message(
+                translated_status_message(
                     ui,
                     MessageKind::Error,
-                    &format!("Events unavailable: {error}"),
+                    l10n::format_text(
+                        ui.ctx(),
+                        "Events unavailable: {error}",
+                        &[("error", error.to_string().as_str())],
+                    ),
                 );
             }
             None if self.loading && self.events.is_empty() => {

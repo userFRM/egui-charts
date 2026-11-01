@@ -6,7 +6,7 @@ use egui::{Color32, Pos2, Rect, Vec2};
 fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
     let mut menu = ChartContextMenu::new();
     let submenu = |menu: &ChartContextMenu| {
-        menu.build_menu_items(&crate::widget::ShortcutMap::default())
+        menu.build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default())
             .into_iter()
             .find_map(|entry| match entry {
                 MenuEntry::Submenu { label, entries, .. } => Some((
@@ -127,7 +127,7 @@ fn hidden_menu_controls_remove_rows_and_empty_sections() {
                     assert!(
                         matches!(
                             menus
-                                .build_menu_items(chart.shortcuts(), menus.context.unwrap())
+                                .build_menu_items(&ctx, chart.shortcuts(), menus.context.unwrap())
                                 .first(),
                             Some(MenuEntry::Item(_))
                         ),
