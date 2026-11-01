@@ -49,7 +49,6 @@ use crate::scales::{PriceMap, PriceScale};
 use crate::studies::IndicatorRegistry;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
-mod indicator_pane;
 pub use crate::chart::renderers::{
     Legend, LegendStatus, QuoteSide, StudyAction, StudyValue, ValueFormatters, Watermark,
     WatermarkLine,
@@ -58,7 +57,7 @@ pub use crate::chart::selection::{ChartElementId, SeriesId};
 pub use builder::ChartBuilder;
 use egui::{Pos2, Rect, Vec2};
 pub use export::{ChartImage, DataTable, ImageExportOptions};
-pub use indicator_pane::{
+pub use pane::{
     IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction,
 };
 

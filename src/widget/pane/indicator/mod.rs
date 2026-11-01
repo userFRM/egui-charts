@@ -7,7 +7,7 @@
 //!
 //! # Usage
 //!
-//! Indicator panes are typically drawn by [`super::Chart::show`], but
+//! Indicator panes are typically drawn by [`crate::widget::Chart::show`], but
 //! they can also be used standalone:
 //!
 //! ```rust
@@ -215,7 +215,7 @@ impl IndicatorCoordParams {
     /// Creates coordinate parameters from the main chart's time-scale state.
     ///
     /// These values are typically obtained from the chart after rendering via
-    /// [`super::Chart::get_chart_mapping`].
+    /// [`crate::widget::Chart::get_chart_mapping`].
     pub fn new(
         bar_spacing: f32,
         right_offset: impl Into<f64>,
@@ -559,7 +559,7 @@ impl IndicatorPane {
         collapsed: bool,
         axis: Option<crate::scales::PriceScaleId>,
         hover: Option<(Pos2, crate::config::CrosshairOptions)>,
-        primitives: &[&super::primitives::Attached],
+        primitives: &[&crate::widget::primitives::Attached],
         bar_series: bool,
     ) -> Option<PaneInteraction> {
         if !indicator.is_visible() {
@@ -861,7 +861,7 @@ impl IndicatorPane {
         if indicator.is_volume()
             && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
         {
-            return super::volume::range(indicator, visible_range, None);
+            return crate::widget::volume::range(indicator, visible_range, None);
         }
         if let Some((min, max)) = self.config.y_range {
             return (min, max);
@@ -1190,7 +1190,7 @@ impl IndicatorPane {
                 visible_range.end.saturating_sub(1),
                 visible_range.start,
             );
-            super::volume::paint(
+            crate::widget::volume::paint(
                 painter,
                 rect,
                 indicator,
@@ -1300,7 +1300,7 @@ impl IndicatorPane {
             if indicator.is_volume()
                 && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
             {
-                super::volume::tags(
+                crate::widget::volume::tags(
                     painter,
                     chart_rect,
                     &map,

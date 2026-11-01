@@ -1,6 +1,8 @@
 //! Pane placement, layout state and interaction controls.
 
+mod indicator;
 mod render;
+pub use indicator::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
 
 use super::{Chart, SeriesId};
 use crate::config::NavigationButtons;
