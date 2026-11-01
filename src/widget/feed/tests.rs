@@ -1064,6 +1064,73 @@ fn executions_link_existing_tape_fills_without_counting_twice() {
     }
 }
 
+/// Appearance reaches the painter, survives visibility changes and image copies, and
+/// repeated enable or configuration calls keep the uploaded texels.
+#[test]
+fn heatmap_appearance_survives_visibility_and_frozen_images() {
+    use crate::chart::overlays::LiquidityHeatmapConfig;
+    use crate::data::DepthColumn;
+
+    let mut chart = fed(&Arc::new(Script::default()), None);
+    chart.set_instrument(Some(Instrument::new("TEST").with_tick_size(1.0)));
+    let config = LiquidityHeatmapConfig {
+        brightness: 0.5,
+        lower_cutoff: 10.0,
+        full_intensity_size: Some(999.0),
+    };
+    chart.set_liquidity_heatmap_config(config);
+    chart.set_liquidity_heatmap(true);
+    let mut history = DepthHistory::new(Default::default()).unwrap();
+    history.push(DepthColumn {
+        time: "2026-01-05T10:00:00Z".parse().unwrap(),
+        span: chrono::TimeDelta::seconds(1),
+        bids: vec![(100, 99.0)],
+        asks: vec![(101, 9.0)],
+        ..Default::default()
+    });
+    chart.set_depth_history(Some(history));
+    let ctx = egui::Context::default();
+    for frame in 0..5 {
+        match frame {
+            1 | 4 => {
+                chart.set_liquidity_heatmap(true);
+                chart.set_liquidity_heatmap_config(config);
+            }
+            2 => {
+                chart.set_liquidity_heatmap(false);
+                chart.set_liquidity_heatmap(true);
+            }
+            3 => chart.feed_link = Some(chart.feed_link.as_ref().unwrap().frozen()),
+            _ => {}
+        }
+        assert_eq!(chart.liquidity_heatmap_config(), config);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            chart.paint_liquidity(ui.painter(), &chart.get_chart_mapping());
+        });
+        let alphas: Vec<_> = output
+            .textures_delta
+            .set
+            .values()
+            .flatten()
+            .filter(|delta| delta.pos.is_some() && delta.image.size() == [1, 256])
+            .map(|delta| {
+                let egui::ImageData::Color(image) = &delta.image;
+                [image.pixels[100].a(), image.pixels[101].a()]
+            })
+            .collect();
+        output.textures_delta.clear();
+        // 99 reaches 2/3 intensity: round(255 * 0.75 * 2/3) * 0.5 = 64.
+        assert_eq!(
+            alphas,
+            if frame == 1 || frame == 4 {
+                vec![]
+            } else {
+                vec![[64, 0]]
+            }
+        );
+    }
+}
+
 #[test]
 fn depth_paging_ends_independently_and_drops_old_settings_replies() {
     let feed = Arc::new(Script::default());

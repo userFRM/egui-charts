@@ -17,6 +17,7 @@ mod indicator;
 mod study_scale;
 pub(crate) use study_scale::{render_study_axis, study_mapping};
 mod labels;
+mod legend;
 mod markers;
 mod session_breaks;
 mod tooltip;
@@ -35,13 +36,10 @@ pub use crosshair::{render_crosshair_full, render_crosshair_with_options};
 pub(crate) use crosshair::{render_crosshair_lines, render_crosshair_price_tag, snap_to_values};
 pub use indicator::IndicatorRenderer;
 pub(crate) use indicator::paint_study_plot;
-pub use labels::{
-    Legend, LegendStatus, QuoteSide, StudyAction, render_price_labels, render_price_labels_at_pos,
-    render_time_labels,
-};
-pub(crate) use labels::{
-    SeriesAction, price_marks, render_time_grid, study_controls, tick_decimals, time_axis_marks,
-};
+pub(crate) use labels::{price_marks, render_time_grid, tick_decimals, time_axis_marks};
+pub use labels::{render_price_labels, render_price_labels_at_pos, render_time_labels};
+pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
+pub(crate) use legend::{SeriesAction, study_controls};
 pub(crate) use markers::{render_change_mark, render_event_badges, render_event_breaks};
 pub use markers::{render_event_band, render_markers};
 pub use session_breaks::{
@@ -49,12 +47,12 @@ pub use session_breaks::{
 };
 pub(crate) use session_breaks::{exchange_session, render_extended_hours};
 pub use tooltip::{StudyValue, ValueFormatters, render_tooltip_with_options};
+#[cfg(feature = "ui")]
+pub(crate) use trading_lines::entry_price;
 pub use trading_lines::{
     PnlUnit, TradingLabelAlignment, TradingLineAction, TradingLineOptions, TradingLines,
     render_trading_lines,
 };
-#[cfg(feature = "ui")]
-pub(crate) use trading_lines::{decimals, to_step};
 pub use volume::render_volume_bar;
 pub(crate) use watermark::render_watermark;
 pub use watermark::{Watermark, WatermarkLine};

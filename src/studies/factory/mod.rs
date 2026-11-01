@@ -366,6 +366,18 @@ impl IndicatorFactory {
                 ),
             );
         }
+        for cumulative in [false, true] {
+            let name = OrderFlowStudy::execution_delta(cumulative)
+                .name()
+                .to_owned();
+            self.constructors.insert(
+                name,
+                (
+                    Some("Order flow"),
+                    Box::new(move || Box::new(OrderFlowStudy::execution_delta(cumulative))),
+                ),
+            );
+        }
         for family in PatternFamily::ALL {
             let name = ChartPatterns::new(family).name().to_owned();
             self.constructors.insert(

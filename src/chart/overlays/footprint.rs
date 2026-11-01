@@ -97,6 +97,13 @@ pub struct FootprintConfig {
     pub extreme_ratio: bool,
     /// Outline the rows of the bar's pullback range, see [`pullback_range`].
     pub pullback: bool,
+    /// Reserve a per-bar statistics table below the chart's price pane.
+    /// Used by [`crate::widget::Chart::show_footprint`].
+    pub statistics: bool,
+    /// Annotations calculated from the displayed rows after executions or grouping change.
+    /// `None` hides them. Used by [`crate::widget::Chart::show_footprint`].
+    #[cfg(feature = "studies")]
+    pub studies: Option<crate::studies::FootprintStudyConfig>,
 }
 
 impl Default for FootprintConfig {
@@ -123,6 +130,9 @@ impl Default for FootprintConfig {
             font_size: [10.0, 10.0],
             extreme_ratio: false,
             pullback: false,
+            statistics: false,
+            #[cfg(feature = "studies")]
+            studies: None,
         }
     }
 }
@@ -203,17 +213,7 @@ pub fn render_footprint(
         };
         let x = mapping.idx_to_x(index);
         // Automatic grouping uses the local price mapping, including log and inverted scales.
-        let raw_height = (mapping.price_to_y(bar.close + flow.price_step())
-            - mapping.price_to_y(bar.close))
-        .abs();
-        let group = config
-            .auto_row_height
-            .filter(|h| h.is_finite() && *h > 0.0)
-            .map_or(1, |height| {
-                (height / raw_height.max(0.01))
-                    .ceil()
-                    .clamp(1.0, 1_000_000.0) as i64
-            });
+        let group = row_group(mapping, bar, flow, config);
         let grouped;
         let shown = if group > 1 {
             grouped = group_bar(source, group);
@@ -442,6 +442,19 @@ fn volume_text(value: f64, abbreviate: bool) -> String {
     }
 }
 
+fn row_group(mapping: &ChartMapping, bar: &Bar, flow: &Footprint, config: &FootprintConfig) -> i64 {
+    let raw_height =
+        (mapping.price_to_y(bar.close + flow.price_step()) - mapping.price_to_y(bar.close)).abs();
+    config
+        .auto_row_height
+        .filter(|h| h.is_finite() && *h > 0.0)
+        .map_or(1, |height| {
+            (height / raw_height.max(0.01))
+                .ceil()
+                .clamp(1.0, 1_000_000.0) as i64
+        })
+}
+
 fn group_bar(source: &FootprintBar, group: i64) -> FootprintBar {
     let mut shown = FootprintBar {
         time: source.time,
@@ -511,7 +524,8 @@ fn cell_color(
 
 /// Draws a compact per-bar statistics table under the footprint at the same x coordinates.
 /// Rows show total, bid, ask, delta, minimum and maximum intrabar delta, cumulative delta,
-/// delta percentage, and ask/bid ratio (undefined for zero volume or bid).
+/// delta percentage, and ask/bid ratio (undefined for zero volume or bid). Bars before
+/// [`Footprint::complete_from`] get no column and no share of the cumulative delta.
 /// A column too narrow for text, or cut by the plot edge, is left empty; values are still
 /// available in [`FootprintBar`].
 pub fn render_footprint_statistics(
@@ -523,8 +537,12 @@ pub fn render_footprint_statistics(
 ) {
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
     let mut cumulative = 0.0;
+    let complete = flow.complete_from();
     for (i, bar) in bars.iter().enumerate() {
-        let Some(row) = flow.bar_at(bar.time) else {
+        let Some(row) = flow
+            .bar_at(bar.time)
+            .filter(|_| complete.is_some_and(|from| bar.time >= from))
+        else {
             continue;
         };
         cumulative += row.delta();
@@ -565,6 +583,64 @@ pub fn render_footprint_statistics(
             }
         }
     }
+}
+
+#[cfg(feature = "studies")]
+#[derive(Clone, Default)]
+struct FootprintStudyCache {
+    source: Vec<(FootprintBar, i64)>,
+    config: Option<crate::studies::FootprintStudyConfig>,
+    studies: std::sync::Arc<[crate::studies::FootprintStudy]>,
+}
+
+/// Cache calculations per chart, including display grouping and execution corrections.
+#[cfg(feature = "studies")]
+pub(crate) fn render_footprint_annotations(
+    painter: &Painter,
+    mapping: &ChartMapping,
+    bars: &[Bar],
+    flow: &Footprint,
+    config: &FootprintConfig,
+    chart_id: egui::Id,
+) {
+    let Some(settings) = &config.studies else {
+        return;
+    };
+    let complete = flow.complete_from();
+    let source: Vec<_> = bars
+        .iter()
+        .filter(|bar| complete.is_some_and(|from| bar.time >= from))
+        .filter_map(|bar| {
+            flow.bar_at(bar.time)
+                .map(|row| (row, row_group(mapping, bar, flow, config)))
+        })
+        .collect();
+    let studies = painter.ctx().data_mut(|data| {
+        let cache = data
+            .get_temp_mut_or_default::<FootprintStudyCache>(chart_id.with("footprint_annotations"));
+        if cache.config.as_ref() != Some(settings)
+            || cache.source.len() != source.len()
+            || !cache
+                .source
+                .iter()
+                .zip(&source)
+                .all(|((old, group), (new, next_group))| old == *new && group == next_group)
+        {
+            cache.source = source
+                .iter()
+                .map(|(bar, group)| ((*bar).clone(), *group))
+                .collect();
+            let grouped: Vec<_> = source
+                .iter()
+                .map(|(bar, group)| (group_bar(bar, *group), *group))
+                .collect();
+            let rows: Vec<_> = grouped.iter().map(|(bar, group)| (bar, *group)).collect();
+            cache.studies = crate::studies::footprint_studies_on_rows(&rows, settings).into();
+            cache.config = Some(settings.clone());
+        }
+        cache.studies.clone()
+    });
+    render_footprint_studies(painter, mapping, bars, flow, &studies, config);
 }
 
 /// Paints footprint study levels and zones. Compute `studies` only after executions change.

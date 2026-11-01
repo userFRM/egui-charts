@@ -133,6 +133,8 @@ pub(crate) struct Trades {
     ids: HashMap<u64, usize>,
     /// Position stamp of the deque's front, moving with pushes and evictions at either end.
     front: usize,
+    /// Held trades prepended by history pages, before the live suffix.
+    paged: usize,
     /// Time of the newest trade a page added: live trades without an id at or before it repeat it.
     paged_until: Option<DateTime<Utc>>,
     /// Time of the newest trade without an id a page added: any live trade at or before it may
@@ -151,6 +153,7 @@ impl Trades {
             capacity,
             ids: HashMap::new(),
             front: 0,
+            paged: 0,
             paged_until: None,
             paged_without_id_until: None,
             lost_until: None,
@@ -176,13 +179,13 @@ impl Trades {
         self.lost_until
     }
 
-    /// Time of the newest trade a page added: newer held trades arrived live.
+    /// Held executions that arrived live, including those sharing a page's boundary time.
     #[cfg_attr(
-        not(feature = "widget"),
+        not(any(feature = "widget", test)),
         expect(dead_code, reason = "only the chart widget consumes a feed")
     )]
-    pub(crate) fn paged_until(&self) -> Option<DateTime<Utc>> {
-        self.paged_until
+    pub(crate) fn live(&self) -> impl Iterator<Item = &Tick> {
+        self.trades.iter().skip(self.paged)
     }
 
     /// An empty store of the same capacity, for the next drain.
@@ -236,6 +239,7 @@ impl Trades {
             && let Some(evicted) = self.trades.pop_front()
         {
             self.front = self.front.wrapping_add(1);
+            self.paged = self.paged.saturating_sub(1);
             if let Some(id) = evicted.id {
                 self.ids.remove(&id);
             }
@@ -322,6 +326,7 @@ impl Trades {
             self.revision = next_revision();
             changed(&trade, true);
             self.front = self.front.wrapping_sub(1);
+            self.paged += 1;
             self.trades.push_front(trade);
         }
         rejected
@@ -502,66 +507,70 @@ mod tests {
         let cases = [
             ("zero capacity holds no ids", 0,
                 vec![Live(vec![id(trade(1, 1.0), 1)]), Page(vec![id(trade(0, 0.0), 0)]),
-                    Live(vec![id(trade(2, 2.0), 1)])], vec![], 0),
+                    Live(vec![id(trade(2, 2.0), 1)])], vec![], 0, vec![]),
             ("the oldest trades make room", 3,
                 vec![Live(vec![id(trade(10, 10.0), 10), trade(11, 11.0), trade(12, 12.0)]),
                     Live(vec![trade(13, 13.0)])],
-                vec![11.0, 12.0, 13.0], 0),
+                vec![11.0, 12.0, 13.0], 0, vec![11.0, 12.0, 13.0]),
             ("a page fills free room in front, without invalid or repeated trades", 4,
                 vec![Live(vec![trade(10, 10.0), trade(11, 11.0), trade(12, 12.0)]),
                     Page(vec![trade(9, 9.0), trade(8, f64::NAN), trade(11, 99.0), trade(7, 7.0)])],
-                vec![9.0, 10.0, 11.0, 12.0], 1),
+                vec![9.0, 10.0, 11.0, 12.0], 1, vec![10.0, 11.0, 12.0]),
             ("a full store takes nothing from a page", 2,
                 vec![Live(vec![trade(10, 10.0), trade(11, 11.0)]), Page(vec![trade(1, 1.0)])],
-                vec![10.0, 11.0], 0),
+                vec![10.0, 11.0], 0, vec![10.0, 11.0]),
             ("with ids, a page keeps a trade at the instant of the oldest live trade", 10,
                 vec![Live(vec![id(trade(5, 3.0), 3), id(trade(5, 4.0), 4)]),
                     Page(vec![id(trade(4, 1.0), 1), id(trade(5, 2.0), 2), id(trade(5, 3.0), 3),
                         id(trade(5, 4.0), 4)])],
-                vec![1.0, 2.0, 3.0, 4.0], 0),
+                vec![1.0, 2.0, 3.0, 4.0], 0, vec![3.0, 4.0]),
             ("without ids, a page drops trades at the instant of the oldest live trade", 10,
                 vec![Live(vec![trade(5, 3.0), trade(5, 4.0)]),
                     Page(vec![trade(4, 1.0), trade(5, 2.0), trade(5, 3.0), trade(5, 4.0)])],
-                vec![1.0, 3.0, 4.0], 0),
+                vec![1.0, 3.0, 4.0], 0, vec![3.0, 4.0]),
             ("with ids, live trades a page already added are dropped", 10,
                 vec![Page(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2)]),
                     Live(vec![id(trade(2, 2.0), 2), id(trade(2, 2.5), 5), id(trade(3, 3.0), 3)])],
-                vec![1.0, 2.0, 2.5, 3.0], 0),
+                vec![1.0, 2.0, 2.5, 3.0], 0, vec![2.5, 3.0]),
             ("without ids, live trades at or before the newest page trade are dropped", 10,
                 vec![Page(vec![trade(1, 1.0), trade(2, 2.0)]),
                     Live(vec![trade(2, 2.0), trade(3, 3.0)])],
-                vec![1.0, 2.0, 3.0], 0),
+                vec![1.0, 2.0, 3.0], 0, vec![3.0]),
             ("with ids, page trades after the oldest live trade are left to live", 10,
                 vec![Live(vec![id(trade(5, 3.0), 3)]),
                     Page(vec![id(trade(4, 1.0), 1), id(trade(5, 3.0), 3), id(trade(6, 4.0), 4),
                         id(trade(7, 5.0), 5)]),
                     Live(vec![id(trade(6, 4.0), 4), id(trade(7, 5.0), 5)])],
-                vec![1.0, 3.0, 4.0, 5.0], 0),
+                vec![1.0, 3.0, 4.0, 5.0], 0, vec![3.0, 4.0, 5.0]),
             ("with ids, a replayed live trade is dropped wherever the held one sits", 10,
                 vec![Page(vec![id(trade(8, 8.0), 8), id(trade(9, 9.0), 9)]),
                     Live(vec![id(trade(7, 7.0), 7), id(trade(8, 8.0), 8), id(trade(9, 9.0), 9)])],
-                vec![8.0, 9.0, 7.0], 0),
+                vec![8.0, 9.0, 7.0], 0, vec![7.0]),
             ("with ids, a live trade stamped later than the page's copy is dropped", 10,
                 vec![Page(vec![id(trade(5, 5.0), 5)]),
                     Live(vec![id(later(trade(5, 5.0), 400), 5)])],
-                vec![5.0], 0),
+                vec![5.0], 0, vec![]),
             ("with ids, a page trade stamped earlier than the live copy is dropped", 10,
                 vec![Live(vec![id(later(trade(5, 5.0), 400), 5)]),
                     Page(vec![id(trade(4, 4.0), 4), id(trade(5, 5.0), 5)])],
-                vec![4.0, 5.0], 0),
+                vec![4.0, 5.0], 0, vec![5.0]),
             ("a page without ids drops live trades with ids at or before its newest trade", 10,
                 vec![Page(vec![trade(1, 1.0), trade(2, 2.0)]),
                     Live(vec![id(trade(2, 2.0), 2), id(trade(3, 3.0), 3)])],
-                vec![1.0, 2.0, 3.0], 0),
+                vec![1.0, 2.0, 3.0], 0, vec![3.0]),
             ("a page with ids drops trades at the instant of a held trade without one", 10,
                 vec![Live(vec![trade(5, 5.0)]),
                     Page(vec![id(trade(4, 4.0), 4), id(trade(5, 5.0), 5)])],
-                vec![4.0, 5.0], 0),
+                vec![4.0, 5.0], 0, vec![5.0]),
             ("a page is sorted by time, keeping the order of trades sharing a time", 10,
                 vec![Page(vec![trade(5, 4.0), trade(5, 3.0), trade(4, 2.0)])],
-                vec![2.0, 4.0, 3.0], 0),
+                vec![2.0, 4.0, 3.0], 0, vec![]),
+            ("eviction removes history before the live suffix", 4,
+                vec![Live(vec![trade(10, 10.0), trade(11, 11.0)]),
+                    Page(vec![trade(8, 8.0), trade(9, 9.0)]), Live(vec![trade(12, 12.0)])],
+                vec![9.0, 10.0, 11.0, 12.0], 0, vec![10.0, 11.0, 12.0]),
         ];
-        for (name, capacity, steps, prices, rejected) in cases {
+        for (name, capacity, steps, prices, rejected, live_prices) in cases {
             let mut store = Trades::new(capacity);
             let mut dropped = 0;
             for step in steps {
@@ -575,7 +584,12 @@ mod tests {
                 }
             }
             let held = Vec::from_iter(store.iter().map(|trade| trade.price));
-            assert_eq!((held, dropped), (prices, rejected), "{name}");
+            let live = Vec::from_iter(store.live().map(|trade| trade.price));
+            assert_eq!(
+                (held, dropped, live),
+                (prices, rejected, live_prices),
+                "{name}"
+            );
             let ids = store.iter().filter(|trade| trade.id.is_some()).count();
             assert_eq!(store.ids.len(), ids, "{name}: held ids");
             let repeats: Vec<_> = store.iter().filter(|t| t.id.is_some()).cloned().collect();

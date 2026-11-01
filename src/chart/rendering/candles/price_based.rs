@@ -25,8 +25,9 @@ use crate::model::range_bar::{self, RangeBarBuilder};
 use crate::model::renko::{self, RenkoBuilder};
 use crate::model::{
     Bar, ChartType, ChartTypeParams, LineBreakConfig, PointFigureConfig, PriceBasedSource,
-    PriceBuilder, SpanCache,
+    PriceBuilder,
 };
+use crate::painting::span_cache::SpanCache;
 
 /// A builder and the elements it has built, newest limit included.
 pub(super) struct Built<B: PriceBuilder> {

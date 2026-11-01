@@ -461,6 +461,8 @@ pub struct DemoApp {
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
+    replay_updated: Option<chrono::DateTime<chrono::Utc>>,
+    replay_applied: Option<chrono::DateTime<chrono::Utc>>,
     replay_start: ReplayStartPicker,
     replay_selecting: bool,
     replay_interval: Timeframe,
@@ -760,6 +762,8 @@ impl DemoApp {
                 ),
             ]),
             replay: None,
+            replay_updated: None,
+            replay_applied: None,
             replay_start: ReplayStartPicker::default(),
             replay_selecting: false,
             replay_interval: Timeframe::Hour1,
@@ -2312,7 +2316,7 @@ impl DemoApp {
         if let Some(trade) = alert {
             let decimals = instrument.and_then(|i| i.price_decimals).unwrap_or(2);
             self.toasts.info(format!(
-                "Large trade: {} at {:.*}",
+                "Size filter matched on fill: {} at {:.*}",
                 trade.size,
                 usize::from(decimals),
                 trade.price
@@ -3112,6 +3116,18 @@ impl DemoApp {
     }
 
     fn handle_replay_control(&mut self, action: ReplayControlAction) {
+        let play = matches!(action, ReplayControlAction::Play);
+        let endpoint = match action {
+            ReplayControlAction::GoToStart => Some(false),
+            ReplayControlAction::GoToEnd => Some(true),
+            _ => None,
+        };
+        let transport = matches!(
+            action,
+            ReplayControlAction::Play
+                | ReplayControlAction::Pause
+                | ReplayControlAction::SetSpeed(_)
+        );
         let Some(replay) = self.replay.as_mut() else {
             return;
         };
@@ -3135,19 +3151,35 @@ impl DemoApp {
             ReplayControlAction::Stop => self.stop_replay(),
             ReplayControlAction::Close => {
                 self.replay_control.dismiss();
+                return;
             }
             ReplayControlAction::None => return,
             _ => {}
         }
-        self.push_replay_window_to_chart();
-    }
-
-    fn advance_replay(&mut self) {
-        let Some(replay) = self.replay.as_mut() else {
-            return;
-        };
-        replay.update();
-        self.push_replay_window_to_chart();
+        if let Some(end) = endpoint
+            && let Some(driver) = self.chart.replay_driver().cloned()
+            && let Some((first, last)) = driver.time_range()
+        {
+            driver.seek(if end { last } else { first });
+            self.push_market_replay_window();
+        } else if !transport {
+            self.push_replay_window_to_chart();
+        }
+        if let Some(driver) = self.chart.replay_driver() {
+            let replay = self.replay.as_mut().expect("active replay");
+            if play && !driver.is_finished() {
+                replay.state.playback_state = egui_charts::ui::replay::PlaybackState::Playing;
+            }
+            let speed = if replay.state.is_playing() {
+                replay.state.speed.multiplier()
+            } else {
+                0.0
+            };
+            driver
+                .set_speed(f64::from(speed))
+                .expect("playback control speed");
+            self.replay_updated = Some(chrono::Utc::now());
+        }
     }
 
     fn keyboard_dialog_open(&self) -> bool {

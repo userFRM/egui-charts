@@ -61,6 +61,12 @@ impl Book {
         }
     }
 
+    /// Last applied sequence, including deltas recovered by a snapshot.
+    #[cfg(feature = "detectors")]
+    pub(crate) fn sequence(&self) -> Option<u64> {
+        self.sequence
+    }
+
     /// Replaces the book with `book`, numbered `sequence`, and applies the held deltas numbered
     /// above it, so a snapshot fetched while deltas kept arriving heals the book.
     pub(crate) fn snapshot(&mut self, sequence: u64, book: OrderBook) -> Result<(), Lost> {
