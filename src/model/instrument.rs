@@ -118,10 +118,11 @@ pub struct Instrument {
     pub supported_timeframes: Option<Vec<Timeframe>>,
     /// How current the feed's data is. The legend marks delayed and end-of-day data.
     pub data_status: Option<DataStatus>,
-    /// Bar intervals the feed suggests for volume profile studies, by profile length. A profile
-    /// study whose source interval follows the chart reads the shortest suggested interval that
-    /// is shorter than the chart's and serves its length. Empty, the default, suggests none, and
-    /// the studies spread each chart bar's volume over its range.
+    /// Bar intervals the feed suggests for volume profile studies and drawings, by profile
+    /// length. A study whose source follows the chart, or a fixed range or anchored drawing
+    /// without executions, reads the shortest suggested interval shorter than the chart's that
+    /// serves its length. Empty, the default, suggests none; profiles then spread each chart
+    /// bar's volume over its range.
     pub profile_resolutions: Vec<ProfileResolution>,
 }
 
@@ -276,7 +277,7 @@ impl Instrument {
     }
 }
 
-/// A bar interval a feed suggests for volume profile studies, for profiles up to a length.
+/// A bar interval a feed suggests for volume profile studies and drawings, for profiles up to a length.
 /// Report them in [`Instrument::profile_resolutions`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -295,6 +296,25 @@ impl ProfileResolution {
             timeframe,
             max_span,
         }
+    }
+
+    /// The shortest time interval shorter than `interval` that serves `span`, from the open of
+    /// the profile's first bar to the close of its last.
+    #[cfg(any(feature = "studies", feature = "drawings"))]
+    pub(crate) fn suggested(
+        resolutions: &[Self],
+        interval: Timeframe,
+        span: TimeDelta,
+    ) -> Option<Timeframe> {
+        resolutions
+            .iter()
+            .filter(|hint| {
+                !hint.timeframe.is_trade_based()
+                    && hint.timeframe.duration_ms() < interval.duration_ms()
+                    && hint.max_span.is_none_or(|max| span <= max)
+            })
+            .min_by_key(|hint| hint.timeframe.duration_ms())
+            .map(|hint| hint.timeframe)
     }
 }
 

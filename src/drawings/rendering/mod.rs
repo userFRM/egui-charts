@@ -60,6 +60,15 @@ pub struct ChartView<'a> {
     /// then show the executed volume at each price, split by aggressor side, instead of
     /// spreading bar volume over bar ranges; `None` estimates from the bars.
     pub executions: Option<&'a crate::data::Footprint>,
+    /// Interval of `bars`, or `None` for price-based chart types, trade-based intervals and
+    /// horizontal scales other than time. Volume profiles read finer bars only with an interval.
+    pub timeframe: Option<crate::model::Timeframe>,
+    /// Histories of this symbol at the intervals that
+    /// [`Chart::study_data_requests`](crate::Chart::study_data_requests) lists for its drawings.
+    /// Without executions in their span, profile drawings use the interval
+    /// [`Instrument::profile_resolutions`](crate::model::Instrument::profile_resolutions)
+    /// suggests, replacing covered chart bars with finer bars; `&[]` estimates from `bars`.
+    pub finer: &'a [crate::data::StudyData<'a>],
 }
 
 /// Index of the first bar and the bars from anchor `a` to anchor `b`
@@ -1026,6 +1035,8 @@ mod tests {
                         y_to_price: &|y| 500.0 - f64::from(y),
                         time_axis: true,
                         executions: None,
+                        timeframe: None,
+                        finer: &[],
                     };
                     drawing.render(ui.painter(), pane, &view);
                 });
@@ -1678,6 +1689,8 @@ mod tests {
                 y_to_price: &|y| 500.0 - f64::from(y),
                 time_axis: true,
                 executions: None,
+                timeframe: None,
+                finer: &[],
             };
             drawing.render_with_selection(
                 ui.painter(),
@@ -1945,6 +1958,8 @@ mod tests {
                 y_to_price: &f64::from,
                 time_axis: true,
                 executions: None,
+                timeframe: None,
+                finer: &[],
             };
             manager.render_all(&ui.painter().with_clip_rect(parent), pane, &view);
         });
