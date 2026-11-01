@@ -196,6 +196,11 @@ fn min_time_label_spacing(options: &TimeScaleOptions) -> f32 {
     }
 }
 
+/// At most four keys per point on either side keep a host's tiny bar spacing bounded.
+fn max_whitespace_keys(width: f32) -> usize {
+    (4.0 * f64::from(width).ceil()) as usize
+}
+
 type TimeAxisPoints = Vec<(chrono::DateTime<chrono::Utc>, usize)>;
 
 /// The tick marks of the time axis from `scale`, the keys they are placed by and the mapping
@@ -203,7 +208,8 @@ type TimeAxisPoints = Vec<(chrono::DateTime<chrono::Utc>, usize)>;
 /// from the full chart history: up to ten bars to the left, and into the whitespace two slots
 /// past either edge of the view. With no bar in view the keys start at the left edge of the
 /// view. Next to the bars the keys skip the weekdays on which the series has no bars
-/// (`closed_weekdays`), so a series of weekday bars labels no weekend there.
+/// (`closed_weekdays`), so a series of weekday bars labels no weekend there. Whitespace on
+/// either side gets at most four keys per point of plot width.
 ///
 /// Keys carry unsigned indices, so when they reach before the first bar every index, and the
 /// bar indices of the returned mapping, are shifted by the same number of slots.
@@ -232,8 +238,11 @@ pub(crate) fn time_axis_marks(
     // before the first bar in view, the keys reach two slots past the left edge instead, at
     // most four slots per point of plot width before the first bar so that a host's tiny bar
     // spacing cannot build millions of keys.
+    let whitespace_limit = max_whitespace_keys(context.rect.width());
+    let mut remaining = whitespace_limit;
+    let last = coords.base_idx;
     let lead = if left < 0.0 {
-        (left - 2.0).max(-4.0 * f64::from(context.rect.width()).ceil()) as i64
+        (left - 2.0).max(-(whitespace_limit as f64)) as i64
     } else {
         first.saturating_sub(10) as i64
     };
@@ -242,7 +251,13 @@ pub(crate) fn time_axis_marks(
     // Extrapolation stops where chrono's range ends, so a bar near it cannot panic.
     let mut bars: Vec<_> = (lead..first as i64)
         .rev()
-        .map_while(|index| Some((time_at(index as f64)?, (index + shift as i64) as usize)))
+        .map_while(|index| {
+            // A view wholly after the bars can prefetch right whitespace here too.
+            if index > last as i64 {
+                remaining = remaining.checked_sub(1)?;
+            }
+            Some((time_at(index as f64)?, (index + shift as i64) as usize))
+        })
         .collect();
     bars.reverse();
     bars.extend(
@@ -251,9 +266,17 @@ pub(crate) fn time_axis_marks(
             .enumerate()
             .map(|(i, bar)| (bar.time, first + shift + i)),
     );
-    bars.extend((next..=end).map_while(|index| Some((time_at(index as f64)?, index + shift))));
+    // History keys do not use the budget; prefetched keys after the last bar already have.
+    let trailing = last
+        .saturating_add(1)
+        .saturating_sub(next)
+        .saturating_add(remaining);
+    bars.extend(
+        (next..=end)
+            .take(trailing)
+            .map_while(|index| Some((time_at(index as f64)?, index + shift))),
+    );
     // Next to the bars, a daily series gets no keys on the weekdays it has no bars.
-    let last = coords.base_idx;
     let after = closed_weekdays(last.saturating_sub(15)..=last, last as f64 + 1.0, &time_at);
     let before = if shift > 0 {
         closed_weekdays(0..=last.min(15), -1.0, &time_at)
@@ -1551,10 +1574,10 @@ mod tests {
         }
     }
 
-    /// One frame renders without panicking for bars stamped at or near the end of chrono's date
-    /// range, where the time axis extrapolates times past the range.
+    /// Whitespace keys stop at chrono's date limits and stay bounded at a host's tiny minimum
+    /// bar spacing, so the chart renders a frame at either limit.
     #[test]
-    fn time_axis_survives_timestamps_at_the_end_of_the_date_range() {
+    fn time_axis_bounds_whitespace_at_date_and_spacing_limits() {
         let start = Utc.with_ymd_and_hms(2024, 3, 15, 10, 0, 0).unwrap();
         let minutes = |extra: [DateTime<Utc>; 1]| {
             vec![start, start + chrono::Duration::minutes(1)]
@@ -1565,21 +1588,68 @@ mod tests {
         let far = Utc.with_ymd_and_hms(60_000, 1, 1, 0, 0, 0).unwrap();
         // A millisecond timestamp read as seconds.
         let millis = DateTime::from_timestamp(1_710_496_800_000, 0).unwrap();
-        for times in [
-            vec![Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(), far],
-            minutes([millis]),
-            vec![DateTime::<Utc>::MAX_UTC],
+        // (bar times, host minimum spacing)
+        for (times, minimum) in [
+            (
+                vec![Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(), far],
+                0.5,
+            ),
+            (minutes([millis]), 0.5),
+            (vec![DateTime::<Utc>::MAX_UTC], 0.5),
+            (vec![start, start + chrono::Duration::days(1)], 1e-6),
         ] {
-            let bars = times
+            let mut bars: Vec<_> = times
                 .iter()
                 .map(|&t| Bar::new(t, 10.0, 12.0, 9.0, 11.0, 1.0))
                 .collect();
-            frame(
-                &Context::default(),
-                &mut Chart::new(BarData::from_bars(bars)),
-                0.1,
-                vec![],
-            );
+            if minimum < 0.25 {
+                // A ten-point close move makes completed one-point bricks.
+                *bars.last_mut().unwrap() = Bar::new(times[1], 11.0, 22.0, 10.0, 21.0, 1.0);
+            }
+            let ctx = Context::default();
+            let mut chart = Chart::new(BarData::from_bars(bars));
+            let mut options = chart.chart_options().clone();
+            options.time_scale.min_bar_spacing = minimum;
+            chart.set_chart_options(options);
+            if minimum < 0.25 {
+                // Price-based charts keep their axis slots unmerged even at tiny spacing.
+                chart.set_chart_type(crate::model::ChartType::Renko);
+                chart.set_chart_type_params(crate::model::ChartTypeParams {
+                    renko_brick_size: 1.0,
+                    ..Default::default()
+                });
+                chart.set_timeframe(crate::model::Timeframe::Day1);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                assert!(
+                    chart.set_visible_logical_range(crate::model::LogicalRange::new(
+                        10_000.0,
+                        700_000_000.0,
+                    ))
+                );
+                let coords = chart.get_chart_mapping();
+                let painter =
+                    egui::Painter::new(ctx.clone(), egui::LayerId::background(), Rect::EVERYTHING);
+                // Check the keys as well as rendering the unmerged axis.
+                let (_, keys, axis) = super::time_axis_marks(
+                    &super::RenderContext::new(&painter, coords.rect),
+                    chart.state.visible_data(),
+                    &coords,
+                    &chart.build_time_formatter(),
+                    &chart.chart_options.time_scale,
+                    |index| chart.index_to_time(index),
+                );
+                let whitespace = keys
+                    .iter()
+                    .filter(|(_, index)| *index > axis.base_idx)
+                    .count();
+                assert!(
+                    whitespace > 0 && whitespace <= (4.0 * coords.rect.width().ceil()) as usize,
+                    "{whitespace} whitespace keys for {} points at spacing {}",
+                    coords.rect.width(),
+                    coords.bar_spacing
+                );
+            }
+            frame(&ctx, &mut chart, 0.1, vec![]);
         }
     }
 }
