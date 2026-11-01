@@ -6,6 +6,7 @@
 //! mark, lower-weight marks are dropped first, ensuring that the most
 //! significant boundaries (year, month changes) always remain visible.
 
+use super::horizontal::median_bar_duration;
 use super::time_formatter::{DefaultTimeFormatter, TimeFormatter};
 use chrono::{DateTime, Datelike, Duration, Months, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
@@ -207,12 +208,17 @@ impl TickMarkGenerator {
             return Vec::new();
         }
 
-        let time_span = end_time - start_time;
-
         let intraday = bars.windows(2).any(|pair| {
             let delta = pair[1].0 - pair[0].0;
             delta > Duration::zero() && delta < Duration::days(1)
         });
+        // Closed sessions take no slots, so the clock interval follows typical bar spacing.
+        let time_span = if intraday {
+            let bar_ms = median_bar_duration(bars.iter().map(|bar| bar.0)).num_milliseconds();
+            Duration::milliseconds(bar_ms.saturating_mul(bars.len().saturating_sub(1) as i64))
+        } else {
+            end_time - start_time
+        };
         let mut interval = self.calculate_optimal_interval(time_span, width_pixels);
         if !self.formatter.time_visible() {
             interval = interval.max(Duration::days(1));
@@ -1262,11 +1268,7 @@ mod tests {
                 .iter()
                 .any(|mark| mark.mark_type == TickMarkType::Month && mark.label == "Apr")
         );
-        assert!(
-            marks
-                .iter()
-                .all(|mark| bars[mark.index].0 == mark.time && mark.time.hour() == 13)
-        );
+        assert!(marks.iter().all(|mark| bars[mark.index].0 == mark.time));
         let month_start = bars
             .windows(2)
             .position(|pair| pair[0].0.month() != pair[1].0.month())
