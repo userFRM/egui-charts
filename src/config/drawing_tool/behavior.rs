@@ -73,10 +73,6 @@ impl DrawingToolType {
                 | Self::ArrowMarker
                 | Self::Arrow
                 | Self::Path
-                | Self::Polyline
-                | Self::Arc
-                | Self::Curve
-                | Self::DoubleCurve
                 | Self::CyclicLines
                 | Self::SineLine
                 | Self::AnchoredNote

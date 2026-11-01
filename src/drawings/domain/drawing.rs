@@ -283,7 +283,7 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
         T::Rect => filled(PURPLE, 51),
         T::RotatedRect => filled(GREEN, 51),
         T::Circle | T::Ellipse => filled(RED, 51),
-        // Polylines and arcs paint no fill yet, so they start unfilled.
+        // Polylines and arcs start unfilled.
         T::Polyline | T::Brush => colored(CYAN),
         T::Arc => colored(PINK),
         T::Sector => DefaultStyle {
