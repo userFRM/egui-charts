@@ -580,7 +580,10 @@ impl Chart {
         self.currency_choice.take()
     }
 
-    /// Supplies a host-owned instrument image for the legend. `None` hides it.
+    /// Supplies an image for the legend's symbol mark in place of
+    /// [`Instrument::logo`](crate::model::Instrument::logo). `None` shows the instrument's logo,
+    /// or the symbol's initial without one;
+    /// [`ChartConfig::show_legend_badge`](crate::config::ChartConfig::show_legend_badge) hides the mark.
     pub fn set_legend_badge(&mut self, badge: Option<egui::ImageSource<'static>>) {
         self.legend_badge = badge;
     }

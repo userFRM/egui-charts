@@ -52,6 +52,7 @@ Builder API,Datafeed API,Realtime bar updates,done,host,src/data/merge.rs;src/wi
 Builder API,Datafeed API,Resolve symbol to symbol metadata,done,host,src/data/mod.rs;src/model/instrument.rs;src/widget/feed/mod.rs
 Builder API,Datafeed API,Server time,done,host,src/widget/mod.rs;src/widget/frame.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Builder API,Datafeed API,Session breaks on intraday charts,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/model/session/mod.rs;src/config/chart.rs;src/widget/palette.rs
+Builder API,Datafeed API,Symbol logos,partial,host,src/model/instrument.rs;src/painting/symbol_mark.rs;src/chart/renderers/legend/mod.rs;src/ui/dialogs/symbol_search/row.rs;src/ui/dialogs/symbol_search/compare.rs;src/ui/widget_bar/panels/watchlist.rs;src/icons/loader.rs
 Builder API,Datafeed API,Symbol search,done,host,src/services/search.rs;src/ui/dialogs/symbol_search/mod.rs;src/ui/dialogs/symbol_search/service.rs
 Builder API,Datafeed API,Timescale marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs;src/widget/mod.rs;src/model/markers.rs
 Builder API,Datafeed API,Trade tick input,done,host,src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs
@@ -185,7 +186,7 @@ Chart,Legend and data window,Data window panel,done,library,src/ui/widget_bar/pa
 Chart,Legend and data window,Indicator entries in the legend,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/widget/panes.rs;src/widget/indicator_pane.rs;src/config/chart.rs;src/theme/presets.rs
 Chart,Legend and data window,Legend buttons,done,library,src/chart/renderers/legend/mod.rs;src/widget/crosshair.rs;src/widget/panes.rs
 Chart,Legend and data window,Status line values follow the crosshair,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs
-Chart,Legend and data window,Symbol status line,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/theme/mod.rs
+Chart,Legend and data window,Symbol status line,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/model/session/exchange.rs;src/painting/symbol_mark.rs
 Chart,Legend and data window,Volume in the status line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/scales/price_formatter.rs
 Chart,Multi-chart and sync,Grid layout presets,done,library,src/widget/layout.rs;src/ui/top_toolbar/components/chart_grid_selector.rs;src/ui/top_toolbar/toolbar.rs
 Chart,Multi-chart and sync,Multi-chart layout container,done,library,src/widget/layout.rs

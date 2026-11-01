@@ -1234,6 +1234,7 @@ mod tests {
                             legend.badge = Some(egui::ImageSource::Texture(
                                 (badge.id(), Vec2::splat(18.0)).into(),
                             ));
+                            legend.session = Some(crate::model::session::MarketSession::PostMarket);
                             legend.statuses = &statuses;
                             legend.instrument = Some(&instrument);
                             legend.show_volume = false;
@@ -1252,12 +1253,24 @@ mod tests {
                     })
                     .collect();
                 assert!(!text.is_empty());
-                for shape in &output.shapes {
-                    if let Shape::Mesh(mesh) = &shape.shape
-                        && mesh.texture_id == badge.id()
-                    {
-                        assert!(plot.shrink(8.0).contains_rect(shape.clip_rect));
-                    }
+                let marks: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Rect(rect) if rect.fill_texture_id() == badge.id() => {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(marks.len(), 1);
+                let mark = marks[0];
+                assert!(
+                    plot.shrink2(Vec2::new(theme.spacing.lg, theme.spacing.md))
+                        .contains_rect(mark)
+                );
+                for field in &text {
+                    assert!(!mark.intersects(Rect::from_min_size(field.pos, field.galley.size())));
                 }
                 for (index, field) in text.iter().enumerate() {
                     let bounds = Rect::from_min_size(field.pos, field.galley.size());

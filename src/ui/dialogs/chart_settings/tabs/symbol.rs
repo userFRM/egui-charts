@@ -231,6 +231,12 @@ impl SettingsDialog {
                 });
                 styled_checkbox(
                     ui,
+                    &mut self.settings.status_line.show_market_status,
+                    "Market status",
+                    theme.ui.text,
+                );
+                styled_checkbox(
+                    ui,
                     &mut self.settings.status_line.show_ohlc,
                     "Chart values",
                     theme.ui.text,

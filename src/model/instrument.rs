@@ -77,8 +77,9 @@ pub struct Instrument {
     pub description: Option<String>,
     /// Exchange or venue, such as "NASDAQ".
     pub exchange: Option<String>,
-    /// URI of the symbol's mark, such as a company logo, for egui's installed image loaders.
-    /// Symbol choosers show the symbol's initial while it is unknown, loading or unreadable.
+    /// URI of the symbol's logo for egui's installed image loaders; supply a square image. The
+    /// legend and symbol choosers draw it in a circle, and the symbol's first letter or digit
+    /// while it is unknown, loading or unreadable. A prefixed symbol such as `VENUE:ABC` shows V.
     pub logo: Option<String>,
     /// URI of the exchange's mark, for egui's installed image loaders. Symbol search shows the
     /// exchange name alone while it is unknown, loading or unreadable.

@@ -3,8 +3,9 @@
 use super::{Row, SymbolSearchDialog};
 use crate::localization as l10n;
 use crate::model::Instrument;
+use crate::painting::symbol_mark::{paint_round_image, paint_symbol_mark};
 use crate::theme::ThemeExt;
-use egui::{Color32, Context, Pos2, Response, Sense, Ui, Vec2};
+use egui::{Color32, Context, ImageSource, Pos2, Response, Sense, Ui, Vec2};
 
 /// Height shared by search and comparison results.
 pub(super) const SYMBOL_ROW_HEIGHT: f32 = 56.0;
@@ -49,7 +50,11 @@ impl SymbolSearchDialog {
                 Pos2::new(right - 24.0, rect.center().y - 12.0),
                 Pos2::new(right, rect.center().y + 12.0),
             );
-            paint_image(ui, symbol.exchange_logo.as_deref(), mark);
+            paint_round_image(
+                ui.painter(),
+                mark,
+                symbol.exchange_logo.as_deref().map(ImageSource::from),
+            );
             right = mark.left() - 12.0;
         }
         let kind = symbol
@@ -127,7 +132,12 @@ impl SymbolSearchDialog {
             Pos2::new(rect.left() + 22.0 + indent, rect.center().y),
             Vec2::splat(36.0),
         );
-        paint_symbol_mark(ui, symbol, mark);
+        paint_symbol_mark(
+            ui.painter(),
+            mark,
+            &symbol.symbol,
+            symbol.logo.as_deref().map(egui::ImageSource::from),
+        );
         let left = mark.right() + 8.0;
         let mut text_right = exchange_right - exchange_width - 16.0;
         let mut toggled = false;
@@ -207,55 +217,6 @@ pub(super) fn search_backdrop(ctx: &Context) -> Color32 {
             .lerp_to_gamma(theme.ui.text, 0.2)
             .gamma_multiply(0.3)
     }
-}
-
-/// Paints the image at `uri` into `rect` as a circle. Returns `false`, painting nothing, without
-/// a URI or while the image is loading or unreadable.
-fn paint_image(ui: &Ui, uri: Option<&str>, rect: egui::Rect) -> bool {
-    let Some(uri) = uri else {
-        return false;
-    };
-    let pixels = (rect.size() * ui.ctx().pixels_per_point()).round();
-    let size = egui::SizeHint::Size {
-        width: pixels.x as u32,
-        height: pixels.y as u32,
-        maintain_aspect_ratio: true,
-    };
-    match ui
-        .ctx()
-        .try_load_texture(uri, egui::TextureOptions::LINEAR, size)
-    {
-        Ok(egui::load::TexturePoll::Ready { texture }) => {
-            egui::Image::from_texture(texture)
-                .corner_radius(rect.width() / 2.0)
-                .paint_at(ui, rect);
-            true
-        }
-        _ => false,
-    }
-}
-
-/// Paints the instrument's logo in `rect`, or its initial in a neutral circle without one.
-pub(super) fn paint_symbol_mark(ui: &Ui, symbol: &Instrument, rect: egui::Rect) {
-    if paint_image(ui, symbol.logo.as_deref(), rect) {
-        return;
-    }
-    let theme = ui.active_theme();
-    ui.painter()
-        .circle_filled(rect.center(), rect.width() / 2.0, theme.ui.btn_bg_hover);
-    let initial: String = symbol
-        .symbol
-        .chars()
-        .take(1)
-        .flat_map(char::to_uppercase)
-        .collect();
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        initial,
-        egui::FontId::proportional(rect.height() * 0.5),
-        theme.ui.text_secondary,
-    );
 }
 
 /// Shared two-line instrument layout, with an optional type badge after the description.

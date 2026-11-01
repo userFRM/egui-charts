@@ -7,6 +7,9 @@
 use chrono::{DateTime, Utc};
 use egui_charts::model::{Bar, Instrument, SymbolType};
 
+pub(crate) const SAMPLE_LOGO: &str = "bytes://demo/sample-logo.svg";
+pub(crate) const SAMPLE_LOGO_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="32" fill="#455a64"/><rect x="16" y="34" width="8" height="14" rx="1" fill="#fff"/><rect x="28" y="24" width="8" height="24" rx="1" fill="#fff"/><rect x="40" y="16" width="8" height="32" rx="1" fill="#fff"/></svg>"##;
+
 /// A tradable instrument the demo knows how to render, including the seed and
 /// starting price used to synthesize its bars.
 pub struct DemoSymbol {
@@ -142,6 +145,9 @@ impl DemoSymbol {
                     .with_exchange(s.exchange)
                     .with_currency("USD")
                     .with_symbol_type(kind);
+                if s.symbol == "SAMPLE" {
+                    instrument = instrument.with_logo(SAMPLE_LOGO);
+                }
                 if kind == SymbolType::Futures {
                     instrument = instrument.with_root("ES");
                 }
