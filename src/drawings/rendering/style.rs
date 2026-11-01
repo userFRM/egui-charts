@@ -445,7 +445,9 @@ fn fewer_circle_sides(shape: &mut Shape, pixels_per_point: f32, clip: Rect) {
             }
         }
         Shape::Circle(c) if !c.stroke.is_empty() || c.radius * pixels_per_point > 6.0 => {
-            let radius = f64::from(c.radius) * f64::from(pixels_per_point);
+            // Outside joins extend by width / cos(half_step), so wide rings need more sides.
+            let radius = (f64::from(c.radius) * f64::from(pixels_per_point))
+                .max(f64::from(c.stroke.width) * f64::from(pixels_per_point) + 0.25);
             let step = (1.0 - 0.25 / radius).clamp(-1.0, 1.0).acos();
             let sides = (std::f64::consts::PI / step).ceil().max(8.0) as usize;
             // Small marker rings keep their existing quarter-pixel polygons.
@@ -457,12 +459,17 @@ fn fewer_circle_sides(shape: &mut Shape, pixels_per_point: f32, clip: Rect) {
                     })
                     .collect()
             } else {
-                let mut points = ellipse_arc(
-                    c.center,
-                    egui::Vec2::splat(c.radius),
+                let bound = radius / f64::from(pixels_per_point);
+                let mut points = smooth_path(
                     [0.0, std::f64::consts::TAU],
+                    Acceleration {
+                        x: bound,
+                        y: bound,
+                        length: bound,
+                    },
                     clip.expand(c.stroke.width + 2.0),
                     pixels_per_point,
+                    |angle| ellipse_point(c.center, egui::Vec2::splat(c.radius), angle),
                 );
                 points.pop();
                 points
@@ -1149,6 +1156,8 @@ mod tests {
             (200.0, 2.0, ring, true),
             (5000.0, 1.0, ring, true),
             (5000.0, 2.0, ring, true),
+            (8.0, 1.0, Stroke::new(100.0, Color32::WHITE), true),
+            (8.0, 2.0, Stroke::new(100.0, Color32::WHITE), true),
         ] {
             let circle = egui::epaint::CircleShape {
                 center,
@@ -1183,6 +1192,25 @@ mod tests {
                 assert!(((*a - center).length() - radius).abs() < 1e-3, "{case}");
                 let error = (radius - (center.distance(a.lerp(b, 0.5)))) * ppp;
                 assert!((0.0..=0.25).contains(&error), "{case}: {error} px");
+            }
+            // Outside joins must stay on the outer circle even when the stroke exceeds the radius.
+            let mut mesh = egui::Mesh::default();
+            egui::epaint::Tessellator::new(
+                ppp,
+                egui::epaint::TessellationOptions {
+                    feathering: false,
+                    ..Default::default()
+                },
+                [1, 1],
+                Vec::new(),
+            )
+            .tessellate_shape(shape, &mut mesh);
+            for vertex in &mesh.vertices {
+                let error = (vertex.pos.distance(center) - radius - stroke.width) * ppp;
+                assert!(
+                    error <= 0.25,
+                    "{case}: outer stroke exceeds the circle by {error} px"
+                );
             }
         }
     }
