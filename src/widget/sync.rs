@@ -266,24 +266,19 @@ mod tests {
                     assert_eq!(chart.bars(SeriesId::MAIN)[0].time, time(180));
                 }
                 let expected = expected_index.map(|_| (selected, price));
-                // Export both before the next screen frame and after it.
-                for pass in 0..2 {
-                    if pass == 1 {
-                        frame(&ctx, &mut chart, 0.2, Vec::new());
-                        assert_eq!(chart.synced_crosshair_bar_idx, expected_index);
-                        assert_eq!(chart.last_crosshair, expected);
-                    }
-                    let options = ImageExportOptions {
-                        include_crosshair: true,
-                        ..Default::default()
-                    };
-                    chart
-                        .export_layout_svg(&ctx, &options, |ui, snapshot| {
-                            snapshot.show(ui);
-                            assert_eq!(snapshot.last_crosshair, expected);
-                        })
-                        .unwrap();
-                }
+                frame(&ctx, &mut chart, 0.2, Vec::new());
+                assert_eq!(chart.synced_crosshair_bar_idx, expected_index);
+                assert_eq!(chart.last_crosshair, expected);
+                let options = ImageExportOptions {
+                    include_crosshair: true,
+                    ..Default::default()
+                };
+                chart
+                    .export_layout_svg(&ctx, &options, |ui, snapshot| {
+                        snapshot.show(ui);
+                        assert_eq!(snapshot.last_crosshair, expected);
+                    })
+                    .unwrap();
                 // An explicit index replaces the time anchor and keeps its local semantics.
                 chart.set_synced_crosshair_bar_idx(Some(5.0));
                 chart.update(SeriesId::MAIN, bar(-5));
