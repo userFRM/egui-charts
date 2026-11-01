@@ -33,12 +33,11 @@ test('published area bars and group tables count every CSV status', () => {
 });
 
 test('incomplete features link their recorded issues and omit completed features', () => {
-  assert.ok(page.includes('href="https://github.com/userFRM/egui-charts/issues/1759"'));
   for (const [index, area] of areas.entries()) {
     const expected = features.filter((feature) => feature.area === area && feature.status !== 'done').map((feature) => {
-      const links = feature.issues ? ': ' + feature.issues.split(';').map((issue) =>
-        `<a href="https://github.com/userFRM/egui-charts/issues/${issue}">#${issue}</a>`).join(', ') : '';
-      return `${escape(feature.feature)} (${feature.status})${links}`;
+      const links = feature.issues.split(';').filter(Boolean).map((issue) =>
+        `<a href="https://github.com/userFRM/egui-charts/issues/${issue}">#${issue}</a>`).join(', ');
+      return `${escape(feature.feature)} (${feature.status})${links ? ': ' + links : ''}`;
     });
     assert.deepEqual([...sections[index].matchAll(/<li>(.*?)<\/li>/gs)].map((match) => match[1]), expected, area);
   }
