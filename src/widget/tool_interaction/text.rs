@@ -3,6 +3,7 @@
 use crate::drawings::manager::TextEditState;
 use crate::drawings::{DrawingManager, DrawingToolType};
 use crate::localization as l10n;
+use crate::model::PostLink;
 use egui::{Id, Key, Modifiers, Rect, Ui};
 
 pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize) {
@@ -20,6 +21,8 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize) {
         id,
         draft: if drawing.tool_type == DrawingToolType::Table {
             drawing.table_text()
+        } else if let Some(post) = &drawing.post {
+            post.link.clone()
         } else {
             drawing.text.clone().unwrap_or_default()
         },
@@ -29,7 +32,14 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize) {
     manager.select(id);
 }
 
-pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: Id, pane: Rect) {
+/// `links` says whether the chart has a `Posts` source.
+pub(super) fn show_editor(
+    ui: &mut Ui,
+    manager: &mut DrawingManager,
+    chart_id: Id,
+    pane: Rect,
+    links: bool,
+) {
     let Some(mut editor) = manager.text_editor.take() else {
         return;
     };
@@ -74,6 +84,12 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
     let font_size = crate::styles::typography::font_size(drawing.font_size);
     let hint = match drawing.tool_type {
         DrawingToolType::Image => "Image address (https://… or file://…)",
+        DrawingToolType::Tweet if links => {
+            "A post address, or the author on the first line, then the post"
+        }
+        DrawingToolType::Idea if links => {
+            "An idea address, or the title on the first line, then the idea"
+        }
         DrawingToolType::Tweet => "Author on the first line, then the post",
         DrawingToolType::Idea => "Title on the first line, then the idea",
         _ => "",
@@ -126,12 +142,41 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
         });
     if cancel || commit || outside {
         ui.memory_mut(|memory| memory.surrender_focus(id.with("field")));
-        if !cancel && drawing.text.as_deref() != Some(editor.draft.as_str()) {
-            manager.edit_drawing(editor.id, |drawing| drawing.text = Some(editor.draft));
+        let address = editor.draft.trim();
+        let unchanged = match &drawing.post {
+            Some(post) => post.link.trim() == address,
+            None => drawing.text.as_deref() == Some(editor.draft.as_str()),
+        };
+        if !cancel && !unchanged {
+            // With a source, an address typed on its own links a post or idea; anything else
+            // is content typed by hand, which replaces the link.
+            let post = (links
+                && matches!(
+                    drawing.tool_type,
+                    DrawingToolType::Tweet | DrawingToolType::Idea
+                )
+                && is_address(address))
+            .then(|| PostLink::new(address));
+            manager.edit_drawing(editor.id, |drawing| {
+                drawing.text = post.is_none().then_some(editor.draft);
+                drawing.post = post;
+            });
         }
     } else {
         manager.text_editor = Some(editor);
     }
+}
+
+/// Whether `draft` is one address with a scheme, such as `https://…`, and nothing else.
+fn is_address(draft: &str) -> bool {
+    !draft.contains(char::is_whitespace)
+        && draft.split_once("://").is_some_and(|(scheme, rest)| {
+            !rest.is_empty()
+                && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        })
 }
 
 #[cfg(test)]
@@ -183,7 +228,7 @@ mod tests {
                             events,
                             ..Default::default()
                         },
-                        |ui| super::show_editor(ui, manager, chart_id, pane),
+                        |ui| super::show_editor(ui, manager, chart_id, pane, false),
                     )
                     .drop_without_applying_deltas();
                 };

@@ -5,6 +5,7 @@ use crate::drawings::domain::{
     ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType, HandlePos,
 };
 use crate::drawings::services::HandleService;
+use crate::model::PostLink;
 use egui::Pos2;
 
 impl DrawingManager {
@@ -540,6 +541,24 @@ impl DrawingManager {
         drawing.completed = false; // Not complete until user clicks
 
         // Set as current drawing (will be placed on next click)
+        self.curr_drawing = Some(drawing);
+    }
+
+    /// Prepares a post or idea card showing `post`, placed by the next click on the chart, as
+    /// [`Self::start_icon_insertion`] does for a picked icon. The tool's saved defaults apply,
+    /// and the inline editor does not open, since the card has its content. Does nothing for
+    /// other tools or a disabled one.
+    pub fn start_post_insertion(&mut self, tool: DrawingToolType, post: PostLink) {
+        if !matches!(tool, DrawingToolType::Tweet | DrawingToolType::Idea)
+            || !self.registry.availability(tool).enabled
+        {
+            return;
+        }
+        self.set_active_tool(Some(tool));
+        let id = self.take_id();
+        let mut drawing = self.new_drawing(id, tool);
+        drawing.post = Some(post);
+        drawing.completed = false;
         self.curr_drawing = Some(drawing);
     }
 

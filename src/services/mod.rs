@@ -1,7 +1,7 @@
-//! Services a host supplies, each through a small trait. Charts consume `Marks` and `Signals`
-//! and keep their drawings in `Storage`, symbol choosers consume `SymbolSearch`, the alerts
-//! panel `Alerts`, the watchlist `Quotes`, the notifications panel `Notifications` and the chats
-//! panel `Chats`. `SettingsStore` and the layout menu keep settings and layouts in `Storage`;
+//! Services a host supplies, each through a small trait. Charts consume `Marks`, `Signals` and
+//! `Posts` and keep their drawings in `Storage`, symbol choosers consume `SymbolSearch`, the
+//! alerts panel `Alerts`, the watchlist `Quotes`, the notifications panel `Notifications` and the
+//! chats panel `Chats`. `SettingsStore` and the layout menu keep settings and layouts in `Storage`;
 //! other contracts define the host side of the assembled terminal. [`PaperAccount`] is a
 //! ready-made [`Broker`] that simulates an account, and `AlertEngine`, with the `alert-engine`
 //! feature, an [`Alerts`] service that evaluates alerts on the bars the host feeds it.
@@ -30,6 +30,7 @@ mod events;
 mod marks;
 mod notifications;
 mod paper;
+mod posts;
 #[cfg(feature = "widget")]
 mod profile_directory;
 mod profiles;
@@ -61,6 +62,7 @@ pub(crate) use events::Listener;
 pub use marks::{Marks, MarksPage, MarksRequest};
 pub use notifications::{Notification, NotificationTarget, Notifications};
 pub use paper::PaperAccount;
+pub use posts::Posts;
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub use profile_directory::{FollowOperation, FollowStatus, ProfileDirectory};
