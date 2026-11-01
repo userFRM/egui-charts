@@ -68,8 +68,9 @@ pub enum OrderFlowKind {
         /// Bars in the rolling sum.
         bars: usize,
     },
-    /// Buy minus sell volume per bar of executions whose size lies in the inclusive range,
-    /// which a study accumulates into a cumulative volume delta. The sum starts at the oldest
+    /// Buy minus sell volume, its highest and lowest running value including zero, per bar,
+    /// counting executions whose size lies in the inclusive range. A study accumulates the
+    /// delta into a cumulative volume delta. The sum starts at the oldest
     /// bar with a retained value, so it starts again from a later bar after the input drops its
     /// oldest bars (see [`OrderFlowInput`]).
     FilteredCvd {
@@ -1048,8 +1049,9 @@ impl State {
                 ]
             }
             OrderFlowKind::FilteredCvd { min, max } => {
-                let old = self.bars.get(&open).map_or(0.0, |(v, _)| v[0]);
-                [old + signed_size(trade, min, max, size), 0.0, 0.0]
+                let old = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
+                let delta = old[0] + signed_size(trade, min, max, size);
+                [delta, old[1].max(delta), old[2].min(delta)]
             }
             _ => return,
         };
