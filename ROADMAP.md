@@ -217,7 +217,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Timeframe toolbar provides range presets, go-to-date, time zone, regular/extended session and adjustment requests.
 - [x] Drawing toolbar categories, cursor modes, snapping, repeated placement, locking and template actions; favourites can be stored.
 - [x] Chart settings apply backgrounds, grids, candle parts and colours, previous-close colouring, crosshair styling, session shading and watermarks.
-- [x] Status settings control supplied logos, last day change and study backdrops; Symbol settings request dividend-adjusted history from the host.
+- [x] Status settings control supplied logos, last day change and study backdrops; legend text and controls have opaque backing over profiles; Symbol settings request dividend-adjusted history from the host.
 - [x] Object tree supports selection, filtering, visibility, locks, ordering, rename, duplication, pane moves and bulk actions; a data window shows OHLCV and study values.
 - [x] Editable shortcut bindings are shared by chart input, help and menu hints; quick search uses a command palette.
 - [x] Watchlists support named lists, sections, sorting, row reordering, flags, symbol navigation and text import/export.
