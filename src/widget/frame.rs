@@ -3624,7 +3624,8 @@ mod tests {
                 }
                 let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
                 for (i, bar) in chart.bars(crate::widget::SeriesId::MAIN).iter().enumerate() {
-                    for (price, size) in [(100.0, 2.0), (101.0, if i == 0 { 1.0 } else { 4.0 })] {
+                    for (price, size) in [(100.0, 2.0), (101.0, if i % 2 == 0 { 1.0 } else { 4.0 })]
+                    {
                         flow.push(&Tick::new(bar.time, price, size, Some(OrderSide::Buy)))
                             .unwrap();
                     }
@@ -3666,6 +3667,26 @@ mod tests {
                         _ => false,
                     })
                     .expect("footprint cells");
+                let Shape::Mesh(mesh) = &output.shapes[cells].shape else {
+                    unreachable!()
+                };
+                for text in output.shapes.iter().filter_map(|shape| match &shape.shape {
+                    Shape::Text(text) if text.galley.text().contains('×') => Some(text),
+                    _ => None,
+                }) {
+                    let bounds = Rect::from_min_size(text.pos, text.galley.size());
+                    assert!(
+                        mesh.vertices.chunks_exact(4).any(|quad| {
+                            let opaque = quad.iter().all(|v| v.color.a() == 255);
+                            let backing = quad.iter().fold(Rect::NOTHING, |rect, vertex| {
+                                rect.union(Rect::from_min_max(vertex.pos, vertex.pos))
+                            });
+                            opaque && backing.contains_rect(bounds)
+                        }),
+                        "opaque clearance beneath {}",
+                        text.galley.text()
+                    );
+                }
                 let strokes: Vec<_> = output
                     .shapes
                     .iter()
