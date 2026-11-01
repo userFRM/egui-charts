@@ -262,9 +262,11 @@ the first retained bar is excluded because it may be partial. Trade-based interv
 stop sweeps. Another feed event at or after the next boundary closes a bar; no wall clock runs.
 
 Icebergs count exact order refills at the same price and side within 100 ms of depletion, or
-an increase of an executed order without keeping priority. Two refills
-report by default; later refills update the same marker. Aggregate depth estimates a refill count
-as whole opening displayed sizes executed minus one, confirming only on the next synchronized
+an increase within 100 ms of execution without keeping priority. Unrelated adds and cancels
+do not erase pending matches; concurrent depletions at a price each await a matching replacement
+within that window. Two refills report by default; later refills update the same marker.
+Aggregate depth estimates a refill count as whole opening displayed sizes executed minus one,
+confirming only on the next synchronized
 book update that still shows the level. Leaving that inside price breaks the run. Estimates say
 so in their tooltips. Order snapshots and any depth loss discard unfinished refill sequences;
 replayed order events and duplicate trade ids do not count again. Loaded trade history alone

@@ -1,6 +1,6 @@
 //! Refills identified by order events, or estimated from executions against aggregated depth.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use chrono::{DateTime, TimeDelta, Utc};
 
@@ -13,9 +13,10 @@ use crate::data::{OrderEvent, RestingOrder, meets_threshold};
 use crate::model::{Signal, SignalId, SignalShape, Tick};
 use crate::services::SignalEvent;
 
-/// Refills of one displayed size at one price and side. An exact refill follows depletion
-/// within 100 ms, or restores an executed order without preserving priority. Aggregate depth
-/// estimates refills from executed volume divided by the opening displayed size, minus one.
+/// Order-level refills at one price and side. An exact refill follows depletion
+/// within 100 ms, or replenishes an executed order within 100 ms without preserving priority.
+/// Aggregate depth estimates refills from executed volume divided by the opening displayed size,
+/// minus one.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct IcebergRule {
@@ -32,7 +33,7 @@ impl Default for IcebergRule {
 #[derive(Default)]
 pub(super) struct Icebergs {
     levels: BTreeMap<Price, Episode>,
-    orders: HashMap<u64, (f64, f64)>,
+    orders: HashMap<u64, (f64, f64, DateTime<Utc>)>,
     next: u64,
 }
 
@@ -40,7 +41,8 @@ struct Episode {
     shown: f64,
     executed: f64,
     refills: u64,
-    depleted: Option<DateTime<Utc>>,
+    depleted: VecDeque<(DateTime<Utc>, f64)>,
+    active: HashSet<u64>,
     number: Option<u64>,
     reported: Option<u64>,
 }
@@ -69,7 +71,8 @@ impl Icebergs {
             shown: book.size(price),
             executed: 0.0,
             refills: 0,
-            depleted: None,
+            depleted: VecDeque::new(),
+            active: HashSet::new(),
             number: None,
             reported: None,
         });
@@ -92,11 +95,11 @@ impl Icebergs {
         out: &mut Vec<SignalEvent>,
     ) {
         self.levels.retain(|&price, episode| {
-            book.size(price) > 0.0
-                || (book.exact
-                    && episode
-                        .depleted
-                        .is_some_and(|at| time >= at && time - at <= TimeDelta::milliseconds(100)))
+            if book.exact {
+                !episode.active.is_empty() || !episode.depleted.is_empty()
+            } else {
+                book.size(price) > 0.0
+            }
         });
         if !book.exact {
             for (&price, episode) in &mut self.levels {
@@ -126,56 +129,64 @@ impl Icebergs {
         self.levels.retain(|_, episode| {
             episode
                 .depleted
-                .is_none_or(|at| time >= at && time - at <= TimeDelta::milliseconds(100))
+                .retain(|(at, _)| time >= *at && time - *at <= TimeDelta::milliseconds(100));
+            !episode.active.is_empty() || !episode.depleted.is_empty()
         });
         match event {
             OrderEvent::Execute { id, size, .. } => {
                 let Some(order) = before else {
                     return;
                 };
-                let (shown, executed) = self.orders.entry(*id).or_insert((order.size, 0.0));
+                let (shown, executed, executed_at) =
+                    self.orders.entry(*id).or_insert((order.size, 0.0, time));
                 *executed = (*executed + size).min(f64::MAX);
+                *executed_at = time;
                 let price = depth::price(order.side, order.price, tick);
                 let episode = self.levels.entry(price).or_insert(Episode {
                     shown: *shown,
                     executed: 0.0,
                     refills: 0,
-                    depleted: None,
+                    depleted: VecDeque::new(),
+                    active: HashSet::new(),
                     number: None,
                     reported: None,
                 });
                 episode.executed = (episode.executed + size).min(f64::MAX);
-                if *size == order.size {
-                    episode.depleted = Some(time);
+                episode.active.insert(*id);
+                if meets_threshold(*size, order.size) {
+                    episode.depleted.push_back((time, *shown));
+                    episode.active.remove(id);
                     self.orders.remove(id);
                 }
             }
             OrderEvent::Add(order) => {
                 let price = depth::price(order.side, order.price, tick);
-                if let Some(episode) = self.levels.get_mut(&price) {
-                    if episode.depleted.is_some() && episode.shown == order.size {
-                        episode.depleted = None;
-                        episode.refills += 1;
-                        Self::report(
-                            &mut self.next,
-                            price,
-                            time,
-                            tick,
-                            episode,
-                            settings,
-                            false,
-                            out,
-                        );
-                    } else if episode.depleted.is_some() {
-                        self.levels.remove(&price);
-                    }
+                if let Some(episode) = self.levels.get_mut(&price)
+                    && let Some(at) = episode.depleted.iter().position(|(_, shown)| {
+                        meets_threshold(*shown, order.size) && meets_threshold(order.size, *shown)
+                    })
+                {
+                    episode.depleted.remove(at);
+                    episode.active.insert(order.id);
+                    episode.shown = order.size;
+                    episode.refills += 1;
+                    Self::report(
+                        &mut self.next,
+                        price,
+                        time,
+                        tick,
+                        episode,
+                        settings,
+                        false,
+                        out,
+                    );
                 }
-                self.orders.insert(order.id, (order.size, 0.0));
+                self.orders.insert(order.id, (order.size, 0.0, time));
             }
             OrderEvent::Modify {
                 id,
                 price,
-                size: Some(size),
+                size,
                 keep_priority,
             } => {
                 let Some(order) = before else {
@@ -183,10 +194,24 @@ impl Icebergs {
                 };
                 let at = depth::price(order.side, order.price, tick);
                 let same_price = price.is_none_or(|p| depth::price(order.side, p, tick) == at);
-                let (shown, executed) = self.orders.entry(*id).or_insert((order.size, 0.0));
-                if same_price && !keep_priority && *size > order.size && *executed > 0.0 {
+                let size = size.unwrap_or(order.size);
+                if !same_price || size == 0.0 {
                     if let Some(episode) = self.levels.get_mut(&at) {
-                        episode.shown = *size;
+                        episode.active.remove(id);
+                    }
+                    self.orders.remove(id);
+                    return;
+                }
+                let (shown, executed, executed_at) =
+                    self.orders.entry(*id).or_insert((order.size, 0.0, time));
+                if !keep_priority
+                    && size > order.size
+                    && *executed > 0.0
+                    && time >= *executed_at
+                    && time - *executed_at <= TimeDelta::milliseconds(100)
+                {
+                    if let Some(episode) = self.levels.get_mut(&at) {
+                        episode.shown = size;
                         episode.refills += 1;
                         Self::report(
                             &mut self.next,
@@ -199,21 +224,22 @@ impl Icebergs {
                             out,
                         );
                     }
-                    *shown = *size;
                     *executed = 0.0;
-                } else if !same_price || *size < order.size {
-                    self.levels.remove(&at);
-                    self.orders.remove(id);
+                }
+                if size != order.size {
+                    *shown = size;
                 }
             }
             OrderEvent::Cancel { id } => {
-                if let Some(order) = before {
-                    self.levels
-                        .remove(&depth::price(order.side, order.price, tick));
+                if let Some(order) = before
+                    && let Some(episode) =
+                        self.levels
+                            .get_mut(&depth::price(order.side, order.price, tick))
+                {
+                    episode.active.remove(id);
                 }
                 self.orders.remove(id);
             }
-            _ => {}
         }
     }
 

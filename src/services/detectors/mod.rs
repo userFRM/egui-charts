@@ -1464,6 +1464,109 @@ mod tests {
                 .unwrap()
                 .starts_with("2 refills")
         );
+
+        let host = Host::new(Some(1_000.0));
+        let mut settings = host.detectors.settings();
+        settings.icebergs.enabled = true;
+        host.detectors.set_settings(settings);
+        host.push(MarketEvent::OrderSnapshot {
+            sequence: 1,
+            orders: vec![
+                RestingOrder::new(1, OrderSide::Sell, 100.0, 10.0),
+                RestingOrder::new(2, OrderSide::Sell, 100.0, 10.0),
+                RestingOrder::new(3, OrderSide::Sell, 100.0, 1.0),
+            ],
+        });
+        for (sequence, event) in [
+            (
+                2,
+                OrderEvent::Execute {
+                    id: 1,
+                    size: 10.0,
+                    trade: None,
+                },
+            ),
+            (
+                3,
+                OrderEvent::Execute {
+                    id: 2,
+                    size: 10.0,
+                    trade: None,
+                },
+            ),
+            (4, OrderEvent::Cancel { id: 3 }),
+            (
+                5,
+                OrderEvent::Add(RestingOrder::new(4, OrderSide::Sell, 100.0, 7.0)),
+            ),
+            (
+                6,
+                OrderEvent::Add(RestingOrder::new(5, OrderSide::Sell, 100.0, 10.0)),
+            ),
+            (
+                7,
+                OrderEvent::Add(RestingOrder::new(6, OrderSide::Sell, 100.0, 10.0)),
+            ),
+        ] {
+            host.detectors
+                .push("ES", time(0), &MarketEvent::Order { sequence, event });
+        }
+        let signals = of_kind(host.events(), "Icebergs");
+        assert_eq!(
+            signals.len(),
+            1,
+            "both depletions survive unrelated orders at the same price"
+        );
+        assert_eq!(
+            signals[0].tooltip.as_deref(),
+            Some("2 refills, executed 20, shown 10; order-level refills")
+        );
+
+        let host = Host::new(Some(1_000.0));
+        let mut settings = host.detectors.settings();
+        settings.icebergs.enabled = true;
+        host.detectors.set_settings(settings);
+        host.push(MarketEvent::OrderSnapshot {
+            sequence: 1,
+            orders: vec![RestingOrder::new(1, OrderSide::Sell, 100.0, 0.3)],
+        });
+        for i in 0..2 {
+            for (offset, size) in [(0, 0.1), (1, 0.2)] {
+                host.detectors.push(
+                    "ES",
+                    time(0),
+                    &MarketEvent::Order {
+                        sequence: 2 + i * 3 + offset,
+                        event: OrderEvent::Execute {
+                            id: 1 + i,
+                            size,
+                            trade: None,
+                        },
+                    },
+                );
+            }
+            host.detectors.push(
+                "ES",
+                time(0),
+                &MarketEvent::Order {
+                    sequence: 4 + i * 3,
+                    event: OrderEvent::Add(RestingOrder::new(2 + i, OrderSide::Sell, 100.0, 0.3)),
+                },
+            );
+        }
+        let signals = of_kind(host.events(), "Icebergs");
+        assert_eq!(
+            signals.len(),
+            1,
+            "decimal fills replenish twice without a false depth loss"
+        );
+        assert!(
+            signals[0]
+                .tooltip
+                .as_deref()
+                .unwrap()
+                .starts_with("2 refills")
+        );
     }
 
     #[test]
@@ -1471,9 +1574,11 @@ mod tests {
         for (name, gap, delay, keep, expected) in [
             ("priority lost", false, 10, false, 1),
             ("changed displayed size", false, 10, false, 1),
+            ("smaller refill clip", false, 10, false, 1),
             ("priority retained", false, 10, true, 0),
             ("gap", true, 10, false, 0),
             ("replacement too late", false, 101, false, 0),
+            ("partial refill too late", false, 101, false, 0),
         ] {
             let host = Host::new(Some(1_000.0));
             let mut settings = host.detectors.settings();
@@ -1498,12 +1603,16 @@ mod tests {
                         sequence: seq + u64::from(gap),
                         event: OrderEvent::Execute {
                             id: 1,
-                            size: if delay > 100 { 10.0 } else { 5.0 },
+                            size: if name == "replacement too late" {
+                                10.0
+                            } else {
+                                5.0
+                            },
                             trade: None,
                         },
                     },
                 );
-                let event = if delay > 100 {
+                let event = if name == "replacement too late" {
                     OrderEvent::Add(RestingOrder::new(1, OrderSide::Buy, 100.0, 10.0))
                 } else {
                     OrderEvent::Modify {
@@ -1511,6 +1620,8 @@ mod tests {
                         price: None,
                         size: Some(if name == "changed displayed size" {
                             12.0 + i as f64
+                        } else if name == "smaller refill clip" {
+                            8.0 + i as f64
                         } else {
                             10.0
                         }),

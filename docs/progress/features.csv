@@ -423,7 +423,7 @@ Order flow,Order flow,Heatmap depth source and order filters,done,library,src/da
 Order flow,Order flow,Heatmap history retention in memory with manual memory release,done,library,src/data/depth_history.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Heatmap rendering at scale,done,library,src/chart/overlays/liquidity_heatmap.rs;src/data/depth_history.rs;src/data/depth.rs;benches/heatmap.rs;docs/order-flow.md;benches/regression/mod.rs
 Order flow,Order flow,Horizontal bid vs ask imbalance,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
-Order flow,Order flow,Iceberg detection from order-level refills at one price,done,library,src/services/detectors/icebergs.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs
+Order flow,Order flow,Iceberg detection from order-level refills at one price,done,library,src/services/detectors/icebergs.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/data/orders.rs
 Order flow,Order flow,Imbalance zone tracker and rejector,partial,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs
 Order flow,Order flow,Large aggressive trades and historical loading,done,library,src/chart/overlays/volume_bubbles.rs;src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs;src/services/detectors/big_trades.rs;src/services/detectors/mod.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Large resting order highlight on heatmap and DOM levels,done,library,src/data/orders.rs;src/chart/overlays/book_profile.rs;src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/widget/feed/mod.rs;src/data/depth_history.rs;src/data/inbox/sink.rs;src/chart/overlays/liquidity_heatmap.rs;src/theme/presets.rs
