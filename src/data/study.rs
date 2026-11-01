@@ -1,10 +1,10 @@
-//! Additional price or metric histories requested by a study from the host's data source.
+//! Additional price or metric histories requested by a study or drawing from the host's data source.
 
 use crate::model::{Bar, BarClock, Instrument, Timeframe};
 use chrono::{DateTime, Utc};
 
-/// A study's additional history and live subscription. Empty symbols and absent intervals
-/// follow the chart. The host owns symbol identifiers and supplies the market data.
+/// A study or drawing's additional history and live subscription. Empty symbols and absent
+/// intervals follow the chart. The host owns symbol identifiers and supplies the market data.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct StudyDataRequest {
     /// Host symbol identifier, or empty for the chart symbol.

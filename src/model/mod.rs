@@ -59,6 +59,8 @@ pub use alert::{
 };
 #[cfg(feature = "widget")]
 pub(crate) use bar::SpanCache;
+#[cfg(feature = "drawings")]
+pub(crate) use bar::SpanFingerprint;
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
 pub(crate) use bar::{index_at, index_at_with_timeframe, time_at, time_at_with_timeframe};
