@@ -8,6 +8,7 @@ use crate::ui::app_state::set_control_visible;
 use crate::ui::context_menu::drawing::DRAWING_MENU_OFFSET;
 use crate::ui::context_menu::study::{self as study_context_menu, StudyContextMenu};
 use crate::ui::context_menu::tpo::TpoMenu;
+use crate::ui::context_menu::trade_profile::TradeProfileMenu;
 use crate::ui::dialogs::{DrawingContextMenu, SeriesContextMenu};
 use crate::widget::{Chart, RightClickTarget};
 use egui::{Context, Id};
@@ -116,6 +117,7 @@ pub struct ChartMenus {
     drawing: DrawingContextMenu,
     axes: crate::ui::context_menu::axis::AxisMenus,
     tpo: Option<TpoMenu>,
+    trade_profile: Option<TradeProfileMenu>,
     /// Host rows in display order. Empty by default.
     pub host_entries: Vec<HostMenuEntry>,
     context: Option<HostMenuContext>,
@@ -214,6 +216,14 @@ impl ChartMenus {
                 } => TpoMenu::open(chart, pos),
                 _ => None,
             };
+            self.trade_profile = match target {
+                RightClickTarget::Background { .. }
+                | RightClickTarget::Element {
+                    id: ChartElementId::Series(SeriesId::MAIN),
+                    ..
+                } => TradeProfileMenu::open(chart, pos, time),
+                _ => None,
+            };
             self.just_opened = true;
             // A new right-click supersedes any menu still open.
             self.chart.close();
@@ -283,6 +293,11 @@ impl ChartMenus {
                 {
                     chart.user_action(|chart| tpo.apply(chart, action));
                 }
+                if let Some(ChartContextAction::Chart(action)) = &picked
+                    && let Some(profile) = &self.trade_profile
+                {
+                    profile.apply(chart, action);
+                }
                 if let Some(ChartContextAction::Chart(ContextMenuAction::DrawHorizontalLine(price))) =
                     &picked
                     && let RightClickTarget::Background { pos, .. } = context.target
@@ -342,6 +357,14 @@ impl ChartMenus {
         };
         if let Some(tpo) = &self.tpo {
             let mut profile = tagged(tpo.entries(), ChartContextAction::Chart);
+            if !entries.is_empty() {
+                profile.push(MenuEntry::Separator);
+            }
+            profile.extend(entries);
+            entries = profile;
+        }
+        if let Some(profile) = &self.trade_profile {
+            let mut profile = tagged(profile.entries(), ChartContextAction::Chart);
             if !entries.is_empty() {
                 profile.push(MenuEntry::Separator);
             }

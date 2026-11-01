@@ -621,7 +621,7 @@ impl Chart {
                 indicator.data_requests(),
                 &self.symbol,
                 self.timeframe,
-                self.replay.as_ref().map(|replay| replay.time),
+                self.replay_time(),
             );
             indicator.update_data(&self.state.data().bars, 0, &sources);
         }
@@ -817,12 +817,9 @@ impl Chart {
             .iter()
             .flat_map(|study| study.data_requests())
             .collect();
-        let sources = self.study_data.data(
-            requests,
-            &self.symbol,
-            self.timeframe,
-            self.replay.as_ref().map(|replay| replay.time),
-        );
+        let sources =
+            self.study_data
+                .data(requests, &self.symbol, self.timeframe, self.replay_time());
         refresh_values(
             self.studies.indicators_mut(),
             &self.study_ids,
@@ -835,6 +832,7 @@ impl Chart {
     }
 
     pub(super) fn refresh_element_studies(&mut self, now: f64) -> Option<f64> {
+        let cutoff = self.replay_time();
         let cache = &mut self.element_studies;
         let requests = cache
             .studies
@@ -842,12 +840,9 @@ impl Chart {
             .iter()
             .flat_map(|study| study.data_requests())
             .collect();
-        let sources = self.study_data.data(
-            requests,
-            &self.symbol,
-            self.timeframe,
-            self.replay.as_ref().map(|replay| replay.time),
-        );
+        let sources = self
+            .study_data
+            .data(requests, &self.symbol, self.timeframe, cutoff);
         refresh_values(
             cache.studies.indicators_mut(),
             &self.study_ids,

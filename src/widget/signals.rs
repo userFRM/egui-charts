@@ -120,16 +120,21 @@ impl Chart {
             .or_else(|| self.time_to_index(time))
             .map(|index| coords.idx_to_x(0) + index as f32 * coords.bar_spacing)
         };
-        let signals = self
-            .signal_sources
-            .iter()
-            .enumerate()
-            .flat_map(|(index, source)| {
-                source
-                    .signals
-                    .iter()
-                    .map(move |signal| (index, source, signal))
-            });
+        // Price zones stay behind their markers, including hit targets after a zone update.
+        let signals = [true, false].into_iter().flat_map(|price_zones| {
+            self.signal_sources
+                .iter()
+                .enumerate()
+                .flat_map(move |(index, source)| {
+                    source
+                        .signals
+                        .iter()
+                        .filter(move |signal| {
+                            matches!(signal.shape, SignalShape::PriceZone { .. }) == price_zones
+                        })
+                        .map(move |signal| (index, source, signal))
+                })
+        });
         for (index, source, signal) in signals {
             if self.hidden_signal_categories.contains(&signal.category) {
                 continue;
@@ -241,6 +246,48 @@ impl Chart {
                         neutral,
                     )
                 }
+                SignalShape::PriceZone {
+                    from,
+                    to,
+                    price,
+                    direction,
+                } => {
+                    let Some(left) = x(from) else {
+                        continue;
+                    };
+                    let right = match to {
+                        Some(time) => {
+                            let Some(right) = x(time) else {
+                                continue;
+                            };
+                            right
+                        }
+                        None => coords.rect.right(),
+                    };
+                    let y = coords.price.price_to_y(price);
+                    if right < coords.rect.left()
+                        || left > coords.rect.right()
+                        || !coords.rect.y_range().contains(y)
+                    {
+                        continue;
+                    }
+                    let color = match direction {
+                        Direction::Up => theme.chart.candle_up,
+                        Direction::Down => theme.chart.candle_down,
+                        Direction::Neutral => neutral,
+                    };
+                    let left = left.max(coords.rect.left());
+                    let right = right.max(left + 1.0).min(coords.rect.right());
+                    painter.line_segment(
+                        [Pos2::new(left, y), Pos2::new(right, y)],
+                        Stroke::new(2.0, color),
+                    );
+                    (
+                        Rect::from_min_max(Pos2::new(left, y - 4.0), Pos2::new(right, y + 4.0)),
+                        Pos2::new(left + 6.0, y - 9.0),
+                        color,
+                    )
+                }
                 SignalShape::Zone {
                     from,
                     to,
@@ -337,6 +384,9 @@ fn valid(shape: &SignalShape) -> bool {
     match *shape {
         SignalShape::Marker { price, .. } => price.is_none_or(f64::is_finite),
         SignalShape::Level { price, .. } => price.is_finite(),
+        SignalShape::PriceZone {
+            from, to, price, ..
+        } => price.is_finite() && to.is_none_or(|to| to >= from),
         SignalShape::Zone {
             from,
             to,
@@ -577,5 +627,85 @@ mod tests {
             .2
             .push(SignalEvent::Clear);
         assert_eq!(labels(&mut chart, 0.2), ["From B"]);
+    }
+    #[test]
+    fn one_price_zones_render_with_their_side_even_with_no_duration() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for (direction, color) in [
+                (Direction::Up, theme.chart.candle_up),
+                (Direction::Down, theme.chart.candle_down),
+            ] {
+                let ctx = egui::Context::default();
+                let mut chart = test_frames::chart(&[95.0], &[105.0]);
+                chart.set_theme_override(Some(theme.clone()));
+                chart.set_symbol("A");
+                let host = Arc::new(Host::default());
+                chart.set_signal_source(Some(host.clone()));
+                test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+                let stream = host.streams.lock().unwrap()[0].2.clone();
+                let time = chart.state.shown()[70].time;
+                let zone = Signal {
+                    id: SignalId("price-zone".into()),
+                    shape: SignalShape::PriceZone {
+                        from: time,
+                        to: Some(time),
+                        price: 100.0,
+                        direction,
+                    },
+                    category: "Depth".into(),
+                    label: Some("Held level".into()),
+                    tooltip: Some("Absorbed 10".into()),
+                };
+                stream.push(SignalEvent::Upsert(zone.clone()));
+                let shapes = test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
+                let x = chart.index_to_x(70.0).unwrap();
+                let y = chart.last_price_map.price_to_y(100.0);
+                assert!(shapes.iter().any(|shape| matches!(shape, egui::Shape::LineSegment { points, stroke }
+                    if (points[0].x - x).abs() < 0.01 && (points[0].y - y).abs() < 0.01
+                    && (points[1].x - points[0].x - 1.0).abs() < 0.01 && stroke.color == color && stroke.width == 2.0)));
+                stream.push(SignalEvent::Upsert(Signal {
+                    id: SignalId("wall".into()),
+                    shape: SignalShape::Marker {
+                        time,
+                        price: Some(100.0),
+                        direction,
+                    },
+                    category: "Depth".into(),
+                    label: None,
+                    tooltip: Some("Wall executions".into()),
+                }));
+                // A later zone update must leave the coincident marker available on hover.
+                stream.push(SignalEvent::Upsert(zone));
+                test_frames::frame(
+                    &ctx,
+                    &mut chart,
+                    0.2,
+                    vec![egui::Event::PointerMoved(Pos2::new(x, y))],
+                );
+                test_frames::frame(&ctx, &mut chart, 1.0, vec![]);
+                let hovered = test_frames::shapes(&ctx, &mut chart, 1.1, vec![]);
+                assert!(
+                    hovered
+                        .iter()
+                        .any(|shape| matches!(shape, egui::Shape::Text(text)
+                    if text.galley.text() == "Wall executions"))
+                );
+                chart.set_signal_category_visible("Depth", false);
+                let hidden = test_frames::shapes(&ctx, &mut chart, 1.2, vec![]);
+                assert!(!hidden.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == "Held level")));
+                assert!(!valid(&SignalShape::PriceZone {
+                    from: time,
+                    to: Some(time - chrono::TimeDelta::seconds(1)),
+                    price: 100.0,
+                    direction
+                }));
+                assert!(!valid(&SignalShape::PriceZone {
+                    from: time,
+                    to: None,
+                    price: f64::NAN,
+                    direction
+                }));
+            }
+        }
     }
 }
