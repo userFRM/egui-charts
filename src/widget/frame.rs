@@ -2770,10 +2770,8 @@ impl Chart {
                 legend.formatters = self.value_formatters();
                 legend.thousands_sep = price_map.thousands_sep();
                 legend.instrument = self.instrument();
-                legend.badge = self
-                    .legend_badge
-                    .clone()
-                    .filter(|_| self.config.show_legend_badge);
+                legend.badge = self.legend_badge.clone();
+                legend.show_logo = self.config.show_legend_badge;
                 legend.statuses = &statuses;
                 legend.quote = self
                     .quote

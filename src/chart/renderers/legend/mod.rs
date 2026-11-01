@@ -4,6 +4,7 @@ use super::{price_decimals, semibold};
 use crate::chart::renderers::StyleColors;
 use crate::localization as l10n;
 use crate::model::{Bar, DataStatus, Instrument, Level1Quote, percent_change};
+use crate::painting::symbol_mark::paint_symbol_mark;
 use crate::studies::Indicator;
 use crate::theme::ThemeExt;
 use egui::{Color32, FontId, ImageSource, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
@@ -78,8 +79,11 @@ pub struct Legend<'a> {
     pub previous_close: Option<f64>,
     /// Current host quote, independent of `bar`. Invalid or crossed quotes are omitted.
     pub quote: Option<&'a Level1Quote>,
-    /// Optional host-owned instrument image.
+    /// Image for the symbol mark before the title, in place of the instrument's logo.
     pub badge: Option<ImageSource<'a>>,
+    /// Show the symbol mark before the title: [`badge`](Self::badge), else the instrument's
+    /// [`logo`](Instrument::logo), else the symbol's first letter or digit on a neutral disc.
+    pub show_logo: bool,
     /// Optional host-owned status marks.
     pub statuses: &'a [LegendStatus<'a>],
     /// Studies on the chart. Overlay studies retain a row while hidden so they can be shown again.
@@ -90,7 +94,7 @@ pub struct Legend<'a> {
     pub bar_index: usize,
     /// Whether this series has volume.
     pub show_volume: bool,
-    /// Display the instrument title and its host status marks.
+    /// Display the title row: the symbol mark, the instrument title and the status marks.
     pub show_title: bool,
     /// Whether the series is shown. A hidden series keeps its title and controls, dimmed, so it
     /// can be shown again.
@@ -134,6 +138,7 @@ impl<'a> Legend<'a> {
             previous_close: None,
             quote: None,
             badge: None,
+            show_logo: true,
             statuses: &[],
             studies: &[],
             study_inputs: &[],
@@ -211,11 +216,20 @@ impl<'a> Legend<'a> {
         #[cfg(feature = "icons")]
         let title_start = layout.pos;
         if self.show_title {
-            if let Some(badge) = &self.badge {
+            let image = self.badge.clone().or_else(|| {
+                self.instrument
+                    .and_then(|instrument| instrument.logo.as_deref())
+                    .map(ImageSource::from)
+            });
+            let mark_symbol = self
+                .instrument
+                .map_or(self.symbol, |instrument| instrument.symbol.as_str());
+            if self.show_logo && (image.is_some() || mark_symbol.chars().any(char::is_alphanumeric))
+            {
                 let rect = layout.reserve(Vec2::splat(18.0));
-                let mut badge_ui = ui.new_child(egui::UiBuilder::new().max_rect(bounds));
-                badge_ui.set_clip_rect(painter.clip_rect());
-                egui::Image::new(badge.clone()).paint_at(&badge_ui, rect);
+                // The title follows 5 points after the mark, closer than the layout's gap.
+                layout.pos.x = rect.right() + 5.0;
+                paint_symbol_mark(&painter, rect, mark_symbol, image);
             }
             let title = self.title();
             // Delayed and end-of-day data are marked ahead of the host's own marks.
@@ -1291,6 +1305,81 @@ fn format_volume(volume: f64) -> String {
     format!("{volume:.0}")
 }
 
+#[cfg(test)]
+mod mark_tests {
+    use super::*;
+
+    /// The mark uses the host override, then the instrument logo, then an initial, and the
+    /// title keeps its five-point gap. Hiding the title or logo removes the mark.
+    #[test]
+    fn legend_marks_the_symbol_before_its_title() {
+        for (_, theme) in crate::theme::presets() {
+            for (badge, logo, shown, title, symbol) in [
+                (true, false, true, true, "ABC"),
+                (false, true, true, true, "ABC"),
+                (false, false, true, true, "ABC"),
+                (true, true, false, true, "ABC"),
+                (false, false, true, false, "ABC"),
+                (false, false, true, true, ""),
+            ] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let texture = ctx.load_texture(
+                    "badge",
+                    egui::ColorImage::filled([18, 18], Color32::BLUE),
+                    Default::default(),
+                );
+                let mut instrument = Instrument::new(symbol);
+                if logo {
+                    instrument = instrument.with_logo("bytes://unreadable.svg");
+                }
+                let bar = Bar::new(chrono::Utc::now(), 1.0, 2.0, 0.0, 1.0, 0.0);
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    let mut legend = Legend::new(symbol, "1h", &bar);
+                    legend.instrument = Some(&instrument);
+                    legend.badge = badge
+                        .then(|| ImageSource::Texture((texture.id(), Vec2::splat(18.0)).into()));
+                    legend.show_logo = shown;
+                    legend.show_title = title;
+                    legend.show(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0)));
+                });
+                let mark = shown && title && (badge || !symbol.is_empty());
+                let images = output
+                    .shapes
+                    .iter()
+                    .filter(|shape| {
+                        matches!(&shape.shape,
+                    egui::Shape::Rect(rect) if rect.fill_texture_id() == texture.id())
+                    })
+                    .count();
+                assert_eq!(images, usize::from(mark && badge));
+                let letters = output
+                    .shapes
+                    .iter()
+                    .filter(|shape| {
+                        matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.text() == "A")
+                    })
+                    .count();
+                assert_eq!(letters, usize::from(mark && !badge));
+                if title {
+                    let label = if symbol.is_empty() { "1h" } else { "ABC · 1h" };
+                    let text = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == label => Some(text),
+                            _ => None,
+                        })
+                        .expect("title");
+                    assert_eq!(text.pos.x, theme.spacing.lg + if mark { 23.0 } else { 0.0 });
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+}
+
 #[cfg(all(test, feature = "studies"))]
 mod tests {
     use super::*;
@@ -1612,7 +1701,7 @@ mod tests {
                 .collect();
             assert_eq!(titles.len(), 2);
             for (index, title) in titles.iter().enumerate() {
-                assert_eq!(title.pos.x, index as f32 * 600.0 + 8.0);
+                assert_eq!(title.pos.x, index as f32 * 600.0 + 31.0);
                 assert_eq!(title.galley.job.sections[0].format.font_id.size, 13.0);
             }
             let buttons: Vec<_> = second

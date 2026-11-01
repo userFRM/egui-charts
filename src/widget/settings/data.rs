@@ -65,7 +65,8 @@ impl Default for CandleColorConfig {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct StatusLineOptions {
-    /// Whether the legend shows the host's instrument logo before the title.
+    /// Whether the legend shows the symbol's logo before the title, or its initial on a neutral
+    /// disc without one.
     pub show_logo: bool,
     /// Whether the legend shows the instrument title.
     pub show_symbol: bool,

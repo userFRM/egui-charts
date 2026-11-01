@@ -317,7 +317,8 @@ pub struct ChartConfig {
     pub show_legend_volume: bool,
     /// Show host-supplied study inputs in the legend.
     pub show_indicator_inputs: bool,
-    /// Show the host's legend badge, such as the instrument logo, before the title.
+    /// Show the symbol's logo before the legend title: the legend badge, else the instrument's
+    /// logo, else the symbol's initial on a neutral disc.
     pub show_legend_badge: bool,
     /// Show the change of the last price from the previous session's close in the legend.
     pub show_last_day_change: bool,

@@ -6,6 +6,8 @@ The host input integration can call `set_pointer_kind(Some(PointerKind::Pen))` b
 
 `set_price_formatter` supplies raw prices and `PriceFormatter::format_tick` supplies axis ticks. `set_percentage_formatter` receives percentage points or indexed values on relative scales, and percentage changes in readouts. `set_series_formatter(id, ...)` overrides a bar series' raw-price labels, readouts and ticks; a shared axis uses its first visible series. `set_volume_formatter` supplies volume readouts and configured volume studies, including studies added later. `None` restores the built-in formatting. Formatter implementations are shared `Arc`s and retained by PNG exports. CSV keeps numeric machine-readable values.
 
+A legend shows the symbol's logo before its title, from `Legend::badge` or `Instrument::logo`, else the symbol's initial. `Legend::show_logo` hides the mark.
+
 Standalone legends built with `Legend::new` take `ValueFormatters` in their `formatters` field; its default preserves built-in formatting. `StudyValue::formatted_value` uses the chart-supplied formatted text when present, so host readouts match the chart. Direct `StudyValue` literals set `formatted: None` to use the declared units and precision.
 
 `set_locale`, `set_date_format`, `set_time_formatter` and `set_session_provider` already support localized calendar names, crosshair/tooltip date patterns, separate time tick/hover methods and host session rules. Built-in price labels on price scales, their tags, the crosshair and the legend group thousands with `ChartConfig::thousands_sep` (`','` by default, `None` for plain digits); hosts supply decimal commas and currency conventions through their numeric formatters, whose labels are never grouped.

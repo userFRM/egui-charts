@@ -92,7 +92,7 @@ use egui_charts::widget::settings::ChartSettingsState;
 use live::LiveFeed;
 use std::sync::Arc;
 
-use crate::sampledata::{DemoSymbol, us_equity_session, visible_bars_for_range};
+use crate::sampledata::{SAMPLE_LOGO, SAMPLE_LOGO_SVG, DemoSymbol, us_equity_session, visible_bars_for_range};
 
 fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
     study
@@ -504,6 +504,7 @@ impl DemoApp {
     ) -> Self {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
+        cc.egui_ctx.include_bytes(SAMPLE_LOGO, SAMPLE_LOGO_SVG);
 
         // Earlier releases saved active palettes without an explicit choice.
         let theme_choice = cc
@@ -805,6 +806,7 @@ impl DemoApp {
         app.top_toolbar.state.can_trade = true;
         app.watchlist.set_selected(symbol);
         app.watchlist.set_service(app.quotes.clone());
+        app.watchlist.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
         app.symbol_details.set_storage(app.storage.clone());

@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use super::market::Market;
 use super::orders::Orders;
 use crate::sampledata::{
-    DemoSymbol, dividend_date, dividend_factor, latest_open_end, session_bars, us_equity_hours,
+    DemoSymbol, SAMPLE_LOGO, dividend_date, dividend_factor, latest_open_end, session_bars, us_equity_hours,
     us_equity_session, us_equity_zone,
 };
 use egui_charts::ui::timeframe_toolbar::SessionType;
@@ -231,6 +231,9 @@ impl LiveFeed {
             instrument = instrument
                 .with_time_zone(us_equity_zone())
                 .with_session(us_equity_session());
+        }
+        if sim.symbol == "SAMPLE" {
+            instrument = instrument.with_logo(SAMPLE_LOGO);
         }
         // Index quotes are commonly licensed delayed; the legend marks them.
         if sim.symbol == "SPX" {
