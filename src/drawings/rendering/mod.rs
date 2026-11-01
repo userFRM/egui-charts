@@ -29,7 +29,8 @@ pub(crate) use outline::Outline;
 pub use traits::DrawingRenderer;
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
-use crate::model::{Bar, SpanCache};
+use crate::model::Bar;
+use crate::painting::span_cache::SpanCache;
 use egui::Rect;
 use std::rc::Rc;
 
@@ -245,8 +246,9 @@ impl Drawing {
             | DrawingToolType::DateAndPriceRange => self.render_range(painter, rect, stroke, view),
 
             // Annotations (7 tools)
-            DrawingToolType::TextLabel => self.render_text_label(painter),
-            DrawingToolType::AnchoredText => self.render_anchored_text(painter),
+            DrawingToolType::TextLabel | DrawingToolType::AnchoredText => {
+                self.render_text_label(painter)
+            }
             DrawingToolType::Note => self.render_note(painter),
             DrawingToolType::AnchoredNote => self.render_anchored_note(painter, selected),
             DrawingToolType::Callout => self.render_callout(painter),
@@ -686,8 +688,6 @@ mod tests {
             }
             let mut filled = drawing.clone();
             filled.fill_color = Some([12, 34, 56, 80]);
-            // A text box shows its fill once its background is on.
-            filled.background = true;
             let fill = filled.fill_color32().unwrap();
             let fill = found(&paint(&filled), &|s| match s {
                 Shape::Path(p) => p.fill == fill,

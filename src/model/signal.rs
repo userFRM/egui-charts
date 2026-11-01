@@ -46,6 +46,18 @@ pub enum SignalShape {
         /// Start time, or `None` for a level across the whole chart.
         from: Option<DateTime<Utc>>,
     },
+    /// A directional zone at one price, drawn as a line from `from` to `to`, or onward
+    /// without `to`. Even a zero-duration zone remains visible and can be hovered.
+    PriceZone {
+        /// Start time of the zone.
+        from: DateTime<Utc>,
+        /// End time, at or after `from`, or `None` for an open zone.
+        to: Option<DateTime<Utc>>,
+        /// Price of the resting level.
+        price: f64,
+        /// Side colour of the zone.
+        direction: Direction,
+    },
     /// The prices from `low` to `high` between `from` and `to`, or from `from` onward without
     /// `to`. `low` is at most `high`.
     Zone {

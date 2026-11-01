@@ -2,10 +2,10 @@
 //! exits.
 
 use super::{Bracket, BracketMode, Kind, Market, OrderTicket, Sizing, reward};
-use crate::chart::{decimals, to_step};
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::model::{OrderRequest, OrderSide};
+use crate::scales::{decimals, to_step};
 use crate::theme::ThemeExt;
 use crate::ui::top_toolbar::buttons::rule_color;
 use crate::ui::trading::widgets::{

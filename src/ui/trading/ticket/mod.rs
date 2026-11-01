@@ -9,11 +9,12 @@ mod view;
 use super::dom::Ladder;
 use super::format::{Numbers, TradingFormatter};
 use super::widgets::{grouped, side_name};
-use crate::chart::{TradingLineAction, decimals, to_step};
+use crate::chart::TradingLineAction;
 use crate::model::{
     Capabilities, Order, OrderBook, OrderId, OrderPreview, OrderRequest, OrderSide, OrderType,
     Position, TakeProfitLevel, Tick, TimeInForce, TradingRules,
 };
+use crate::scales::{decimals, to_step};
 
 /// How a take-profit or stop-loss distance is entered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

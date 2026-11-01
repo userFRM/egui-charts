@@ -534,7 +534,11 @@ impl Indicator for ConfiguredStudy {
             self.study.calculate(&[]);
             Ok(())
         } else {
+            let format = self.study.value_format();
             self.study.set_input(id, value)?;
+            if self.study.value_format() != format {
+                self.formatter = None;
+            }
             self.aligned = None;
             Ok(())
         }
@@ -878,6 +882,9 @@ impl Indicator for ConfiguredStudy {
                 edited.study.set_color(line, plot.color);
             }
         }
+        if self.study.value_format() != edited.study.value_format() {
+            self.formatter = None;
+        }
         self.study = edited.study;
         self.study.set_label_precision(settings.precision);
         self.source = edited.source;
@@ -907,7 +914,13 @@ impl Indicator for ConfiguredStudy {
             .as_ref()
             .filter(|_| value.is_finite())
             .map_or_else(
-                || self.value_format().format(value, self.precision()),
+                || {
+                    if self.precision() == self.study.precision() {
+                        self.study.format_value(value)
+                    } else {
+                        self.value_format().format(value, self.precision())
+                    }
+                },
                 |formatter| formatter.format(value),
             )
     }

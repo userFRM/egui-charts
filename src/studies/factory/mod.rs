@@ -81,6 +81,8 @@ impl IndicatorFactory {
     pub const PROFILES: &'static str = "Profiles";
     /// The category of the built-in pattern detectors.
     pub const PATTERNS: &'static str = "Patterns";
+    /// The category of studies computed from trades, quotes or the order book.
+    pub const ORDER_FLOW: &'static str = "Order flow";
 
     /// Create a factory with the built-in catalogue enabled by the current features.
     pub fn new() -> Self {
@@ -361,7 +363,7 @@ impl IndicatorFactory {
             self.constructors.insert(
                 name,
                 (
-                    Some("Order flow"),
+                    Some(Self::ORDER_FLOW),
                     Box::new(move || Box::new(OrderFlowStudy::new(kind))),
                 ),
             );
@@ -373,7 +375,7 @@ impl IndicatorFactory {
             self.constructors.insert(
                 name,
                 (
-                    Some("Order flow"),
+                    Some(Self::ORDER_FLOW),
                     Box::new(move || Box::new(OrderFlowStudy::execution_delta(cumulative))),
                 ),
             );
@@ -418,7 +420,7 @@ impl IndicatorFactory {
 
     /// Register a named indicator constructor in `category`, such as [`PERSONAL`](Self::PERSONAL)
     /// for a script the user imported, [`COMMUNITY`](Self::COMMUNITY) or
-    /// [`PROFILES`](Self::PROFILES).
+    /// [`PROFILES`](Self::PROFILES) or [`ORDER_FLOW`](Self::ORDER_FLOW).
     ///
     /// A constructor already registered under `name`, a built-in included, is replaced. Returns
     /// `false`, registering nothing, when `name` is empty or only whitespace.
