@@ -1,4 +1,6 @@
 use crate::studies::{MACD, RSI};
+#[cfg(all(test, feature = "ui"))]
+use crate::ui::context_menu::ChartMenus;
 use crate::widget::test_frames::chart;
 use egui::{Context, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
@@ -528,7 +530,7 @@ fn merged_panes_share_scales_and_studies_can_return_to_the_main_pane() {
     }
     #[cfg(feature = "ui")]
     {
-        let mut menus = crate::ui::context_menu::ChartMenus::default();
+        let mut menus = ChartMenus::default();
         let mut shapes = Vec::new();
         for clicked in [true, false] {
             let mut output = ctx.run_ui(
