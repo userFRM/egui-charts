@@ -497,7 +497,8 @@ impl DrawingStorage {
                         // Before the id check, so that a skipped drawing does not claim its id.
                         let tool = drawing.drawing.tool_type;
                         if version < 3 {
-                            // Earlier renderers ignored these flags for rays and extended lines.
+                            // Earlier renderers ignored these flags for rays, extended lines
+                            // and pitchforks.
                             match tool {
                                 DrawingToolType::Ray => {
                                     let reversed = drawing.points.get(..2).is_some_and(|p| {
@@ -509,6 +510,13 @@ impl DrawingStorage {
                                 DrawingToolType::ExtendedLine => {
                                     drawing.drawing.extend_left = true;
                                     drawing.drawing.extend_right = true;
+                                }
+                                DrawingToolType::Pitchfork
+                                | DrawingToolType::SchiffPitchfork
+                                | DrawingToolType::ModifiedSchiffPitchfork
+                                | DrawingToolType::InsidePitchfork => {
+                                    drawing.drawing.extend_left = false;
+                                    drawing.drawing.extend_right = false;
                                 }
                                 _ => {}
                             }
@@ -1463,6 +1471,23 @@ mod tests {
             }
         }
 
+        // Old forks ignored Extend, so loading their saved flags must keep that reach.
+        for tool in [
+            DrawingToolType::Pitchfork,
+            DrawingToolType::SchiffPitchfork,
+            DrawingToolType::ModifiedSchiffPitchfork,
+            DrawingToolType::InsidePitchfork,
+        ] {
+            let mut saved: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+            saved["drawings"].as_array_mut().unwrap().truncate(1);
+            saved["drawings"][0]["drawing"]["tool_type"] = serde_json::to_value(tool).unwrap();
+            let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+            let drawing = &loaded.drawings[0].drawing;
+            assert!(!drawing.extend_left && !drawing.extend_right, "{tool:?}");
+        }
+
         // Strokes saved before version 4 were drawn at twice (brush) and eight times
         // (highlighter) their width, the highlighter at alpha 100. They load as drawn, once.
         for (version, tool, width, alpha, want_width, want_alpha) in [
@@ -1597,12 +1622,14 @@ mod tests {
                 "anchored VWAP band multiplier out of bounds",
                 &["2"][..],
                 0,
+                "invalid",
             ),
             (
                 with_vwap_multiplier(10.5),
                 "anchored VWAP band multiplier out of bounds",
                 &["2"][..],
                 0,
+                "invalid",
             ),
             (
                 with_level_width(0.0),
@@ -1689,6 +1716,13 @@ mod tests {
                 "Rect has 1 of 2 anchors",
             ),
             (
+                short_of_anchors(DrawingToolType::Pitchfork, 2),
+                "Pitchfork needs 3 anchors, has 2",
+                &["2"],
+                0,
+                "Pitchfork has 2 of 3 anchors",
+            ),
+            (
                 current.replacen("\"id\": \"2\"", "\"id\": \"1\"", 1),
                 "duplicate drawing id \"1\"",
                 &["1"],
@@ -1730,12 +1764,6 @@ mod tests {
             assert!(skipped[0].error.to_string().contains(error), "{skipped:?}");
             assert!(storage.to_json().is_ok(), "{error}");
         }
-
-        // A pitchfork finished after one click has two anchors and draws a mark and a segment each.
-        let (storage, skipped) =
-            DrawingStorage::from_json(&short_of_anchors(DrawingToolType::Pitchfork, 2)).unwrap();
-        assert!(skipped.is_empty(), "{skipped:?}");
-        assert_eq!(storage.drawings().len(), 2);
 
         // A drawing saved with the former Paintbrush tool, which drew as a brush, loads as one.
         let paintbrush = current.replace("\"TrendLine\"", "\"Paintbrush\"");

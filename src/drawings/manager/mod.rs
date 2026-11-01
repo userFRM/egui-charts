@@ -716,13 +716,16 @@ mod tests {
 
     /// Two clicks and Enter finish a multi-point tool with two anchors. Whatever the
     /// manager finishes must save, and a tool that draws nothing with two anchors (the parallel
-    /// channel) must stay in progress, or the whole storage would refuse to save.
+    /// channel and the pitchforks) must stay in progress, or the whole storage would refuse to save.
     #[test]
     fn a_drawing_finished_early_can_be_saved() {
         use crate::drawings::persistence::{DrawingStorage, drawing_to_stored};
         for (tool, finishes) in [
             (DrawingToolType::Triangle, true),
-            (DrawingToolType::Pitchfork, true),
+            (DrawingToolType::Pitchfork, false),
+            (DrawingToolType::SchiffPitchfork, false),
+            (DrawingToolType::ModifiedSchiffPitchfork, false),
+            (DrawingToolType::InsidePitchfork, false),
             (DrawingToolType::FlatTopBottom, true),
             (DrawingToolType::ParallelChannel, false),
         ] {
