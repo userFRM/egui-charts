@@ -184,13 +184,9 @@ impl Icebergs {
                 let at = depth::price(order.side, order.price, tick);
                 let same_price = price.is_none_or(|p| depth::price(order.side, p, tick) == at);
                 let (shown, executed) = self.orders.entry(*id).or_insert((order.size, 0.0));
-                if same_price
-                    && !keep_priority
-                    && *size > order.size
-                    && *executed > 0.0
-                    && *size == *shown
-                {
+                if same_price && !keep_priority && *size > order.size && *executed > 0.0 {
                     if let Some(episode) = self.levels.get_mut(&at) {
+                        episode.shown = *size;
                         episode.refills += 1;
                         Self::report(
                             &mut self.next,
@@ -203,6 +199,7 @@ impl Icebergs {
                             out,
                         );
                     }
+                    *shown = *size;
                     *executed = 0.0;
                 } else if !same_price || *size < order.size {
                     self.levels.remove(&at);

@@ -1433,6 +1433,7 @@ mod tests {
     fn iceberg_refills_reject_late_replacements_priority_keeps_and_depth_gaps() {
         for (name, gap, delay, keep, expected) in [
             ("priority lost", false, 10, false, 1),
+            ("changed displayed size", false, 10, false, 1),
             ("priority retained", false, 10, true, 0),
             ("gap", true, 10, false, 0),
             ("replacement too late", false, 101, false, 0),
@@ -1471,7 +1472,11 @@ mod tests {
                     OrderEvent::Modify {
                         id: 1,
                         price: None,
-                        size: Some(10.0),
+                        size: Some(if name == "changed displayed size" {
+                            12.0 + i as f64
+                        } else {
+                            10.0
+                        }),
                         keep_priority: keep,
                     }
                 };
