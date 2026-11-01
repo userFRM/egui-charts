@@ -3,7 +3,7 @@
 use crate::drawings::domain::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
 use crate::drawings::{
     Drawing, DrawingToolType as Tool, ElliottDegree, FibonacciLevel, GannConfig, GannFanDirection,
-    GannLevel, PitchforkConfig, PitchforkLevel, PositionSize, RegressionTrendConfig,
+    GannLevel, PitchforkConfig, PitchforkLevel, PositionSize, RegressionTrendConfig, VwapBand,
 };
 
 use crate::data::{ProfileDisplay, VolumeProfileConfig};
@@ -43,6 +43,7 @@ impl InputsTab {
                 | Tool::ShortPos
                 | Tool::FixedRangeVolumeProfile
                 | Tool::AnchoredVolumeProfile
+                | Tool::AnchoredVWAP
                 | Tool::RegressionTrend
                 | Tool::ElliottImpulse
                 | Tool::ElliottCorrection
@@ -295,6 +296,42 @@ impl InputsTab {
                     if updated != original {
                         drawing.volume_profile = Some(updated);
                     }
+                }
+            }
+            Tool::AnchoredVWAP => {
+                let original = drawing.vwap.unwrap_or_default();
+                let mut config = original;
+                let pickers = grid_pickers(pickers, 0);
+                pickers.resize_with(config.bands.len(), ColorPickerState::default);
+                for (i, (band, picker)) in
+                    config.bands.iter_mut().zip(pickers.iter_mut()).enumerate()
+                {
+                    ui.push_id(i, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            let name = |ui: &Ui, property| {
+                                l10n::format_text(ui.ctx(), property, &[("0", (i + 1).to_string())])
+                            };
+                            ui.checkbox(&mut band.enabled, name(ui, "Band {0}"));
+                            let mut multiplier = band.multiplier();
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut multiplier)
+                                        .range(f64::MIN_POSITIVE..=10.0)
+                                        .speed(0.1),
+                                )
+                                .accessible_name(name(ui, "Band {0} multiplier"))
+                                .changed()
+                                && let Some(updated) =
+                                    VwapBand::new(band.enabled, multiplier, band.color)
+                            {
+                                *band = updated;
+                            }
+                            level_color(ui, &mut band.color, picker);
+                        });
+                    });
+                }
+                if config != original {
+                    drawing.vwap = Some(config);
                 }
             }
             Tool::RegressionTrend => {

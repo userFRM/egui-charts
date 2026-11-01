@@ -12,6 +12,7 @@ mod ghost_feed;
 mod options;
 mod pitchfork;
 mod template;
+mod vwap;
 
 pub use crate::config::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
 pub use coordinates::ChartPoint;
@@ -26,3 +27,4 @@ pub use options::{
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use template::DrawingTemplate;
+pub use vwap::{VwapBand, VwapConfig};

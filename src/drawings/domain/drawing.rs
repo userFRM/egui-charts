@@ -11,7 +11,7 @@
 use super::{
     ArrowStyle, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig, FontWeight,
     GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing,
-    RegressionTrendConfig, TimeframeVisibility,
+    RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -179,6 +179,9 @@ pub struct Drawing {
     pub volume_profile: Option<VolumeProfileConfig>,
     /// Band width of the regression trend tool
     pub regression_trend: Option<RegressionTrendConfig>,
+    /// Bands of the anchored VWAP. Older drawings use the defaults.
+    #[serde(default)]
+    pub vwap: Option<VwapConfig>,
 
     /// Levels, fan lines, arcs and background of the Gann tools; `None` draws
     /// [`GannConfig::for_tool`].
@@ -462,6 +465,7 @@ impl Drawing {
             )
             .then(VolumeProfileConfig::drawing_default),
             regression_trend: None,
+            vwap: None,
             pitchfork: matches!(
                 tool_type,
                 DrawingToolType::Pitchfork

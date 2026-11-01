@@ -949,6 +949,10 @@ mod tests {
         });
         d.volume_profile = VolumeProfileConfig::new(50, 0.68);
         d.regression_trend = RegressionTrendConfig::new(1.5);
+        let mut vwap = VwapConfig::default();
+        vwap.bands[0].enabled = false;
+        vwap.bands[1] = VwapBand::new(true, 2.5, [9, 8, 7, 6]).unwrap();
+        d.vwap = Some(vwap);
         if tool == DrawingToolType::DoubleCurve {
             d.chart_points.push(ChartPoint::new(12.0, 115.0));
         }
@@ -1164,6 +1168,7 @@ mod tests {
             let mut want = non_default_drawing(tool);
             want.label = None; // Earlier files have no object name.
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
+            want.vwap = None; // Earlier files use the default bands.
             // Earlier files draw text and borders in the drawing colour, boxed and upright.
             want.italic = false;
             want.text_color = None;
@@ -1404,7 +1409,31 @@ mod tests {
             });
             serde_json::to_string(&value).unwrap()
         };
+        let with_vwap_multiplier = |multiplier| {
+            let mut value = serde_json::to_value(&storage).unwrap();
+            let band = |m| {
+                serde_json::json!({
+                    "enabled": true, "multiplier": m, "color": [1, 2, 3, 255]
+                })
+            };
+            value["drawings"][0]["drawing"]["vwap"] = serde_json::json!({
+                "bands": [band(multiplier), band(2.0), band(3.0)]
+            });
+            serde_json::to_string(&value).unwrap()
+        };
         let unreadable = [
+            (
+                with_vwap_multiplier(0.0),
+                "anchored VWAP band multiplier out of bounds",
+                &["2"][..],
+                0,
+            ),
+            (
+                with_vwap_multiplier(10.5),
+                "anchored VWAP band multiplier out of bounds",
+                &["2"][..],
+                0,
+            ),
             (
                 with_level_width(0.0),
                 "out-of-range pitchfork.levels[0].width",

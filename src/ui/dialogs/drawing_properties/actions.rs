@@ -264,6 +264,7 @@ impl DrawingProps {
                     position_stop_color,
                     volume_profile,
                     regression_trend,
+                    vwap,
                     channel_midline,
                     elliott_degree,
                 );
@@ -539,6 +540,9 @@ mod tests {
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
+            let mut vwap = crate::drawings::VwapConfig::default();
+            vwap.bands[2] = crate::drawings::VwapBand::new(true, 0.5, [1, 2, 3, 255]).unwrap();
+            settings.vwap = Some(vwap);
             settings.elliott_degree = crate::drawings::ElliottDegree::Minute;
             settings.italic = true;
             settings.text_color = Some([1, 2, 3, 255]);
@@ -573,6 +577,7 @@ mod tests {
             assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
+            assert_eq!(saved.vwap, Some(vwap));
             assert_eq!(saved.elliott_degree, crate::drawings::ElliottDegree::Minute);
             assert!(saved.italic && !saved.background && !saved.border);
             assert_eq!(saved.text_color, Some([1, 2, 3, 255]));
