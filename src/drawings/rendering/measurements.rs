@@ -6,10 +6,11 @@ use super::{ChartView, bars_between};
 use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::model::{Bar, percent_change};
 use crate::scales::price_decimals;
-use crate::scales::{PriceFormatter, VolumeFormatter};
+use crate::scales::{DefaultPriceFormatter, PriceFormatter, VolumeFormatter};
 use crate::styles::{stroke, typography};
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
+use egui::{Align2, Color32, Pos2, Rect, Stroke};
 
 impl Drawing {
     pub(crate) fn render_measure(&self, painter: &egui::Painter, view: &ChartView) {
@@ -49,23 +50,6 @@ impl Drawing {
             });
             painter.rect_filled(rect, 0.0, fill_color);
 
-            // Draw thin border lines around the rect
-            let border_color = Color32::from_rgba_unmultiplied(
-                base_color.r(),
-                base_color.g(),
-                base_color.b(),
-                100,
-            );
-            painter.rect_stroke(
-                rect,
-                0.0,
-                Stroke::new(stroke::HAIRLINE, border_color),
-                egui::epaint::StrokeKind::Outside,
-            );
-
-            // Draw cross lines inside rect (+ shape with arrows)
-            let center_x = (rect.min.x + rect.max.x) / 2.0;
-            let center_y = (rect.min.y + rect.max.y) / 2.0;
             let line_color = Color32::from_rgba_unmultiplied(
                 base_color.r(),
                 base_color.g(),
@@ -74,282 +58,70 @@ impl Drawing {
             );
             let line_stroke = Stroke::new(stroke::MEDIUM, line_color);
 
-            // Vertical line (from top to bottom)
-            painter.line_segment(
-                [
-                    Pos2::new(center_x, rect.min.y),
-                    Pos2::new(center_x, rect.max.y),
-                ],
+            let center = rect.center();
+            arrow(
+                painter,
+                Pos2::new(center.x, start.y),
+                Pos2::new(center.x, end.y),
                 line_stroke,
             );
-
-            // Horizontal line (from left to right)
-            painter.line_segment(
-                [
-                    Pos2::new(rect.min.x, center_y),
-                    Pos2::new(rect.max.x, center_y),
-                ],
+            arrow(
+                painter,
+                Pos2::new(start.x, center.y),
+                Pos2::new(end.x, center.y),
                 line_stroke,
             );
-
-            // Draw arrow at right end of horizontal line (pointing right)
-            let arrow_size = 8.0;
-            let h_arrow_tip = Pos2::new(rect.max.x, center_y);
-            let h_arrow_left = h_arrow_tip + egui::vec2(-arrow_size, -arrow_size * 0.4);
-            let h_arrow_right = h_arrow_tip + egui::vec2(-arrow_size, arrow_size * 0.4);
-            painter.add(egui::Shape::convex_polygon(
-                vec![h_arrow_tip, h_arrow_left, h_arrow_right],
-                line_color,
-                Stroke::NONE,
-            ));
-
-            // Draw arrow at top/bottom of vertical line based on direction
-            if price_diff < 0.0 {
-                // Measuring down: arrow at bottom pointing down
-                let v_arrow_tip = Pos2::new(center_x, rect.max.y);
-                let v_arrow_left = v_arrow_tip + egui::vec2(-arrow_size * 0.4, -arrow_size);
-                let v_arrow_right = v_arrow_tip + egui::vec2(arrow_size * 0.4, -arrow_size);
-                painter.add(egui::Shape::convex_polygon(
-                    vec![v_arrow_tip, v_arrow_left, v_arrow_right],
-                    line_color,
-                    Stroke::NONE,
-                ));
-            } else {
-                // Measuring up: arrow at top pointing up
-                let v_arrow_tip = Pos2::new(center_x, rect.min.y);
-                let v_arrow_left = v_arrow_tip + egui::vec2(-arrow_size * 0.4, arrow_size);
-                let v_arrow_right = v_arrow_tip + egui::vec2(arrow_size * 0.4, arrow_size);
-                painter.add(egui::Shape::convex_polygon(
-                    vec![v_arrow_tip, v_arrow_left, v_arrow_right],
-                    line_color,
-                    Stroke::NONE,
-                ));
-            }
-
-            // Draw + symbol at center where lines cross (same color and thickness as cross lines)
-            let plus_size = 6.0;
-            painter.line_segment(
-                [
-                    Pos2::new(center_x - plus_size, center_y),
-                    Pos2::new(center_x + plus_size, center_y),
-                ],
-                line_stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(center_x, center_y - plus_size),
-                    Pos2::new(center_x, center_y + plus_size),
-                ],
-                line_stroke,
-            );
-
-            let info = self
-                .measurement_label(view.bars, view.instrument, view.time_axis)
-                .unwrap_or_default();
-
-            // Draw info box at the top-left corner of rect
-            let font = egui::FontId::proportional(typography::SM);
-            let galley = painter.layout_no_wrap(info.clone(), font.clone(), Color32::WHITE);
-            let text_size = galley.size();
-
-            // Pos box near the top-left corner of rect
-            let box_x = rect.min.x.min(rect.max.x) + 5.0;
-            let box_y = rect.min.y.min(rect.max.y) - text_size.y - 15.0;
-
-            // Draw background (solid color matching direction: red for down, blue for up)
-            let padding = egui::vec2(8.0, 6.0);
-            let size = text_size + padding * 2.0;
-            let clip = painter.clip_rect();
-            let pos = Pos2::new(box_x, box_y).clamp(clip.min, clip.max - size.min(clip.size()));
-            let (box_x, box_y) = (pos.x, pos.y);
-            let box_rect = egui::Rect::from_min_size(pos, size);
-            painter.rect_filled(box_rect, DESIGN_TOKENS.rounding.md, base_color);
-
-            // Draw text with padding
-            painter.text(
-                Pos2::new(box_x + padding.x, box_y + padding.y),
-                egui::Align2::LEFT_TOP,
-                info,
-                font,
-                Color32::WHITE,
-            );
+            self.range_card(painter, rect, view);
         }
     }
 
-    pub(crate) fn render_price_range(
+    /// Renders the price range, date range and date and price range: a box between the anchors
+    /// with edges at the measured prices, bars or both, arrows from the first anchor towards the
+    /// second, and the measurement on a card. The price edges reach the pane's side when the
+    /// drawing extends that way.
+    pub(crate) fn render_range(
         &self,
         painter: &egui::Painter,
-        chart_rect: Rect,
+        pane: Rect,
+        stroke: Stroke,
         view: &ChartView,
     ) {
-        if self.points.len() < 2 {
-            if !self.points.is_empty() {
-                painter.circle_filled(
-                    self.points[0],
-                    DESIGN_TOKENS.rounding.sm,
-                    Color32::from_rgba_unmultiplied(
-                        self.color[0],
-                        self.color[1],
-                        self.color[2],
-                        self.color[3],
-                    ),
-                );
+        let &[p1, p2, ..] = self.points.as_slice() else {
+            if let Some(&p) = self.points.first() {
+                painter.circle_filled(p, DESIGN_TOKENS.rounding.sm, self.color32());
             }
             return;
-        }
-
-        let p1 = self.points[0];
-        let p2 = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        // Horizontal lines at both price levels
-        painter.hline(
-            chart_rect.x_range(),
-            p1.y,
-            Stroke::new(stroke::HAIRLINE, color),
-        );
-        painter.hline(
-            chart_rect.x_range(),
-            p2.y,
-            Stroke::new(stroke::HAIRLINE, color),
-        );
-
-        // Vertical connector
-        let mid_x = (p1.x + p2.x) / 2.0;
-        painter.vline(
-            mid_x,
-            p1.y.min(p2.y)..=p1.y.max(p2.y),
-            Stroke::new(stroke::HAIRLINE, color),
-        );
-
-        let info = self
-            .measurement_label(&[], view.instrument, view.time_axis)
-            .unwrap_or_default();
-
-        painter.text(
-            Pos2::new(mid_x + 10.0, (p1.y + p2.y) / 2.0),
-            egui::Align2::LEFT_CENTER,
-            info,
-            egui::FontId::proportional(typography::SM),
-            color,
-        );
-    }
-
-    pub(crate) fn render_date_range(
-        &self,
-        painter: &egui::Painter,
-        chart_rect: Rect,
-        view: &ChartView,
-    ) {
-        if self.points.len() < 2 {
-            if !self.points.is_empty() {
-                painter.circle_filled(
-                    self.points[0],
-                    DESIGN_TOKENS.rounding.sm,
-                    Color32::from_rgba_unmultiplied(
-                        self.color[0],
-                        self.color[1],
-                        self.color[2],
-                        self.color[3],
-                    ),
-                );
-            }
-            return;
-        }
-
-        let p1 = self.points[0];
-        let p2 = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        // Vertical lines at both time points
-        painter.vline(
-            p1.x,
-            chart_rect.y_range(),
-            Stroke::new(stroke::HAIRLINE, color),
-        );
-        painter.vline(
-            p2.x,
-            chart_rect.y_range(),
-            Stroke::new(stroke::HAIRLINE, color),
-        );
-
-        // Horizontal connector
-        let mid_y = (p1.y + p2.y) / 2.0;
-        painter.hline(
-            p1.x.min(p2.x)..=p1.x.max(p2.x),
-            mid_y,
-            Stroke::new(stroke::HAIRLINE, color),
-        );
-
-        let info = self
-            .measurement_label(view.bars, view.instrument, view.time_axis)
-            .unwrap_or_default();
-
-        painter.text(
-            Pos2::new((p1.x + p2.x) / 2.0, mid_y - 10.0),
-            egui::Align2::CENTER_BOTTOM,
-            info,
-            egui::FontId::proportional(typography::SM),
-            color,
-        );
-
-        // Fill the range area
-        let fill_color = self.fill_color32().unwrap_or_else(|| {
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 20)
-        });
-        let range_rect =
-            Rect::from_x_y_ranges(p1.x.min(p2.x)..=p1.x.max(p2.x), chart_rect.y_range());
-        painter.rect_filled(range_rect, 0.0, fill_color);
-    }
-
-    // === NEW TOOL RENDER FUNCTIONS ===
-
-    pub(crate) fn render_date_and_price_range(&self, painter: &egui::Painter, view: &ChartView) {
-        if self.points.len() < 2 {
-            return;
-        }
-        let p1 = self.points[0];
-        let p2 = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        // Draw rect covering both ranges
+        };
         let rect = Rect::from_two_pos(p1, p2);
-        let fill = self.fill_color32().unwrap_or_else(|| {
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 30)
-        });
-        painter.rect_filled(rect, 0.0, fill);
-        painter.rect_stroke(
-            rect,
-            0.0,
-            Stroke::new(stroke::HAIRLINE, color),
-            StrokeKind::Outside,
-        );
-
-        let info = self
-            .measurement_label(view.bars, view.instrument, view.time_axis)
-            .unwrap_or_default();
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            info,
-            egui::FontId::proportional(typography::XS),
-            color,
-        );
+        let center = rect.center();
+        if let Some(fill) = self.fill_color32() {
+            painter.rect_filled(rect, 0.0, fill);
+        }
+        if self.tool_type != DrawingToolType::DateRange
+            && let Some(edges) = self.rectangle_bounds(pane)
+        {
+            for y in [p1.y, p2.y] {
+                painter.hline(edges.x_range(), y, stroke);
+            }
+            arrow(
+                painter,
+                Pos2::new(center.x, p1.y),
+                Pos2::new(center.x, p2.y),
+                stroke,
+            );
+        }
+        if self.tool_type != DrawingToolType::PriceRange {
+            for x in [p1.x, p2.x] {
+                painter.vline(x, rect.y_range(), stroke);
+            }
+            arrow(
+                painter,
+                Pos2::new(p1.x, center.y),
+                Pos2::new(p2.x, center.y),
+                stroke,
+            );
+        }
+        self.range_card(painter, rect, view);
     }
 
     pub(crate) fn render_info_line(&self, painter: &egui::Painter, view: &ChartView) {
@@ -377,67 +149,34 @@ impl Drawing {
             self.render_line_text(painter, start, end, end.y >= start.y);
             return;
         };
-        let is_positive = self.chart_points[1].price >= self.chart_points[0].price;
-
-        // Calculate midpoint for info box positioning
         let mid = start.lerp(end, 0.5);
-
-        // Info box styling
-        let font = egui::FontId::proportional(typography::XS);
-        let galley = painter.layout_no_wrap(info_text, font, Color32::WHITE);
-        let padding = egui::vec2(8.0, 6.0);
-        let size = galley.size() + padding * 2.0;
-
-        // The box sits 15 pt beside the line, moved inside the pane, and the text on the other
-        // side: above when the line rises, unless only the other side has room for it.
+        let card = stats_card(
+            painter,
+            Align2::LEFT_TOP,
+            mid + egui::vec2(8.0, 8.0),
+            info_text,
+        );
+        // Keep custom text on the side away from the card, even after the card is clamped.
         let angle = super::lines::upright_angle(start, end);
         let up = egui::vec2(angle.sin(), -angle.cos());
-        let place = |side: egui::Vec2| {
-            let reach = 15.0 + (size.x * side.x.abs() + size.y * side.y.abs()) / 2.0;
-            let min = mid + side * reach - size / 2.0;
-            Rect::from_min_size(min.clamp(clip.min, clip.max - size.min(clip.size())), size)
-        };
-        let clear = |side: egui::Vec2| {
-            let rect = place(side);
-            [rect.min, rect.max, rect.left_bottom(), rect.right_top()]
-                .into_iter()
-                .all(|corner| (corner - mid).dot(side) >= 0.0)
-        };
-        let mut box_up = end.y < start.y;
-        let side = |box_up| if box_up { up } else { -up };
-        if !clear(side(box_up)) && clear(side(!box_up)) {
-            box_up = !box_up;
-        }
-        let box_rect = place(side(box_up));
-        // On the side away from the measurement box, which is painted over it.
-        self.render_line_text(painter, start, end, !box_up);
-
-        // Draw background box with color based on direction
-        let bg_color = if is_positive {
-            DESIGN_TOKENS.semantic.extended.bullish // Green/teal (up)
-        } else {
-            DESIGN_TOKENS.semantic.extended.bearish // Red (down)
-        };
-        painter.rect_filled(box_rect, DESIGN_TOKENS.rounding.md, bg_color);
-
-        // Draw text
-        painter.galley(box_rect.min + padding, galley, Color32::WHITE);
-
-        // Draw connecting line from box to midpoint (thin dashed)
-        let connector_stroke = Stroke::new(
-            stroke::HAIRLINE,
-            Color32::from_rgba_unmultiplied(bg_color.r(), bg_color.g(), bg_color.b(), 150),
-        );
-        painter.line_segment([box_rect.clamp(mid), mid], connector_stroke);
+        let above = (card.center() - mid).dot(up) <= 0.0;
+        let side = if above { up } else { -up };
+        let reach = [card.min, card.max, card.left_bottom(), card.right_top()]
+            .into_iter()
+            .map(|corner| (corner - mid).dot(side))
+            .fold(0.0_f32, f32::max);
+        let offset = side * reach;
+        self.render_line_text(painter, start + offset, end + offset, above);
     }
 
     // Note: render_bars_pattern is now in trading.rs with full projection features
 
-    /// Label of the measuring tools: the price change from the first anchor to the second and
-    /// its percentage, the bars between them and, on a `time_axis`, the time they span, the
-    /// volume traded over them, and for the info line the angle of the line on screen. Each
-    /// anchor counts at its nearest bar: anchors N bars apart span N bars of time and the volume
-    /// of the N + 1 bars from one to the other, both included.
+    /// Label of the measuring tools: the price change from the first anchor to the second in
+    /// the instrument's price decimals (by magnitude without them), its percentage and its whole
+    /// number of pips, or else ticks, the bars between them and, on a `time_axis`, the time they
+    /// span, the volume traded over them, and for the info line the angle of the line on screen.
+    /// Volume drops trailing zeros. Each anchor counts at its nearest bar: anchors N bars apart
+    /// span N bars of time and the volume of the N + 1 bars from one to the other, both included.
     pub(crate) fn measurement_label(
         &self,
         bars: &[Bar],
@@ -450,21 +189,25 @@ impl Drawing {
         let change = b.price - a.price;
         let pct = percent_change(a.price, b.price);
         let decimals = change_decimals(instrument, a.price, change);
-        let mut change_label = format!("{change:+.decimals$} ({pct:+.2}%)");
-        if let Some(instrument) = instrument {
-            for (size, unit) in [
-                (instrument.tick_size, "ticks"),
-                (instrument.pip_size, "pips"),
-            ] {
-                if let Some(size) = size.filter(|s| s.is_finite() && *s > 0.0) {
-                    let count = change / size;
-                    if count.is_finite() {
-                        change_label.push_str(&format!("  {count:+.2} {unit}"));
-                    }
-                }
+        let text = DefaultPriceFormatter::with_precision(decimals).format(change);
+        let sign = if text.starts_with('-') { "" } else { "+" };
+        let mut change = format!("{sign}{text} ({pct:+.2}%)");
+        // Pips where the instrument quotes them, else ticks. Past 2^53 an f64 no longer holds
+        // every whole number, so such a count is left out.
+        if let Some((size, unit)) = instrument.and_then(|instrument| {
+            [(instrument.pip_size, "pip"), (instrument.tick_size, "tick")]
+                .into_iter()
+                .find_map(|(size, unit)| Some((size.filter(|s| s.is_finite() && *s > 0.0)?, unit)))
+        }) {
+            let count = ((b.price - a.price) / size).round() + 0.0;
+            if count.abs() <= 2f64.powi(53) {
+                let plural = if count.abs() == 1.0 { "" } else { "s" };
+                change.push_str(&format!("  {count:+.0} {unit}{plural}"));
             }
         }
-        let change = change_label;
+        if self.tool_type == DrawingToolType::PriceRange {
+            return Some(change);
+        }
         let (from, to) = (a.bar_idx.round(), b.bar_idx.round());
         let mut span = format!("{} bars", (to - from).abs() as i64);
         if let Some(ms) = elapsed_ms(bars, from, to).filter(|_| time_axis) {
@@ -477,14 +220,18 @@ impl Drawing {
                     .map(|bar| bar.volume)
                     .filter(|v| v.is_finite())
                     .sum();
-                format!("\nVol {}", VolumeFormatter::default().format(volume))
+                let text = VolumeFormatter::default().format(volume);
+                let digits = text.trim_end_matches(char::is_alphabetic);
+                let unit = &text[digits.len()..];
+                // Precision 2 writes a point, so trimming zeros never eats an integer digit.
+                let digits = digits.trim_end_matches('0').trim_end_matches('.');
+                format!("\nVol {digits}{unit}")
             })
             .unwrap_or_default();
         Some(match self.tool_type {
             DrawingToolType::Measure | DrawingToolType::DateAndPriceRange => {
                 format!("{change}\n{span}{volume}")
             }
-            DrawingToolType::PriceRange => change,
             DrawingToolType::DateRange => format!("{span}{volume}"),
             DrawingToolType::InfoLine => {
                 let [start, end, ..] = self.points[..] else {
@@ -536,6 +283,78 @@ pub(super) fn change_decimals(
             },
             usize::from,
         )
+}
+
+impl Drawing {
+    /// Paints the measurement on a card centred on `rect`: above it when the second anchor is
+    /// level with or above the first on screen, below it otherwise.
+    fn range_card(&self, painter: &egui::Painter, rect: Rect, view: &ChartView) {
+        let (Some(text), [first, second, ..]) = (
+            self.measurement_label(view.bars, view.instrument, view.time_axis),
+            self.points.as_slice(),
+        ) else {
+            return;
+        };
+        let (align, pos) = if second.y <= first.y {
+            (
+                Align2::CENTER_BOTTOM,
+                rect.center_top() - egui::vec2(0.0, 6.0),
+            )
+        } else {
+            (
+                Align2::CENTER_TOP,
+                rect.center_bottom() + egui::vec2(0.0, 6.0),
+            )
+        };
+        stats_card(painter, align, pos, text);
+    }
+}
+
+/// Paints `text` on a card in the theme's tooltip colours, placed at `pos` by `align` and
+/// moved inside the painter's clip rect.
+fn stats_card(painter: &egui::Painter, align: Align2, pos: Pos2, text: String) -> Rect {
+    let theme = painter.ctx().active_theme();
+    let chart = theme.chart;
+    let galley = painter.layout_no_wrap(
+        text,
+        egui::FontId::proportional(typography::SM_MD),
+        chart.axis_text,
+    );
+    let padding = egui::vec2(8.0, 6.0);
+    let size = galley.size() + padding * 2.0;
+    let clip = painter.clip_rect();
+    let min = align
+        .anchor_size(pos, size)
+        .min
+        .clamp(clip.min, clip.max - size.min(clip.size()));
+    let card = Rect::from_min_size(min, size);
+    // The border keeps the white light-theme card visible on the white chart.
+    painter.rect(
+        card,
+        DESIGN_TOKENS.rounding.md,
+        chart.bg_tooltip,
+        Stroke::new(1.0, theme.ui.border),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(min + padding, galley, chart.axis_text);
+    card
+}
+
+/// Paints a shaft from `from` to `to` and a filled head at `to`; nothing when they meet.
+fn arrow(painter: &egui::Painter, from: Pos2, to: Pos2, stroke: Stroke) {
+    let direction = to - from;
+    if direction.length() < 1e-3 {
+        return;
+    }
+    painter.line_segment([from, to], stroke);
+    let along = direction.normalized() * (3.0 * stroke.width).max(8.0);
+    let across = egui::vec2(-along.y, along.x) * 0.4;
+    let base = to - along;
+    painter.add(egui::Shape::convex_polygon(
+        vec![to, base + across, base - across],
+        stroke.color,
+        Stroke::NONE,
+    ));
 }
 
 /// Paints `text` over a `bg` box sized to it, placed at `pos` by `align`, and returns its bounds.
@@ -627,7 +446,7 @@ mod tests {
                 DrawingToolType::Measure,
                 (1.0, 100.0),
                 (4.0, 95.0),
-                "-5.00 (-5.00%)\n3 bars, 3h\nVol 900.00",
+                "-5.00 (-5.00%)\n3 bars, 3h\nVol 900",
             ),
             (
                 DrawingToolType::InfoLine,
@@ -639,20 +458,26 @@ mod tests {
                 DrawingToolType::DateRange,
                 (2.0, 100.0),
                 (5.0, 100.0),
-                "3 bars, 3h\nVol 1.10K",
+                "3 bars, 3h\nVol 1.1K",
+            ),
+            (
+                DrawingToolType::DateRange,
+                (0.0, 100.0),
+                (0.0, 100.0),
+                "0 bars, 0s\nVol 100",
             ),
             // Fractional anchors count at their nearest bars, 1 and 4.
             (
                 DrawingToolType::DateRange,
                 (1.4, 100.0),
                 (3.6, 100.0),
-                "3 bars, 3h\nVol 900.00",
+                "3 bars, 3h\nVol 900",
             ),
             (
                 DrawingToolType::DateAndPriceRange,
                 (5.0, 200.0),
                 (2.0, 210.0),
-                "+10.00 (+5.00%)\n3 bars, 3h\nVol 1.10K",
+                "+10.00 (+5.00%)\n3 bars, 3h\nVol 1.1K",
             ),
         ];
         let mut wrong = Vec::new();
@@ -670,26 +495,62 @@ mod tests {
         // On a horizontal scale other than time the bar times are keys, not times.
         assert_eq!(
             drawing.measurement_label(&bars, None, false).as_deref(),
-            Some("-0.0005 (-0.05%)\n3 bars\nVol 900.00")
+            Some("-0.0005 (-0.05%)\n3 bars\nVol 900")
         );
-        for (tick, pip, want) in [
-            (Some(0.00001), Some(0.0001), "-50.00 ticks  -5.00 pips"),
-            (Some(0.0), Some(f64::NAN), ""),
-            (Some(-1.0), Some(f64::INFINITY), ""),
-            (None, None, ""),
+        for (tick, pip, precision, want) in [
+            (
+                Some(0.00001),
+                Some(0.0001),
+                None,
+                "-0.00050 (-0.05%)  -5 pips",
+            ),
+            (Some(0.00001), None, None, "-0.00050 (-0.05%)  -50 ticks"),
+            (
+                Some(0.00001),
+                Some(f64::NAN),
+                None,
+                "-0.00050 (-0.05%)  -50 ticks",
+            ),
+            (Some(0.0005), None, None, "-0.0005 (-0.05%)  -1 tick"),
+            (Some(25.0), None, None, "+0 (-0.05%)  +0 ticks"),
+            (
+                Some(1e-10),
+                None,
+                None,
+                "-0.0005000000 (-0.05%)  -5000000 ticks",
+            ),
+            (Some(0.0), Some(f64::NAN), None, "-0.0005 (-0.05%)"),
+            (Some(-1.0), Some(f64::INFINITY), None, "-0.0005 (-0.05%)"),
+            (None, None, None, "-0.0005 (-0.05%)"),
+            (
+                Some(0.00001),
+                None,
+                Some(6),
+                "-0.000500 (-0.05%)  -50 ticks",
+            ),
         ] {
             let mut instrument = crate::model::Instrument::new("PAIR");
             instrument.tick_size = tick;
             instrument.pip_size = pip;
+            instrument.price_decimals = precision;
             let label = drawing
                 .measurement_label(&bars, Some(&instrument), true)
                 .unwrap();
-            if want.is_empty() {
-                assert!(!label.contains("ticks") && !label.contains("pips"));
-            } else {
-                assert!(label.contains(want), "{label}");
-            }
+            assert_eq!(
+                label.lines().next(),
+                Some(want),
+                "{tick:?}, {pip:?}, {precision:?}"
+            );
         }
+        // Counts beyond the exactly representable integers, including overflow, are omitted.
+        let instrument = crate::model::Instrument::new("PAIR").with_tick_size(1e-300);
+        let label = drawing
+            .measurement_label(&bars, Some(&instrument), true)
+            .unwrap();
+        assert!(
+            !label.contains("ticks") && !label.contains("pips"),
+            "{label}"
+        );
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
@@ -707,7 +568,7 @@ mod tests {
         ));
         let output = shapes(&ctx, &mut chart, 0.0, vec![]);
         assert!(output.iter().any(
-            |s| matches!(s,egui::Shape::Text(t) if t.galley.job.text.contains("-20.00 ticks"))
+            |s| matches!(s,egui::Shape::Text(t) if t.galley.job.text.contains("-5.00 (-5.00%)  -20 ticks"))
         ));
     }
 
