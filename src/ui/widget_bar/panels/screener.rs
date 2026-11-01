@@ -225,12 +225,16 @@ impl ScreenerPanel {
     }
 
     /// Make the criteria of `saved` the panel's and ask the feed.
-    fn load_screen(&mut self, name: &str) {
+    fn load_screen(&mut self, ctx: &egui::Context, name: &str) {
         let Some(saved) = self.saved.entries().get(name).cloned() else {
             return;
         };
         let Some(set) = self.sets.iter().position(|set| set.name == saved.set) else {
-            self.saved.error = Some(format!("The column set {} is not available", saved.set));
+            self.saved.error = Some(l10n::format_text(
+                ctx,
+                "The column set {name} is not available",
+                &[("name", saved.set.as_str())],
+            ));
             return;
         };
         self.set = set;
@@ -455,7 +459,7 @@ impl ScreenerPanel {
                     .clicked();
             });
             if let Some(name) = load {
-                self.load_screen(&name);
+                self.load_screen(ui.ctx(), &name);
             }
             let name = self.name.query().trim().to_owned();
             if save && self.saved.save(&name, self.saved_screen()).is_ok() {
@@ -479,7 +483,15 @@ impl ScreenerPanel {
         if self.stored
             && let Some(error) = &self.saved.error
         {
-            status_message(ui, MessageKind::Error, &format!("Saved screens: {error}"));
+            status_message(
+                ui,
+                MessageKind::Error,
+                &l10n::format_text(
+                    ui.ctx(),
+                    "Saved screens: {error}",
+                    &[("error", error.to_string().as_str())],
+                ),
+            );
         }
         if !columns.is_empty() {
             ui.horizontal_wrapped(|ui| {
@@ -560,7 +572,15 @@ impl ScreenerPanel {
                 status_message(ui, MessageKind::Info, "This feed supplies no screener.");
             }
             Some(error) => {
-                status_message(ui, MessageKind::Error, &format!("Screen failed: {error}"));
+                status_message(
+                    ui,
+                    MessageKind::Error,
+                    &l10n::format_text(
+                        ui.ctx(),
+                        "Screen failed: {error}",
+                        &[("error", error.to_string().as_str())],
+                    ),
+                );
             }
             None if self.loading && self.rows.is_empty() => {
                 LoadingIndicator::new().message("Screening").show(ui);
@@ -842,7 +862,7 @@ mod tests {
         for _ in 0..4 {
             restored.poll(&ctx);
         }
-        restored.load_screen("Cheap");
+        restored.load_screen(&egui::Context::default(), "Cheap");
         assert_eq!(restored.query(0), first);
         // A feed without descriptions is told apart from one without a screener.
         restored.set_feed(feed.clone());

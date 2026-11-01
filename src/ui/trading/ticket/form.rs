@@ -111,7 +111,7 @@ impl OrderTicket {
             let response = dropdown(
                 ui,
                 if ticket.sizing == Sizing::Value {
-                    format!("Amount, {currency}")
+                    l10n::format_text(ui.ctx(), "Amount, {currency}", &[("currency", currency)])
                 } else {
                     "Units".to_owned()
                 },
@@ -162,9 +162,15 @@ impl OrderTicket {
                         muted(
                             ui,
                             &if ticket.sizing == Sizing::Value {
-                                format!(
-                                    "{} units",
-                                    numbers.quantity(quantity, decimals(rules.quantity_step))
+                                l10n::format_text(
+                                    ui.ctx(),
+                                    "{quantity} units",
+                                    &[(
+                                        "quantity",
+                                        numbers
+                                            .quantity(quantity, decimals(rules.quantity_step))
+                                            .as_str(),
+                                    )],
                                 )
                             } else {
                                 format!("{} {currency}", grouped(entry * per_point, 2, false))
@@ -479,7 +485,11 @@ impl OrderTicket {
             (risk > 0.0).then(|| reward / risk)
         });
         if let Some(ratio) = ratio {
-            let ratio = format!("  ·  Risk/Reward {ratio:.2}");
+            let ratio = l10n::format_text(
+                ui.ctx(),
+                "  ·  Risk/Reward {ratio}",
+                &[("ratio", format!("{ratio:.2}").as_str())],
+            );
             let at = row.left_center() + vec2(width, 0.0);
             text(
                 ui,
@@ -551,7 +561,14 @@ impl OrderTicket {
                         muted(
                             ui,
                             &if bracket.mode == BracketMode::Price {
-                                format!("{} ticks", ((price - entry) / tick).abs().round())
+                                l10n::format_text(
+                                    ui.ctx(),
+                                    "{0} ticks",
+                                    &[(
+                                        "0",
+                                        ((price - entry) / tick).abs().round().to_string().as_str(),
+                                    )],
+                                )
                             } else {
                                 market.numbers().price(price)
                             },

@@ -129,7 +129,11 @@ impl HotlistsPanel {
                 status_message(
                     ui,
                     MessageKind::Error,
-                    &format!("Hotlist unavailable: {error}"),
+                    &l10n::format_text(
+                        ui.ctx(),
+                        "Hotlist unavailable: {error}",
+                        &[("error", error.to_string().as_str())],
+                    ),
                 );
             }
             None if self.loading && self.entries.is_empty() => {

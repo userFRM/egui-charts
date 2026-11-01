@@ -283,7 +283,11 @@ impl ChatsPanel {
             status_message(
                 ui,
                 MessageKind::Error,
-                &format!("Chat action failed: {error}"),
+                &l10n::format_text(
+                    ui.ctx(),
+                    "Chat action failed: {error}",
+                    &[("error", error.to_string().as_str())],
+                ),
             );
         }
         match self.view {
@@ -308,7 +312,11 @@ impl ChatsPanel {
             status_message(
                 ui,
                 MessageKind::Error,
-                &format!("Message not sent: {error}"),
+                &l10n::format_text(
+                    ui.ctx(),
+                    "Message not sent: {error}",
+                    &[("error", error.to_string().as_str())],
+                ),
             );
         }
         let mut send = false;
@@ -324,7 +332,11 @@ impl ChatsPanel {
                             .show(ui)
                             .clicked();
                         self.draft = std::mem::take(&mut self.draft)
-                            .placeholder(format!("Message {room}"))
+                            .placeholder(l10n::format_text(
+                                ui.ctx(),
+                                "Message {room}",
+                                &[("room", room.as_str())],
+                            ))
                             .show_icon(false)
                             .show_clear_button(false);
                         let response = self.draft.show(ui).response;

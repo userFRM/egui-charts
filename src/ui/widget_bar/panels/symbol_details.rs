@@ -277,7 +277,13 @@ impl SymbolDetailsPanel {
                     match result {
                         Ok(details) => self.details = Some(details),
                         Err(FeedError::NotSupported) => {}
-                        Err(error) => self.error = Some(format!("Details unavailable: {error}")),
+                        Err(error) => {
+                            self.error = Some(l10n::format_text(
+                                ctx,
+                                "Details unavailable: {error}",
+                                &[("error", error.to_string().as_str())],
+                            ))
+                        }
                     }
                 }
                 Request::Load(symbol) => {
@@ -303,7 +309,11 @@ impl SymbolDetailsPanel {
                             notes.written = Some(text);
                         }
                         Err(error) if current(&symbol) => {
-                            self.error = Some(format!("Notes unavailable: {error}"));
+                            self.error = Some(l10n::format_text(
+                                ctx,
+                                "Notes unavailable: {error}",
+                                &[("error", error.to_string().as_str())],
+                            ));
                         }
                         Err(_) => {}
                     }
@@ -313,7 +323,14 @@ impl SymbolDetailsPanel {
                         .downcast::<Result<(), FeedError>>()
                         .expect("notes save");
                     if let Err(error) = result {
-                        self.error = Some(format!("Notes for {symbol} not saved: {error}"));
+                        self.error = Some(l10n::format_text(
+                            ctx,
+                            "Notes for {symbol} not saved: {error}",
+                            &[
+                                ("symbol", symbol.as_str()),
+                                ("error", error.to_string().as_str()),
+                            ],
+                        ));
                     }
                     // After a failure too, so the next edit writes again rather than every frame.
                     if let Some(notes) = self.notes.get_mut(&symbol) {
@@ -438,12 +455,19 @@ impl SymbolDetailsPanel {
             hidden.remove("Notes");
         }
         let shown = |section| !hidden.contains(section);
+        let ctx = ui.ctx().clone();
         let update = |time: DateTime<Utc>| {
             let local = time.with_timezone(&*timezone);
-            format!(
-                "Last update at {} {}",
-                local.format("%H:%M"),
-                zone_label(local.offset().fix().local_minus_utc())
+            l10n::format_text(
+                &ctx,
+                "Last update at {time} {zone}",
+                &[
+                    ("time", local.format("%H:%M").to_string().as_str()),
+                    (
+                        "zone",
+                        zone_label(local.offset().fix().local_minus_utc()).as_str(),
+                    ),
+                ],
             )
         };
         egui::ScrollArea::vertical()

@@ -270,7 +270,7 @@ impl AlertsPanel {
         for (key, answer) in self.inbox.drain().answers {
             if key == self.generation {
                 if let Ok(event) = answer.downcast::<AlertEvent>() {
-                    self.apply_event(*event, toasts);
+                    self.apply_event(ctx, *event, toasts);
                 }
             } else if (key == 0 || key == DRAFT_REPLY)
                 && let Ok(result) = answer.downcast::<Result<(), FeedError>>()
@@ -291,7 +291,7 @@ impl AlertsPanel {
         }
     }
 
-    fn apply_event(&mut self, event: AlertEvent, toasts: &mut Toasts) {
+    fn apply_event(&mut self, ctx: &egui::Context, event: AlertEvent, toasts: &mut Toasts) {
         match event {
             AlertEvent::Upsert(alert) => {
                 if alert.id.is_none() {
@@ -312,7 +312,17 @@ impl AlertsPanel {
                 price,
                 message,
             } => {
-                self.record_trigger(id, symbol, time, price, message, toasts);
+                self.record_trigger(
+                    ctx,
+                    AlertTrigger {
+                        id,
+                        symbol,
+                        time,
+                        price,
+                        message,
+                    },
+                    toasts,
+                );
             }
             AlertEvent::Triggered { id, time, price } => {
                 let symbol = self
@@ -321,23 +331,44 @@ impl AlertsPanel {
                     .find(|a| a.id.as_ref() == Some(&id))
                     .map(|a| a.symbol.clone())
                     .unwrap_or_default();
-                self.record_trigger(id, symbol, time, price, String::new(), toasts);
+                self.record_trigger(
+                    ctx,
+                    AlertTrigger {
+                        id,
+                        symbol,
+                        time,
+                        price,
+                        message: String::new(),
+                    },
+                    toasts,
+                );
             }
         }
     }
 
     fn record_trigger(
         &mut self,
-        id: AlertId,
-        symbol: String,
-        time: DateTime<Utc>,
-        price: Option<f64>,
-        message: String,
+        ctx: &egui::Context,
+        mut trigger: AlertTrigger,
         toasts: &mut Toasts,
     ) {
-        let title = format!(
-            "Alert triggered: {}",
-            if symbol.is_empty() { &id.0 } else { &symbol }
+        let AlertTrigger {
+            id,
+            symbol,
+            message,
+            ..
+        } = &trigger;
+        let title = l10n::format_text(
+            ctx,
+            "Alert triggered: {subject}",
+            &[(
+                "subject",
+                if symbol.is_empty() {
+                    id.0.as_str()
+                } else {
+                    symbol.as_str()
+                },
+            )],
         );
         toasts.add(
             Toast::info(if message.is_empty() {
@@ -350,13 +381,8 @@ impl AlertsPanel {
         self.sound = self.sound_choice.clone();
         let extra = toasts.len().saturating_sub(5);
         toasts.toasts_mut().drain(..extra);
-        self.log.push_back(AlertTrigger {
-            id,
-            symbol,
-            time,
-            price: price.filter(|p| p.is_finite()),
-            message,
-        });
+        trigger.price = trigger.price.filter(|p| p.is_finite());
+        self.log.push_back(trigger);
         if self.log.len() > 10_000 {
             self.log.pop_front();
         }
@@ -535,7 +561,13 @@ impl AlertsPanel {
                         ui.push_id(&id.0, |ui| {
                             let subject = alert.watchlist.as_ref().map_or_else(
                                 || alert.symbol.clone(),
-                                |id| format!("Watchlist: {id}"),
+                                |id| {
+                                    l10n::format_text(
+                                        ui.ctx(),
+                                        "Watchlist: {name}",
+                                        &[("name", id.as_str())],
+                                    )
+                                },
                             );
                             ui.label(RichText::new(l10n::text(ui.ctx(), subject)).strong());
                             ui.label(l10n::text(ui.ctx(), alert.condition.to_string()));
@@ -718,6 +750,7 @@ mod tests {
         assert_eq!(panel.take_sound(), None);
         panel.set_sound(Some("Bell".into()));
         panel.apply_event(
+            &egui::Context::default(),
             AlertEvent::TriggeredForSymbol {
                 id: AlertId("watchlist".into()),
                 symbol: "AAPL".into(),

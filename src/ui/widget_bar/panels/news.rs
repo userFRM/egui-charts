@@ -303,19 +303,34 @@ impl NewsPanel {
             || (!self.more_symbols.is_empty() && !self.market);
         if offered {
             ui.horizontal_wrapped(|ui| {
-                for (id, noun, choices) in [
-                    ("news_symbols", "symbols", &mut self.more_symbols),
-                    ("news_topics", "topics", &mut self.topics),
-                    ("news_providers", "providers", &mut self.providers),
+                for (id, all, some, choices) in [
+                    (
+                        "news_symbols",
+                        "All symbols",
+                        "{count} symbols",
+                        &mut self.more_symbols,
+                    ),
+                    (
+                        "news_topics",
+                        "All topics",
+                        "{count} topics",
+                        &mut self.topics,
+                    ),
+                    (
+                        "news_providers",
+                        "All providers",
+                        "{count} providers",
+                        &mut self.providers,
+                    ),
                 ] {
                     if choices.is_empty() || (id == "news_symbols" && self.market) {
                         continue;
                     }
                     let count = choices.iter().filter(|(_, on)| *on).count();
                     let text = if count == 0 {
-                        format!("All {noun}")
+                        l10n::text(ui.ctx(), all)
                     } else {
-                        format!("{count} {noun}")
+                        l10n::format_text(ui.ctx(), some, &[("count", count.to_string().as_str())])
                     };
                     dropdown(ui, id, &text, |ui| {
                         for (value, on) in choices.iter_mut() {
@@ -344,7 +359,11 @@ impl NewsPanel {
                 status_message(
                     ui,
                     MessageKind::Error,
-                    &format!("Stories unavailable: {error}"),
+                    &l10n::format_text(
+                        ui.ctx(),
+                        "Stories unavailable: {error}",
+                        &[("error", error.to_string().as_str())],
+                    ),
                 );
             }
             None if self.loading && self.stories.is_empty() => {

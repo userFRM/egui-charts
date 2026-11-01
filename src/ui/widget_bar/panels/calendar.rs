@@ -239,7 +239,11 @@ impl CalendarPanel {
             let text = if chosen == 0 {
                 "All countries".to_owned()
             } else {
-                format!("{chosen} countries")
+                l10n::format_text(
+                    ui.ctx(),
+                    "{count} countries",
+                    &[("count", chosen.to_string().as_str())],
+                )
             };
             dropdown(ui, "calendar_countries", &text, |ui| {
                 for (code, on) in &mut self.countries {
@@ -265,7 +269,11 @@ impl CalendarPanel {
                 status_message(
                     ui,
                     MessageKind::Error,
-                    &format!("Events unavailable: {error}"),
+                    &l10n::format_text(
+                        ui.ctx(),
+                        "Events unavailable: {error}",
+                        &[("error", error.to_string().as_str())],
+                    ),
                 );
             }
             None if self.loading && self.events.is_empty() => {
