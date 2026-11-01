@@ -7485,15 +7485,17 @@ mod tests {
                     "compact cropped profiles advertise their hover readout"
                 );
                 if kind == ChartType::TimePriceOpportunity {
-                    chart.set_instrument(Some(Instrument::new("SESSION")));
-                    chart.set_data(
-                        crate::widget::SeriesId::MAIN,
+                    let mut chart = crate::widget::Chart::new(crate::model::BarData::from_bars(
                         bars[8..]
                             .iter()
                             .map(|bar| Bar::from_value(bar.time, 100.0))
                             .collect(),
-                    );
-                    chart.price_scale_mut().reset();
+                    ));
+                    chart.set_chart_type(kind);
+                    chart.set_chart_type_params(crate::model::ChartTypeParams {
+                        tpo_letters: letters,
+                        ..Default::default()
+                    });
                     chart.set_visible_bars(8);
                     chart.set_start_idx(0);
                     draw(&mut chart);
