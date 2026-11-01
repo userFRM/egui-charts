@@ -1868,17 +1868,6 @@ impl Chart {
                     .iter()
                     .any(|bar| flow.bar_at(bar.time).is_some())
             });
-        if price_line_below && let Some(line) = &last_price_line {
-            rendering::render_price_line(
-                &painter,
-                price_rect,
-                &price_map,
-                line,
-                price_rect.left(),
-                false,
-                price_rect.right(),
-            );
-        }
 
         self.paint_primitives(&painter, &coords, PrimitivePass::Below);
         let studies = if self.chart_type.is_time_independent() {
@@ -2194,6 +2183,17 @@ impl Chart {
                     let mapping = self.get_chart_mapping();
                     let bars = self.bars(super::SeriesId::MAIN);
                     if !session_profiles {
+                        if price_line_below && let Some(line) = &last_price_line {
+                            rendering::render_price_line(
+                                &painter,
+                                price_rect,
+                                &price_map,
+                                line,
+                                price_rect.left(),
+                                false,
+                                price_rect.right(),
+                            );
+                        }
                         crate::chart::overlays::render_footprint(
                             &clipped_painter,
                             &mapping,
@@ -3902,6 +3902,15 @@ mod tests {
         use crate::chart::overlays::{FootprintColor, FootprintConfig};
         use crate::data::Footprint;
         use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+        use crate::widget::{Primitive, PrimitivePass, PrimitiveView};
+        struct Underlay(egui::Color32);
+        impl Primitive for Underlay {
+            fn draw(&self, painter: &egui::Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+                if pass == PrimitivePass::Below {
+                    painter.rect_filled(view.mapping.rect, 0.0, self.0);
+                }
+            }
+        }
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for (width, pane) in [(1440.0, false), (600.0, false), (600.0, true)] {
                 let ctx = egui::Context::default();
@@ -3911,6 +3920,10 @@ mod tests {
                 chart.apply_synced_time_scale(100.0, 1.0);
                 let line_color = egui::Color32::from_rgb(191, 72, 216);
                 chart.main_series_style.price_line_color = Some(line_color);
+                let below_color = egui::Color32::from_rgb(93, 17, 126);
+                chart
+                    .attach_primitive(crate::widget::SeriesId::MAIN, Underlay(below_color))
+                    .unwrap();
                 #[cfg(feature = "studies")]
                 if pane {
                     chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
@@ -3996,6 +4009,15 @@ mod tests {
                     })
                     .collect();
                 assert!(!strokes.is_empty(), "current-price line remains visible");
+                let below = output
+                    .shapes
+                    .iter()
+                    .position(|shape| matches!(&shape.shape, Shape::Rect(rect) if rect.fill == below_color))
+                    .expect("below-series content");
+                assert!(
+                    strokes.iter().all(|i| below < *i),
+                    "current-price guide stays above below-series content"
+                );
                 assert!(
                     strokes.iter().all(|i| *i < cells),
                     "current-price line covers footprint cells"
