@@ -946,7 +946,10 @@ mod tests {
             }
             let old = host.subscriptions.lock().unwrap()[0].sink.clone();
             old.report_error(error.clone());
-            assert_eq!(reader.poll(&ctx, Utc::now()), [error.clone()]);
+            assert_eq!(
+                reader.poll(&ctx, Utc::now()).as_slice(),
+                std::slice::from_ref(&error)
+            );
             assert!(reader.bars().is_empty());
             assert_eq!(
                 host.count("OTHER", Timeframe::Min5),
