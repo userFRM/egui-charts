@@ -15,6 +15,7 @@ use egui::{Align2, FontId, Painter, Rect, Stroke, pos2};
 /// Histograms of partly visible sessions stay at the left edge of the viewport.
 /// Profile ranges and data remain host-owned; edit [`crate::studies::TradeProfileRanges`]
 /// in response to a session menu's merge/split actions and recalculate after trades change.
+/// A profile that is not [`complete`](TradeProfile::complete) is labelled "Partial executions".
 pub fn render_trade_profiles(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -30,6 +31,7 @@ pub fn render_trade_profiles(
 /// Draws the session volume profile chart: each session fills its bar span inside a faint box,
 /// with up volume stacked before down volume, a POC across the session, and the value area shown
 /// by row opacity alone (no guides, node labels or developing POC).
+/// A session whose profile is not complete is labelled "Partial executions".
 pub(crate) fn render_session_volume_profiles(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -199,6 +201,23 @@ fn render_profiles(
                     [pos2(x, (y0 + y1) * 0.5), pos2(x + width, (y0 + y1) * 0.5)],
                     Stroke::new(DESIGN_TOKENS.stroke.hairline, config.text_color),
                 );
+            }
+        }
+        // A range that starts before the first complete footprint bar leaves those bars out.
+        // No narrower profile has room for the note, so its text is never laid out.
+        if !profile.complete
+            && width >= 60.0
+            && let Some(&high) = profile.volume.levels.keys().next_back()
+        {
+            let y = mapping.price_to_y((high as f64 + 1.0) * step - tick * 0.5);
+            let galley = painter.layout_no_wrap(
+                crate::localization::text(painter.ctx(), "Partial executions"),
+                FontId::proportional(crate::styles::typography::XS),
+                theme.chart.axis_text_secondary,
+            );
+            let size = galley.size();
+            if y.is_finite() && size.x <= width {
+                painter.galley(pos2(x, y - size.y), galley, theme.chart.axis_text_secondary);
             }
         }
         // A valley can lie on untraded rows, so nodes are placed by level, not by traded row.
