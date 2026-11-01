@@ -31,7 +31,12 @@ struct Card {
 /// Paints the picture at `uri`, loaded through the host's egui image loaders, fitted inside
 /// `frame` without stretching, and returns where; otherwise the line saying that it is loading or
 /// could not be loaded. The loaders repaint once a pending load finishes.
-fn paint_fitted(painter: &egui::Painter, uri: &str, frame: Rect) -> Result<Rect, &'static str> {
+fn paint_fitted(
+    painter: &egui::Painter,
+    uri: &str,
+    frame: Rect,
+    tint: Color32,
+) -> Result<Rect, &'static str> {
     match painter.ctx().try_load_texture(
         uri,
         egui::TextureOptions::LINEAR,
@@ -44,7 +49,7 @@ fn paint_fitted(painter: &egui::Painter, uri: &str, frame: Rect) -> Result<Rect,
                 texture.id,
                 rect,
                 Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                Color32::WHITE,
+                tint,
             );
             Ok(rect)
         }
@@ -54,50 +59,33 @@ fn paint_fitted(painter: &egui::Painter, uri: &str, frame: Rect) -> Result<Rect,
 }
 
 impl Drawing {
-    /// Renders the image whose URI is the drawing's text, fitted inside the frame between its
-    /// anchors, or the empty frame with a line saying that the image is missing, loading or could
-    /// not be loaded.
-    pub(crate) fn render_image(&self, painter: &egui::Painter) {
-        if self.points.is_empty() {
-            return;
-        }
-        let pos = self.points[0];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        // Calculate frame size from two points if available
-        let (width, height) = if self.points.len() >= 2 {
-            let p2 = self.points[1];
-            (
-                (p2.x - pos.x)
-                    .abs()
-                    .max(DESIGN_TOKENS.sizing.media.image_min_width),
-                (p2.y - pos.y)
-                    .abs()
-                    .max(DESIGN_TOKENS.sizing.media.image_min_height),
-            )
-        } else {
-            (
+    /// The image frame at its top-left anchor, sized in points or the default 120 x 90.
+    /// `None` before the anchor has a screen position.
+    pub(crate) fn image_frame(&self) -> Option<Rect> {
+        let size = self.image.and_then(|c| c.size).map_or(
+            egui::vec2(
                 DESIGN_TOKENS.sizing.media.image_default_width,
                 DESIGN_TOKENS.sizing.media.image_default_height,
-            ) // Default 4:3 aspect ratio
-        };
-        let origin = self
-            .points
-            .get(1)
-            .map_or(pos, |p2| Pos2::new(pos.x.min(p2.x), pos.y.min(p2.y)));
-        let frame_rect = Rect::from_min_size(origin, egui::vec2(width, height));
+            ),
+            egui::Vec2::from,
+        );
+        Some(Rect::from_min_size(*self.points.first()?, size))
+    }
 
+    /// Renders the picture fitted inside its frame, or the placeholder saying that it is
+    /// missing, loading or could not be loaded. Only the picture takes the configured opacity.
+    pub(crate) fn render_image(&self, painter: &egui::Painter) {
+        let Some(frame_rect) = self.image_frame() else {
+            return;
+        };
+        let color = self.color32();
+        let tint = Color32::from_white_alpha(self.image.map_or(255, |c| c.opacity));
         let uri = self
             .text
             .as_deref()
             .map(str::trim)
             .filter(|uri| !uri.is_empty());
-        let status = match uri.map(|uri| paint_fitted(painter, uri, frame_rect)) {
+        let status = match uri.map(|uri| paint_fitted(painter, uri, frame_rect, tint)) {
             Some(Ok(rect)) => {
                 painter.rect_stroke(
                     rect,
@@ -115,12 +103,11 @@ impl Drawing {
         // Background with subtle pattern (checkerboard for transparency indication)
         painter.rect_filled(frame_rect, DESIGN_TOKENS.rounding.md, theme.ui.panel_bg);
 
-        // Checkerboard pattern (simplified), only the squares the painter can show: the anchors may
-        // make the frame far larger than the screen.
+        // Only paint the checker squares in view; the frame may be much larger than the screen.
         let check_size = DESIGN_TOKENS.sizing.media.checkerboard_size;
         let check_color = DESIGN_TOKENS.semantic.extended.gray.gamma_multiply(0.8);
-        let cols = (width / check_size) as i32;
-        let rows = (height / check_size) as i32;
+        let cols = (frame_rect.width() / check_size) as i32;
+        let rows = (frame_rect.height() / check_size) as i32;
         let visible = finite_clip(painter).map_or(Rect::NOTHING, |clip| frame_rect.intersect(clip));
         // Squares overlapping `from..to` px from the frame's corner, within `0..count`; none when
         // nothing is visible.
@@ -382,7 +369,7 @@ impl Drawing {
         painter.galley(card.first.0, card.first.1, theme.ui.text);
         painter.galley(card.rest.0, card.rest.1, theme.ui.text_secondary);
         if let Some((box_rect, uri)) = card.picture
-            && let Err(status) = paint_fitted(painter, &uri, box_rect)
+            && let Err(status) = paint_fitted(painter, &uri, box_rect, Color32::WHITE)
         {
             painter.rect_stroke(
                 box_rect,
@@ -592,7 +579,7 @@ mod tests {
 
         fn load(&self, _: &Context, uri: &str, _: SizeHint) -> ImageLoadResult {
             match uri {
-                "test://square" => Ok(ImagePoll::Ready {
+                "test://square" | "test://legacy" | "test://faded" => Ok(ImagePoll::Ready {
                     image: Arc::new(ColorImage::filled([50, 50], Color32::RED)),
                 }),
                 "test://pending" => Ok(ImagePoll::Pending { size: None }),
@@ -651,6 +638,23 @@ mod tests {
                 (
                     DrawingToolType::Image,
                     Some(" test://square\n"),
+                    vec![],
+                    Some(fitted),
+                    None,
+                ),
+                (
+                    DrawingToolType::Image,
+                    Some("test://legacy"),
+                    vec![],
+                    Some(Rect::from_min_max(
+                        Pos2::new(15.0, 0.0),
+                        Pos2::new(105.0, 90.0),
+                    )),
+                    None,
+                ),
+                (
+                    DrawingToolType::Image,
+                    Some("test://faded"),
                     vec![],
                     Some(fitted),
                     None,
@@ -744,7 +748,17 @@ mod tests {
                 ),
             ] {
                 let mut drawing = Drawing::new(1, tool);
-                drawing.points = vec![Pos2::ZERO, Pos2::new(200.0, 100.0)];
+                drawing.points = vec![Pos2::ZERO];
+                if tool == DrawingToolType::Image && text != Some("test://legacy") {
+                    drawing.image = Some(crate::drawings::ImageConfig {
+                        size: Some([200.0, 100.0]),
+                        opacity: if text == Some("test://faded") {
+                            128
+                        } else {
+                            255
+                        },
+                    });
+                }
                 drawing.text = text.map(Into::into);
                 drawing.post = post.clone();
                 let ctx = Context::default();
@@ -793,6 +807,12 @@ mod tests {
                         Shape::Text(text) => shown.push(text.galley.text().to_owned()),
                         Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
                             pictures.push(mesh.calc_bounds());
+                            let opacity = drawing.image.map_or(255, |c| c.opacity);
+                            assert!(
+                                mesh.vertices
+                                    .iter()
+                                    .all(|v| v.color == Color32::from_white_alpha(opacity))
+                            );
                         }
                         _ => {}
                     }
@@ -809,7 +829,11 @@ mod tests {
     fn checkers_only_the_visible_part_of_a_huge_image() {
         let viewport = Rect::from_min_size(Pos2::ZERO, egui::vec2(2000.0, 1000.0));
         let mut drawing = Drawing::new(1, DrawingToolType::Image);
-        drawing.points = vec![Pos2::ZERO, Pos2::new(20_000.0, 20_000.0)];
+        drawing.points = vec![Pos2::ZERO];
+        drawing.image = Some(crate::drawings::ImageConfig {
+            size: Some([20_000.0, 20_000.0]),
+            ..Default::default()
+        });
         // 10 px squares, half of them dark, plus at most 10 fixed shapes (fill, border, icon, status).
         for (clip, dark_squares) in [
             (

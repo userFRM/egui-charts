@@ -83,7 +83,10 @@ impl Terminal {
         match region {
             Region::Left => self.show_drawing_toolbar(ui),
             Region::Right => self.show_drawings_panel(ui),
-            Region::Chart => self.read_crosshair(ui.ctx()),
+            Region::Chart => {
+                self.read_crosshair(ui.ctx());
+                self.forward_image_requests();
+            }
             Region::Windows => {
                 if !self.keyboard_dialog_open()
                     && let Some(action) = self
@@ -99,6 +102,26 @@ impl Terminal {
                     .show(ui.ctx(), &mut self.charts[self.active]);
             }
             Region::Top | Region::Bottom => {}
+        }
+    }
+
+    fn forward_image_requests(&mut self) {
+        let requests: Vec<_> = self
+            .chart_events
+            .iter()
+            .filter_map(|(slot, event)| {
+                if let ChartEvent::ImageRequested(request) = event {
+                    Some((*slot, request.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (slot, request) in requests {
+            // shortcut: answers target the active slot; include its id when a slot-addressed
+            // chart accessor exists.
+            self.activate_slot(slot);
+            self.emit(Action::Image(request));
         }
     }
 
@@ -671,6 +694,60 @@ mod tests {
             frame(&mut terminal, SIZE, vec![]);
         }
         terminal
+    }
+
+    /// The host receives the Image request after placement on the active chart.
+    #[test]
+    fn image_requests_are_forwarded_to_the_host() {
+        let mut terminal = ready();
+        terminal
+            .chart_mut()
+            .drawings_mut()
+            .set_active_tool(Some(DrawingToolType::Image));
+        let p = terminal.chart().get_rendered_price_rect().center();
+        let ctx = terminal.ctx.clone().unwrap();
+        let mut actions = Vec::new();
+        for events in [
+            vec![Event::PointerMoved(p)],
+            vec![Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ] {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                time: Some(ctx.input(|i| i.time) + 0.1),
+                events,
+                ..Default::default()
+            };
+            // Opening the inline editor can request another pass; the host handles each pass.
+            ctx.run_ui(raw, |ui| actions.extend(terminal.show(ui)))
+                .drop_without_applying_deltas();
+        }
+        let requests: Vec<_> = actions
+            .into_iter()
+            .filter_map(|action| {
+                if let Action::Image(request) = action {
+                    Some(request)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].drawing,
+            terminal.chart().drawings().drawings[0].id
+        );
+        assert!(requests[0].file.is_none());
     }
 
     fn line(id: usize) -> Drawing {

@@ -158,7 +158,7 @@ impl StoredDrawing {
     /// The first field holding NaN or an infinity, which JSON cannot store, or a size or
     /// pitchfork level outside the range drawings are drawn at.
     pub(super) fn invalid_field(&self) -> Option<String> {
-        use super::validation::{MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH};
+        use super::validation::{MAX_IMAGE_SIDE, MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH};
         use crate::styles::typography::FONT_SIZES;
         let d = &self.drawing;
         let bad = |value: f64| !value.is_finite();
@@ -177,6 +177,12 @@ impl StoredDrawing {
             .is_some_and(|anchor| anchor.into_iter().any(|value| !value.is_finite()))
         {
             return Some("screen_anchor".into());
+        }
+        if d.image.and_then(|c| c.size).is_some_and(|size| {
+            size.into_iter()
+                .any(|side| !(1.0..=MAX_IMAGE_SIDE).contains(&side))
+        }) {
+            return Some("image.size".into());
         }
         if !FONT_SIZES.contains(&d.font_size) {
             return Some("font_size".into());
@@ -1231,6 +1237,12 @@ mod tests {
                 average_range_ticks: 2.5,
                 noise_ticks: 0.5,
             });
+            if tool == DrawingToolType::Image {
+                drawing.image = Some(crate::drawings::ImageConfig {
+                    size: Some([240.0, 135.0]),
+                    opacity: 128,
+                });
+            }
             drawing.bars_pattern = Some(crate::drawings::BarsPatternConfig {
                 mode: crate::drawings::BarsPatternMode::Line,
                 mirrored: true,
@@ -1914,7 +1926,27 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 24] = [
+        let cases: [(Spoil, &str); 26] = [
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .image
+                        .get_or_insert_with(Default::default)
+                        .size = Some([f32::NAN, 1.0])
+                },
+                "invalid image.size",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .image
+                        .get_or_insert_with(Default::default)
+                        .size = Some([0.0, 1.0])
+                },
+                "invalid image.size",
+            ),
             (
                 |s| {
                     first(s)

@@ -313,6 +313,14 @@ impl Chart {
             None
         };
         if let Some(id) = edit_id {
+            if drawing_manager.drawings.len() > count_before
+                && drawing_manager
+                    .drawings
+                    .iter()
+                    .any(|d| d.id == id && d.tool_type == crate::drawings::DrawingToolType::Image)
+            {
+                drawing_manager.image_request = Some(id);
+            }
             text::begin_edit(drawing_manager, id);
         }
 

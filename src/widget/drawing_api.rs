@@ -68,6 +68,60 @@ impl Chart {
         Ok(())
     }
 
+    /// Sets an image drawing's picture as one undoable edit. `uri` is the address the host's
+    /// image loaders resolve, and `size` is its pixel size, which gives the frame its
+    /// proportions, scaled down to fit 240 x 180 points. Closes this drawing's text editor.
+    /// Unknown, locked and non-image drawings, an empty address and a size that is not
+    /// positive and finite change nothing. Each frame side is at least one point.
+    pub fn set_drawing_image(
+        &mut self,
+        id: usize,
+        uri: impl Into<String>,
+        size: egui::Vec2,
+    ) -> Result<(), &'static str> {
+        let drawing = self
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.id == id)
+            .ok_or("Unknown drawing")?;
+        if drawing.locked {
+            return Err("Drawing is locked");
+        }
+        if drawing.tool_type != crate::drawings::DrawingToolType::Image {
+            return Err("Drawing is not an image");
+        }
+        let uri = uri.into();
+        if uri.trim().is_empty() {
+            return Err("Image address is empty");
+        }
+        if !(size.x > 0.0 && size.y > 0.0 && size.is_finite()) {
+            return Err("Image size must be positive and finite");
+        }
+        let sizing = &crate::tokens::DESIGN_TOKENS.sizing.media;
+        let limit = egui::vec2(
+            2.0 * sizing.image_default_width,
+            2.0 * sizing.image_default_height,
+        );
+        let scale = 1.0_f32.min(limit.x / size.x).min(limit.y / size.y);
+        let frame = (size * scale).max(egui::Vec2::splat(1.0)).min(limit);
+        self.user_action(|chart| {
+            let manager = chart.drawings_mut();
+            if manager
+                .text_editor
+                .as_ref()
+                .is_some_and(|editor| editor.id == id)
+            {
+                manager.text_editor = None;
+            }
+            manager.edit_drawing(id, |drawing| {
+                drawing.text = Some(uri);
+                drawing.image.get_or_insert_with(Default::default).size = Some(frame.into());
+            });
+        });
+        Ok(())
+    }
+
     /// The pane that draws drawing `id`, or `None` for an unknown drawing.
     pub fn drawing_pane(&self, id: usize) -> Option<PaneId> {
         let drawing = self.drawings().drawings.iter().find(|d| d.id == id)?;

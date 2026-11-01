@@ -161,6 +161,11 @@ pub enum ChartEvent {
         /// Its [`PostLink::link`](crate::model::PostLink::link).
         link: String,
     },
+    /// The user placed an image or dropped picture files on the price pane. Answer with
+    /// [`Chart::set_drawing_image`]; until then the image shows its placeholder.
+    #[cfg(feature = "drawings")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+    ImageRequested(ImageRequest),
     /// A successful history page or `set_data` completed, including an empty result.
     /// Live updates emit `DataUpdated` instead; failed or obsolete feed replies emit nothing.
     DataLoaded {
@@ -183,6 +188,36 @@ pub enum ChartEvent {
     TimeframeChanged(crate::model::Timeframe),
 }
 
+/// An image drawing waiting for its picture, from [`ChartEvent::ImageRequested`].
+///
+/// The chart reads no file and opens no dialog. For a placed image, `file` is `None` and the
+/// host may offer a file chooser; for a dropped file it holds egui's handle, which gives the
+/// path on native platforms and the bytes on the web. Treat the file as untrusted: check its
+/// size, format and pixel dimensions before loading it, then call [`Chart::set_drawing_image`]
+/// with an address the host's image loaders resolve.
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ImageRequest {
+    /// Id of the image drawing to answer.
+    pub drawing: usize,
+    /// The dropped file, or `None` when the user placed the image with the tool.
+    pub file: Option<egui::DroppedFileHandle>,
+}
+
+#[cfg(feature = "drawings")]
+impl PartialEq for ImageRequest {
+    fn eq(&self, other: &Self) -> bool {
+        self.drawing == other.drawing
+            && match (&self.file, &other.file) {
+                (None, None) => true,
+                (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+                _ => false,
+            }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct HostEvents {
     queue: std::collections::VecDeque<ChartEvent>,
@@ -196,6 +231,8 @@ pub(super) struct HostEvents {
     /// What the pointer is over this frame, resolved while the plots are drawn.
     pub target: Option<PointerTarget>,
     pub volume_map: Option<crate::scales::PriceMap>,
+    #[cfg(feature = "drawings")]
+    dropped_images: Vec<egui::DroppedFileHandle>,
 }
 
 impl HostEvents {
@@ -388,6 +425,8 @@ impl Chart {
     }
 
     pub(super) fn record_host_events(&mut self, ui: &Ui) {
+        #[cfg(feature = "drawings")]
+        self.record_image_requests(ui);
         let range = self.visible_time_range();
         if range != self.host_events.range {
             self.host_events.range = range;
@@ -419,6 +458,78 @@ impl Chart {
         if position != self.host_events.pointer {
             self.host_events.pointer = position.clone();
             self.host_events.push(ChartEvent::CrosshairMoved(position));
+        }
+    }
+
+    #[cfg(feature = "drawings")]
+    fn record_image_requests(&mut self, ui: &Ui) {
+        use crate::drawings::DrawingToolType;
+
+        if let Some(drawing) = self.drawings.image_request.take() {
+            self.host_events
+                .push(ChartEvent::ImageRequested(ImageRequest {
+                    drawing,
+                    file: None,
+                }));
+        }
+        let pos = ui.input(|input| {
+            for file in &input.raw.dropped_files {
+                let supported = file
+                    .path()
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| {
+                        ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]
+                            .iter()
+                            .any(|image| ext.eq_ignore_ascii_case(image))
+                    });
+                if supported && self.host_events.dropped_images.len() < 16 {
+                    self.host_events.dropped_images.push(file.clone());
+                }
+            }
+            input.pointer.hover_pos()
+        });
+        // shortcut: egui has no drop position; hidden charts retain files until shown with a
+        // pointer. Use the drop position instead when egui supplies it.
+        let Some(pos) = pos.filter(|_| !self.host_events.dropped_images.is_empty()) else {
+            return;
+        };
+        let files = std::mem::take(&mut self.host_events.dropped_images);
+        let plot = self.last_rendered_price_rect;
+        if !ui.rect_contains_pointer(plot) {
+            return;
+        }
+        let index = self
+            .state
+            .time_scale()
+            .coord_to_idx_precise(pos.x, plot.left(), plot.width())
+            .round();
+        let Some(time) = crate::model::time_at(self.state.shown(), index) else {
+            return;
+        };
+        let price = self.last_price_map.y_to_price(pos.y);
+        if !price.is_finite() {
+            return;
+        }
+        let requests = self.user_action(|chart| {
+            files
+                .into_iter()
+                .filter_map(|file| {
+                    let mut drawing = chart.drawings.new_drawing(0, DrawingToolType::Image);
+                    drawing.z_order = chart.drawings.top_z_order();
+                    let drawing = chart.create_drawing(drawing, &[(time, price)]).ok()?;
+                    Some(ImageRequest {
+                        drawing,
+                        file: Some(file),
+                    })
+                })
+                .collect::<Vec<_>>()
+        });
+        if let Some(request) = requests.last() {
+            self.drawings.select(request.drawing);
+        }
+        for request in requests {
+            self.host_events.push(ChartEvent::ImageRequested(request));
         }
     }
 
@@ -459,6 +570,202 @@ impl Chart {
 
 #[cfg(test)]
 mod tests {
+    /// Placement, delayed drops and host answers retain their ids, coordinates and undo steps.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn image_requests_reach_the_host() {
+        use crate::drawings::{Drawing, DrawingToolType};
+        use crate::widget::test_frames::{chart, frame};
+        use egui::{Context, Event, RawInput, Rect, Vec2, pos2, vec2};
+        use std::sync::Arc;
+
+        #[derive(Debug)]
+        struct File(&'static str);
+        impl egui::DroppedFile for File {
+            fn path(&self) -> &std::path::Path {
+                self.0.as_ref()
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            fn bytes(&self) -> Result<Vec<u8>, String> {
+                Ok(Vec::new())
+            }
+            #[cfg(target_arch = "wasm32")]
+            fn bytes_async(
+                &self,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + '_>>
+            {
+                Box::pin(async { Ok(Vec::new()) })
+            }
+        }
+        let requests = |chart: &mut Chart| {
+            chart
+                .drain_events()
+                .filter_map(|event| {
+                    if let ChartEvent::ImageRequested(request) = event {
+                        Some(request)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let map = chart.get_chart_mapping();
+        let p = pos2(map.idx_to_x(30), map.price_to_y(16.0));
+        chart
+            .drawings_mut()
+            .set_active_tool(Some(DrawingToolType::Image));
+        frame(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(p)]);
+        for (time, pressed) in [(0.2, true), (0.3, false)] {
+            frame(
+                &ctx,
+                &mut chart,
+                time,
+                vec![Event::PointerButton {
+                    pos: p,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+        }
+        let id = chart.drawings().drawings[0].id;
+        assert_eq!(
+            requests(&mut chart),
+            [ImageRequest {
+                drawing: id,
+                file: None
+            }]
+        );
+        assert_eq!(chart.drawings().text_editor.as_ref().unwrap().id, id);
+        assert_eq!(
+            chart.set_drawing_image(id, "test://a", vec2(1920.0, 1080.0)),
+            Ok(())
+        );
+        let picture = &chart.drawings().drawings[0];
+        assert_eq!(picture.text.as_deref(), Some("test://a"));
+        assert_eq!(picture.image.unwrap().size, Some([240.0, 135.0]));
+        assert!(chart.drawings().text_editor.is_none());
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings[0].text, None);
+        assert_eq!(chart.drawings().drawings[0].image, None);
+        for (size, expected) in [
+            (vec2(100.0, 50.0), [100.0, 50.0]),
+            (vec2(400.0, 200.0), [240.0, 120.0]),
+            (vec2(480.0, 720.0), [120.0, 180.0]),
+            (vec2(10_000.0, 1.0), [240.0, 1.0]),
+        ] {
+            chart.set_drawing_image(id, "test://a", size).unwrap();
+            let actual = chart.drawings().drawings[0].image.unwrap().size.unwrap();
+            for (actual, expected) in actual.into_iter().zip(expected) {
+                assert!((actual - expected).abs() < 1e-3);
+            }
+            assert!(actual[0] <= 240.0 && actual[1] <= 180.0, "{actual:?}");
+            assert!(chart.undo());
+        }
+        let line = chart
+            .create_drawing(
+                Drawing::new(0, DrawingToolType::TrendLine),
+                &[
+                    (chart.bars(SeriesId::MAIN)[0].time, 15.0),
+                    (chart.bars(SeriesId::MAIN)[1].time, 16.0),
+                ],
+            )
+            .unwrap();
+        for (target, locked, uri, size, error) in [
+            (usize::MAX, false, "a", vec2(10.0, 10.0), "Unknown drawing"),
+            (id, true, "a", vec2(10.0, 10.0), "Drawing is locked"),
+            (
+                line,
+                false,
+                "a",
+                vec2(10.0, 10.0),
+                "Drawing is not an image",
+            ),
+            (id, false, "  ", vec2(10.0, 10.0), "Image address is empty"),
+            (
+                id,
+                false,
+                "a",
+                vec2(0.0, 10.0),
+                "Image size must be positive and finite",
+            ),
+            (
+                id,
+                false,
+                "a",
+                vec2(f32::NAN, 1.0),
+                "Image size must be positive and finite",
+            ),
+        ] {
+            chart.drawings_mut().drawings[0].locked = locked;
+            let before = chart.drawings().drawings.clone();
+            assert_eq!(chart.set_drawing_image(target, uri, size), Err(error));
+            assert_eq!(
+                serde_json::to_value(&chart.drawings().drawings).unwrap(),
+                serde_json::to_value(&before).unwrap()
+            );
+        }
+        chart.drawings_mut().drawings.clear();
+        frame(&ctx, &mut chart, 0.4, vec![Event::PointerGone]);
+        let files: Vec<egui::DroppedFileHandle> = vec![
+            Arc::new(File("a.PNG")),
+            Arc::new(File("b.jpg")),
+            Arc::new(File("notes.txt")),
+        ];
+        let drop_files = |chart: &mut Chart, time, dropped_files| {
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                    time: Some(time),
+                    dropped_files,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        chart.show(ui);
+                    });
+                },
+            );
+            output.drop_without_applying_deltas();
+        };
+        drop_files(&mut chart, 0.5, files.clone());
+        assert!(chart.drawings().drawings.is_empty());
+        assert!(requests(&mut chart).is_empty());
+        frame(&ctx, &mut chart, 0.6, vec![Event::PointerMoved(p)]);
+        let dropped = requests(&mut chart);
+        assert_eq!(dropped.len(), 2);
+        assert_eq!(chart.drawings().drawings.len(), 2);
+        for (request, file) in dropped.iter().zip(&files) {
+            assert!(Arc::ptr_eq(request.file.as_ref().unwrap(), file));
+            let anchors = chart.drawing_points(request.drawing).unwrap();
+            assert_eq!(anchors.len(), 1);
+            assert_eq!(anchors[0].0.timestamp(), 1_702_592_000);
+            assert!((anchors[0].1 - 16.0).abs() < 1e-6, "{anchors:?}");
+        }
+        assert_eq!(chart.drawings().sel_drawing(), Some(dropped[1].drawing));
+        assert!(chart.undo());
+        assert!(chart.drawings().drawings.is_empty());
+        frame(&ctx, &mut chart, 0.7, vec![Event::PointerGone]);
+        drop_files(&mut chart, 0.8, vec![files[0].clone()]);
+        let rect = chart.get_rendered_price_rect();
+        frame(
+            &ctx,
+            &mut chart,
+            0.9,
+            vec![Event::PointerMoved(pos2(
+                rect.center().x,
+                rect.bottom() + 5.0,
+            ))],
+        );
+        assert!(chart.host_events.dropped_images.is_empty());
+        frame(&ctx, &mut chart, 1.0, vec![Event::PointerMoved(p)]);
+        assert!(chart.drawings().drawings.is_empty());
+        assert!(requests(&mut chart).is_empty());
+    }
+
     use super::*;
     use crate::widget::test_frames::{chart, frame};
     use egui::{Context, Event};
