@@ -204,19 +204,20 @@ fn render_profiles(
             }
         }
         // A range that starts before the first complete footprint bar leaves those bars out.
+        // No narrower profile has room for the note, so its text is never laid out.
         if !profile.complete
             && width >= 60.0
             && let Some(&high) = profile.volume.levels.keys().next_back()
         {
             let y = mapping.price_to_y((high as f64 + 1.0) * step - tick * 0.5);
-            if y.is_finite() {
-                painter.text(
-                    pos2(x, y),
-                    Align2::LEFT_BOTTOM,
-                    crate::localization::text(painter.ctx(), "Partial executions"),
-                    FontId::proportional(crate::styles::typography::XS),
-                    theme.chart.axis_text_secondary,
-                );
+            let galley = painter.layout_no_wrap(
+                crate::localization::text(painter.ctx(), "Partial executions"),
+                FontId::proportional(crate::styles::typography::XS),
+                theme.chart.axis_text_secondary,
+            );
+            let size = galley.size();
+            if y.is_finite() && size.x <= width {
+                painter.galley(pos2(x, y - size.y), galley, theme.chart.axis_text_secondary);
             }
         }
         // A valley can lie on untraded rows, so nodes are placed by level, not by traded row.
