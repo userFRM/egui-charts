@@ -155,7 +155,7 @@ jobs:
           ${{ matrix.features == 'all' && '--all-features' || '--no-default-features --features widget' }}
       - name: Build the network feed example for the browser
         if: matrix.features == 'widget'
-        run: cargo clippy --target wasm32-unknown-unknown --no-default-features --features widget --example network_feed -- -D warnings
+        run: cargo clippy --target wasm32-unknown-unknown --no-default-features --features widget,http --example network_feed -- -D warnings
 
   bare-chart:
     if: github.event.pull_request.draft != true
