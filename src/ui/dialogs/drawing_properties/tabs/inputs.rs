@@ -34,6 +34,7 @@ impl InputsTab {
                 | Tool::SchiffPitchfork
                 | Tool::ModifiedSchiffPitchfork
                 | Tool::InsidePitchfork
+                | Tool::Pitchfan
                 | Tool::GannBox
                 | Tool::GannSquare
                 | Tool::GannFixed
@@ -76,7 +77,8 @@ impl InputsTab {
             Tool::Pitchfork
             | Tool::SchiffPitchfork
             | Tool::ModifiedSchiffPitchfork
-            | Tool::InsidePitchfork => pitchfork(ui, drawing, grid_pickers(pickers, 0)),
+            | Tool::InsidePitchfork
+            | Tool::Pitchfan => pitchfork(ui, drawing, grid_pickers(pickers, 0)),
             Tool::GannBox | Tool::GannSquare | Tool::GannFixed | Tool::GannFan => {
                 gann(ui, drawing, pickers, coordinates)
             }

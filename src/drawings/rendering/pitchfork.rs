@@ -5,12 +5,12 @@
 use crate::drawings::domain::{Drawing, DrawingToolType, PitchforkConfig};
 use crate::drawings::validation::MAX_PITCHFORK_LEVEL;
 use crate::model::LineStyle;
-use crate::styles::{stroke, typography};
+use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 
 impl Drawing {
-    /// Standard and Schiff pitchfork
+    /// Standard and Schiff pitchforks and the pitchfan
     pub(crate) fn render_pitchfork(&self, painter: &egui::Painter, chart_rect: Rect) {
         let color = Color32::from_rgba_unmultiplied(
             self.color[0],
@@ -116,6 +116,8 @@ impl Drawing {
                     vec![[p0, p1], [p1, p2], [mid(p0, p1), p2]],
                 )
             }
+            // The pitchfan's rays all start at the first anchor; see `level_lines`.
+            DrawingToolType::Pitchfan => (p0, mid(p1, p2), p1, p2, vec![[p1, p2]]),
             _ => return None,
         };
         let mut lines = fork_lines(origin, through, upper, lower, rect).to_vec();
@@ -168,22 +170,31 @@ impl Drawing {
             let outer = self.level_lines(&base, pair[1].value, rect);
             for (side, outside) in outer.iter().enumerate() {
                 let inside = inner[side.min(inner.len() - 1)];
-                bands.push(vec![inside[0], inside[1], outside[1], outside[0]]);
+                bands.push(if self.tool_type == DrawingToolType::Pitchfan {
+                    fan_band(inside[0], inside[1], outside[1], rect)
+                } else {
+                    vec![inside[0], inside[1], outside[1], outside[0]]
+                });
             }
         }
         bands
     }
 
-    /// Level `value`'s lines: each tine's start is interpolated from the median origin and the
-    /// line runs parallel to the median to the pane edge, and back too when the fork extends back.
+    /// Level `value`'s lines. A fork interpolates each tine's start from the median origin and
+    /// runs parallel to the median to the pane edge, and back too when it extends back.
+    /// The pitchfan casts rays from the first anchor through points `value` half-legs from the
+    /// midpoint of the second and third anchors.
     fn level_lines(&self, base: &[[Pos2; 2]], value: f32, rect: Rect) -> Vec<[Pos2; 2]> {
         let origin = base[0][0];
         let direction = base[0][1] - origin;
-        let back = if direction.x < 0.0 {
-            self.extend_right
-        } else {
-            self.extend_left
-        };
+        let fan = self.tool_type == DrawingToolType::Pitchfan;
+        let back = !fan
+            && if direction.x < 0.0 {
+                self.extend_right
+            } else {
+                self.extend_left
+            };
+        let mid = base[1][0].lerp(base[2][0], 0.5);
         let tines = if value == 0.0 {
             &base[..1]
         } else {
@@ -192,6 +203,10 @@ impl Drawing {
         tines
             .iter()
             .map(|line| {
+                if fan {
+                    let through = mid + (line[0] - mid) * value;
+                    return [origin, super::lines::ray_end(origin, through, rect)];
+                }
                 let start = origin + (line[0] - origin) * value;
                 let end = super::lines::ray_end(start, start + direction, rect);
                 if back {
@@ -286,86 +301,6 @@ impl Drawing {
             stroke_line(leg, width, rgba, style);
         }
     }
-
-    pub(crate) fn render_pitchfan(&self, painter: &egui::Painter, rect: Rect) {
-        let &[center, end, boundary, ..] = self.points.as_slice() else {
-            return;
-        };
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-        let line_stroke_main = Stroke::new(self.stroke_width, color);
-
-        for (i, (&ratio, [_, fan_end])) in PITCHFAN_RATIOS
-            .iter()
-            .zip(pitchfan_lines(center, end, boundary, rect))
-            .enumerate()
-        {
-            let line_stroke = if i == 0 || i == PITCHFAN_RATIOS.len() - 1 {
-                line_stroke_main
-            } else {
-                Stroke::new(
-                    stroke::HAIRLINE,
-                    Color32::from_rgba_unmultiplied(
-                        self.color[0],
-                        self.color[1],
-                        self.color[2],
-                        150,
-                    ),
-                )
-            };
-
-            painter.line_segment([center, fan_end], line_stroke);
-
-            // Place labels at the visible end of each ray, where the fan is widest.
-            let run = fan_end - center;
-            let t = if fan_end.y < rect.min.y {
-                (rect.min.y - center.y) / run.y
-            } else if fan_end.y > rect.max.y {
-                (rect.max.y - center.y) / run.y
-            } else {
-                1.0
-            };
-            let label_pos = center + run * t;
-            if ratio > 0.0 {
-                painter.text(
-                    label_pos,
-                    if fan_end.x >= center.x {
-                        egui::Align2::RIGHT_BOTTOM
-                    } else {
-                        egui::Align2::LEFT_BOTTOM
-                    },
-                    format!("{:.1}%", ratio * 100.0),
-                    egui::FontId::proportional(typography::XS),
-                    color,
-                );
-            }
-        }
-    }
-}
-
-/// Fractions along the pitchfork's tine span through which the fan rays pass.
-const PITCHFAN_RATIOS: [f32; 7] = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
-
-/// Rays from the first pivot through fractional points on the second-to-third leg.
-pub(super) fn pitchfan_lines(
-    center: Pos2,
-    end: Pos2,
-    boundary: Pos2,
-    rect: Rect,
-) -> Vec<[Pos2; 2]> {
-    PITCHFAN_RATIOS
-        .iter()
-        .map(|&ratio| {
-            [
-                center,
-                super::lines::ray_end(center, end.lerp(boundary, ratio), rect),
-            ]
-        })
-        .collect()
 }
 
 /// A pitchfork's median from `origin` through `through`, extended towards the
@@ -385,6 +320,28 @@ fn median_line(p0: Pos2, p1: Pos2, p2: Pos2, is_schiff: bool) -> (Pos2, Pos2) {
         p0
     };
     (origin, p1.lerp(p2, 0.5))
+}
+
+/// Covers the band between two rays throughout the pane by taking both rays out to the
+/// farthest corner's distance, then meeting their perpendiculars there. Opposite rays are empty.
+fn fan_band(apex: Pos2, a: Pos2, b: Pos2, rect: Rect) -> Vec<Pos2> {
+    let reach = [
+        rect.left_top(),
+        rect.right_top(),
+        rect.left_bottom(),
+        rect.right_bottom(),
+    ]
+    .into_iter()
+    .map(|corner| corner.distance(apex))
+    .fold(0.0, f32::max);
+    let (da, db) = ((a - apex).normalized(), (b - apex).normalized());
+    let cos = da.dot(db);
+    let tip = if cos > -1.0 + 1e-6 {
+        apex + (da + db) * (reach / (1.0 + cos))
+    } else {
+        apex
+    };
+    vec![apex, apex + da * reach, tip, apex + db * reach]
 }
 
 #[cfg(test)]
@@ -482,12 +439,20 @@ mod tests {
                 ],
                 vec![[a, b], [b, c], [Pos2::new(5.0, 50.0), c]],
             ),
+            (
+                DrawingToolType::Pitchfan,
+                [66.6667, 200.0, -28.5714, 400.0, -100.0, 733.3333, -155.5556],
+                vec![[b, c]],
+            ),
         ] {
             let mut drawing = Drawing::new(12, tool);
             // A fork saved without a config.
             drawing.pitchfork = None;
             drawing.points = vec![Pos2::ZERO, Pos2::new(10.0, 100.0), Pos2::new(20.0, -50.0)];
             let lines = drawing.pitchfork_lines(rect).unwrap();
+            if tool == DrawingToolType::Pitchfan {
+                assert!(lines[..7].iter().all(|line| line[0] == Pos2::ZERO));
+            }
             assert_eq!(lines[7..], legs, "{tool:?}: construction legs");
             for ([a, b], want) in lines.iter().take(7).zip(ys) {
                 let y = a.y + (40.0 - a.x) * (b.y - a.y) / (b.x - a.x);
@@ -574,5 +539,16 @@ mod tests {
             legacy.points = drawing.points;
             assert_eq!(legacy.pitchfork_lines(rect).unwrap(), lines);
         }
+        // Rays leaving through different pane edges must fill the whole visible wedge.
+        let mut fan = Drawing::new(13, DrawingToolType::Pitchfan);
+        fan.points = vec![Pos2::ZERO, Pos2::new(10.0, -5.0), Pos2::new(-10.0, -5.0)];
+        assert_eq!(
+            crate::drawings::services::DrawingInteraction::new().hit_test(
+                Pos2::new(300.0, -1900.0),
+                &[fan],
+                "1m"
+            ),
+            Some(13)
+        );
     }
 }
