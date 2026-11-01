@@ -27,6 +27,22 @@ mod example;
 mod frame;
 mod regression;
 
+/// Fix Linux hash seeds for repeatable instruction counts, including dependencies' maps.
+/// This interposed symbol belongs only to the benchmark executable.
+#[cfg(target_os = "linux")]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn getrandom(
+    buffer: *mut std::ffi::c_void,
+    length: usize,
+    _flags: std::ffi::c_uint,
+) -> isize {
+    if length != 0 {
+        // SAFETY: the caller supplies a buffer writable for `length` bytes.
+        unsafe { std::ptr::write_bytes(buffer.cast::<u8>(), 0x42, length) };
+    }
+    length as isize
+}
+
 /// A scenario: its name, how many bars each chart has and shows, and how many charts.
 struct Scenario {
     name: &'static str,

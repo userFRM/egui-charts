@@ -32,8 +32,7 @@
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 mod builtin;
 mod custom;
-mod data;
-pub use data::{StudyData, StudyDataRequest};
+pub use crate::data::{StudyData, StudyDataRequest};
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub mod factory;

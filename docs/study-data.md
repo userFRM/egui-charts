@@ -49,6 +49,10 @@ fn supply_snapshots(
 
 A response replaces the prior snapshot. The chart sorts, deduplicates and validates it through
 its shared study-data path; a connected `Datafeed` loads and subscribes automatically.
+The fixed range and anchored volume profile drawings add the finer interval that
+`Instrument::profile_resolutions` suggests for their span to these requests. A connected feed
+loads it back to the first bar of the span. Profiles still estimate volume from those bars;
+a chart bar without finer inputs keeps its own estimate.
 Direct callers supply `StudyData` to `Indicator::update_data` with sorted, unique bars;
 invalid prices, negative volume or unordered timestamps leave accepted values unchanged.
 Pass `from = 0` whenever a requested history changes. A nonzero `from` reuses those histories

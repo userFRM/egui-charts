@@ -197,6 +197,21 @@ impl StudyTemplate {
                         .push((id.to_owned(), InputValue::Toggle(false)));
                 }
             }
+            // Profile endpoints were Unix milliseconds before they read as UTC dates and times.
+            "Vol Profile FR" | "Vol Profile Anchored"
+                if self.inputs.iter().any(|(id, value)| {
+                    matches!(id.as_str(), "start_time" | "end_time")
+                        && matches!(value, InputValue::Number(_))
+                }) =>
+            {
+                for (id, value) in &mut template.inputs {
+                    if let ("start_time" | "end_time", InputValue::Number(ms)) =
+                        (id.as_str(), &*value)
+                    {
+                        *value = InputValue::Text(super::builtin::time_text(*ms));
+                    }
+                }
+            }
             _ => return None,
         }
         Some(template)
@@ -402,7 +417,7 @@ mod tests {
     /// study offered it.
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
-        use InputValue::{Choice, Length, Number, Toggle};
+        use InputValue::{Choice, Length, Number, Text, Toggle};
         let rows = [
             (
                 "SMA",
@@ -462,6 +477,23 @@ mod tests {
                 "Trading Sessions",
                 vec![("boxes", Toggle(true))],
                 vec![("boxes", Toggle(true)), ("name_labels", Toggle(true))],
+            ),
+            // Saved as Unix milliseconds before the endpoints read as UTC dates and times.
+            (
+                "Vol Profile FR",
+                vec![
+                    ("start_time", Number(1_772_838_000_500.0)),
+                    ("end_time", Number(8e15)),
+                ],
+                vec![
+                    ("start_time", Text("2026-03-06 23:00:00.500".into())),
+                    ("end_time", Text(String::new())),
+                ],
+            ),
+            (
+                "Vol Profile Anchored",
+                vec![("start_time", Number(-8e15))],
+                vec![("start_time", Text(String::new()))],
             ),
         ];
         let factory = IndicatorFactory::new();
