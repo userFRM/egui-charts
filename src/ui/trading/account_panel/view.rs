@@ -2,7 +2,9 @@
 
 use crate::localization as l10n;
 
-use egui::{Align, Align2, Color32, FontId, Layout, Rect, RichText, Sense, Stroke, Ui, vec2};
+use egui::{
+    Align, Align2, Color32, FontId, ImageSource, Layout, Rect, RichText, Sense, Stroke, Ui, vec2,
+};
 
 use super::{
     ACTIONS_WIDTH, AccountPanelAction, Cell, Column, HEADER_HEIGHT, ROW_HEIGHT, Row, RowAction,
@@ -11,6 +13,7 @@ use super::{
 use crate::chart::TradingLineAction;
 use crate::icons::icons;
 use crate::model::{Order, OrderSide, OrderType};
+use crate::painting::symbol_mark::paint_symbol_mark;
 use crate::theme::ThemeExt;
 use crate::ui::connection_status::{show_connection_status, show_connection_status_with_label};
 use crate::ui::top_toolbar::buttons::rule_color;
@@ -356,24 +359,28 @@ impl Trading {
             color: theme.ui.text,
             unit: String::new(),
             symbol: false,
+            logo: None,
         };
         let symbol = |symbol: &str| Cell {
             text: symbol.to_owned(),
             color: theme.ui.text,
             unit: String::new(),
             symbol: true,
+            logo: self.logo(symbol).map(str::to_owned),
         };
         let side = |side: OrderSide, text: &str| Cell {
             text: text.to_owned(),
             color: side_color(&theme, side),
             unit: String::new(),
             symbol: false,
+            logo: None,
         };
         let colored = |(text, color, unit): (String, Color32, String)| Cell {
             text,
             color,
             unit,
             symbol: false,
+            logo: None,
         };
         let optional =
             |symbol: &str, value: Option<f64>| value.map_or(String::new(), |v| price(symbol, v));
@@ -721,9 +728,24 @@ impl Trading {
                                         theme.text.small,
                                         theme.ui.text,
                                     ));
+                                    let mark = Rect::from_center_size(
+                                        egui::pos2(cell_rect.left() + 9.0, rect.center().y),
+                                        vec2(18.0, 18.0),
+                                    );
+                                    paint_symbol_mark(
+                                        &cells.with_clip_rect(cell_rect),
+                                        mark,
+                                        &cell.text,
+                                        cell.logo.as_deref().map(ImageSource::from),
+                                    );
+                                    let left = mark.right() + 6.0;
                                     let chip = Rect::from_min_size(
-                                        egui::pos2(cell_rect.left(), rect.center().y - 15.0),
-                                        vec2((galley.size().x + 16.0).min(cell_rect.width()), 30.0),
+                                        egui::pos2(left, rect.center().y - 15.0),
+                                        vec2(
+                                            (galley.size().x + 16.0)
+                                                .min((cell_rect.right() - left).max(0.0)),
+                                            30.0,
+                                        ),
                                     );
                                     let current = cell.text == chart_symbol;
                                     let (fill, text) = if current {

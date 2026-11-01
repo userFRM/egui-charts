@@ -252,7 +252,7 @@ impl Tab {
         match self {
             Tab::Positions => {
                 const COLUMNS: &[Column] = &[
-                    left("Symbol", 110.0),
+                    left("Symbol", 134.0),
                     left("Side", 44.0),
                     right("Qty", 44.0),
                     right("Avg Fill Price", 84.0),
@@ -269,7 +269,7 @@ impl Tab {
             }
             Tab::Orders => {
                 const COLUMNS: &[Column] = &[
-                    left("Symbol", 110.0),
+                    left("Symbol", 134.0),
                     left("Side", 44.0),
                     left("Type", 60.0),
                     right("Qty", 44.0),
@@ -285,7 +285,7 @@ impl Tab {
             }
             Tab::History => {
                 const COLUMNS: &[Column] = &[
-                    left("Symbol", 110.0),
+                    left("Symbol", 134.0),
                     left("Side", 44.0),
                     left("Type", 60.0),
                     right("Qty", 44.0),
@@ -311,7 +311,7 @@ impl Tab {
             }
             Tab::Executions => {
                 const COLUMNS: &[Column] = &[
-                    left("Symbol", 110.0),
+                    left("Symbol", 134.0),
                     left("Side", 44.0),
                     right("Qty", 44.0),
                     right("Fill Price", 80.0),
@@ -342,6 +342,8 @@ struct Cell {
     color: Color32,
     unit: String,
     symbol: bool,
+    /// The logo of a symbol chip's instrument, when the host supplied one.
+    logo: Option<String>,
 }
 
 /// A table row: its cells, the symbol a click on its chip shows, and what its edit and close
@@ -700,6 +702,7 @@ mod tests {
                     color: Color32::WHITE,
                     unit: String::new(),
                     symbol: false,
+                    logo: None,
                 })
                 .collect(),
             symbol: None,
