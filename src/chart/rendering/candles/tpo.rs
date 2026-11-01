@@ -4,7 +4,8 @@
 //! - TPO letters (A, B, C...) at each price level
 //! - Point of Control (POC) highlighting
 //! - Value Area guides and cell emphasis
-//! - Initial Balance range
+//! - Initial Balance range and extensions
+//! - Poor high and low markers
 //! - Single prints highlighting
 //! - Session separators
 //! - Multiple color modes and display modes
@@ -706,6 +707,22 @@ fn draw_session_profile(
         }
     }
 
+    if config.show_poor_highs_lows {
+        for (poor, price) in [
+            (profile.has_poor_high, profile.profile_high),
+            (profile.has_poor_low, profile.profile_low),
+        ] {
+            let y = row_y(price);
+            if poor && price_rect.y_range().contains(y) {
+                let right = anchor_x + profile.tpo_count_at(price) as f32 * column_width;
+                painter.line_segment(
+                    [Pos2::new(right + 4.0, y), Pos2::new(right + 12.0, y)],
+                    Stroke::new(DESIGN_TOKENS.stroke.medium, chart.axis_text),
+                );
+            }
+        }
+    }
+
     // Letters retain a fine POC underline; blocks carry the POC in the row itself.
     if config.show_poc && use_letters {
         let y = row_y(profile.poc_price) + row_height * 0.5;
@@ -815,19 +832,41 @@ fn draw_session_profile(
     }
 
     // Initial balance: a bar beside the profile from its low to its high.
-    if config.show_initial_balance && profile.initial_balance_high >= profile.initial_balance_low {
+    if (config.show_initial_balance || config.show_initial_balance_extensions)
+        && profile.initial_balance_high >= profile.initial_balance_low
+    {
         let top = coords.price_to_y(profile.initial_balance_high);
         let bottom = coords.price_to_y(profile.initial_balance_low);
-        painter.rect_filled(
-            Rect::from_x_y_ranges(anchor_x - 2.0..=anchor_x, top.min(bottom)..=top.max(bottom)),
-            0.0,
-            readable_color(
-                render_config.initial_balance_color,
-                chart.axis_text_secondary,
-                &[chart.bg],
-                3.0,
-            ),
+        let color = readable_color(
+            render_config.initial_balance_color,
+            chart.axis_text_secondary,
+            &[chart.bg],
+            3.0,
         );
+        if config.show_initial_balance {
+            painter.rect_filled(
+                Rect::from_x_y_ranges(anchor_x - 2.0..=anchor_x, top.min(bottom)..=top.max(bottom)),
+                0.0,
+                color,
+            );
+        }
+        let range = profile.initial_balance_high - profile.initial_balance_low;
+        if config.show_initial_balance_extensions && range > 0.0 && range.is_finite() {
+            for multiple in [1.0, 2.0] {
+                for price in [
+                    profile.initial_balance_low - multiple * range,
+                    profile.initial_balance_high + multiple * range,
+                ] {
+                    let y = coords.price_to_y(price);
+                    if price.is_finite() && y.is_finite() && price_rect.y_range().contains(y) {
+                        painter.line_segment(
+                            [Pos2::new(anchor_x - 10.0, y), Pos2::new(anchor_x, y)],
+                            Stroke::new(DESIGN_TOKENS.stroke.light, color),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // Opening marker: a small triangle at the session open, tinted by direction.
@@ -951,6 +990,179 @@ mod tests {
     use super::*;
     use crate::model::{Bar, Timeframe, to_tpo_profiles};
     use chrono::{Duration, Utc};
+
+    #[test]
+    fn poor_extremes_mark_only_rows_with_multiple_periods() {
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
+        let map = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            0.0,
+            400.0,
+            false,
+        );
+        // The two half-hour periods share both extremes, just the high, just the low, or neither.
+        for (first, second, tick, enabled, expected) in [
+            (
+                (100.0, 104.0),
+                (100.0, 104.0),
+                1.0,
+                true,
+                vec![104.0, 100.0],
+            ),
+            ((100.0, 104.0), (101.0, 104.0), 1.0, true, vec![104.0]),
+            ((100.0, 104.0), (100.0, 103.0), 1.0, true, vec![100.0]),
+            ((100.0, 104.0), (101.0, 103.0), 1.0, true, vec![]),
+            ((100.0, 104.0), (100.0, 104.0), 1.0, false, vec![]),
+            // A row of four 0.25 ticks starts at 104 and is centred at 104.375.
+            ((100.0, 104.25), (101.0, 104.75), 0.25, true, vec![104.375]),
+        ] {
+            let params: crate::model::ChartTypeParams = serde_json::from_value(serde_json::json!({
+                "tpo_row_ticks": (1.0 / tick) as u32,
+                "tpo_poor_highs_lows": enabled
+            }))
+            .unwrap();
+            let config = TPOConfig {
+                show_poc: false,
+                show_value_area: false,
+                show_opening_range: false,
+                ..params.tpo_config(Some(tick))
+            };
+            let bars = [first, second].map(|(low, high)| {
+                Bar::new(chrono::DateTime::UNIX_EPOCH, low, high, low, high, 1.0)
+            });
+            let mut bars = bars;
+            bars[1].time += Duration::minutes(30);
+            let profile = to_tpo_profiles(&bars, &config, &Timeframe::Min30.into()).remove(0);
+            let ctx = egui::Context::default();
+            ctx.begin_pass(egui::RawInput::default());
+            draw_session_profile(
+                &ctx.layer_painter(egui::LayerId::background()),
+                rect,
+                &map,
+                &profile,
+                &config,
+                &TpoRenderConfig::default(),
+                40.0,
+                20.0,
+                false,
+                Color32::GREEN,
+                Color32::RED,
+            );
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            let marks: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::LineSegment { points, .. } => Some(points[0].y),
+                    _ => None,
+                })
+                .collect();
+            let expected: Vec<_> = expected
+                .into_iter()
+                .map(|price| map.price_to_y(price))
+                .collect();
+            assert_eq!(marks, expected, "{second:?}, enabled {enabled}");
+        }
+    }
+
+    #[test]
+    fn initial_balance_extensions_use_one_and_two_ranges_and_require_balance_bars() {
+        use crate::model::{Session, SessionWindow, TimezoneId};
+        use chrono::{NaiveTime, Weekday};
+        let clock = BarClock::new(Timeframe::Min30).with_session(
+            TimezoneId::fixed_offset(0).unwrap(),
+            Session::new([SessionWindow::new(
+                [Weekday::Thu],
+                NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(8, 0, 0).unwrap(),
+            )]),
+            false,
+        );
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
+        for (enabled, minutes, high, bar_minute, expected) in [
+            (true, 60, 104.0, 0, vec![96.0, 108.0, 92.0, 112.0]),
+            (false, 60, 104.0, 0, vec![]),
+            (true, 0, 104.0, 0, vec![]),
+            // History starts 90 minutes after the session opens, outside the 60-minute balance.
+            (true, 60, 104.0, 90, vec![]),
+            (true, 60, 100.0, 0, vec![]),
+        ] {
+            let params: crate::model::ChartTypeParams = serde_json::from_value(serde_json::json!({
+                "tpo_initial_balance_minutes": minutes,
+                "tpo_initial_balance_extensions": enabled,
+                "tpo_row_ticks": 1
+            }))
+            .unwrap();
+            let config = TPOConfig {
+                show_poc: false,
+                show_value_area: false,
+                show_opening_range: false,
+                ..params.tpo_config(Some(1.0))
+            };
+            let bar = Bar::new(
+                chrono::DateTime::UNIX_EPOCH + Duration::minutes(bar_minute),
+                100.0,
+                high,
+                100.0,
+                high,
+                1.0,
+            );
+            let profile = to_tpo_profiles(&[bar], &config, &clock).remove(0);
+            for inverted in [false, true] {
+                let map = PriceMap::new(
+                    crate::scales::PriceTransform::default(),
+                    crate::scales::PriceRange::new(90.0, 115.0),
+                    0.0,
+                    400.0,
+                    inverted,
+                );
+                let ctx = egui::Context::default();
+                ctx.begin_pass(egui::RawInput::default());
+                draw_session_profile(
+                    &ctx.layer_painter(egui::LayerId::background()),
+                    rect,
+                    &map,
+                    &profile,
+                    &config,
+                    &TpoRenderConfig::default(),
+                    40.0,
+                    20.0,
+                    false,
+                    Color32::GREEN,
+                    Color32::RED,
+                );
+                let mut output = ctx.end_pass();
+                output.textures_delta.clear();
+                let balance_color = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    Shape::Rect(r) if r.rect.width() == 2.0 => Some(r.fill),
+                    _ => None,
+                });
+                let lines: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::LineSegment { points, stroke } => {
+                            assert_eq!(Some(stroke.color), balance_color);
+                            assert!(points[0].x < points[1].x && points[1].x <= 40.0);
+                            assert_eq!(points[0].y, points[1].y);
+                            Some(points[0].y)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let expected: Vec<_> = expected
+                    .iter()
+                    .map(|&price| map.price_to_y(price))
+                    .collect();
+                assert_eq!(
+                    lines, expected,
+                    "enabled {enabled}, minutes {minutes}, high {high}"
+                );
+            }
+        }
+    }
 
     fn create_test_bars() -> Vec<Bar> {
         let start = Utc::now();
