@@ -9,6 +9,7 @@ use crate::styles::{stroke, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
+use std::fmt::Write;
 
 impl Drawing {
     /// Renders a long or short position: entry, target and stop zones, and the
@@ -195,7 +196,12 @@ impl Drawing {
         };
         let amount =
             |price: f64| money((price - entry_price).abs()).map(|amount| format!("{amount:.2}"));
-        let target_level = format!("{target_price:.2} ({:.2}%)", pct(target_price));
+        let mut target_level = String::with_capacity(32);
+        let _ = write!(
+            target_level,
+            "{target_price:.2} ({:.2}%)",
+            pct(target_price)
+        );
         let target_label = match amount(target_price) {
             Some(amount) => l10n::format_text(
                 ctx,
@@ -207,7 +213,8 @@ impl Drawing {
             ),
             None => l10n::format_text(ctx, "Target: {level}", &[("level", target_level.as_str())]),
         };
-        let stop_level = format!("{stop_price:.2} ({:.2}%)", pct(stop_price));
+        let mut stop_level = String::with_capacity(32);
+        let _ = write!(stop_level, "{stop_price:.2} ({:.2}%)", pct(stop_price));
         let stop_label = match amount(stop_price) {
             Some(amount) => l10n::format_text(
                 ctx,
