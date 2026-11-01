@@ -6,6 +6,92 @@ without egui and its performance metrics work with `default-features = false`. T
 supplies the market data.
 `examples/backtesting.rs` demonstrates both a headless run and, with `ui`, a report window.
 
+With the `strategies` feature, configure a run through `Backtest::settings`:
+
+```rust
+use egui_charts::model::{Bar, OrderSide, OrderType, Timeframe};
+use egui_charts::strategies::{Backtest, Commission, OrderSize, Slippage, Strategy, StrategyContext};
+
+struct Long;
+impl Strategy for Long {
+    fn inputs(&self) -> Vec<(String, String)> {
+        vec![("Direction".into(), "Long".into())]
+    }
+    fn on_bar(&mut self, ctx: &mut StrategyContext<'_>) {
+        if ctx.position() == 0.0 {
+            ctx.entry("Long", OrderSide::Buy, None, OrderType::Market);
+        }
+    }
+}
+let mut engine = Backtest::new("Long", "SAMPLE", Timeframe::Hour1, 10_000.0);
+engine.settings.currency = Some("USD".into());
+engine.settings.risk_free_rate = 0.02;
+engine.settings.order_size = OrderSize::EquityFraction(0.1);
+engine.settings.commission = Commission::PerOrder(1.0);
+engine.settings.slippage = Slippage::Ticks { ticks: 1, tick_size: 0.01 };
+engine.settings.leverage = 2.0;
+let bars: Vec<Bar> = vec![]; // The host supplies history independently of the visible chart.
+let lower: Vec<Bar> = vec![]; // Optional finer bars for the same instrument.
+let report = engine.run(&mut Long, &bars, &lower);
+```
+
+An entry's explicit positive quantity overrides the default size. `None` uses fixed units,
+a fraction of current marked equity, or cash divided by the absolute execution price.
+Cash and equity sizing reject a zero execution price. The default pyramiding limit is one
+open entry; zero disables entries. A partial exit retains its entry slot until that lot is
+fully closed. An opposite entry reverses the position and starts a new entry count.
+
+Commission is an absolute fill-value fraction, an amount per unit, or an amount per order.
+Each fill pays once, even when reversing or closing several FIFO lots; trade fees and net
+profits include their quantity shares of entry and exit commission. Open trades retain
+their unallocated entry fees, already deducted from equity. Market and stop orders slip
+against their side once per fill, by ticks times tick size or an absolute-price fraction.
+Limits, including the limit execution of a stop-limit order, never slip.
+
+Margin is absolute position market value divided by leverage, as on the paper account.
+An entry is rejected if its resulting margin plus commission exceeds equity after slippage.
+The report counts rejected entries. Along every segment of the price path, equity below
+margin closes the whole position at the crossing, labelled `Margin call`, with exit fees
+and market slippage. An order at the boundary can avert the deficit; a gap already below
+margin closes at its open. For example, capital
+1,000 and 15 long units entered at 100 with leverage 2 give equity `15p - 500` and margin
+`7.5p` at positive price `p`; a decline crosses at `p = 200/3`, leaving equity 500 before
+exit costs, even if the bar later recovers.
+
+`recalculate_after_fills` calls the strategy again after every fill, with `price()` equal
+to the execution price and `equity()` marked there after commission. `is_after_fill()`
+distinguishes it from a closed-bar decision. During this call, `bars()` contains only
+previously closed chart bars, excluding the unfinished bar. Newly created orders wait for
+a subsequent price point; they cannot repeatedly fill on the same tick. `fill_on_close`
+fills market orders on the closing tick. All settings and `Strategy::inputs()` appear in
+the report's properties, currency and risk-free rate also populate its metadata.
+
+`Backtest::run(strategy, bars, lower)` uses valid lower-interval bars in timestamp order
+within each chart bar's time span, with the end excluded. Duplicate finer timestamps use
+the first valid bar. A chart bar without valid finer coverage uses its own path; gaps
+between supplied finer bars fill at the next finer open. Monthly spans use calendar
+months; execution bars end at the next chart open, with the final one covering remaining
+finer bars. Only fills use finer timestamps; decisions and equity stay on the chart
+interval. Without finer bars the existing nearest-extreme-first chart path is unchanged.
+
+`settings.start_time` selects the first eligible chart-bar open. Earlier chart bars cannot
+place or fill orders, but still reach `Strategy::prepare` and `Strategy::on_bar` to warm
+both precomputed studies and incremental strategy state. The host loads
+both histories and can supply more data than its chart has loaded; no account or market
+data service is required by the engine. With a start time, equity starts at that time and
+subsequent values are stamped at chart-bar closes, preserving the starting capital point.
+The final execution bar has no known closing time; its equity mark is provisionally labelled
+one nanosecond after its last supplied price timestamp so the curve stays ordered.
+Without a start time, the existing equity timestamps are retained. When comparing a
+bounded run in the panel, supply only its eligible chart bars as the comparison source.
+
+Migration: `Backtest::initial_capital` and `Backtest::fill_on_close` move to
+`Backtest::settings`. `Backtest::new` keeps its starting-capital argument. Add `&[]` as the
+third argument to existing `run` calls, or supply finer bars. Runs that intentionally stack
+entries must set `settings.pyramiding` to their limit; the default is now one. Entries also
+need enough margin and commission in the account, with leverage one by default. Starting
+capital must be finite.
+
 With the `ui` feature, keep a `ui::strategy_report::StrategyReportPanel` in your host:
 
 ```rust
