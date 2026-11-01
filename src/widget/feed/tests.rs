@@ -2706,6 +2706,22 @@ fn profile_drawings_read_executions_on_every_time_based_chart_type() {
     }
     chart.set_chart_type(ChartType::Candles);
     frames.run(&mut chart);
+    // Holding executions for a drawing must keep the selected candle chart's price series.
+    // Wide bars make footprint cells readable, so accidentally enabling that renderer is visible.
+    chart.apply_synced_time_scale(80.0, 0.0);
+    let colors = [chart.config().bullish_color, chart.config().bearish_color];
+    chart.drawings_mut().drawings[0].visible = false;
+    frames.time += 1.0;
+    let without = shapes(&frames.ctx, &mut chart, frames.time, Vec::new());
+    let reference = colors.map(|color| candle_ys(&without, color));
+    chart.drawings_mut().drawings[0].visible = true;
+    frames.time += 1.0;
+    let with = shapes(&frames.ctx, &mut chart, frames.time, Vec::new());
+    assert_eq!(
+        colors.map(|color| candle_ys(&with, color)),
+        reference,
+        "price candles with a profile drawing"
+    );
     let mut anchored = drawing.clone();
     anchored.tool_type = DrawingToolType::AnchoredVolumeProfile;
     anchored.chart_points.truncate(1);
