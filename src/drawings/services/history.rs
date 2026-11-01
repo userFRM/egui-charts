@@ -43,7 +43,7 @@ use std::collections::HashSet;
 
 /// Command representing a reversible drawing operation
 #[derive(Debug, Clone)]
-pub enum DrawingCommand {
+pub(crate) enum DrawingCommand {
     /// Drawings owned by one bulk edit, including their list order.
     Snapshot {
         /// Drawings at this side of the bulk edit, in list order, each with its list index.
@@ -78,7 +78,7 @@ pub enum DrawingCommand {
 
 impl DrawingCommand {
     /// Get the drawing ID affected by this command
-    pub fn drawing_id(&self) -> usize {
+    pub(crate) fn drawing_id(&self) -> usize {
         match self {
             DrawingCommand::Snapshot { ids, .. } => ids.first().copied().unwrap_or(0),
             DrawingCommand::Add(d) | DrawingCommand::Delete { drawing: d, .. } => d.id,
@@ -87,7 +87,7 @@ impl DrawingCommand {
     }
 
     /// Shift the bar indices at or after `from` for bars inserted in front of them
-    pub fn shift_bar_indices(&mut self, from: f32, delta: f32) {
+    pub(crate) fn shift_bar_indices(&mut self, from: f32, delta: f32) {
         match self {
             DrawingCommand::Snapshot { drawings, .. } => {
                 for (_, drawing) in drawings {

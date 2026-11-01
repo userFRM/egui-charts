@@ -258,7 +258,7 @@ Drawings,Drawing management,Move selected drawings with arrow keys,done,library,
 Drawings,Drawing management,Multi-select drawings,done,library,src/widget/tool_interaction/selection.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs;src/ui/dialogs/drawing_properties/actions.rs
 Drawings,Drawing management,Object tree,done,library,src/ui/widget_bar/panels/object_tree/chart_actions.rs;src/ui/widget_bar/panels/object_tree/source_tree.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Per-tool settings dialog,done,library,src/ui/dialogs/drawing_properties/dialog.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/domain/drawing.rs;src/drawings/rendering/trading/position.rs;src/ui/floating_toolbar/toolbar.rs;terminal/src/drawings.rs;terminal/src/studies.rs;examples/demo/controller.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
-Drawings,Drawing management,Persistence of drawings per symbol,done,library,src/widget/stored_drawings.rs;src/widget/frame.rs;src/services/document.rs;src/widget/layout.rs;src/ui/dialogs/storage_conflict.rs;terminal/src/drawings.rs
+Drawings,Drawing management,Persistence of drawings per symbol,done,library,src/widget/stored_drawings.rs;src/widget/frame.rs;src/services/document.rs;src/widget/layout.rs;src/ui/dialogs/storage_conflict.rs;terminal/src/drawings.rs;src/drawings/persistence.rs
 Drawings,Drawing management,Remove all drawings,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/ui/drawing_toolbar/utilities/remove_menu.rs
 Drawings,Drawing management,Select a drawing by clicking its body,done,library,src/drawings/manager/mod.rs;src/drawings/services/interaction.rs;src/widget/tool_interaction/selection.rs;src/drawings/manager/paint.rs;src/drawings/manager/interaction.rs
 Drawings,Drawing management,Snap anchors to bars in time,done,library,src/widget/tool_interaction/mod.rs;src/widget/tool_interaction/interaction.rs
@@ -274,7 +274,7 @@ Drawings,Drawings,ABCD pattern,done,library,src/drawings/rendering/patterns.rs;s
 Drawings,Drawings,API: default style overrides for new drawings,done,library,src/drawings/manager/mod.rs;src/drawings/domain/template.rs;src/drawings/manager/edit.rs;src/drawings/manager/interaction.rs
 Drawings,Drawings,API: drawing templates through the save/load adapter,done,library,src/services/storage.rs;src/ui/dialogs/templates/store.rs;src/drawings/domain/template.rs
 Drawings,Drawings,"API: per-drawing selection, saving, user-edit and object-tree flags",done,library,src/drawings/domain/drawing.rs;src/drawings/manager/mod.rs;src/widget/anchors.rs;src/drawings/manager/edit.rs
-Drawings,Drawings,Anchored VWAP,done,library,src/drawings/rendering/trading/volume_profile.rs
+Drawings,Drawings,Anchored VWAP,done,library,src/drawings/rendering/trading/volume_profile.rs;src/drawings/domain/vwap.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
 Drawings,Drawings,Anchored text,done,library,src/drawings/domain/drawing.rs;src/drawings/rendering/annotations/text.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
 Drawings,Drawings,Anchored volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/drawings/rendering/mod.rs
 Drawings,Drawings,Arc,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
@@ -293,8 +293,8 @@ Drawings,Drawings,Cross line,done,library,src/drawings/rendering/lines.rs;src/dr
 Drawings,Drawings,Curve,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Cyclic lines,done,library,src/drawings/rendering/cycles.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/style.rs
 Drawings,Drawings,Cypher pattern,done,library,src/drawings/rendering/patterns.rs;src/painting/dashed_line.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs
-Drawings,Drawings,Date and price range,done,library,src/drawings/rendering/measurements.rs
-Drawings,Drawings,Date range,done,library,src/drawings/rendering/measurements.rs
+Drawings,Drawings,Date and price range,done,library,src/drawings/rendering/measurements.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs
+Drawings,Drawings,Date range,done,library,src/drawings/rendering/measurements.rs;src/drawings/rendering/mod.rs
 Drawings,Drawings,Demonstration and magic cursors,done,library,src/config/crosshair.rs;src/chart/cursor_modes/mod.rs;src/widget/frame.rs;src/ui/drawing_toolbar/categories/cursors.rs
 Drawings,Drawings,Disjoint channel,done,library,src/drawings/rendering/channels.rs;src/drawings/rendering/mod.rs;src/drawings/services/handle.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs
 Drawings,Drawings,Double curve,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs
@@ -307,7 +307,7 @@ Drawings,Drawings,Drawing persistence,done,library,src/widget/anchors.rs;src/dra
 Drawings,Drawings,Drawing property access,partial,library,src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/drawings/rendering/fibonacci.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/domain/pitchfork.rs;src/drawings/rendering/pitchfork.rs
 Drawings,Drawings,Drawing removal,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Drawing stacking order,done,library,src/drawings/manager/mod.rs;src/drawings/services/z_order.rs;src/drawings/manager/edit.rs;src/ui/context_menu/drawing.rs;src/ui/widget_bar/panels/object_tree/chart_actions.rs;terminal/src/drawings.rs;examples/demo/controller.rs
-Drawings,Drawings,Drawing tool availability,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs;src/drawings/repositories.rs;src/drawings/categories.rs;src/config/drawing_tool/categories.rs;src/ui/drawing_toolbar/toolbar/mod.rs
+Drawings,Drawings,Drawing tool availability,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs;src/drawings/repositories.rs;src/drawings/categories.rs;src/config/drawing_tool/categories.rs;src/ui/drawing_toolbar/toolbar/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Elliott correction wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs;src/drawings/domain/elliott.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
 Drawings,Drawings,Elliott double combo wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/elliott.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/persistence.rs
 Drawings,Drawings,Elliott impulse wave,done,library,src/drawings/rendering/elliott.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs;src/drawings/domain/elliott.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
@@ -340,7 +340,7 @@ Drawings,Drawings,Icons and emojis,done,library,src/ui/drawing_toolbar/glyph_pic
 Drawings,Drawings,Ideas,done,host,src/drawings/rendering/media.rs;src/widget/tool_interaction/text.rs;src/drawings/categories.rs;src/model/post.rs;src/services/posts.rs;src/widget/posts.rs;src/widget/events.rs;src/drawings/manager/interaction.rs;src/ui/ideas.rs
 Drawings,Drawings,Image,done,library,src/drawings/rendering/media.rs;src/widget/tool_interaction/text.rs;src/drawings/categories.rs
 Drawings,Drawings,Info line,done,library,src/drawings/rendering/measurements.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/style.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Inside pitchfork,done,library,src/drawings/rendering/pitchfork.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/pitchfork.rs
+Drawings,Drawings,Inside pitchfork,done,library,src/drawings/rendering/pitchfork.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/pitchfork.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Long position,done,library,src/drawings/manager/mod.rs;src/drawings/rendering/trading/position.rs;src/drawings/services/handle.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/manager/edit.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/dialog.rs;src/widget/frame.rs;src/widget/panes.rs
 Drawings,Drawings,Measure,done,library,src/drawings/rendering/measurements.rs;src/ui/drawing_toolbar/utilities/measure.rs;src/drawings/manager/interaction.rs;src/widget/tool_interaction/selection.rs
 Drawings,Drawings,Modified Schiff pitchfork,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/pitchfork.rs
@@ -349,13 +349,13 @@ Drawings,Drawings,Note,done,library,src/drawings/rendering/annotations/notes.rs;
 Drawings,Drawings,Parallel channel,done,library,src/drawings/rendering/channels.rs;src/drawings/rendering/mod.rs;src/drawings/services/handle.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs
 Drawings,Drawings,Path,done,library,src/drawings/rendering/shapes.rs;src/drawings/rendering/style.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs
 Drawings,Drawings,Pin,done,library,src/drawings/rendering/annotations/notes.rs;src/drawings/domain/drawing.rs;src/drawings/manager/interaction.rs;src/widget/tool_interaction/mod.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
-Drawings,Drawings,Pitchfan,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs
+Drawings,Drawings,Pitchfan,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/pitchfork.rs
 Drawings,Drawings,Pitchfork,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/pitchfork.rs
 Drawings,Drawings,Polyline,done,library,src/drawings/rendering/lines.rs;src/drawings/manager/mod.rs;src/widget/tool_interaction/interaction.rs;src/drawings/manager/edit.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/style.rs;src/painting/dashed_line.rs
 Drawings,Drawings,Position forecast,done,library,src/drawings/rendering/trading/forecast.rs;src/drawings/rendering/measurements.rs;src/drawings/rendering/trading/projection.rs
 Drawings,Drawings,Price label,done,library,src/drawings/rendering/annotations/labels.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Price note,done,library,src/drawings/rendering/annotations/labels.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/manager/interaction.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
-Drawings,Drawings,Price range,done,library,src/drawings/rendering/measurements.rs
+Drawings,Drawings,Price range,done,library,src/drawings/rendering/measurements.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Projection,done,library,src/drawings/rendering/trading/projection.rs;src/drawings/rendering/measurements.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Ray,done,library,src/drawings/rendering/lines.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/mod.rs;src/drawings/domain/drawing.rs;src/drawings/persistence.rs;src/drawings/rendering/style.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Rectangle,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/measurements.rs;src/widget/tool_interaction/interaction.rs;src/drawings/manager/paint.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/mod.rs;src/drawings/services/interaction.rs;src/config/drawing_tool/behavior.rs;src/drawings/services/handle.rs;src/drawings/domain/options.rs
@@ -845,6 +845,7 @@ Terminal,Replay,"Start options: select date, random bar, first available date",d
 Terminal,Replay,Step forward and back one bar,done,library,src/ui/replay/mod.rs;src/ui/replay/state.rs
 Terminal,Replay,Synchronised replay across the charts of a layout,done,library,src/widget/replay.rs
 Terminal,Replay,Tick replay,done,library,src/data/replay.rs
+Terminal,Replay,Trade-by-trade updates during bar replay,done,library,src/widget/replay.rs;src/ui/replay/floating.rs
 Terminal,Replay,Update interval smaller than the chart interval,done,library,src/widget/replay.rs;src/ui/replay/floating.rs
 Terminal,Templates and layouts,Autosave,done,library,src/ui/top_toolbar/components/layout_menu.rs
 Terminal,Templates and layouts,Chart settings templates,done,library,src/ui/dialogs/chart_settings/mod.rs

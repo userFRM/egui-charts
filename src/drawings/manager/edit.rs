@@ -118,6 +118,7 @@ impl DrawingManager {
     }
 
     /// Duplicate a drawing three bars to the right, recording its creation for undo and saving.
+    /// Adds nothing for a drawing of a disabled tool or a copy that saving would refuse.
     pub fn duplicate_drawing(&mut self, id: usize) {
         let Some(mut copy) = self.drawings.iter().find(|d| d.id == id).cloned() else {
             return;
@@ -128,20 +129,19 @@ impl DrawingManager {
         for point in &mut copy.chart_points {
             point.bar_idx += 3.0;
         }
-        self.add_synced_drawing(copy);
+        if self.validate_created(&copy).is_ok() {
+            self.push_synced(copy);
+        }
     }
 
     /// Paste copies three bars to the right with fresh identities, selecting them as one undoable addition.
-    /// The caller maps clipboard anchors into this manager's chart coordinates first.
+    /// The caller maps clipboard anchors into this manager's chart coordinates first. Leaves out a
+    /// copy of a disabled tool or an unregistered custom tool and a copy that saving would refuse;
+    /// when it leaves out every copy, it selects nothing and records no undo step.
     pub fn paste_drawings(&mut self, drawings: &[Drawing]) {
-        if drawings.is_empty() {
-            return;
-        }
         let mut ids = Vec::new();
         for drawing in in_z_order(drawings) {
             let mut copy = drawing.clone();
-            copy.id = self.take_id();
-            copy.z_order = self.top_z_order();
             copy.stored_id = None;
             copy.created_at = None;
             copy.screen_anchor = copy.screen_anchor.map(|[x, y]| [x + 0.02, y]);
@@ -150,10 +150,18 @@ impl DrawingManager {
             for point in &mut copy.chart_points {
                 *point = point.with_shifted_bar_idx(3.0);
             }
+            if self.validate_created(&copy).is_err() {
+                continue;
+            }
+            copy.id = self.take_id();
+            copy.z_order = self.top_z_order();
             ids.push(copy.id);
             let id = copy.id;
             self.drawings.push(copy);
             self.queue(DrawingSyncAction::SaveDrawing(id));
+        }
+        if ids.is_empty() {
+            return;
         }
         self.select_drawings(ids.iter().copied());
         self.history
@@ -513,6 +521,11 @@ impl DrawingManager {
 
     pub(crate) fn validate_drawing(&self, drawing: &Drawing) -> Result<(), &'static str> {
         crate::drawings::validation::validate(drawing)?;
+        self.validate_custom_tool(drawing)
+    }
+
+    /// A registered tool's drawing must be a polyline with exactly the tool's anchors.
+    fn validate_custom_tool(&self, drawing: &Drawing) -> Result<(), &'static str> {
         if let Some(id) = &drawing.custom_tool {
             let tool = self.registry.get(id).ok_or("Unknown drawing tool")?;
             if drawing.tool_type != DrawingToolType::Polyline
@@ -520,6 +533,19 @@ impl DrawingManager {
             {
                 return Err("Invalid custom drawing anchors");
             }
+        }
+        Ok(())
+    }
+
+    /// Checks a drawing the user creates by duplicating, pasting, copy dragging or placing it:
+    /// what saving needs, a registered tool's anchors and the tool's availability, as
+    /// `add_drawing` does. A drawing finished with fewer anchors than the toolbar collects
+    /// passes when its tool draws with them.
+    pub(super) fn validate_created(&self, drawing: &Drawing) -> Result<(), &'static str> {
+        crate::drawings::validation::validate_stored(drawing)?;
+        self.validate_custom_tool(drawing)?;
+        if drawing.custom_tool.is_none() && !self.registry.availability(drawing.tool_type).enabled {
+            return Err("Drawing tool is disabled");
         }
         Ok(())
     }
@@ -560,11 +586,22 @@ impl DrawingManager {
     }
 
     /// Add a drawing from another source (for multi-chart sync, or restored from storage)
-    /// under a new id. A drawing restored from storage keeps its stored identity (`stored_id`,
-    /// `created_at`, `notes`) and its z-order. A drawing that was never stored goes on top, and
-    /// so does a copy, one stored under the id of a drawing already here, which is saved as a
-    /// new drawing.
-    pub fn add_synced_drawing(&mut self, mut drawing: Drawing) {
+    /// under a new id, and return the id. A drawing restored from storage keeps its stored
+    /// identity (`stored_id`, `created_at`, `notes`) and its z-order. A drawing that was never
+    /// stored goes on top, and so does a copy, one stored under the id of a drawing already
+    /// here, which is saved as a new drawing.
+    ///
+    /// Refuses, and adds nothing, a drawing that saving would refuse: a cursor tool, fewer
+    /// anchors than the tool draws with, a non-finite coordinate, an anchor too far out to map
+    /// to a time or a setting out of range. Tool availability does not apply: drawings of a
+    /// disabled tool are restored and synced.
+    pub fn add_synced_drawing(&mut self, drawing: Drawing) -> Result<usize, &'static str> {
+        crate::drawings::validation::validate_stored(&drawing)?;
+        Ok(self.push_synced(drawing))
+    }
+
+    /// Adds a checked drawing under a new id, as [`Self::add_synced_drawing`] describes.
+    fn push_synced(&mut self, mut drawing: Drawing) -> usize {
         if drawing.stored_id.is_some()
             && self
                 .drawings
@@ -584,6 +621,8 @@ impl DrawingManager {
             }
             self.history.push_add(drawing.clone());
         }
+        let id = drawing.id;
         self.drawings.push(drawing);
+        id
     }
 }

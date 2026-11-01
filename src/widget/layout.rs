@@ -1047,7 +1047,7 @@ mod tests {
                 drawing
                     .chart_points
                     .push(crate::drawings::ChartPoint::new(10.0, 10.0));
-                chart.drawings_mut().add_synced_drawing(drawing);
+                chart.drawings_mut().add_synced_drawing(drawing).unwrap();
                 let id = chart.drawings().drawings[0].id;
                 chart.drawings_mut().select(id);
             }
@@ -1087,7 +1087,10 @@ mod tests {
             drawing
                 .chart_points
                 .push(crate::drawings::ChartPoint::new(10.0, 10.0));
-            charts[0].drawings_mut().add_synced_drawing(drawing);
+            charts[0]
+                .drawings_mut()
+                .add_synced_drawing(drawing)
+                .unwrap();
             frame(&mut layout, &mut charts, vec![]);
             assert_eq!(charts[1].drawings().drawings.len(), 1);
             layout.mode = ChartLayoutMode::Single;

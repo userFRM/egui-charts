@@ -334,7 +334,7 @@ mod tests {
                         let mut drawing = Drawing::new(1, tool);
                         drawing.chart_points = vec![ChartPoint::new(index, price)];
                         drawing.completed = true;
-                        chart.drawings_mut().add_synced_drawing(drawing);
+                        chart.drawings_mut().add_synced_drawing(drawing).unwrap();
                         let id = chart.drawings().drawings[0].id;
                         let sources = [SourceItem::drawing(id, tool, egui::Color32::RED)];
                         let mut tree = ObjectTreePanel::new();
@@ -402,7 +402,7 @@ mod tests {
             let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
             drawing.chart_points = vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 200.0)];
             drawing.completed = true;
-            chart.drawings_mut().add_synced_drawing(drawing);
+            chart.drawings_mut().add_synced_drawing(drawing).unwrap();
         }
         let ids: Vec<_> = chart.drawings().drawings.iter().map(|d| d.id).collect();
         let z_order = |chart: &Chart| {

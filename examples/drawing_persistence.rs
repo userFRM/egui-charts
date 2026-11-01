@@ -39,7 +39,10 @@ impl DrawingPersistenceApp {
         let mut chart = Chart::new(BarData::from_bars(bars));
         chart.set_symbol("SAMPLE");
         chart.set_timeframe(Timeframe::Hour1);
-        chart.drawings_mut().add_synced_drawing(line);
+        chart
+            .drawings_mut()
+            .add_drawing(line)
+            .expect("a valid trend line");
         chart
             .drawings_mut()
             .set_active_tool(Some(DrawingToolType::TrendLine));

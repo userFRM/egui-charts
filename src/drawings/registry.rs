@@ -90,7 +90,8 @@ impl DrawingToolRegistry {
     }
 
     /// Hides or disables a built-in tool. Hidden tools may still be created by the host when
-    /// enabled; disabling rejects new creation through the manager and chart APIs.
+    /// enabled; disabling rejects new creation through the manager and chart APIs. Duplicates,
+    /// pastes and copies of its drawings are left out; restoring and syncing them is not affected.
     pub fn set_availability(&mut self, tool: DrawingToolType, availability: ToolAvailability) {
         self.builtins.insert(tool, availability);
     }
@@ -237,7 +238,7 @@ mod tests {
                 .builtin_tools()
                 .any(|(tool, _)| tool == DrawingToolType::TrendLine)
         );
-        manager.set_active_tool(Some(DrawingToolType::TrendLine));
+        assert!(!manager.set_active_tool(Some(DrawingToolType::TrendLine)));
         assert_eq!(manager.active_tool, None);
         manager.start_drawing_with_coords(DrawingToolType::TrendLine, Pos2::ZERO, |x| x, f64::from);
         assert!(manager.curr_drawing.is_none());

@@ -1,90 +1,13 @@
 //! Drawing renderer trait and rendering utilities.
 //!
-//! Defines the [`DrawingRenderer`] trait interface for rendering drawing tools,
-//! plus helper types ([`RenderContext`], [`HandleHit`]) and utility functions
-//! ([`render_handles`], [`point_near_line`], [`point_near_points`]) for custom renderers.
+//! Re-exports the [`DrawingRenderer`] trait for rendering drawing tools and provides the
+//! utility functions [`render_handles`], [`point_near_line`] and [`point_near_points`] for
+//! custom renderers.
 
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Painter, Pos2, Rect, Stroke};
+use egui::{Color32, Painter, Pos2};
 
 pub use crate::drawings::registry::DrawingRenderer;
-
-/// Result of a handle hit test on a rendered drawing.
-///
-/// Used by the trait-based rendering system to distinguish between hitting a
-/// specific anchor point, hitting the body of the drawing (for move operations),
-/// or missing entirely.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HandleHit {
-    /// No handle or body was hit.
-    None,
-    /// Hit a specific anchor point handle, identified by its index.
-    Point(usize),
-    /// Hit the body/interior of the drawing (for move/drag operations).
-    Body,
-}
-
-/// Rendering context carrying commonly needed values for drawing renderers.
-///
-/// Bundles the egui [`Painter`], visible chart rectangle, default stroke/fill,
-/// and handle configuration into a single value that can be passed through the
-/// rendering pipeline. Use the builder methods ([`with_stroke`](Self::with_stroke),
-/// [`with_fill`](Self::with_fill), [`with_handles`](Self::with_handles)) to
-/// customize before passing to a renderer.
-#[derive(Clone)]
-pub struct RenderContext<'a> {
-    /// The egui painter to draw on.
-    pub painter: &'a Painter,
-    /// The visible chart area rectangle (clip rect for drawing).
-    pub chart_rect: Rect,
-    /// Default stroke style for lines and borders.
-    pub stroke: Stroke,
-    /// Default fill color for shapes.
-    pub fill_color: Color32,
-    /// Whether to render selection handles.
-    pub show_handles: bool,
-    /// Handle size in pixels.
-    pub handle_size: f32,
-}
-
-impl<'a> RenderContext<'a> {
-    /// Create a new render context
-    pub fn new(painter: &'a Painter, chart_rect: Rect) -> Self {
-        Self {
-            painter,
-            chart_rect,
-            stroke: Stroke::new(
-                DESIGN_TOKENS.stroke.medium,
-                DESIGN_TOKENS.semantic.extended.info,
-            ),
-            fill_color: {
-                let info = DESIGN_TOKENS.semantic.extended.info;
-                Color32::from_rgba_unmultiplied(info.r(), info.g(), info.b(), 50)
-            },
-            show_handles: false,
-            handle_size: 8.0,
-        }
-    }
-
-    /// Set the stroke
-    pub fn with_stroke(mut self, stroke: Stroke) -> Self {
-        self.stroke = stroke;
-        self
-    }
-
-    /// Set the fill color
-    pub fn with_fill(mut self, color: Color32) -> Self {
-        self.fill_color = color;
-        self
-    }
-
-    /// Enable handle rendering
-    pub fn with_handles(mut self, show: bool, size: f32) -> Self {
-        self.show_handles = show;
-        self.handle_size = size;
-        self
-    }
-}
 
 /// Helper function to render selection handles
 pub fn render_handles(painter: &Painter, points: &[Pos2], size: f32, selected: bool) {

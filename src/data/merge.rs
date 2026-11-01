@@ -195,7 +195,7 @@ pub(crate) fn valid(bar: &Bar) -> bool {
 /// `bar` extended with `ticks`, a bar of later trades in the same slot, or `None` if the result is
 /// not valid: two valid volumes can add up to infinity. Whitespace `ticks` leave `bar` as it is,
 /// and the values of `ticks` fill a whitespace `bar`.
-pub(super) fn fold(bar: &Bar, ticks: &Bar) -> Option<Bar> {
+pub(crate) fn fold(bar: &Bar, ticks: &Bar) -> Option<Bar> {
     if ticks.is_whitespace() {
         return Some(bar.clone());
     }

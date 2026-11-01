@@ -349,7 +349,10 @@ fn apply(app: &mut DemoApp, ctx: &Context, step: &Step) {
         Step::Drawings(place) => {
             let placed = place(app.chart.bars(SeriesId::MAIN));
             let dm = app.chart.drawings_mut();
-            placed.into_iter().for_each(|d| dm.add_synced_drawing(d));
+            for drawing in placed {
+                dm.add_synced_drawing(drawing)
+                    .expect("capture drawings are valid");
+            }
             dm.deselect();
         }
         Step::Grid(mode) => app.handle_top_toolbar(

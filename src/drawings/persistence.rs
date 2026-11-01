@@ -24,11 +24,10 @@
 //! A restored drawing keeps the id, creation time and notes of its record in
 //! `Drawing::stored_id`, `created_at` and `notes`, and is saved back under
 //! them. Restore drawings through
-//! [`DrawingManager::add_synced_drawing`](crate::drawings::DrawingManager::add_synced_drawing)
-//! or by pushing them onto `DrawingManager::drawings`: either way the manager
-//! gives a new drawing an id that no restored drawing uses. Two managers
-//! restoring the same storage can still hand out the same id: one storage per
-//! manager is the supported use.
+//! [`DrawingManager::add_synced_drawing`](crate::drawings::DrawingManager::add_synced_drawing),
+//! which refuses a drawing that saving would refuse; the manager then gives a new drawing an
+//! id that no restored drawing uses. Two managers restoring the same storage can still hand
+//! out the same id: one storage per manager is the supported use.
 //!
 //! # Storage format
 //!
@@ -434,21 +433,21 @@ impl DrawingStorage {
     }
 
     /// Deserialize from JSON, migrating versions 1 to 4 to the current format.
-    ///
-    /// Fails as a whole on invalid JSON, on a version this release does not
-    /// know and on a missing or invalid symbol, timeframe or metadata. A
+    /// Fails as a whole with a [`LoadError`]: [`LoadError::Json`] for invalid JSON or a missing
+    /// or invalid version, symbol, timeframe or metadata, and [`LoadError::UnsupportedVersion`]
+    /// for a version this release does not know. A
     /// drawing that cannot be read (a missing field, a `null` an earlier release
     /// wrote for a non-finite number, a number out of the range of its field, a
     /// tool type from a newer release, a cursor, fewer anchors than the tool
     /// draws with or a setting out of bounds) is
-    /// left out and returned as a [`SkippedDrawing`], so one bad drawing does
+    /// left out and returned as a [`SkippedDrawing`] with its [`SkipReason`], so one bad drawing does
     /// not lose the others. A drawing whose id an
     /// earlier loaded drawing already has is skipped too, so the loaded ids are
     /// unique and the first one in the file wins. Saving the returned storage writes
     /// only the drawings that loaded; keep the original file if the skipped
     /// ones must be recovered. A drawing whose timeframe filter names no
     /// timeframe loads as visible on every timeframe.
-    pub fn from_json(json: &str) -> Result<(Self, Vec<SkippedDrawing>), serde_json::Error> {
+    pub fn from_json(json: &str) -> Result<(Self, Vec<SkippedDrawing>), LoadError> {
         #[derive(Deserialize)]
         struct Version {
             version: u32,
@@ -460,9 +459,10 @@ impl DrawingStorage {
             drawings: Vec<serde_json::Value>,
             metadata: StorageMetadata,
         }
-        let version = serde_json::from_str::<Version>(json)?.version;
-        let load: fn(serde_json::Value) -> Result<StoredDrawing, serde_json::Error> = match version
-        {
+        let version = serde_json::from_str::<Version>(json)
+            .map_err(LoadError::Json)?
+            .version;
+        let load: fn(serde_json::Value) -> Result<StoredDrawing, SkipReason> = match version {
             1 => v1::load,
             2..=Self::CURRENT_VERSION => |value| {
                 // Checked here, not in `Drawing`'s serde, which other formats share:
@@ -470,20 +470,20 @@ impl DrawingStorage {
                 if let Some(name) = value.pointer("/drawing/tool_type").and_then(|t| t.as_str()) {
                     DrawingToolType::deserialize(name.into_deserializer()).map_err(
                         |_: serde::de::value::Error| {
-                            serde::de::Error::custom(ParseToolTypeError { input: name.into() })
+                            SkipReason::UnknownTool(ParseToolTypeError { input: name.into() })
                         },
                     )?;
                 }
-                serde_json::from_value(value)
+                serde_json::from_value(value).map_err(SkipReason::Invalid)
             },
             version => {
-                return Err(serde::de::Error::custom(format!(
-                    "unsupported drawing storage version {version}, expected 1 to {}",
-                    Self::CURRENT_VERSION
-                )));
+                return Err(LoadError::UnsupportedVersion {
+                    found: version,
+                    supported: 1..=Self::CURRENT_VERSION,
+                });
             }
         };
-        let container: Container = serde_json::from_str(json)?;
+        let container: Container = serde_json::from_str(json).map_err(LoadError::Json)?;
         let mut skipped = Vec::new();
         let mut ids = HashSet::new();
         let drawings = container
@@ -497,7 +497,8 @@ impl DrawingStorage {
                         // Before the id check, so that a skipped drawing does not claim its id.
                         let tool = drawing.drawing.tool_type;
                         if version < 3 {
-                            // Earlier renderers ignored these flags for rays and extended lines.
+                            // Earlier renderers ignored these flags for rays, extended lines
+                            // and pitchforks.
                             match tool {
                                 DrawingToolType::Ray => {
                                     let reversed = drawing.points.get(..2).is_some_and(|p| {
@@ -510,23 +511,28 @@ impl DrawingStorage {
                                     drawing.drawing.extend_left = true;
                                     drawing.drawing.extend_right = true;
                                 }
+                                DrawingToolType::Pitchfork
+                                | DrawingToolType::SchiffPitchfork
+                                | DrawingToolType::ModifiedSchiffPitchfork
+                                | DrawingToolType::InsidePitchfork => {
+                                    drawing.drawing.extend_left = false;
+                                    drawing.drawing.extend_right = false;
+                                }
                                 _ => {}
                             }
                         }
                         if tool.is_cursor() {
-                            return Err(serde::de::Error::custom(format!(
-                                "{tool} is a cursor, not a drawing"
-                            )));
+                            return Err(SkipReason::Cursor { tool });
                         }
                         if drawing.points.iter().any(|point| point.time().is_none()) {
-                            return Err(serde::de::Error::custom(
+                            return Err(SkipReason::Invalid(serde::de::Error::custom(
                                 "anchor timestamp is outside the supported range",
-                            ));
+                            )));
                         }
                         if let Some(field) = drawing.invalid_field() {
-                            return Err(serde::de::Error::custom(format!(
+                            return Err(SkipReason::Invalid(serde::de::Error::custom(format!(
                                 "non-finite or out-of-range {field}"
-                            )));
+                            ))));
                         }
                         if version < 4 {
                             // Earlier renderers drew brushes at twice and highlighters at eight
@@ -582,9 +588,11 @@ impl DrawingStorage {
                             _ => {}
                         }
                         if let Some((needed, anchors)) = drawing.missing_anchors() {
-                            return Err(serde::de::Error::custom(format!(
-                                "{tool} needs {needed} anchors, has {anchors}"
-                            )));
+                            return Err(SkipReason::MissingAnchors {
+                                tool,
+                                anchors,
+                                needed,
+                            });
                         }
                         // A filter naming no interval and holding no range would show the drawing on none.
                         let visibility = &mut drawing.drawing.timeframe_visibility;
@@ -593,10 +601,9 @@ impl DrawingStorage {
                         if ids.insert(drawing.id.clone()) {
                             Ok(drawing)
                         } else {
-                            let id = &drawing.id;
-                            Err(serde::de::Error::custom(format!(
-                                "duplicate drawing id {id:?}"
-                            )))
+                            Err(SkipReason::DuplicateId {
+                                id: drawing.id.clone(),
+                            })
                         }
                     })
                     .map_err(|error| skipped.push(SkippedDrawing { index, id, error }))
@@ -710,7 +717,178 @@ pub struct SkippedDrawing {
     /// The stored id, or `None` if the entry has no id or a non-string one.
     pub id: Option<String>,
     /// Why the drawing could not be read.
-    pub error: serde_json::Error,
+    pub error: SkipReason,
+}
+
+/// Why [`DrawingStorage::from_json`] left a drawing out.
+///
+/// An [`UnknownTool`](Self::UnknownTool) in a file of version 2 or later was most likely written
+/// by a newer release that added the tool: keep the file. The other reasons describe damaged or
+/// hand-edited data.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum SkipReason {
+    /// The tool is not one this release knows; [`ParseToolTypeError::input`] holds its name.
+    UnknownTool(ParseToolTypeError),
+    /// The tool is a cursor, such as the eraser, which creates no drawing.
+    Cursor {
+        /// The cursor tool.
+        tool: DrawingToolType,
+    },
+    /// The drawing has fewer anchors than its tool draws with.
+    MissingAnchors {
+        /// The tool of the drawing.
+        tool: DrawingToolType,
+        /// The anchors the drawing has.
+        anchors: usize,
+        /// The anchors the tool needs.
+        needed: usize,
+    },
+    /// An earlier drawing in the file has the same id; the first one is loaded.
+    DuplicateId {
+        /// The repeated id.
+        id: String,
+    },
+    /// A field is missing or has the wrong type, or a value is out of range, such as a `null`
+    /// written for a non-finite number, a timestamp outside the supported range or a setting
+    /// out of bounds.
+    Invalid(serde_json::Error),
+}
+
+impl fmt::Display for SkipReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownTool(error) => error.fmt(f),
+            Self::Cursor { tool } => write!(f, "{tool} is a cursor, not a drawing"),
+            Self::MissingAnchors {
+                tool,
+                anchors,
+                needed,
+            } => write!(f, "{tool} needs {needed} anchors, has {anchors}"),
+            Self::DuplicateId { id } => write!(f, "duplicate drawing id {id:?}"),
+            Self::Invalid(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for SkipReason {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::UnknownTool(error) => Some(error),
+            Self::Invalid(error) => Some(error),
+            Self::Cursor { .. } | Self::MissingAnchors { .. } | Self::DuplicateId { .. } => None,
+        }
+    }
+}
+
+/// Why drawings were not loaded, by [`DrawingStorage::from_json`],
+/// [`Chart::load_drawings`](crate::widget::Chart::load_drawings) or
+/// [`Chart::paste_drawings`](crate::widget::Chart::paste_drawings), before any drawing changed.
+///
+/// [`UnsupportedVersion`](Self::UnsupportedVersion) above `supported` means a newer release
+/// wrote the data: keep it and update. [`Json`](Self::Json) means damaged data.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum LoadError {
+    /// The text is not valid JSON, or its version, symbol, timeframe or metadata is missing or
+    /// invalid.
+    Json(serde_json::Error),
+    /// The storage version is not one this release reads.
+    UnsupportedVersion {
+        /// The version the data declares.
+        found: u32,
+        /// The versions this release reads.
+        supported: std::ops::RangeInclusive<u32>,
+    },
+    /// The drawings belong to another symbol than the chart's.
+    OtherSymbol,
+    /// The chart has no bars to place the pasted anchors on; paste once history has loaded.
+    NeedsHistory,
+    /// The pasted text is not drawing clipboard text from
+    /// [`Chart::copy_selected_drawings`](crate::widget::Chart::copy_selected_drawings).
+    NotClipboard,
+    /// Drawings that could not be read, where every drawing is needed: a paste, or a document
+    /// that automatic storage then never writes over.
+    Skipped(Vec<SkippedDrawing>),
+}
+
+impl fmt::Display for LoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Json(error) => error.fmt(f),
+            Self::UnsupportedVersion { found, supported } => write!(
+                f,
+                "unsupported drawing storage version {found}, expected {} to {}",
+                supported.start(),
+                supported.end()
+            ),
+            Self::OtherSymbol => f.write_str("drawing storage belongs to a different symbol"),
+            Self::NeedsHistory => f.write_str("clipboard needs loaded chart history"),
+            Self::NotClipboard => f.write_str("not a drawing clipboard"),
+            Self::Skipped(skipped) if skipped.len() == 1 => {
+                f.write_str("1 drawing could not be read")
+            }
+            Self::Skipped(skipped) => write!(f, "{} drawings could not be read", skipped.len()),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Json(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+/// A failed read or write of automatic drawing storage, from
+/// [`Chart::take_storage_error`](crate::widget::Chart::take_storage_error).
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum StorageError {
+    /// The stored drawings of `symbol`, or its kept copy, could not all be read. The document
+    /// is kept and never written over; `error` tells a newer release from damaged data.
+    Read {
+        /// The symbol or kept copy whose document was read.
+        symbol: String,
+        /// Why it could not be read.
+        error: LoadError,
+    },
+    /// The drawings of `symbol` could not be saved. They stay on the chart.
+    Save {
+        /// The symbol whose drawings were saved.
+        symbol: String,
+        /// Why they could not be saved.
+        error: SaveError,
+    },
+    /// The storage service or a kept-copy operation failed; the message names it. A failed
+    /// write keeps the drawings on the chart and is retried.
+    Storage(String),
+}
+
+impl fmt::Display for StorageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Read { symbol, error } => {
+                write!(f, "Could not read drawings of {symbol}: {error}")
+            }
+            Self::Save { symbol, error } => {
+                write!(f, "Could not save drawings of {symbol}: {error}")
+            }
+            Self::Storage(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for StorageError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Read { error, .. } => Some(error),
+            Self::Save { error, .. } => Some(error),
+            Self::Storage(_) => None,
+        }
+    }
 }
 
 /// The version 1 format, read only to migrate it: the tool by display name,
@@ -719,7 +897,6 @@ mod v1 {
     use super::StoredCoord;
     use crate::drawings::{Drawing, DrawingToolType};
     use serde::Deserialize;
-    use serde::de::Error;
     use std::collections::HashMap;
 
     #[derive(Deserialize)]
@@ -748,14 +925,15 @@ mod v1 {
     /// Reads one version 1 drawing as a current one.
     pub(super) fn load(
         value: serde_json::Value,
-    ) -> Result<super::StoredDrawing, serde_json::Error> {
-        let stored: StoredDrawing = serde_json::from_value(value)?;
+    ) -> Result<super::StoredDrawing, super::SkipReason> {
+        let stored: StoredDrawing =
+            serde_json::from_value(value).map_err(super::SkipReason::Invalid)?;
         // The previous loader also accepted the other names `FromStr` parses,
         // such as "trendline".
         let tool_type: DrawingToolType = stored
             .tool_type
             .parse()
-            .map_err(serde_json::Error::custom)?;
+            .map_err(super::SkipReason::UnknownTool)?;
         let Color { r, g, b, a } = stored.color;
         let mut drawing = Drawing::with_color(0, tool_type, [r, g, b, a]);
         drawing.fib_config = None;
@@ -949,6 +1127,10 @@ mod tests {
         });
         d.volume_profile = VolumeProfileConfig::new(50, 0.68);
         d.regression_trend = RegressionTrendConfig::new(1.5);
+        let mut vwap = VwapConfig::default();
+        vwap.bands[0].enabled = false;
+        vwap.bands[1] = VwapBand::new(true, 2.5).unwrap();
+        d.vwap = Some(vwap);
         if tool == DrawingToolType::DoubleCurve {
             d.chart_points.push(ChartPoint::new(12.0, 115.0));
         }
@@ -1080,9 +1262,13 @@ mod tests {
 
         let mut manager = DrawingManager::new();
         for stored in storage.drawings() {
-            manager.add_synced_drawing(stored_to_drawing(stored, time_to_bar, 0));
+            manager
+                .add_synced_drawing(stored_to_drawing(stored, time_to_bar, 0))
+                .unwrap();
         }
-        manager.add_synced_drawing(manager.drawings[0].clone());
+        manager
+            .add_synced_drawing(manager.drawings[0].clone())
+            .unwrap();
         let (x_to_bar, y_to_price) = (|x: f32| x, |y: f32| f64::from(y));
         let at = egui::Pos2::new(5.0, 90.0);
         manager.start_drawing_with_coords(
@@ -1164,6 +1350,7 @@ mod tests {
             let mut want = non_default_drawing(tool);
             want.label = None; // Earlier files have no object name.
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
+            want.vwap = None; // Earlier files use the default bands.
             // Earlier files draw text and borders in the drawing colour, boxed and upright.
             want.italic = false;
             want.text_color = None;
@@ -1282,6 +1469,23 @@ mod tests {
                     assert!(!again.drawings[0].drawing.extend_right);
                 }
             }
+        }
+
+        // Old forks ignored Extend, so loading their saved flags must keep that reach.
+        for tool in [
+            DrawingToolType::Pitchfork,
+            DrawingToolType::SchiffPitchfork,
+            DrawingToolType::ModifiedSchiffPitchfork,
+            DrawingToolType::InsidePitchfork,
+        ] {
+            let mut saved: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+            saved["drawings"].as_array_mut().unwrap().truncate(1);
+            saved["drawings"][0]["drawing"]["tool_type"] = serde_json::to_value(tool).unwrap();
+            let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+            let drawing = &loaded.drawings[0].drawing;
+            assert!(!drawing.extend_left && !drawing.extend_right, "{tool:?}");
         }
 
         // Strokes saved before version 4 were drawn at twice (brush) and eight times
@@ -1404,84 +1608,126 @@ mod tests {
             });
             serde_json::to_string(&value).unwrap()
         };
+        let with_vwap_multiplier = |multiplier| {
+            let mut value = serde_json::to_value(&storage).unwrap();
+            let band = |m| serde_json::json!({ "enabled": true, "multiplier": m });
+            value["drawings"][0]["drawing"]["vwap"] = serde_json::json!({
+                "bands": [band(multiplier), band(2.0), band(3.0)]
+            });
+            serde_json::to_string(&value).unwrap()
+        };
         let unreadable = [
+            (
+                with_vwap_multiplier(0.0),
+                "anchored VWAP band multiplier out of bounds",
+                &["2"][..],
+                0,
+                "invalid",
+            ),
+            (
+                with_vwap_multiplier(10.5),
+                "anchored VWAP band multiplier out of bounds",
+                &["2"][..],
+                0,
+                "invalid",
+            ),
             (
                 with_level_width(0.0),
                 "out-of-range pitchfork.levels[0].width",
                 &["2"][..],
                 0,
+                "invalid",
             ),
             (
                 with_level_width(101.0),
                 "out-of-range pitchfork.levels[0].width",
                 &["2"][..],
                 0,
+                "invalid",
             ),
             (
                 current.replacen("\"ts_ms\":", "\"subms_ns\": 1000000, \"ts_ms\":", 1),
                 "anchor timestamp is outside the supported range",
                 &["2"][..],
                 0,
+                "invalid",
             ),
             (
                 current.replacen("\"stroke_width\": 2.0", "\"stroke_width\": null", 1),
                 "invalid type: null",
                 &["2"][..],
                 0,
+                "invalid",
             ),
             (
                 current.replacen("\"rows\": 24", "\"rows\": 0", 1),
                 "volume profile settings out of bounds",
                 &["2"],
                 0,
+                "invalid",
             ),
             (
                 current.replace("FixedRangeVolumeProfile", "NewerTool"),
                 "unknown drawing tool \"NewerTool\"",
                 &["2"],
                 0,
+                "unknown tool NewerTool",
             ),
             (
                 current.replace("FixedRangeVolumeProfile", "Eraser"),
                 "Eraser is a cursor, not a drawing",
                 &["2"],
                 0,
+                "cursor Eraser",
             ),
             (
                 current.replacen("\"stroke_width\": 2.0", "\"stroke_width\": 1e39", 1),
                 "out-of-range stroke_width",
                 &["2"],
                 0,
+                "invalid",
             ),
             (
                 current.replacen("\"stroke_width\": 2.0", "\"stroke_width\": -1.0", 1),
                 "out-of-range stroke_width",
                 &["2"],
                 0,
+                "invalid",
             ),
             (
                 current.replacen("\"font_size\": 14.0", "\"font_size\": 100000.0", 1),
                 "out-of-range font_size",
                 &["2"],
                 0,
+                "invalid",
             ),
             (
                 short_of_anchors(DrawingToolType::TrendLine, 0),
                 "Trend Line needs 2 anchors, has 0",
                 &["2"],
                 0,
+                "TrendLine has 0 of 2 anchors",
             ),
             (
                 short_of_anchors(DrawingToolType::Rect, 1),
                 "Rectangle needs 2 anchors, has 1",
                 &["2"],
                 0,
+                "Rect has 1 of 2 anchors",
+            ),
+            (
+                short_of_anchors(DrawingToolType::Pitchfork, 2),
+                "Pitchfork needs 3 anchors, has 2",
+                &["2"],
+                0,
+                "Pitchfork has 2 of 3 anchors",
             ),
             (
                 current.replacen("\"id\": \"2\"", "\"id\": \"1\"", 1),
                 "duplicate drawing id \"1\"",
                 &["1"],
                 1,
+                "duplicate 1",
             ),
             (
                 // "fib retracement" is a name the previous loader also accepted.
@@ -1493,24 +1739,31 @@ mod tests {
                 "unknown drawing tool \"Newer Tool\"",
                 &["2", "3", "4", "5"],
                 0,
+                "unknown tool Newer Tool",
             ),
         ];
-        for (json, error, loaded, index) in unreadable {
+        let reason = |skipped: &SkippedDrawing| match &skipped.error {
+            SkipReason::UnknownTool(error) => format!("unknown tool {}", error.input),
+            SkipReason::Cursor { tool } => format!("cursor {tool:?}"),
+            SkipReason::MissingAnchors {
+                tool,
+                anchors,
+                needed,
+            } => format!("{tool:?} has {anchors} of {needed} anchors"),
+            SkipReason::DuplicateId { id } => format!("duplicate {id}"),
+            SkipReason::Invalid(_) => "invalid".into(),
+        };
+        for (json, error, loaded, index, expected) in unreadable {
             let (storage, skipped) = DrawingStorage::from_json(&json).unwrap();
             let ids: Vec<_> = storage.drawings().iter().map(|d| d.id.as_str()).collect();
             assert_eq!(ids, loaded);
             assert_eq!(skipped.len(), 1);
             assert_eq!(skipped[0].index, index);
+            assert_eq!(reason(&skipped[0]), expected, "{skipped:?}");
             assert_eq!(skipped[0].id.as_deref(), Some("1"));
             assert!(skipped[0].error.to_string().contains(error), "{skipped:?}");
             assert!(storage.to_json().is_ok(), "{error}");
         }
-
-        // A pitchfork finished after one click has two anchors and draws a mark and a segment each.
-        let (storage, skipped) =
-            DrawingStorage::from_json(&short_of_anchors(DrawingToolType::Pitchfork, 2)).unwrap();
-        assert!(skipped.is_empty(), "{skipped:?}");
-        assert_eq!(storage.drawings().len(), 2);
 
         // A drawing saved with the former Paintbrush tool, which drew as a brush, loads as one.
         let paintbrush = current.replace("\"TrendLine\"", "\"Paintbrush\"");
@@ -1543,12 +1796,11 @@ mod tests {
         assert!(!visibility.show_on_all);
         assert!(visibility.is_visible_on("2h") && !visibility.is_visible_on("1D"));
 
-        let got = DrawingStorage::from_json(&current.replace("\"version\": 5", "\"version\": 6"))
-            .unwrap_err()
-            .to_string();
+        let error = DrawingStorage::from_json(&current.replace("\"version\": 5", "\"version\": 6"))
+            .unwrap_err();
         assert!(
-            got.contains("unsupported drawing storage version 6"),
-            "{got}"
+            matches!(&error, LoadError::UnsupportedVersion { found: 6, supported } if *supported == (1..=5)),
+            "{error}"
         );
     }
 

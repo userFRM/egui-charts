@@ -438,7 +438,7 @@ mod tests {
                 drawing.chart_points =
                     vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
                 drawing.completed = true;
-                chart.drawings_mut().add_synced_drawing(drawing);
+                chart.drawings_mut().add_synced_drawing(drawing).unwrap();
             }
             let ids: Vec<_> = chart.drawings().drawings.iter().map(|d| d.id).collect();
             let mut panel = ObjectTreePanel::with_config(ObjectTreeConfig {

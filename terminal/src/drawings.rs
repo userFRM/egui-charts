@@ -227,7 +227,7 @@ impl Terminal {
             MagnetType::Weak
         };
         toolbar.sync_from_domain_state(&DrawingToolbarDomainState {
-            sel_tool: manager.active_tool,
+            sel_tool: manager.active_tool(),
             magnet_mode: manager.options.magnet_mode,
             snap_to_indicators: manager.options.snap_to_indicators,
             magnet_type,
@@ -238,11 +238,14 @@ impl Terminal {
                 CrosshairStyle::Demonstration => CursorType::Demonstration,
                 CrosshairStyle::Magic => CursorType::Magic,
             },
-            eraser_mode_enabled: manager.eraser_mode,
+            eraser_mode_enabled: manager.is_eraser_mode(),
             stay_in_drawing_mode: manager.stay_in_drawing_mode,
             // The swatch shows the colour the active tool draws in, its saved default or its own.
             drawing_color: manager
-                .new_drawing(0, manager.active_tool.unwrap_or(DrawingToolType::TrendLine))
+                .new_drawing(
+                    0,
+                    manager.active_tool().unwrap_or(DrawingToolType::TrendLine),
+                )
                 .color,
         });
         let drawings = &manager.drawings;
@@ -320,7 +323,7 @@ impl Terminal {
             }
             DrawingToolbarAction::ToggleValuesTooltip => chart.set_tooltip_enabled(values_tooltip),
             DrawingToolbarAction::SelectTool(tool) => {
-                chart.drawings_mut().set_active_tool(Some(tool))
+                chart.drawings_mut().set_active_tool(Some(tool));
             }
             DrawingToolbarAction::ToggleMagnet => {
                 let manager = chart.drawings_mut();
@@ -346,7 +349,7 @@ impl Terminal {
             }
             DrawingToolbarAction::ToggleEraserMode => {
                 let manager = chart.drawings_mut();
-                let on = !manager.eraser_mode;
+                let on = !manager.is_eraser_mode();
                 manager.set_eraser_mode(on);
             }
             DrawingToolbarAction::ToggleStayInDrawingMode => {
@@ -356,7 +359,7 @@ impl Terminal {
             DrawingToolbarAction::ColorChanged(rgba) => {
                 // The colour becomes the active tool's saved default; other tools keep theirs.
                 let manager = chart.drawings_mut();
-                if let Some(tool) = manager.active_tool {
+                if let Some(tool) = manager.active_tool() {
                     let mut drawing = manager.new_drawing(0, tool);
                     drawing.color = rgba;
                     manager
@@ -383,7 +386,7 @@ impl Terminal {
             DrawingToolbarAction::InsertGlyph { icon_name, size } => {
                 let manager = chart.drawings_mut();
                 manager.start_icon_insertion(icon_name.to_string());
-                if let Some(drawing) = &mut manager.curr_drawing {
+                if let Some(drawing) = manager.curr_drawing_mut() {
                     drawing.font_size = size;
                 }
             }
@@ -693,7 +696,8 @@ mod tests {
         terminal
             .chart_mut()
             .drawings_mut()
-            .add_synced_drawing(drawing);
+            .add_synced_drawing(drawing)
+            .unwrap();
         let id = terminal.chart().drawings().drawings[0].id;
         terminal.chart_mut().drawings_mut().select_drawings([id]);
         frame(&mut terminal, SIZE, vec![]);
@@ -841,7 +845,8 @@ mod tests {
             terminal
                 .chart_mut()
                 .drawings_mut()
-                .add_synced_drawing(drawing);
+                .add_synced_drawing(drawing)
+                .unwrap();
             frame(&mut terminal, SIZE, vec![]);
             let points = &terminal.chart().drawings().drawings[0].points;
             let pos = if settings {
@@ -919,7 +924,7 @@ mod tests {
                 f64::from,
             );
             manager.add_point_with_coords(pos2(3.0, 4.0), |x| x, f64::from);
-            assert!(manager.active_tool.is_none());
+            assert!(manager.active_tool().is_none());
             frame(&mut terminal, SIZE, vec![]);
             assert!(terminal.drawings.toolbar.state.sel_tool.is_none());
             terminal.chart_mut().drawings_mut().set_eraser_mode(true);
@@ -937,8 +942,8 @@ mod tests {
     fn zoom_controls_leave_drawing_history_untouched() {
         let mut terminal = ready();
         let chart = terminal.chart_mut();
-        chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(line(1)));
-        chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(line(2)));
+        chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(line(1)).unwrap());
+        chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(line(2)).unwrap());
         terminal.run(Action::TopToolbar(TopToolbarAction::Undo));
         let drawings = |terminal: &Terminal| {
             terminal
@@ -982,7 +987,8 @@ mod tests {
             terminal
                 .chart_mut()
                 .drawings_mut()
-                .add_synced_drawing(line(id));
+                .add_synced_drawing(line(id))
+                .unwrap();
         }
         let ids: Vec<_> = terminal
             .chart()
@@ -1048,7 +1054,8 @@ mod tests {
         terminal
             .chart_mut()
             .drawings_mut()
-            .add_synced_drawing(line(7));
+            .add_synced_drawing(line(7))
+            .unwrap();
         let id = terminal.chart().drawings().drawings[0].id;
         let original = terminal.chart().drawings().drawings[0].color;
         let color = egui::Color32::from_rgba_unmultiplied(51, 102, 153, 85);
@@ -1078,7 +1085,8 @@ mod tests {
             terminal
                 .chart_mut()
                 .drawings_mut()
-                .add_synced_drawing(line(id));
+                .add_synced_drawing(line(id))
+                .unwrap();
         }
         for period in [3, 5] {
             terminal
@@ -1145,7 +1153,8 @@ mod tests {
             terminal
                 .chart_mut()
                 .drawings_mut()
-                .add_synced_drawing(line(id));
+                .add_synced_drawing(line(id))
+                .unwrap();
         }
         let ids: Vec<_> = terminal
             .chart()
@@ -1251,7 +1260,8 @@ mod tests {
         terminal
             .chart_mut()
             .drawings_mut()
-            .add_synced_drawing(line(0));
+            .add_synced_drawing(line(0))
+            .unwrap();
         let id = terminal.chart().drawings().drawings[0].id;
         terminal.chart_mut().drawings_mut().select_drawings([id]);
         let count = |terminal: &Terminal| terminal.chart().drawings().drawings.len();
@@ -1274,7 +1284,8 @@ mod tests {
             terminal
                 .chart_mut()
                 .drawings_mut()
-                .add_synced_drawing(line(copy));
+                .add_synced_drawing(line(copy))
+                .unwrap();
         }
         let ids: Vec<_> = terminal
             .chart()

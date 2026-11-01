@@ -3,7 +3,7 @@
 use super::Chart;
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
-use crate::drawings::persistence::{DrawingStorage, StoredPane};
+use crate::drawings::persistence::{DrawingStorage, LoadError, StorageError, StoredPane};
 use crate::services::document::{Received, StoredDocument, copy_number};
 use crate::services::{ConflictChoice, Revision, Storage, StoreKind};
 use std::collections::{HashMap, VecDeque};
@@ -71,7 +71,7 @@ pub(super) struct DrawingStore {
     captured: u64,
     /// Edits made before a read finishes. The flag distinguishes edits from a restored layout.
     pending: HashMap<String, (DrawingStorage, bool)>,
-    error: Option<String>,
+    error: Option<StorageError>,
     /// Documents this chart wrote, or read again at a newer revision, since the charts of its
     /// layout that keep drawings in the same storage were told; `None` for a host without
     /// revisions.
@@ -155,9 +155,9 @@ impl DrawingStore {
                         .filter_map(|name| Some((copy_number(&symbol, &name)?, name)))
                         .collect(),
                     Err(error) => {
-                        self.error = Some(format!(
+                        self.error = Some(StorageError::Storage(format!(
                             "Could not list the kept copies of {symbol} drawings: {error}"
-                        ));
+                        )));
                         Vec::new()
                     }
                 };
@@ -177,7 +177,8 @@ impl DrawingStore {
                     Ok(None) => {
                         self.copies.forget(&symbol, &name);
                         if !discard {
-                            self.error = Some(format!("{name} no longer exists"));
+                            self.error =
+                                Some(StorageError::Storage(format!("{name} no longer exists")));
                         }
                     }
                     Ok(Some(json)) if !discard => self.copies.read = Some((symbol, name, json)),
@@ -187,14 +188,20 @@ impl DrawingStore {
                             .push_front(CopyRequest::Delete { symbol, name });
                     }
                     Ok(Some(_)) => {
-                        self.error = Some(format!(
+                        self.error = Some(StorageError::Storage(format!(
                             "{name} was not discarded: it does not hold drawings of {symbol}"
-                        ));
+                        )));
                     }
                     Err(error) if discard => {
-                        self.error = Some(format!("Could not discard {name}: {error}"));
+                        self.error = Some(StorageError::Storage(format!(
+                            "Could not discard {name}: {error}"
+                        )));
                     }
-                    Err(error) => self.error = Some(format!("Could not read {name}: {error}")),
+                    Err(error) => {
+                        self.error = Some(StorageError::Storage(format!(
+                            "Could not read {name}: {error}"
+                        )))
+                    }
                 }
             }
             CopyRequest::Delete { symbol, name } => {
@@ -203,7 +210,11 @@ impl DrawingStore {
                     .expect("copy delete");
                 match answer {
                     Ok(()) => self.copies.forget(&symbol, &name),
-                    Err(error) => self.error = Some(format!("Could not discard {name}: {error}")),
+                    Err(error) => {
+                        self.error = Some(StorageError::Storage(format!(
+                            "Could not discard {name}: {error}"
+                        )))
+                    }
                 }
             }
         }
@@ -302,11 +313,12 @@ impl Chart {
         })
     }
 
-    /// The error of a failed read or write of drawings since the last call, to show to the
-    /// user. A failed write keeps the drawings on the chart and is reported once. A failed read
+    /// The error of a failed read, write or kept-copy operation since the last call, to show
+    /// to the user. A failed write keeps the drawings on the chart and is reported once. A failed read
     /// of drawings changed elsewhere is reported once and tried again a second of input time
-    /// later until it succeeds.
-    pub fn take_storage_error(&mut self) -> Option<String> {
+    /// later until it succeeds. [`StorageError::Read`] tells a document from a newer release,
+    /// which is never written over, from damaged data.
+    pub fn take_storage_error(&mut self) -> Option<StorageError> {
         self.drawing_store.as_mut()?.error.take()
     }
 
@@ -434,9 +446,9 @@ impl Chart {
         let loaded = if symbol == self.symbol {
             self.apply_local_copy(&name, &json)
         } else {
-            Err(format!(
+            Err(StorageError::Storage(format!(
                 "{name} was not loaded because {symbol} is no longer shown"
-            ))
+            )))
         };
         if let Err(error) = loaded {
             self.drawing_store.as_mut().expect("drawing storage").error = Some(error);
@@ -445,12 +457,21 @@ impl Chart {
 
     /// Replaces the saveable drawings with those of the kept copy `name` read as `json`, as one
     /// user action that the next write stores.
-    fn apply_local_copy(&mut self, name: &str, json: &str) -> Result<(), String> {
-        let copy = match DrawingStorage::from_json(json) {
-            Ok((copy, skipped)) if skipped.is_empty() && copy.symbol == self.symbol => copy,
-            Ok(_) => return Err(format!("Drawings of {name} could not all be read")),
-            Err(error) => return Err(format!("Could not read drawings of {name}: {error}")),
-        };
+    fn apply_local_copy(&mut self, name: &str, json: &str) -> Result<(), StorageError> {
+        let copy = DrawingStorage::from_json(json)
+            .and_then(|(copy, skipped)| {
+                if copy.symbol != self.symbol {
+                    Err(LoadError::OtherSymbol)
+                } else if !skipped.is_empty() {
+                    Err(LoadError::Skipped(skipped))
+                } else {
+                    Ok(copy)
+                }
+            })
+            .map_err(|error| StorageError::Read {
+                symbol: name.into(),
+                error,
+            })?;
         // Shown in the price pane when this chart does not show their study, written back in it.
         let mut unshown = HashMap::new();
         let drawings: Vec<_> = copy
@@ -565,17 +586,26 @@ impl Chart {
                         });
                         let read = json.as_deref().map(DrawingStorage::from_json).transpose();
                         match read {
-                            Ok(Some((drawings, skipped)))
-                                if !skipped.is_empty() || drawings.symbol != *name =>
-                            {
+                            Ok(Some((drawings, _))) if drawings.symbol != *name => {
                                 document.refuse_writes();
-                                store.error =
-                                    Some(format!("Drawings of {name} could not all be read"));
+                                store.error = Some(StorageError::Read {
+                                    symbol: name.clone(),
+                                    error: LoadError::OtherSymbol,
+                                });
+                            }
+                            Ok(Some((_, skipped))) if !skipped.is_empty() => {
+                                document.refuse_writes();
+                                store.error = Some(StorageError::Read {
+                                    symbol: name.clone(),
+                                    error: LoadError::Skipped(skipped),
+                                });
                             }
                             Err(error) => {
                                 document.refuse_writes();
-                                store.error =
-                                    Some(format!("Could not read drawings of {name}: {error}"));
+                                store.error = Some(StorageError::Read {
+                                    symbol: name.clone(),
+                                    error,
+                                });
                             }
                             Ok(loaded) => {
                                 if let Some((mut pending, merge)) = store.pending.remove(name) {
@@ -602,9 +632,10 @@ impl Chart {
                                             }
                                         }
                                         Err(error) => {
-                                            store.error = Some(format!(
-                                                "Could not save drawings of {name}: {error}"
-                                            ))
+                                            store.error = Some(StorageError::Save {
+                                                symbol: name.clone(),
+                                                error,
+                                            })
                                         }
                                     }
                                 } else if let Some(json) = json
@@ -619,7 +650,7 @@ impl Chart {
                             }
                         }
                     }
-                    Received::Failed(error) => store.error = Some(error),
+                    Received::Failed(error) => store.error = Some(StorageError::Storage(error)),
                     // `storage_conflict` reports it until `resolve_storage_conflict` settles it.
                     Received::Conflict => {}
                     Received::Saved(_) => {
@@ -653,8 +684,8 @@ impl Chart {
         }
         let refused = match loaded {
             Ok(skipped) if skipped.is_empty() => None,
-            Ok(skipped) => Some(format!("{} drawings could not be read", skipped.len())),
-            Err(error) => Some(error.to_string()),
+            Ok(skipped) => Some(LoadError::Skipped(skipped)),
+            Err(error) => Some(error),
         };
         // Drawings whose study this chart does not show, shown in the price pane.
         let unshown: HashMap<_, _> = DrawingStorage::from_json(json)
@@ -681,10 +712,10 @@ impl Chart {
             if let Some(document) = store.documents.get_mut(&self.symbol) {
                 document.refuse_writes();
             }
-            store.error = Some(format!(
-                "Drawings of {} are not saved: {error}",
-                self.symbol
-            ));
+            store.error = Some(StorageError::Read {
+                symbol: self.symbol.clone(),
+                error,
+            });
         }
     }
 
@@ -738,9 +769,19 @@ impl Chart {
                     document.save(&*store.storage, json);
                     store.captured = edits;
                 }
-                Err(error) => store.error = Some(format!("Could not save drawings: {error}")),
+                Err(error) => {
+                    store.error = Some(StorageError::Save {
+                        symbol: self.symbol.clone(),
+                        error,
+                    })
+                }
             },
-            Err(error) => store.error = Some(format!("Could not save drawings: {error}")),
+            Err(error) => {
+                store.error = Some(StorageError::Save {
+                    symbol: self.symbol.clone(),
+                    error,
+                })
+            }
         }
     }
 
@@ -897,7 +938,7 @@ mod tests {
             let mut drawing = Drawing::new(0, DrawingToolType::HorizontalLine);
             drawing.chart_points = vec![ChartPoint::new(4.0, 10.5)];
             drawing.completed = true;
-            chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(drawing));
+            chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(drawing).unwrap());
         };
         let host = Arc::new(Host::default());
         host.documents
@@ -1000,7 +1041,11 @@ mod tests {
         // A document this release cannot read is reported and never written over.
         restarted.set_symbol("B");
         frame(&mut restarted);
-        assert!(restarted.take_storage_error().is_some());
+        assert!(
+            matches!(restarted.take_storage_error(), Some(StorageError::Read {
+            symbol, error: LoadError::UnsupportedVersion { found: 99, .. },
+        }) if symbol == "B")
+        );
         draw(&mut restarted);
         frame(&mut restarted);
         assert_eq!(host.documents.lock().unwrap()["B"], "{\"version\": 99}");
@@ -1014,7 +1059,10 @@ mod tests {
             frame(&mut restarted);
             frame(&mut restarted);
         }
-        assert!(restarted.take_storage_error().is_some());
+        assert!(matches!(
+            restarted.take_storage_error(),
+            Some(StorageError::Storage(_))
+        ));
         draw(&mut restarted);
         frame(&mut restarted);
         frame(&mut restarted);
@@ -1282,7 +1330,7 @@ mod tests {
                             .to_vec()
                     )
                 );
-                assert_eq!(mine.take_storage_error(), None);
+                assert!(mine.take_storage_error().is_none());
                 // Another symbol's drawings under a copy's name are neither loaded nor deleted.
                 mine.load_local_copy("A (local copy 3)");
                 mine.discard_local_copy("A (local copy 3)");
@@ -1426,7 +1474,7 @@ mod tests {
             // drawing sync.
             let mut volatile = line_at(4.0, 77.0);
             volatile.saveable = false;
-            a.drawings_mut().add_synced_drawing(volatile);
+            a.drawings_mut().add_synced_drawing(volatile).unwrap();
             frames(&mut a, &mut b);
             draw_line(&mut b, line_at(4.0, 8.5));
             frames(&mut a, &mut b);
@@ -1519,13 +1567,14 @@ mod tests {
         // A writes; B's read of it fails, and fails again a second later.
         show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 3.0);
         assert_eq!(
-            b.take_storage_error().as_deref(),
+            b.take_storage_error()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some("Could not read A: network error: offline")
         );
         show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 3.0);
-        assert_eq!(
-            b.take_storage_error(),
-            None,
+        assert!(
+            b.take_storage_error().is_none(),
             "a run of failed reads is reported once"
         );
         host.fail_loads.store(false, Ordering::Relaxed);

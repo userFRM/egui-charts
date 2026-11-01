@@ -37,7 +37,7 @@ impl Default for EraserConfig {
 }
 
 /// Runtime state for the eraser cursor mode, which
-/// [`DrawingManager::eraser_mode`](crate::drawings::DrawingManager::eraser_mode) switches on.
+/// [`DrawingManager::set_eraser_mode`](crate::drawings::DrawingManager::set_eraser_mode) switches on.
 ///
 /// Hovering over a drawing highlights it with a colored outline.
 /// Clicking deletes the hovered drawing. The eraser does not affect non-drawing
