@@ -128,6 +128,32 @@ pub(crate) struct TextEditState {
     pub draft: String,
     pub focus: bool,
     pub opened_frame: Option<u64>,
+    /// Placed just before editing, so empty content can be removed without an undo step.
+    pub placed: bool,
+    /// Paint the draft on the drawing and put the editor over its text.
+    pub inline: bool,
+}
+
+impl TextEditState {
+    /// The draft, or a localised placeholder while it is empty.
+    pub(crate) fn shown_text(&self, ctx: &egui::Context) -> String {
+        if self.draft.is_empty() {
+            crate::localization::text(ctx, "Add text")
+        } else {
+            self.draft.clone()
+        }
+    }
+
+    /// The drawing with its draft, fading the placeholder in its own text colour.
+    pub(crate) fn preview(&self, drawing: &Drawing, ctx: &egui::Context) -> Drawing {
+        let mut shown = drawing.clone();
+        if self.draft.is_empty() {
+            let faded = drawing.text_box_colors(ctx).text.gamma_multiply(0.5);
+            shown.text_color = Some(faded.to_srgba_unmultiplied());
+        }
+        shown.text = Some(self.shown_text(ctx));
+        shown
+    }
 }
 
 /// Central coordinator for chart drawings.
@@ -197,6 +223,8 @@ pub struct DrawingManager {
     pane_members: Vec<Option<usize>>,
     pane_clips: std::collections::HashMap<Option<usize>, Rect>,
     pub(crate) text_editor: Option<TextEditState>,
+    /// A completed text placement whose add command may already be in chart history.
+    pub(crate) finished_text_placement: Option<usize>,
     /// A newly placed image waiting for a host file request at the end of this frame.
     pub(crate) image_request: Option<usize>,
 
@@ -283,6 +311,7 @@ impl DrawingManager {
             pane_members: vec![None],
             pane_clips: std::collections::HashMap::new(),
             text_editor: None,
+            finished_text_placement: None,
             image_request: None,
             selection: SelectionService::new(),
             history: HistoryService::new(),
