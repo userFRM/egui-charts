@@ -110,6 +110,7 @@ impl Drawing {
             || self.extend_left
             || self.extend_right;
         let clip = crate::painting::dashed_line::finite_clip(painter);
+        let pixels_per_point = painter.pixels_per_point();
         painter.ctx().graphics_mut(|g| {
             let list = g.entry(painter.layer_id());
             // Segments that continue one another become one path, which the tessellator joins
@@ -159,17 +160,18 @@ impl Drawing {
             }
             if styled {
                 for index in start..list.next_idx().0 {
-                    list.mutate_shape(ShapeIdx(index), |s| self.style_shape(&mut s.shape, clip));
+                    list.mutate_shape(ShapeIdx(index), |s| {
+                        self.style_shape(&mut s.shape, clip, pixels_per_point)
+                    });
                 }
             }
         });
         self.render_end_markers(painter, rect);
-        let pixels_per_point = painter.pixels_per_point();
         painter.ctx().graphics_mut(|g| {
             let list = g.entry(painter.layer_id());
             for index in start..list.next_idx().0 {
                 list.mutate_shape(ShapeIdx(index), |s| {
-                    fewer_circle_sides(&mut s.shape, pixels_per_point)
+                    fewer_circle_sides(&mut s.shape, pixels_per_point, s.clip_rect)
                 });
             }
         });
@@ -177,10 +179,10 @@ impl Drawing {
 
     /// Restyles one shape. Dashes are generated only inside `clip`, so a drawing reaching far off
     /// screen costs no more than its visible part; without a finite clip nothing is dashed.
-    fn style_shape(&self, shape: &mut Shape, clip: Option<Rect>) {
+    fn style_shape(&self, shape: &mut Shape, clip: Option<Rect>, ppp: f32) {
         if let Shape::Vec(shapes) = shape {
             for s in shapes {
-                self.style_shape(s, clip);
+                self.style_shape(s, clip, ppp);
             }
             return;
         }
@@ -295,12 +297,13 @@ impl Drawing {
                 if dash.is_none() || c.stroke.is_empty() {
                     return;
                 }
-                path = (0..=64)
-                    .map(|i| {
-                        let angle = i as f32 * std::f32::consts::TAU / 64.0;
-                        c.center + c.radius * egui::vec2(angle.cos(), angle.sin())
-                    })
-                    .collect();
+                path = ellipse_arc(
+                    c.center,
+                    egui::Vec2::splat(c.radius),
+                    [0.0, std::f64::consts::TAU],
+                    clip.unwrap_or(Rect::NOTHING).expand(c.stroke.width + 2.0),
+                    ppp,
+                );
                 let stroke = c.stroke;
                 c.stroke = Stroke::NONE;
                 stroke
@@ -309,12 +312,13 @@ impl Drawing {
                 if dash.is_none() || e.stroke.is_empty() {
                     return;
                 }
-                path = (0..=64)
-                    .map(|i| {
-                        let angle = i as f32 * std::f32::consts::TAU / 64.0;
-                        e.center + e.radius * egui::vec2(angle.cos(), angle.sin())
-                    })
-                    .collect();
+                path = ellipse_arc(
+                    e.center,
+                    e.radius,
+                    [0.0, std::f64::consts::TAU],
+                    clip.unwrap_or(Rect::NOTHING).expand(e.stroke.width + 2.0),
+                    ppp,
+                );
                 let stroke = e.stroke;
                 e.stroke = Stroke::NONE;
                 stroke
@@ -429,25 +433,40 @@ impl Drawing {
     }
 }
 
-/// Replaces a circle with the polygon of the fewest sides within a quarter of a physical pixel of
-/// it. The tessellator gives a circle 32 sides from a radius of 5 points and 64 from 18, which made
-/// the anchor dots and rings of a drawing most of its vertices. A small disc without an outline
-/// stays a circle, which the tessellator draws as one textured quad.
-fn fewer_circle_sides(shape: &mut Shape, pixels_per_point: f32) {
+/// Replaces a circle with a path within a quarter of a physical pixel of it. The tessellator
+/// gives a circle 32 sides from a radius of 5 points and 64 from 18, which made the anchor dots
+/// and rings of a drawing most of its vertices. A small disc without an outline stays a circle,
+/// which the tessellator draws as one textured quad.
+fn fewer_circle_sides(shape: &mut Shape, pixels_per_point: f32, clip: Rect) {
     match shape {
         Shape::Vec(shapes) => {
             for shape in shapes {
-                fewer_circle_sides(shape, pixels_per_point);
+                fewer_circle_sides(shape, pixels_per_point, clip);
             }
         }
         Shape::Circle(c) if !c.stroke.is_empty() || c.radius * pixels_per_point > 6.0 => {
-            let sides = circle_sides(c.radius * pixels_per_point);
-            let points = (0..sides)
-                .map(|i| {
-                    let angle = i as f32 * std::f32::consts::TAU / sides as f32;
-                    c.center + c.radius * egui::vec2(angle.cos(), angle.sin())
-                })
-                .collect();
+            let radius = f64::from(c.radius) * f64::from(pixels_per_point);
+            let step = (1.0 - 0.25 / radius).clamp(-1.0, 1.0).acos();
+            let sides = (std::f64::consts::PI / step).ceil().max(8.0) as usize;
+            // Small marker rings keep their existing quarter-pixel polygons.
+            let points = if sides <= 128 {
+                (0..sides)
+                    .map(|i| {
+                        let angle = i as f32 * std::f32::consts::TAU / sides as f32;
+                        c.center + c.radius * egui::vec2(angle.cos(), angle.sin())
+                    })
+                    .collect()
+            } else {
+                let mut points = ellipse_arc(
+                    c.center,
+                    egui::Vec2::splat(c.radius),
+                    [0.0, std::f64::consts::TAU],
+                    clip.expand(c.stroke.width + 2.0),
+                    pixels_per_point,
+                );
+                points.pop();
+                points
+            };
             let mut path = egui::epaint::PathShape::convex_polygon(points, c.fill, c.stroke);
             path.stroke = path.stroke.outside();
             *shape = Shape::Path(path);
@@ -456,11 +475,145 @@ fn fewer_circle_sides(shape: &mut Shape, pixels_per_point: f32) {
     }
 }
 
-/// The fewest sides of a polygon whose sides stay within a quarter of a physical pixel of a
-/// circle of `radius` physical pixels, from 8 to 128.
-pub(super) fn circle_sides(radius: f32) -> usize {
-    let step = (1.0 - 0.25 / radius).clamp(-1.0, 1.0).acos();
-    ((std::f32::consts::PI / step).ceil() as usize).clamp(8, 128)
+/// Bounds on the second derivative in screen coordinates.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Acceleration {
+    /// Maximum absolute horizontal component.
+    pub(super) x: f64,
+    /// Maximum absolute vertical component.
+    pub(super) y: f64,
+    /// Maximum vector length, which may be tighter than the component bounds' hypotenuse.
+    pub(super) length: f64,
+}
+
+impl Acceleration {
+    /// Bounds for an ellipse parameterised by its angle in radians.
+    pub(super) fn ellipse(radii: egui::Vec2) -> Self {
+        Self {
+            x: f64::from(radii.x.abs()),
+            y: f64::from(radii.y.abs()),
+            length: f64::from(radii.abs().max_elem()),
+        }
+    }
+}
+
+/// Samples whose chords stay within a quarter of a physical pixel of each curve in
+/// `at`. Each `acceleration` bounds that curve's second derivative over `range`.
+/// Off-screen spans stay coarse. A long enough chord certifies monotone projection
+/// along it, so only the normal error matters; turns retain the full vector bound.
+pub(super) fn sample_curve<const N: usize>(
+    range: [f64; 2],
+    acceleration: [Acceleration; N],
+    clip: Rect,
+    ppp: f32,
+    at: impl Fn(f64) -> [Pos2; N],
+) -> Vec<(f64, [Pos2; N])> {
+    let [from, to] = range;
+    let (a, b) = (at(from), at(to));
+    if acceleration.iter().any(|m| !m.length.is_finite())
+        || a.iter().chain(&b).any(|p| !p.is_finite())
+    {
+        return Vec::new();
+    }
+    // Leave room for the final conversion back to single-precision screen coordinates.
+    let tolerance = 0.24 / f64::from(ppp.max(0.01));
+    let max_acceleration = acceleration.iter().map(|m| m.length).fold(0.0, f64::max);
+    let mut result = Vec::with_capacity(32);
+    result.push((from, a));
+    let mut pending = Vec::new();
+    let mut current = (from, to, a, b);
+    loop {
+        let (from, to, a, b) = current;
+        let factor = (to - from).powi(2) / 8.0;
+        let mut refine = false;
+        for i in 0..N {
+            let m = acceleration[i];
+            let mut error = m.length * factor;
+            if error <= tolerance {
+                continue;
+            }
+            if m.x < m.length || m.y < m.length {
+                let dx = f64::from(b[i].x) - f64::from(a[i].x);
+                let dy = f64::from(b[i].y) - f64::from(a[i].y);
+                let chord = (dx * dx + dy * dy).sqrt();
+                // The projected derivative differs from chord / dt by at most M * dt / 2.
+                if chord > 0.0 && chord >= 4.0 * error {
+                    error = error.min((m.x * dy.abs() + m.y * dx.abs()) * factor / chord);
+                }
+            }
+            if error > tolerance
+                && Rect::from_two_pos(a[i], b[i])
+                    .expand2(egui::vec2((m.x * factor) as f32, (m.y * factor) as f32))
+                    .intersects(clip)
+            {
+                refine = true;
+                break;
+            }
+        }
+        let mid = (from + to) / 2.0;
+        if !refine || mid == from || mid == to {
+            result.push((to, b));
+        } else if max_acceleration * factor <= 1024.0 * tolerance {
+            // Finish short visible spans directly, without rounding their density up to
+            // a power of two or allocating more subdivision entries.
+            let segments = (max_acceleration * factor / tolerance).sqrt().ceil() as usize;
+            for i in 1..segments {
+                let t = from + (to - from) * i as f64 / segments as f64;
+                result.push((t, at(t)));
+            }
+            result.push((to, b));
+        } else {
+            let m = at(mid);
+            pending.push((mid, to, m, b));
+            current = (from, mid, a, m);
+            continue;
+        }
+        let Some(next) = pending.pop() else { break };
+        current = next;
+    }
+    result
+}
+
+/// A smooth sampled curve with the same tolerance and off-screen bounds as curved bands.
+pub(super) fn smooth_path(
+    range: [f64; 2],
+    acceleration: Acceleration,
+    clip: Rect,
+    ppp: f32,
+    at: impl Fn(f64) -> Pos2,
+) -> Vec<Pos2> {
+    sample_curve(range, [acceleration], clip, ppp, |t| [at(t)])
+        .into_iter()
+        .map(|(_, [point])| point)
+        .collect()
+}
+
+/// A circular or elliptical arc, including both ends. Evaluate in double precision so a
+/// large off-screen centre does not consume the precision of the visible coordinates.
+pub(super) fn ellipse_arc(
+    center: Pos2,
+    radii: egui::Vec2,
+    angles: [f64; 2],
+    clip: Rect,
+    ppp: f32,
+) -> Vec<Pos2> {
+    let mut points = smooth_path(angles, Acceleration::ellipse(radii), clip, ppp, |angle| {
+        ellipse_point(center, radii, angle)
+    });
+    if angles[1] - angles[0] == std::f64::consts::TAU && !points.is_empty() {
+        let first = points[0];
+        *points.last_mut().unwrap() = first;
+    }
+    points
+}
+
+/// A point on the ellipse, retaining double precision until the final screen coordinates.
+pub(super) fn ellipse_point(center: Pos2, radii: egui::Vec2, angle: f64) -> Pos2 {
+    let (sin, cos) = angle.sin_cos();
+    Pos2::new(
+        (f64::from(center.x) + f64::from(radii.x) * cos) as f32,
+        (f64::from(center.y) + f64::from(radii.y) * sin) as f32,
+    )
 }
 
 #[cfg(test)]
@@ -897,7 +1050,7 @@ mod tests {
                                 p.points
                                     .windows(2)
                                     .any(|p| drawing.points.windows(2).any(|leg| leg == p))
-                                    || (tool == SineLine && p.points.len() > 100)
+                                    || matches!(tool, Brush | Highlighter | SineLine)
                                     || matches!(tool, GannSquare | GannFixed)
                                     || (tool == TimeCycles
                                         && p.points.len() > 4
@@ -994,6 +1147,8 @@ mod tests {
             (8.0, 1.0, Stroke::NONE, true),
             (8.0, 2.0, ring, true),
             (200.0, 2.0, ring, true),
+            (5000.0, 1.0, ring, true),
+            (5000.0, 2.0, ring, true),
         ] {
             let circle = egui::epaint::CircleShape {
                 center,
@@ -1002,7 +1157,7 @@ mod tests {
                 stroke,
             };
             let mut shape = Shape::Circle(circle);
-            fewer_circle_sides(&mut shape, ppp);
+            fewer_circle_sides(&mut shape, ppp, Rect::EVERYTHING);
             let case = format!("radius {radius} at {ppp}x");
             let Shape::Path(path) = &shape else {
                 assert!(!polygon, "{case}: still a circle");
@@ -1014,12 +1169,211 @@ mod tests {
                 (path.fill, path.stroke.kind),
                 (Color32::RED, StrokeKind::Outside)
             );
+            if !stroke.is_empty() {
+                let mut drawing = Drawing::new(1, DrawingToolType::Circle);
+                drawing.points = vec![center, center + egui::vec2(radius, 0.0)];
+                drawing.completed = true;
+                assert!(paint(&drawing).iter().any(|shape| {
+                    matches!(shape, Shape::Path(p) if p.stroke.width > 0.0 && p.stroke.kind == StrokeKind::Outside)
+                }), "{case}: drawing circle lost its outward stroke");
+            }
             let corners = &path.points;
             for (i, a) in corners.iter().enumerate() {
                 let b = corners[(i + 1) % corners.len()];
                 assert!(((*a - center).length() - radius).abs() < 1e-3, "{case}");
                 let error = (radius - (center.distance(a.lerp(b, 0.5)))) * ppp;
                 assert!((0.0..=0.25).contains(&error), "{case}: {error} px");
+            }
+        }
+    }
+
+    #[test]
+    fn zoomed_curves_and_brushes_follow_their_geometry() {
+        use DrawingToolType as T;
+        // Circle at pi/2 + 0.06, ellipse at pi/2 + 0.04; quadratic at t = 0.51; equal chord
+        // Catmull-Rom knots at t = 1/4 of the middle span (tangents (50, 50)).
+        for (tool, anchors, expected) in [
+            (
+                T::Circle,
+                vec![(400., -4800.), (400., 200.)],
+                (100.17997, 191.0027),
+            ),
+            (
+                T::Circle,
+                vec![(400., -999800.), (400., 200.)],
+                (100., 199.955),
+            ),
+            (
+                T::FibonacciCircles,
+                vec![(-999600., -1999800.), (1000400., 200.)],
+                (100., 199.955),
+            ),
+            (
+                T::FibonacciSpeedResistanceArcs,
+                vec![(400., -999800.), (400., 200.)],
+                (100., 199.955),
+            ),
+            (
+                T::Ellipse,
+                vec![(-6600., -9800.), (7400., 200.)],
+                (120.07466, 196.00053),
+            ),
+            (
+                T::Arc,
+                vec![(-4600., -4800.), (5400., -4800.), (400., 200.)],
+                (100.17997, 191.0027),
+            ),
+            (
+                T::Sector,
+                vec![(400., -4800.), (5400., -4800.), (-4600., -4800.)],
+                (100.17997, 191.0027),
+            ),
+            (
+                T::DoubleCurve,
+                vec![
+                    (-5000., -5000.),
+                    (-1400., 1933.3334),
+                    (2200., 1933.3334),
+                    (5800., -5000.),
+                ],
+                (508., 197.92),
+            ),
+            (
+                T::Curve,
+                vec![(-5000., -5000.), (400., 5400.), (5800., -5000.)],
+                (508., 197.92),
+            ),
+            (
+                T::DoubleCurve,
+                vec![(100., 100.), (200., 500.), (300., -300.), (400., 100.)],
+                (175., 212.5),
+            ),
+            (
+                T::DoubleCurve,
+                vec![(100., 100.), (600., 100.), (-400., 100.), (200., 100.)],
+                (242.1875, 100.),
+            ),
+            (
+                T::SineLine,
+                vec![(100., 50.), (125., 550.)],
+                (102.5, 62.23587),
+            ),
+            (
+                T::Brush,
+                vec![(100., 100.), (200., 100.), (200., 200.), (300., 200.)],
+                (204.6875, 120.3125),
+            ),
+            // Chord lengths 100, 400, 400 give knot intervals 10, 20, 20 and
+            // middle-span tangents (400/3,400/3) and (200,200).
+            (
+                T::Brush,
+                vec![(0., 0.), (100., 0.), (100., 400.), (500., 400.)],
+                (109.375, 71.875),
+            ),
+            (
+                T::Highlighter,
+                vec![
+                    (100., 100.),
+                    (200., 100.),
+                    (200., 100.),
+                    (200., 200.),
+                    (300., 200.),
+                ],
+                (204.6875, 120.3125),
+            ),
+            (T::Brush, vec![(100., 100.), (300., 200.)], (200., 150.)),
+        ] {
+            for ppp in [1.0, 2.0] {
+                let mut drawing = Drawing::new(1, tool);
+                drawing.points = anchors.iter().copied().map(Pos2::from).collect();
+                drawing.completed = true;
+                drawing.fill_color = None;
+                if matches!(tool, T::FibonacciCircles | T::FibonacciSpeedResistanceArcs) {
+                    drawing.fib_config = Some(crate::drawings::FibonacciConfig {
+                        levels: vec![crate::drawings::FibonacciLevel::new(1.0, "", [255; 4])],
+                        show_background: false,
+                        ..Default::default()
+                    });
+                }
+                let ctx = egui::Context::default();
+                ctx.set_pixels_per_point(ppp);
+                let shapes = paint_on(&ctx, &drawing, false);
+                let mut lines = Vec::new();
+                for shape in shapes {
+                    match shape {
+                        Shape::Path(p) => {
+                            lines.extend(p.points.windows(2).map(|p| [p[0], p[1]]));
+                            if p.closed {
+                                lines.push([*p.points.last().unwrap(), p.points[0]]);
+                            }
+                        }
+                        Shape::LineSegment { points, .. } => lines.push(points),
+                        _ => {}
+                    }
+                }
+                assert!(lines.len() < 2048, "{tool:?}: {} segments", lines.len());
+                if matches!(tool, T::Brush | T::Highlighter) {
+                    for &sample in &drawing.points {
+                        assert!(
+                            lines.iter().flatten().any(|&p| p == sample),
+                            "lost sample {sample:?}"
+                        );
+                    }
+                }
+                let point = Pos2::from(expected);
+                let distance = lines
+                    .iter()
+                    .map(|&[a, b]| {
+                        let ab = b - a;
+                        point.distance(
+                            a + ab * ((point - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0),
+                        )
+                    })
+                    .fold(f32::INFINITY, f32::min);
+                assert!(distance * ppp <= 0.25, "{tool:?} at {ppp}x: {distance} pt");
+                if matches!(tool, T::Circle | T::Ellipse) {
+                    let (center, axes) = if tool == T::Circle {
+                        (
+                            drawing.points[0],
+                            egui::Vec2::splat(drawing.points[0].distance(drawing.points[1])),
+                        )
+                    } else {
+                        (
+                            drawing.points[0].lerp(drawing.points[1], 0.5),
+                            (drawing.points[1] - drawing.points[0]).abs() * 0.5,
+                        )
+                    };
+                    let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
+                    for &[a, b] in &lines {
+                        let mid = a.lerp(b, 0.5);
+                        if !pane.contains(mid) {
+                            continue;
+                        }
+                        let dx = f64::from(mid.x) - f64::from(center.x);
+                        let dy = f64::from(mid.y) - f64::from(center.y);
+                        let length = (dx / f64::from(axes.x)).hypot(dy / f64::from(axes.y));
+                        let error = dx.hypot(dy) * (1.0 / length - 1.0).abs() * f64::from(ppp);
+                        assert!(error <= 0.25, "{tool:?} conic error {error} px");
+                    }
+                }
+                if matches!(
+                    tool,
+                    T::FibonacciCircles | T::FibonacciSpeedResistanceArcs | T::SineLine
+                ) {
+                    continue;
+                }
+                let outline = drawing
+                    .outline(Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.)))
+                    .unwrap();
+                assert!(
+                    outline.lines.iter().any(|&[a, b]| {
+                        let ab = b - a;
+                        point.distance(
+                            a + ab * ((point - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0),
+                        ) <= 0.25
+                    }),
+                    "{tool:?} hit outline"
+                );
             }
         }
     }

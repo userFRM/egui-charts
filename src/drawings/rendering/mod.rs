@@ -1332,12 +1332,17 @@ mod tests {
             (125., 100.),
             (50., 200.),
         ];
-        for (tool, points, closed, area, hits, misses) in [
+        // Analytic areas: a radius-100 semicircle, the quadratic's 300 * 90 * 2/3,
+        // and the cubic's two lobes, 2 * 300 * 450 / 32. Curved fills allow the
+        // curved boundary length, bounded by control polygons for Beziers, times
+        // a quarter point of boundary error.
+        for (tool, points, closed, area, area_tolerance, hits, misses) in [
             (
                 T::Polyline,
                 concave.clone(),
                 true,
                 15000.,
+                2.,
                 vec![(125., 75.), (50., 125.)],
                 vec![(125., 150.)],
             ),
@@ -1346,6 +1351,7 @@ mod tests {
                 concave,
                 false,
                 0.,
+                2.,
                 vec![],
                 vec![(125., 75.), (50., 125.)],
             ),
@@ -1354,6 +1360,7 @@ mod tests {
                 vec![(50., 50.), (250., 250.), (250., 50.), (50., 250.)],
                 false,
                 20000.,
+                2.,
                 vec![(70., 150.)],
                 vec![(150., 70.)],
             ),
@@ -1361,7 +1368,8 @@ mod tests {
                 T::Arc,
                 vec![(100., 200.), (300., 200.), (200., 100.)],
                 false,
-                15701.7,
+                std::f32::consts::PI * 5000.,
+                80.,
                 vec![(200., 150.)],
                 vec![(200., 250.)],
             ),
@@ -1369,7 +1377,8 @@ mod tests {
                 T::Curve,
                 vec![(100., 300.), (250., 120.), (400., 300.)],
                 false,
-                17982.4,
+                18000.,
+                120.,
                 vec![(250., 260.)],
                 vec![(250., 190.)],
             ),
@@ -1377,7 +1386,8 @@ mod tests {
                 T::DoubleCurve,
                 vec![(100., 200.), (200., 350.), (300., 50.), (400., 200.)],
                 false,
-                8429.3,
+                8437.5,
+                170.,
                 vec![(163.4, 230.), (336.6, 170.)],
                 vec![(163.4, 170.), (250., 240.)],
             ),
@@ -1413,7 +1423,7 @@ mod tests {
                 })
                 .sum();
             assert!(
-                (painted_area - area).abs() < 2.,
+                (painted_area - area).abs() < area_tolerance,
                 "{tool:?}: {painted_area} != {area}"
             );
             let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.));

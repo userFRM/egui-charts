@@ -3,6 +3,7 @@
 //! Includes: lines, rays, shapes (rect, circle, ellipse, triangle, arc),
 //! arrows, and polylines.
 
+use super::style::{Acceleration, ellipse_arc, smooth_path};
 use crate::drawings::domain::Drawing;
 use crate::styles::{stroke, typography};
 use crate::theme::ThemeExt;
@@ -380,13 +381,13 @@ impl Drawing {
         if self.points.len() >= 2 {
             let center = self.points[0];
             let edge = self.points[1];
-            let radius = ((edge.x - center.x).powi(2) + (edge.y - center.y).powi(2)).sqrt();
-            if let Some(fill) = self.fill_color {
-                let fill_color =
-                    Color32::from_rgba_unmultiplied(fill[0], fill[1], fill[2], fill[3]);
-                painter.circle_filled(center, radius, fill_color);
-            }
-            painter.circle_stroke(center, radius, stroke);
+            let radius = center.distance(edge);
+            painter.circle(
+                center,
+                radius,
+                self.fill_color32().unwrap_or(Color32::TRANSPARENT),
+                stroke,
+            );
             self.render_placed_text(painter, center, Align2::CENTER_CENTER);
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
@@ -396,21 +397,18 @@ impl Drawing {
     /// Render ellipse
     pub(crate) fn render_ellipse(&self, painter: &egui::Painter, color: Color32, stroke: Stroke) {
         if self.points.len() >= 2 {
-            let ellipse_points = ellipse_points(self.points[0], self.points[1]);
-
-            if let Some(fill) = self.fill_color {
-                let fill_color =
-                    Color32::from_rgba_unmultiplied(fill[0], fill[1], fill[2], fill[3]);
-                painter.add(egui::Shape::convex_polygon(
-                    ellipse_points.clone(),
-                    fill_color,
-                    Stroke::NONE,
-                ));
-            }
-
-            for i in 1..ellipse_points.len() {
-                painter.line_segment([ellipse_points[i - 1], ellipse_points[i]], stroke);
-            }
+            let mut points = ellipse_points(
+                self.points[0],
+                self.points[1],
+                painter.clip_rect().expand(stroke.width + 2.0),
+                painter.pixels_per_point(),
+            );
+            points.pop();
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                self.fill_color32().unwrap_or(Color32::TRANSPARENT),
+                stroke,
+            ));
             let center = self.points[0].lerp(self.points[1], 0.5);
             self.render_placed_text(painter, center, Align2::CENTER_CENTER);
         } else if self.points.len() == 1 {
@@ -450,9 +448,13 @@ impl Drawing {
     pub(crate) fn render_arc(&self, painter: &egui::Painter, color: Color32, stroke: Stroke) {
         if self.points.len() >= 2 {
             self.paint_enclosed_fill(painter);
-            for pair in self.arc_path().windows(2) {
-                painter.line_segment([pair[0], pair[1]], stroke);
-            }
+            painter.add(egui::Shape::line(
+                self.arc_path(
+                    painter.clip_rect().expand(stroke.width + 2.0),
+                    painter.pixels_per_point(),
+                ),
+                stroke,
+            ));
             if !self.completed && self.points.len() == 2 {
                 painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
             }
@@ -462,37 +464,68 @@ impl Drawing {
     }
 
     /// Circular arc from the first anchor to the second through the third.
-    pub(super) fn arc_path(&self) -> Vec<Pos2> {
+    pub(super) fn arc_path(&self, clip: Rect, ppp: f32) -> Vec<Pos2> {
         let &[a, b, ..] = self.points.as_slice() else {
             return Vec::new();
         };
         let Some(&c) = self.points.get(2) else {
-            return arc_points(a, b);
+            return arc_points(a, b, clip, ppp);
         };
-        let (u, v) = (b - a, c - a);
-        let det = 2.0 * (u.x * v.y - u.y * v.x);
+        let (ux, uy) = (
+            f64::from(b.x) - f64::from(a.x),
+            f64::from(b.y) - f64::from(a.y),
+        );
+        let (vx, vy) = (
+            f64::from(c.x) - f64::from(a.x),
+            f64::from(c.y) - f64::from(a.y),
+        );
+        let det = 2.0 * (ux * vy - uy * vx);
         if det.abs() < 1e-6 {
             return vec![a, c, b];
         }
-        let center = a + egui::vec2(
-            (u.length_sq() * v.y - v.length_sq() * u.y) / det,
-            (u.x * v.length_sq() - v.x * u.length_sq()) / det,
-        );
-        let angle = |p: Pos2| (p.y - center.y).atan2(p.x - center.x);
+        let (u2, v2) = (ux * ux + uy * uy, vx * vx + vy * vy);
+        let cx = f64::from(a.x) + (u2 * vy - v2 * uy) / det;
+        let cy = f64::from(a.y) + (ux * v2 - vx * u2) / det;
+        let angle = |p: Pos2| (f64::from(p.y) - cy).atan2(f64::from(p.x) - cx);
         let start = angle(a);
-        let end = (angle(b) - start).rem_euclid(std::f32::consts::TAU);
-        let through = (angle(c) - start).rem_euclid(std::f32::consts::TAU);
-        let sweep = if through <= end {
-            end
+        let end = (angle(b) - start).rem_euclid(std::f64::consts::TAU);
+        let through = (angle(c) - start).rem_euclid(std::f64::consts::TAU);
+        let (through, sweep) = if through <= end {
+            (through, end)
         } else {
-            end - std::f32::consts::TAU
+            (through - std::f64::consts::TAU, end - std::f64::consts::TAU)
         };
-        (0..=64)
-            .map(|i| {
-                let theta = start + sweep * i as f32 / 64.0;
-                center + center.distance(a) * egui::vec2(theta.cos(), theta.sin())
-            })
-            .collect()
+        let radius = (f64::from(a.x) - cx).hypot(f64::from(a.y) - cy);
+        let at = |angle: f64| {
+            Pos2::new(
+                (cx + radius * angle.cos()) as f32,
+                (cy + radius * angle.sin()) as f32,
+            )
+        };
+        let acceleration = Acceleration {
+            x: radius,
+            y: radius,
+            length: radius,
+        };
+        let mut first = smooth_path([start, start + through], acceleration, clip, ppp, at);
+        let second = smooth_path(
+            [start + through, start + sweep],
+            acceleration,
+            clip,
+            ppp,
+            at,
+        );
+        if let Some(point) = first.first_mut() {
+            *point = a;
+        }
+        if let Some(point) = first.last_mut() {
+            *point = c;
+        }
+        first.extend(second.into_iter().skip(1));
+        if let Some(point) = first.last_mut() {
+            *point = b;
+        }
+        first
     }
 
     /// Render polyline: connected line segments through all points, joined back to the first
@@ -622,16 +655,14 @@ pub(super) fn extended_line(p1: Pos2, p2: Pos2, rect: Rect) -> [Pos2; 2] {
 }
 
 /// The closed outline of the ellipse inscribed in the box from `p1` to `p2`.
-pub(super) fn ellipse_points(p1: Pos2, p2: Pos2) -> Vec<Pos2> {
-    let center = Pos2::new((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0);
-    let (rx, ry) = ((p2.x - p1.x).abs() / 2.0, (p2.y - p1.y).abs() / 2.0);
-    let segments = 48;
-    (0..=segments)
-        .map(|i| {
-            let angle = (i as f32 / segments as f32) * std::f32::consts::TAU;
-            Pos2::new(center.x + rx * angle.cos(), center.y + ry * angle.sin())
-        })
-        .collect()
+pub(super) fn ellipse_points(p1: Pos2, p2: Pos2, clip: Rect, ppp: f32) -> Vec<Pos2> {
+    ellipse_arc(
+        p1.lerp(p2, 0.5),
+        (p2 - p1).abs() * 0.5,
+        [0.0, std::f64::consts::TAU],
+        clip,
+        ppp,
+    )
 }
 
 /// The outline of an arrow marker from `tail` to `tip`: a shaft that widens from 8% of its
@@ -659,19 +690,15 @@ pub(super) fn arrow_marker_outline(tail: Pos2, tip: Pos2) -> Option<[Pos2; 7]> {
 
 /// The half circle around `center` that starts at `edge` and turns clockwise
 /// on screen.
-pub(super) fn arc_points(center: Pos2, edge: Pos2) -> Vec<Pos2> {
-    let radius = center.distance(edge);
-    let start_angle = (edge.y - center.y).atan2(edge.x - center.x);
-    let segments = 32;
-    (0..=segments)
-        .map(|i| {
-            let angle = start_angle + std::f32::consts::PI * (i as f32 / segments as f32);
-            Pos2::new(
-                center.x + radius * angle.cos(),
-                center.y + radius * angle.sin(),
-            )
-        })
-        .collect()
+pub(super) fn arc_points(center: Pos2, edge: Pos2, clip: Rect, ppp: f32) -> Vec<Pos2> {
+    let start = f64::from((edge.y - center.y).atan2(edge.x - center.x));
+    ellipse_arc(
+        center,
+        egui::Vec2::splat(center.distance(edge)),
+        [start, start + std::f64::consts::PI],
+        clip,
+        ppp,
+    )
 }
 
 #[cfg(test)]

@@ -44,6 +44,7 @@ impl Drawing {
             outline.lines = edges(&c);
             outline.areas.push(c);
         };
+        let clip = rect.expand(self.stroke_width + 8.0);
         let filled = self.fill_color.is_some();
         let &first = p.first()?;
         let across = |y: f32| [Pos2::new(rect.min.x, y), Pos2::new(rect.max.x, y)];
@@ -72,8 +73,6 @@ impl Drawing {
             | T::InfoLine
             | T::Arrow
             | T::Path
-            | T::Brush
-            | T::Highlighter
             | T::XABCDPattern
             | T::CypherPattern
             | T::ABCDPattern
@@ -84,9 +83,14 @@ impl Drawing {
             | T::ElliottDoubleCombo
             | T::ElliottTripleCombo => {
                 outline.lines = path(false);
-                if matches!(self.tool_type, T::Brush | T::Highlighter) {
-                    outline.width = self.stroke_width;
-                }
+            }
+            T::Brush | T::Highlighter => {
+                outline.lines = self
+                    .brush_points(clip, 1.0)
+                    .windows(2)
+                    .map(|w| [w[0], w[1]])
+                    .collect();
+                outline.width = self.stroke_width;
             }
             T::Polyline => outline.lines = path(self.closed),
             T::ArrowMarker => match lines::arrow_marker_outline(first, second) {
@@ -117,7 +121,7 @@ impl Drawing {
                 None => outline.lines = path(p.len() == 3),
             },
             T::Sector => {
-                let points = self.sector_points()?;
+                let points = self.sector_points(clip, 1.0)?;
                 outline.lines = edges(&points);
                 if filled {
                     outline.areas.extend(
@@ -159,37 +163,42 @@ impl Drawing {
             }
             T::Circle => {
                 let radius = first.distance(second);
-                let ring: Vec<Pos2> = (0..=64)
-                    .map(|i| {
-                        let angle = i as f32 / 64.0 * std::f32::consts::TAU;
-                        first + radius * egui::vec2(angle.cos(), angle.sin())
-                    })
-                    .collect();
+                let ring = super::style::ellipse_arc(
+                    first,
+                    egui::Vec2::splat(radius),
+                    [0.0, std::f64::consts::TAU],
+                    clip,
+                    1.0,
+                );
                 outline.lines = ring.windows(2).map(|w| [w[0], w[1]]).collect();
                 if filled {
                     outline.areas.push(ring);
                 }
             }
             T::Ellipse => {
-                let ring = lines::ellipse_points(first, second);
+                let ring = lines::ellipse_points(first, second, clip, 1.0);
                 outline.lines = ring.windows(2).map(|w| [w[0], w[1]]).collect();
                 if filled {
                     outline.areas.push(ring);
                 }
             }
             T::Arc => {
-                outline.lines = self.arc_path().windows(2).map(|w| [w[0], w[1]]).collect();
+                outline.lines = self
+                    .arc_path(clip, 1.0)
+                    .windows(2)
+                    .map(|w| [w[0], w[1]])
+                    .collect();
             }
             T::Curve => {
                 let [p0, p1, p2] = self.curve_controls()?;
-                outline.lines = shapes::curve_points(p0, p1, p2)
+                outline.lines = shapes::curve_points(p0, p1, p2, clip, 1.0)
                     .windows(2)
                     .map(|w| [w[0], w[1]])
                     .collect();
             }
             T::DoubleCurve => {
                 outline.lines = self
-                    .double_curve_points()?
+                    .double_curve_points(clip, 1.0)?
                     .windows(2)
                     .map(|w| [w[0], w[1]])
                     .collect();
@@ -210,11 +219,11 @@ impl Drawing {
             T::FlatTopBottom | T::DisjointChannel => return self.wedge_channel_outline(rect),
             T::ParallelChannel => return self.parallel_channel_outline(rect),
             T::FibonacciTimeZones => outline.lines = self.fibonacci_time_zone_lines(rect),
-            T::FibonacciWedge => return self.fibonacci_wedge_outline(),
+            T::FibonacciWedge => return self.fibonacci_wedge_outline(clip),
             T::FibonacciSpeedFan => outline.lines = self.fibonacci_speed_fan_lines(rect),
             _ => return None,
         }
-        if filled && let Some(area) = self.enclosed_area() {
+        if filled && let Some(area) = self.enclosed_area(clip, 1.0) {
             outline.areas.extend(
                 shapes::even_odd_trapezoids(&area)
                     .into_iter()

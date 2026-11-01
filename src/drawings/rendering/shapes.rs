@@ -2,14 +2,15 @@
 //!
 //! Includes: rotated rect, double curve, brush, highlighter, path, curve, and sine line.
 
+use super::style::{Acceleration, ellipse_arc, smooth_path};
 use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType};
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Shape, Stroke};
+use egui::{Color32, Pos2, Rect, Shape, Stroke};
 
 impl Drawing {
     /// The first anchor is the center, the second fixes the radius, and the third fixes
     /// the end ray. The sweep takes the short arc in (-180°, 180°], clockwise at 180°.
-    pub(super) fn sector_points(&self) -> Option<Vec<Pos2>> {
+    pub(super) fn sector_points(&self, clip: Rect, ppp: f32) -> Option<Vec<Pos2>> {
         let [center, start, end, ..] = *self.points else {
             return None;
         };
@@ -24,17 +25,22 @@ impl Drawing {
         } else if sweep <= -std::f32::consts::PI {
             sweep += std::f32::consts::TAU;
         }
-        let steps = ((sweep.abs() / std::f32::consts::TAU * 128.0).ceil() as usize).max(1);
         let mut points = vec![center];
-        points.extend((0..=steps).map(|i| {
-            let angle = from + sweep * i as f32 / steps as f32;
-            center + egui::Vec2::angled(angle) * radius
-        }));
+        points.extend(ellipse_arc(
+            center,
+            egui::Vec2::splat(radius),
+            [f64::from(from), f64::from(from) + f64::from(sweep)],
+            clip,
+            ppp,
+        ));
         Some(points)
     }
 
     pub(super) fn render_sector(&self, painter: &egui::Painter) {
-        let Some(points) = self.sector_points() else {
+        let Some(points) = self.sector_points(
+            painter.clip_rect().expand(self.stroke_width + 2.0),
+            painter.pixels_per_point(),
+        ) else {
             return;
         };
         if let Some(fill) = self.fill_color32() {
@@ -81,7 +87,10 @@ impl Drawing {
 
     /// Cubic Bezier curve with two independently editable control points.
     pub(crate) fn render_double_curve(&self, painter: &egui::Painter) {
-        let Some(points) = self.double_curve_points() else {
+        let Some(points) = self.double_curve_points(
+            painter.clip_rect().expand(self.stroke_width + 2.0),
+            painter.pixels_per_point(),
+        ) else {
             return;
         };
         self.paint_enclosed_fill(painter);
@@ -107,28 +116,21 @@ impl Drawing {
         Some([a, a + chord / 3.0 + side, a + chord * (2.0 / 3.0) - side, d])
     }
 
-    pub(super) fn double_curve_points(&self) -> Option<Vec<Pos2>> {
-        let [a, b, c, d] = self.double_curve_controls()?;
-        Some(
-            (0..=64)
-                .map(|i| {
-                    let t = i as f32 / 64.0;
-                    let u = 1.0 - t;
-                    (a.to_vec2() * u * u * u
-                        + b.to_vec2() * 3.0 * u * u * t
-                        + c.to_vec2() * 3.0 * u * t * t
-                        + d.to_vec2() * t * t * t)
-                        .to_pos2()
-                })
-                .collect(),
-        )
+    pub(super) fn double_curve_points(&self, clip: Rect, ppp: f32) -> Option<Vec<Pos2>> {
+        Some(bezier_points(self.double_curve_controls()?, clip, ppp))
     }
 
     /// Brush and highlighter strokes: one path through the samples at the drawing's width and
     /// colour, so a translucent stroke does not darken where its segments meet.
     pub(crate) fn render_brush(&self, painter: &egui::Painter) {
         if self.points.len() >= 2 {
-            painter.add(Shape::line(self.points.clone(), self.stroke()));
+            painter.add(Shape::line(
+                self.brush_points(
+                    painter.clip_rect().expand(self.stroke_width + 2.0),
+                    painter.pixels_per_point(),
+                ),
+                self.stroke(),
+            ));
         }
     }
 
@@ -183,9 +185,16 @@ impl Drawing {
         );
         let stroke = Stroke::new(self.stroke_width, color);
 
-        for pair in curve_points(p0, p1, p2).windows(2) {
-            painter.line_segment([pair[0], pair[1]], stroke);
-        }
+        painter.add(Shape::line(
+            curve_points(
+                p0,
+                p1,
+                p2,
+                painter.clip_rect().expand(stroke.width + 2.0),
+                painter.pixels_per_point(),
+            ),
+            stroke,
+        ));
 
         if !self.completed {
             painter.circle_filled(p0, DESIGN_TOKENS.rounding.md, color);
@@ -242,12 +251,14 @@ impl Drawing {
 
     /// The polygon whose even-odd inside the fill colour fills: a polyline's anchors, and an arc
     /// or curve closed by the chord between its ends. `None` for other tools.
-    pub(super) fn enclosed_area(&self) -> Option<Vec<Pos2>> {
+    pub(super) fn enclosed_area(&self, clip: Rect, ppp: f32) -> Option<Vec<Pos2>> {
         match self.tool_type {
             DrawingToolType::Polyline => Some(self.points.clone()),
-            DrawingToolType::Arc => Some(self.arc_path()),
-            DrawingToolType::Curve => self.curve_controls().map(|[a, b, c]| curve_points(a, b, c)),
-            DrawingToolType::DoubleCurve => self.double_curve_points(),
+            DrawingToolType::Arc => Some(self.arc_path(clip, ppp)),
+            DrawingToolType::Curve => self
+                .curve_controls()
+                .map(|[a, b, c]| curve_points(a, b, c, clip, ppp)),
+            DrawingToolType::DoubleCurve => self.double_curve_points(clip, ppp),
             _ => None,
         }
     }
@@ -258,7 +269,10 @@ impl Drawing {
         let Some(fill) = self.fill_color32() else {
             return;
         };
-        let Some(area) = self.enclosed_area() else {
+        let Some(area) = self.enclosed_area(
+            painter.clip_rect().expand(self.stroke_width + 2.0),
+            painter.pixels_per_point(),
+        ) else {
             return;
         };
         let mut mesh = egui::Mesh::default();
@@ -276,11 +290,74 @@ impl Drawing {
     }
 }
 
-/// The quadratic Bezier curve from `p0` to `p2` pulled towards `p1`.
-pub(super) fn curve_points(p0: Pos2, p1: Pos2, p2: Pos2) -> Vec<Pos2> {
-    (0..=32)
-        .map(|i| Drawing::quadratic_bezier(p0, p1, p2, i as f32 / 32.0))
-        .collect()
+/// The quadratic Bezier curve from `a` to `c` pulled towards `b`.
+pub(super) fn curve_points(a: Pos2, b: Pos2, c: Pos2, clip: Rect, ppp: f32) -> Vec<Pos2> {
+    bezier_points(
+        [a, a + (b - a) * (2.0 / 3.0), c + (b - c) * (2.0 / 3.0), c],
+        clip,
+        ppp,
+    )
+}
+
+/// Cubic Bezier sampling with |B''| bounded by the larger endpoint second derivative.
+fn bezier_points(controls: [Pos2; 4], clip: Rect, ppp: f32) -> Vec<Pos2> {
+    if controls.iter().any(|p| !p.is_finite()) {
+        return Vec::new();
+    }
+    let acceleration = controls.windows(3).fold(Acceleration::default(), |m, p| {
+        let x = 6.0 * (f64::from(p[0].x) - 2.0 * f64::from(p[1].x) + f64::from(p[2].x));
+        let y = 6.0 * (f64::from(p[0].y) - 2.0 * f64::from(p[1].y) + f64::from(p[2].y));
+        Acceleration {
+            x: m.x.max(x.abs()),
+            y: m.y.max(y.abs()),
+            length: m.length.max(x.hypot(y)),
+        }
+    });
+    smooth_path([0.0, 1.0], acceleration, clip, ppp, |t| {
+        if t == 0.0 {
+            return controls[0];
+        }
+        if t == 1.0 {
+            return controls[3];
+        }
+        let u = 1.0 - t;
+        let weights = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
+        let (x, y) = controls
+            .iter()
+            .zip(weights)
+            .fold((0.0, 0.0), |(x, y), (p, w)| {
+                (x + f64::from(p.x) * w, y + f64::from(p.y) * w)
+            });
+        Pos2::new(x as f32, y as f32)
+    })
+}
+
+impl Drawing {
+    /// Centripetal Catmull-Rom interpolation of the recorded samples. Repeated samples
+    /// have no span; reflected endpoints give the first and last spans finite tangents.
+    pub(super) fn brush_points(&self, clip: Rect, ppp: f32) -> Vec<Pos2> {
+        let mut samples = self.points.clone();
+        if samples.iter().any(|p| !p.is_finite()) {
+            return Vec::new();
+        }
+        samples.dedup();
+        let mut points = Vec::new();
+        for i in 0..samples.len().saturating_sub(1) {
+            let (a, b) = (samples[i], samples[i + 1]);
+            let before = i.checked_sub(1).map_or(a + (a - b), |j| samples[j]);
+            let after = samples.get(i + 2).copied().unwrap_or(b + (b - a));
+            let (dt0, dt1, dt2) = (
+                before.distance(a).sqrt(),
+                a.distance(b).sqrt(),
+                b.distance(after).sqrt(),
+            );
+            let m1 = ((a - before) / dt0 - (b - before) / (dt0 + dt1) + (b - a) / dt1) * dt1;
+            let m2 = ((b - a) / dt1 - (after - a) / (dt1 + dt2) + (after - b) / dt2) * dt1;
+            let span = bezier_points([a, a + m1 / 3.0, b - m2 / 3.0, b], clip, ppp);
+            points.extend(span.into_iter().skip(usize::from(i > 0)));
+        }
+        points
+    }
 }
 
 /// The even-odd inside of the closed polygon through `points`, as trapezoids between the
@@ -389,6 +466,16 @@ mod tests {
                     "{tool:?} missing {point:?}"
                 );
             }
+        }
+        for tool in [DrawingToolType::Curve, DrawingToolType::DoubleCurve] {
+            let mut drawing = Drawing::new(0, tool);
+            drawing.points = vec![
+                Pos2::ZERO,
+                Pos2::new(f32::NAN, 100.0),
+                Pos2::new(100.0, 100.0),
+                Pos2::new(200.0, 0.0),
+            ];
+            assert!(drawing.enclosed_area(rect, 1.0).unwrap().is_empty());
         }
         let mut sector = Drawing::new(0, DrawingToolType::Sector);
         for points in [
