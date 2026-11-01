@@ -32,4 +32,4 @@ mod trade_profile;
 pub(crate) use trade_profile::render_session_volume_profiles;
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
-pub use trade_profile::render_trade_profiles;
+pub use trade_profile::{TradeProfileSettings, render_trade_profiles};
