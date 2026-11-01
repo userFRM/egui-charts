@@ -506,13 +506,20 @@ impl Chart {
         }
         let target = Rect::from_x_y_ranges(left..=right, top..=mapping.rect.bottom())
             .intersect(mapping.rect);
-        ui.interact(
-            target,
-            ui.scope_id()
-                .with(("profile_context", self.state.revision(), session)),
-            Sense::hover(),
-        )
-        .on_hover_text(&text);
+        // Painted rows can own another tooltip, so use the same hit test as the rows.
+        if ui.ctx().pointer_hover_pos().is_some_and(|pos| {
+            target.contains(pos) && ui.ctx().layer_id_at(pos) == Some(ui.layer_id())
+        }) {
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                ui.scope_id().with(("profile_context", session)),
+                target,
+            )
+            .show(|ui| {
+                ui.label(&text);
+            });
+        }
         let painter = ui.painter().with_clip_rect(mapping.rect);
         if right - left < 40.0 {
             painter.with_clip_rect(target).text(
@@ -7385,9 +7392,10 @@ mod tests {
                     mode,
                     ..Default::default()
                 });
-                let draw = |chart: &mut crate::widget::Chart| {
+                let draw = |chart: &mut crate::widget::Chart, pointer: Option<Pos2>| {
                     let mut output = ctx.run_ui(
                         egui::RawInput {
+                            events: pointer.into_iter().map(Event::PointerMoved).collect(),
                             screen_rect: Some(Rect::from_min_size(
                                 Pos2::ZERO,
                                 egui::vec2(width, 600.0),
@@ -7405,7 +7413,7 @@ mod tests {
                 for (count, start) in [(16, 0), (8, 8), (1, 15)] {
                     chart.set_visible_bars(count);
                     chart.set_start_idx(start);
-                    draw(&mut chart);
+                    draw(&mut chart, None);
                     let map = chart.get_chart_mapping();
                     for price in [99.875, 160.125] {
                         assert!(
@@ -7439,13 +7447,13 @@ mod tests {
                 }
                 if kind == ChartType::SessionVolumeProfile {
                     assert!(chart.merge_trade_profile(0));
-                    draw(&mut chart);
+                    draw(&mut chart, None);
                     assert!(
                         chart.state.price_scale().range().contains(49.875),
                         "merged earlier session is fitted"
                     );
                     assert!(chart.split_trade_profile(0, bars[8].time));
-                    draw(&mut chart);
+                    draw(&mut chart, None);
                     assert!(
                         chart.state.price_scale().range().min > 90.0,
                         "offscreen split profile is excluded"
@@ -7454,14 +7462,14 @@ mod tests {
                     let mut params = chart.chart_type_params().clone();
                     params.tpo_composites = vec![bars[0].time..=bars[15].time];
                     chart.set_chart_type_params(params);
-                    draw(&mut chart);
+                    draw(&mut chart, None);
                     assert!(
                         chart.state.price_scale().range().contains(49.875),
                         "TPO composite is fitted"
                     );
                 }
                 chart.price_scale_mut().set_range(150.0, 162.0);
-                let painted = draw(&mut chart);
+                let painted = draw(&mut chart, None);
                 assert_eq!(
                     chart.state.price_scale().range(),
                     crate::scales::PriceRange::new(150.0, 162.0)
@@ -7502,17 +7510,39 @@ mod tests {
                 );
                 chart.set_visible_bars(1);
                 chart.set_start_idx(0);
-                draw(&mut chart);
+                draw(&mut chart, None);
                 assert_eq!(
                     chart.state.price_scale().range(),
                     crate::scales::PriceRange::new(150.0, 162.0)
                 );
                 chart.apply_synced_time_scale(2.0, 0.0);
-                let compact = draw(&mut chart);
+                let compact = draw(&mut chart, None);
+                let hint = compact
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.galley.text() == "i" => {
+                            Some(text.pos + text.galley.size() * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .expect("compact cropped profiles advertise their hover readout");
+                ctx.all_styles_mut(|style| {
+                    style.interaction.tooltip_delay = 0.0;
+                    style.interaction.show_tooltips_only_when_still = false;
+                });
+                let mut hovered = Vec::new();
+                for frame in 0..3 {
+                    let mut corrected = bars[14].clone();
+                    corrected.volume += frame as f64 + 1.0;
+                    chart.update(crate::widget::SeriesId::MAIN, corrected);
+                    hovered = draw(&mut chart, Some(hint));
+                }
                 assert!(
-                    compact.iter().any(|s| matches!(&s.shape, Shape::Text(t)
-                    if t.galley.text() == "i")),
-                    "compact cropped profiles advertise their hover readout"
+                    hovered.iter().any(|s| matches!(&s.shape, Shape::Text(text)
+                        if text.galley.text().contains("POC")
+                            && text.galley.text().contains("below"))),
+                    "compact cropped levels remain readable over row tooltips: {kind:?} {mode:?} width={width} dark={}",
+                    theme.dark
                 );
                 if kind == ChartType::TimePriceOpportunity {
                     for (prices, expected) in [
@@ -7539,7 +7569,7 @@ mod tests {
                         });
                         chart.set_visible_bars(8);
                         chart.set_start_idx(0);
-                        draw(&mut chart);
+                        draw(&mut chart, None);
                         assert_eq!(
                             chart.state.price_scale().range(),
                             expected,
