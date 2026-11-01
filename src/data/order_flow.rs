@@ -788,7 +788,12 @@ impl OrderFlowInput {
             {
                 let mut part = State::new(Source::Fixed(kind));
                 let mut open = None;
-                let mut sorted: Vec<_> = trades.iter().collect();
+                // History pages did not form the chart's live trade bars.
+                let paged = trades.paged_until();
+                let mut sorted: Vec<_> = trades
+                    .iter()
+                    .filter(|trade| paged.is_none_or(|until| trade.ts > until))
+                    .collect();
                 sorted.sort_by_key(|trade| trade.ts);
                 for trade in sorted {
                     let Ok(parts) = part.trade_bars.push(timeframe, trade, state.tick_size) else {
@@ -1317,7 +1322,8 @@ mod tests {
     }
 
     /// Quotes and books between fills belong to the current three-tick bar, even when
-    /// the feed sends the entire burst before the chart drains it.
+    /// the feed sends the entire burst before the chart drains it. Paging older executions
+    /// must keep that allocation during replay too.
     #[cfg(feature = "widget")]
     #[test]
     fn trade_bar_streams_share_the_sinks_allocation_before_drain() {
@@ -1396,7 +1402,7 @@ mod tests {
         assert_eq!([flow.values(), rebuilt.values()], [live.clone(), live]);
         let cutoff = start + TimeDelta::seconds(2);
         for input in [&spread, &book, &flow] {
-            input.set_replay(&clock, Some(cutoff), Some(&updates.trades));
+            input.set_replay(&clock, Some(cutoff), Some(&held));
         }
         assert_eq!(flow.values(), BTreeMap::from([(start, [2.0, 2.0, 0.0])]));
         assert!(
@@ -1408,12 +1414,12 @@ mod tests {
             "past depth cannot be reconstructed"
         );
         for input in [&spread, &book, &flow] {
-            input.set_replay(&clock, Some(opens[1]), Some(&updates.trades));
+            input.set_replay(&clock, Some(opens[1]), Some(&held));
         }
         assert_eq!(spread.values().keys().copied().collect::<Vec<_>>(), [start]);
         assert_eq!(book.values().keys().copied().collect::<Vec<_>>(), [start]);
         assert_eq!(flow.values(), BTreeMap::from([(start, [3.0, 3.0, 0.0])]));
-        let mut trades = updates.trades;
+        let mut trades = held;
         for second in [6, 7] {
             let trade = Tick::new(
                 start + TimeDelta::seconds(second),
