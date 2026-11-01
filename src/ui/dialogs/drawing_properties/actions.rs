@@ -258,6 +258,7 @@ impl DrawingProps {
                     pitchfork,
                     gann,
                     ghost_feed,
+                    bars_pattern,
                     position_size,
                     position_sizing,
                     position_target_color,
@@ -553,6 +554,10 @@ mod tests {
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
+            settings.bars_pattern = Some(crate::drawings::BarsPatternConfig {
+                mirrored: true,
+                ..Default::default()
+            });
             settings.price_axis_label = false;
             settings.time_axis_label = false;
             let mut vwap = crate::drawings::VwapConfig::default();
@@ -592,6 +597,7 @@ mod tests {
             assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
+            assert!(saved.bars_pattern.unwrap().mirrored);
             assert!(
                 !saved.price_axis_label && !saved.time_axis_label,
                 "{tool:?}"

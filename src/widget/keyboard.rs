@@ -388,7 +388,8 @@ impl super::Chart {
                             / map.rect.height(),
                     ]);
                 }
-                for point in &mut drawing.chart_points {
+                let first = drawing.first_moved_anchor();
+                for point in drawing.chart_points.iter_mut().skip(first) {
                     point.bar_idx += bars;
                     point.price += price;
                 }

@@ -59,6 +59,7 @@ impl HandleService {
     /// - **Glyphs**: Four resize corners around the centre and a Middle move handle
     /// - **Brushes**: One Middle handle on the stroke, which moves it whole
     /// - **Three-anchor channels**: Four indexed handles, one at each line end
+    /// - **Bars pattern**: Start and End at the ends of its copy
     /// - **Multi-point tools**: Indexed handles at each anchor
     pub fn get_handles(drawing: &Drawing) -> Vec<(HandlePos, Pos2)> {
         let mut handles = Vec::new();
@@ -163,6 +164,12 @@ impl HandleService {
                     handles.push((HandlePos::Middle, point));
                 }
             }
+            // The ends of a bars pattern's copy: its anchor, and the source's width to the right.
+            DrawingToolType::BarsPattern if drawing.points.len() >= 3 => {
+                let [a, b, c] = [drawing.points[0], drawing.points[1], drawing.points[2]];
+                handles.push((HandlePos::Start, c));
+                handles.push((HandlePos::End, Pos2::new(c.x + (b.x - a.x).abs(), c.y)));
+            }
             // Multi-point tools - show indexed handles
             _ => {
                 for (i, &point) in drawing.points.iter().enumerate() {
@@ -193,8 +200,8 @@ impl HandleService {
     /// Moves a handle to a new screen position, updating both screen coordinates
     /// and chart coordinates using the provided conversion closures.
     ///
-    /// For the `Middle` handle, all points are translated by the delta between
-    /// the old and new centroid positions (move entire drawing).
+    /// For the `Middle` handle, every anchor that moves with the drawing (all but a bars
+    /// pattern's source) is translated by the delta between the old and new centroid positions.
     /// `translate_price(price, from_y, to_y)` shifts their prices in scale units;
     /// other handles use `y_to_price`.
     pub fn update_handle<F, G, H>(
@@ -210,10 +217,12 @@ impl HandleService {
         H: Fn(f64, f32, f32) -> f64,
     {
         if handle == HandlePos::Middle {
-            let count = drawing.points.len().max(1) as f32;
+            let first = drawing.first_moved_anchor();
+            let count = drawing.points.len().saturating_sub(first).max(1) as f32;
             let centroid = drawing
                 .points
                 .iter()
+                .skip(first)
                 .fold(egui::Vec2::ZERO, |sum, p| sum + p.to_vec2())
                 / count;
             let center = Self::get_handles(drawing)
@@ -222,17 +231,41 @@ impl HandleService {
                 .map_or(Pos2::ZERO + centroid, |(_, p)| p);
             if !drawing.points.is_empty() {
                 let bars = x_to_bar(new_pos.x) - x_to_bar(center.x);
-                for point in &mut drawing.chart_points {
+                for point in drawing.chart_points.iter_mut().skip(first) {
                     point.bar_idx += bars;
                     point.price = translate_price(point.price, center.y, new_pos.y);
                 }
-                for point in &mut drawing.points {
+                for point in drawing.points.iter_mut().skip(first) {
                     *point += new_pos - center;
                 }
             }
             return;
         }
         match drawing.tool_type {
+            // The copy's ends move in time: the start moves the left source anchor with the
+            // copy's anchor, the end the right source anchor, so the source gains or loses
+            // bars at that end and the copy's other end stays.
+            DrawingToolType::BarsPattern
+                if drawing.points.len() >= 3 && drawing.chart_points.len() >= 3 =>
+            {
+                let Some((_, current)) = Self::get_handles(drawing)
+                    .into_iter()
+                    .find(|(h, _)| *h == handle)
+                else {
+                    return;
+                };
+                let left = usize::from(drawing.points[1].x < drawing.points[0].x);
+                let moved: &[usize] = match handle {
+                    HandlePos::Start => &[left, 2],
+                    HandlePos::End => &[1 - left],
+                    _ => return,
+                };
+                let bars = x_to_bar(new_pos.x) - x_to_bar(current.x);
+                for &i in moved {
+                    drawing.points[i].x += new_pos.x - current.x;
+                    drawing.chart_points[i].bar_idx += bars;
+                }
+            }
             DrawingToolType::TrendLine
             | DrawingToolType::Measure
             | DrawingToolType::FibonacciRetracement
@@ -636,6 +669,11 @@ mod tests {
         use HandlePos::*;
         let cases = [
             (
+                DrawingToolType::BarsPattern,
+                vec![pos2(300.0, 200.0), pos2(100.0, 400.0), pos2(500.0, 100.0)],
+                vec![(Start, pos2(500.0, 100.0)), (End, pos2(700.0, 100.0))],
+            ),
+            (
                 DrawingToolType::FontIcon,
                 vec![pos2(100.0, 200.0)],
                 vec![
@@ -882,7 +920,6 @@ mod tests {
                     DrawingToolType::Arc,
                     DrawingToolType::Curve,
                     DrawingToolType::ProjectionTool,
-                    DrawingToolType::BarsPattern,
                     DrawingToolType::GhostFeed,
                     DrawingToolType::ElliottDoubleCombo,
                 ],
@@ -1063,6 +1100,42 @@ mod tests {
     fn update_handle_moves_screen_and_chart_points() {
         // Edges ignore the pointer's other coordinate, including reversed and crossed sides.
         let cases = [
+            (
+                DrawingToolType::BarsPattern,
+                vec![pos2(300.0, 200.0), pos2(100.0, 400.0), pos2(500.0, 100.0)],
+                HandlePos::End,
+                pos2(750.0, 50.0),
+                vec![pos2(350.0, 200.0), pos2(100.0, 400.0), pos2(500.0, 100.0)],
+                vec![
+                    ChartPoint::new(35.0, 800.0),
+                    ChartPoint::new(10.0, 600.0),
+                    ChartPoint::new(50.0, 900.0),
+                ],
+            ),
+            (
+                DrawingToolType::BarsPattern,
+                vec![pos2(300.0, 200.0), pos2(100.0, 400.0), pos2(500.0, 100.0)],
+                HandlePos::Start,
+                pos2(450.0, 150.0),
+                vec![pos2(300.0, 200.0), pos2(50.0, 400.0), pos2(450.0, 100.0)],
+                vec![
+                    ChartPoint::new(30.0, 800.0),
+                    ChartPoint::new(5.0, 600.0),
+                    ChartPoint::new(45.0, 900.0),
+                ],
+            ),
+            (
+                DrawingToolType::BarsPattern,
+                vec![pos2(300.0, 200.0), pos2(100.0, 400.0), pos2(500.0, 100.0)],
+                HandlePos::Middle,
+                pos2(520.0, 90.0),
+                vec![pos2(300.0, 200.0), pos2(100.0, 400.0), pos2(520.0, 90.0)],
+                vec![
+                    ChartPoint::new(30.0, 800.0),
+                    ChartPoint::new(10.0, 600.0),
+                    ChartPoint::new(52.0, 910.0),
+                ],
+            ),
             // The label's handle changes only its height; the bar's handle carries the label along.
             (
                 DrawingToolType::Signpost,

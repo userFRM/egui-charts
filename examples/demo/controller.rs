@@ -6003,6 +6003,7 @@ mod tests {
             (Tool::FixedRangeVolumeProfile, "Rows"),
             (Tool::AnchoredVolumeProfile, "Rows"),
             (Tool::RegressionTrend, "Deviations"),
+            (Tool::BarsPattern, "Mirrored"),
         ] {
             app.chart.drawings_mut().drawings.clear();
             let mut drawing = Drawing::new(7, tool);

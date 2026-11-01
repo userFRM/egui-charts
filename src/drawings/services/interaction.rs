@@ -261,8 +261,8 @@ impl DrawingInteraction {
                         }
                         continue;
                     }
-                    // The other tools: proximity to any anchor
-                    for &p in &drawing.points {
+                    // The other tools: proximity to any anchor. A bars pattern draws nothing at its source.
+                    for &p in drawing.points.iter().skip(drawing.first_moved_anchor()) {
                         let dist = ((point.x - p.x).powi(2) + (point.y - p.y).powi(2)).sqrt();
                         if dist <= hit_distance * 2.0 {
                             return Some(drawing.id);

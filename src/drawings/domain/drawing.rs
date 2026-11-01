@@ -9,9 +9,9 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig, FontWeight,
-    GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing,
-    RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig,
+    FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, PitchforkConfig, PositionSize,
+    PositionSizing, RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -218,6 +218,11 @@ pub struct Drawing {
     /// Notation of the wave labels of the Elliott wave tools. Older drawings use the default.
     #[serde(default)]
     pub elliott_degree: ElliottDegree,
+
+    /// Draw mode, mirroring and flipping of a bars pattern's copy. `None` uses the defaults,
+    /// as drawings saved before this setting do.
+    #[serde(default)]
+    pub bars_pattern: Option<BarsPatternConfig>,
 
     // === Z-Order (rendering layer) ===
     /// Z-order for rendering priority (higher = drawn on top)
@@ -501,6 +506,7 @@ impl Drawing {
             closed: false,
             gann: None,
             ghost_feed: None,
+            bars_pattern: None,
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
         }
@@ -814,6 +820,17 @@ impl Drawing {
             if cp.bar_idx >= from {
                 cp.shift_bar_idx(delta);
             }
+        }
+    }
+
+    /// Index of the first anchor that moving the whole drawing moves. A bars pattern's source
+    /// anchors stay on the bars it copies, so a move takes only its copy's anchor; every other
+    /// drawing, and a bars pattern still without a copy anchor, moves all of its anchors.
+    pub(crate) fn first_moved_anchor(&self) -> usize {
+        if self.tool_type == DrawingToolType::BarsPattern && self.chart_points.len() >= 3 {
+            2
+        } else {
+            0
         }
     }
 

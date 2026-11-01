@@ -63,6 +63,7 @@ impl DrawingToolType {
                 | Self::InsidePitchfork
                 | Self::Pitchfan
                 | Self::GhostFeed
+                | Self::BarsPattern
                 | Self::LongPos
                 | Self::ShortPos
                 | Self::AnchoredVWAP
@@ -288,11 +289,11 @@ impl DrawingToolType {
             | Self::ElliottTriangle
             | Self::ElliottDoubleCombo
             | Self::ElliottTripleCombo
-            | Self::BarsPattern
             | Self::GhostFeed => DrawingInteractionMode::MultiPoint,
 
             // Click-click tools
-            Self::ArrowMarker
+            Self::BarsPattern
+            | Self::ArrowMarker
             | Self::Note
             | Self::Signpost
             | Self::PriceNote
@@ -349,7 +350,7 @@ impl DrawingToolType {
     /// tools with no fixed count (`Polyline`, `Path`, `Brush`, cursors). Some tools store more
     /// anchors than they are placed with: a long or short position adds its target and stop,
     /// three anchors in all, and a curve and a double curve add their controls between their
-    /// ends, three and four.
+    /// ends, three and four. A bars pattern adds its copy anchor, three anchors in all.
     ///
     /// | Mode | Typical count |
     /// |---|---|
@@ -377,7 +378,6 @@ impl DrawingToolType {
                     | Self::FlatTopBottom
                     | Self::DisjointChannel
                     | Self::FibonacciChannel
-                    | Self::BarsPattern
                     | Self::Triangle
                     | Self::ParallelChannel
                     | Self::Pitchfork

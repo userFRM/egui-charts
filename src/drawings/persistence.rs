@@ -566,6 +566,19 @@ impl DrawingStorage {
                             (T::PriceNote | T::ArrowMarker, [a]) => {
                                 drawing.points.push(a.clone());
                             }
+                            (T::BarsPattern, [a, b]) => {
+                                // Its copy starts over its source, as placement puts it.
+                                let left = if (b.ts_ms, b.subms_ns) < (a.ts_ms, a.subms_ns) {
+                                    b
+                                } else {
+                                    a
+                                };
+                                let copy = StoredCoord {
+                                    price: a.price,
+                                    ..left.clone()
+                                };
+                                drawing.points.push(copy);
+                            }
                             (T::RotatedRect, [a, b]) => {
                                 drawing.points = vec![
                                     a.clone(),
@@ -1196,6 +1209,11 @@ mod tests {
                 average_range_ticks: 2.5,
                 noise_ticks: 0.5,
             });
+            drawing.bars_pattern = Some(crate::drawings::BarsPatternConfig {
+                mode: crate::drawings::BarsPatternMode::Line,
+                mirrored: true,
+                flipped: true,
+            });
             drawing.update_screen_coords(bar_to_x, price_to_y);
             let mut fork = crate::drawings::PitchforkConfig::default();
             fork.levels[0].line_style = LineStyle::Dotted;
@@ -1537,7 +1555,7 @@ mod tests {
             (DrawingToolType::DoubleCurve, 2, &[0, 0, 1, 1][..]),
             (DrawingToolType::FibonacciWedge, 2, &[0, 1, 1][..]),
             (DrawingToolType::Pitchfan, 2, &[0, 1, 1][..]),
-            (DrawingToolType::BarsPattern, 2, &[0, 1][..]),
+            (DrawingToolType::BarsPattern, 2, &[0, 1, 0][..]),
             (DrawingToolType::ElliottDoubleCombo, 3, &[0, 0, 1, 2][..]),
             (
                 DrawingToolType::ElliottTripleCombo,

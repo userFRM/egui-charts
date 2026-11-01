@@ -126,7 +126,8 @@ impl DrawingManager {
         copy.stored_id = None;
         copy.created_at = None;
         copy.screen_anchor = copy.screen_anchor.map(|[x, y]| [x + 0.02, y]);
-        for point in &mut copy.chart_points {
+        let first = copy.first_moved_anchor();
+        for point in copy.chart_points.iter_mut().skip(first) {
             point.bar_idx += 3.0;
         }
         if self.validate_created(&copy).is_ok() {
@@ -147,7 +148,8 @@ impl DrawingManager {
             copy.screen_anchor = copy.screen_anchor.map(|[x, y]| [x + 0.02, y]);
             copy.points.clear();
             copy.level_ys.clear();
-            for point in &mut copy.chart_points {
+            let first = copy.first_moved_anchor();
+            for point in copy.chart_points.iter_mut().skip(first) {
                 *point = point.with_shifted_bar_idx(3.0);
             }
             if self.validate_created(&copy).is_err() {
