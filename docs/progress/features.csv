@@ -419,7 +419,7 @@ Order flow,Order flow,DOM levels panel beside the heatmap,partial,library,src/da
 Order flow,Order flow,Delta % and bid/ask ratio highlight markers on bars,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/studies/builtin/footprint_studies.rs;src/widget/frame.rs
 Order flow,Order flow,Delta POC per bar,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Delta split into trade-size ranges,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/data/order_flow.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
-Order flow,Order flow,Depth ladder liquidity and execution columns,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs
+Order flow,Order flow,Depth ladder liquidity and execution columns sized to content,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs
 Order flow,Order flow,"Depth ladder order entry, editing and brackets",partial,host,src/ui/trading/dom.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs;src/ui/trading/mod.rs
 Order flow,Order flow,Depth ladder session and resettable profiles,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs
 Order flow,Order flow,Depth ladder with configurable visible levels,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/data/depth.rs
