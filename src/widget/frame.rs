@@ -2645,6 +2645,7 @@ impl Chart {
                         chart_rect.left()..=chart_rect.right(),
                         label.text,
                         (rendering::axes::tag_text_color(label.color), label.color),
+                        rendering::axes::axis_font(ui.ctx()),
                         25.0,
                         None,
                     )));

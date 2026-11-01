@@ -101,8 +101,8 @@ impl Default for CrosshairOptions {
         Self {
             mode: CrosshairMode::Normal,
             style: CrosshairStyle::Full,
-            vert_line_style: LineStyle::Dotted,
-            horz_line_style: LineStyle::Dotted,
+            vert_line_style: LineStyle::Dashed,
+            horz_line_style: LineStyle::Dashed,
             vert_line_visible: true,
             horz_line_visible: true,
             vert_line_color: Color32::PLACEHOLDER,

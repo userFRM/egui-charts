@@ -424,10 +424,6 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
     app.paper
         .set_replay_time(Some("2026-10-27T19:29:50Z".parse().unwrap()));
     app.chart.config_mut().show_countdown = false;
-    let mut options = app.chart.chart_options().clone();
-    options.crosshair.vert_line_color = egui::Color32::from_gray(if light { 100 } else { 170 });
-    options.crosshair.horz_line_color = options.crosshair.vert_line_color;
-    app.chart.set_chart_options(options);
     app.trading.display.notifications = egui_charts::widget::settings::TradingNotifications::Off;
     app.timeframe_toolbar
         .set_control_visible(egui_charts::ui::Control::TimeZone, false);

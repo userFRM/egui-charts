@@ -332,14 +332,14 @@ pub(crate) fn paint_crosshair_tag(
     bounds: std::ops::RangeInclusive<f32>,
     text: String,
     colors: (Color32, Color32),
+    font: FontId,
     height: f32,
     covered: Option<Rect>,
 ) -> Rect {
     let (text_color, fill) = colors;
     let padding = 8.0;
     let available = (bounds.end() - bounds.start()).max(0.0);
-    let mut job =
-        egui::text::LayoutJob::simple_singleline(text, axis_font(painter.ctx()), text_color);
+    let mut job = egui::text::LayoutJob::simple_singleline(text, font, text_color);
     job.wrap = egui::text::TextWrapping::truncate_at_width((available - padding).max(0.0));
     let galley = painter.layout_job(job);
     let size = Vec2::new(
