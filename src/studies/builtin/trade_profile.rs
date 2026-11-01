@@ -60,6 +60,10 @@ pub struct TradeProfile {
     pub volume: FootprintBar,
     /// Developing POC as `(bar open, grouped price level)`, including lower-price ties.
     pub developing_poc: Vec<(DateTime<Utc>, i64)>,
+    /// Whether the executions of every bar in `range` are held. False when `range` starts
+    /// before [`Footprint::complete_from`], or no bar is complete: `volume` and
+    /// `developing_poc` then leave out the bars before it, and the profile is partial.
+    pub complete: bool,
 }
 
 impl TradeProfile {
@@ -126,23 +130,27 @@ impl TradeProfile {
 /// Builds exact profiles from footprint rows. No OHLC volume is distributed across prices.
 /// Ranges select whole bars, so session and split boundaries must align with the footprint's
 /// bar clock. Unknown aggressor volume remains separate and contributes only to total volume.
+/// Bars before [`Footprint::complete_from`], whose executions are not all held, are left
+/// out; [`TradeProfile::complete`] tells whether a range starts before it.
 pub fn trade_profiles(flow: &Footprint, ranges: &TradeProfileRanges) -> Vec<TradeProfile> {
+    let complete_from = flow.complete_from();
     ranges
         .ranges()
         .iter()
         .map(|range| {
             let mut volume = FootprintBar::empty(range.start);
             let mut developing_poc = Vec::new();
-            for (&time, bar) in flow.bars().range(range.clone()) {
+            for bar in flow.complete_bars(range.clone()) {
                 volume.absorb(bar);
                 if let Some(poc) = volume.poc() {
-                    developing_poc.push((time, poc));
+                    developing_poc.push((bar.time, poc));
                 }
             }
             TradeProfile {
                 range: range.clone(),
                 volume,
                 developing_poc,
+                complete: complete_from.is_some_and(|from| from <= range.start),
             }
         })
         .collect()
@@ -233,6 +241,7 @@ mod tests {
                     max_delta: 0.0,
                 },
                 developing_poc: Vec::new(),
+                complete: true,
             }
             .nodes(NodeSensitivity {
                 smoothing,
