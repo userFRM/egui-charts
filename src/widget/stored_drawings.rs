@@ -4,10 +4,19 @@ use super::Chart;
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
 use crate::drawings::persistence::{DrawingStorage, LoadError, StorageError, StoredPane};
+use crate::localization as l10n;
 use crate::services::document::{Received, StoredDocument, copy_number};
 use crate::services::{ConflictChoice, Revision, Storage, StoreKind};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+
+/// Formats a message for the chart's last context, with English before its first frame.
+fn message(ctx: Option<&egui::Context>, english: &str, values: &[(&str, &str)]) -> String {
+    match ctx {
+        Some(ctx) => l10n::format_text(ctx, english, values),
+        None => l10n::substitute(english, values),
+    }
+}
 
 /// What a chart asked its storage about the kept copies of its symbols' drawings.
 #[derive(Default)]
@@ -72,6 +81,8 @@ pub(super) struct DrawingStore {
     /// Edits made before a read finishes. The flag distinguishes edits from a restored layout.
     pending: HashMap<String, (DrawingStorage, bool)>,
     error: Option<StorageError>,
+    /// The last drawing context, retained for storage operations between frames.
+    ctx: Option<egui::Context>,
     /// Documents this chart wrote, or read again at a newer revision, since the charts of its
     /// layout that keep drawings in the same storage were told; `None` for a host without
     /// revisions.
@@ -155,8 +166,13 @@ impl DrawingStore {
                         .filter_map(|name| Some((copy_number(&symbol, &name)?, name)))
                         .collect(),
                     Err(error) => {
-                        self.error = Some(StorageError::Storage(format!(
-                            "Could not list the kept copies of {symbol} drawings: {error}"
+                        self.error = Some(StorageError::Storage(message(
+                            self.ctx.as_ref(),
+                            "Could not list the kept copies of {symbol} drawings: {error}",
+                            &[
+                                ("symbol", symbol.as_str()),
+                                ("error", error.to_string().as_str()),
+                            ],
                         )));
                         Vec::new()
                     }
@@ -177,8 +193,11 @@ impl DrawingStore {
                     Ok(None) => {
                         self.copies.forget(&symbol, &name);
                         if !discard {
-                            self.error =
-                                Some(StorageError::Storage(format!("{name} no longer exists")));
+                            self.error = Some(StorageError::Storage(message(
+                                self.ctx.as_ref(),
+                                "{name} no longer exists",
+                                &[("name", name.as_str())],
+                            )));
                         }
                     }
                     Ok(Some(json)) if !discard => self.copies.read = Some((symbol, name, json)),
@@ -188,18 +207,30 @@ impl DrawingStore {
                             .push_front(CopyRequest::Delete { symbol, name });
                     }
                     Ok(Some(_)) => {
-                        self.error = Some(StorageError::Storage(format!(
-                            "{name} was not discarded: it does not hold drawings of {symbol}"
+                        self.error = Some(StorageError::Storage(message(
+                            self.ctx.as_ref(),
+                            "{name} was not discarded: it does not hold drawings of {symbol}",
+                            &[("name", name.as_str()), ("symbol", symbol.as_str())],
                         )));
                     }
                     Err(error) if discard => {
-                        self.error = Some(StorageError::Storage(format!(
-                            "Could not discard {name}: {error}"
+                        self.error = Some(StorageError::Storage(message(
+                            self.ctx.as_ref(),
+                            "Could not discard {name}: {error}",
+                            &[
+                                ("name", name.as_str()),
+                                ("error", error.to_string().as_str()),
+                            ],
                         )));
                     }
                     Err(error) => {
-                        self.error = Some(StorageError::Storage(format!(
-                            "Could not read {name}: {error}"
+                        self.error = Some(StorageError::Storage(message(
+                            self.ctx.as_ref(),
+                            "Could not read {name}: {error}",
+                            &[
+                                ("name", name.as_str()),
+                                ("error", error.to_string().as_str()),
+                            ],
                         )))
                     }
                 }
@@ -211,8 +242,13 @@ impl DrawingStore {
                 match answer {
                     Ok(()) => self.copies.forget(&symbol, &name),
                     Err(error) => {
-                        self.error = Some(StorageError::Storage(format!(
-                            "Could not discard {name}: {error}"
+                        self.error = Some(StorageError::Storage(message(
+                            self.ctx.as_ref(),
+                            "Could not discard {name}: {error}",
+                            &[
+                                ("name", name.as_str()),
+                                ("error", error.to_string().as_str()),
+                            ],
                         )))
                     }
                 }
@@ -288,6 +324,7 @@ impl Chart {
             captured: self.history.drawing_edits,
             pending: HashMap::new(),
             error: None,
+            ctx: None,
             changed: HashMap::new(),
             unshown_panes: HashMap::new(),
             copies: LocalCopies::default(),
@@ -446,8 +483,10 @@ impl Chart {
         let loaded = if symbol == self.symbol {
             self.apply_local_copy(&name, &json)
         } else {
-            Err(StorageError::Storage(format!(
-                "{name} was not loaded because {symbol} is no longer shown"
+            Err(StorageError::Storage(message(
+                store.ctx.as_ref(),
+                "{name} was not loaded because {symbol} is no longer shown",
+                &[("name", name.as_str()), ("symbol", symbol.as_str())],
             )))
         };
         if let Err(error) = loaded {
@@ -550,6 +589,11 @@ impl Chart {
     }
 
     fn poll_stored_drawings(&mut self, ctx: Option<&egui::Context>) {
+        if let Some(ctx) = ctx
+            && let Some(store) = &mut self.drawing_store
+        {
+            store.ctx = Some(ctx.clone());
+        }
         self.save_stored_drawings();
         let symbol = self.symbol.clone();
         // A change made elsewhere is read between gestures, so that it cannot cut one short.
