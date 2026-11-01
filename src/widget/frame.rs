@@ -3940,6 +3940,7 @@ mod tests {
                 let config = FootprintConfig {
                     auto_row_height: None,
                     color_by: FootprintColor::Volume,
+                    text_color: theme.chart.axis_text,
                     neutral_color: egui::Color32::from_rgb(21, 45, 78),
                     ..Default::default()
                 };
@@ -4023,11 +4024,13 @@ mod tests {
                     strokes.iter().all(|i| *i < cells),
                     "current-price line covers footprint cells"
                 );
-                assert!(
-                    output.shapes.iter().any(|shape| matches!(&shape.shape,
-                    Shape::Text(text) if text.galley.text() == "0 × 2")),
-                    "populated close rows retain their values"
-                );
+                for value in ["0 × 1", "0 × 4"] {
+                    assert!(
+                        output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        Shape::Text(text) if text.galley.text() == value)),
+                        "ordinary and POC close rows retain {value}"
+                    );
+                }
                 let badge = output
                     .shapes
                     .iter()
@@ -7358,8 +7361,12 @@ mod tests {
             ),
             (ChartType::TimePriceOpportunity, FootprintMode::Volume, true),
         ] {
-            for width in [800.0, 1440.0] {
+            for (width, theme) in [800.0, 1440.0].into_iter().flat_map(|width| {
+                [crate::theme::Theme::light(), crate::theme::Theme::dark()]
+                    .map(|theme| (width, theme))
+            }) {
                 let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
                 let mut chart = crate::ChartBuilder::new()
                     .with_symbol("SESSION")
                     .with_timeframe(Timeframe::Min30)

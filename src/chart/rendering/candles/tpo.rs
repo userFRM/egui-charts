@@ -329,9 +329,6 @@ pub fn render_live_tpo(
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
-    if visible.is_empty() || visible.end > full_data.len() {
-        return;
-    }
     let render_config = TpoRenderConfig {
         poc_color: painter.ctx().active_theme().ui.text,
         ..Default::default()
