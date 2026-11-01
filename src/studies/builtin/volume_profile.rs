@@ -119,7 +119,7 @@ const DISPLAYS: [ProfileDisplay; 3] = [
 const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.f";
 
 /// Saved milliseconds as text, empty for the unset endpoints.
-fn time_text(ms: f64) -> String {
+pub(crate) fn time_text(ms: f64) -> String {
     if ms.abs() >= 8e15 {
         return String::new();
     }
