@@ -1249,6 +1249,7 @@ mod tests {
                             trades: &[],
                             session_open: None,
                             last_fill: None,
+                            logo: None,
                         };
                         let mut action = None;
                         let output = ctx.run_ui(
@@ -1429,6 +1430,7 @@ mod tests {
                 trades: &[],
                 session_open: None,
                 last_fill: None,
+                logo: None,
             };
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 ladder.show(ui, "ES", &market, &mut 1.0, &mut TimeInForce::Day);
