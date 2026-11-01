@@ -1,9 +1,14 @@
 //! One event clock for host-supplied trades, quotes and depth across instruments.
 
-use super::{FeedError, OrderEvent, RestingOrder, Sink};
-use crate::model::{Level1Quote, OrderBook, Tick};
+use super::{
+    Datafeed, DepthHistory, DepthPage, DepthRequest, FeedError, HistoryPage, HistoryRequest,
+    OrderEvent, RecordingReader, Reply, RestingOrder, Sink, Subscription, SubscriptionId,
+};
+use crate::model::{Instrument, Level1Quote, OrderBook, Tick};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::collections::{HashMap, HashSet};
+use std::io::{self, Read};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 /// Recorded market data. Book sequencing is independent of the replay's merge sequence.
@@ -130,7 +135,7 @@ impl ReplayEvent {
 /// ```
 #[derive(Clone, Debug)]
 pub struct ReplayClock {
-    events: Vec<ReplayEvent>,
+    events: Arc<[ReplayEvent]>,
     cursor: usize,
     time: DateTime<Utc>,
     speed: f64,
@@ -155,7 +160,7 @@ impl ReplayClock {
         }
         let time = events.first().map_or(DateTime::default(), |e| e.time);
         Ok(Self {
-            events,
+            events: events.into(),
             cursor: 0,
             time,
             speed: 1.0,
@@ -208,14 +213,18 @@ impl ReplayClock {
         Ok(&self.events[start..self.cursor])
     }
 
+    fn position(&mut self, time: DateTime<Utc>) {
+        self.time = time;
+        self.fractional_nanos = 0.0;
+        self.cursor = self.events.partition_point(|event| event.time <= time);
+    }
+
     /// Seeks inclusively to `time`. Before pushing these events, call `Sink::reset_replay` on
     /// every participating sink. Trades rebuild bars from the beginning; book messages before
     /// each symbol's latest snapshot are skipped. A symbol without a snapshot starts empty and
     /// follows normal gap/resync rules. Subsequent `advance` returns only events after the seek.
     pub fn seek(&mut self, time: DateTime<Utc>) -> impl Iterator<Item = ReplayEvent> {
-        self.time = time;
-        self.fractional_nanos = 0.0;
-        self.cursor = self.events.partition_point(|e| e.time <= time);
+        self.position(time);
         let events = &self.events[..self.cursor];
         let mut anchors = HashMap::new();
         for (at, event) in events.iter().enumerate().filter(|(_, e)| e.snapshot()) {
@@ -249,6 +258,304 @@ impl ReplayClock {
             }
             Some(event.clone())
         })
+    }
+}
+
+/// A recording-backed feed and playback driver for every symbol in one session.
+///
+/// Attach the same `Arc<ReplayDriver>` to each chart with `ChartBuilder::with_feed`. Call
+/// [`advance`](Self::advance) outside egui context locks before drawing, even while paused, to
+/// publish the shared time to quiet symbols. Zero speed pauses; seeking is inclusive. Hosts own
+/// capture, storage and scheduling. Bar aggregation, book gaps and trade deduplication use the
+/// live sink's rules. A new subscription reconstructs the current position, including when its
+/// interval changes. No history request can return events beyond the playback position.
+///
+/// ```
+/// use egui_charts::data::{MarketEvent, RecordingWriter, ReplayDriver, ReplayEvent};
+/// use egui_charts::model::{Instrument, Tick};
+/// use std::time::Duration;
+/// let time = chrono::Utc::now();
+/// let mut capture = RecordingWriter::new(Vec::new())?;
+/// capture.write(&ReplayEvent::new("A", time, 0,
+///     MarketEvent::Trade(Tick::new(time, 100.0, 2.0, None))))?;
+/// let bytes = capture.finish()?;
+/// let replay = ReplayDriver::load(bytes.as_slice(), vec![Instrument::new("A")])?;
+/// replay.advance(Duration::ZERO)?;
+/// replay.set_speed(0.0)?;
+/// replay.seek(time);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub struct ReplayDriver {
+    state: Mutex<Playback>,
+    // Serialize pushes without blocking readouts or unsubscribe while a waker waits on egui.
+    dispatch: Mutex<()>,
+}
+
+struct Playback {
+    clock: ReplayClock,
+    instruments: HashMap<String, Instrument>,
+    subscriptions: HashMap<SubscriptionId, (String, Sink)>,
+}
+
+impl ReplayDriver {
+    /// Validates a complete recording and its host-supplied instrument metadata. Every recorded
+    /// symbol must have exactly one instrument; its tick size is needed for price-based bars.
+    /// Playback starts at the first event, with none consumed, at normal speed.
+    pub fn new(events: Vec<ReplayEvent>, instruments: Vec<Instrument>) -> Result<Self, FeedError> {
+        let count = instruments.len();
+        let instruments: HashMap<_, _> = instruments
+            .into_iter()
+            .map(|instrument| (instrument.symbol.clone(), instrument))
+            .collect();
+        if count != instruments.len()
+            || events
+                .iter()
+                .any(|event| !instruments.contains_key(&event.symbol))
+        {
+            return Err(FeedError::InvalidData(
+                "missing or duplicate replay instrument".into(),
+            ));
+        }
+        Ok(Self {
+            state: Mutex::new(Playback {
+                clock: ReplayClock::new(events)?,
+                instruments,
+                subscriptions: HashMap::new(),
+            }),
+            dispatch: Mutex::new(()),
+        })
+    }
+
+    /// Loads the same stream that [`super::RecordingWriter`] writes. Read errors retain their
+    /// original kind; malformed recordings and duplicate merge keys report `InvalidData`.
+    pub fn load(reader: impl Read, instruments: Vec<Instrument>) -> io::Result<Self> {
+        let mut reader = RecordingReader::new(reader)?;
+        let mut events = Vec::new();
+        while let Some(event) = reader.read()? {
+            events.push(event);
+        }
+        Self::new(events, instruments)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+
+    fn state(&self) -> MutexGuard<'_, Playback> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The inclusive playback position shared by all subscriptions.
+    pub fn time(&self) -> DateTime<Utc> {
+        self.state().clock.time()
+    }
+
+    /// First and last recorded observation instants, for transport bounds; `None` when empty.
+    pub fn time_range(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        let state = self.state();
+        Some((
+            state.clock.events.first()?.time,
+            state.clock.events.last()?.time,
+        ))
+    }
+
+    /// Playback multiplier; zero pauses.
+    pub fn speed(&self) -> f64 {
+        self.state().clock.speed()
+    }
+
+    /// Sets a finite, non-negative playback multiplier.
+    pub fn set_speed(&self, speed: f64) -> Result<(), FeedError> {
+        self.state().clock.set_speed(speed)
+    }
+
+    /// Whether every event has been published.
+    pub fn is_finished(&self) -> bool {
+        self.state().clock.is_finished()
+    }
+
+    /// Advances once by wall-clock elapsed time and routes due events by symbol. Publishes the
+    /// resulting time to every sink, including quiet symbols and paused frames. Clock errors
+    /// leave the position and subscriptions unchanged.
+    pub fn advance(&self, elapsed: Duration) -> Result<(), FeedError> {
+        let _dispatch = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
+        let (events, start, end, time, sinks) = {
+            let mut state = self.state();
+            let count = state.clock.advance(elapsed)?.len();
+            let end = state.clock.cursor;
+            (
+                Arc::clone(&state.clock.events),
+                end - count,
+                end,
+                state.clock.time(),
+                state.sinks(),
+            )
+        };
+        for event in &events[start..end] {
+            for (symbol, sink) in &sinks {
+                if *symbol == event.symbol {
+                    event.push_to(sink);
+                }
+            }
+        }
+        publish_time(time, &sinks);
+        Ok(())
+    }
+
+    /// Reconstructs every active subscription through `time`, clearing all later state first.
+    /// Replays book history from the beginning as well as trades: starting at the latest book
+    /// snapshot would lose earlier heatmap columns. No later snapshot or execution is exposed.
+    /// Call outside egui context locks, as with live pushes.
+    pub fn seek(&self, time: DateTime<Utc>) {
+        let _dispatch = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
+        let (events, end, sinks) = {
+            let mut state = self.state();
+            state.clock.position(time);
+            (
+                Arc::clone(&state.clock.events),
+                state.clock.cursor,
+                state.sinks(),
+            )
+        };
+        for (symbol, sink) in &sinks {
+            rebuild(&events[..end], symbol, sink, time);
+        }
+        publish_time(time, &sinks);
+    }
+}
+
+impl Playback {
+    fn sinks(&mut self) -> Vec<(String, Sink)> {
+        self.subscriptions.retain(|_, (_, sink)| sink.is_active());
+        self.subscriptions.values().cloned().collect()
+    }
+}
+
+fn rebuild(events: &[ReplayEvent], symbol: &str, sink: &Sink, time: DateTime<Utc>) {
+    sink.reset_replay(time);
+    for event in events {
+        if event.symbol == symbol {
+            event.push_to(sink);
+        }
+    }
+}
+
+fn publish_time(time: DateTime<Utc>, sinks: &[(String, Sink)]) {
+    for (_, sink) in sinks {
+        sink.set_server_time(time);
+        sink.advance_time(time);
+    }
+}
+
+impl Datafeed for ReplayDriver {
+    fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+        let instrument = self
+            .state()
+            .instruments
+            .get(symbol)
+            .cloned()
+            .ok_or(FeedError::NotSupported);
+        reply.send(instrument);
+    }
+
+    fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+        // The subscription rebuilds all bars through the cursor, including its partial bar.
+        reply.send(Ok(HistoryPage::new(Vec::new(), true)));
+    }
+
+    fn subscribe(&self, subscription: Subscription) {
+        let _dispatch = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
+        let position = {
+            let mut state = self.state();
+            if !state.instruments.contains_key(&subscription.symbol)
+                || subscription.conversion.is_some()
+            {
+                None
+            } else {
+                state.subscriptions.insert(
+                    subscription.id,
+                    (subscription.symbol.clone(), subscription.sink.clone()),
+                );
+                Some((
+                    Arc::clone(&state.clock.events),
+                    state.clock.cursor,
+                    state.clock.time(),
+                ))
+            }
+        };
+        let Some((events, end, time)) = position else {
+            subscription.sink.report_error(FeedError::NotSupported);
+            return;
+        };
+        rebuild(
+            &events[..end],
+            &subscription.symbol,
+            &subscription.sink,
+            time,
+        );
+        publish_time(time, &[(subscription.symbol, subscription.sink)]);
+    }
+
+    fn unsubscribe(&self, id: SubscriptionId) {
+        self.state().subscriptions.remove(&id);
+    }
+
+    fn depth_history(&self, request: DepthRequest, reply: Reply<DepthPage>) {
+        let _dispatch = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
+        if request.conversion.is_some()
+            || !request.tick_size.is_finite()
+            || request.tick_size <= 0.0
+        {
+            reply.send(Err(FeedError::NotSupported));
+            return;
+        }
+        if let Err(error) = DepthHistory::new(request.config.clone()) {
+            reply.send(Err(error));
+            return;
+        }
+        let (events, end, time) = {
+            let state = self.state();
+            let time = state.clock.time();
+            let horizon = request
+                .before
+                .and_then(|before| before.checked_add_signed(request.config.cadence))
+                .map_or(time, |before| before.min(time));
+            let end = state
+                .clock
+                .events
+                .partition_point(|event| event.time <= horizon)
+                .min(state.clock.cursor);
+            (Arc::clone(&state.clock.events), end, horizon)
+        };
+        let inbox = Arc::new(super::inbox::Inbox::default());
+        let sink = inbox.subscribe(
+            request.symbol.clone(),
+            crate::model::Timeframe::Min1.into(),
+            0,
+            Some(request.tick_size),
+        );
+        inbox.sample_depth(sink.id, Some(request.config));
+        sink.reset_replay(time);
+        for event in &events[..end] {
+            if event.symbol == request.symbol && event.book_event() {
+                event.push_to(&sink);
+            }
+        }
+        sink.set_server_time(time);
+        sink.advance_time(time);
+        let (_, updates) = inbox
+            .drain()
+            .updates
+            .pop()
+            .expect("replay depth subscription");
+        let history = updates.replay_depth.expect("replay depth history");
+        let mut columns: Vec<_> = history
+            .columns()
+            .filter(|column| {
+                request.before.is_none_or(|before| column.time < before)
+                    && request.since.is_none_or(|since| column.time >= since)
+            })
+            .cloned()
+            .collect();
+        let start = columns.len().saturating_sub(request.count);
+        reply.send(Ok(DepthPage::new(columns.split_off(start), start == 0)));
     }
 }
 
@@ -461,5 +768,327 @@ mod tests {
         assert_eq!(fractional.time(), at(0));
         fractional.advance(Duration::from_nanos(1)).unwrap();
         assert_eq!(fractional.time(), at(0) + TimeDelta::nanoseconds(1));
+    }
+
+    #[test]
+    fn recording_driver_routes_two_symbols_and_rewinds_bars_quotes_books_and_heatmap() {
+        use super::super::{DepthHistoryConfig, RecordingWriter};
+        let order = RestingOrder::new(9, OrderSide::Sell, 20.0, 6.0)
+            .with_participant(42)
+            .with_placed(at(-30));
+        let quote = |symbol: &str, time, sequence, bid| {
+            ReplayEvent::new(
+                symbol,
+                at(time),
+                sequence,
+                MarketEvent::Quote(Level1Quote {
+                    ts: at(time),
+                    symbol: symbol.into(),
+                    bid,
+                    ask: bid + 1.0,
+                    bid_size: 3.0,
+                    ask_size: 4.0,
+                }),
+            )
+        };
+        let delta = |time, sequence, size| {
+            let mut event = snapshot(time, sequence, size);
+            if let MarketEvent::DepthSnapshot { sequence, book } = event.event {
+                event.event = MarketEvent::DepthDelta { sequence, book };
+            }
+            event
+        };
+        let events = vec![
+            snapshot(0, 0, 5.0),
+            ReplayEvent::new(
+                "B",
+                at(0),
+                0,
+                MarketEvent::OrderSnapshot {
+                    sequence: 0,
+                    orders: vec![order.clone()],
+                },
+            ),
+            trade("A", 0, 10, 10.0),
+            trade("B", 0, 10, 20.0),
+            delta(1, 1, 7.0),
+            ReplayEvent::new(
+                "B",
+                at(1),
+                1,
+                MarketEvent::Order {
+                    sequence: 1,
+                    event: OrderEvent::Execute {
+                        id: 9,
+                        size: 2.0,
+                        trade: Some(Tick::new(at(1), 20.0, 2.0, Some(OrderSide::Buy)).with_id(55)),
+                    },
+                },
+            ),
+            quote("A", 1, 20, 9.0),
+            quote("B", 1, 20, 19.0),
+            delta(2, 2, 8.0),
+            trade("A", 2, 11, 12.0),
+            ReplayEvent::new(
+                "B",
+                at(2),
+                2,
+                MarketEvent::Order {
+                    sequence: 2,
+                    event: OrderEvent::Modify {
+                        id: 9,
+                        price: None,
+                        size: Some(3.0),
+                        keep_priority: true,
+                    },
+                },
+            ),
+            snapshot(3, 3, 99.0),
+            ReplayEvent::new(
+                "B",
+                at(3),
+                3,
+                MarketEvent::OrderSnapshot {
+                    sequence: 3,
+                    orders: vec![RestingOrder {
+                        size: 99.0,
+                        ..order
+                    }],
+                },
+            ),
+            quote("A", 3, 20, 98.0),
+            trade("A", 4, 12, 99.0),
+        ];
+        let mut writer = RecordingWriter::new(Vec::new()).unwrap();
+        writer.capture(events.iter().cloned().map(Ok)).unwrap();
+        let bytes = writer.finish().unwrap();
+        let load = || {
+            ReplayDriver::load(
+                bytes.as_slice(),
+                vec![
+                    Instrument::new("A").with_tick_size(1.0),
+                    Instrument::new("B").with_tick_size(1.0),
+                ],
+            )
+            .unwrap()
+        };
+        let connect = |driver: &ReplayDriver| {
+            let inbox = Arc::new(Inbox::default());
+            let mut sinks = Vec::new();
+            for symbol in ["A", "B"] {
+                let sink = inbox.subscribe(symbol.into(), Timeframe::Min1.into(), 100, Some(1.0));
+                inbox.sample_depth(sink.id, Some(DepthHistoryConfig::default()));
+                driver.subscribe(Subscription {
+                    id: sink.id,
+                    symbol: symbol.into(),
+                    timeframe: Timeframe::Min1,
+                    clock: Timeframe::Min1.into(),
+                    extended_hours: true,
+                    conversion: None,
+                    sink: sink.clone(),
+                });
+                sinks.push(sink);
+            }
+            inbox.drain();
+            (inbox, sinks)
+        };
+        let state = |inbox: &Inbox, sinks: &[Sink]| {
+            let mut updates = inbox.drain().updates;
+            sinks
+                .iter()
+                .map(|sink| {
+                    let (_, update) = updates
+                        .swap_remove(updates.iter().position(|(id, _)| *id == sink.id).unwrap());
+                    assert_eq!(
+                        (update.rejected, update.rejected_depth, update.late_ticks),
+                        (0, 0, 0)
+                    );
+                    (
+                        update
+                            .bars
+                            .into_values()
+                            .map(|(bar, _)| bar)
+                            .collect::<Vec<_>>(),
+                        update.trades.iter().cloned().collect::<Vec<_>>(),
+                        update.quote,
+                        update.depth,
+                        update
+                            .orders
+                            .map(|queue| queue.orders().cloned().collect::<Vec<_>>()),
+                        update
+                            .replay_depth
+                            .map(|history| history.columns().cloned().collect())
+                            .unwrap_or(update.depth_columns),
+                        update.time,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let fresh = load();
+        let (fresh_inbox, fresh_sinks) = connect(&fresh);
+        fresh.set_speed(2.0).unwrap();
+        fresh.advance(Duration::from_secs(1)).unwrap(); // 1 wall second * 2 = market second 2.
+        let expected = state(&fresh_inbox, &fresh_sinks);
+        assert_eq!(
+            expected[0].0,
+            [crate::model::Bar::new(at(0), 10.0, 12.0, 10.0, 12.0, 2.0)]
+        );
+        assert_eq!(
+            expected[1].0,
+            [crate::model::Bar::new(at(0), 20.0, 20.0, 20.0, 20.0, 3.0)]
+        );
+        assert_eq!(expected[0].3.as_ref().unwrap().bids[0].size, 8.0);
+        assert_eq!(expected[1].4.as_ref().unwrap()[0].size, 3.0);
+        assert_eq!(expected[1].4.as_ref().unwrap()[0].placed, Some(at(-30)));
+        assert_eq!(
+            expected[0]
+                .5
+                .iter()
+                .map(|column| column.bids[0].1)
+                .collect::<Vec<_>>(),
+            [5.0, 7.0]
+        );
+        assert_eq!(
+            expected[1]
+                .5
+                .iter()
+                .map(|column| column.asks[0].1)
+                .collect::<Vec<_>>(),
+            [6.0, 4.0]
+        );
+        let replay = load();
+        let (inbox, sinks) = connect(&replay);
+        let fresh_later = load();
+        let (later_inbox, later_sinks) = connect(&fresh_later);
+        fresh_later.advance(Duration::from_secs(4)).unwrap();
+        let later = state(&later_inbox, &later_sinks);
+        assert_eq!(later[1].5.back().unwrap().time, at(3));
+        assert_eq!(
+            later[1].5.back().unwrap().asks[0].1,
+            99.0,
+            "the shared clock must sample a quiet symbol's standing book"
+        );
+        replay.seek(at(4));
+        assert_eq!(
+            state(&inbox, &sinks),
+            later,
+            "seek must retain heatmap history before the latest snapshots"
+        );
+        replay.set_speed(0.0).unwrap();
+        replay.seek(at(2)); // Cross both snapshots backward; none of their size 99 may survive.
+        assert_eq!(state(&inbox, &sinks), expected);
+        replay.advance(Duration::from_secs(20)).unwrap();
+        assert_eq!(replay.time(), at(2));
+        assert!(
+            state(&inbox, &sinks)
+                .iter()
+                .all(|update| update.6 == Some(at(2)))
+        );
+        replay.set_speed(0.5).unwrap();
+        replay.advance(Duration::from_secs(1)).unwrap();
+        let quiet = at(2) + TimeDelta::milliseconds(500);
+        assert_eq!(replay.time(), quiet);
+        assert!(
+            state(&inbox, &sinks)
+                .iter()
+                .all(|update| update.6 == Some(quiet))
+        );
+        replay.seek(at(-1));
+        assert!(
+            state(&inbox, &sinks)
+                .iter()
+                .all(|update| update.0.is_empty()
+                    && update.1.is_empty()
+                    && update.2.is_none()
+                    && update.3.is_none()
+                    && update.4.is_none()
+                    && update.5.is_empty())
+        );
+
+        let mut capture = RecordingWriter::new(Vec::new()).unwrap();
+        assert_eq!(
+            capture
+                .capture([
+                    Ok(events[0].clone()),
+                    Err(io::Error::new(
+                        io::ErrorKind::ConnectionReset,
+                        "capture stream failed"
+                    )),
+                ])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::ConnectionReset
+        );
+        assert!(
+            RecordingReader::new(capture.finish().unwrap().as_slice())
+                .unwrap()
+                .read()
+                .unwrap()
+                .is_some()
+        );
+
+        struct FailedRead;
+        impl Read for FailedRead {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "capture stream failed",
+                ))
+            }
+        }
+        assert_eq!(
+            ReplayDriver::load(bytes.as_slice().chain(FailedRead), Vec::new())
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::ConnectionReset
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn readouts_and_unsubscribe_do_not_wait_for_playback_wakers() {
+        use std::sync::mpsc;
+        let replay = Arc::new(
+            ReplayDriver::new(vec![trade("A", 0, 0, 10.0)], vec![Instrument::new("A")]).unwrap(),
+        );
+        let inbox = Arc::new(Inbox::default());
+        let sink = inbox.subscribe("A".into(), Timeframe::Min1.into(), 100, None);
+        let id = sink.id;
+        replay.subscribe(Subscription {
+            id,
+            symbol: "A".into(),
+            timeframe: Timeframe::Min1,
+            clock: Timeframe::Min1.into(),
+            extended_hours: true,
+            conversion: None,
+            sink,
+        });
+        inbox.drain();
+        let (woken, waking) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let resume = Mutex::new(resume);
+        inbox.set_waker(move || {
+            woken.send(()).unwrap();
+            resume.lock().unwrap().recv().unwrap();
+        });
+        let producer = replay.clone();
+        let pushing = std::thread::spawn(move || producer.advance(Duration::ZERO).unwrap());
+        waking.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (finished, finish) = mpsc::channel();
+        let removing = std::thread::spawn(move || {
+            let time = replay.time();
+            replay.unsubscribe(id);
+            finished.send(time).unwrap();
+        });
+        let result = finish.recv_timeout(Duration::from_secs(5));
+        release.send(()).unwrap();
+        pushing.join().unwrap();
+        removing.join().unwrap();
+        assert_eq!(
+            result.unwrap(),
+            at(0),
+            "a UI readout or drop must not wait on its own waker"
+        );
     }
 }

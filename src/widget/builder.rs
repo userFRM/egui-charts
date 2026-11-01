@@ -85,6 +85,7 @@ impl Chart {
         Self {
             state,
             replay: None,
+            market_replay: None,
             config: ChartConfig::default(),
             applied_config_scale_mode: Default::default(),
             start_idx: 0,
@@ -104,6 +105,8 @@ impl Chart {
             time_axis_rect: egui::Rect::NOTHING,
             chart_type: ChartType::Candles,
             chart_type_params: ChartTypeParams::default(),
+            #[cfg(feature = "studies")]
+            trade_profiles: Default::default(),
             pending_box_sizes: [false; 4],
             older_bars_drawn: true,
             tracking_mode_active: false,
@@ -149,7 +152,7 @@ impl Chart {
             #[cfg(feature = "drawings")]
             restored_studies: Default::default(),
             history: super::history::ChartHistory::default(),
-            pane_layout: super::pane_layout::PaneLayout::default(),
+            pane_layout: super::pane::PaneLayout::default(),
             pane_options: Default::default(),
             box_zoom: BoxZoomState::new(),
             zoom_mode_active: false,
