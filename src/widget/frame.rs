@@ -2709,6 +2709,7 @@ impl Chart {
                                 chart_rect.left()..=chart_rect.right(),
                                 scale.format_crosshair(time, bar_seconds),
                                 (rendering::axes::tag_text_color(color), color),
+                                rendering::axes::axis_font(ui.ctx()),
                                 25.0,
                                 None,
                             )));
