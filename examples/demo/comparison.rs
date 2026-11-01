@@ -274,6 +274,13 @@ pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused:
 }
 
 impl DemoApp {
+    /// The comparisons on the chart, without those an undoable edit removed.
+    fn live_comparisons(&self) -> impl Iterator<Item = &(String, SeriesId, Arc<LiveFeed>)> {
+        self.comparisons
+            .iter()
+            .filter(|(_, id, _)| self.chart.series_order(*id).is_some())
+    }
+
     pub(super) fn sync_comparisons(&mut self) {
         // shortcut: removed entries stay until history is empty, including those past its
         // 100-step cap; prune per step if retaining their feeds becomes costly.
@@ -339,9 +346,9 @@ impl DemoApp {
             .map(|spec| spec.symbol)
             .find(|symbol| {
                 *symbol != self.chart.symbol()
-                    && !self.comparisons.iter().any(|(current, id, _)| {
-                        current == symbol && self.chart.series_order(*id).is_some()
-                    })
+                    && !self
+                        .live_comparisons()
+                        .any(|(current, _, _)| current == symbol)
             })
             .map(str::to_owned)
         else {
@@ -375,11 +382,12 @@ impl DemoApp {
     pub(super) fn handle_comparison(&mut self, action: CompareAction) {
         match action {
             CompareAction::AddSymbol(symbol, placement) => {
-                if self.comparisons.iter().any(|(current, id, _)| {
-                    *current == symbol && self.chart.series_order(*id).is_some()
-                }) || !DemoSymbol::catalog()
-                    .iter()
-                    .any(|spec| spec.symbol == symbol)
+                if self
+                    .live_comparisons()
+                    .any(|(current, _, _)| *current == symbol)
+                    || !DemoSymbol::catalog()
+                        .iter()
+                        .any(|spec| spec.symbol == symbol)
                 {
                     return;
                 }
@@ -389,7 +397,7 @@ impl DemoApp {
                     self.theme.ui.warning,
                     self.theme.ui.success,
                 ];
-                let color = colors[self.comparisons.len() % colors.len()];
+                let color = colors[self.live_comparisons().count() % colors.len()];
                 let scale = match placement {
                     // The lowest additional scale id no series uses yet.
                     ComparePlacement::NewPriceScale => {
@@ -425,27 +433,21 @@ impl DemoApp {
                 self.grid_edits = self.grid_edits.wrapping_add(1);
             }
             CompareAction::RemoveSymbol(symbol) => {
-                if let Some(id) = self
-                    .comparisons
-                    .iter()
-                    .find(|(current, id, _)| {
-                        *current == symbol && self.chart.series_order(*id).is_some()
-                    })
-                    .map(|(_, id, _)| *id)
-                {
+                let id = self
+                    .live_comparisons()
+                    .find(|(current, _, _)| *current == symbol)
+                    .map(|(_, id, _)| *id);
+                if let Some(id) = id {
                     self.chart.user_action(|chart| chart.remove_series(id));
                     self.grid_edits = self.grid_edits.wrapping_add(1);
                 }
             }
             CompareAction::ToggleVisibility(symbol) => {
-                if let Some(id) = self
-                    .comparisons
-                    .iter()
-                    .find(|(current, id, _)| {
-                        *current == symbol && self.chart.series_order(*id).is_some()
-                    })
-                    .map(|(_, id, _)| *id)
-                {
+                let id = self
+                    .live_comparisons()
+                    .find(|(current, _, _)| *current == symbol)
+                    .map(|(_, id, _)| *id);
+                if let Some(id) = id {
                     let visible = self.chart.is_series_visible(id);
                     self.chart
                         .user_action(|chart| chart.set_series_visible(id, !visible));
@@ -472,13 +474,23 @@ mod tests {
     }
 
     /// Undo restores a removed comparison's feed and dialog entry; the removed symbol can
-    /// also be compared anew without its parked entry intercepting later dialog edits.
+    /// also be compared anew, in its first palette colour, without its parked entry intercepting
+    /// later dialog edits.
     #[test]
     fn undo_brings_back_a_removed_comparison_with_its_feed() {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
         app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
         let id = app.comparisons[0].1;
+        let colour = |app: &DemoApp, id| {
+            app.chart
+                .series()
+                .find(|(current, _)| *current == id)
+                .unwrap()
+                .1
+                .color
+        };
+        let first = colour(&app, id);
         app.handle_comparison(CompareAction::RemoveSymbol("AAPL".into()));
         assert!(listed(&app).is_empty());
 
@@ -493,6 +505,7 @@ mod tests {
         assert_eq!(listed(&app), ["AAPL"]);
         let again = app.comparisons.last().unwrap().1;
         assert_ne!(again, id);
+        assert_eq!(colour(&app, again), first);
         app.handle_comparison(CompareAction::ToggleVisibility("AAPL".into()));
         assert!(!app.chart.is_series_visible(again));
         app.handle_comparison(CompareAction::RemoveSymbol("AAPL".into()));
