@@ -1954,10 +1954,8 @@ impl Chart {
                     }
                     #[cfg(feature = "studies")]
                     if session_profiles
-                        && let Some(ranges) = session_ranges(
-                            bars,
+                        && let Some(ranges) = self.execution_profile_ranges(
                             start_idx + candles..start_idx + visible_data.len(),
-                            &bar_clock,
                         )
                     {
                         let profiles = crate::studies::trade_profiles(flow, &ranges);
@@ -1968,6 +1966,7 @@ impl Chart {
                             &profiles,
                             flow.price_step(),
                             flow.tick_size(),
+                            self.trade_profile_settings(),
                         );
                     }
                 }
@@ -3427,7 +3426,7 @@ impl Chart {
 /// The sessions of `clock` that the bars `shown` of `bars` belong to, each from the open of its
 /// first bar to the next session's.
 #[cfg(feature = "studies")]
-fn session_ranges(
+pub(super) fn session_ranges(
     bars: &[crate::model::Bar],
     shown: std::ops::Range<usize>,
     clock: &crate::model::BarClock,
@@ -3456,12 +3455,17 @@ fn session_ranges(
         });
     let close = bars
         .get(end)
-        .map_or(chrono::DateTime::<chrono::Utc>::MAX_UTC, |bar| bar.time);
-    let ends = starts.iter().skip(1).map(|&next| bars[next].time);
+        .map_or(chrono::DateTime::<chrono::Utc>::MAX_UTC, |bar| {
+            clock.bar_open(bar.time)
+        });
+    let ends = starts
+        .iter()
+        .skip(1)
+        .map(|&next| clock.bar_open(bars[next].time));
     let ranges = starts
         .iter()
         .zip(ends.chain([close]))
-        .map(|(&start, end)| bars[start].time..end)
+        .map(|(&start, end)| clock.bar_open(bars[start].time)..end)
         .collect();
     crate::studies::TradeProfileRanges::new(ranges).ok()
 }
