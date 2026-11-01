@@ -2,7 +2,6 @@ use super::context::{ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering::axes::{PRICE_LABEL_GAP, axis_font};
 use crate::config::{PriceAxisOptions, TimeScaleOptions};
 use crate::model::Bar;
-use crate::scales::price_decimals;
 use crate::scales::{
     HorizontalScale, PriceFormatter, PriceMap, PriceMark, PriceScaleId, TickMark, TickMarkLayout,
 };
@@ -534,11 +533,6 @@ pub fn render_time_labels(
     }
     context.painter.set(slot, labels);
 }
-
-#[path = "legend/mod.rs"]
-mod legend;
-pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
-pub(crate) use legend::{SeriesAction, study_controls};
 
 /// Formats text at weight 600 when the face has a weight axis.
 pub(super) fn semibold(font: FontId, color: Color32) -> egui::text::TextFormat {
@@ -1263,6 +1257,7 @@ mod tests {
     /// Legend fields stay inside the plot and keep their positions during hover.
     #[test]
     fn legend_fields_stay_inside_the_plot() {
+        use crate::chart::renderers::{Legend, LegendStatus};
         use crate::theme::apply_to_egui;
         use egui::Vec2;
 
@@ -1278,7 +1273,7 @@ mod tests {
                     egui::ColorImage::filled([18, 18], egui::Color32::BLUE),
                     Default::default(),
                 );
-                let statuses = [super::LegendStatus {
+                let statuses = [LegendStatus {
                     text: "S",
                     color: theme.ui.text,
                     background: theme.ui.panel_bg_secondary,
@@ -1300,7 +1295,7 @@ mod tests {
                             ..Default::default()
                         },
                         |ui| {
-                            let mut legend = super::Legend::new("Sample equity fund", "1h", &bar);
+                            let mut legend = Legend::new("Sample equity fund", "1h", &bar);
                             legend.previous_close = Some(749.42);
                             legend.badge = Some(egui::ImageSource::Texture(
                                 (badge.id(), Vec2::splat(18.0)).into(),

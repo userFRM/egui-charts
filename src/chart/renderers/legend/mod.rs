@@ -1,11 +1,12 @@
 //! In-pane series readout and supplementary rows.
 
-use super::{price_decimals, semibold};
+use super::labels::semibold;
 use crate::chart::renderers::StyleColors;
 use crate::localization as l10n;
 use crate::model::session::MarketSession;
 use crate::model::{Bar, DataStatus, Instrument, Level1Quote, percent_change};
 use crate::painting::symbol_mark::paint_symbol_mark;
+use crate::scales::price_decimals;
 use crate::studies::Indicator;
 use crate::theme::ThemeExt;
 use egui::{Color32, FontId, ImageSource, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
@@ -67,7 +68,7 @@ pub(crate) enum SeriesAction {
 /// An in-pane legend. Historical readout data and current quotes are supplied independently.
 pub struct Legend<'a> {
     /// Host number formatting for this series' readouts.
-    pub formatters: super::super::ValueFormatters<'a>,
+    pub formatters: super::ValueFormatters<'a>,
     /// Fallback title when the instrument has no description.
     pub symbol: &'a str,
     /// Display interval.
