@@ -87,6 +87,7 @@ pub(crate) struct FeedLink {
     /// without `continue_before`: no trade before the oldest held one was missed.
     trades_from_start: bool,
     pub(super) heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
+    heatmap_config: crate::chart::overlays::LiquidityHeatmapConfig,
     /// How the live book is shown by the heatmap's profile and the depth ladder.
     book_view: crate::chart::overlays::OrderBookView,
     study_inputs: Vec<(crate::data::OrderFlowInput, u64)>,
@@ -168,6 +169,7 @@ impl FeedLink {
             trades_complete: false,
             trades_from_start: false,
             heatmap: self.heatmap.is_some().then(Default::default),
+            heatmap_config: self.heatmap_config,
             book_view: self.book_view.clone(),
             study_inputs: Vec::new(),
             time: self.time,
@@ -263,6 +265,7 @@ impl Chart {
             trades_complete: false,
             trades_from_start: false,
             heatmap: None,
+            heatmap_config: Default::default(),
             book_view: Default::default(),
             study_inputs: Vec::new(),
             time: None,
@@ -554,11 +557,12 @@ impl Chart {
         crate::data::combine_trades(self.trades(series))
     }
 
-    /// Draws the trades the feed sends as bubbles, grouped and coloured as the config says (by
-    /// default one per bar and price level), from the next frame, or stops with `None`. A chart
-    /// without a feed holds no trades and draws none, and Renko, Kagi, line break, point and
-    /// figure and range charts draw none, since their x axis is not time. Sums every held trade
-    /// again: call it when the settings change, not every frame.
+    /// Draws the trades the feed sends as bubbles, grouped and coloured as the config says,
+    /// from the next frame, or stops with `None`. By default, nearby bars and price levels merge
+    /// when crowded, and diameters adapt to the available screen space. A chart without a feed
+    /// holds no trades and draws none, and Renko, Kagi, line break, point and figure and range
+    /// charts draw none, since their x axis is not time. Sums every held trade again: call it
+    /// when the settings change, not every frame.
     pub fn set_volume_bubbles(&mut self, config: Option<VolumeBubblesConfig>) {
         if let Some(link) = &mut self.feed_link {
             link.bubbles = config.map(|config| link.bubbles(config));
@@ -637,7 +641,8 @@ impl Chart {
 
     /// Shows resting liquidity behind the price series. A feed and instrument tick size are
     /// required. Enabling starts the default depth history if none is configured; disabling
-    /// releases textures and retains that history. Trade bubbles and best bid/ask lines can be
+    /// releases textures and retains that history and the appearance settings. Re-enabling an
+    /// enabled heatmap keeps its textures. Trade bubbles and best bid/ask lines can be
     /// enabled independently through the existing chart options.
     pub fn set_liquidity_heatmap(&mut self, enabled: bool) {
         if enabled
@@ -651,8 +656,33 @@ impl Chart {
             ));
         }
         if let Some(link) = &mut self.feed_link {
-            link.heatmap = enabled.then(|| std::cell::RefCell::new(Default::default()));
+            if enabled {
+                link.heatmap.get_or_insert_with(Default::default);
+            } else {
+                link.heatmap = None;
+            }
         }
+    }
+
+    /// Sets the heatmap's cell brightness and resting-size range from the next frame. A changed
+    /// appearance redraws the held columns once; an unchanged effective setting uploads nothing.
+    /// Retained while disabled and in exported images. Does nothing without a feed; enable the
+    /// heatmap separately with [`set_liquidity_heatmap`](Self::set_liquidity_heatmap).
+    pub fn set_liquidity_heatmap_config(
+        &mut self,
+        config: crate::chart::overlays::LiquidityHeatmapConfig,
+    ) {
+        if let Some(link) = &mut self.feed_link {
+            link.heatmap_config = config;
+        }
+    }
+
+    /// The heatmap appearance supplied by the host, or its default without a feed.
+    pub fn liquidity_heatmap_config(&self) -> crate::chart::overlays::LiquidityHeatmapConfig {
+        self.feed_link
+            .as_ref()
+            .map(|link| link.heatmap_config)
+            .unwrap_or_default()
     }
 
     pub(super) fn paint_liquidity(
@@ -671,7 +701,9 @@ impl Chart {
         ) else {
             return;
         };
-        heatmap.borrow_mut().render(
+        let mut heatmap = heatmap.borrow_mut();
+        heatmap.config = link.heatmap_config;
+        heatmap.render(
             painter,
             mapping,
             history,

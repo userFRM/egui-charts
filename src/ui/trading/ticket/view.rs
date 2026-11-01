@@ -1,10 +1,10 @@
 //! The order ticket's panel: its header, tabs and menu, and the button that sends the order.
 
 use super::{Action, Market, OrderPreset, OrderTicket, Tab, confirmation, order_quantity, summary};
-use crate::chart::decimals;
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::painting::symbol_mark::paint_symbol_mark;
+use crate::scales::decimals;
 use crate::theme::ThemeExt;
 use crate::ui::connection_status::show_connection_status_with_label;
 use crate::ui::trading::widgets::{SECTION_TITLE_SIZE, hit, side_fill, side_name, text, track};

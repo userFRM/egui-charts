@@ -16,13 +16,14 @@
 use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
 
 use crate::localization as l10n;
+use crate::painting::span_cache::SpanCache;
 use crate::scales::PriceMap;
 use egui::emath::GuiRounding as _;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
 use crate::model::{
-    Bar, BarClock, ExchangeSessionProvider, SessionProvider, SpanCache, TPOColorMode, TPOConfig,
+    Bar, BarClock, ExchangeSessionProvider, SessionProvider, TPOColorMode, TPOConfig,
     TPODisplayMode, TPOProfile, derive_tick_size, to_tpo_profiles,
 };
 use crate::styles::typography;
