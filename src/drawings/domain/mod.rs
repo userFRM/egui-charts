@@ -4,6 +4,7 @@
 //! For persistence across history or interval changes, use timestamp anchors through
 //! [`persistence`](super::persistence) or the chart's drawing APIs.
 
+mod bars_pattern;
 mod coordinates;
 mod drawing;
 mod elliott;
@@ -15,6 +16,7 @@ mod template;
 mod vwap;
 
 pub use crate::config::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
+pub use bars_pattern::{BarsPatternConfig, BarsPatternMode};
 pub use coordinates::ChartPoint;
 pub use drawing::Drawing;
 pub use elliott::ElliottDegree;

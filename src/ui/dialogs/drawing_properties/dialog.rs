@@ -232,6 +232,7 @@ impl DrawingPropertiesDialog {
                 drawing.pitchfork = old.pitchfork;
                 drawing.gann = old.gann;
                 drawing.ghost_feed = old.ghost_feed;
+                drawing.bars_pattern = old.bars_pattern;
                 drawing.position_size = old.position_size;
                 drawing.position_sizing = old.position_sizing;
                 drawing.position_target_color = old.position_target_color;

@@ -2,8 +2,9 @@
 
 use crate::drawings::domain::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
 use crate::drawings::{
-    Drawing, DrawingToolType as Tool, ElliottDegree, FibonacciLevel, GannConfig, GannFanDirection,
-    GannLevel, PitchforkConfig, PitchforkLevel, PositionSize, RegressionTrendConfig, VwapBand,
+    BarsPatternMode, Drawing, DrawingToolType as Tool, ElliottDegree, FibonacciLevel, GannConfig,
+    GannFanDirection, GannLevel, PitchforkConfig, PitchforkLevel, PositionSize,
+    RegressionTrendConfig, VwapBand,
 };
 
 use crate::data::{ProfileDisplay, VolumeProfileConfig};
@@ -39,6 +40,7 @@ impl InputsTab {
                 | Tool::GannSquare
                 | Tool::GannFixed
                 | Tool::GannFan
+                | Tool::BarsPattern
                 | Tool::GhostFeed
                 | Tool::LongPos
                 | Tool::ShortPos
@@ -81,6 +83,36 @@ impl InputsTab {
             | Tool::Pitchfan => pitchfork(ui, drawing, grid_pickers(pickers, 0)),
             Tool::GannBox | Tool::GannSquare | Tool::GannFixed | Tool::GannFan => {
                 gann(ui, drawing, pickers, coordinates)
+            }
+            Tool::BarsPattern => {
+                let mut config = drawing.bars_pattern.unwrap_or_default();
+                let original = config;
+                FormGrid::new("bars_pattern_inputs").show(ui, |ui| {
+                    let label = ui.label(l10n::text(ui.ctx(), "Draw as"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        let ctx = ui.ctx().clone();
+                        ui.combo_select(
+                            "bars_pattern_mode",
+                            &mut config.mode,
+                            [BarsPatternMode::Bars, BarsPatternMode::Line],
+                            |mode| {
+                                l10n::text(
+                                    &ctx,
+                                    match mode {
+                                        BarsPatternMode::Line => "Line",
+                                        _ => "Bars",
+                                    },
+                                )
+                            },
+                        );
+                    });
+                    ui.end_row();
+                });
+                ui.checkbox(&mut config.mirrored, l10n::text(ui.ctx(), "Mirrored"));
+                ui.checkbox(&mut config.flipped, l10n::text(ui.ctx(), "Flipped"));
+                if config != original {
+                    drawing.bars_pattern = Some(config);
+                }
             }
             Tool::GhostFeed => {
                 let mut config = drawing.ghost_feed.unwrap_or_default();

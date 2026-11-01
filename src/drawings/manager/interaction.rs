@@ -61,7 +61,8 @@ impl DrawingManager {
         }
     }
 
-    /// Begins moving every anchor from a body grab at `origin`, retaining the grab offset.
+    /// Begins moving the anchors that move with the body (all but a bars pattern's source)
+    /// from a grab at `origin`, retaining the grab offset.
     /// Locked drawings ignore the grab. The move shares the handle drag's undo and sync lifecycle.
     pub fn start_drag_body(&mut self, drawing_id: usize, origin: Pos2) {
         self.start_drag_handle(drawing_id, HandlePos::Middle);
@@ -287,15 +288,21 @@ impl DrawingManager {
                         .iter_mut()
                         .find(|d| d.id == old.id && !d.locked)
                     {
-                        for (point, before) in
-                            drawing.chart_points.iter_mut().zip(&old.chart_points)
+                        let first = old.first_moved_anchor();
+                        for (point, before) in drawing
+                            .chart_points
+                            .iter_mut()
+                            .zip(&old.chart_points)
+                            .skip(first)
                         {
                             *point = ChartPoint::new(
                                 before.bar_idx + bars,
                                 translate_price(before.price, origin.y, snapped.y),
                             );
                         }
-                        for (point, before) in drawing.points.iter_mut().zip(&old.points) {
+                        for (point, before) in
+                            drawing.points.iter_mut().zip(&old.points).skip(first)
+                        {
                             *point = *before + (snapped - origin);
                         }
                         if let Some([x, y]) = old.screen_anchor {
@@ -323,6 +330,7 @@ impl DrawingManager {
                                     | DrawingToolType::PriceNote
                             ),
                     );
+                    let skip = skip.max(old.first_moved_anchor());
                     for (point, before) in drawing
                         .chart_points
                         .iter_mut()
@@ -808,6 +816,20 @@ impl DrawingManager {
     /// In keep-drawing mode the icon tool goes on placing the icon that was picked.
     fn finish_curr_drawing(&mut self) {
         if let Some(mut drawing) = self.curr_drawing.take() {
+            // A bars pattern's copy starts over its source: on the left source bar, at the
+            // first anchor's price. Moving the pattern then moves only this anchor.
+            if drawing.tool_type == DrawingToolType::BarsPattern
+                && let (&[first, second], &[first_at, second_at]) =
+                    (drawing.chart_points.as_slice(), drawing.points.as_slice())
+            {
+                let (bar, x) = if second.bar_idx < first.bar_idx {
+                    (second.bar_idx, second_at.x)
+                } else {
+                    (first.bar_idx, first_at.x)
+                };
+                drawing.chart_points.push(ChartPoint::new(bar, first.price));
+                drawing.points.push(Pos2::new(x, first_at.y));
+            }
             drawing.update_pane_coords(self.pane_rect);
             if self.validate_created(&drawing).is_err() {
                 return;
@@ -906,6 +928,50 @@ impl DrawingManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two clicks copy the bars between them in place, right to left as well, and dragging the
+    /// pattern moves its copy while the source anchors stay on the bars it copies.
+    #[test]
+    fn a_bars_pattern_is_copied_on_two_clicks_and_moved_by_its_copy() {
+        let mut manager = DrawingManager::new();
+        let x_to_bar = |x: f32| x / 10.0;
+        let y_to_price = |y: f32| 1000.0 - f64::from(y);
+        manager.start_drawing_with_coords(
+            DrawingToolType::BarsPattern,
+            Pos2::new(300.0, 200.0),
+            x_to_bar,
+            y_to_price,
+        );
+        manager.add_point_with_coords(Pos2::new(100.0, 400.0), x_to_bar, y_to_price);
+        assert_eq!(manager.drawings.len(), 1);
+        let drawing = &manager.drawings[0];
+        assert_eq!(
+            drawing.chart_points,
+            [
+                ChartPoint::new(30.0, 800.0),
+                ChartPoint::new(10.0, 600.0),
+                ChartPoint::new(10.0, 800.0)
+            ]
+        );
+        assert_eq!(drawing.points[2], Pos2::new(100.0, 200.0));
+        let id = drawing.id;
+        manager.start_drag_body(id, Pos2::new(150.0, 250.0));
+        manager.update_drag_handle(
+            Pos2::new(250.0, 150.0),
+            x_to_bar,
+            y_to_price,
+            |price, from, to| price - f64::from(to - from),
+        );
+        manager.end_drag_handle();
+        assert_eq!(
+            manager.drawings[0].chart_points,
+            [
+                ChartPoint::new(30.0, 800.0),
+                ChartPoint::new(10.0, 600.0),
+                ChartPoint::new(20.0, 900.0)
+            ]
+        );
+    }
 
     #[test]
     fn copied_groups_keep_their_layers_locally_and_when_synced() {

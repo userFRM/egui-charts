@@ -35,11 +35,11 @@ pub(crate) mod validation;
 
 // Re-export domain types at module root for convenience
 pub use domain::{
-    ArrowStyle, ChartPoint, Drawing, DrawingInteractionMode, DrawingOptions, DrawingTemplate,
-    DrawingToolType, ElliottDegree, FibonacciConfig, FibonacciLevel, FontWeight, GannConfig,
-    GannFanDirection, GannLevel, GhostCandle, GhostFeedConfig, HandlePos, ParseToolTypeError,
-    PitchforkConfig, PitchforkLevel, PositionSize, PositionSizing, RegressionTrendConfig,
-    TimeframeVisibility, VwapBand, VwapConfig,
+    ArrowStyle, BarsPatternConfig, BarsPatternMode, ChartPoint, Drawing, DrawingInteractionMode,
+    DrawingOptions, DrawingTemplate, DrawingToolType, ElliottDegree, FibonacciConfig,
+    FibonacciLevel, FontWeight, GannConfig, GannFanDirection, GannLevel, GhostCandle,
+    GhostFeedConfig, HandlePos, ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize,
+    PositionSizing, RegressionTrendConfig, TimeframeVisibility, VwapBand, VwapConfig,
 };
 
 // Re-export manager types
