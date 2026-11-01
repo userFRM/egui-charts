@@ -64,7 +64,8 @@ distinguishes it from a closed-bar decision. During this call, `bars()` contains
 previously closed chart bars, excluding the unfinished bar. Newly created orders wait for
 a subsequent price point; they cannot repeatedly fill on the same tick. `fill_on_close`
 fills market orders on the closing tick. All settings and `Strategy::inputs()` appear in
-the report's properties, currency and risk-free rate also populate its metadata.
+the report's Properties tab and summary CSV. Capital, currency and risk-free rate use the
+report's existing metadata fields, so each appears once.
 
 `Backtest::run(strategy, bars, lower)` uses valid lower-interval bars in timestamp order
 within each chart bar's time span, with the end excluded. Duplicate finer timestamps use

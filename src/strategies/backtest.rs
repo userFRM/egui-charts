@@ -429,18 +429,6 @@ impl Backtest {
             }
         };
         report.properties = vec![
-            (
-                "Initial capital".into(),
-                settings.initial_capital.to_string(),
-            ),
-            (
-                "Currency".into(),
-                settings
-                    .currency
-                    .clone()
-                    .unwrap_or_else(|| "Unspecified".into()),
-            ),
-            ("Risk-free rate".into(), settings.risk_free_rate.to_string()),
             ("Order size".into(), size),
             ("Pyramiding".into(), settings.pyramiding.to_string()),
             ("Commission".into(), commission),
@@ -2343,7 +2331,7 @@ mod tests {
         // Chart path: 100 -> 94 -> 111 -> 108 stops at 95, losing 2*(100-95)=10.
         // Finer path: 100 -> 99 -> 111 reaches the 110 target first, earning 2*10=20.
         // A start at 01:00 warms on 00:00, decides at 01:00, and buys at 02:00 for 108.
-        for (name, lower, start, entry_bar, expected, times, decisions) in [
+        for (name, lower, start, entry_bar, expected, times, decisions, equity) in [
             (
                 "chart path",
                 vec![],
@@ -2352,6 +2340,7 @@ mod tests {
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 95.0, -10.0)), "A / X")],
                 vec![hour(-1), hour(0), hour(1), hour(2)],
                 vec![0, 1, 2],
+                990.0,
             ),
             (
                 "finer path",
@@ -2361,6 +2350,7 @@ mod tests {
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 110.0, 20.0)), "A / X")],
                 vec![hour(-1), hour(0), hour(1), hour(2)],
                 vec![0, 1, 2],
+                1020.0,
             ),
             (
                 "only fills use finer timestamps",
@@ -2380,6 +2370,7 @@ mod tests {
                 vec![later_target],
                 vec![hour(-1), hour(0), hour(1), hour(2)],
                 vec![0, 1, 2],
+                1020.0,
             ),
             (
                 "finer bars are ordered",
@@ -2389,6 +2380,7 @@ mod tests {
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 110.0, 20.0)), "A / X")],
                 vec![hour(-1), hour(0), hour(1), hour(2)],
                 vec![0, 1, 2],
+                1020.0,
             ),
             (
                 "uncovered bar falls back",
@@ -2398,6 +2390,7 @@ mod tests {
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 95.0, -10.0)), "A / X")],
                 vec![hour(-1), hour(0), hour(1), hour(2)],
                 vec![0, 1, 2],
+                990.0,
             ),
             (
                 "invalid finer bar falls back",
@@ -2407,6 +2400,7 @@ mod tests {
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 95.0, -10.0)), "A / X")],
                 vec![hour(-1), hour(0), hour(1), hour(2)],
                 vec![0, 1, 2],
+                990.0,
             ),
             (
                 "start warms studies",
@@ -2416,6 +2410,7 @@ mod tests {
                 vec![trade(Buy, 2.0, 2, 108.0, None, "A")],
                 vec![hour(1), hour(2), hour(3)],
                 vec![0, 1, 2],
+                1000.0,
             ),
             (
                 "start between chart bars",
@@ -2425,6 +2420,7 @@ mod tests {
                 vec![trade(Buy, 2.0, 2, 108.0, None, "A")],
                 vec![hour(0) + TimeDelta::minutes(30), hour(2), hour(3)],
                 vec![0, 1, 2],
+                1000.0,
             ),
             (
                 "start after history",
@@ -2434,6 +2430,7 @@ mod tests {
                 vec![],
                 vec![],
                 vec![0, 1, 2],
+                1000.0,
             ),
         ] {
             let mut strategy = History {
@@ -2457,13 +2454,18 @@ mod tests {
                 times,
                 "{name}"
             );
-            let expected_last = report
-                .trades
-                .first()
-                .and_then(|trade| trade.exit.as_ref())
-                .map_or(1000.0, |exit| 1000.0 + exit.profit);
             if let Some((_, last)) = report.equity.last() {
-                assert_eq!(*last, expected_last, "{name}");
+                assert_eq!(*last, equity, "{name}");
+            }
+            let csv = report.summary_csv(&report.performance(), &report.comparison(&source));
+            for setting in ["Initial capital", "Currency", "Risk-free rate"] {
+                assert_eq!(
+                    csv.lines()
+                        .filter(|row| row.starts_with(&format!("properties,{setting},")))
+                        .count(),
+                    1,
+                    "{name}: {setting} must appear once"
+                );
             }
             assert!(
                 report
@@ -2471,9 +2473,6 @@ mod tests {
                     .contains(&("Input: Length".into(), "2".into()))
             );
             for setting in [
-                "Initial capital",
-                "Currency",
-                "Risk-free rate",
                 "Order size",
                 "Pyramiding",
                 "Commission",
