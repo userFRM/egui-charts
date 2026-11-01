@@ -1,6 +1,6 @@
 //! The lifetime of large resting levels and recently added individual orders.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, TimeDelta, Utc};
 
@@ -10,7 +10,7 @@ use super::{
     stops::direction,
 };
 use crate::data::{OrderEvent, RestingOrder, meets_threshold};
-use crate::model::{Signal, SignalId, SignalShape, Tick};
+use crate::model::{OrderBook, Signal, SignalId, SignalShape, Tick};
 use crate::services::SignalEvent;
 
 /// Follows levels within ten ticks of their side's inside, and size added within five ticks.
@@ -51,7 +51,7 @@ struct Level {
     withdrawn: f64,
     wall: bool,
     tested: bool,
-    beyond: Option<DateTime<Utc>>,
+    beyond: bool,
     largest: Option<u64>,
 }
 
@@ -131,7 +131,7 @@ impl Liquidity {
                     && book.inside(price.0) == Some(price.1);
             }
             if depth::beyond(price, traded) {
-                level.beyond = Some(fill.ts);
+                level.beyond = true;
             }
             if enabled
                 && !meets_threshold(level.size, level.peak * 0.2)
@@ -161,6 +161,7 @@ impl Liquidity {
         time: DateTime<Utc>,
         tick: f64,
         snapshot: bool,
+        changes: Option<&OrderBook>,
         settings: &Detector<LiquidityRule>,
         out: &mut Vec<SignalEvent>,
     ) {
@@ -172,6 +173,15 @@ impl Liquidity {
             self.clear(out);
             return;
         }
+        let changed: Option<BTreeSet<_>> = changes.map(|changes| {
+            changes
+                .bids
+                .iter()
+                .map(|level| (true, level))
+                .chain(changes.asks.iter().map(|level| (false, level)))
+                .map(|(bid, level)| (bid, (level.price / tick).round() as i64))
+                .collect()
+        });
         let mut pulled = Vec::new();
         let mut swept = Vec::new();
         for (&price, level) in &mut self.levels {
@@ -179,10 +189,14 @@ impl Liquidity {
                 continue;
             }
             let size = book.size(price);
-            if !book.exact {
+            if !book.exact
+                && changed
+                    .as_ref()
+                    .is_none_or(|changed| changed.contains(&price))
+            {
                 level.withdrawn += (level.size - size - level.since_update).max(0.0);
+                level.since_update = 0.0;
             }
-            level.since_update = 0.0;
             level.size = size;
             level.peak = level.peak.max(size);
             level.tested &= meets_threshold(level.executed, level.peak * 0.1);
@@ -201,9 +215,7 @@ impl Liquidity {
                 out.push(Self::marker(DetectionKind::Wall, price, time, tick, level));
             }
             if !meets_threshold(size, level.peak * 0.2) {
-                if level.beyond.is_some()
-                    && meets_threshold(level.executed, (level.peak - size) * 0.5)
-                {
+                if level.beyond && meets_threshold(level.executed, (level.peak - size) * 0.5) {
                     swept.push(price);
                 } else if meets_threshold(level.withdrawn, level.peak * 0.8) {
                     pulled.push(price);
@@ -251,7 +263,7 @@ impl Liquidity {
                     withdrawn: 0.0,
                     wall: false,
                     tested: false,
-                    beyond: None,
+                    beyond: false,
                     largest: shown.largest.map(|(id, _)| id),
                 };
                 out.push(Self::marker(
@@ -277,7 +289,7 @@ impl Liquidity {
                     withdrawn: 0.0,
                     wall: false,
                     tested: false,
-                    beyond: None,
+                    beyond: false,
                     largest: shown.largest.map(|(id, _)| id),
                 };
                 out.push(Self::zone(price, tick, &level, None));
@@ -366,7 +378,7 @@ impl Liquidity {
                             withdrawn,
                             wall: false,
                             tested: false,
-                            beyond: None,
+                            beyond: false,
                             largest: Some(*id),
                         };
                         out.push(Self::marker(

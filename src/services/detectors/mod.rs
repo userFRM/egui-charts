@@ -209,7 +209,6 @@ struct Tracked {
     book: Book,
     orders: Option<OrderQueue>,
     depth: Depth,
-    depth_sequence: Option<u64>,
     icebergs: Icebergs,
     absorption: Absorption,
     liquidity: Liquidity,
@@ -332,11 +331,11 @@ impl OrderFlowDetectors {
                     tracked.lose_depth(&mut out);
                 }
                 if tracked.book.snapshot(*sequence, book.clone()).is_ok() {
-                    tracked.depth_sequence = Some(*sequence);
                     tracked.update_depth(
                         Depth::from_book(&tracked.book, tracked.tick),
                         time,
                         true,
+                        None,
                         settings,
                         &mut out,
                     );
@@ -349,15 +348,18 @@ impl OrderFlowDetectors {
                     tracked.book = Book::new(Some(tracked.tick));
                     tracked.lose_depth(&mut out);
                 }
-                let replayed = tracked.depth_sequence.is_some_and(|last| *sequence <= last);
+                let replayed = tracked
+                    .book
+                    .sequence()
+                    .is_some_and(|last| *sequence <= last);
                 if tracked.book.delta(*sequence, book).is_err() {
                     tracked.lose_depth(&mut out);
                 } else if !replayed {
-                    tracked.depth_sequence = Some(*sequence);
                     tracked.update_depth(
                         Depth::from_book(&tracked.book, tracked.tick),
                         time,
                         false,
+                        Some(book),
                         settings,
                         &mut out,
                     );
@@ -375,7 +377,7 @@ impl OrderFlowDetectors {
                     tracked.trade(&trade, settings, false, &mut out);
                 }
                 if let Some(depth) = depth {
-                    tracked.update_depth(depth, time, true, settings, &mut out);
+                    tracked.update_depth(depth, time, true, None, settings, &mut out);
                 }
             }
             MarketEvent::Order { sequence, event } => {
@@ -416,7 +418,7 @@ impl OrderFlowDetectors {
                         &settings.liquidity,
                         &mut out,
                     );
-                    tracked.update_depth(depth, time, false, settings, &mut out);
+                    tracked.update_depth(depth, time, false, None, settings, &mut out);
                 }
             }
         }
@@ -508,7 +510,6 @@ impl State {
             book: Book::new(Some(tick)),
             orders: None,
             depth: Depth::default(),
-            depth_sequence: None,
             icebergs: Icebergs::default(),
             absorption: Absorption::default(),
             liquidity: Liquidity::default(),
@@ -539,7 +540,6 @@ impl State {
 impl Tracked {
     fn lose_depth(&mut self, out: &mut Vec<SignalEvent>) {
         self.depth = Depth::default();
-        self.depth_sequence = None;
         self.icebergs.clear();
         self.absorption.clear();
         self.liquidity.clear(out);
@@ -550,6 +550,7 @@ impl Tracked {
         depth: Depth,
         time: DateTime<Utc>,
         snapshot: bool,
+        changes: Option<&crate::model::OrderBook>,
         settings: &DetectorSettings,
         out: &mut Vec<SignalEvent>,
     ) {
@@ -568,6 +569,7 @@ impl Tracked {
             time,
             self.tick,
             snapshot,
+            changes,
             &settings.liquidity,
             out,
         );
@@ -1113,7 +1115,42 @@ mod tests {
             host.push(MarketEvent::Trade(trade)).is_empty(),
             "the tape copy counts once"
         );
+
+        let host = Host::new(Some(1_000.0));
+        let mut settings = host.detectors.settings();
+        settings.icebergs.enabled = true;
+        host.detectors.set_settings(settings);
+        host.push(MarketEvent::DepthDelta {
+            sequence: 2,
+            book: depth_book(&[], &[(100.0, 10.0)]),
+        });
+        host.push(MarketEvent::DepthSnapshot {
+            sequence: 1,
+            book: depth_book(&[], &[(100.0, 10.0)]),
+        });
+        host.push(MarketEvent::Trade(fill(
+            0,
+            100.0,
+            30.0,
+            OrderSide::Buy,
+            None,
+        )));
+        for sequence in [2, 3] {
+            let signals = of_kind(
+                host.push(MarketEvent::DepthDelta {
+                    sequence,
+                    book: depth_book(&[], &[(100.0, 10.0)]),
+                }),
+                "Icebergs",
+            );
+            assert_eq!(
+                signals.len(),
+                usize::from(sequence == 3),
+                "only a new book update confirms the retained level"
+            );
+        }
     }
+
     #[test]
     fn stop_runs_require_a_fast_monotone_burst_and_distinct_known_aggressors() {
         for (name, ids, gap, prices, known, expected) in [
@@ -1641,6 +1678,7 @@ mod tests {
             assert_eq!(found.len(), expected, "{name}");
         }
     }
+
     #[test]
     fn absorption_requires_a_held_inside_level_and_discards_broken_or_lost_episodes() {
         for side in [OrderSide::Buy, OrderSide::Sell] {
@@ -1855,10 +1893,18 @@ mod tests {
             "added size holds despite less than half remaining"
         );
     }
+
     #[test]
     fn liquidity_zones_end_at_the_pull_or_sweep_and_walls_need_execution_and_rejection() {
         for bid in [false, true] {
-            for outcome in ["pull", "sweep", "sweep before depth", "wall"] {
+            for outcome in [
+                "pull",
+                "sweep",
+                "sweep before depth",
+                "sweep unrelated update",
+                "pull after refill",
+                "wall",
+            ] {
                 let mut host = Host::new(Some(1_000.0));
                 let mut settings = host.detectors.settings();
                 settings.liquidity.enabled = true;
@@ -1880,7 +1926,10 @@ mod tests {
                 assert_eq!(zones.len(), 1);
                 let side = if bid { OrderSide::Sell } else { OrderSide::Buy };
                 let traded = match outcome {
-                    "sweep" | "sweep before depth" => 90.0,
+                    "sweep"
+                    | "sweep before depth"
+                    | "sweep unrelated update"
+                    | "pull after refill" => 90.0,
                     "wall" => 10.0,
                     _ => 0.0,
                 };
@@ -1889,6 +1938,21 @@ mod tests {
                         "ES",
                         time(1),
                         &MarketEvent::Trade(fill(1, 100.0, traded, side, None)),
+                    );
+                }
+                let interim = matches!(outcome, "sweep unrelated update" | "pull after refill");
+                if interim {
+                    host.detectors.push(
+                        "ES",
+                        time(1),
+                        &MarketEvent::DepthDelta {
+                            sequence: 2,
+                            book: if outcome == "pull after refill" {
+                                book(&[(100.0, 100.0)])
+                            } else {
+                                book(&[(if bid { 99.0 } else { 101.0 }, 1.0)])
+                            },
+                        },
                     );
                 }
                 let away = if bid { 100.75 } else { 99.25 };
@@ -1909,11 +1973,11 @@ mod tests {
                     "ES",
                     time(2),
                     &MarketEvent::DepthDelta {
-                        sequence: 2,
+                        sequence: if interim { 3 } else { 2 },
                         book: book(&rows),
                     },
                 );
-                if outcome == "sweep" {
+                if matches!(outcome, "sweep" | "sweep unrelated update") {
                     let beyond = if bid { 99.75 } else { 100.25 };
                     host.detectors.push(
                         "ES",
@@ -1923,8 +1987,8 @@ mod tests {
                 }
                 let events = host.events();
                 let category = match outcome {
-                    "pull" => "Pulled liquidity",
-                    "sweep" | "sweep before depth" => "Liquidity sweeps",
+                    "pull" | "pull after refill" => "Pulled liquidity",
+                    "sweep" | "sweep before depth" | "sweep unrelated update" => "Liquidity sweeps",
                     _ => "Walls",
                 };
                 assert_eq!(
@@ -1942,7 +2006,13 @@ mod tests {
                         ended[0].shape,
                         SignalShape::PriceZone {
                             from: time(0),
-                            to: Some(time(if outcome == "sweep" { 3 } else { 2 })),
+                            to: Some(time(
+                                if matches!(outcome, "sweep" | "sweep unrelated update") {
+                                    3
+                                } else {
+                                    2
+                                }
+                            )),
                             price: 100.0,
                             direction: if bid { Direction::Up } else { Direction::Down }
                         }

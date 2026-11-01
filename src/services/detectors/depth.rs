@@ -8,7 +8,7 @@ use crate::model::OrderSide;
 /// Bid or ask, and its integer price tick.
 pub(super) type Price = (bool, i64);
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(super) struct Level {
     pub size: f64,
     pub largest: Option<(u64, f64)>,
