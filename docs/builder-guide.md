@@ -37,12 +37,85 @@ producing when `Sink::is_active` becomes false. Symbol and interval changes end
 the old subscription; implement `unsubscribe` when the backend needs explicit
 cleanup. The sink wakes the chart when data arrives. `Chart::feed_state` exposes
 loading, failures and rejected updates. See `examples/live_feed.rs` for a complete
-paged feed with a cancellable producer. `examples/network_feed.rs` answers the same
-requests from an HTTP backend after the call returns, natively and in the browser.
+paged feed with a cancellable producer. With the optional `http` feature,
+`data::http::HttpDatafeed::new(address)` connects to a column-based HTTP server
+without another `Datafeed` implementation. `examples/network_feed.rs` starts a
+matching local server; run it with `cargo run --features http --example network_feed`.
 
 Apply a `theme::Theme` to egui at startup with `theme::apply_to_egui`. Render with
 `chart.show(ui)` inside a host panel. Drain `Chart::drain_events` after showing the
 chart to handle clicks, crosshair movement and visible-range changes.
+
+## HTTP endpoint contract
+
+Enable `http` and attach `Arc::new(data::http::HttpDatafeed::new(address))` with
+`ChartBuilder::with_feed`. The same adapter implements `services::SymbolSearch`:
+pass that `Arc` to the host's symbol search dialog. The address is the endpoint
+root, optionally with a path prefix. The host supplies and operates the server,
+its market data and authorization. Browser servers must allow the app's origin
+with CORS. The adapter uses GET with percent-encoded query values.
+
+| Endpoint | Request | JSON response |
+|---|---|---|
+| `/config` | No parameters | `{"supported_resolutions":["1","15","1D"],"exchanges":[{"value":"X"}],"symbols_types":[{"value":"stock"}]}` |
+| `/symbols` | `symbol`; optional `conversion` | One symbol object as below |
+| `/search` | `query`, `type`, `exchange`, `offset`, `limit` | Array of symbol objects, best first, after the requested offset, at most the limit; empty filters mean all |
+| `/history` | `symbol`, `resolution`, `countback`, `extended_hours`; optional `from`, `to`, `conversion` | Column history as below |
+
+A symbol object requires `name` (`symbol` is also accepted). Optional `ticker`
+is the identifier used for subsequent requests. Metadata fields are `description`,
+`exchange`, `type` (lowercase model symbol type), `minmov`, `pricescale`,
+`volume_precision`, `currency_code`, `timezone`, `session`, `supported_resolutions`
+and `data_status` (`streaming`, `delayed_streaming` or `endofday`). Price tick size
+is `minmov / pricescale`, with `minmov` defaulting to one. Time zones use the
+library's `TimezoneId` parser. Sessions accept `24x7` or
+`HHMM-HHMM[,HHMM-HHMM]:days` windows (one day suffix for all windows), where 1 is Sunday and 7 is Saturday; an overnight
+window belongs to its closing day. Omitted days mean Monday through Friday. Unsupported
+session syntax or unavailable time zones report invalid data rather than guessing.
+
+Configuration lists may be omitted (unknown, unrestricted) or empty (none).
+Exchange and type entries use their `value` field. Optional feed services are
+reported as unavailable: this adapter supplies bars and symbol search. Resolution
+strings are minutes (`1`, `15`, `240`), seconds (`1S`, `45S`), days (`1D`), weeks
+(`1W`, `2W`) or calendar months (`1M`, `3M`). Subsecond and execution-based bars
+are not supported by this seconds-based endpoint contract. `resolve_converted`
+passes the chosen conversion to `/symbols` so metadata and bars share the same unit.
+
+History timestamps and bounds are Unix seconds in UTC; bounds may include a
+fraction. `from` is inclusive and `to` exclusive, and an omitted bound is
+unbounded. Return the newest `countback` bars within those bounds. Keep interval,
+extended-hours and conversion semantics on the server; return an HTTP error for
+an unsupported request rather than serving different prices under those labels.
+For example:
+
+```json
+{"s":"ok","t":[60,120],"o":[10,11],"h":[12,13],"l":[9,10],"c":[11,12],"v":[100,200]}
+```
+
+Each index is one bar; all supplied columns must have equal lengths. `v` may be
+omitted when volume is unavailable (zero). Invalid lengths, prices or timestamps
+report `FeedError::InvalidData`. The adapter orders bars, enforces bounds and keeps
+at most the requested count. Optional `end_of_history: true` says no older bars
+exist. An empty window may answer `{"s":"no_data","nextTime":0}` to continue
+at that UTC instant. The adapter advances this bar timestamp by one second
+(or half the gap to `to`, if smaller) to form an exclusive continuation bound
+that includes the named bar and still moves backward. `nextTime` must be earlier
+than the requested `to`.
+Without continuation, `no_data` ends paging. `{"s":"error","errmsg":"..."}`
+reports invalid data. HTTP 404 maps to symbol not found, 429 to rate limited
+(with `Retry-After` seconds or HTTP date), and 408 or 5xx to a recoverable network
+error. Other unsuccessful statuses report invalid data. Historical request retries
+follow the chart's normal retry policy.
+
+Live subscriptions poll the same history endpoint every five seconds, starting
+with the latest 500 bars and then including the newest received timestamp so the
+forming bar can change. Each response replaces full bars, including volume;
+no trades are synthesized. The server must return the complete requested window
+within 500 bars between refreshes. If a full response no longer overlaps the
+previous refresh, the adapter reports invalid data and stops; reload history.
+Recoverable live failures back off to 60 seconds and respect a longer
+`Retry-After`; permanent failures stop the subscription. Unsubscribe and chart
+drop cancel further requests and discard any pending response.
 
 ## Custom studies
 
@@ -145,7 +218,7 @@ public API and generated sample data.
 | Name | Workflow |
 |---|---|
 | `live_feed` | Paged historical bars and streaming executions |
-| `network_feed` | History and live trades from a local HTTP server, natively and in the browser |
+| `network_feed` | Reusable HTTP column history and live bar refresh (`--features http`), natively and in the browser |
 | `custom_indicator` | Ten-bar price change with explicit warm-up values |
 | `drawing_persistence` | Editable drawing JSON, save/load and error reporting |
 | `backtesting` | Host buy-and-hold run, fees, equity and strategy metrics |
