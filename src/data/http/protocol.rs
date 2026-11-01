@@ -46,12 +46,7 @@ fn timeframe(text: &str) -> Result<Timeframe, FeedError> {
     } else if text.bytes().all(|byte| byte.is_ascii_digit()) {
         format!("{text}min").parse().map_err(invalid)
     } else {
-        match text {
-            "D" => Ok(Timeframe::Day1),
-            "W" => Ok(Timeframe::Week1),
-            "M" => Ok(Timeframe::Month1),
-            _ => text.parse().map_err(invalid),
-        }
+        text.parse().map_err(invalid)
     }
 }
 
@@ -89,17 +84,12 @@ pub(super) fn history_url(base: &str, request: &HistoryRequest) -> Result<String
 #[derive(Deserialize)]
 pub(super) struct Config {
     supported_resolutions: Option<Vec<String>>,
-    exchanges: Option<Vec<Exchange>>,
-    symbols_types: Option<Vec<Kind>>,
+    exchanges: Option<Vec<FilterValue>>,
+    symbols_types: Option<Vec<FilterValue>>,
 }
 
 #[derive(Deserialize)]
-struct Exchange {
-    value: String,
-}
-
-#[derive(Deserialize)]
-struct Kind {
+struct FilterValue {
     value: String,
 }
 

@@ -4,6 +4,9 @@ use crate::model::{Bar, BarClock, SymbolType, Timeframe};
 use chrono::{DateTime, Utc};
 use serde_json::json;
 
+#[cfg(all(target_arch = "wasm32", not(feature = "widget")))]
+wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
 fn request() -> HistoryRequest {
     HistoryRequest {
         symbol: "A&B/é".into(),
@@ -448,4 +451,36 @@ fn old_subscription_cannot_publish_or_schedule_after_cancellation() {
     let dropped = poll();
     drop(feed);
     assert!(dropped.received(Ok(page())).is_none());
+}
+
+/// A cancelled browser retry releases its captured state without waiting for Retry-After.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen_test::wasm_bindgen_test]
+async fn cancelled_browser_retry_releases_its_callback() {
+    use wasm_bindgen::{JsCast as _, closure::Closure};
+    use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let held = Arc::new(());
+    let captured = held.clone();
+    later(
+        Duration::from_secs(300),
+        cancelled.clone(),
+        Box::new(move || {
+            drop(captured);
+            panic!("a cancelled retry must not run");
+        }),
+    );
+    cancelled.store(true, Ordering::Release);
+    let wait = Promise::new(&mut |resolve, _| {
+        let done = Closure::once_into_js(move || {
+            resolve.call0(&wasm_bindgen::JsValue::NULL).unwrap();
+        });
+        web_sys::window()
+            .unwrap()
+            .set_timeout_with_callback_and_timeout_and_arguments_0(done.unchecked_ref(), 1500)
+            .unwrap();
+    });
+    JsFuture::from(wait).await.unwrap();
+    assert_eq!(Arc::strong_count(&held), 1);
 }

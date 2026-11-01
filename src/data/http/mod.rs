@@ -327,7 +327,8 @@ fn later(delay: Duration, cancelled: Arc<AtomicBool>, action: Box<dyn FnOnce() +
 fn later(delay: Duration, cancelled: Arc<AtomicBool>, action: Box<dyn FnOnce() + Send>) {
     use wasm_bindgen::{JsCast as _, closure::Closure};
     if let Some(window) = web_sys::window() {
-        let wait = delay.min(Duration::from_millis(i32::MAX as u64));
+        // Release cancelled retries promptly, even after a long Retry-After.
+        let wait = delay.min(Duration::from_secs(1));
         let millis =
             wait.as_millis() as i32 + i32::from(!wait.subsec_nanos().is_multiple_of(1_000_000));
         let callback = Closure::once_into_js(move || {
