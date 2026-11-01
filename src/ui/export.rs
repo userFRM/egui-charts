@@ -404,9 +404,13 @@ impl ExportDialog {
                 }
 
                 if self.config.format != ExportFormat::Clipboard {
-                    let hint = format!(
-                        "File path, such as chart_export.{}",
-                        self.config.format.file_extension().unwrap_or("png")
+                    let hint = l10n::format_text(
+                        ui.ctx(),
+                        "File path, such as chart_export.{extension}",
+                        &[(
+                            "extension",
+                            self.config.format.file_extension().unwrap_or("png"),
+                        )],
                     );
                     let label = ui.label(l10n::text(ui.ctx(), "File"));
                     let field = ui
@@ -461,12 +465,20 @@ impl ExportDialog {
                 if self.config.format == ExportFormat::Clipboard {
                     ui.success_label("Export successful!");
                 } else {
-                    ui.success_label(format!("Export successful: {}", self.save_path.trim()));
+                    ui.success_label(l10n::format_text(
+                        ui.ctx(),
+                        "Export successful: {path}",
+                        &[("path", self.save_path.trim())],
+                    ));
                 }
             }
             ExportStatus::Error(msg) => {
                 ui.add_space(ui.active_theme().spacing.md);
-                ui.error_label(format!("Error: {msg}"));
+                ui.error_label(l10n::format_text(
+                    ui.ctx(),
+                    "Error: {message}",
+                    &[("message", msg.as_str())],
+                ));
             }
         }
     }

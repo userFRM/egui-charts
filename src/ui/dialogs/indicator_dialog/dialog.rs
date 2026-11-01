@@ -554,7 +554,11 @@ impl IndicatorDialog {
     /// The empty state for the active search, tab or category.
     fn draw_empty_state(&self, ui: &mut Ui) {
         let query = self.search.query();
-        let no_match = format!("No indicators match \"{query}\"");
+        let no_match = l10n::format_text(
+            ui.ctx(),
+            "No indicators match \"{query}\"",
+            &[("query", query)],
+        );
         let state = match self.sel_category {
             _ if !query.is_empty() => EmptyState::new(&no_match)
                 .description("Check the spelling or try another category."),

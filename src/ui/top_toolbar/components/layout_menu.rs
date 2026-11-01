@@ -248,8 +248,6 @@ impl LayoutMenu {
                 let Some(request) = self.pending.take() else {
                     continue;
                 };
-                let failed =
-                    |action: &str, error: FeedError| format!("Could not {action}: {error}");
                 match request {
                     Request::List => {
                         match *answer
@@ -260,7 +258,13 @@ impl LayoutMenu {
                                 names.sort();
                                 self.layouts = names;
                             }
-                            Err(error) => self.error = Some(failed("list layouts", error)),
+                            Err(error) => {
+                                self.error = Some(l10n::format_text(
+                                    ctx,
+                                    "Could not list layouts: {error}",
+                                    &[("error", error.to_string().as_str())],
+                                ))
+                            }
                         }
                     }
                     Request::Open(name) => {
@@ -275,15 +279,35 @@ impl LayoutMenu {
                                     opened = Some((name, layout));
                                 }
                                 Err(error) => {
-                                    self.error = Some(format!("Could not open {name}: {error}"));
+                                    self.error = Some(l10n::format_text(
+                                        ctx,
+                                        "Could not open {name}: {error}",
+                                        &[
+                                            ("name", name.as_str()),
+                                            ("error", error.to_string().as_str()),
+                                        ],
+                                    ));
                                 }
                             },
                             Ok(None) => {
                                 self.layouts.retain(|layout| *layout != name);
                                 self.favorites.retain(|layout| *layout != name);
-                                self.error = Some(format!("{name} no longer exists"));
+                                self.error = Some(l10n::format_text(
+                                    ctx,
+                                    "{name} no longer exists",
+                                    &[("name", name.as_str())],
+                                ));
                             }
-                            Err(error) => self.error = Some(failed(&format!("open {name}"), error)),
+                            Err(error) => {
+                                self.error = Some(l10n::format_text(
+                                    ctx,
+                                    "Could not open {name}: {error}",
+                                    &[
+                                        ("name", name.as_str()),
+                                        ("error", error.to_string().as_str()),
+                                    ],
+                                ))
+                            }
                         }
                     }
                     request => {
@@ -315,17 +339,38 @@ impl LayoutMenu {
                             }
                             (Request::Save(name, _), Err(error)) => {
                                 if report {
-                                    self.error = Some(failed(&format!("save {name}"), error));
+                                    self.error = Some(l10n::format_text(
+                                        ctx,
+                                        "Could not save {name}: {error}",
+                                        &[
+                                            ("name", name.as_str()),
+                                            ("error", error.to_string().as_str()),
+                                        ],
+                                    ));
                                 }
                             }
                             (Request::Rename(old, name, _), Err(error)) => {
                                 if self.curr_layout.as_ref() == Some(&name) {
                                     self.curr_layout = Some(old);
                                 }
-                                self.error = Some(failed(&format!("rename to {name}"), error));
+                                self.error = Some(l10n::format_text(
+                                    ctx,
+                                    "Could not rename to {name}: {error}",
+                                    &[
+                                        ("name", name.as_str()),
+                                        ("error", error.to_string().as_str()),
+                                    ],
+                                ));
                             }
                             (Request::Delete(name), Err(error)) => {
-                                self.error = Some(failed(&format!("delete {name}"), error));
+                                self.error = Some(l10n::format_text(
+                                    ctx,
+                                    "Could not delete {name}: {error}",
+                                    &[
+                                        ("name", name.as_str()),
+                                        ("error", error.to_string().as_str()),
+                                    ],
+                                ));
                             }
                             (Request::List | Request::Open(_), _) => unreachable!("not a write"),
                         }

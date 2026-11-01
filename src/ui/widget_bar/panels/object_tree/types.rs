@@ -269,7 +269,7 @@ impl SourceItem {
     /// Offer the panes of `chart` other than the one drawing this row's drawing as its Move to
     /// choices, applied with [`ObjectTreePanel::apply_to_chart`](super::ObjectTreePanel::apply_to_chart).
     pub fn with_panes(mut self, chart: &crate::widget::Chart) -> Self {
-        self.panes = crate::ui::context_menu::drawing::move_targets(chart, self.id);
+        self.panes = crate::ui::context_menu::drawing::move_targets(None, chart, self.id);
         self
     }
 

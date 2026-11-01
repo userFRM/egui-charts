@@ -225,7 +225,7 @@ impl ChartMenus {
                     id: ChartElementId::Indicator(id),
                     bar_idx,
                     ..
-                } => self.study.open(chart, id, bar_idx),
+                } => self.study.open(ctx, chart, id, bar_idx),
                 RightClickTarget::Element {
                     id: ChartElementId::Series(id),
                     pos,
@@ -236,7 +236,7 @@ impl ChartMenus {
                     self.series.open(pos, id);
                 }
                 RightClickTarget::Drawing { drawing_id, pos } => {
-                    self.drawing.open_on(chart, pos, drawing_id);
+                    self.drawing.open_on(ctx, chart, pos, drawing_id);
                 }
                 RightClickTarget::Background { pos, price } => {
                     self.chart.set_indicator_cnt(chart.indicators().count());
@@ -265,7 +265,7 @@ impl ChartMenus {
                 | RightClickTarget::Background { pos, .. } => (pos, POINTER_GAP),
                 RightClickTarget::Drawing { pos, .. } => (pos, DRAWING_MENU_OFFSET),
             };
-            let entries = self.build_menu_items(chart.shortcuts(), context);
+            let entries = self.build_menu_items(ctx, chart.shortcuts(), context);
             if let Some(picked) = show_menu(
                 ctx,
                 Id::unique("chart_host_menu"),
@@ -310,6 +310,7 @@ impl ChartMenus {
 
     fn build_menu_items(
         &self,
+        ctx: &Context,
         shortcuts: &crate::widget::ShortcutMap,
         context: HostMenuContext,
     ) -> Vec<MenuEntry<ChartContextAction>> {
@@ -321,21 +322,21 @@ impl ChartMenus {
         }
         let mut entries = match context.target {
             RightClickTarget::Background { .. } => tagged(
-                self.chart.build_menu_items(shortcuts),
+                self.chart.build_menu_items(ctx, shortcuts),
                 ChartContextAction::Chart,
             ),
             RightClickTarget::Element {
                 id: ChartElementId::Indicator(id),
                 ..
-            } => tagged(self.study.build_menu_items(shortcuts), |action| {
+            } => tagged(self.study.build_menu_items(ctx, shortcuts), |action| {
                 ChartContextAction::Study { id, action }
             }),
             RightClickTarget::Element { .. } => tagged(
-                self.series.build_menu_items(shortcuts),
+                self.series.build_menu_items(ctx, shortcuts),
                 ChartContextAction::Series,
             ),
             RightClickTarget::Drawing { .. } => tagged(
-                self.drawing.build_menu_items(shortcuts),
+                self.drawing.build_menu_items(ctx, shortcuts),
                 ChartContextAction::Drawing,
             ),
         };

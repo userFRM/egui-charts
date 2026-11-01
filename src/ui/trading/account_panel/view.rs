@@ -377,6 +377,7 @@ impl Trading {
         };
         let optional =
             |symbol: &str, value: Option<f64>| value.map_or(String::new(), |v| price(symbol, v));
+        let ctx = ui.ctx().clone();
         let order_cells = |order: &Order, finished: bool| {
             let request = &order.request;
             let (limit, stop) = match request.order_type {
@@ -413,7 +414,7 @@ impl Trading {
                 }));
                 cells.push(plain(optional(&request.symbol, request.stop_loss)));
             }
-            cells.push(plain(status(&order.status)));
+            cells.push(plain(status(&ctx, &order.status)));
             cells.push(plain(time(order.placed)));
             if finished {
                 cells.push(plain(time(order.closed)));

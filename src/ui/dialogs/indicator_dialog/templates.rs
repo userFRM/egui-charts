@@ -427,7 +427,11 @@ impl<'a> IndicatorTemplatePanel<'a> {
         // Parameter summary and shared badge
         let summary = template.parameter_summary();
         let suffix = if template.is_shared {
-            format!("{summary} [shared]")
+            l10n::format_text(
+                ui.ctx(),
+                "{summary} [shared]",
+                &[("summary", summary.as_str())],
+            )
         } else {
             summary
         };

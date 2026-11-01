@@ -582,6 +582,7 @@ mod tests {
                 rules.time_in_force = vec![TimeInForce::GoodTillCancelled];
                 if response == "changed" {
                     trading.apply(
+                        &egui::Context::default(),
                         AccountEvent::Position(Position::new("OTHER", 1.0, 100.0)),
                         &mut Toasts::new(),
                     );

@@ -17,7 +17,7 @@ use crate::services::{
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::filter::FilterWidget;
-use crate::ui_kit::status_message::{MessageKind, status_message};
+use crate::ui_kit::status_message::{MessageKind, translated_status_message};
 use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
 
 /// Messages kept at most across the rooms; older ones are dropped.
@@ -280,10 +280,14 @@ impl ChatsPanel {
             self.action_error = None;
         }
         if let Some(error) = &self.action_error {
-            status_message(
+            translated_status_message(
                 ui,
                 MessageKind::Error,
-                &format!("Chat action failed: {error}"),
+                l10n::format_text(
+                    ui.ctx(),
+                    "Chat action failed: {error}",
+                    &[("error", error.to_string().as_str())],
+                ),
             );
         }
         match self.view {
@@ -305,10 +309,14 @@ impl ChatsPanel {
         });
         let room = self.rooms[self.room].clone();
         if let Some(error) = &self.error {
-            status_message(
+            translated_status_message(
                 ui,
                 MessageKind::Error,
-                &format!("Message not sent: {error}"),
+                l10n::format_text(
+                    ui.ctx(),
+                    "Message not sent: {error}",
+                    &[("error", error.to_string().as_str())],
+                ),
             );
         }
         let mut send = false;
@@ -324,7 +332,11 @@ impl ChatsPanel {
                             .show(ui)
                             .clicked();
                         self.draft = std::mem::take(&mut self.draft)
-                            .placeholder(format!("Message {room}"))
+                            .placeholder(l10n::format_text(
+                                ui.ctx(),
+                                "Message {room}",
+                                &[("room", room.as_str())],
+                            ))
                             .show_icon(false)
                             .show_clear_button(false);
                         let response = self.draft.show(ui).response;

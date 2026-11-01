@@ -37,6 +37,12 @@ pub enum MessageKind {
 
 /// Show a padded, colored status message.
 pub fn status_message(ui: &mut Ui, kind: MessageKind, text: &str) {
+    let text = l10n::text(ui.ctx(), text);
+    translated_status_message(ui, kind, text);
+}
+
+/// Show an already translated message without copying it through another lookup.
+pub(crate) fn translated_status_message(ui: &mut Ui, kind: MessageKind, text: String) {
     let theme = ui.active_theme();
     let color = match kind {
         MessageKind::Error => ui.style().visuals.error_fg_color,
@@ -46,5 +52,5 @@ pub fn status_message(ui: &mut Ui, kind: MessageKind, text: &str) {
     };
 
     ui.add_space(theme.spacing.sm);
-    ui.colored_label(color, l10n::text(ui.ctx(), text));
+    ui.colored_label(color, text);
 }

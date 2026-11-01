@@ -257,7 +257,11 @@ impl TimeframeToolbar {
                     .text_btn(
                         ui,
                         &time_text,
-                        &format!("Timezone: {}", self.state.timezone),
+                        &l10n::format_text(
+                            ui.ctx(),
+                            "Timezone: {zone}",
+                            &[("zone", self.state.timezone.as_str())],
+                        ),
                         false,
                     )
                     .clicked()

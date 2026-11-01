@@ -329,9 +329,14 @@ impl NotificationPanel {
         let side = ui
             .painter()
             .layout_job(egui::text::LayoutJob::single_section(
-                l10n::text(
+                l10n::format_text(
                     ui.ctx(),
-                    format!("{} {}", if buy { "Buy" } else { "Sell" }, trade.quantity),
+                    if buy {
+                        "Buy {quantity}"
+                    } else {
+                        "Sell {quantity}"
+                    },
+                    &[("quantity", trade.quantity.to_string().as_str())],
                 ),
                 side_format,
             ));

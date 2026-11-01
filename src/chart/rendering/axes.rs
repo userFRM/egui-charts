@@ -605,9 +605,32 @@ pub fn crosshair_price_action(
             egui::StrokeKind::Inside,
         );
     }
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Add at price"));
+    let needs_info = response.clicked()
+        || response.double_clicked()
+        || response.triple_clicked()
+        || response.gained_focus()
+        || response.changed()
+        || ui
+            .ctx()
+            .accesskit_node_builder(response.id, |_| ())
+            .is_some();
+    #[cfg(debug_assertions)]
+    let needs_info = needs_info || ui.ctx().global_style().debug.show_interactive_widgets;
+    if needs_info {
+        // Translation must run outside the context lock held by widget_info.
+        let label = crate::localization::lookup(ui.ctx(), "Add at price");
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::Button,
+                true,
+                label.as_deref().unwrap_or("Add at price"),
+            )
+        });
+    }
     response
-        .on_hover_text("Add at price")
+        .on_hover_ui(|ui| {
+            ui.label(crate::localization::text(ui.ctx(), "Add at price"));
+        })
         .clicked()
         .then_some(price)
 }
@@ -629,8 +652,31 @@ pub fn axis_settings_button(ui: &mut egui::Ui, corner: Rect) -> egui::Response {
             ui,
             Rect::from_center_size(target.center(), Vec2::splat(16.0)),
         );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Scale settings"));
-    response.on_hover_text("Scale settings")
+    let needs_info = response.clicked()
+        || response.double_clicked()
+        || response.triple_clicked()
+        || response.gained_focus()
+        || response.changed()
+        || ui
+            .ctx()
+            .accesskit_node_builder(response.id, |_| ())
+            .is_some();
+    #[cfg(debug_assertions)]
+    let needs_info = needs_info || ui.ctx().global_style().debug.show_interactive_widgets;
+    if needs_info {
+        // Translation must run outside the context lock held by widget_info.
+        let label = crate::localization::lookup(ui.ctx(), "Scale settings");
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::Button,
+                true,
+                label.as_deref().unwrap_or("Scale settings"),
+            )
+        });
+    }
+    response.on_hover_ui(|ui| {
+        ui.label(crate::localization::text(ui.ctx(), "Scale settings"));
+    })
 }
 
 #[cfg(test)]
