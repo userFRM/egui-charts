@@ -23,9 +23,9 @@ impl Chart {
         }
     }
 
-    /// Formats a timestamp with the chart's zone, clock visibility and the duration of the bars
-    /// in view (of the two bars nearest the view when fewer than two are in it), or a key as the
-    /// crosshair label of the [horizontal scale](Self::set_horizontal_scale) reads.
+    /// Formats a timestamp with the chart's zone, clock visibility and interval, or the median
+    /// spacing of the source bars in or nearest the view for inferred and trade-based intervals.
+    /// On a [horizontal scale](Self::set_horizontal_scale), formats its key as the crosshair does.
     /// Hosts can use this for data windows and other readouts beside the chart.
     pub fn format_time(&self, time: chrono::DateTime<chrono::Utc>) -> String {
         let bar_seconds = self.time_label_seconds();
@@ -110,9 +110,14 @@ impl Chart {
         crate::scales::bar_countdown(last.time, timeframe, now, self.bar_close_time.or(close))
     }
 
-    // Source-bar cadence sets precision even when many elements share one time. With fewer
-    // than two bars in view, the two bars nearest the view set it.
+    // Source-bar cadence sets precision even when many elements share one time.
     fn time_label_seconds(&self) -> i64 {
+        if let Some(timeframe) = self
+            .timeframe
+            .filter(|timeframe| !timeframe.is_trade_based())
+        {
+            return timeframe.duration().num_seconds();
+        }
         let bars = &self.state.data().bars;
         let shown = self.state.shown();
         // An empty range starts at 0 before the first bar and at the bar count after the last.
@@ -122,15 +127,18 @@ impl Chart {
         else {
             return 1;
         };
-        let end = bars.partition_point(|bar| bar.time <= last.time);
+        // At least 16 nearby source bars keep a lone session gap from setting the precision.
+        let end = bars
+            .partition_point(|bar| bar.time <= last.time)
+            .max(16)
+            .min(bars.len());
         let at = bars
             .partition_point(|bar| bar.time < first.time)
-            .min(end.saturating_sub(2));
-        bars.get(at)
-            .zip(bars.get(at + 1))
-            .map_or(1, |(left, right)| {
-                (right.time - left.time).num_seconds().abs()
-            })
+            .min(end.saturating_sub(16));
+        if end - at < 2 {
+            return 1;
+        }
+        crate::scales::median_bar_duration(bars[at..end].iter().map(|bar| bar.time)).num_seconds()
     }
 
     pub(super) fn display_timezone(&self) -> crate::scales::TimezoneMode {
@@ -5051,6 +5059,101 @@ mod tests {
                 _ => false,
             });
             assert_eq!(has_cells, cells, "spacing {spacing}");
+        }
+    }
+
+    /// A session gap at the view's edge never changes minute precision. A known daily
+    /// interval keeps date precision even when the clock change makes one bar 23 hours long.
+    #[test]
+    fn time_precision_follows_the_interval_across_gaps_and_clock_changes() {
+        use crate::model::{Bar, BarData, LogicalRange, Timeframe};
+        use chrono::{Duration, TimeZone, Utc};
+        let session = |day, minutes| {
+            let open = Utc.with_ymd_and_hms(2024, 1, day, 14, 30, 0).unwrap();
+            (0..minutes).map(move |minute| {
+                Bar::new(
+                    open + Duration::minutes(minute),
+                    100.0,
+                    110.0,
+                    100.0,
+                    110.0,
+                    1.0,
+                )
+            })
+        };
+        // (Monday bars, left, right, bar formatted, expected)
+        for (monday, left, right, at, expected) in [
+            (390, 390.5, 450.5, 405, "Mon 08 Jan '24 14:45"),
+            (390, 389.5, 450.5, 405, "Mon 08 Jan '24 14:45"),
+            (1, 400.5, 460.5, 390, "Mon 08 Jan '24 14:30"),
+        ] {
+            for timeframe in [
+                Some(Timeframe::Min1),
+                None,
+                Some(Timeframe::Ticks(std::num::NonZeroU64::new(10).unwrap())),
+            ] {
+                let ctx = egui::Context::default();
+                let bars = session(5, 390).chain(session(8, monday)).collect();
+                let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+                if let Some(timeframe) = timeframe {
+                    chart.set_timeframe(timeframe);
+                }
+                chart.chart_options.tooltip.enabled = false;
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                assert!(chart.set_visible_logical_range(LogicalRange::new(left, right)));
+                let time = chart.state.data().bars[at].time;
+                assert_eq!(
+                    chart.format_time(time),
+                    expected,
+                    "{left}..{right}, {timeframe:?}"
+                );
+                if at as f32 >= left {
+                    let map = chart.get_chart_mapping();
+                    let painted = shapes(
+                        &ctx,
+                        &mut chart,
+                        0.1,
+                        vec![Event::PointerMoved(Pos2::new(
+                            map.idx_to_x(at),
+                            map.rect.center().y,
+                        ))],
+                    );
+                    assert!(
+                        painted.iter().any(|shape| matches!(shape,
+                            Shape::Text(text) if text.galley.text() == expected
+                        )),
+                        "crosshair: {left}..{right}, {timeframe:?}"
+                    );
+                }
+            }
+        }
+        #[cfg(feature = "timezones")]
+        for (left, right) in [(39.5, 69.5), (38.5, 68.5)] {
+            let ctx = egui::Context::default();
+            let first = Utc.with_ymd_and_hms(2024, 2, 1, 5, 0, 0).unwrap();
+            // New York midnight is 05:00Z through March 10, then 04:00Z from March 11.
+            let bars = (0..90)
+                .map(|day| {
+                    let time = first + Duration::days(day)
+                        - if day >= 39 {
+                            Duration::hours(1)
+                        } else {
+                            Duration::zero()
+                        };
+                    Bar::new(time, 100.0, 110.0, 100.0, 110.0, 1.0)
+                })
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Day1);
+            chart.chart_options.time_scale.timezone =
+                crate::scales::TimezoneMode::Timezone("America/New_York".parse().unwrap());
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            assert!(chart.set_visible_logical_range(LogicalRange::new(left, right)));
+            assert_eq!(
+                chart.format_time(chart.state.data().bars[39].time),
+                "Mar 11, 2024",
+                "{left}..{right}"
+            );
         }
     }
 

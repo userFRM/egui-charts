@@ -144,7 +144,7 @@ Chart,Compare and overlay,Percent scale when comparing,done,library,src/widget/p
 Chart,Crosshair and interaction,Auto-scroll to realtime and jump-to-latest button,done,library,src/widget/series.rs;src/widget/frame.rs;src/widget/time_scale.rs
 Chart,Crosshair and interaction,"Chart, series and drawing context menus",partial,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/drawing.rs;src/widget/drawing_api.rs;terminal/src/drawings.rs;terminal/src/studies.rs;src/ui/floating_toolbar/toolbar.rs;examples/demo/controller.rs
 Chart,Crosshair and interaction,Crosshair across all panes,done,library,src/widget/panes.rs;src/widget/indicator_pane.rs;src/widget/frame.rs
-Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/painting/dashed_line.rs;src/config/crosshair.rs;src/chart/rendering/axes.rs;src/theme/presets.rs;src/widget/panes.rs
+Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/painting/dashed_line.rs;src/config/crosshair.rs;src/chart/rendering/axes.rs;src/theme/presets.rs;src/widget/panes.rs;src/scales/horizontal.rs
 Chart,Crosshair and interaction,Cursor types,done,library,src/widget/frame.rs;src/chart/cursor_modes/mod.rs;src/chart/cursor_modes/eraser.rs;src/widget/tool_interaction/selection.rs;src/widget/panes.rs;src/drawings/manager/interaction.rs
 Chart,Crosshair and interaction,Double-click on axes to reset,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs;src/widget/pane_layout.rs
 Chart,Crosshair and interaction,Drag on the time axis to zoom,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
@@ -152,7 +152,7 @@ Chart,Crosshair and interaction,Drag or wheel on the price axis to zoom,done,lib
 Chart,Crosshair and interaction,Drag to pan,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
 Chart,Crosshair and interaction,Go to date,done,library,src/widget/builder.rs;src/widget/pan_zoom.rs
 Chart,Crosshair and interaction,Horizontal scroll,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
-Chart,Crosshair and interaction,Hover tooltip and floating data window,done,library,src/widget/frame.rs;src/chart/renderers/tooltip.rs;src/widget/readout.rs
+Chart,Crosshair and interaction,Hover tooltip and floating data window,done,library,src/widget/frame.rs;src/chart/renderers/tooltip.rs;src/widget/readout.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs
 Chart,Crosshair and interaction,Kinetic scroll,done,library,src/widget/pan_zoom.rs;src/config/kinetic.rs;src/widget/mod.rs;src/widget/builder.rs
 Chart,Crosshair and interaction,Magnet crosshair,done,library,src/widget/crosshair.rs;src/widget/price_series.rs
 Chart,Crosshair and interaction,Mouse wheel zoom anchored at the cursor,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs;src/model/timescale.rs
@@ -182,7 +182,7 @@ Chart,Keyboard shortcuts,Shortcut list dialog,done,library,src/config/keyboard.r
 Chart,Keyboard shortcuts,Snapshot,done,library,src/config/keyboard.rs;src/widget/export.rs;src/ui/top_toolbar/toolbar.rs
 Chart,Keyboard shortcuts,Type to change symbol,done,host,src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Undo and redo,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/history.rs
-Chart,Legend and data window,Data window panel,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs
+Chart,Legend and data window,Data window panel,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs;src/widget/frame.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs
 Chart,Legend and data window,Indicator entries in the legend,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/widget/panes.rs;src/widget/indicator_pane.rs;src/config/chart.rs;src/theme/presets.rs
 Chart,Legend and data window,Legend buttons,done,library,src/chart/renderers/legend/mod.rs;src/widget/crosshair.rs;src/widget/panes.rs
 Chart,Legend and data window,Status line values follow the crosshair,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs
@@ -871,7 +871,7 @@ Terminal,Toolbars and panels,Chart settings button and applying the dialog,done,
 Terminal,Toolbars and panels,Chart type menu,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/chart_type_selector.rs
 Terminal,Toolbars and panels,Compare / add symbol dialog,done,library,src/ui/dialogs/symbol_search/compare.rs;src/ui/dialogs/symbol_search/row.rs;src/ui/dialogs/symbol_search/service.rs
 Terminal,Toolbars and panels,Custom intervals,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs;src/model/timeframe.rs;src/model/session/exchange.rs
-Terminal,Toolbars and panels,Data window,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs
+Terminal,Toolbars and panels,Data window,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/frame.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs
 Terminal,Toolbars and panels,Favourite drawing tools floating bar,partial,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/toolbar/floating.rs;src/ui/drawing_toolbar/state.rs;src/ui/drawing_toolbar/utilities/favorites.rs;src/services/settings.rs;examples/demo/layouts.rs
 Terminal,Toolbars and panels,Favourite intervals pinned to the toolbar,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs
 Terminal,Toolbars and panels,Fullscreen,done,library,src/ui/top_toolbar/toolbar.rs

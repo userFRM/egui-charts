@@ -14,6 +14,8 @@ mod time_formatter;
 mod timescale_marks;
 
 pub use countdown::bar_countdown;
+#[cfg(feature = "widget")]
+pub(crate) use horizontal::median_bar_duration;
 pub use horizontal::{
     HorizontalScale, MaturityScale, PriceHorizontalScale, TickMarkLayout, key_time, time_key,
 };

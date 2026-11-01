@@ -12,7 +12,7 @@ use super::timescale_marks::{
     TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkType, TickMarkWeight, keep_spaced,
 };
 use crate::model::Bar;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 
 /// Where the tick marks of a horizontal axis are laid out.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -62,23 +62,12 @@ impl HorizontalScale for Box<dyn TimeFormatter> {
             return Vec::new();
         };
         // The median controls clock precision; point timestamps already carry the chart mapping.
-        let mut deltas_ms: Vec<i64> = points
-            .windows(2)
-            .filter_map(|pair| {
-                let delta = (pair[1].0 - pair[0].0).num_milliseconds().abs();
-                (delta > 0).then_some(delta)
-            })
-            .collect();
-        deltas_ms.sort_unstable();
-        let bar_duration_ms = deltas_ms
-            .get(deltas_ms.len() / 2)
-            .copied()
-            .unwrap_or(60_000);
+        let bar_duration = median_bar_duration(points.iter().map(|point| point.0));
         let zoom_factor = (layout.bar_spacing / 8.0).clamp(0.5, 2.5);
         let config = TickMarkGeneratorConfig {
             min_spacing: layout.min_spacing,
             max_marks: ((layout.width / layout.min_spacing).ceil() as usize + 2).clamp(6, 24),
-            show_subseconds: bar_duration_ms < 1000,
+            show_subseconds: bar_duration < Duration::seconds(1),
             use_24_hour: true,
             target_density: (1.0 * zoom_factor).clamp(0.6, 2.5),
         };
@@ -90,6 +79,25 @@ impl HorizontalScale for Box<dyn TimeFormatter> {
     fn format_crosshair(&self, key: DateTime<Utc>, bar_seconds: i64) -> String {
         (**self).format_crosshair(key, bar_seconds)
     }
+}
+
+/// The median positive gap between successive times, ignoring repeated keys and defaulting
+/// to a minute when there is no gap, as the time axis does for a single key.
+pub(crate) fn median_bar_duration(times: impl Iterator<Item = DateTime<Utc>>) -> Duration {
+    let mut previous = None;
+    let mut deltas_ms: Vec<_> = times
+        .filter_map(|time| {
+            let delta = (time - previous.replace(time)?).num_milliseconds().abs();
+            (delta > 0).then_some(delta)
+        })
+        .collect();
+    deltas_ms.sort_unstable();
+    Duration::milliseconds(
+        deltas_ms
+            .get(deltas_ms.len() / 2)
+            .copied()
+            .unwrap_or(60_000),
+    )
 }
 
 /// The bar time standing for a numeric key on a horizontal scale other than time: the key as
