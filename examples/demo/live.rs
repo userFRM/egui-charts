@@ -1258,6 +1258,7 @@ mod tests {
                     chart.extended_hours(),
                 );
                 let actual = chart.bars(SeriesId::MAIN);
+                assert!(!actual.is_empty(), "{} after reopening", chart.symbol());
                 assert_eq!(
                     actual,
                     &expected[expected.len() - actual.len()..],
