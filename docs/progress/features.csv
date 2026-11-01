@@ -16,7 +16,7 @@ Builder API,Broker API,Take-profit levels,done,host,src/model/trading.rs;src/ser
 Builder API,Broker API,Trading entry points in the UI,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs;src/ui/dialogs/chart_settings/tabs/trading.rs
 Builder API,Builder integration,Custom drawing tools from a downstream crate,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Builder API,Builder integration,Custom indicator metadata,done,library,src/studies/indicator_trait.rs;src/studies/inputs.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs;src/chart/renderers/study_scale.rs
-Builder API,Builder integration,Custom indicators from a downstream crate,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/widget/series/mod.rs;src/studies/custom.rs;terminal/src/studies.rs
+Builder API,Builder integration,Custom indicators from a downstream crate,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/widget/studies.rs;src/studies/custom.rs;terminal/src/studies.rs
 Builder API,Builder integration,Custom series types from a downstream crate,done,library,src/widget/primitives.rs;src/widget/pane/render/mod.rs;src/chart/primitives.rs
 Builder API,Builder integration,Desktop webview integration,missing,library,
 Builder API,Builder integration,Embedding with a data feed,done,host,src/widget/builder.rs;src/widget/frame.rs;src/widget/feed/mod.rs
@@ -80,7 +80,7 @@ Builder API,Widget API and customization,Chart type switching,done,library,src/w
 Builder API,Widget API and customization,Chart without toolbars,done,library,Cargo.toml;src/lib.rs;src/widget/builder.rs;src/widget/frame.rs
 Builder API,Widget API and customization,Context menu customisation,done,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs
 Builder API,Widget API and customization,Create and edit drawings from code,done,library,src/widget/drawing_api.rs;src/widget/anchors.rs;src/drawings/manager/mod.rs;src/widget/mod.rs;src/drawings/manager/edit.rs
-Builder API,Widget API and customization,Create and remove studies,done,library,src/widget/series/mod.rs;src/studies/settings.rs;src/widget/pane/mod.rs
+Builder API,Widget API and customization,Create and remove studies,done,library,src/widget/series/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/widget/pane/mod.rs
 Builder API,Widget API and customization,Custom date and time formatters,done,library,src/widget/frame.rs;src/scales/time_formatter.rs
 Builder API,Widget API and customization,Custom price formatter,done,library,src/widget/frame.rs
 Builder API,Widget API and customization,Export chart data,done,library,src/widget/export.rs;src/model/bar/io.rs
@@ -463,7 +463,7 @@ Order flow,Order flow,"Profile POC, value area and VAH/VAL lines",done,library,s
 Order flow,Order flow,Profile peaks and valleys with sensitivity,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/trade_profile.rs
 Order flow,Order flow,Proprietary order-flow models,partial,library,src/model/tpo.rs;src/chart/rendering/candles/tpo.rs
 Order flow,Order flow,Rolling volume/delta sum over N bars,done,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
-Order flow,Order flow,"Session VWAP with daily, weekly or monthly reset",done,library,src/studies/builtin/vwap.rs;src/widget/series/mod.rs
+Order flow,Order flow,"Session VWAP with daily, weekly or monthly reset",done,library,src/studies/builtin/vwap.rs;src/widget/studies.rs
 Order flow,Order flow,Order-flow page in the indicator browser,missing,library,
 Order flow,Order flow,Speed of tape,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
 Order flow,Order flow,Split session profiles,done,library,src/studies/builtin/trade_profile.rs;src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs
@@ -515,7 +515,7 @@ Studies,Custom studies,Custom study plot and style metadata,done,library,src/stu
 Studies,Custom studies,Custom study registration,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/ui/dialogs/indicator_dialog/data.rs;terminal/src/studies.rs
 Studies,Custom studies,Custom study scale and format metadata,done,library,src/studies/custom.rs;src/studies/settings.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/chart/renderers/study_scale.rs
 Studies,Custom studies,Per-bar study callbacks and calculation helpers,done,library,src/studies/stepper.rs;src/studies/helpers.rs;src/studies/indicator_trait.rs;src/widget/studies.rs
-Studies,Custom studies,Study input editing,done,library,src/studies/indicator_trait.rs;src/studies/inputs.rs;src/studies/custom.rs;src/widget/series/mod.rs
+Studies,Custom studies,Study input editing,done,library,src/studies/indicator_trait.rs;src/studies/inputs.rs;src/studies/custom.rs;src/widget/studies.rs
 Studies,Indicator infrastructure,Built-in catalogue and the '130+ indicators' claim,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/data.rs
 Studies,Indicator infrastructure,Create studies by name and list them,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/data.rs;terminal/src/studies.rs
 Studies,Indicator infrastructure,Edge cases: very short or flat series,done,library,src/studies/factory/mod.rs;src/studies/builtin/sma.rs;src/studies/builtin/ma_combination.rs;src/studies/builtin/mod.rs
@@ -525,55 +525,55 @@ Studies,Indicator infrastructure,Indicator search dialog,done,library,src/ui/dia
 Studies,Indicator infrastructure,Indicator templates,done,library,src/studies/template.rs;src/ui/dialogs/templates/dialog.rs;src/ui/dialogs/templates/store.rs;src/ui/top_toolbar/toolbar.rs
 Studies,Indicator infrastructure,Indicators on indicators,done,library,src/studies/settings.rs;src/widget/studies.rs;src/ui/dialogs/indicator_dialog/settings.rs
 Studies,Indicator infrastructure,Input validation,done,library,src/studies/inputs.rs;src/studies/builtin/kama.rs;src/studies/builtin/mod.rs;src/studies/factory/mod.rs
-Studies,Indicator infrastructure,Maximum studies per chart,done,library,src/widget/series/mod.rs;src/widget/clipboard.rs;src/ui/dialogs/indicator_dialog/dialog.rs;terminal/src/studies.rs
+Studies,Indicator infrastructure,Maximum studies per chart,done,library,src/widget/studies.rs;src/widget/clipboard.rs;src/ui/dialogs/indicator_dialog/dialog.rs;terminal/src/studies.rs
 Studies,Indicator infrastructure,Multi-output studies draw all their lines,done,library,src/studies/builtin/adx.rs;src/studies/builtin/stochastic.rs;src/studies/builtin/stochastic_rsi.rs;src/studies/indicator_trait.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs
 Studies,Indicator infrastructure,Multi-timeframe inputs,partial,library,src/studies/settings.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/builtin/volume_profile.rs
 Studies,Indicator infrastructure,Other-symbol inputs,partial,library,src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/studies_data.rs;src/services/search/expression.rs;src/studies/factory/mod.rs
-Studies,Indicator infrastructure,Overlay versus separate pane,done,library,src/widget/series/mod.rs;src/studies/settings.rs;src/widget/pane/mod.rs;src/widget/pane/render/mod.rs
+Studies,Indicator infrastructure,Overlay versus separate pane,done,library,src/widget/studies.rs;src/studies/settings.rs;src/widget/pane/mod.rs;src/widget/pane/render/mod.rs
 Studies,Indicator infrastructure,Plot offset,done,library,src/studies/indicator_trait.rs;src/studies/custom.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
 Studies,Indicator infrastructure,Plot styles,done,library,src/studies/settings.rs;src/studies/custom.rs;src/chart/renderers/indicator.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/studies/indicator_trait.rs;src/studies/palette.rs;src/painting/dashed_line.rs
 Studies,Indicator infrastructure,Recalculation on realtime updates,done,library,src/widget/series/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/studies/stepper.rs
-Studies,Indicator infrastructure,Remove a study,done,library,src/widget/series/mod.rs;src/widget/pane/render/mod.rs
+Studies,Indicator infrastructure,Remove a study,done,library,src/widget/series/mod.rs;src/widget/studies.rs;src/widget/pane/render/mod.rs
 Studies,Indicator infrastructure,Settings dialog: Inputs tab,done,library,src/ui/dialogs/indicator_dialog/settings.rs;src/studies/settings.rs
 Studies,Indicator infrastructure,Settings dialog: Style tab,partial,library,src/ui/dialogs/indicator_dialog/settings.rs;src/studies/settings.rs
 Studies,Indicator infrastructure,Settings dialog: Visibility tab,done,library,src/ui/dialogs/indicator_dialog/settings.rs;src/studies/settings.rs
-Studies,Indicator infrastructure,Show or hide a study,done,library,src/widget/series/mod.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
+Studies,Indicator infrastructure,Show or hide a study,done,library,src/widget/studies.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
 Studies,Indicator infrastructure,Source input,done,library,src/studies/settings.rs;src/widget/studies.rs;src/studies/indicator_trait.rs;src/ui/dialogs/indicator_dialog/settings.rs
 Studies,Indicator infrastructure,Study levels and the fill between them,done,library,src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/studies/indicator_trait.rs
-Studies,Indicators,24-hour Volume,done,library,src/studies/builtin/volume_24h.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/builtin/lower_interval.rs;src/studies/settings.rs;src/studies/template.rs;src/widget/snapshot.rs;src/widget/export.rs
-Studies,Indicators,52 Week High/Low,done,library,src/studies/builtin/week52_highlow.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Accelerator Oscillator,done,library,src/studies/builtin/accelerator_oscillator.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Accumulation Distribution,done,library,src/studies/builtin/acc_dist.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Accumulative Swing Index,done,library,src/studies/builtin/accumulation_swing.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Advance/Decline,done,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,24-hour Volume,done,library,src/studies/builtin/volume_24h.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/builtin/lower_interval.rs;src/studies/settings.rs;src/studies/template.rs;src/widget/snapshot.rs;src/widget/export.rs
+Studies,Indicators,52 Week High/Low,done,library,src/studies/builtin/week52_highlow.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Accelerator Oscillator,done,library,src/studies/builtin/accelerator_oscillator.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Accumulation Distribution,done,library,src/studies/builtin/acc_dist.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Accumulative Swing Index,done,library,src/studies/builtin/accumulation_swing.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Advance/Decline,done,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Advance/Decline Line,done,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs
 Studies,Indicators,Advance/Decline Ratio,done,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs
-Studies,Indicators,Advance/Decline Ratio bars,done,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Advance/Decline Ratio bars,done,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,All Candlestick Patterns,partial,library,src/studies/builtin/candlestick_patterns/mod.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,All Chart Patterns,missing,library,
 Studies,Indicators,Analyst price forecast,done,host,src/data/mod.rs;src/data/targets.rs;src/widget/targets.rs;src/widget/frame.rs
 Studies,Indicators,Anchored Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/model/instrument.rs;src/studies/template.rs
-Studies,Indicators,Arnaud Legoux Moving Average,done,library,src/studies/builtin/alma.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Aroon Indicator,done,library,src/studies/builtin/aroon.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Aroon Oscillator,done,library,src/studies/builtin/aroon_oscillator.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Arnaud Legoux Moving Average,done,library,src/studies/builtin/alma.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Aroon Indicator,done,library,src/studies/builtin/aroon.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Aroon Oscillator,done,library,src/studies/builtin/aroon_oscillator.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Auto Anchored Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/model/instrument.rs
 Studies,Indicators,Auto Fib Retracement,done,library,src/studies/builtin/auto_drawing.rs;src/studies/builtin/zigzag.rs;src/chart/indicators/plots.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/fibonacci.rs;src/studies/factory/mod.rs;src/studies/builtin/atr.rs
 Studies,Indicators,Auto Pitchfork,done,library,src/studies/builtin/auto_drawing.rs;src/studies/builtin/zigzag.rs;src/chart/indicators/plots.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/pitchfork.rs;src/studies/factory/mod.rs;src/studies/builtin/atr.rs
 Studies,Indicators,Auto fib extension,done,library,src/studies/builtin/auto_drawing.rs;src/studies/builtin/zigzag.rs;src/chart/indicators/plots.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/fibonacci.rs;src/studies/factory/mod.rs;src/studies/builtin/atr.rs
 Studies,Indicators,Auto key levels,missing,library,
 Studies,Indicators,Auto trendlines,done,library,src/studies/builtin/auto_drawing.rs;src/studies/builtin/zigzag.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/lines.rs;src/studies/builtin/atr.rs
-Studies,Indicators,Average Daily Range,done,library,src/studies/builtin/average_daily_range.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Average Directional Index,done,library,src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Average Price,done,library,src/studies/builtin/average_price.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Average True Range,done,library,src/studies/builtin/atr.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Awesome Oscillator,done,library,src/studies/builtin/awesome_oscillator.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,BBTrend,done,library,src/studies/builtin/bbtrend.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Balance of Power,done,library,src/studies/builtin/balance_of_power.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Average Daily Range,done,library,src/studies/builtin/average_daily_range.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Average Directional Index,done,library,src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Average Price,done,library,src/studies/builtin/average_price.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Average True Range,done,library,src/studies/builtin/atr.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Awesome Oscillator,done,library,src/studies/builtin/awesome_oscillator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,BBTrend,done,library,src/studies/builtin/bbtrend.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Balance of Power,done,library,src/studies/builtin/balance_of_power.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Bollinger BandWidth,done,library,src/studies/builtin/bbw.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Bollinger Bands,done,library,src/studies/builtin/bollinger_bands.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Bollinger Bands %b,done,library,src/studies/builtin/percent_b.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Bollinger Bars,done,library,src/studies/builtin/bollinger_bars.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Bull Bear Power,done,library,src/studies/builtin/bull_bear_power.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Bollinger Bands %b,done,library,src/studies/builtin/percent_b.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Bollinger Bars,done,library,src/studies/builtin/bollinger_bars.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Bull Bear Power,done,library,src/studies/builtin/bull_bear_power.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Candlestick pattern: Abandoned Baby - Bearish,done,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Candlestick pattern: Abandoned Baby - Bullish,done,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Candlestick pattern: Dark Cloud Cover - Bearish,done,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
@@ -618,12 +618,12 @@ Studies,Indicators,Candlestick pattern: Tri Star - Bullish,done,library,src/stud
 Studies,Indicators,Candlestick pattern: Tweezer Bottom - Bullish,done,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Candlestick pattern: Tweezer Top - Bearish,done,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Candlestick pattern: Upside Tasuki Gap - Bullish,done,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Chaikin Money Flow,done,library,src/studies/builtin/cmf.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Chaikin Oscillator,done,library,src/studies/builtin/chaikin_oscillator.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Chaikin Volatility,done,library,src/studies/builtin/chaikin_volatility.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Chande Kroll Stop,done,library,src/studies/builtin/chande_kroll_stop.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Chande Momentum Oscillator,done,library,src/studies/builtin/chande_momentum.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Chandelier Exit,done,library,src/studies/builtin/chandelier_exit.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Chaikin Money Flow,done,library,src/studies/builtin/cmf.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Chaikin Oscillator,done,library,src/studies/builtin/chaikin_oscillator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Chaikin Volatility,done,library,src/studies/builtin/chaikin_volatility.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Chande Kroll Stop,done,library,src/studies/builtin/chande_kroll_stop.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Chande Momentum Oscillator,done,library,src/studies/builtin/chande_momentum.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Chandelier Exit,done,library,src/studies/builtin/chandelier_exit.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Chart Pattern Bearish Flag,done,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Chart Pattern Bearish Pennant,done,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Chart Pattern Bullish Flag,done,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
@@ -641,11 +641,11 @@ Studies,Indicators,Chart Pattern Rising Wedge,missing,library,
 Studies,Indicators,Chart Pattern Triangle,done,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Chart Pattern Triple Bottom,done,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Chart Pattern Triple Top,done,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Chop Zone,done,library,src/studies/builtin/chop_zone.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Choppiness Index,done,library,src/studies/builtin/choppiness.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Commodity Channel Index,done,library,src/studies/builtin/cci.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Chop Zone,done,library,src/studies/builtin/chop_zone.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Choppiness Index,done,library,src/studies/builtin/choppiness.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Commodity Channel Index,done,library,src/studies/builtin/cci.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Connors RSI,partial,library,src/studies/builtin/connors_rsi.rs
-Studies,Indicators,Coppock Curve,done,library,src/studies/builtin/coppock.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Coppock Curve,done,library,src/studies/builtin/coppock.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Correlation - Log,missing,library,
 Studies,Indicators,Correlation Coefficient,missing,library,
 Studies,Indicators,Crypto derivatives metrics,done,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/renderers/indicator.rs
@@ -653,128 +653,128 @@ Studies,Indicators,Crypto on-chain and ETF metrics,done,host,src/data/metrics.rs
 Studies,Indicators,Cumulative Volume Delta,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs;src/studies/builtin/volume_delta.rs;src/studies/builtin/lower_interval.rs
 Studies,Indicators,Cumulative Volume Index,done,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs
 Studies,Indicators,Detrended Price Oscillator,done,library,src/studies/builtin/dpo.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Directional Movement,done,library,src/studies/builtin/directional_movement.rs;src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Directional Movement,done,library,src/studies/builtin/directional_movement.rs;src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Dividend Yield,done,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Donchian Channels,done,library,src/studies/builtin/donchian.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Double Exponential Moving Average,done,library,src/studies/builtin/dema.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Donchian Channels,done,library,src/studies/builtin/donchian.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Double Exponential Moving Average,done,library,src/studies/builtin/dema.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,EMA Cross,done,library,src/studies/builtin/ma_combination.rs;src/studies/builtin/ma_presets.rs;src/studies/builtin/ma_multiple.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Ease of Movement,done,library,src/studies/builtin/ease_of_movement.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Elder Impulse System,done,library,src/studies/builtin/elder_impulse.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Elder's Force Index,done,library,src/studies/builtin/force_index.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Envelope,done,library,src/studies/builtin/envelopes.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Exponential Moving Average,done,library,src/studies/builtin/ema.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Fisher Transform,done,library,src/studies/builtin/fisher_transform.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Ease of Movement,done,library,src/studies/builtin/ease_of_movement.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Elder Impulse System,done,library,src/studies/builtin/elder_impulse.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Elder's Force Index,done,library,src/studies/builtin/force_index.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Envelope,done,library,src/studies/builtin/envelopes.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Exponential Moving Average,done,library,src/studies/builtin/ema.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Fisher Transform,done,library,src/studies/builtin/fisher_transform.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Fixed Range Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/model/instrument.rs;src/studies/template.rs
 Studies,Indicators,Gaps,done,library,src/studies/builtin/gaps.rs;src/chart/indicators/plots.rs;src/studies/factory/mod.rs
 Studies,Indicators,Guppy Multiple Moving Average,done,library,src/studies/builtin/guppy_ma.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Historical Volatility,done,library,src/studies/builtin/historical_volatility.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Hull Moving Average,done,library,src/studies/builtin/hma.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Ichimoku Cloud,done,library,src/studies/builtin/ichimoku.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Kaufman's Adaptive Moving Average,done,library,src/studies/builtin/kama.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Keltner Channels,done,library,src/studies/builtin/keltner.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/builtin/price_oscillator.rs
-Studies,Indicators,Klinger Oscillator,done,library,src/studies/builtin/klinger.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Know Sure Thing,done,library,src/studies/builtin/know_sure_thing.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Least Squares Moving Average,done,library,src/studies/builtin/lsma.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Historical Volatility,done,library,src/studies/builtin/historical_volatility.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Hull Moving Average,done,library,src/studies/builtin/hma.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Ichimoku Cloud,done,library,src/studies/builtin/ichimoku.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Kaufman's Adaptive Moving Average,done,library,src/studies/builtin/kama.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Keltner Channels,done,library,src/studies/builtin/keltner.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/builtin/price_oscillator.rs
+Studies,Indicators,Klinger Oscillator,done,library,src/studies/builtin/klinger.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Know Sure Thing,done,library,src/studies/builtin/know_sure_thing.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Least Squares Moving Average,done,library,src/studies/builtin/lsma.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Linear Regression,done,library,src/studies/builtin/linear_regression_channel.rs;src/model/math.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/template.rs
-Studies,Indicators,Linear Regression Curve,done,library,src/studies/builtin/linear_regression.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Linear Regression Slope,done,library,src/studies/builtin/linear_regression.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Linear Regression Curve,done,library,src/studies/builtin/linear_regression.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Linear Regression Slope,done,library,src/studies/builtin/linear_regression.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,MA Cross,done,library,src/studies/builtin/ma_combination.rs;src/studies/builtin/ma_presets.rs;src/studies/builtin/ma_multiple.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,MA with EMA Cross,done,library,src/studies/builtin/ma_combination.rs;src/studies/builtin/ma_presets.rs;src/studies/builtin/ma_multiple.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Majority Rule,partial,library,src/studies/builtin/majority_rule.rs;src/studies/factory/mod.rs
-Studies,Indicators,Mass Index,done,library,src/studies/builtin/mass_index.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,McGinley Dynamic,done,library,src/studies/builtin/mcginley_dynamic.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Median,done,library,src/studies/builtin/median.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Median Price,done,library,src/studies/builtin/typical_price.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Momentum,done,library,src/studies/builtin/momentum.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Money Flow,done,library,src/studies/builtin/mfi.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/builtin/rsi.rs;src/studies/factory/mod.rs
+Studies,Indicators,Mass Index,done,library,src/studies/builtin/mass_index.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,McGinley Dynamic,done,library,src/studies/builtin/mcginley_dynamic.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Median,done,library,src/studies/builtin/median.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Median Price,done,library,src/studies/builtin/typical_price.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Momentum,done,library,src/studies/builtin/momentum.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Money Flow,done,library,src/studies/builtin/mfi.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/builtin/rsi.rs;src/studies/factory/mod.rs
 Studies,Indicators,Moon Phases,done,library,src/studies/builtin/lunar_phases.rs;src/studies/factory/mod.rs
-Studies,Indicators,Moving Average Adaptive,done,library,src/studies/builtin/kama.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Moving Average Channel,done,library,src/studies/builtin/ma_channel.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/template.rs
+Studies,Indicators,Moving Average Adaptive,done,library,src/studies/builtin/kama.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Moving Average Channel,done,library,src/studies/builtin/ma_channel.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/template.rs
 Studies,Indicators,Moving Average Convergence Divergence,done,library,src/studies/builtin/macd.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/studies/palette.rs
 Studies,Indicators,Moving Average Double,done,library,src/studies/builtin/ma_combination.rs;src/studies/builtin/ma_presets.rs;src/studies/builtin/ma_multiple.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Moving Average Hamming,done,library,src/studies/builtin/ma_hamming.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Moving Average Hamming,done,library,src/studies/builtin/ma_hamming.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Moving Average Multiple,done,library,src/studies/builtin/ma_combination.rs;src/studies/builtin/ma_presets.rs;src/studies/builtin/ma_multiple.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Moving Average Ribbon,done,library,src/studies/builtin/ma_combination.rs;src/studies/builtin/ma_presets.rs;src/studies/builtin/ma_multiple.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Moving Average Triple,done,library,src/studies/builtin/ma_combination.rs;src/studies/builtin/ma_presets.rs;src/studies/builtin/ma_multiple.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Multi-Time Period Charts,done,library,src/studies/builtin/higher_interval_candles.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Multi-Time Period Charts,done,library,src/studies/builtin/higher_interval_candles.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Negative Volume Index,done,library,src/studies/builtin/volume_price_trend.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Net Volume,partial,library,src/studies/builtin/net_volume.rs;src/studies/indicator_trait.rs
-Studies,Indicators,On Balance Volume,done,library,src/studies/builtin/obv.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,On Balance Volume,done,library,src/studies/builtin/obv.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Open Interest,done,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Options Volume Profile,done,host,src/studies/builtin/options_volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs
-Studies,Indicators,Parabolic SAR,done,library,src/studies/builtin/parabolic_sar.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Parabolic SAR,done,library,src/studies/builtin/parabolic_sar.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Percentage Price Oscillator,partial,library,src/studies/builtin/price_oscillator.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/studies/builtin/macd.rs;src/studies/palette.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Percentage Volume Oscillator,partial,library,src/studies/builtin/percentage_volume_oscillator.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/studies/builtin/macd.rs;src/studies/palette.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Performance,done,library,src/studies/builtin/performance.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/table.rs;src/widget/pane/indicator/mod.rs;src/data/study.rs;src/widget/studies_data.rs
+Studies,Indicators,Performance,done,library,src/studies/builtin/performance.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/table.rs;src/widget/pane/indicator/mod.rs;src/data/study.rs;src/widget/studies_data.rs
 Studies,Indicators,Periodic Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/model/instrument.rs
 Studies,Indicators,Pivot Points High Low,done,library,src/studies/builtin/pivot_points_high_low.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Pivot Points Standard,done,library,src/studies/builtin/pivot_points.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/studies/template.rs
 Studies,Indicators,Positive Volume Index,done,library,src/studies/builtin/volume_price_trend.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Price Channel,done,library,src/studies/builtin/price_channel.rs;src/studies/builtin/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Price Momentum Oscillator,done,library,src/studies/builtin/price_momentum_oscillator.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Price Channel,done,library,src/studies/builtin/price_channel.rs;src/studies/builtin/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Price Momentum Oscillator,done,library,src/studies/builtin/price_momentum_oscillator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Price Target,done,host,src/data/mod.rs;src/data/targets.rs;src/widget/targets.rs;src/widget/frame.rs
-Studies,Indicators,Price Volume Trend,done,library,src/studies/builtin/volume_price_trend.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Pring's Special K,done,library,src/studies/builtin/special_k.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,RCI Ribbon,done,library,src/studies/builtin/rci_ribbon.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Price Volume Trend,done,library,src/studies/builtin/volume_price_trend.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Pring's Special K,done,library,src/studies/builtin/special_k.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,RCI Ribbon,done,library,src/studies/builtin/rci_ribbon.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,RSI Divergence Indicator,partial,library,src/studies/builtin/rsi_divergence.rs;src/studies/builtin/rsi.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Rank Correlation Index,done,library,src/studies/builtin/rank_correlation.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Rate of Change,done,library,src/studies/builtin/roc.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Rank Correlation Index,done,library,src/studies/builtin/rank_correlation.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Rate of Change,done,library,src/studies/builtin/roc.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Ratio,partial,library,src/services/search/expression.rs
 Studies,Indicators,Relative Strength Index,partial,library,src/studies/builtin/rsi.rs;src/studies/factory/mod.rs
-Studies,Indicators,Relative Vigor Index,done,library,src/studies/builtin/relative_vigor.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Relative Volatility Index,done,library,src/studies/builtin/relative_volatility_index.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Relative Volume at Time,done,library,src/studies/builtin/relative_volume_at_time.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Relative Vigor Index,done,library,src/studies/builtin/relative_vigor.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Relative Volatility Index,done,library,src/studies/builtin/relative_volatility_index.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Relative Volume at Time,done,library,src/studies/builtin/relative_volume_at_time.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Rob Booker - ADX Breakout,done,library,src/studies/builtin/adx_breakout.rs;src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Rob Booker - Knoxville Divergence,missing,library,
 Studies,Indicators,Rob Booker Intraday Pivot Points,missing,library,
 Studies,Indicators,Rob Booker Missed Pivot Points,missing,library,
 Studies,Indicators,Rob Booker Reversal,missing,library,
 Studies,Indicators,Rob Booker Ziv Ghost Pivots,missing,library,
-Studies,Indicators,SMI Ergodic Indicator,done,library,src/studies/builtin/smi_ergodic.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,SMI Ergodic Oscillator,done,library,src/studies/builtin/smi_ergodic.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Seasonality,done,library,src/studies/builtin/seasonality.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/table.rs;src/widget/pane/indicator/mod.rs;src/chart/indicators/projection.rs
+Studies,Indicators,SMI Ergodic Indicator,done,library,src/studies/builtin/smi_ergodic.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,SMI Ergodic Oscillator,done,library,src/studies/builtin/smi_ergodic.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Seasonality,done,library,src/studies/builtin/seasonality.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/table.rs;src/widget/pane/indicator/mod.rs;src/chart/indicators/projection.rs
 Studies,Indicators,Session Time Price Opportunity,done,library,src/studies/builtin/time_price_opportunity.rs;src/model/tpo.rs;src/model/session/exchange.rs;src/widget/frame.rs;src/chart/rendering/candles/tpo.rs;src/tokens/mod.rs;src/tokens/semantic.rs
 Studies,Indicators,Session Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/model/instrument.rs
 Studies,Indicators,Session Volume Profile HD,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/data/study.rs;src/widget/studies_data.rs;src/model/instrument.rs
-Studies,Indicators,Simple Moving Average,done,library,src/studies/builtin/sma.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Smoothed Moving Average,done,library,src/studies/builtin/smoothed_ma.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Simple Moving Average,done,library,src/studies/builtin/sma.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Smoothed Moving Average,done,library,src/studies/builtin/smoothed_ma.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Spread,partial,library,src/services/search/expression.rs
-Studies,Indicators,Standard Deviation,done,library,src/studies/builtin/std_dev.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Standard Error,done,library,src/studies/builtin/standard_error.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Standard Error Bands,done,library,src/studies/builtin/standard_error_bands.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Stochastic,done,library,src/studies/builtin/stochastic.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Stochastic Momentum Index,done,library,src/studies/builtin/smi.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Stochastic RSI,done,library,src/studies/builtin/stochastic_rsi.rs;src/studies/builtin/rsi.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Supertrend,done,library,src/studies/builtin/supertrend.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,TRIX,done,library,src/studies/builtin/trix.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Standard Deviation,done,library,src/studies/builtin/std_dev.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Standard Error,done,library,src/studies/builtin/standard_error.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Standard Error Bands,done,library,src/studies/builtin/standard_error_bands.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Stochastic,done,library,src/studies/builtin/stochastic.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Stochastic Momentum Index,done,library,src/studies/builtin/smi.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Stochastic RSI,done,library,src/studies/builtin/stochastic_rsi.rs;src/studies/builtin/rsi.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Supertrend,done,library,src/studies/builtin/supertrend.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,TRIX,done,library,src/studies/builtin/trix.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Technical Ratings,partial,library,src/studies/builtin/technical_ratings.rs;src/studies/builtin/stochastic.rs;src/studies/builtin/cci.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs;src/studies/table.rs;src/widget/pane/indicator/mod.rs
 Studies,Indicators,Time Price Opportunity,done,library,src/studies/builtin/time_price_opportunity.rs;src/model/tpo.rs;src/model/session/exchange.rs;src/widget/frame.rs;src/chart/rendering/candles/tpo.rs;src/tokens/mod.rs;src/tokens/semantic.rs
-Studies,Indicators,Time Weighted Average Price,done,library,src/studies/builtin/twap.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Trading Sessions,done,library,src/studies/builtin/trading_sessions.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/chart/indicators/plots.rs;src/chart/indicators/hit_test.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/studies/template.rs
+Studies,Indicators,Time Weighted Average Price,done,library,src/studies/builtin/twap.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Trading Sessions,done,library,src/studies/builtin/trading_sessions.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/chart/indicators/plots.rs;src/chart/indicators/hit_test.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/studies/template.rs
 Studies,Indicators,Trend Strength Index,partial,library,src/studies/builtin/linear_regression_channel.rs
-Studies,Indicators,Triple EMA,done,library,src/studies/builtin/tema.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,True Strength Index,done,library,src/studies/builtin/true_strength.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Typical Price,done,library,src/studies/builtin/typical_price.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Ulcer Index,done,library,src/studies/builtin/ulcer_index.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Ultimate Oscillator,done,library,src/studies/builtin/ultimate_oscillator.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Triple EMA,done,library,src/studies/builtin/tema.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,True Strength Index,done,library,src/studies/builtin/true_strength.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Typical Price,done,library,src/studies/builtin/typical_price.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Ulcer Index,done,library,src/studies/builtin/ulcer_index.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Ultimate Oscillator,done,library,src/studies/builtin/ultimate_oscillator.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Up/Down Volume,done,library,src/studies/builtin/up_down_volume.rs;src/widget/studies_data.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/studies/builtin/lower_interval.rs
-Studies,Indicators,VWAP Auto Anchored,done,library,src/studies/builtin/vwap_auto_anchored.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
-Studies,Indicators,Visible Average Price,done,library,src/studies/builtin/visible_average_price.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,VWAP Auto Anchored,done,library,src/studies/builtin/vwap_auto_anchored.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Visible Average Price,done,library,src/studies/builtin/visible_average_price.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Visible Range Volume Profile,done,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/renderers/indicator.rs;src/painting/volume_profile.rs;src/chart/renderers/volume_profile.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/model/instrument.rs
-Studies,Indicators,Volatility Close-to-Close,done,library,src/studies/builtin/historical_volatility.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
+Studies,Indicators,Volatility Close-to-Close,done,library,src/studies/builtin/historical_volatility.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs
 Studies,Indicators,Volatility Index,missing,library,
-Studies,Indicators,Volatility O-H-L-C,done,library,src/studies/builtin/ohlc_volatility.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Volatility Stop,done,library,src/studies/builtin/volatility_stop.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Volatility Zero Trend Close-to-Close,done,library,src/studies/builtin/zero_trend_vol.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Volume,done,library,src/studies/builtin/volume.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/widget/volume.rs;src/studies/palette.rs
+Studies,Indicators,Volatility O-H-L-C,done,library,src/studies/builtin/ohlc_volatility.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Volatility Stop,done,library,src/studies/builtin/volatility_stop.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Volatility Zero Trend Close-to-Close,done,library,src/studies/builtin/zero_trend_vol.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Volume,done,library,src/studies/builtin/volume.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/widget/volume.rs;src/studies/palette.rs
 Studies,Indicators,Volume Delta,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs;src/studies/builtin/volume_delta.rs;src/studies/builtin/lower_interval.rs
-Studies,Indicators,Volume Weighted Average Price,done,library,src/studies/builtin/vwap.rs;src/studies/settings.rs;src/widget/series/mod.rs
-Studies,Indicators,Volume-Weighted Moving Average,done,library,src/studies/builtin/vwma.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Vortex Indicator,done,library,src/studies/builtin/vortex.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Weighted Moving Average,done,library,src/studies/builtin/wma.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Williams %R,done,library,src/studies/builtin/williams_r.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Williams Alligator,done,library,src/studies/builtin/williams_alligator.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
-Studies,Indicators,Williams Fractal,done,library,src/studies/builtin/williams_fractals.rs;src/studies/factory/mod.rs;src/widget/series/mod.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Volume Weighted Average Price,done,library,src/studies/builtin/vwap.rs;src/studies/settings.rs;src/widget/studies.rs
+Studies,Indicators,Volume-Weighted Moving Average,done,library,src/studies/builtin/vwma.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Vortex Indicator,done,library,src/studies/builtin/vortex.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Weighted Moving Average,done,library,src/studies/builtin/wma.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Williams %R,done,library,src/studies/builtin/williams_r.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Williams Alligator,done,library,src/studies/builtin/williams_alligator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
+Studies,Indicators,Williams Fractal,done,library,src/studies/builtin/williams_fractals.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Woodies CCI,partial,library,src/studies/builtin/woodies_cci.rs
 Studies,Indicators,Zig Zag,done,library,src/studies/builtin/zigzag.rs;src/chart/renderers/indicator.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs
 Studies,Strategy tester,Backtest engine,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs;src/services/paper.rs;docs/strategy-report.md;

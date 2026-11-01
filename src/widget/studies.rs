@@ -1,4 +1,4 @@
-//! Calculation order for studies that consume another study's output.
+//! Study registration, settings and calculation order, including dependent studies.
 
 use super::{Chart, ChartElementId, SeriesId};
 use crate::model::Bar;

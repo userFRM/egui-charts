@@ -1,5 +1,4 @@
-//! The chart's bars, merged by one set of rules for history and live updates, and the studies
-//! computed from them.
+//! The chart's bar series, merged by one set of rules for history and live updates.
 
 mod options;
 mod paint;
