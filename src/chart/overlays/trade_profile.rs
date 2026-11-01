@@ -276,18 +276,26 @@ fn render_profiles(
                 let y0 = mapping.price_to_y(level as f64 * step - tick * 0.5);
                 let y1 = mapping.price_to_y((level as f64 + 1.0) * step - tick * 0.5);
                 if y0.is_finite() && y1.is_finite() && (y0 - y1).abs() >= config.min_text_height {
-                    painter.text(
-                        pos2(
-                            x + width + if session { -3.0 } else { 3.0 },
-                            (y0 + y1) * 0.5,
-                        ),
-                        if session {
-                            Align2::RIGHT_CENTER
-                        } else {
-                            Align2::LEFT_CENTER
-                        },
-                        label,
+                    let galley = painter.layout_no_wrap(
+                        label.into(),
                         FontId::monospace(crate::styles::typography::TINY),
+                        config.text_color,
+                    );
+                    if session && galley.size().x + 6.0 > width {
+                        continue;
+                    }
+                    let anchor = if session {
+                        Align2::RIGHT_CENTER
+                    } else {
+                        Align2::LEFT_CENTER
+                    };
+                    let pos = pos2(
+                        x + width + if session { -3.0 } else { 3.0 },
+                        (y0 + y1) * 0.5,
+                    );
+                    painter.galley(
+                        anchor.anchor_size(pos, galley.size()).min,
+                        galley,
                         config.text_color,
                     );
                 }

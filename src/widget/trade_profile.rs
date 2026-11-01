@@ -12,7 +12,7 @@ use std::ops::{Range, RangeInclusive};
 pub(super) struct TradeProfiles {
     settings: TradeProfileSettings,
     context: Option<(String, BarClock)>,
-    merged: Vec<RangeInclusive<DateTime<Utc>>>,
+    spans: Vec<RangeInclusive<DateTime<Utc>>>,
     splits: Vec<DateTime<Utc>>,
 }
 
@@ -47,20 +47,12 @@ impl Chart {
             return false;
         };
         // End at a held bar, so future sessions cannot join this composite accidentally.
-        let mut merged = pair[0].start..=last.time;
+        let merged = pair[0].start..=last.time;
         self.prepare_profile_edits();
         self.trade_profiles
             .splits
             .retain(|t| !(merged.start() < t && merged.contains(t)));
-        for range in &self.trade_profiles.merged {
-            if range.end() >= merged.start() && range.start() <= merged.end() {
-                merged = (*range.start()).min(*merged.start())..=(*range.end()).max(*merged.end());
-            }
-        }
-        self.trade_profiles
-            .merged
-            .retain(|r| r.end() < merged.start() || r.start() > merged.end());
-        self.trade_profiles.merged.push(merged);
+        self.retain_profile_span(merged);
         true
     }
 
@@ -74,18 +66,19 @@ impl Chart {
         let Some(bar) = bars.get(bars.partition_point(|bar| bar.time < time)) else {
             return false;
         };
+        let Some(range) = ranges.ranges().get(index) else {
+            return false;
+        };
         let open = self.profile_clock().bar_open(bar.time);
-        if (time != bar.time && time != open)
-            || !ranges
-                .ranges()
-                .get(index)
-                .is_some_and(|r| r.start < open && open < r.end)
-        {
+        if (time != bar.time && time != open) || !(range.start < open && open < range.end) {
             return false;
         }
-        let time = open;
+        let end = bars.partition_point(|bar| bar.time < range.end);
+        let span = range.start..=bars[end - 1].time;
         self.prepare_profile_edits();
-        self.trade_profiles.splits.push(time);
+        // A split needs its original session start even after the first candles are evicted.
+        self.retain_profile_span(span);
+        self.trade_profiles.splits.push(open);
         self.trade_profiles.splits.sort_unstable();
         self.trade_profiles.splits.dedup();
         true
@@ -93,7 +86,7 @@ impl Chart {
 
     /// Restores the natural session boundaries for execution profiles.
     pub fn reset_trade_profile_ranges(&mut self) {
-        self.trade_profiles.merged.clear();
+        self.trade_profiles.spans.clear();
         self.trade_profiles.splits.clear();
     }
 
@@ -125,6 +118,18 @@ impl Chart {
         }
     }
 
+    fn retain_profile_span(&mut self, mut span: RangeInclusive<DateTime<Utc>>) {
+        for range in &self.trade_profiles.spans {
+            if range.end() >= span.start() && range.start() <= span.end() {
+                span = (*range.start()).min(*span.start())..=(*range.end()).max(*span.end());
+            }
+        }
+        self.trade_profiles
+            .spans
+            .retain(|r| r.end() < span.start() || r.start() > span.end());
+        self.trade_profiles.spans.push(span);
+    }
+
     pub(crate) fn execution_profile_ranges(
         &self,
         mut shown: Range<usize>,
@@ -138,7 +143,7 @@ impl Chart {
             let first = natural.ranges().first()?.start;
             let end = natural.ranges().last()?.end;
             let original = shown.clone();
-            for merged in &self.trade_profiles.merged {
+            for merged in &self.trade_profiles.spans {
                 if *merged.start() < end
                     && (*merged.end() >= first
                         || sessions
@@ -162,7 +167,7 @@ impl Chart {
         }
         let mut ranges: Vec<Range<DateTime<Utc>>> = Vec::new();
         for range in natural.ranges() {
-            let merged = self.trade_profiles.merged.iter().find(|r| {
+            let merged = self.trade_profiles.spans.iter().find(|r| {
                 *r.start() < range.end
                     && (*r.end() >= range.start
                         || sessions
@@ -193,6 +198,7 @@ impl Chart {
                         part
                     })
             })
+            .filter(|range| range.end > clock.bar_open(bars[0].time))
             .collect();
         TradeProfileRanges::new(ranges).ok()
     }

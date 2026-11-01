@@ -198,12 +198,17 @@ mod tests {
         .into_iter()
         .map(|(day, minute, price, size, side)| Tick::new(time(day, minute), price, size, side))
         .collect();
-        for (theme, stamp) in [
+        for (theme, stamp, size) in [
             (Theme::dark(), TimeDelta::zero()),
             (Theme::light(), TimeDelta::zero()),
             (Theme::dark(), TimeDelta::seconds(1)),
             (Theme::light(), TimeDelta::seconds(1)),
-        ] {
+        ]
+        .into_iter()
+        .flat_map(|(theme, stamp)| {
+            [Vec2::new(1440.0, 900.0), Vec2::new(360.0, 640.0)]
+                .map(move |size| (theme.clone(), stamp, size))
+        }) {
             let bars: Vec<_> = bars
                 .iter()
                 .cloned()
@@ -237,10 +242,7 @@ mod tests {
                 let mut action = None;
                 let mut output = ctx.run_ui(
                     RawInput {
-                        screen_rect: Some(Rect::from_min_size(
-                            Pos2::ZERO,
-                            Vec2::new(1440.0, 900.0),
-                        )),
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                         events,
                         ..Default::default()
                     },
@@ -501,6 +503,49 @@ mod tests {
                 && (r.rect.width() - width * 0.5).abs() < 0.001
                 && r.rect.contains(Pos2::new(r.rect.center().x, map.price_to_y(101.0)))))
             );
+            assert!(chart.set_visible_logical_range(LogicalRange::new(-0.5, 1000.5)));
+            let (_, narrow) = frame(&mut chart, &mut menus, vec![]);
+            assert!(
+                !narrow.iter().any(|s| matches!(&s.shape, Shape::Text(t)
+                if ["HVN", "LVN"].contains(&t.galley.text()))),
+                "node labels must fit within their profile"
+            );
+            // Splitting a natural session retains the start of either surviving part,
+            // including its executions and incomplete-history flag after candle eviction.
+            for (split, evict, first, volume, partial_volume) in
+                [(2, 1, 0, 17.0, 1.0), (1, 2, 1, 1.0, 0.0)]
+            {
+                chart.reset_trade_profile_ranges();
+                chart.set_bar_limit(SeriesId::MAIN, None);
+                chart.set_data(
+                    SeriesId::MAIN,
+                    (0..4)
+                        .map(|minute| {
+                            Bar::new(time(0, minute) + stamp, 99.0, 104.0, 97.0, 102.0, 0.0)
+                        })
+                        .collect(),
+                );
+                assert!(chart.split_trade_profile(0, time(0, split)));
+                chart.set_bar_limit(SeriesId::MAIN, std::num::NonZeroUsize::new(4 - evict));
+                let ranges = chart.trade_profile_ranges().unwrap();
+                assert_eq!(ranges.ranges()[0].start, time(0, first));
+                for partial in [false, true] {
+                    let mut flow =
+                        crate::data::Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1)
+                            .unwrap();
+                    for tick in ticks.iter().filter(|tick| {
+                        tick.ts < time(1, 0) && (!partial || tick.ts > time(0, first))
+                    }) {
+                        flow.push(tick).unwrap();
+                    }
+                    let profiles = crate::studies::trade_profiles(&flow, &ranges);
+                    assert_eq!(profiles[0].complete, !partial);
+                    assert_eq!(
+                        profiles[0].volume.volume(),
+                        if partial { partial_volume } else { volume }
+                    );
+                }
+            }
             chart.set_symbol("OTHER");
             assert!(!chart.merge_trade_profile(usize::MAX));
         }
