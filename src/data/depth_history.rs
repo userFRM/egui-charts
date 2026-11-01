@@ -234,7 +234,6 @@ impl DepthHistory {
     }
 
     /// Live columns supersede overlapping history, including a page answered in the same drain.
-    #[cfg(any(feature = "widget", test))]
     pub(crate) fn push(&mut self, column: impl Into<Arc<DepthColumn>>) {
         let column = column.into();
         if self

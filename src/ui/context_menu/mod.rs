@@ -78,6 +78,12 @@ pub enum ContextMenuAction {
     MergeTpoNext,
     /// Restore the sessions of the clicked composite TPO profile. Already applied by [`ChartMenus`].
     SplitTpoProfile,
+    /// Merge the clicked execution profile with its previous neighbour. Applied by [`ChartMenus`].
+    MergeTradeProfilePrevious,
+    /// Merge the clicked execution profile with its next neighbour. Applied by [`ChartMenus`].
+    MergeTradeProfileNext,
+    /// Split the clicked execution profile at the selected bar. Applied by [`ChartMenus`].
+    SplitTradeProfile,
     /// Draw a horizontal line at this price in the clicked pane, with the line tool's default
     /// style, and select it. Already applied by [`ChartMenus`].
     DrawHorizontalLine(f64),
