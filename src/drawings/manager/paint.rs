@@ -324,23 +324,15 @@ impl DrawingManager {
     ) -> impl Iterator<Item = DrawingAxisTag> + '_ {
         self.drawings
             .iter()
-            .filter_map(move |drawing| {
+            .filter(|drawing| {
+                self.owns_pane(drawing) && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+            })
+            .flat_map(move |drawing| {
                 let (price, time) = Drawing::axis_labels_of(drawing.tool_type);
                 let (price, time) = (
                     price && drawing.price_axis_label,
                     time && drawing.time_axis_label,
                 );
-                ((price
-                    || time
-                    || matches!(
-                        drawing.tool_type,
-                        DrawingToolType::LongPos | DrawingToolType::ShortPos
-                    ))
-                    && self.owns_pane(drawing)
-                    && drawing.is_visible_on_timeframe(&self.curr_timeframe))
-                .then_some((drawing, price, time))
-            })
-            .flat_map(move |(drawing, price, time)| {
                 let [r, g, b, _] = drawing.color;
                 let color = Color32::from_rgb(r, g, b);
                 let at = drawing.chart_points.first().zip(drawing.points.first());
