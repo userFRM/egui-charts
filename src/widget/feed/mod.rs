@@ -402,6 +402,7 @@ impl Chart {
             self.event_click = None;
             self.axis_hover = None;
             self.state.price_scale_mut().set_price_precision(None);
+            self.state.price_scale_mut().set_tick_size(None);
         }
         self.symbol = symbol;
     }
