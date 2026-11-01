@@ -139,6 +139,7 @@ mod tests {
             (Tool::ShortPos, "Entry price"),
             (Tool::FixedRangeVolumeProfile, "Rows"),
             (Tool::AnchoredVolumeProfile, "Rows"),
+            (Tool::AnchoredVWAP, "Band 1"),
             (Tool::RegressionTrend, "Deviations"),
             (Tool::ElliottImpulse, "Degree"),
             (Tool::ElliottCorrection, "Degree"),
