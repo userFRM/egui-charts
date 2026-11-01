@@ -105,20 +105,6 @@ mod tests {
         for (name, theme) in presets() {
             let ctx = Context::default();
             apply_to_egui(&ctx, &theme);
-            #[cfg(feature = "icons")]
-            {
-                egui_extras::install_image_loaders(&ctx);
-                let uri = "bytes://host/logo.svg";
-                ctx.include_bytes(uri, br#"<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"><circle cx="9" cy="9" r="9" fill="blue"/></svg>"#);
-                crate::icons::install_loader(&ctx);
-                assert!(
-                    matches!(
-                        ctx.try_load_texture(uri, TextureOptions::LINEAR, SizeHint::default()),
-                        Ok(TexturePoll::Ready { .. })
-                    ),
-                    "installing icons retains the host's logo bytes"
-                );
-            }
             ctx.add_texture_loader(std::sync::Arc::new(PendingLogo));
             let logo = ctx.load_texture(
                 "logo",

@@ -1541,6 +1541,7 @@ mod mark_tests {
         for (_, theme) in crate::theme::presets() {
             for (badge, logo, shown, title, symbol) in [
                 (true, false, true, true, "ABC"),
+                (true, true, true, true, "ABC"),
                 (false, true, true, true, "ABC"),
                 (false, false, true, true, "ABC"),
                 (true, true, false, true, "ABC"),
@@ -1554,9 +1555,16 @@ mod mark_tests {
                     egui::ColorImage::filled([18, 18], Color32::BLUE),
                     Default::default(),
                 );
+                // Without image loaders the instrument's logo stays unreadable.
+                #[cfg(feature = "icons")]
+                {
+                    egui_extras::install_image_loaders(&ctx);
+                    ctx.include_bytes("bytes://logo.svg", br#"<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"><circle cx="9" cy="9" r="9" fill="blue"/></svg>"#);
+                }
+                let logo_ready = logo && cfg!(feature = "icons");
                 let mut instrument = Instrument::new(symbol);
                 if logo {
-                    instrument = instrument.with_logo("bytes://unreadable.svg");
+                    instrument = instrument.with_logo("bytes://logo.svg");
                 }
                 let bar = Bar::new(chrono::Utc::now(), 1.0, 2.0, 0.0, 1.0, 0.0);
                 let mut output = ctx.run_ui(Default::default(), |ui| {
@@ -1570,15 +1578,21 @@ mod mark_tests {
                 });
                 output.textures_delta.clear();
                 let mark = shown && title && (badge || !symbol.is_empty());
-                let images = output
+                let images: Vec<_> = output
                     .shapes
                     .iter()
-                    .filter(|shape| {
-                        matches!(&shape.shape,
-                    egui::Shape::Rect(rect) if rect.fill_texture_id() == texture.id())
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.fill_texture_id() != egui::TextureId::default() =>
+                        {
+                            Some(rect.fill_texture_id() == texture.id())
+                        }
+                        _ => None,
                     })
-                    .count();
-                assert_eq!(images, usize::from(mark && badge));
+                    .collect();
+                // One image, the badge's when supplied, else the instrument's ready logo.
+                let image = (mark && (badge || logo_ready)).then_some(badge);
+                assert_eq!(images, Vec::from_iter(image));
                 let letters = output
                     .shapes
                     .iter()
@@ -1587,7 +1601,7 @@ mod mark_tests {
                     egui::Shape::Text(text) if text.galley.text() == "A")
                     })
                     .count();
-                assert_eq!(letters, usize::from(mark && !badge));
+                assert_eq!(letters, usize::from(mark && !badge && !logo_ready));
                 if title {
                     let label = if symbol.is_empty() { "1h" } else { "ABC · 1h" };
                     let text = output
