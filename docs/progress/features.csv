@@ -465,7 +465,7 @@ Order flow,Order flow,Profile peaks and valleys with sensitivity,done,library,sr
 Order flow,Order flow,Proprietary order-flow models,partial,library,src/model/tpo.rs;src/chart/rendering/candles/tpo.rs
 Order flow,Order flow,Rolling volume/delta sum over N bars,done,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
 Order flow,Order flow,"Session VWAP with daily, weekly or monthly reset",done,library,src/studies/builtin/vwap.rs;src/widget/studies.rs
-Order flow,Order flow,Order-flow page in the indicator browser,missing,library,
+Order flow,Order flow,Order-flow page in the indicator browser,done,library,src/ui/dialogs/indicator_dialog/dialog.rs;src/ui/dialogs/indicator_dialog/types.rs;src/studies/factory/mod.rs;
 Order flow,Order flow,Speed of tape,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
 Order flow,Order flow,Split session profiles,done,library,src/studies/builtin/trade_profile.rs;src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs
 Order flow,Order flow,Spoofing and pulled-liquidity detection,done,library,src/services/detectors/liquidity.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/model/signal.rs;src/widget/signals.rs;
@@ -522,7 +522,7 @@ Studies,Indicator infrastructure,Create studies by name and list them,done,libra
 Studies,Indicator infrastructure,Edge cases: very short or flat series,done,library,src/studies/factory/mod.rs;src/studies/builtin/sma.rs;src/studies/builtin/ma_combination.rs;src/studies/builtin/mod.rs
 Studies,Indicator infrastructure,Favourite indicators,done,library,src/ui/dialogs/indicator_dialog/dialog.rs;src/ui/dialogs/indicator_dialog/data.rs;terminal/src/studies.rs;src/services/settings.rs;src/ui/top_toolbar/toolbar.rs
 Studies,Indicator infrastructure,Filled areas and bands between plots,done,library,src/studies/plots.rs;src/studies/custom.rs;src/studies/builtin/bollinger_bands.rs;src/studies/builtin/ichimoku.rs;src/chart/renderers/indicator.rs;src/studies/indicator_trait.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs
-Studies,Indicator infrastructure,Indicator search dialog,done,library,src/ui/dialogs/indicator_dialog/dialog.rs;terminal/src/studies.rs;src/services/settings.rs;src/ui_kit/tab_bar/mod.rs;src/ui_kit/filter/mod.rs;src/ui_kit/sidebar_layout/mod.rs
+Studies,Indicator infrastructure,Indicator search dialog,done,library,src/ui/dialogs/indicator_dialog/dialog.rs;src/ui/dialogs/indicator_dialog/types.rs;src/studies/factory/mod.rs;terminal/src/studies.rs;src/services/settings.rs;src/ui_kit/tab_bar/mod.rs;src/ui_kit/filter/mod.rs;src/ui_kit/sidebar_layout/mod.rs
 Studies,Indicator infrastructure,Indicator templates,done,library,src/studies/template.rs;src/ui/dialogs/templates/dialog.rs;src/ui/dialogs/templates/store.rs;src/ui/top_toolbar/toolbar.rs
 Studies,Indicator infrastructure,Indicators on indicators,done,library,src/studies/settings.rs;src/widget/studies.rs;src/ui/dialogs/indicator_dialog/settings.rs
 Studies,Indicator infrastructure,Input validation,done,library,src/studies/inputs.rs;src/studies/builtin/kama.rs;src/studies/builtin/mod.rs;src/studies/factory/mod.rs
