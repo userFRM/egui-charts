@@ -189,7 +189,7 @@ Feed methods run on the UI thread and must return promptly. Fetch data elsewhere
 | Saved drawings, layouts and settings | `Storage` |
 | Alert rules and alert events | `Alerts` |
 
-Order flow uses executions and depth from your feed. The library renders footprints, session volume profiles, volume bubbles and liquidity heatmaps. Footprints need a time-based interval and an instrument tick size; without them, or before retained executions begin, that chart style draws candles. OHLCV bars alone do not supply the aggressor side of trades.
+Order flow uses executions and depth from your feed. The library renders footprints, session volume profiles, volume bubbles and liquidity heatmaps. Footprints need a time-based interval and an instrument tick size; without them, or before the first bar whose executions are all retained, that chart style draws candles. OHLCV bars alone do not supply the aggressor side of trades.
 
 The host also owns strategy execution and any scripting runtime. The [builder guide](docs/builder-guide.md) covers these integration points and the service contracts.
 

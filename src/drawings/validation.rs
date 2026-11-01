@@ -34,8 +34,12 @@ fn check(drawing: &Drawing, exact: bool) -> Result<(), &'static str> {
     }
     let count = drawing.chart_points.len();
     let invalid_count = if exact {
+        // Tools that store more anchors than the clicks that place them.
         let required = match tool {
-            DrawingToolType::LongPos | DrawingToolType::ShortPos => Some(3),
+            DrawingToolType::LongPos | DrawingToolType::ShortPos | DrawingToolType::Curve => {
+                Some(3)
+            }
+            DrawingToolType::DoubleCurve => Some(4),
             _ => tool.required_points(),
         };
         drawing.custom_tool.is_none() && required.map_or(count < 2, |required| count != required)

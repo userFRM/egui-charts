@@ -1203,6 +1203,7 @@ mod tests {
             fork.show_background = false;
             drawing.pitchfork = Some(fork);
             drawing.channel_midline = true;
+            drawing.closed = true;
             drawing.elliott_degree = ElliottDegree::Minuette;
             drawing.selectable = false;
             drawing.listed = false;

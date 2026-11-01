@@ -6278,4 +6278,45 @@ mod tests {
             assert_eq!(ranges, expected, "{shown:?}");
         }
     }
+
+    /// A session that opens before the first complete footprint bar counts only the bars from
+    /// it and is marked partial, so the bar the store cut, drawn as a candle, counts nowhere.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn session_profile_counts_only_complete_footprint_bars() {
+        use crate::data::Footprint;
+        use crate::model::OrderSide::{Buy, Sell};
+        use crate::model::{Bar, BarClock, Tick, Timeframe};
+        let t0: chrono::DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let m = chrono::TimeDelta::minutes(1);
+        let trades = [
+            Tick::new(t0 + m, 100.0, 5.0, Some(Sell)),
+            Tick::new(
+                t0 + m + chrono::TimeDelta::seconds(1),
+                101.0,
+                3.0,
+                Some(Buy),
+            ),
+            Tick::new(t0 + m * 2, 102.0, 2.0, Some(Buy)),
+        ];
+        let clock = BarClock::new(Timeframe::Min1);
+        let mut flow = Footprint::new(clock.clone(), 1.0, 1).unwrap();
+        for trade in &trades {
+            flow.push(trade).unwrap();
+        }
+        // The store dropped the sell of 5, so the 10:01 bar keeps only the buy of 3.
+        flow.drop_through(trades[0].ts, &trades[1..]);
+        let bars: Vec<_> = (0..3)
+            .map(|i| Bar::new(t0 + m * i, 100.0, 102.0, 100.0, 101.0, 10.0))
+            .collect();
+        // As the frame splits candles from bars drawn from executions.
+        let candles = bars.partition_point(|bar| bar.time < flow.complete_from().unwrap());
+        let ranges = super::session_ranges(&bars, candles..bars.len(), &clock).unwrap();
+        let profile = &crate::studies::trade_profiles(&flow, &ranges)[0];
+        assert_eq!(
+            (profile.volume.volume(), profile.volume.poc()),
+            (2.0, Some(102))
+        );
+        assert!(!profile.complete);
+    }
 }

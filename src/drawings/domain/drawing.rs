@@ -208,6 +208,10 @@ pub struct Drawing {
     /// Whether a rectangle or parallel channel draws its dashed halfway line.
     #[serde(default)]
     pub channel_midline: bool,
+    /// Whether a polyline joins its last anchor back to its first. Clicking the first anchor
+    /// while placing a polyline closes it; older saved drawings are open.
+    #[serde(default)]
+    pub closed: bool,
     /// Level lines and band fill of the pitchfork tools.
     #[serde(default)]
     pub pitchfork: Option<PitchforkConfig>,
@@ -287,7 +291,7 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
         T::Rect => filled(PURPLE, 51),
         T::RotatedRect => filled(GREEN, 51),
         T::Circle | T::Ellipse => filled(RED, 51),
-        // Polylines and arcs paint no fill yet, so they start unfilled.
+        // Polylines and arcs start unfilled.
         T::Polyline | T::Brush => colored(CYAN),
         T::Arc => colored(PINK),
         T::Sector => DefaultStyle {
@@ -494,6 +498,7 @@ impl Drawing {
             .then(PitchforkConfig::default),
             elliott_degree: ElliottDegree::default(),
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
+            closed: false,
             gann: None,
             ghost_feed: None,
             // Z-order (default: 0, higher values render on top)

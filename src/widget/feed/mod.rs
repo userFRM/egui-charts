@@ -80,6 +80,9 @@ pub(crate) struct FeedLink {
     depth_cursor: Option<chrono::DateTime<chrono::Utc>>,
     /// No older trades remain to be loaded.
     trades_complete: bool,
+    /// A trade page reported that nothing exists before its oldest trade, or came back empty
+    /// without `continue_before`: no trade before the oldest held one was missed.
+    trades_from_start: bool,
     heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
     /// How the live book is shown by the heatmap's profile and the depth ladder.
     book_view: crate::chart::overlays::OrderBookView,
@@ -155,6 +158,7 @@ impl FeedLink {
             trade_cursor: None,
             depth_cursor: None,
             trades_complete: false,
+            trades_from_start: false,
             heatmap: self.heatmap.is_some().then(Default::default),
             book_view: self.book_view.clone(),
             study_inputs: Vec::new(),
@@ -164,7 +168,8 @@ impl FeedLink {
     }
 
     /// The held trades as a footprint, or `None` without the instrument's tick size. A trade
-    /// older than the one before it is left out, as it is when it arrives live.
+    /// older than the one before it is left out, as it is when it arrives live. The bar of the
+    /// oldest held trade is incomplete until a trade page reports the start of trade history.
     fn footprint(&self) -> Option<Footprint> {
         let tick_size = self.instrument.as_ref()?.tick_size?;
         let mut flow = Footprint::new(self.clock.clone(), tick_size, 1).ok()?;
@@ -175,7 +180,20 @@ impl FeedLink {
         if let Some(lost) = self.trades.lost_until() {
             flow.drop_through(lost, self.trades.iter());
         }
+        if let Some(first) = self.unconfirmed_start() {
+            flow.received_from(first);
+        }
         Some(flow)
+    }
+
+    /// The oldest held trade, where the footprint starts, while executions before it may
+    /// exist that never arrived: no trade page reported the start of trade history and the
+    /// store lost none. A loss is marked exactly by `drop_through` instead.
+    fn unconfirmed_start(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        if self.trades_from_start || self.trades.lost_until().is_some() {
+            return None;
+        }
+        self.trades.iter().next().map(|trade| trade.ts)
     }
 
     fn bubbles(&self, config: VolumeBubblesConfig) -> VolumeBubbles {
@@ -225,6 +243,7 @@ impl Chart {
             trade_cursor: None,
             depth_cursor: None,
             trades_complete: false,
+            trades_from_start: false,
             heatmap: None,
             book_view: Default::default(),
             study_inputs: Vec::new(),
