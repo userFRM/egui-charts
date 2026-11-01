@@ -13,7 +13,7 @@ pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;
 /// Padding between an axis tag's text and its edge.
 const TAG_PADDING: Vec2 = Vec2::new(6.0, 1.5);
 
-/// The font of every axis label and tag: the theme's label text.
+/// The default font for axis labels and tags: the theme's label text.
 pub(crate) fn axis_font(ctx: &egui::Context) -> FontId {
     FontId::proportional(ctx.active_theme().text.label)
 }
