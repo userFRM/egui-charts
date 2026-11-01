@@ -54,7 +54,7 @@ impl Chart {
     /// next bar of its interval opens. Between bars it marks the nearest one; ties choose the
     /// earlier bar. Times before the first bar or after the last bar's period, and `None`, clear
     /// it. Repeated element times choose the first element. Each receiver resolves the timestamp
-    /// against its own series.
+    /// against its own series, including after bars are evicted or older history is loaded.
     pub fn set_synced_crosshair_time(&mut self, time: Option<DateTime<Utc>>) {
         self.set_synced_crosshair(time.map(|time| (time, time)), None);
     }
@@ -80,6 +80,7 @@ impl Chart {
     ) {
         let period = period.filter(|_| price.is_none_or(f64::is_finite));
         self.synced_crosshair_bar_idx = period.and_then(|(from, to)| self.synced_index(from, to));
+        self.synced_crosshair_period = period.filter(|_| self.synced_crosshair_bar_idx.is_some());
         self.synced_crosshair_price = price.filter(|_| self.synced_crosshair_bar_idx.is_some());
     }
 
@@ -184,6 +185,7 @@ impl Chart {
     /// `None` clears it. Use [`Self::set_synced_crosshair_time`] between independent charts.
     pub fn set_synced_crosshair_bar_idx(&mut self, bar_idx: Option<f64>) {
         self.synced_crosshair_bar_idx = bar_idx;
+        self.synced_crosshair_period = None;
         self.synced_crosshair_price = None;
     }
 
@@ -227,6 +229,67 @@ mod tests {
         chart.state.set_data(BarData::from_bars(bars));
         chart.state.time_scale_mut().set_width(width);
         chart
+    }
+
+    #[test]
+    fn synced_crosshair_keeps_its_time_when_history_changes() {
+        use crate::widget::test_frames::frame;
+        use crate::widget::{ImageExportOptions, SeriesId};
+
+        let bar = |minute: i64| Bar::new(time(minute * 60), 10.0, 11.0, 9.0, 10.0, 1.0);
+        for price in [Some(10.5), None] {
+            for (prepend, minute, expected_index) in [
+                (false, 10, Some(7.0)),
+                (true, 10, Some(14.0)),
+                (false, 1, None),
+            ] {
+                let mut chart = Chart::new(BarData::from_bars((0..16).map(bar).collect()));
+                if !prepend {
+                    chart.set_bar_limit(SeriesId::MAIN, std::num::NonZeroUsize::new(16));
+                }
+                let ctx = egui::Context::default();
+                frame(&ctx, &mut chart, 0.0, Vec::new());
+                let selected = time(minute * 60);
+                match price {
+                    Some(price) => chart.set_crosshair_position(Some((selected, price))),
+                    None => chart.set_synced_crosshair_time(Some(selected)),
+                }
+                frame(&ctx, &mut chart, 0.1, Vec::new());
+                assert_eq!(chart.last_crosshair, Some((selected, price)));
+                if prepend {
+                    for minute in -4..0 {
+                        chart.update(SeriesId::MAIN, bar(minute));
+                    }
+                    assert_eq!(chart.bars(SeriesId::MAIN)[0].time, time(-240));
+                } else {
+                    chart.update(SeriesId::MAIN, bar(16));
+                    assert_eq!(chart.bars(SeriesId::MAIN)[0].time, time(180));
+                }
+                let expected = expected_index.map(|_| (selected, price));
+                frame(&ctx, &mut chart, 0.2, Vec::new());
+                assert_eq!(chart.synced_crosshair_bar_idx, expected_index);
+                assert_eq!(chart.last_crosshair, expected);
+                let options = ImageExportOptions {
+                    include_crosshair: true,
+                    ..Default::default()
+                };
+                chart
+                    .export_layout_svg(&ctx, &options, |ui, snapshot| {
+                        snapshot.show(ui);
+                        assert_eq!(snapshot.last_crosshair, expected);
+                    })
+                    .unwrap();
+                // An explicit index replaces the time anchor and keeps its local semantics.
+                chart.set_synced_crosshair_bar_idx(Some(5.0));
+                chart.update(SeriesId::MAIN, bar(-5));
+                frame(&ctx, &mut chart, 0.3, Vec::new());
+                assert_eq!(chart.synced_crosshair_bar_idx, Some(5.0));
+                assert_eq!(
+                    chart.last_crosshair,
+                    Some((chart.state.shown()[5].time, None))
+                );
+            }
+        }
     }
 
     fn time(seconds: i64) -> DateTime<Utc> {

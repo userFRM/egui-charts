@@ -72,7 +72,7 @@ Builder API,Save/load adapter,User settings persistence,done,host,src/services/s
 Builder API,Widget API and customization,Change interval at runtime,done,library,src/widget/feed/mod.rs;src/widget/events.rs
 Builder API,Widget API and customization,Change symbol at runtime,done,library,src/widget/feed/mod.rs;src/scales/pricescale.rs;src/widget/events.rs
 Builder API,Widget API and customization,Chart events,done,library,src/widget/events.rs;src/widget/feed/mod.rs;src/widget/series.rs;src/widget/frame.rs
-Builder API,Widget API and customization,Chart synchronisation,done,library,src/widget/sync.rs;src/widget/layout.rs;src/model/timescale.rs
+Builder API,Widget API and customization,Chart synchronisation,done,library,src/widget/sync.rs;src/widget/layout.rs;src/model/timescale.rs;src/widget/frame.rs
 Builder API,Widget API and customization,Chart type switching,done,library,src/widget/builder.rs;src/widget/frame.rs;src/chart/rendering/candles/mod.rs
 Builder API,Widget API and customization,Chart without toolbars,done,library,Cargo.toml;src/lib.rs;src/widget/builder.rs;src/widget/frame.rs
 Builder API,Widget API and customization,Context menu customisation,done,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs
@@ -393,7 +393,7 @@ Order flow,Order flow,Book speed,partial,library,src/data/order_flow.rs;src/stud
 Order flow,Order flow,Book thickness and resting-size delta over time,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/orders.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs
 Order flow,Order flow,"Bubble grouping: automatic, by time window, by price, tick grouping",done,library,src/chart/overlays/volume_bubbles.rs;src/model/clock.rs
 Order flow,Order flow,CVD drawn as candles,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/chart/series/mod.rs
-Order flow,Order flow,"Chart tabs, detached groups and shared crosshair",done,library,src/widget/layout.rs;src/widget/sync.rs
+Order flow,Order flow,"Chart tabs, detached groups and shared crosshair",done,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame.rs
 Order flow,Order flow,Connectors for futures data feeds with aggregated and order-level depth,partial,host,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs;examples/demo/orders.rs
 Order flow,Order flow,Cumulative aggressor volume delta with resets,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs
 Order flow,Order flow,Cumulative iceberg and stop counts over time with alerts,missing,host,
@@ -864,7 +864,7 @@ Terminal,Templates and layouts,Save chart layout,done,library,src/widget/snapsho
 Terminal,Templates and layouts,Share a layout by link,done,host,src/services/sharing.rs;src/ui/share_controls.rs;src/ui/top_toolbar/components/layout_menu.rs
 Terminal,Templates and layouts,Snapshot: copy image to clipboard,done,library,src/ui/export.rs;src/ui/top_toolbar/toolbar.rs
 Terminal,Templates and layouts,Snapshot: download the chart image,done,library,src/widget/export.rs;src/ui/top_toolbar/toolbar.rs
-Terminal,Templates and layouts,Sync between charts,done,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/sync.rs;src/model/timescale.rs
+Terminal,Templates and layouts,Sync between charts,done,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/sync.rs;src/model/timescale.rs;src/widget/frame.rs
 Terminal,Toolbars and panels,Bottom time bar,done,library,src/ui/timeframe_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs;src/theme/mod.rs
 Terminal,Toolbars and panels,Chart settings button and applying the dialog,done,library,src/ui/top_toolbar/toolbar.rs;src/widget/settings/apply.rs
 Terminal,Toolbars and panels,Chart type menu,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/chart_type_selector.rs

@@ -513,6 +513,13 @@ impl Chart {
                 .request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
         self.show_elements();
+        // A crosshair set by time follows its bar when bars are evicted or loaded in front.
+        if let Some(period) = self.synced_crosshair_period {
+            self.set_synced_crosshair(Some(period), self.synced_crosshair_price);
+            if self.synced_crosshair_bar_idx.is_none() {
+                self.last_crosshair = None;
+            }
+        }
         if let Some(wait) = self.refresh_element_studies(ui.input(|i| i.time)) {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_secs_f64(wait));

@@ -400,6 +400,8 @@ pub struct Chart {
     // =========================================================================
     /// External crosshair position from synced chart (bar index)
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
+    /// Source period retained by time-based setters and resolved against the current bars.
+    synced_crosshair_period: Option<(DateTime<Utc>, DateTime<Utc>)>,
     /// Main-pane price of the external crosshair; `None` centres its horizontal line.
     synced_crosshair_price: Option<f64>,
     /// Time and main-pane price of the crosshair last drawn, for exported images.
