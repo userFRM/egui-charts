@@ -1,7 +1,8 @@
 //! Reusable drawing properties without geometry or record identity.
 
 /// Drawing properties without anchors or record identity. Apply to an existing drawing of the
-/// same type; its coordinates, name, notes, layer, post link and persistence identity stay intact.
+/// same type; its coordinates, closed outline, name, notes, layer, post link and persistence identity
+/// stay intact.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DrawingTemplate {
     /// Tool and reusable properties. Serialization omits anchors and record identity.
@@ -65,6 +66,7 @@ impl DrawingTemplate {
             selectable: drawing.selectable,
             saveable: drawing.saveable,
             listed: drawing.listed,
+            closed: drawing.closed,
             z_order: drawing.z_order,
             ..self.settings.clone()
         };

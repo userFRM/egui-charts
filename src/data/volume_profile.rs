@@ -172,10 +172,11 @@ pub enum ProfileSource {
     /// Bar volume spread over each bar's high-low range, split by candle direction.
     Estimated,
     /// Executed volume at each price, split by aggressor side, with unclassified volume
-    /// apart. `complete` is false when the executions held start after the profile's span
-    /// does, so the earliest rows may be missing.
+    /// apart. `complete` is false when the span starts before the first bar whose executions
+    /// are all held, [`Footprint::complete_from`](super::Footprint::complete_from), so the
+    /// earliest rows may be missing.
     Executions {
-        /// Whether executions are held from the start of the span.
+        /// Whether the executions of every bar in the span are held.
         complete: bool,
     },
     /// Call and put contract volume at each strike, from [`VolumeProfile::from_options`].

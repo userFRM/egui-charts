@@ -524,6 +524,16 @@ impl super::Chart {
             },
             #[cfg(feature = "drawings")]
             A::Cancel => {
+                // Keep placed path anchors; completion drops the pointer preview.
+                if self.drawings.curr_drawing.as_ref().is_some_and(|d| {
+                    matches!(
+                        d.tool_type,
+                        crate::drawings::DrawingToolType::Path
+                            | crate::drawings::DrawingToolType::Polyline
+                    )
+                }) {
+                    self.drawings.complete_curr_drawing();
+                }
                 self.drawings.cancel_curr_drawing();
                 self.drawings.deselect();
                 self.drawings.set_active_tool(None);

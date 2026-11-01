@@ -1,11 +1,12 @@
 use super::context::{ChartMapping, RenderContext};
 use super::labels::tick_decimals;
-use crate::chart::rendering::axes::paint_crosshair_tag;
+use crate::chart::rendering::axes::{axis_font, paint_crosshair_tag};
 use crate::config::{CrosshairMode, CrosshairOptions, CrosshairStyle};
 use crate::model::Bar;
 use crate::model::LineStyle;
-use crate::painting::dashed_line::draw_dashed_line;
+use crate::painting::dashed_line::{draw_cached_dashed_segments, draw_dashed_segments};
 use crate::scales::{HorizontalScale, PriceFormatter, PriceMap, PriceScaleMode};
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, Color32, Pos2, Rect, Stroke};
 
@@ -125,7 +126,8 @@ pub fn render_crosshair_with_options(
                     options.label_text_color,
                     options.vert_label_background_color,
                 ),
-                25.0,
+                egui::FontId::proportional(context.painter.ctx().active_theme().text.title),
+                23.5,
                 None,
             )
         });
@@ -138,37 +140,72 @@ pub(crate) fn render_crosshair_lines(
     options: &CrosshairOptions,
     chart_bottom: f32,
 ) {
-    let line = |from, to, color, width, style| {
+    // Pointerless image exports keep vector strokes for the vector writer.
+    let cache_lines = context
+        .painter
+        .ctx()
+        .input(|input| input.pointer.has_pointer());
+    let line = |segments: &[[Pos2; 2]], color, width, style| {
         let stroke = Stroke::new(width, color);
-        match style {
-            LineStyle::Solid => {
-                context.painter.line_segment([from, to], stroke);
+        let pattern = match style {
+            LineStyle::Solid => None,
+            LineStyle::Dashed => Some((6.0, 6.0)),
+            LineStyle::Dotted => Some((1.0, 3.0)),
+            LineStyle::LargeDashed => Some((10.0, 10.0)),
+            LineStyle::SparseDotted => Some((1.0, 7.0)),
+        };
+        if let Some((dash, gap)) = pattern {
+            let segments = segments.iter().map(|&[from, to]| (from, to, 0.0));
+            if cache_lines {
+                draw_cached_dashed_segments(context.painter, segments, stroke, dash, gap);
+            } else {
+                draw_dashed_segments(context.painter, segments, stroke, dash, gap);
             }
-            LineStyle::Dashed => draw_dashed_line(context.painter, from, to, stroke, 5.0, 5.0),
-            LineStyle::Dotted => draw_dashed_line(context.painter, from, to, stroke, 1.0, 3.0),
-            LineStyle::LargeDashed => {
-                draw_dashed_line(context.painter, from, to, stroke, 10.0, 10.0)
-            }
-            LineStyle::SparseDotted => {
-                draw_dashed_line(context.painter, from, to, stroke, 1.0, 7.0)
+        } else {
+            for &points in segments {
+                context.painter.line_segment(points, stroke);
             }
         }
     };
     match options.style {
         CrosshairStyle::Full => {
+            let vertical = [
+                Pos2::new(pos.x, context.rect.top()),
+                Pos2::new(pos.x, chart_bottom),
+            ];
+            let horizontal = [
+                Pos2::new(context.rect.left(), pos.y),
+                Pos2::new(context.rect.right(), pos.y),
+            ];
+            let show_horizontal =
+                options.horz_line_visible && context.rect.y_range().contains(pos.y);
+            if cache_lines
+                && options.vert_line_visible
+                && show_horizontal
+                && options.vert_line_style == options.horz_line_style
+                && options.vert_line_color == options.horz_line_color
+                && options.vert_line_width == options.horz_line_width
+            {
+                // One mesh avoids growing and copying the frame mesh again for the other axis.
+                line(
+                    &[vertical, horizontal],
+                    options.vert_line_color,
+                    options.vert_line_width,
+                    options.vert_line_style,
+                );
+                return;
+            }
             if options.vert_line_visible {
                 line(
-                    Pos2::new(pos.x, context.rect.top()),
-                    Pos2::new(pos.x, chart_bottom),
+                    &[vertical],
                     options.vert_line_color,
                     options.vert_line_width,
                     options.vert_line_style,
                 );
             }
-            if options.horz_line_visible && context.rect.y_range().contains(pos.y) {
+            if show_horizontal {
                 line(
-                    Pos2::new(context.rect.left(), pos.y),
-                    Pos2::new(context.rect.right(), pos.y),
+                    &[horizontal],
                     options.horz_line_color,
                     options.horz_line_width,
                     options.horz_line_style,
@@ -248,6 +285,7 @@ pub(crate) fn render_crosshair_price_tag(
             options.label_text_color,
             options.horz_label_background_color,
         ),
+        axis_font(context.painter.ctx()),
         21.0,
         last_price_tag,
     ))
@@ -284,6 +322,58 @@ mod tests {
     use crate::scales::{PriceRange, PriceTransform, TimeFormatterBuilder, TimezoneMode};
     use chrono::{Duration, TimeZone, Utc};
     use egui::{Context, RawInput, Shape};
+
+    /// Default lines keep six-point dashes and gaps in the preset's contrasting ink.
+    #[test]
+    fn default_crosshair_dashes_read_in_both_presets() {
+        use crate::theme::{Theme, apply_to_egui, contrast};
+        for (theme, ink) in [(Theme::dark(), 119), (Theme::light(), 116)] {
+            let ctx = Context::default();
+            apply_to_egui(&ctx, &theme);
+            let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(24.0, 24.0));
+            let mut output = ctx.run_ui(RawInput::default(), |ui| {
+                let painter = ui.painter().with_clip_rect(rect);
+                render_crosshair_lines(
+                    &RenderContext::new(&painter, rect),
+                    Pos2::new(12.0, 12.0),
+                    &CrosshairOptions::default().resolved(&ctx),
+                    24.0,
+                );
+            });
+            output.textures_delta.clear();
+            let lines: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match shape.shape {
+                    Shape::LineSegment { points, stroke } => Some((points, stroke)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                lines,
+                [
+                    (
+                        [Pos2::new(12.0, 0.0), Pos2::new(12.0, 6.0)],
+                        Stroke::new(1.0, Color32::from_gray(ink))
+                    ),
+                    (
+                        [Pos2::new(12.0, 12.0), Pos2::new(12.0, 18.0)],
+                        Stroke::new(1.0, Color32::from_gray(ink))
+                    ),
+                    (
+                        [Pos2::new(0.0, 12.0), Pos2::new(6.0, 12.0)],
+                        Stroke::new(1.0, Color32::from_gray(ink))
+                    ),
+                    (
+                        [Pos2::new(12.0, 12.0), Pos2::new(18.0, 12.0)],
+                        Stroke::new(1.0, Color32::from_gray(ink))
+                    ),
+                ]
+            );
+            assert!(contrast(theme.chart.crosshair_line, theme.chart.bg) >= 4.5);
+            output.drop_without_applying_deltas();
+        }
+    }
 
     /// Edge tags remain inside the pane, use supplied precision, and name the nearest bar
     /// in the selected timezone, including when the pointer is below the price area.
@@ -324,7 +414,7 @@ mod tests {
                 let coords = ChartMapping::new(rect, 10.0, 0, 29, 0.0, map);
                 let ctx = Context::default();
                 let mut tags = [None; 2];
-                let output = ctx.run_ui(RawInput::default(), |ui| {
+                let mut output = ctx.run_ui(RawInput::default(), |ui| {
                     tags = render_crosshair_full(
                         &RenderContext::new(ui.painter(), rect),
                         Pos2::new(coords.idx_to_x(index), hover_y),
@@ -345,6 +435,7 @@ mod tests {
                         3600,
                     );
                 });
+                output.textures_delta.clear();
                 let labels: Vec<_> = output
                     .shapes
                     .iter()
@@ -353,13 +444,22 @@ mod tests {
                         _ => None,
                     })
                     .collect();
+                let date_text = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.galley.text().contains("'24") => Some(text),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(date_text.galley.job.sections[0].format.font_id.size, 14.0);
                 output.drop_without_applying_deltas();
                 let date = tags[1].unwrap();
                 assert!(
                     date.left() >= rect.left() && date.right() <= axis_right,
                     "{date:?}"
                 );
-                assert_eq!(date.height(), 25.0);
+                assert_eq!(date.height(), 23.5);
                 if let Some(tag) = tags[0] {
                     assert_eq!(tag.height(), 21.0);
                     assert!(

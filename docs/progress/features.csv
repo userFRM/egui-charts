@@ -100,12 +100,12 @@ Chart,Chart settings and themes,Background,done,library,src/widget/settings/appl
 Chart,Chart settings and themes,Candle colour customisation,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/rendering/candles/candlestick.rs;src/chart/renderers/candle.rs
 Chart,Chart settings and themes,Canvas tab,done,library,src/ui/dialogs/chart_settings/tabs/canvas.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
 Chart,Chart settings and themes,Chart settings dialog,done,library,src/ui/dialogs/chart_settings/mod.rs;src/widget/settings/apply.rs;src/ui_kit/modal/modal.rs;src/ui/dialogs/chart_settings/tabs/mod.rs;src/ui_kit/dialog/mod.rs;src/ui_kit/sidebar_layout/mod.rs;src/tokens/mod.rs
-Chart,Chart settings and themes,Crosshair appearance,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/crosshair.rs;src/painting/dashed_line.rs
+Chart,Chart settings and themes,Crosshair appearance,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/crosshair.rs;src/painting/dashed_line.rs;src/config/crosshair.rs;src/theme/presets.rs
 Chart,Chart settings and themes,Events tab,done,host,src/model/time_scale_event.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/dialogs/chart_settings/tabs/trading.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
 Chart,Chart settings and themes,Grid lines,partial,library,src/widget/frame.rs;src/chart/renderers/labels.rs;src/chart/rendering/grid.rs;src/widget/settings/apply.rs;src/widget/indicator_pane.rs;src/painting/dashed_line.rs;src/theme/presets.rs
 Chart,Chart settings and themes,Light and dark themes,done,library,src/widget/mod.rs;src/widget/palette.rs;src/widget/frame.rs;src/config/chart.rs;src/model/markers.rs;src/chart/renderers/markers.rs;src/theme/presets.rs;src/theme/style.rs;examples/demo/controller.rs
 Chart,Chart settings and themes,Navigation and pane buttons,done,library,src/widget/navigation.rs;src/widget/frame.rs;src/widget/pane_layout.rs;src/widget/settings/data.rs
-Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/dialogs/chart_settings/tabs/scales.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
+Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/dialogs/chart_settings/tabs/scales.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs;src/ui/dialogs/chart_settings/tabs/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Chart,Chart settings and themes,Scales text colour and size,done,library,src/widget/settings/data.rs;src/widget/settings/apply.rs;src/chart/rendering/axes.rs;src/chart/renderers/labels.rs
 Chart,Chart settings and themes,Session background shading,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs
 Chart,Chart settings and themes,Status line tab,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
@@ -132,11 +132,11 @@ Chart,Chart types,Price-based type parameters,done,library,src/model/chart_type.
 Chart,Chart types,"Price-based types: axis, crosshair and legend",done,library,src/widget/series.rs;src/studies/chart_state.rs;src/chart/rendering/candles/price_based.rs;src/widget/frame.rs;src/chart/renderers/crosshair.rs
 Chart,Chart types,Range,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/price_based.rs;src/model/range_bar.rs;src/data/trades.rs;src/widget/series.rs;src/widget/feed/mod.rs
 Chart,Chart types,Renko,done,library,src/chart/rendering/candles/price_based.rs;src/model/renko.rs;src/chart/rendering/candles/japanese.rs;src/ui/dialogs/series_settings/tabs/symbol.rs
-Chart,Chart types,Session volume profile,done,host,src/widget/feed/mod.rs;src/widget/frame.rs;src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/merge.rs
+Chart,Chart types,Session volume profile,done,host,src/widget/feed/mod.rs;src/widget/frame.rs;src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/merge.rs;src/data/footprint.rs
 Chart,Chart types,Step line,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/line.rs;src/painting/dashed_line.rs
 Chart,Chart types,Time Price Opportunity,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/tpo.rs;src/model/tpo.rs;src/model/session/exchange.rs;src/widget/frame.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/chart/rendering/candles/line.rs;src/tokens/mod.rs;src/tokens/semantic.rs;src/model/chart_type.rs
 Chart,Chart types,Volume candles,done,library,src/widget/frame.rs;src/chart/rendering/candles/candlestick.rs
-Chart,Chart types,Volume footprint,done,host,src/widget/feed/mod.rs;src/data/footprint.rs;src/widget/frame.rs;src/chart/overlays/footprint.rs;src/widget/merge.rs;benches/frame_time.rs
+Chart,Chart types,Volume footprint,done,host,src/widget/feed/mod.rs;src/data/footprint.rs;src/widget/frame.rs;src/chart/overlays/footprint.rs;src/widget/merge.rs;benches/frame_time.rs;src/widget/feed/pump.rs
 Chart,Compare and overlay,Compare on a new price scale,done,host,src/model/series_scale.rs;src/widget/price_series.rs
 Chart,Compare and overlay,Compare symbol,done,host,src/widget/price_series.rs
 Chart,Compare and overlay,Overlay a symbol on the same price scale,done,host,src/widget/price_series.rs;src/widget/series.rs
@@ -144,7 +144,7 @@ Chart,Compare and overlay,Percent scale when comparing,done,library,src/widget/p
 Chart,Crosshair and interaction,Auto-scroll to realtime and jump-to-latest button,done,library,src/widget/series.rs;src/widget/frame.rs;src/widget/time_scale.rs
 Chart,Crosshair and interaction,"Chart, series and drawing context menus",partial,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/drawing.rs;src/widget/drawing_api.rs;terminal/src/drawings.rs;terminal/src/studies.rs;src/ui/floating_toolbar/toolbar.rs;examples/demo/controller.rs
 Chart,Crosshair and interaction,Crosshair across all panes,done,library,src/widget/panes.rs;src/widget/indicator_pane.rs;src/widget/frame.rs
-Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/painting/dashed_line.rs
+Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/painting/dashed_line.rs;src/config/crosshair.rs;src/chart/rendering/axes.rs;src/theme/presets.rs;src/widget/panes.rs
 Chart,Crosshair and interaction,Cursor types,done,library,src/widget/frame.rs;src/chart/cursor_modes/mod.rs;src/chart/cursor_modes/eraser.rs;src/widget/tool_interaction/selection.rs;src/widget/panes.rs;src/drawings/manager/interaction.rs
 Chart,Crosshair and interaction,Double-click on axes to reset,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs;src/widget/pane_layout.rs
 Chart,Crosshair and interaction,Drag on the time axis to zoom,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
@@ -189,7 +189,7 @@ Chart,Legend and data window,Status line values follow the crosshair,done,librar
 Chart,Legend and data window,Symbol status line,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/model/session/exchange.rs;src/painting/symbol_mark.rs
 Chart,Legend and data window,Volume in the status line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/scales/price_formatter.rs
 Chart,Multi-chart and sync,Grid layout presets,done,library,src/widget/layout.rs;src/ui/top_toolbar/components/chart_grid_selector.rs;src/ui/top_toolbar/toolbar.rs
-Chart,Multi-chart and sync,Multi-chart layout container,done,library,src/widget/layout.rs
+Chart,Multi-chart and sync,Multi-chart layout container,done,library,src/widget/layout.rs;src/widget/frame.rs;src/widget/mod.rs;src/chart/rendering/axes.rs
 Chart,Multi-chart and sync,Symbol and interval sync groups,done,library,src/widget/layout.rs
 Chart,Multi-chart and sync,Sync crosshair,done,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame.rs
 Chart,Multi-chart and sync,Sync date range,done,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs
@@ -277,8 +277,8 @@ Drawings,Drawings,API: drawing templates through the save/load adapter,done,libr
 Drawings,Drawings,"API: per-drawing selection, saving, user-edit and object-tree flags",done,library,src/drawings/domain/drawing.rs;src/drawings/manager/mod.rs;src/widget/anchors.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Anchored VWAP,done,library,src/drawings/rendering/trading/volume_profile.rs;src/drawings/domain/vwap.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
 Drawings,Drawings,Anchored text,done,library,src/drawings/domain/drawing.rs;src/drawings/rendering/annotations/text.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
-Drawings,Drawings,Anchored volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/drawings/rendering/mod.rs
-Drawings,Drawings,Arc,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
+Drawings,Drawings,Anchored volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/drawings/rendering/mod.rs;src/data/footprint.rs
+Drawings,Drawings,Arc,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/shapes.rs;src/drawings/rendering/mod.rs
 Drawings,Drawings,Arrow,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/style.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs
 Drawings,Drawings,Arrow mark down,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Arrow mark left,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs
@@ -290,15 +290,15 @@ Drawings,Drawings,Brush,done,library,src/drawings/rendering/shapes.rs;src/widget
 Drawings,Drawings,Callout,done,library,src/drawings/rendering/annotations/callout.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/annotations/labels.rs;src/drawings/manager/interaction.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
 Drawings,Drawings,Circle,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Comment,done,library,src/drawings/rendering/annotations/callout.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/annotations/labels.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
-Drawings,Drawings,Cross line,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs
-Drawings,Drawings,Curve,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs
+Drawings,Drawings,Cross line,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/drawings/manager/paint.rs;src/widget/frame.rs
+Drawings,Drawings,Curve,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/manager/interaction.rs;src/drawings/validation.rs
 Drawings,Drawings,Cyclic lines,done,library,src/drawings/rendering/cycles.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/style.rs
 Drawings,Drawings,Cypher pattern,done,library,src/drawings/rendering/patterns.rs;src/painting/dashed_line.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs
 Drawings,Drawings,Date and price range,done,library,src/drawings/rendering/measurements.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Date range,done,library,src/drawings/rendering/measurements.rs;src/drawings/rendering/mod.rs
 Drawings,Drawings,Demonstration and magic cursors,done,library,src/config/crosshair.rs;src/chart/cursor_modes/mod.rs;src/widget/frame.rs;src/ui/drawing_toolbar/categories/cursors.rs
 Drawings,Drawings,Disjoint channel,done,library,src/drawings/rendering/channels.rs;src/drawings/rendering/mod.rs;src/drawings/services/handle.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs
-Drawings,Drawings,Double curve,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs
+Drawings,Drawings,Double curve,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/manager/interaction.rs;src/drawings/validation.rs
 Drawings,Drawings,Drawing anchor access,done,library,src/widget/drawing_api.rs;src/widget/anchors.rs;src/model/bar/time.rs;src/widget/time_scale.rs
 Drawings,Drawings,Drawing attachment to a study or pane,done,library,src/drawings/domain/drawing.rs;src/widget/drawing_api.rs;src/widget/panes.rs
 Drawings,Drawings,Drawing events,done,library,src/drawings/manager/mod.rs
@@ -325,7 +325,7 @@ Drawings,Drawings,Fib speed resistance fan,done,library,src/drawings/rendering/f
 Drawings,Drawings,Fib spiral,done,library,src/drawings/rendering/fibonacci.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/style.rs
 Drawings,Drawings,Fib time zone,done,library,src/drawings/rendering/fibonacci.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/domain/drawing.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/actions.rs
 Drawings,Drawings,Fib wedge,done,library,src/drawings/rendering/fibonacci.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/domain/drawing.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/actions.rs
-Drawings,Drawings,Fixed range volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/drawings/rendering/mod.rs
+Drawings,Drawings,Fixed range volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/drawings/rendering/mod.rs;src/data/footprint.rs
 Drawings,Drawings,Flag mark,done,library,src/drawings/rendering/annotations/notes.rs;src/widget/tool_interaction/text.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
 Drawings,Drawings,Flat top/bottom,done,library,src/drawings/rendering/channels.rs;src/drawings/rendering/mod.rs;src/drawings/services/handle.rs;src/drawings/rendering/measurements.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Gann box,done,library,src/drawings/rendering/gann.rs;src/drawings/domain/gann.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/services/handle.rs;src/drawings/domain/drawing.rs
@@ -335,8 +335,8 @@ Drawings,Drawings,Gann square fixed,done,library,src/drawings/rendering/gann.rs;
 Drawings,Drawings,Ghost feed,done,library,src/ui/dialogs/drawing_properties/actions.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/persistence.rs;src/drawings/rendering/trading/ghost_feed.rs;src/drawings/categories.rs;src/drawings/domain/ghost_feed.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
 Drawings,Drawings,Head and shoulders,done,library,src/drawings/rendering/patterns.rs;src/painting/dashed_line.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs
 Drawings,Drawings,Highlighter,done,library,src/drawings/rendering/shapes.rs;src/widget/tool_interaction/interaction.rs;src/drawings/domain/drawing.rs;src/drawings/services/handle.rs
-Drawings,Drawings,Horizontal line,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/painting/dashed_line.rs
-Drawings,Drawings,Horizontal ray,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/painting/dashed_line.rs
+Drawings,Drawings,Horizontal line,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/painting/dashed_line.rs;src/drawings/manager/paint.rs;src/widget/frame.rs
+Drawings,Drawings,Horizontal ray,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/painting/dashed_line.rs;src/drawings/manager/paint.rs;src/widget/frame.rs
 Drawings,Drawings,Icons and emojis,done,library,src/ui/drawing_toolbar/glyph_picker.rs;src/drawings/manager/mod.rs;src/drawings/rendering/media.rs;src/drawings/glyphs.rs;src/drawings/manager/interaction.rs;src/drawings/services/handle.rs
 Drawings,Drawings,Ideas,done,host,src/drawings/rendering/media.rs;src/widget/tool_interaction/text.rs;src/drawings/categories.rs;src/model/post.rs;src/services/posts.rs;src/widget/posts.rs;src/widget/events.rs;src/drawings/manager/interaction.rs;src/ui/ideas.rs
 Drawings,Drawings,Image,done,library,src/drawings/rendering/media.rs;src/widget/tool_interaction/text.rs;src/drawings/categories.rs
@@ -348,11 +348,11 @@ Drawings,Drawings,Modified Schiff pitchfork,done,library,src/drawings/rendering/
 Drawings,Drawings,Multi-point drawing creation,done,library,src/widget/drawing_api.rs;src/drawings/manager/mod.rs;src/drawings/validation.rs;src/drawings/manager/interaction.rs
 Drawings,Drawings,Note,done,library,src/drawings/rendering/annotations/notes.rs;src/widget/tool_interaction/text.rs;src/drawings/rendering/annotations/labels.rs;src/config/drawing_tool/behavior.rs;src/drawings/manager/interaction.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
 Drawings,Drawings,Parallel channel,done,library,src/drawings/rendering/channels.rs;src/drawings/rendering/mod.rs;src/drawings/services/handle.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs
-Drawings,Drawings,Path,done,library,src/drawings/rendering/shapes.rs;src/drawings/rendering/style.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs
+Drawings,Drawings,Path,done,library,src/drawings/rendering/shapes.rs;src/drawings/rendering/style.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/widget/keyboard.rs
 Drawings,Drawings,Pin,done,library,src/drawings/rendering/annotations/notes.rs;src/drawings/domain/drawing.rs;src/drawings/manager/interaction.rs;src/widget/tool_interaction/mod.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
 Drawings,Drawings,Pitchfan,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/pitchfork.rs
 Drawings,Drawings,Pitchfork,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/pitchfork.rs
-Drawings,Drawings,Polyline,done,library,src/drawings/rendering/lines.rs;src/drawings/manager/mod.rs;src/widget/tool_interaction/interaction.rs;src/drawings/manager/edit.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/style.rs;src/painting/dashed_line.rs
+Drawings,Drawings,Polyline,done,library,src/drawings/rendering/lines.rs;src/drawings/manager/mod.rs;src/widget/tool_interaction/interaction.rs;src/drawings/manager/edit.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/style.rs;src/painting/dashed_line.rs;src/drawings/rendering/mod.rs;src/drawings/domain/drawing.rs;src/drawings/domain/template.rs;src/drawings/manager/interaction.rs;src/widget/keyboard.rs;src/drawings/rendering/shapes.rs
 Drawings,Drawings,Position forecast,done,library,src/drawings/rendering/trading/forecast.rs;src/drawings/rendering/measurements.rs;src/drawings/rendering/trading/projection.rs
 Drawings,Drawings,Price label,done,library,src/drawings/rendering/annotations/labels.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Price note,done,library,src/drawings/rendering/annotations/labels.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/manager/interaction.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
@@ -381,7 +381,7 @@ Drawings,Drawings,Trend-based fib extension,done,library,src/drawings/rendering/
 Drawings,Drawings,Trend-based fib time,done,library,src/drawings/rendering/fibonacci.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/domain/drawing.rs;src/drawings/rendering/style.rs;src/drawings/rendering/mod.rs;src/ui/dialogs/drawing_properties/actions.rs
 Drawings,Drawings,Triangle,done,library,src/drawings/rendering/lines.rs;src/drawings/manager/mod.rs;src/config/drawing_tool/behavior.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Triangle pattern,done,library,src/drawings/rendering/patterns.rs;src/painting/dashed_line.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs
-Drawings,Drawings,Vertical line,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs
+Drawings,Drawings,Vertical line,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/manager/paint.rs;src/widget/frame.rs
 Drawings,Drawings,XABCD pattern,done,library,src/drawings/rendering/patterns.rs;src/painting/dashed_line.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs
 Order flow,Order flow,Absorption detection,missing,host,
 Order flow,Order flow,Anchored developing VWAP drawing tool,done,library,src/drawings/rendering/trading/volume_profile.rs;src/drawings/rendering/mod.rs
@@ -814,7 +814,7 @@ Terminal,Alerts,Notification: in-app popup when an alert fires,done,library,src/
 Terminal,Alerts,Notification: mobile app push,missing,host,
 Terminal,Alerts,Notification: webhook,missing,host,
 Terminal,Alerts,"Price operators: crossing, crossing up, crossing down, greater than, less than",done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs
-Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,partial,library,src/ui/context_menu/mod.rs;src/chart/renderers/crosshair.rs;src/widget/frame.rs
+Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,done,library,src/ui/context_menu/mod.rs;src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/chart/rendering/axes.rs;src/config/chart.rs;src/widget/settings/apply.rs;src/ui/context_menu/chart_menus/mod.rs
 Terminal,Alerts,Server-side evaluation,done,host,src/services/alerts.rs;src/ui/widget_bar/panels/alerts_panel.rs
 Terminal,Alerts,Trigger frequency,done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs
 Terminal,Alerts,Watchlist alerts,done,host,src/ui/dialogs/alert_dialog/dialog.rs

@@ -9,7 +9,7 @@
 //! | `ClickClick` | Two clicks or a drag create the drawing (e.g., trend line) |
 //! | `DragToDraw` | Two clicks or a drag create the drawing (e.g., rectangle) |
 //! | `ContinuousDraw` | Freehand drawing while dragging (e.g., brush, highlighter) |
-//! | `MultiPoint` | Multiple clicks, double-click or Enter to complete (e.g., path) |
+//! | `MultiPoint` | Multiple clicks, double-click or Enter to complete (e.g., path); a click on a polyline's first point closes it |
 //!
 //! Keyboard completion and cancellation use the shared chart dispatcher.
 
@@ -200,7 +200,7 @@ pub fn handle_active_tool<F1, F2>(
                             x_to_bar,
                             y_to_price,
                         );
-                    } else {
+                    } else if !drawing_manager.close_curr_polyline(pos) {
                         drawing_manager.add_point_with_coords(pos, x_to_bar, y_to_price);
                     }
                 } else if drawing_manager.curr_drawing.is_some() {

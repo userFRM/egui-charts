@@ -167,7 +167,6 @@ impl Drawing {
             | T::InfoLine
             | T::Arrow
             | T::ArrowMarker
-            | T::Polyline
             | T::Path
             | T::Brush
             | T::Highlighter
@@ -185,6 +184,7 @@ impl Drawing {
                     outline.width = self.stroke_width;
                 }
             }
+            T::Polyline => outline.lines = path(self.closed),
             T::HeadAndShoulders => {
                 outline.lines = path(false);
                 if let Some((neckline, regions)) = patterns::head_and_shoulders_outline(p) {
@@ -301,6 +301,13 @@ impl Drawing {
             T::FibonacciWedge => return self.fibonacci_wedge_outline(),
             T::FibonacciSpeedFan => outline.lines = self.fibonacci_speed_fan_lines(rect),
             _ => return None,
+        }
+        if filled && let Some(area) = self.enclosed_area() {
+            outline.areas.extend(
+                shapes::even_odd_trapezoids(&area)
+                    .into_iter()
+                    .map(Vec::from),
+            );
         }
         Some(outline)
     }
@@ -1365,6 +1372,131 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Even-odd fills and their hit areas agree for concave and crossing paths and curve lobes.
+    #[test]
+    fn filled_shapes_cover_the_area_their_line_encloses() {
+        use crate::drawings::services::DrawingInteraction;
+        use DrawingToolType as T;
+        let concave = vec![
+            (50., 50.),
+            (200., 50.),
+            (200., 200.),
+            (125., 100.),
+            (50., 200.),
+        ];
+        for (tool, points, closed, area, hits, misses) in [
+            (
+                T::Polyline,
+                concave.clone(),
+                true,
+                15000.,
+                vec![(125., 75.), (50., 125.)],
+                vec![(125., 150.)],
+            ),
+            (
+                T::Polyline,
+                concave,
+                false,
+                0.,
+                vec![],
+                vec![(125., 75.), (50., 125.)],
+            ),
+            (
+                T::Polyline,
+                vec![(50., 50.), (250., 250.), (250., 50.), (50., 250.)],
+                false,
+                20000.,
+                vec![(70., 150.)],
+                vec![(150., 70.)],
+            ),
+            (
+                T::Arc,
+                vec![(100., 200.), (300., 200.), (200., 100.)],
+                false,
+                15701.7,
+                vec![(200., 150.)],
+                vec![(200., 250.)],
+            ),
+            (
+                T::Curve,
+                vec![(100., 300.), (250., 120.), (400., 300.)],
+                false,
+                17982.4,
+                vec![(250., 260.)],
+                vec![(250., 190.)],
+            ),
+            (
+                T::DoubleCurve,
+                vec![(100., 200.), (200., 350.), (300., 50.), (400., 200.)],
+                false,
+                8429.3,
+                vec![(163.4, 230.), (336.6, 170.)],
+                vec![(163.4, 170.), (250., 240.)],
+            ),
+        ] {
+            let mut drawing = Drawing::new(1, tool);
+            drawing.points = points.into_iter().map(Pos2::from).collect();
+            drawing.completed = true;
+            drawing.closed = closed;
+            drawing.fill_color = (area > 0.).then_some([12, 34, 56, 80]);
+            let painted = paint(&drawing);
+            let fill = Color32::from_rgba_unmultiplied(12, 34, 56, 80);
+            let painted_area: f32 = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Mesh(mesh) => {
+                        assert!(mesh.vertices.iter().all(|v| v.color == fill));
+                        Some(
+                            mesh.indices
+                                .as_chunks::<3>()
+                                .0
+                                .iter()
+                                .map(|tri| {
+                                    let a = mesh.vertices[tri[0] as usize].pos;
+                                    let b = mesh.vertices[tri[1] as usize].pos;
+                                    let c = mesh.vertices[tri[2] as usize].pos;
+                                    ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs()
+                                        / 2.
+                                })
+                                .sum::<f32>(),
+                        )
+                    }
+                    _ => None,
+                })
+                .sum();
+            assert!(
+                (painted_area - area).abs() < 2.,
+                "{tool:?}: {painted_area} != {area}"
+            );
+            let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.));
+            let clipped: Vec<_> = painted
+                .into_iter()
+                .map(|shape| egui::epaint::ClippedShape::new(rect, shape))
+                .collect();
+            for (points, want) in [(hits, true), (misses, false)] {
+                for point in points.into_iter().map(Pos2::from) {
+                    assert_eq!(
+                        DrawingInteraction::new().hit_test(point, &[drawing.clone()], "1m"),
+                        want.then_some(1),
+                        "{tool:?} outline at {point:?}"
+                    );
+                    assert_eq!(
+                        DrawingInteraction::hit_test_painted(point, &clipped),
+                        want,
+                        "{tool:?} paint at {point:?}"
+                    );
+                }
+            }
+        }
+        for points in [
+            vec![],
+            vec![Pos2::ZERO; 2],
+            vec![Pos2::ZERO, Pos2::new(f32::NAN, 1.), Pos2::new(1., 2.)],
+        ] {
+            assert!(shapes::even_odd_trapezoids(&points).is_empty());
         }
     }
 
