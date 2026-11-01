@@ -471,6 +471,8 @@ impl Chart {
     /// Bars without complete executions are drawn as candles. While cells would be too narrow to
     /// read, every bar is, merged per pixel column when zoomed out.
     /// Price-based chart types keep their normal series because their x-axis is not time.
+    /// `config.studies` enables execution annotations with the `studies` feature;
+    /// `config.statistics` reserves a per-bar table below the price pane.
     pub fn show_footprint(
         &mut self,
         ui: &mut Ui,
@@ -840,12 +842,31 @@ impl Chart {
                 Sense::click_and_drag(),
             ));
         }
-        let layout = self.pane_layout_rects(
+        let mut layout = self.pane_layout_rects(
             rect,
             self.config.show_time_labels && shared_time_axis.is_none(),
         );
+        let time_axis_top = shared_time_axis.map_or(layout.price_rect.bottom(), |axis| axis.top());
+        let statistics_rect = footprint
+            .filter(|(_, config)| {
+                config.statistics
+                    && !self.chart_type.is_time_independent()
+                    && self.main_series_visible
+            })
+            .map(|_| {
+                let bottom = layout.price_rect.bottom();
+                let height = 112.0_f32.min(layout.price_rect.height().max(0.0) * 0.4);
+                layout.price_rect.max.y -= height;
+                if self.shows_volume() {
+                    layout.volume_rect =
+                        super::volume::overlay_rect(layout.price_rect, &self.config);
+                }
+                Rect::from_min_max(
+                    Pos2::new(layout.price_rect.left(), layout.price_rect.bottom()),
+                    Pos2::new(layout.price_rect.right(), bottom),
+                )
+            });
         let chart_rect = layout.price_rect;
-        let time_axis_top = shared_time_axis.map_or(chart_rect.bottom(), |axis| axis.top());
 
         self.handle_secondary_axes(ui, rect, chart_rect);
         let chart_width = chart_rect.width();
@@ -1915,6 +1936,15 @@ impl Chart {
                             flow,
                             config,
                         );
+                        #[cfg(feature = "studies")]
+                        crate::chart::overlays::render_footprint_annotations(
+                            &clipped_painter,
+                            &mapping,
+                            bars,
+                            flow,
+                            config,
+                            response.id,
+                        );
                     }
                     #[cfg(feature = "studies")]
                     if session_profiles
@@ -1934,6 +1964,17 @@ impl Chart {
                             flow.tick_size(),
                         );
                     }
+                }
+                if let Some(table) = statistics_rect
+                    && let Some((flow, config)) = host
+                {
+                    crate::chart::overlays::render_footprint_statistics(
+                        &painter,
+                        &self.get_chart_mapping().with_rect(table),
+                        self.bars(super::SeriesId::MAIN),
+                        flow,
+                        config.text_color,
+                    );
                 }
                 if let Some((_, Some(volume))) = &merged {
                     rendering::candles::volume::render_volume_bars(

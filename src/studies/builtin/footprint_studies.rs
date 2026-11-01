@@ -1,6 +1,6 @@
 //! Levels and zones derived only from executed volume.
 
-use crate::data::{Footprint, meets_threshold};
+use crate::data::{Footprint, FootprintBar, meets_threshold};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +70,14 @@ pub struct FootprintStudy {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FootprintStudyConfig {
+    /// Mark consecutive imbalance zones.
+    pub stacked_imbalances: bool,
+    /// Extend the highest-volume row to its first revisit.
+    pub naked_poc: bool,
+    /// Mark the row with the largest absolute delta.
+    pub delta_poc: bool,
+    /// Extend unfinished highs and lows to their first revisit.
+    pub unfinished_auctions: bool,
     /// Dominance multiple of an imbalance, normally 3 (300%).
     pub imbalance_ratio: f64,
     /// At least this many (and one) adjacent imbalances make a zone.
@@ -102,6 +110,10 @@ pub struct FootprintStudyConfig {
 impl Default for FootprintStudyConfig {
     fn default() -> Self {
         Self {
+            stacked_imbalances: true,
+            naked_poc: true,
+            delta_poc: true,
+            unfinished_auctions: true,
             imbalance_ratio: 3.0,
             stack: 3,
             diagonal: true,
@@ -123,24 +135,54 @@ impl Default for FootprintStudyConfig {
 /// their `state` tells which. Call after trades change, not every paint: extending old zones
 /// scans subsequent bars.
 pub fn footprint_studies(flow: &Footprint, config: &FootprintStudyConfig) -> Vec<FootprintStudy> {
-    let bars: Vec<_> = flow.bars().values().collect();
+    let bars: Vec<_> = flow.complete_bars(..).map(|bar| (bar, 1)).collect();
+    footprint_studies_on_rows(&bars, config)
+}
+
+/// Each bar's row keys are in multiples of its display grouping; output keys use input rows.
+pub(crate) fn footprint_studies_on_rows(
+    bars: &[(&FootprintBar, i64)],
+    config: &FootprintStudyConfig,
+) -> Vec<FootprintStudy> {
     let mut result = Vec::new();
-    for (index, bar) in bars.iter().enumerate() {
+    for (index, &(bar, group)) in bars.iter().enumerate() {
         let mut add = |low: i64, high: i64, kind, extended| {
+            let enabled = match kind {
+                FootprintStudyKind::StackedBid | FootprintStudyKind::StackedAsk => {
+                    config.stacked_imbalances
+                }
+                FootprintStudyKind::NakedPoc => config.naked_poc,
+                FootprintStudyKind::DeltaPoc => config.delta_poc,
+                FootprintStudyKind::UnfinishedHigh | FootprintStudyKind::UnfinishedLow => {
+                    config.unfinished_auctions
+                }
+                _ => true,
+            };
+            if !enabled {
+                return;
+            }
+            let low = low.saturating_mul(group);
+            let high = high.saturating_mul(group).saturating_add(group - 1);
             let (end, state) = if extended {
                 let later = bars[index + 1..]
                     .iter()
                     .take(config.extend_bars.unwrap_or(usize::MAX));
-                let revisit = later.clone().find(|next| {
+                let revisit = later.clone().find(|(next, next_group)| {
                     next.levels
                         .first_key_value()
                         .zip(next.levels.last_key_value())
-                        .is_some_and(|((first, _), (last, _))| *first <= high && *last >= low)
+                        .is_some_and(|((first, _), (last, _))| {
+                            first.saturating_mul(*next_group) <= high
+                                && last
+                                    .saturating_mul(*next_group)
+                                    .saturating_add(*next_group - 1)
+                                    >= low
+                        })
                 });
                 match (revisit, config.extend_bars) {
-                    (Some(next), _) => (Some(next.time), FootprintStudyState::Revisited),
+                    (Some((next, _)), _) => (Some(next.time), FootprintStudyState::Revisited),
                     (None, Some(n)) if later.count() == n => (
-                        bars.get(index + n).map(|last| last.time),
+                        bars.get(index + n).map(|(last, _)| last.time),
                         FootprintStudyState::Expired,
                     ),
                     _ => (None, FootprintStudyState::Unvisited),

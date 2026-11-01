@@ -97,6 +97,13 @@ pub struct FootprintConfig {
     pub extreme_ratio: bool,
     /// Outline the rows of the bar's pullback range, see [`pullback_range`].
     pub pullback: bool,
+    /// Reserve a per-bar statistics table below the chart's price pane.
+    /// Used by [`crate::widget::Chart::show_footprint`].
+    pub statistics: bool,
+    /// Annotations calculated from the displayed rows after executions or grouping change.
+    /// `None` hides them. Used by [`crate::widget::Chart::show_footprint`].
+    #[cfg(feature = "studies")]
+    pub studies: Option<crate::studies::FootprintStudyConfig>,
 }
 
 impl Default for FootprintConfig {
@@ -123,6 +130,9 @@ impl Default for FootprintConfig {
             font_size: [10.0, 10.0],
             extreme_ratio: false,
             pullback: false,
+            statistics: false,
+            #[cfg(feature = "studies")]
+            studies: None,
         }
     }
 }
@@ -203,17 +213,7 @@ pub fn render_footprint(
         };
         let x = mapping.idx_to_x(index);
         // Automatic grouping uses the local price mapping, including log and inverted scales.
-        let raw_height = (mapping.price_to_y(bar.close + flow.price_step())
-            - mapping.price_to_y(bar.close))
-        .abs();
-        let group = config
-            .auto_row_height
-            .filter(|h| h.is_finite() && *h > 0.0)
-            .map_or(1, |height| {
-                (height / raw_height.max(0.01))
-                    .ceil()
-                    .clamp(1.0, 1_000_000.0) as i64
-            });
+        let group = row_group(mapping, bar, flow, config);
         let grouped;
         let shown = if group > 1 {
             grouped = group_bar(source, group);
@@ -442,6 +442,19 @@ fn volume_text(value: f64, abbreviate: bool) -> String {
     }
 }
 
+fn row_group(mapping: &ChartMapping, bar: &Bar, flow: &Footprint, config: &FootprintConfig) -> i64 {
+    let raw_height =
+        (mapping.price_to_y(bar.close + flow.price_step()) - mapping.price_to_y(bar.close)).abs();
+    config
+        .auto_row_height
+        .filter(|h| h.is_finite() && *h > 0.0)
+        .map_or(1, |height| {
+            (height / raw_height.max(0.01))
+                .ceil()
+                .clamp(1.0, 1_000_000.0) as i64
+        })
+}
+
 fn group_bar(source: &FootprintBar, group: i64) -> FootprintBar {
     let mut shown = FootprintBar {
         time: source.time,
@@ -523,8 +536,12 @@ pub fn render_footprint_statistics(
 ) {
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
     let mut cumulative = 0.0;
+    let complete = flow.complete_from();
     for (i, bar) in bars.iter().enumerate() {
-        let Some(row) = flow.bar_at(bar.time) else {
+        let Some(row) = flow
+            .bar_at(bar.time)
+            .filter(|_| complete.is_some_and(|from| bar.time >= from))
+        else {
             continue;
         };
         cumulative += row.delta();
@@ -565,6 +582,64 @@ pub fn render_footprint_statistics(
             }
         }
     }
+}
+
+#[cfg(feature = "studies")]
+#[derive(Clone, Default)]
+struct FootprintStudyCache {
+    source: Vec<(FootprintBar, i64)>,
+    config: Option<crate::studies::FootprintStudyConfig>,
+    studies: std::sync::Arc<[crate::studies::FootprintStudy]>,
+}
+
+/// Cache calculations per chart, including display grouping and execution corrections.
+#[cfg(feature = "studies")]
+pub(crate) fn render_footprint_annotations(
+    painter: &Painter,
+    mapping: &ChartMapping,
+    bars: &[Bar],
+    flow: &Footprint,
+    config: &FootprintConfig,
+    chart_id: egui::Id,
+) {
+    let Some(settings) = &config.studies else {
+        return;
+    };
+    let complete = flow.complete_from();
+    let source: Vec<_> = bars
+        .iter()
+        .filter(|bar| complete.is_some_and(|from| bar.time >= from))
+        .filter_map(|bar| {
+            flow.bar_at(bar.time)
+                .map(|row| (row, row_group(mapping, bar, flow, config)))
+        })
+        .collect();
+    let studies = painter.ctx().data_mut(|data| {
+        let cache = data
+            .get_temp_mut_or_default::<FootprintStudyCache>(chart_id.with("footprint_annotations"));
+        if cache.config.as_ref() != Some(settings)
+            || cache.source.len() != source.len()
+            || !cache
+                .source
+                .iter()
+                .zip(&source)
+                .all(|((old, group), (new, next_group))| old == *new && group == next_group)
+        {
+            cache.source = source
+                .iter()
+                .map(|(bar, group)| ((*bar).clone(), *group))
+                .collect();
+            let grouped: Vec<_> = source
+                .iter()
+                .map(|(bar, group)| (group_bar(bar, *group), *group))
+                .collect();
+            let rows: Vec<_> = grouped.iter().map(|(bar, group)| (bar, *group)).collect();
+            cache.studies = crate::studies::footprint_studies_on_rows(&rows, settings).into();
+            cache.config = Some(settings.clone());
+        }
+        cache.studies.clone()
+    });
+    render_footprint_studies(painter, mapping, bars, flow, &studies, config);
 }
 
 /// Paints footprint study levels and zones. Compute `studies` only after executions change.
@@ -701,6 +776,188 @@ mod tests {
     use super::*;
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
+
+    /// The chart paints execution annotations and reserves a separate table; a live revisit
+    /// ends the originating zones and updates the table in the same frame.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn chart_footprint_annotations_and_statistics_follow_executions() {
+        use crate::model::BarData;
+        use crate::widget::{Chart, SeriesId};
+        use chrono::TimeDelta;
+        let start: chrono::DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (second, price, size, side) in [
+            (0, 100.0, 1.0, OrderSide::Sell),
+            (1, 100.0, 1.0, OrderSide::Buy),
+            (2, 101.0, 1.0, OrderSide::Sell),
+            (3, 101.0, 4.0, OrderSide::Buy),
+            (4, 102.0, 1.0, OrderSide::Sell),
+            (5, 102.0, 4.0, OrderSide::Buy),
+            (6, 103.0, 4.0, OrderSide::Buy),
+            (60, 110.0, 1.0, OrderSide::Buy),
+            (120, 110.0, 1.0, OrderSide::Buy),
+        ] {
+            flow.push(&Tick::new(
+                start + TimeDelta::seconds(second),
+                price,
+                size,
+                Some(side),
+            ))
+            .unwrap();
+        }
+        let mut bars = vec![
+            Bar::new(start, 100.0, 103.0, 100.0, 103.0, 16.0),
+            Bar::new(
+                start + TimeDelta::minutes(1),
+                110.0,
+                110.0,
+                110.0,
+                110.0,
+                1.0,
+            ),
+            Bar::new(
+                start + TimeDelta::minutes(2),
+                110.0,
+                110.0,
+                110.0,
+                110.0,
+                1.0,
+            ),
+        ];
+        let config: FootprintConfig = serde_json::from_value(serde_json::json!({
+            "auto_row_height": null, "show_poc": false, "statistics": true,
+            "studies": { "cluster_share": 0.3, "single_print_max": 2.0,
+                         "delta_percent": 62.5, "ratio": 4.0, "min_delta": 4.0 }
+        }))
+        .unwrap();
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        let mut draw = |flow: &Footprint, bars: &[Bar], config: &FootprintConfig| {
+            chart.set_data(SeriesId::MAIN, bars.to_vec());
+            chart.apply_synced_time_scale(220.0, 1.0);
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1440.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show_footprint(ui, flow, config);
+                },
+            );
+            output.textures_delta.clear();
+            assert!(
+                chart.get_rendered_volume_rect().bottom()
+                    <= chart.get_rendered_price_rect().bottom()
+            );
+            (output.shapes, chart.get_chart_mapping())
+        };
+        for revisited in [false, true] {
+            if revisited {
+                flow.push(&Tick::new(
+                    start + TimeDelta::seconds(121),
+                    100.0,
+                    2.0,
+                    Some(OrderSide::Sell),
+                ))
+                .unwrap();
+                bars[2] = Bar::new(bars[2].time, 110.0, 110.0, 100.0, 100.0, 3.0);
+            }
+            let (shapes, map) = draw(&flow, &bars, &config);
+            let text = |expected: &str| {
+                shapes.iter().find_map(|s| match &s.shape {
+                    Shape::Text(t) if t.galley.text() == expected => Some(t),
+                    _ => None,
+                })
+            };
+            // First bar: 13 buys, 3 sells, volume 16, delta 10, delta share 62.5%.
+            for expected in [
+                "Vol 16",
+                "Bid 3",
+                "Ask 13",
+                "Delta 10",
+                "Delta % 62.5",
+                "Min -1",
+                "Max 10",
+                "Cluster",
+                "Single",
+                "Delta POC",
+            ] {
+                assert!(
+                    text(expected).is_some(),
+                    "missing {expected}, revisited={revisited}"
+                );
+            }
+            assert!(
+                text("Vol 16").unwrap().pos.y >= map.rect.bottom(),
+                "table overlaps prices"
+            );
+            assert!(text(if revisited { "CVD 10" } else { "CVD 12" }).is_some());
+            let stack_color = if revisited {
+                config.ask_color.gamma_multiply(0.45)
+            } else {
+                config.ask_color
+            };
+            let stack = shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    Shape::Rect(r)
+                        if r.stroke.color == stack_color
+                            && (r.rect.top() - map.price_to_y(103.5)).abs() < 0.01
+                            && (r.rect.bottom() - map.price_to_y(100.5)).abs() < 0.01 =>
+                    {
+                        Some(r)
+                    }
+                    _ => None,
+                })
+                .expect("diagonal ask stack at 101..103 follows its revisit state");
+            assert!((stack.rect.right() - (map.idx_to_x(2) + map.bar_spacing * 0.46)).abs() < 0.01);
+            let level_color = if revisited {
+                config.text_color.gamma_multiply(0.45)
+            } else {
+                config.text_color
+            };
+            for level in [100.0, 101.0] {
+                assert!(shapes.iter().any(|s| matches!(&s.shape, Shape::Rect(r)
+                    if r.stroke.color == level_color
+                        && (r.rect.top() - map.price_to_y(level + 0.5)).abs() < 0.01
+                        && (r.rect.bottom() - map.price_to_y(level - 0.5)).abs() < 0.01
+                        && (r.rect.right() - (map.idx_to_x(2) + map.bar_spacing * 0.46)).abs() < 0.01)),
+                    "unfinished low and naked POC follow their revisit state");
+            }
+            assert_eq!(
+                shapes
+                    .iter()
+                    .filter(|s| matches!(&s.shape, Shape::Path(p)
+                if p.points.len() == 3 && p.fill == config.ask_color))
+                    .count(),
+                if revisited { 4 } else { 6 }
+            );
+        }
+        let (_, map) = draw(&flow, &bars, &config);
+        let mut grouped = config.clone();
+        grouped.auto_row_height = Some((map.price_to_y(104.0) - map.price_to_y(103.0)).abs() * 1.5);
+        let (shapes, map) = draw(&flow, &bars, &grouped);
+        // Two input rows per cell: 100..101 hold volume 7, delta 3; 102..103 hold 9, delta 7.
+        // Both POCs therefore move to the upper displayed cell, and neither extreme is <= 2.
+        assert!(shapes.iter().any(|s| matches!(&s.shape, Shape::Rect(r)
+            if r.stroke.color == config.text_color
+                && (r.rect.top() - map.price_to_y(103.5)).abs() < 0.01
+                && (r.rect.bottom() - map.price_to_y(101.5)).abs() < 0.01)));
+        assert!(!shapes.iter().any(|s| matches!(&s.shape, Shape::Text(t)
+                    if t.galley.text() == "Single" && t.pos.x < map.idx_to_x(0))));
+        let disabled: FootprintConfig = serde_json::from_value(serde_json::json!({
+            "auto_row_height": grouped.auto_row_height, "show_poc": false, "statistics": true,
+            "studies": {
+            "stacked_imbalances": false, "naked_poc": false, "delta_poc": false,
+            "unfinished_auctions": false
+            }
+        }))
+        .unwrap();
+        let (shapes, _) = draw(&flow, &bars, &disabled);
+        assert!(!shapes.iter().any(|s| matches!(&s.shape, Shape::Text(t)
+            if ["POC", "Delta POC", "Cluster", "Single", "UH", "UL", "Ask stack", "Bid stack"].contains(&t.galley.text()))));
+    }
 
     /// Rows cover the nearest-tick band; spacing that leaves cells under a point wide produces no
     /// geometry.
