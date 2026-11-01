@@ -27,7 +27,7 @@ Builder API,Builder integration,Public API surface and structure,done,library,sr
 Builder API,Builder integration,Threading model for feeding data,done,library,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Builder API,Builder integration,WebAssembly target,done,library,src/data/mod.rs
 Builder API,Datafeed API,"Option expiries and chain snapshots with open interest, quotes, implied volatility and Greeks",missing,host,
-Builder API,Datafeed API,"Per-symbol order-flow data: trades, trade sides, quotes and depth",missing,host,
+Builder API,Datafeed API,"Per-symbol order-flow data: trades, trade sides, quotes and depth",done,host,src/data/mod.rs;src/model/instrument.rs;src/data/inbox/sink.rs
 Builder API,Datafeed API,Bar data model,done,library,src/model/bar/bar.rs;src/widget/builder.rs;src/widget/series.rs;src/chart/rendering/candles/mod.rs
 Builder API,Datafeed API,Bar marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/chart/renderers/markers.rs;src/model/markers.rs;src/widget/events.rs
 Builder API,Datafeed API,Bounded history size,done,library,src/widget/series.rs;src/widget/feed/pump.rs;src/widget/replay.rs;src/data/order_flow.rs

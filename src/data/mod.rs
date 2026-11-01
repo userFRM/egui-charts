@@ -29,6 +29,7 @@
 //! [`FeedError::NotSupported`].
 
 pub use crate::model::Bar;
+pub use crate::model::FeedService;
 pub use crate::model::Timeframe;
 use crate::model::{BarClock, Instrument, SymbolType, Tick};
 use chrono::{DateTime, Utc};
@@ -136,7 +137,7 @@ impl<T: ?Sized> MaybeSend for T {}
 /// ```
 pub trait Datafeed: MaybeSend + 'static {
     /// What the feed offers as a whole, before any symbol is resolved: the intervals, exchanges
-    /// and symbol classes its selectors may offer, and the optional services it answers. The
+    /// and symbol classes its selectors may offer, and the optional services it supplies. The
     /// chart asks once when it attaches the feed and keeps the answer in
     /// `Chart::feed_capabilities` (requires `widget`). The default
     /// answers [`FeedCapabilities::default`], which reports nothing and so restricts nothing.
@@ -303,35 +304,10 @@ pub trait Datafeed: MaybeSend + 'static {
     }
 }
 
-/// An optional service of a [`Datafeed`], which [`FeedCapabilities::services`] lists.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum FeedService {
-    /// [`Datafeed::trades`].
-    Trades,
-    /// [`Datafeed::depth_history`].
-    DepthHistory,
-    /// [`Datafeed::options_volume`].
-    OptionsVolume,
-    /// [`Datafeed::metrics`] and [`Datafeed::metric_history`].
-    Metrics,
-    /// [`Datafeed::price_targets`].
-    PriceTargets,
-    /// [`Datafeed::symbol_details`].
-    SymbolDetails,
-    /// [`Datafeed::news`].
-    News,
-    /// [`Datafeed::calendar`].
-    Calendar,
-    /// [`Datafeed::screen`].
-    Screener,
-    /// [`Datafeed::hotlist`].
-    Hotlist,
-}
-
 /// What a feed offers as a whole, answered by [`Datafeed::capabilities`]. Each list distinguishes
 /// `None`, which the feed does not report and so restricts nothing, from `Some` of an empty
-/// list, which it reports as offering none.
+/// list, which it reports as offering none. Use [`declares`](Self::declares) when a service
+/// needs explicit confirmation.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct FeedCapabilities {
@@ -342,7 +318,9 @@ pub struct FeedCapabilities {
     pub exchanges: Option<Vec<String>>,
     /// Classes of symbol the feed serves.
     pub symbol_types: Option<Vec<SymbolType>>,
-    /// Optional services the feed answers; any other answers [`FeedError::NotSupported`].
+    /// Optional services the feed supplies for at least some symbol. A symbol's own
+    /// [`services`](Instrument::services) narrows them further. Services absent from a
+    /// reported list are unavailable.
     pub services: Option<Vec<FeedService>>,
 }
 
@@ -381,6 +359,18 @@ impl FeedCapabilities {
         self.services
             .as_ref()
             .is_none_or(|services| services.contains(&service))
+    }
+
+    /// Whether `service` is explicitly reported for `instrument`. Its own list takes precedence;
+    /// without one, the feed's list applies. A reported feed list must also include the service.
+    /// With neither list reported, this returns false, unlike [`offers`](Self::offers).
+    pub fn declares(&self, service: FeedService, instrument: &Instrument) -> bool {
+        self.offers(service)
+            && instrument
+                .services
+                .as_ref()
+                .or(self.services.as_ref())
+                .is_some_and(|services| services.contains(&service))
     }
 }
 
@@ -747,4 +737,59 @@ pub struct FeedState {
     /// Order book snapshots and deltas dropped by validation: a non-finite price or size, a
     /// negative size. Each one clears the book until the feed pushes a new snapshot.
     pub rejected_depth: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn declared_services_require_a_report_and_respect_both_lists() {
+        use FeedService::{Depth, OrderDepth, Trades};
+
+        for (feed, symbol, service, expected) in [
+            (None, None, Depth, false),
+            (Some(vec![Depth]), None, Depth, true),
+            (Some(vec![Depth]), Some(vec![]), Depth, false),
+            (None, Some(vec![Depth]), Depth, true),
+            (Some(vec![Trades]), Some(vec![Depth]), Depth, false),
+            (
+                Some(vec![Depth, OrderDepth]),
+                Some(vec![Depth]),
+                Depth,
+                true,
+            ),
+            (
+                Some(vec![Depth, OrderDepth]),
+                Some(vec![Depth]),
+                OrderDepth,
+                false,
+            ),
+            (Some(vec![]), Some(vec![Depth]), Depth, false),
+            (Some(vec![]), None, Depth, false),
+            (None, Some(vec![]), Depth, false),
+            (None, Some(vec![Trades]), Depth, false),
+            (Some(vec![Depth]), Some(vec![Trades]), Depth, false),
+            (Some(vec![Trades]), None, Trades, true),
+        ] {
+            let mut capabilities = FeedCapabilities::new();
+            if let Some(services) = feed {
+                capabilities = capabilities.with_services(services);
+            }
+            let mut instrument = Instrument::new("A");
+            if let Some(services) = symbol {
+                instrument = instrument.with_services(services);
+            }
+            assert_eq!(
+                capabilities.declares(service, &instrument),
+                expected,
+                "feed {:?}, symbol {:?}, service {service:?}",
+                capabilities.services,
+                instrument.services,
+            );
+        }
+
+        assert!(FeedCapabilities::new().offers(Depth));
+        assert!(!FeedCapabilities::new().with_services([]).offers(Depth));
+    }
 }
