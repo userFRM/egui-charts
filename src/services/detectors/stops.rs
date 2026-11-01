@@ -5,13 +5,13 @@ use std::collections::{BTreeMap, VecDeque};
 use chrono::{DateTime, TimeDelta, Utc};
 
 use super::{DetectionKind, Detector};
-use crate::data::Footprint;
+use crate::data::{Footprint, meets_threshold};
 use crate::model::{BarClock, Direction, OrderSide, Signal, SignalId, SignalShape, Tick};
 use crate::services::SignalEvent;
 
 /// A burst of at least five same-side fills, at most 20 ms apart, travelling at least three
 /// ticks without reversing. If any fill identifies its aggressor, at least three distinct
-/// aggressors are required. Unknown-side fills break a burst and never count.
+/// aggressors are required. Unknown-side fills are excluded.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StopRunRule;
 
@@ -50,7 +50,6 @@ impl StopRuns {
         out: &mut Vec<SignalEvent>,
     ) {
         let Some(side) = fill.side.filter(|_| fill.size > 0.0) else {
-            self.burst = None;
             return;
         };
         let price = (fill.price / tick).round() as i64;
@@ -192,11 +191,24 @@ impl StopSweeps {
         {
             return;
         }
-        self.aggregate(fill, settings.enabled, out);
         self.trades.push_back(fill.clone());
-        if self.trades.len() > 100_000 {
-            self.trades.pop_front();
+        if self.trades.len() > 100_000
+            && let Some(old) = self.trades.pop_front()
+            && let Some(clock) = &self.clock
+        {
+            let cut = clock.bar_open(old.ts);
+            if self.first.is_none_or(|first| cut > first) {
+                self.first = Some(cut);
+                if cut == clock.bar_open(fill.ts) {
+                    let mut footprint = Footprint::new(clock.clone(), self.tick, 1).unwrap();
+                    footprint.set_budget(12, 100_000);
+                    self.footprint = Some(footprint);
+                    self.bars.clear();
+                    self.volumes.clear();
+                }
+            }
         }
+        self.aggregate(fill, settings.enabled, out);
     }
 
     fn aggregate(&mut self, fill: &Tick, enabled: bool, out: &mut Vec<SignalEvent>) {
@@ -204,11 +216,11 @@ impl StopSweeps {
         let (Some(clock), Some(footprint)) = (&self.clock, &mut self.footprint) else {
             return;
         };
-        if !matches!(footprint.push(fill), Ok(true)) {
+        let open = clock.bar_open(fill.ts);
+        let first = *self.first.get_or_insert(open);
+        if open <= first || !matches!(footprint.push(fill), Ok(true)) {
             return;
         }
-        let open = clock.bar_open(fill.ts);
-        self.first.get_or_insert(open);
         let bar = self.bars.entry(open).or_insert(Prices {
             open: fill.price,
             high: fill.price,
@@ -238,7 +250,7 @@ impl StopSweeps {
                 continue;
             }
             self.closed = Some(at);
-            if self.first == Some(at) {
+            if self.first.is_some_and(|first| at <= first) {
                 continue;
             }
             let Some(bar) = footprint.bar_at(at) else {
@@ -257,11 +269,17 @@ impl StopSweeps {
                 .count();
             if enabled
                 && prices.high > prices.low
-                && delta >= volume * 0.25
-                && (prices.close - prices.open).abs() >= (prices.high - prices.low) * 0.6
+                && meets_threshold(delta, volume * 0.25)
+                && meets_threshold(
+                    (prices.close - prices.open).abs(),
+                    (prices.high - prices.low) * 0.6,
+                )
                 && count >= 3
                 && self.volumes.len() == 10
-                && volume >= 1.5 * self.volumes.iter().sum::<f64>() / 10.0
+                && meets_threshold(
+                    volume,
+                    1.5 * self.volumes.iter().map(|volume| volume / 10.0).sum::<f64>(),
+                )
             {
                 out.push(SignalEvent::Upsert(Signal {
                     id: SignalId(format!("stop-sweep-{}", at.timestamp_millis())),

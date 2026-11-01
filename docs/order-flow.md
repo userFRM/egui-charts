@@ -252,7 +252,7 @@ host integration; these choices do not themselves send notifications.
 Stop runs require five same-side fills, each no more than 20 ms after its predecessor, travelling
 at least three ticks without reversing. When any aggressor ids are known, three distinct ids are
 required. A continuing burst updates its marker at the last fill, with fill count, distance,
-size and duration in the tooltip. Unknown-side fills break the burst.
+size and duration in the tooltip. Unknown-side fills are excluded.
 
 Stop sweeps use closed bars of the latest subscribed time interval: directional delta at least
 25% of volume, three diagonal imbalances at 3:1, a body at least 60% of range, and volume at least
@@ -260,3 +260,41 @@ Stop sweeps use closed bars of the latest subscribed time interval: directional 
 retains the latest 100,000 sided executions and rebuilds this category on interval changes;
 the first retained bar is excluded because it may be partial. Trade-based intervals have no
 stop sweeps. Another feed event at or after the next boundary closes a bar; no wall clock runs.
+
+Icebergs count exact order refills at the same price and side within 100 ms of depletion, or
+restoration of an executed order to its displayed size without keeping priority. Two refills
+report by default; later refills update the same marker. Aggregate depth estimates a refill count
+as whole opening displayed sizes executed minus one, confirming only on the next synchronized
+book update that still shows the level. Leaving that inside price breaks the run. Estimates say
+so in their tooltips. Order snapshots and any depth loss discard unfinished refill sequences;
+replayed order events and duplicate trade ids do not count again. Loaded trade history alone
+cannot establish refills against a historical book.
+
+Absorption opens at the first execution against an inside level and closes after a second
+without executions there. Its volume must reach the configured fixed threshold and the opening
+shown size. Automatic thresholds use the nearest-rank 99th percentile of the last 1,000 closed
+episodes, after 100 have closed. A qualifying level still shows at least half its opening size,
+or received added size in the order-level book. A trade beyond it breaks the episode. Its
+side-coloured one-price zone runs from the first to the last execution. Quotes or book events
+can close an idle episode on feed time. Book loss discards episodes without reporting them.
+
+The liquidity tracker opens a one-price zone when a level within ten ticks of the inside
+reaches its threshold. Automatic thresholds are four times the median non-zero size within ten
+ticks on both sides; an even number uses the mean of the middle pair. A wall has traded at least
+10% of its peak, retains half its peak and sees the inside move three ticks away. Below 20% of
+peak, a level is pulled when withdrawals reach 80% of peak, or swept when executions cover half
+the drop and a later trade prints beyond it. These outcomes end its zone. Aggregate withdrawals
+are each size drop minus executions since the preceding update; individual orders use cancels
+and reductions. Fresh liquidity is size added in one update within five ticks, using its own
+threshold with the same automatic rule. Snapshots establish a baseline, not fresh arrivals.
+
+Only individual orders can show spoofing: an order added within five ticks, at least the large
+level threshold, is withdrawn below 10% within two seconds with less than 10% executed. Aggregate
+depth reports pulled liquidity only. Order-level tooltips name the largest resting order at the
+level. All depth rules discard open episodes on lost sequencing or a depth-source change; open
+liquidity zones are removed without reporting an outcome. Order snapshots restart episodes
+because buffered events cannot reconstruct their original displayed sizes. Completed signals
+remain available to subscriptions, subject to the shared 5,000-signal retention limit.
+
+`SignalShape::PriceZone` draws a side-coloured line at an exact price, with finite prices and
+ordered times checked by the chart. A zone with coincident endpoints stays visible and hoverable.
