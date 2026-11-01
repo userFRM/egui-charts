@@ -826,3 +826,100 @@ impl Chart {
         }
     }
 }
+
+#[cfg(all(test, feature = "studies"))]
+mod tests {
+    use crate::widget::test_frames::chart;
+    use egui::{Context, Pos2, RawInput, Rect, Vec2};
+
+    /// A host series moved into a pane leaves the price scale, panes share the height by
+    /// stretch factor across resizes, and a pane can sit above the price pane.
+    #[test]
+    fn host_panes_take_series_share_height_by_stretch_and_reorder() {
+        use crate::widget::{PaneId, SeriesId, SeriesOptions};
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        let series = chart.add_series(SeriesOptions::default());
+        let bars = (chart.bars(SeriesId::MAIN).iter().enumerate())
+            .map(|(i, bar)| {
+                let close = 1000.0 + i as f64;
+                crate::model::Bar::new(bar.time, close, close, close, close, 1.0)
+            })
+            .collect();
+        chart.set_data(series, bars);
+        let pane = chart.add_pane();
+        assert!(chart.move_series_to_pane(series, pane));
+        assert!(chart.set_pane_stretch_factor(pane, 3.0));
+        assert!(chart.move_pane(pane, 0));
+        assert_eq!(chart.panes(), [pane, PaneId::MAIN]);
+        assert_eq!(chart.pane_series(pane), [series]);
+        assert_eq!(chart.pane_series(PaneId::MAIN), [SeriesId::MAIN]);
+        let show = |chart: &mut crate::widget::Chart, height: f32| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, height))),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| chart.show(ui));
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        show(&mut chart, 600.0);
+        let heights = |chart: &crate::widget::Chart| {
+            (
+                chart.pane_height(pane).unwrap(),
+                chart.pane_height(PaneId::MAIN).unwrap(),
+            )
+        };
+        let (top, main) = heights(&chart);
+        assert!((top - main).abs() < 0.01, "equal factors share equally");
+        assert!(chart.pane_layout.panes[0].rect.bottom() <= chart.get_rendered_price_rect().top());
+        let range = chart.pane_layout.panes[0].scale.range();
+        assert!(range.min < 1000.0 && range.max > 1099.0);
+        assert!(chart.get_chart_mapping().price.range().max < 1000.0);
+        assert!(chart.set_pane_height(pane, 200.0));
+        show(&mut chart, 600.0);
+        let (top, main) = heights(&chart);
+        assert!((top - 200.0).abs() < 0.01);
+        let share = top / (top + main);
+        show(&mut chart, 400.0);
+        let (top, main) = heights(&chart);
+        assert!(
+            (top / (top + main) - share).abs() < 1e-4,
+            "a resize keeps the shares"
+        );
+        // A factor near f32::MAX gives the pane most of the height instead of overflowing.
+        assert!(chart.set_pane_stretch_factor(pane, 3e38));
+        show(&mut chart, 600.0);
+        let (top, main) = heights(&chart);
+        assert!(top.is_finite() && top > main, "{top} {main}");
+        assert!(chart.set_preserve_empty_pane(pane, true));
+        assert!(chart.move_series_to_pane(series, PaneId::MAIN));
+        assert_eq!(chart.panes(), [pane, PaneId::MAIN]);
+        assert!(chart.set_preserve_empty_pane(pane, false));
+        assert!(chart.move_series_to_pane(series, pane));
+        assert!(chart.move_series_to_pane(series, PaneId::MAIN));
+        assert_eq!(chart.panes(), [PaneId::MAIN]);
+    }
+
+    #[test]
+    fn pane_defaults_do_not_depend_on_the_study_name() {
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.add_indicator(Box::new(
+            crate::studies::CustomIndicator::new("RSI", |bars| {
+                bars.iter()
+                    .map(|_| crate::studies::IndicatorValue::Single(200.0))
+                    .collect()
+            })
+            .with_overlay(false),
+        ));
+        crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, Vec::new());
+        let pane = &chart.get_rendered_indicator_panes()[0];
+        // A flat value of 200 gets 10% of a 1% span (2): [199.8, 200.2].
+        assert!((pane.y_min - 199.8).abs() < 1e-9);
+        assert!((pane.y_max - 200.2).abs() < 1e-9);
+    }
+}
