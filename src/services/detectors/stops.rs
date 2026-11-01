@@ -133,6 +133,7 @@ pub(super) struct StopSweeps {
     closed: Option<DateTime<Utc>>,
     first: Option<DateTime<Utc>>,
     volumes: VecDeque<f64>,
+    last_time: Option<DateTime<Utc>>,
 }
 
 struct Prices {
@@ -153,6 +154,7 @@ impl StopSweeps {
             closed: None,
             first: None,
             volumes: VecDeque::new(),
+            last_time: None,
         }
     }
 
@@ -177,6 +179,9 @@ impl StopSweeps {
             self.aggregate(trade, settings.enabled, out);
         }
         self.trades = trades;
+        if let Some(time) = self.last_time {
+            self.advance(time, settings.enabled, out);
+        }
     }
 
     pub(super) fn trade(
@@ -241,6 +246,7 @@ impl StopSweeps {
         enabled: bool,
         out: &mut Vec<SignalEvent>,
     ) {
+        self.last_time = Some(self.last_time.map_or(time, |last| last.max(time)));
         let (Some(clock), Some(footprint)) = (&self.clock, &self.footprint) else {
             return;
         };

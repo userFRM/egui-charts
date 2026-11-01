@@ -1234,13 +1234,13 @@ mod tests {
                 OrderSide::Buy,
                 None,
             )));
-            let events = host.push(MarketEvent::Trade(fill(
-                720,
-                100.75,
-                1.0,
-                OrderSide::Buy,
-                None,
-            )));
+            // An unclassified print advances feed time without entering the footprint history.
+            host.detectors.push(
+                "ES",
+                time(720),
+                &MarketEvent::Trade(Tick::new(time(720), 100.75, 1.0, None)),
+            );
+            let events = host.events();
             let sweeps: Vec<_> = events
                 .into_iter()
                 .filter(|event| {
@@ -1262,6 +1262,12 @@ mod tests {
                 assert!(events.iter().any(|event| matches!(event,
                     SignalEvent::Remove(id) if id.0 == "stop-sweep-660000")));
             }
+            host.subscribe();
+            assert_eq!(
+                of_kind(host.events(), "Stop sweeps").len(),
+                usize::from(expected),
+                "{name}: rebuilt back at one minute after the last sided execution"
+            );
         }
     }
     fn depth_book(bids: &[(f64, f64)], asks: &[(f64, f64)]) -> OrderBook {
