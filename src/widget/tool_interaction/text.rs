@@ -136,6 +136,8 @@ pub(super) fn show_editor(
             editor.focus = request_focus;
         }
         if cancel || commit || outside {
+            ui.ctx().request_discard("drawing text editor closed");
+            ui.ctx().request_repaint();
             ui.memory_mut(|memory| memory.surrender_focus(id.with("field")));
             let text = (!editor.draft.trim().is_empty()).then_some(editor.draft);
             if editor.placed {
@@ -711,7 +713,10 @@ mod tests {
                     } else {
                         key(Key::Enter, Modifiers::CTRL)
                     };
-                    step(&mut chart, vec![close]);
+                    let painted = step(&mut chart, vec![close]);
+                    assert!(!painted.iter().any(|shape| {
+                        matches!(shape, Shape::Text(text) if text.galley.text() == "Ajouter" || text.galley.text() == "Discard")
+                    }), "{tool:?} closed editor must not leave its draft visible");
                     if tool == DrawingToolType::AnchoredNote {
                         assert_eq!(chart.drawings().drawings.len(), 1);
                         assert_eq!(chart.drawings().drawings[0].text, None);
