@@ -14,9 +14,10 @@ use super::widgets::{
     FIELD_HEIGHT, chevron, field, grouped, muted, number, side_color, side_fill, text,
     time_in_force_menu,
 };
-use crate::chart::{TradingLineAction, decimals, to_step};
+use crate::chart::TradingLineAction;
 use crate::icons::icons;
 use crate::model::{Order, OrderId, OrderRequest, OrderSide, OrderType, Tick, TimeInForce};
+use crate::scales::{decimals, to_step};
 use crate::theme::ThemeExt;
 
 /// Height of a price row.

@@ -13,6 +13,7 @@ use crate::localization as l10n;
 use crate::model::{
     LineStyle, Order, OrderRequest, OrderSide, OrderType, Position, PositionBracket, PriceLine,
 };
+use crate::scales::{decimals, to_step};
 use crate::theme::{Theme, ThemeExt};
 
 /// What the user asked for on a trading line. Confirm it with the user, then send it to the
@@ -673,20 +674,6 @@ impl ExitButtons<'_> {
         }
         (x, released)
     }
-}
-
-/// `value` as the whole multiple of `step` that `round` picks from `value / step`, written at the
-/// step's decimals.
-pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 {
-    let scale = 10f64.powi(decimals(step) as i32);
-    (round(value / step) * step * scale).round() / scale
-}
-
-/// Decimals needed to write `step`, such as 2 for 0.25.
-pub(crate) fn decimals(step: f64) -> usize {
-    let text = format!("{step}");
-    text.split_once('.')
-        .map_or(0, |(_, fraction)| fraction.len())
 }
 
 /// The price an order waits for: its limit or stop price, or the stop of a stop-limit order.

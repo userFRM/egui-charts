@@ -26,8 +26,6 @@ pub use renderers::{
     TradingLines, alert_shortcut_price, render_alert_levels, render_axis_currency,
     render_crosshair_full, render_event_band, render_trading_lines,
 };
-#[cfg(feature = "ui")]
-pub(crate) use renderers::{decimals, to_step};
 #[cfg(feature = "icons")]
 #[cfg_attr(docsrs, doc(cfg(feature = "icons")))]
 pub use rendering::axes::{axis_settings_button, crosshair_price_action};
