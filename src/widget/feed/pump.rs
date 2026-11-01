@@ -272,6 +272,9 @@ impl Chart {
             if updates.orders_changed {
                 link.order_queue = updates.orders;
             }
+            if let Some(history) = updates.replay_depth {
+                link.depth_history = Some(history);
+            }
             if let Some(history) = &mut link.depth_history {
                 updates
                     .depth_columns
