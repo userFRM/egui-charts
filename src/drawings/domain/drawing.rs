@@ -458,10 +458,8 @@ impl Drawing {
                 DrawingToolType::Ray | DrawingToolType::ExtendedLine
             ),
             arrow_start_style: ArrowStyle::None,
-            arrow_end_style: if matches!(
-                tool_type,
-                DrawingToolType::Arrow | DrawingToolType::ArrowMarker | DrawingToolType::Path
-            ) {
+            arrow_end_style: if matches!(tool_type, DrawingToolType::Arrow | DrawingToolType::Path)
+            {
                 ArrowStyle::Arrow
             } else {
                 ArrowStyle::None

@@ -280,11 +280,11 @@ Drawings,Drawings,Anchored text,done,library,src/drawings/domain/drawing.rs;src/
 Drawings,Drawings,Anchored volume profile,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/drawings/rendering/mod.rs;src/data/footprint.rs
 Drawings,Drawings,Arc,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/shapes.rs;src/drawings/rendering/mod.rs
 Drawings,Drawings,Arrow,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/style.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs
-Drawings,Drawings,Arrow mark down,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Arrow mark left,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Arrow mark right,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Arrow mark up,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Arrow marker,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/style.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs
+Drawings,Drawings,Arrow mark down,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs;src/drawings/persistence.rs
+Drawings,Drawings,Arrow mark left,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs;src/drawings/persistence.rs
+Drawings,Drawings,Arrow mark right,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs;src/drawings/persistence.rs
+Drawings,Drawings,Arrow mark up,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs;src/drawings/persistence.rs
+Drawings,Drawings,Arrow marker,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/drawings/domain/drawing.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Bars pattern,done,library,src/drawings/rendering/trading/bars_pattern.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/bars_pattern.rs;src/drawings/manager/interaction.rs;src/drawings/services/handle.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
 Drawings,Drawings,Brush,done,library,src/drawings/rendering/shapes.rs;src/widget/tool_interaction/interaction.rs;src/drawings/manager/interaction.rs;src/drawings/services/handle.rs
 Drawings,Drawings,Callout,done,library,src/drawings/rendering/annotations/callout.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/annotations/labels.rs;src/drawings/manager/interaction.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
