@@ -338,15 +338,13 @@ fn catalogue_accepts_host_strategies_and_validates_typed_inputs() {
     }
     let mut factory = StrategyFactory::new();
     let builtins = if cfg!(feature = "studies") { 22 } else { 10 };
-    assert_eq!(factory.count(), builtins);
+    assert_eq!(factory.list().len(), builtins);
     assert!(factory.list().windows(2).all(|names| names[0] < names[1]));
-    assert!(!factory.has("Unknown"));
     assert!(factory.create("Unknown").is_none());
     factory.register("Host", || Box::new(Host));
-    assert!(factory.has("Host"));
     assert!(factory.create("Host").is_some());
     factory.register("Host", || Box::new(Host));
-    assert_eq!(factory.count(), builtins + 1);
+    assert_eq!(factory.list().len(), builtins + 1);
     let mut strategy = factory.create("Consecutive Up/Down").unwrap();
     for invalid in [
         InputValue::Length(0),

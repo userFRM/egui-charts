@@ -4,6 +4,7 @@
 
 use super::{StrategyFactory, length, length_input, number, number_input, set_input};
 use crate::model::{Bar, OrderSide, OrderType};
+use crate::strategies::backtest::valid_bar;
 use crate::strategies::{Strategy, StrategyContext};
 use crate::studies::{InputValue, StudyInput, helpers};
 
@@ -106,14 +107,6 @@ impl PriceAction {
     }
 }
 
-fn valid(bar: &Bar) -> bool {
-    [bar.open, bar.high, bar.low, bar.close]
-        .iter()
-        .all(|p| p.is_finite())
-        && bar.low <= bar.open.min(bar.close)
-        && bar.high >= bar.open.max(bar.close)
-}
-
 impl Strategy for PriceAction {
     fn study_inputs(&self) -> Vec<StudyInput> {
         self.inputs.clone()
@@ -147,7 +140,7 @@ impl Strategy for PriceAction {
             let ranges: Vec<_> = bars
                 .iter()
                 .map(|bar| {
-                    if !valid(bar) {
+                    if !valid_bar(bar) {
                         return f64::NAN;
                     }
                     let range = previous.map_or(bar.high - bar.low, |close| {
@@ -171,7 +164,7 @@ impl Strategy for PriceAction {
         let Some(bar) = bars.last() else {
             return;
         };
-        if !valid(bar) {
+        if !valid_bar(bar) {
             return;
         }
         let n = bars.len();
@@ -180,7 +173,7 @@ impl Strategy for PriceAction {
                 let [.., previous, bar] = bars else {
                     return;
                 };
-                if !valid(previous) {
+                if !valid_bar(previous) {
                     return;
                 }
                 let (up, down) = match self.rule {
@@ -213,7 +206,7 @@ impl Strategy for PriceAction {
                     return;
                 }
                 let window = &bars[n - count - 1..];
-                if !window.iter().all(valid) {
+                if !window.iter().all(valid_bar) {
                     return;
                 }
                 [
@@ -238,7 +231,7 @@ impl Strategy for PriceAction {
                     return;
                 }
                 let window = &bars[end - count..end];
-                if !window.iter().all(valid) {
+                if !window.iter().all(valid_bar) {
                     return;
                 }
                 let high = window
@@ -264,7 +257,7 @@ impl Strategy for PriceAction {
                 let pivot = n - right - 1;
                 let before = &bars[pivot - left..pivot];
                 let after = &bars[pivot + 1..];
-                if !bars[pivot - left..].iter().all(valid) {
+                if !bars[pivot - left..].iter().all(valid_bar) {
                     return;
                 }
                 let high = bars[pivot].high;

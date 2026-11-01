@@ -626,7 +626,7 @@ fn bar_end(timeframe: Timeframe, bar: &Bar, next: Option<&Bar>) -> Option<DateTi
     }
 }
 
-fn valid_bar(bar: &Bar) -> bool {
+pub(super) fn valid_bar(bar: &Bar) -> bool {
     [bar.open, bar.high, bar.low, bar.close]
         .iter()
         .all(|price| price.is_finite())

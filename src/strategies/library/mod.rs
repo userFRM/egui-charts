@@ -65,16 +65,6 @@ impl StrategyFactory {
         names.sort_unstable();
         names
     }
-
-    /// Whether this name can be created.
-    pub fn has(&self, name: &str) -> bool {
-        self.constructors.contains_key(name)
-    }
-
-    /// Number of registered names.
-    pub fn count(&self) -> usize {
-        self.constructors.len()
-    }
 }
 
 impl Default for StrategyFactory {
