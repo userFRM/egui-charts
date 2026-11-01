@@ -127,10 +127,16 @@ fn gann_square_fan_lines(
     lines
 }
 
-/// The arc of `radius` units around `start` inside the square, `segments + 1` points from the
+/// The arc of `radius` units around `start` inside the square, sampled from the
 /// edge at the first anchor's price to the edge at its time, cut where it leaves the square;
 /// `None` for an invalid radius or an arc wholly outside.
-fn gann_square_arc(start: Pos2, corner: Pos2, radius: f32, segments: usize) -> Option<Vec<Pos2>> {
+fn gann_square_arc(
+    start: Pos2,
+    corner: Pos2,
+    radius: f32,
+    clip: Rect,
+    ppp: f32,
+) -> Option<Vec<Pos2>> {
     if !(radius.is_finite() && radius > 0.0) {
         return None;
     }
@@ -142,13 +148,13 @@ fn gann_square_arc(start: Pos2, corner: Pos2, radius: f32, segments: usize) -> O
         ((1.0 / ratio).acos(), (1.0 / ratio).asin())
     };
     (from < to).then(|| {
-        let (dx, dy) = (corner.x - start.x, corner.y - start.y);
-        (0..=segments)
-            .map(|i| {
-                let angle = from + (to - from) * i as f32 / segments as f32;
-                start + egui::vec2(dx * ratio * angle.cos(), dy * ratio * angle.sin())
-            })
-            .collect()
+        super::style::ellipse_arc(
+            start,
+            (corner - start) * ratio,
+            [f64::from(from), f64::from(to)],
+            clip,
+            ppp,
+        )
     })
 }
 
@@ -158,23 +164,19 @@ fn gann_square_ring_edge(
     start: Pos2,
     corner: Pos2,
     radius: f32,
-    angles: &[(f32, f32)],
+    angles: &[(f64, f64)],
 ) -> impl Iterator<Item = Pos2> + '_ {
-    let (dx, dy) = (corner.x - start.x, corner.y - start.y);
+    let dx = f64::from(corner.x) - f64::from(start.x);
+    let dy = f64::from(corner.y) - f64::from(start.y);
     angles.iter().map(move |&(s, c)| {
-        // The square is convex and star-shaped from `start`, so the band along each ray ends
-        // at the edge. The far corner lies at half the sweep in units, whatever the square's
-        // proportions on screen, so an even number of segments samples it.
-        let r = radius.min(GANN_SQUARE_UNITS / c.max(s)) / GANN_SQUARE_UNITS;
-        start + egui::vec2(dx * r * c, dy * r * s)
+        // Split angles at the square's corners and circle intersections before sampling.
+        let units = f64::from(GANN_SQUARE_UNITS);
+        let r = f64::from(radius).min(units / c.max(s)) / units;
+        Pos2::new(
+            (f64::from(start.x) + dx * r * c) as f32,
+            (f64::from(start.y) + dy * r * s) as f32,
+        )
     })
-}
-
-/// The sine and cosine of `segments + 1` angles across a quarter circle.
-fn gann_square_ring_angles(segments: usize) -> Vec<(f32, f32)> {
-    (0..=segments)
-        .map(|i| (FRAC_PI_2 * i as f32 / segments as f32).sin_cos())
-        .collect()
 }
 
 /// Rays of a Gann box from each corner to the level points on the two edges away from it: the
@@ -325,23 +327,50 @@ impl Drawing {
             )
         };
         let stroke = |level: &GannLevel| Stroke::new(self.stroke_width, level_color(level));
-        let side =
-            (corner.x - start.x).abs().max((corner.y - start.y).abs()) * painter.pixels_per_point();
-        // A quarter of the circle's sides, even so that the far corner is a sample of the rings.
-        let segments = |radius: f32| {
-            super::style::circle_sides(radius / GANN_SQUARE_UNITS * side).div_ceil(8) * 2
-        };
+        let clip = painter.clip_rect().expand(self.stroke_width + 2.0);
+        let ppp = painter.pixels_per_point();
 
         let mut arcs = visible_levels(&config.arc_ratios, 0.0..=GANN_MAX_ARC);
         arcs.retain(|arc| arc.value > 0.0);
         if config.show_arcs
             && config.show_background
             && config.background_opacity > 0
-            && let Some(outermost) = arcs.last()
+            && !arcs.is_empty()
         {
             // All rings in one mesh, each edge shared by the two rings it bounds, as a square
             // repaints them every frame.
-            let angles = gann_square_ring_angles(segments(outermost.value));
+            let mut cuts = vec![
+                0.0,
+                std::f64::consts::FRAC_PI_4,
+                std::f64::consts::FRAC_PI_2,
+            ];
+            for arc in &arcs {
+                let ratio = f64::from(arc.value / GANN_SQUARE_UNITS);
+                if ratio > 1.0 && ratio < std::f64::consts::SQRT_2 {
+                    cuts.extend([(1.0 / ratio).acos(), (1.0 / ratio).asin()]);
+                }
+            }
+            cuts.sort_by(f64::total_cmp);
+            cuts.dedup();
+            let mut parameters = cuts.clone();
+            // Splitting a convex arc at its square intersections only refines its chords.
+            for arc in &arcs {
+                let axes = (corner - start) * (arc.value / GANN_SQUARE_UNITS);
+                parameters.extend(
+                    super::style::sample_curve(
+                        [0.0, std::f64::consts::FRAC_PI_2],
+                        [super::style::Acceleration::ellipse(axes)],
+                        clip,
+                        ppp,
+                        |a| [super::style::ellipse_point(start, axes, a)],
+                    )
+                    .into_iter()
+                    .map(|(angle, _)| angle),
+                );
+            }
+            parameters.sort_by(f64::total_cmp);
+            parameters.dedup();
+            let angles: Vec<_> = parameters.into_iter().map(f64::sin_cos).collect();
             let points = arcs.len() * angles.len();
             let mut edges = Vec::with_capacity(points);
             for arc in &arcs {
@@ -387,8 +416,7 @@ impl Drawing {
         }
         if config.show_arcs {
             for arc in &arcs {
-                if let Some(points) = gann_square_arc(start, corner, arc.value, segments(arc.value))
-                {
+                if let Some(points) = gann_square_arc(start, corner, arc.value, clip, ppp) {
                     painter.add(egui::Shape::line(points, stroke(arc)));
                 }
             }
@@ -1077,20 +1105,21 @@ mod tests {
         // of the square root of 26 leaves the square one unit along each far edge; 7.5 lies
         // wholly outside, since the far corner is 5 * sqrt(2) = 7.07 units away.
         let near = |a: Pos2, b: (f32, f32)| a.distance(Pos2::new(b.0, b.1)) < 1e-2;
-        let arc = |radius| gann_square_arc(start, corner, radius, 16);
+        let arc = |radius| gann_square_arc(start, corner, radius, Rect::EVERYTHING, 1.0);
         let unit = arc(1.0).unwrap();
-        assert_eq!(unit.len(), 17);
-        assert!(near(unit[0], (20.0, 0.0)) && near(unit[16], (0.0, 20.0)));
-        assert!(near(unit[8], (14.142, 14.142)));
+        assert!(near(unit[0], (20.0, 0.0)) && near(*unit.last().unwrap(), (0.0, 20.0)));
+        assert!(near(unit[unit.len() / 2], (14.142, 14.142)));
         let cut = arc(26f32.sqrt()).unwrap();
-        assert!(near(cut[0], (100.0, 20.0)) && near(cut[16], (20.0, 100.0)));
+        assert!(near(cut[0], (100.0, 20.0)) && near(*cut.last().unwrap(), (20.0, 100.0)));
         for radius in [7.5, 0.0, f32::NAN] {
             assert_eq!(arc(radius), None, "{radius}");
         }
 
         // Radius 5 at 45 degrees is 70.711 on each axis, the square root of 26 is 72.111, and
         // both end on the square's edges at its two sides.
-        let angles = gann_square_ring_angles(16);
+        let angles: Vec<_> = (0..=16)
+            .map(|i| (std::f64::consts::FRAC_PI_2 * f64::from(i) / 16.0).sin_cos())
+            .collect();
         let inner: Vec<Pos2> = gann_square_ring_edge(start, corner, 5.0, &angles).collect();
         let outer: Vec<Pos2> =
             gann_square_ring_edge(start, corner, 26f32.sqrt(), &angles).collect();

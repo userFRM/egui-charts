@@ -2,7 +2,7 @@
 //!
 //! Includes: cyclic lines, time cycles, and sine line.
 
-use super::style::circle_sides;
+use super::style::{Acceleration, ellipse_arc, smooth_path};
 use crate::drawings::domain::Drawing;
 use egui::{Color32, Pos2, Rect, Stroke};
 
@@ -68,14 +68,13 @@ impl Drawing {
         let painter = &painter.with_clip_rect(chart_rect);
         let arc_stroke = Stroke::new(self.stroke_width, color);
         for (arc_center, radius) in arcs {
-            let segments = circle_sides(radius * painter.pixels_per_point()).div_ceil(2);
-            // Upper half circle, from the cycle's start to its end.
-            let points = (0..=segments)
-                .map(|j| {
-                    let angle = std::f32::consts::PI * (1.0 + j as f32 / segments as f32);
-                    arc_center + radius * egui::vec2(angle.cos(), angle.sin())
-                })
-                .collect();
+            let points = ellipse_arc(
+                arc_center,
+                egui::Vec2::splat(radius),
+                [std::f64::consts::PI, std::f64::consts::TAU],
+                chart_rect.expand(arc_stroke.width + 2.0),
+                painter.pixels_per_point(),
+            );
             painter.add(egui::Shape::convex_polygon(
                 points,
                 self.fill_color32().unwrap_or(Color32::TRANSPARENT),
@@ -100,23 +99,22 @@ impl Drawing {
             self.color[3],
         );
 
-        // Draw sine wave extending across chart
-        let segments = 200;
-        let start_x = chart_rect.min.x;
-        let end_x = chart_rect.max.x;
-        let x_range = end_x - start_x;
-
-        let mut wave = Vec::with_capacity(segments + 1);
-        for i in 0..=segments {
-            let t = i as f32 / segments as f32;
-            let x = start_x + t * x_range;
-
-            // Anchors too close together draw nothing; the first sample returns before any paint.
-            let Some(y) = sine_line_y(p1, p2, x) else {
-                return;
-            };
-            wave.push(Pos2::new(x, y));
+        if sine_line_y(p1, p2, chart_rect.min.x).is_none() {
+            return;
         }
+        let omega = std::f64::consts::PI / f64::from(p2.x - p1.x);
+        let acceleration = f64::from((p1.y - p2.y).abs()) * 0.5 * omega * omega;
+        let wave = smooth_path(
+            [f64::from(chart_rect.min.x), f64::from(chart_rect.max.x)],
+            Acceleration {
+                x: 0.0,
+                y: acceleration,
+                length: acceleration,
+            },
+            chart_rect.expand(self.stroke_width + 2.0),
+            painter.pixels_per_point(),
+            |x| Pos2::new(x as f32, sine_line_y(p1, p2, x as f32).unwrap()),
+        );
         // One path, not a segment shape per sample, so the tessellator joins the samples.
         painter.add(egui::Shape::line(
             wave,
@@ -132,8 +130,14 @@ fn sine_line_y(p1: Pos2, p2: Pos2, x: f32) -> Option<f32> {
     if half_period.abs() < 5.0 {
         return None;
     }
-    let center = (p1.y + p2.y) / 2.0;
-    Some(center + (p1.y - center) * (std::f32::consts::PI * (x - p1.x) / half_period).cos())
+    let center = (f64::from(p1.y) + f64::from(p2.y)) / 2.0;
+    Some(
+        (center
+            + (f64::from(p1.y) - center)
+                * (std::f64::consts::PI * (f64::from(x) - f64::from(p1.x))
+                    / f64::from(half_period))
+                .cos()) as f32,
+    )
 }
 
 /// Centre and radius of each time cycle arc that reaches into `x_range`: the
