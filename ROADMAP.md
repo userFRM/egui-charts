@@ -130,7 +130,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 ### Study API and Editing
 
 - [x] `Indicator` and `IndicatorRegistry` calculate without egui; `CustomIndicator` accepts downstream calculation code.
-- [x] Typed inputs with validation, mutable settings, plot styles, fills, offsets, precision, visibility and independent scale metadata. Multi-output legends identify each value and wrap in narrow panes; quantity readouts follow instrument precision.
+- [x] Typed inputs with validation, mutable settings, plot styles, fills, offsets, precision, visibility and independent scale metadata. Multi-output legends identify each value and wrap in narrow panes; order-flow quantity readouts follow instrument precision.
 - [x] Additional-symbol and additional-interval histories, source selection and confirmed/developing value alignment.
 - [x] Incremental updates or scheduled recalculation as chart data changes.
 - [x] Applied-study editor with Inputs, Style and Visibility pages and atomic validated changes.
