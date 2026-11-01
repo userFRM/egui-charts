@@ -2,7 +2,6 @@
 
 use super::labels::paint_anchor_line;
 use crate::drawings::domain::Drawing;
-use crate::localization as l10n;
 use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -36,10 +35,7 @@ impl Drawing {
         let Some(&anchor) = self.points.first() else {
             return;
         };
-        let text = match self.text.as_deref() {
-            Some(text) if !text.is_empty() => text.to_owned(),
-            _ => l10n::text(painter.ctx(), "Text"),
-        };
+        let text = self.display_text(painter.ctx()).into_owned();
         let color = self.color32();
         let galley =
             self.annotation_galley(painter, text, self.text_box_colors(painter.ctx()).text);

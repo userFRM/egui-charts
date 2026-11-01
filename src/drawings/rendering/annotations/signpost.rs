@@ -18,8 +18,8 @@ impl Drawing {
         };
         let color = self.color32();
         let colors = self.text_box_colors(painter.ctx());
-        let text = self.text.as_deref().unwrap_or("Event");
-        let galley = self.annotation_galley(painter, text.to_owned(), colors.text);
+        let text = self.display_text(painter.ctx());
+        let galley = self.annotation_galley(painter, text.into_owned(), colors.text);
         let padding = egui::vec2(
             DESIGN_TOKENS.sizing.annotation.callout_padding_x,
             DESIGN_TOKENS.sizing.annotation.text_padding_y,

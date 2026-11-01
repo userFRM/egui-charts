@@ -2,7 +2,6 @@
 
 use super::labels::{facing_point, pointed_outline};
 use crate::drawings::domain::Drawing;
-use crate::localization as l10n;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{
     Color32, CornerRadius, Pos2, Rect,
@@ -31,8 +30,8 @@ impl Drawing {
         let colors = self.text_box_colors(painter.ctx());
 
         // Callout box
-        let text = self.text.as_deref().unwrap_or("Callout text here");
-        let galley = self.annotation_galley(painter, text.to_owned(), colors.text);
+        let text = self.display_text(painter.ctx());
+        let galley = self.annotation_galley(painter, text.into_owned(), colors.text);
         let padding = egui::vec2(
             DESIGN_TOKENS.sizing.annotation.callout_padding_x,
             DESIGN_TOKENS.sizing.annotation.callout_padding_y,
@@ -84,10 +83,7 @@ impl Drawing {
         let Some(&anchor) = self.points.first() else {
             return;
         };
-        let text = match self.text.as_deref() {
-            Some(text) if !text.is_empty() => text.to_owned(),
-            _ => l10n::text(painter.ctx(), "Text"),
-        };
+        let text = self.display_text(painter.ctx()).into_owned();
         let colors = self.text_box_colors(painter.ctx());
         let galley = self.annotation_galley(painter, text, colors.text);
         let padding = egui::vec2(
