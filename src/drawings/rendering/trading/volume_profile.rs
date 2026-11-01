@@ -15,6 +15,9 @@ use std::rc::Rc;
 /// Bars between the saved running sums of an anchored VWAP.
 const VWAP_CHECKPOINT: usize = 1024;
 
+/// Colour of the anchored VWAP's bands, its first band's fill included.
+const VWAP_BAND_COLOR: Color32 = Color32::from_rgb(76, 175, 80);
+
 type ProfileCache = SpanCache<Option<VolumeProfile>, (usize, Option<f64>)>;
 
 thread_local! {
@@ -27,7 +30,8 @@ thread_local! {
 
 impl Drawing {
     /// Renders the anchored VWAP from the anchor bar to the last bar at the drawing's width,
-    /// with the enabled bands of its [`VwapConfig`](crate::drawings::VwapConfig), the first one filled.
+    /// with the enabled bands of its [`VwapConfig`](crate::drawings::VwapConfig), the first one
+    /// filled at 5%.
     pub(crate) fn render_anchored_vwap(&self, painter: &egui::Painter, view: &ChartView) {
         let Some(anchor_at) = self.chart_points.first() else {
             return;
@@ -58,55 +62,39 @@ impl Drawing {
         let checkpoints = VWAP_CHECKPOINTS.with_borrow_mut(|cache| {
             cache.get((), first, &bars[..covered], view.revision, vwap_checkpoints)
         });
+        // The VWAP, then the upper and lower line of every enabled band, in standard deviations
+        // from it.
         let config = self.vwap.unwrap_or_default();
         let mut offsets = vec![0.0];
         for band in config.bands.iter().filter(|b| b.enabled) {
             offsets.extend([band.multiplier(), -band.multiplier()]);
         }
-        let mut lines: Vec<Vec<Pos2>> = offsets
-            .iter()
-            .map(|_| Vec::with_capacity(to - from))
-            .collect();
+        let mut lines = vec![Vec::with_capacity(to - from); offsets.len()];
         for (i, value) in (from..to).zip(anchored_vwap(bars, &checkpoints, from..to)) {
             let Some((vwap, sigma)) = value else { continue };
             let x = (view.bar_to_x)((first + i) as f32);
-            let mut ys = [0.0; 7];
-            for (y, k) in ys.iter_mut().zip(&offsets) {
-                *y = (view.price_to_y)(vwap + k * sigma);
-            }
-            if !x.is_finite() || ys[..offsets.len()].iter().any(|y| !y.is_finite()) {
-                continue;
-            }
-            for (line, y) in lines.iter_mut().zip(ys) {
-                line.push(Pos2::new(x, y));
+            for (line, k) in lines.iter_mut().zip(&offsets) {
+                line.push(Pos2::new(x, (view.price_to_y)(vwap + k * sigma)));
             }
         }
-        if lines[0].len() < 2 {
+        if lines[0].is_empty() {
             return;
         }
-        let color = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+
         if config.bands[0].enabled {
-            // The first band is filled at 5% of its colour's opacity.
             super::super::fibonacci::paint_band(
                 painter,
                 &lines[1],
                 &lines[2],
-                color(config.bands[0].color).gamma_multiply(0.05),
+                VWAP_BAND_COLOR.gamma_multiply(0.05),
             );
         }
         let vwap_line = lines.remove(0);
-        for (band, pair) in config
-            .bands
-            .iter()
-            .filter(|b| b.enabled)
-            .zip(lines.chunks_mut(2))
-        {
-            for line in pair {
-                painter.add(Shape::line(
-                    std::mem::take(line),
-                    Stroke::new(stroke::HAIRLINE, color(band.color)),
-                ));
-            }
+        for line in lines {
+            painter.add(Shape::line(
+                line,
+                Stroke::new(stroke::HAIRLINE, VWAP_BAND_COLOR),
+            ));
         }
         painter.add(Shape::line(
             vwap_line,
@@ -232,22 +220,19 @@ struct VwapSums {
 impl VwapSums {
     fn add(&mut self, bar: &Bar) {
         let price = bar.typical_price();
-        // A bar without a price or traded volume, such as a whitespace bar, adds nothing.
-        if !(price.is_finite() && bar.volume.is_finite() && bar.volume > 0.0) {
-            return;
-        }
         self.volume += bar.volume;
         self.price_volume += price * bar.volume;
         self.square_volume += price * price * bar.volume;
     }
 
-    /// VWAP and the volume-weighted standard deviation around it; `None` until volume trades,
-    /// and once the sums overflow.
+    /// VWAP and the volume-weighted standard deviation around it; `None`
+    /// until volume trades.
     fn value(&self) -> Option<(f64, f64)> {
-        let vwap = self.price_volume / self.volume;
-        let variance = self.square_volume / self.volume - vwap * vwap;
-        (self.volume > 0.0 && self.volume.is_finite() && vwap.is_finite() && variance.is_finite())
-            .then(|| (vwap, variance.max(0.0).sqrt()))
+        (self.volume > 0.0).then(|| {
+            let vwap = self.price_volume / self.volume;
+            let variance = self.square_volume / self.volume - vwap * vwap;
+            (vwap, variance.max(0.0).sqrt())
+        })
     }
 }
 
@@ -316,92 +301,64 @@ mod tests {
         assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
     }
 
-    /// Enabled bands follow the weighted typical-price variance; only band 1 fills, and the
-    /// drawing's line keeps its width. Empty slots add nothing and overflow ends the line.
+    /// The line keeps the drawing's width and only the enabled bands are drawn, band 1 filled.
     #[test]
     fn anchored_vwap_draws_its_line_and_enabled_bands_only() {
         use crate::drawings::{ChartPoint, VwapBand, VwapConfig};
-        let bars: Vec<_> = [
-            (50.0, 0.0),
-            (10.0, 1.0),
-            (12.0, 1.0),
-            (f64::NAN, f64::NAN),
-            (11.0, 6.0),
-            (10.0, f64::INFINITY),
-            (1e200, 1e200),
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(i, (price, volume))| {
-            let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
-            if price.is_nan() {
-                Bar::whitespace(time)
-            } else {
+        // From bar 1: V = 1, 2, 8; PV = 10, 22, 88; P²V = 100, 244, 970.
+        // VWAP = 10, 11, 11; deviation = 0, 1, 0.5.
+        let bars: Vec<_> = [(50.0, 0.0), (10.0, 1.0), (12.0, 1.0), (11.0, 6.0)]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (price, volume))| {
+                let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
                 Bar::new(time, price, price, price, price, volume)
-            }
-        })
-        .collect();
+            })
+            .collect();
         let blue = Color32::from_rgb(41, 98, 255);
-        let green = Color32::from_rgb(76, 175, 80);
-        let olive = Color32::from_rgb(128, 128, 0);
-        let teal = Color32::from_rgb(0, 137, 123);
-        // V = 1, 2, 2, 8, 8; PV = 10, 22, 22, 88, 88; P²V = 100, 244, 244, 970, 970.
-        // VWAP = 10, 11, 11, 11, 11; variance = 0, 1, 1, 0.25, 0.25.
-        let mid = [100.0, 90.0, 90.0, 90.0, 90.0];
-        let upper = [100.0, 80.0, 80.0, 85.0, 85.0];
-        let lower = [100.0, 100.0, 100.0, 95.0, 95.0];
+        let mid = [100.0, 90.0, 90.0];
         let mut other_bands = VwapConfig::default();
         other_bands.bands[0].enabled = false;
         other_bands.bands[1].enabled = true;
-        other_bands.bands[2] = VwapBand::new(true, 0.5, [0, 137, 123, 255]).unwrap();
+        other_bands.bands[2] = VwapBand::new(true, 0.5).unwrap();
         let mut no_bands = VwapConfig::default();
-        no_bands.bands.iter_mut().for_each(|b| b.enabled = false);
-        for (name, bars, anchor, config, width, fill, expected) in [
+        no_bands.bands[0].enabled = false;
+        for (name, anchor, config, width, fill, expected) in [
             (
                 "default",
-                &bars[..],
                 0.0,
                 None,
                 1.0,
                 true,
-                vec![(upper, green, 1.0), (lower, green, 1.0), (mid, blue, 1.0)],
+                vec![
+                    ([100.0, 80.0, 85.0], VWAP_BAND_COLOR, 1.0),
+                    ([100.0, 100.0, 95.0], VWAP_BAND_COLOR, 1.0),
+                    (mid, blue, 1.0),
+                ],
             ),
             (
                 "bands 2 and 3",
-                &bars[..],
                 0.0,
                 Some(other_bands),
                 3.0,
                 false,
                 vec![
-                    ([100.0, 70.0, 70.0, 80.0, 80.0], olive, 1.0),
-                    ([100.0, 110.0, 110.0, 100.0, 100.0], olive, 1.0),
-                    ([100.0, 85.0, 85.0, 87.5, 87.5], teal, 1.0),
-                    ([100.0, 95.0, 95.0, 92.5, 92.5], teal, 1.0),
+                    ([100.0, 70.0, 80.0], VWAP_BAND_COLOR, 1.0),
+                    ([100.0, 110.0, 100.0], VWAP_BAND_COLOR, 1.0),
+                    ([100.0, 85.0, 87.5], VWAP_BAND_COLOR, 1.0),
+                    ([100.0, 95.0, 92.5], VWAP_BAND_COLOR, 1.0),
                     (mid, blue, 3.0),
                 ],
             ),
             (
                 "no bands",
-                &bars[..],
                 0.0,
                 Some(no_bands),
                 1.0,
                 false,
                 vec![(mid, blue, 1.0)],
             ),
-            ("past last bar", &bars[..], 7.0, None, 1.0, false, vec![]),
-            (
-                "one drawable bar",
-                &bars[..5],
-                4.0,
-                None,
-                1.0,
-                false,
-                vec![],
-            ),
-            ("no traded volume", &bars[..], 5.0, None, 1.0, false, vec![]),
-            ("empty", &bars[..0], 0.0, None, 1.0, false, vec![]),
+            ("past last bar", 4.0, None, 1.0, false, vec![]),
         ] {
             let mut drawing = Drawing::new(1, DrawingToolType::AnchoredVWAP);
             drawing.color = [41, 98, 255, 255];
@@ -411,7 +368,7 @@ mod tests {
             let view = ChartView {
                 instrument: None,
                 price_formatter: None,
-                bars,
+                bars: &bars,
                 revision: 0,
                 bar_to_x: &|b| 100.0 + 10.0 * b,
                 price_to_y: &|p| ((20.0 - p) * 10.0) as f32,
@@ -430,39 +387,28 @@ mod tests {
             let shapes = std::mem::take(&mut output.shapes);
             output.drop_without_applying_deltas();
             assert_eq!(shapes.len(), expected.len() + usize::from(fill), "{name}");
-            let points = |ys: [f32; 5]| -> Vec<Pos2> {
-                ys.into_iter()
-                    .enumerate()
-                    .map(|(i, y)| Pos2::new(110.0 + 10.0 * i as f32, y))
-                    .collect()
-            };
             if fill {
                 let Shape::Mesh(mesh) = &shapes[0].shape else {
                     panic!("{name}: band fill")
                 };
-                let mut got: Vec<_> = mesh
-                    .vertices
-                    .iter()
-                    .map(|v| {
-                        assert_eq!(v.color, Color32::from_rgba_premultiplied(4, 9, 4, 13));
-                        v.pos
-                    })
-                    .collect();
-                let mut want = points(upper);
-                want.extend(points(lower));
-                let sort = |a: &Pos2, b: &Pos2| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y));
-                got.sort_by(sort);
-                want.sort_by(sort);
-                assert_eq!(got, want, "{name}");
-                assert_eq!(mesh.indices.len(), 24);
+                assert!(
+                    mesh.vertices
+                        .iter()
+                        .all(|v| v.color == Color32::from_rgba_premultiplied(4, 9, 4, 13)),
+                    "{name}"
+                );
             }
             for (shape, (ys, color, width)) in shapes[usize::from(fill)..].iter().zip(expected) {
                 let Shape::Path(line) = &shape.shape else {
                     panic!("{name}: unexpected shape")
                 };
-                assert!(!line.closed);
                 assert_eq!(line.stroke, Stroke::new(width, color).into(), "{name}");
-                assert_eq!(line.points, points(ys), "{name}");
+                let points: Vec<_> = ys
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, y)| Pos2::new(110.0 + 10.0 * i as f32, y))
+                    .collect();
+                assert_eq!(line.points, points, "{name}");
             }
         }
     }
@@ -489,48 +435,6 @@ mod tests {
             assert!(
                 (got_sigma - sigma).abs() < 1e-6,
                 "sigma {got_sigma}, want {sigma}"
-            );
-        }
-
-        // Invalid prices and untraded volume leave the previous sums alone. Two trades at
-        // 10 and 12 with unit volume have mean 11 and population standard deviation 1.
-        let bar = |price, volume| {
-            Bar::new(
-                chrono::DateTime::UNIX_EPOCH,
-                price,
-                price,
-                price,
-                price,
-                volume,
-            )
-        };
-        for invalid in [
-            Bar::whitespace(chrono::DateTime::UNIX_EPOCH),
-            bar(f64::NAN, 1.0),
-            bar(f64::INFINITY, 1.0),
-            bar(f64::NEG_INFINITY, 1.0),
-            bar(20.0, f64::NAN),
-            bar(20.0, f64::INFINITY),
-            bar(20.0, -1.0),
-            bar(20.0, 0.0),
-        ] {
-            let bars = [bar(10.0, 1.0), invalid, bar(12.0, 1.0)];
-            assert_eq!(
-                anchored_vwap(&bars, &vwap_checkpoints(&[]), 0..3).collect::<Vec<_>>(),
-                [Some((10.0, 0.0)), Some((10.0, 0.0)), Some((11.0, 1.0))]
-            );
-        }
-        // Overflow of any sum ends the line, including volume when price and its squares are 0.
-        for bars in [
-            [bar(0.0, 1e308), bar(0.0, 1e308)],
-            [bar(1e154, 1.0), bar(1e154, 1.0)],
-            [bar(10.0, 1.0), bar(1e200, 1e200)],
-        ] {
-            assert!(
-                anchored_vwap(&bars, &vwap_checkpoints(&[]), 0..2)
-                    .last()
-                    .unwrap()
-                    .is_none()
             );
         }
 

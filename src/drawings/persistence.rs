@@ -951,7 +951,7 @@ mod tests {
         d.regression_trend = RegressionTrendConfig::new(1.5);
         let mut vwap = VwapConfig::default();
         vwap.bands[0].enabled = false;
-        vwap.bands[1] = VwapBand::new(true, 2.5, [9, 8, 7, 6]).unwrap();
+        vwap.bands[1] = VwapBand::new(true, 2.5).unwrap();
         d.vwap = Some(vwap);
         if tool == DrawingToolType::DoubleCurve {
             d.chart_points.push(ChartPoint::new(12.0, 115.0));
@@ -1411,11 +1411,7 @@ mod tests {
         };
         let with_vwap_multiplier = |multiplier| {
             let mut value = serde_json::to_value(&storage).unwrap();
-            let band = |m| {
-                serde_json::json!({
-                    "enabled": true, "multiplier": m, "color": [1, 2, 3, 255]
-                })
-            };
+            let band = |m| serde_json::json!({ "enabled": true, "multiplier": m });
             value["drawings"][0]["drawing"]["vwap"] = serde_json::json!({
                 "bands": [band(multiplier), band(2.0), band(3.0)]
             });

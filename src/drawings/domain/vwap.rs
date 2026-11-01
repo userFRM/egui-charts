@@ -10,9 +10,6 @@ pub struct VwapBand {
     /// Whether the band is drawn.
     pub enabled: bool,
     multiplier: f64,
-    /// Line colour as RGBA. The first band of a [`VwapConfig`] also fills the area between its
-    /// lines with this colour at 5% of its opacity.
-    pub color: [u8; 4],
 }
 
 /// Stored settings of a band, checked by [`VwapBand::new`] on load.
@@ -20,14 +17,13 @@ pub struct VwapBand {
 struct VwapBandFields {
     enabled: bool,
     multiplier: f64,
-    color: [u8; 4],
 }
 
 impl TryFrom<VwapBandFields> for VwapBand {
     type Error = &'static str;
 
     fn try_from(fields: VwapBandFields) -> Result<Self, Self::Error> {
-        Self::new(fields.enabled, fields.multiplier, fields.color)
+        Self::new(fields.enabled, fields.multiplier)
             .ok_or("anchored VWAP band multiplier out of bounds")
     }
 }
@@ -35,11 +31,10 @@ impl TryFrom<VwapBandFields> for VwapBand {
 impl VwapBand {
     /// A band `multiplier` standard deviations either side of the VWAP (above 0, at most 10);
     /// `None` when out of bounds.
-    pub fn new(enabled: bool, multiplier: f64, color: [u8; 4]) -> Option<Self> {
+    pub fn new(enabled: bool, multiplier: f64) -> Option<Self> {
         (multiplier > 0.0 && multiplier <= 10.0).then_some(Self {
             enabled,
             multiplier,
-            color,
         })
     }
 
@@ -58,20 +53,14 @@ pub struct VwapConfig {
 }
 
 impl Default for VwapConfig {
-    /// The band one standard deviation away is on, in green; the bands two and three away are
-    /// off, in olive and teal, the colours of the VWAP study's bands.
+    /// The band one standard deviation away is on; the bands two and three away are off.
     fn default() -> Self {
-        let band = |enabled, multiplier, color| VwapBand {
+        let band = |enabled, multiplier| VwapBand {
             enabled,
             multiplier,
-            color,
         };
         Self {
-            bands: [
-                band(true, 1.0, [76, 175, 80, 255]),
-                band(false, 2.0, [128, 128, 0, 255]),
-                band(false, 3.0, [0, 137, 123, 255]),
-            ],
+            bands: [band(true, 1.0), band(false, 2.0), band(false, 3.0)],
         }
     }
 }

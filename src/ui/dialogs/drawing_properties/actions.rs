@@ -541,7 +541,7 @@ mod tests {
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
             let mut vwap = crate::drawings::VwapConfig::default();
-            vwap.bands[2] = crate::drawings::VwapBand::new(true, 0.5, [1, 2, 3, 255]).unwrap();
+            vwap.bands[2] = crate::drawings::VwapBand::new(true, 0.5).unwrap();
             settings.vwap = Some(vwap);
             settings.elliott_degree = crate::drawings::ElliottDegree::Minute;
             settings.italic = true;

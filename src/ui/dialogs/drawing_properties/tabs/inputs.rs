@@ -301,13 +301,9 @@ impl InputsTab {
             Tool::AnchoredVWAP => {
                 let original = drawing.vwap.unwrap_or_default();
                 let mut config = original;
-                let pickers = grid_pickers(pickers, 0);
-                pickers.resize_with(config.bands.len(), ColorPickerState::default);
-                for (i, (band, picker)) in
-                    config.bands.iter_mut().zip(pickers.iter_mut()).enumerate()
-                {
+                for (i, band) in config.bands.iter_mut().enumerate() {
                     ui.push_id(i, |ui| {
-                        ui.horizontal_wrapped(|ui| {
+                        ui.horizontal(|ui| {
                             let name = |ui: &Ui, property| {
                                 l10n::format_text(ui.ctx(), property, &[("0", (i + 1).to_string())])
                             };
@@ -321,12 +317,10 @@ impl InputsTab {
                                 )
                                 .accessible_name(name(ui, "Band {0} multiplier"))
                                 .changed()
-                                && let Some(updated) =
-                                    VwapBand::new(band.enabled, multiplier, band.color)
+                                && let Some(updated) = VwapBand::new(band.enabled, multiplier)
                             {
                                 *band = updated;
                             }
-                            level_color(ui, &mut band.color, picker);
                         });
                     });
                 }
