@@ -201,6 +201,9 @@ pub(super) fn clear(
 }
 
 pub(super) fn refresh(chart: &mut Chart, id: SeriesId, feed: &LiveFeed) {
+    if chart.series_order(id).is_none() {
+        return;
+    }
     let timeframe = chart.timeframe().unwrap_or(Timeframe::Hour1);
     let bars = feed.snapshot(timeframe, chart.bar_clock(), chart.extended_hours());
     chart.set_data(id, bars);
@@ -244,10 +247,12 @@ fn copy_series(chart: &mut Chart, source: &Chart, id: SeriesId) -> Option<Series
     Some(next)
 }
 
-pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut Vec<Spread>, paused: bool) {
-    spreads.retain(|spread| chart.series().any(|(id, _)| id == spread.id));
+pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused: bool) {
     let timeframe = chart.timeframe().unwrap_or(Timeframe::Hour1);
     for spread in spreads {
+        if chart.series_order(spread.id).is_none() {
+            continue;
+        }
         let histories: Vec<_> = spread
             .feeds
             .iter()
@@ -270,8 +275,15 @@ pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut Vec<Spread>, paus
 
 impl DemoApp {
     pub(super) fn sync_comparisons(&mut self) {
-        self.comparisons
-            .retain(|(_, id, _)| self.chart.series().any(|(current, _)| current == *id));
+        // shortcut: removed entries stay until history is empty, including those past its
+        // 100-step cap; prune per step if retaining their feeds becomes costly.
+        if !self.chart.can_undo() && !self.chart.can_redo() {
+            let chart = &self.chart;
+            self.comparisons
+                .retain(|(_, id, _)| chart.series_order(*id).is_some());
+            self.spreads
+                .retain(|spread| chart.series_order(spread.id).is_some());
+        }
         for (_, id, feed) in &self.comparisons {
             refresh(&mut self.chart, *id, feed);
         }
@@ -300,16 +312,20 @@ impl DemoApp {
         let Ok(expression) = SymbolExpression::parse(symbol) else {
             return;
         };
-        let id = self.chart.add_series(SeriesOptions {
+        let options = SeriesOptions {
             name: symbol.to_owned(),
             chart_type: ChartType::Candles,
             color: self.theme.ui.info,
             up_color: self.theme.ui.info,
             down_color: self.theme.ui.warning,
             ..Default::default()
+        };
+        let id = self.chart.user_action(|chart| {
+            let id = chart.add_series(options);
+            let pane = chart.add_pane();
+            chart.move_series_to_pane(id, pane);
+            id
         });
-        let pane = self.chart.add_pane();
-        self.chart.move_series_to_pane(id, pane);
         self.spreads.push(Spread::new(expression, id));
         self.grid_edits = self.grid_edits.wrapping_add(1);
         self.sync_comparisons();
@@ -323,17 +339,16 @@ impl DemoApp {
             .map(|spec| spec.symbol)
             .find(|symbol| {
                 *symbol != self.chart.symbol()
-                    && !self
-                        .comparisons
-                        .iter()
-                        .any(|(current, _, _)| current == symbol)
+                    && !self.comparisons.iter().any(|(current, id, _)| {
+                        current == symbol && self.chart.series_order(*id).is_some()
+                    })
             })
             .map(str::to_owned)
         else {
             return;
         };
         let feed = Arc::new(LiveFeed::new(&symbol, chrono::Utc::now()));
-        let id = self.chart.add_series(SeriesOptions {
+        let options = SeriesOptions {
             name: symbol.clone(),
             chart_type: ChartType::Candles,
             color: self.theme.ui.info,
@@ -341,13 +356,17 @@ impl DemoApp {
             down_color: self.theme.ui.warning,
             scale: SeriesScale::Left,
             ..Default::default()
+        };
+        let id = self.chart.user_action(|chart| {
+            let id = chart.add_series(options);
+            refresh(chart, id, &feed);
+            let pane = chart.add_pane();
+            chart.move_series_to_pane(id, pane);
+            // Half the price pane's default share of the height.
+            chart.set_pane_stretch_factor(pane, 1.5);
+            chart.move_pane(pane, 0);
+            id
         });
-        refresh(&mut self.chart, id, &feed);
-        let pane = self.chart.add_pane();
-        self.chart.move_series_to_pane(id, pane);
-        // Half the price pane's default share of the height.
-        self.chart.set_pane_stretch_factor(pane, 1.5);
-        self.chart.move_pane(pane, 0);
         self.comparisons.push((symbol, id, feed));
         self.grid_edits = self.grid_edits.wrapping_add(1);
         self.sync_comparisons();
@@ -356,13 +375,11 @@ impl DemoApp {
     pub(super) fn handle_comparison(&mut self, action: CompareAction) {
         match action {
             CompareAction::AddSymbol(symbol, placement) => {
-                if self
-                    .comparisons
+                if self.comparisons.iter().any(|(current, id, _)| {
+                    *current == symbol && self.chart.series_order(*id).is_some()
+                }) || !DemoSymbol::catalog()
                     .iter()
-                    .any(|(current, _, _)| *current == symbol)
-                    || !DemoSymbol::catalog()
-                        .iter()
-                        .any(|spec| spec.symbol == symbol)
+                    .any(|spec| spec.symbol == symbol)
                 {
                     return;
                 }
@@ -387,41 +404,51 @@ impl DemoApp {
                     ComparePlacement::NewPane => Some(SeriesScale::Right),
                     _ => None,
                 };
-                let id = match scale {
-                    Some(scale) => self.chart.add_series(SeriesOptions {
-                        name: symbol.clone(),
-                        color,
-                        scale,
-                        ..Default::default()
-                    }),
-                    None => self.chart.add_comparison(symbol.clone(), color),
-                };
-                if placement == ComparePlacement::NewPane {
-                    let pane = self.chart.add_pane();
-                    self.chart.move_series_to_pane(id, pane);
-                }
-                refresh(&mut self.chart, id, &feed);
+                let id = self.chart.user_action(|chart| {
+                    let id = match scale {
+                        Some(scale) => chart.add_series(SeriesOptions {
+                            name: symbol.clone(),
+                            color,
+                            scale,
+                            ..Default::default()
+                        }),
+                        None => chart.add_comparison(symbol.clone(), color),
+                    };
+                    if placement == ComparePlacement::NewPane {
+                        let pane = chart.add_pane();
+                        chart.move_series_to_pane(id, pane);
+                    }
+                    refresh(chart, id, &feed);
+                    id
+                });
                 self.comparisons.push((symbol, id, feed));
                 self.grid_edits = self.grid_edits.wrapping_add(1);
             }
             CompareAction::RemoveSymbol(symbol) => {
-                if let Some((_, id, _)) = self
+                if let Some(id) = self
                     .comparisons
                     .iter()
-                    .find(|(current, _, _)| *current == symbol)
+                    .find(|(current, id, _)| {
+                        *current == symbol && self.chart.series_order(*id).is_some()
+                    })
+                    .map(|(_, id, _)| *id)
                 {
-                    self.chart.remove_series(*id);
+                    self.chart.user_action(|chart| chart.remove_series(id));
                     self.grid_edits = self.grid_edits.wrapping_add(1);
                 }
             }
             CompareAction::ToggleVisibility(symbol) => {
-                if let Some((_, id, _)) = self
+                if let Some(id) = self
                     .comparisons
                     .iter()
-                    .find(|(current, _, _)| *current == symbol)
+                    .find(|(current, id, _)| {
+                        *current == symbol && self.chart.series_order(*id).is_some()
+                    })
+                    .map(|(_, id, _)| *id)
                 {
-                    let visible = self.chart.is_series_visible(*id);
-                    self.chart.set_series_visible(*id, !visible);
+                    let visible = self.chart.is_series_visible(id);
+                    self.chart
+                        .user_action(|chart| chart.set_series_visible(id, !visible));
                     self.grid_edits = self.grid_edits.wrapping_add(1);
                 }
             }
@@ -429,5 +456,46 @@ impl DemoApp {
             _ => {}
         }
         self.sync_comparisons();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn listed(app: &DemoApp) -> Vec<&str> {
+        app.compare_dialog
+            .compared_symbols
+            .iter()
+            .map(|entry| entry.symbol.as_str())
+            .collect()
+    }
+
+    /// Undo restores a removed comparison's feed and dialog entry; the removed symbol can
+    /// also be compared anew without its parked entry intercepting later dialog edits.
+    #[test]
+    fn undo_brings_back_a_removed_comparison_with_its_feed() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
+        app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
+        let id = app.comparisons[0].1;
+        app.handle_comparison(CompareAction::RemoveSymbol("AAPL".into()));
+        assert!(listed(&app).is_empty());
+
+        assert!(app.chart.undo());
+        app.chart.set_data(id, Vec::new());
+        app.sync_comparisons();
+        assert_eq!(listed(&app), ["AAPL"]);
+        assert!(!app.chart.bars(id).is_empty());
+
+        assert!(app.chart.redo());
+        app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
+        assert_eq!(listed(&app), ["AAPL"]);
+        let again = app.comparisons.last().unwrap().1;
+        assert_ne!(again, id);
+        app.handle_comparison(CompareAction::ToggleVisibility("AAPL".into()));
+        assert!(!app.chart.is_series_visible(again));
+        app.handle_comparison(CompareAction::RemoveSymbol("AAPL".into()));
+        assert!(listed(&app).is_empty());
     }
 }
