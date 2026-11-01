@@ -220,6 +220,7 @@ pub(crate) fn time_axis_marks(
     coords: &ChartMapping,
     scale: &dyn HorizontalScale,
     options: &TimeScaleOptions,
+    calendar: Option<&crate::model::TimezoneId>,
     time_at: impl Fn(f64) -> Option<chrono::DateTime<chrono::Utc>>,
 ) -> (Vec<TickMark>, TimeAxisPoints, ChartMapping) {
     // The logical indices at the right and left edges of the plot; the left one is negative
@@ -277,18 +278,29 @@ pub(crate) fn time_axis_marks(
             .map_while(|index| Some((time_at(index as f64)?, index + shift))),
     );
     // Next to the bars, a daily series gets no keys on the weekdays it has no bars.
-    let after = closed_weekdays(last.saturating_sub(15)..=last, last as f64 + 1.0, &time_at);
+    let weekday = |time| {
+        let local = match calendar {
+            Some(zone) => crate::model::local_time(zone.clone(), time),
+            None => crate::model::local_time(chrono::Local, time),
+        };
+        local.weekday().num_days_from_monday() as usize
+    };
+    let after = closed_weekdays(
+        last.saturating_sub(15)..=last,
+        last as f64 + 1.0,
+        &time_at,
+        &weekday,
+    );
     let before = if shift > 0 {
-        closed_weekdays(0..=last.min(15), -1.0, &time_at)
+        closed_weekdays(0..=last.min(15), -1.0, &time_at, &weekday)
     } else {
         [false; 7]
     };
     bars.retain(|(time, index)| {
-        let day = time.weekday().num_days_from_monday() as usize;
         if *index < shift {
-            !before[day]
+            !before[weekday(*time)]
         } else {
-            *index <= last + shift || !after[day]
+            *index <= last + shift || !after[weekday(*time)]
         }
     });
     let layout = TickMarkLayout {
@@ -311,12 +323,12 @@ pub(crate) fn time_axis_marks(
 /// of a market open on weekdays. `bars` are the 16 bars at one end of the series. A weekday
 /// counts as closed only when both of its dates in those two weeks lack a bar, so one holiday
 /// closes nothing. Weekly and longer intervals, merged daily bars and series shorter than two
-/// weeks close no day. Weekdays are read in UTC, which is consistent because the keys of a
-/// daily series share one time of day.
+/// weeks close no day. `weekday` reads each key's weekday in the chart's calendar zone.
 fn closed_weekdays(
     bars: std::ops::RangeInclusive<usize>,
     outside: f64,
     time_at: impl Fn(f64) -> Option<chrono::DateTime<chrono::Utc>>,
+    weekday: impl Fn(chrono::DateTime<chrono::Utc>) -> usize,
 ) -> [bool; 7] {
     let Some((first, last)) = time_at(*bars.start() as f64)
         .zip(time_at(*bars.end() as f64))
@@ -334,7 +346,7 @@ fn closed_weekdays(
     }
     let mut closed = [true; 7];
     for time in bars.filter_map(|index| time_at(index as f64)) {
-        closed[time.weekday().num_days_from_monday() as usize] = false;
+        closed[weekday(time)] = false;
     }
     closed
 }
@@ -1637,6 +1649,7 @@ mod tests {
                     &coords,
                     &chart.build_time_formatter(),
                     &chart.chart_options.time_scale,
+                    chart.chart_options.time_scale.timezone.to_tz().as_ref(),
                     |index| chart.index_to_time(index),
                 );
                 let whitespace = keys

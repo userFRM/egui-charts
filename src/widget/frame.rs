@@ -1363,6 +1363,7 @@ impl Chart {
                 &time_coords,
                 scale,
                 &self.chart_options.time_scale,
+                calendar.as_ref(),
                 |index| {
                     crate::model::time_at_with_timeframe(
                         self.state.shown(),
@@ -5269,51 +5270,150 @@ mod tests {
         }
     }
 
-    /// The whitespace on either side of a daily series is labelled only on weekdays the series
-    /// has bars on. After weekday bars ending on Thursday 30 or Friday 31 January 2025, February
-    /// is labelled on Monday 3, while a series with weekend bars labels Saturday 1. Before
-    /// weekday bars starting on Monday 2 December 2024, December is labelled on that Monday and
-    /// the whitespace on the weekdays before it, while a series with weekend bars labels
-    /// Sunday 1.
+    /// Whitespace on either side labels only the weekdays the daily series contains,
+    /// including clock changes that move local midnight across UTC midnight.
     #[test]
     fn whitespace_time_labels_skip_days_without_bars() {
-        use crate::model::{Bar, BarData};
-        use crate::scales::CustomTimeFormatter;
-        use chrono::{Datelike, Duration, TimeZone, Utc};
+        use crate::model::{Bar, BarData, Timeframe, TimezoneId};
+        use crate::scales::{CustomTimeFormatter, TimezoneMode};
+        use chrono::{Datelike, Duration, NaiveDate, TimeZone};
         use std::sync::Arc;
-        // (last day of January 2025, weekdays only, logical index at the right edge of the
-        // view or None for six slots past the last bar, a label expected in view)
-        for (last_day, weekdays, right, expected) in [
-            (30, true, None, "Mon 03"),
-            (31, true, None, "Mon 03"),
-            (30, false, None, "Sat 01"),
+        // (first and last local dates, weekdays only, logical right edge or None for a
+        // whitespace offset from the last bar, whitespace offset, zone, expected labels)
+        for (start, last, weekdays, right, offset, zone, expected) in [
+            (
+                "2024-12-02",
+                "2025-01-30",
+                true,
+                None,
+                6.0,
+                "UTC",
+                &["Mon 03"][..],
+            ),
+            (
+                "2024-12-02",
+                "2025-01-31",
+                true,
+                None,
+                6.0,
+                "UTC",
+                &["Mon 03"][..],
+            ),
+            (
+                "2024-12-02",
+                "2025-01-30",
+                false,
+                None,
+                6.0,
+                "UTC",
+                &["Sat 01"][..],
+            ),
             // Partly before the first bar: bar 0 at the right edge.
-            (30, true, Some(0.0), "Mon 25"),
-            (30, false, Some(0.0), "Sun 01"),
+            (
+                "2024-12-02",
+                "2025-01-30",
+                true,
+                Some(0.0),
+                0.0,
+                "UTC",
+                &["Mon 25"][..],
+            ),
+            (
+                "2024-12-02",
+                "2025-01-30",
+                false,
+                Some(0.0),
+                0.0,
+                "UTC",
+                &["Sun 01"][..],
+            ),
             // Wholly before the first bar.
-            (30, true, Some(-3.0), "Mon 25"),
-            (30, false, Some(-3.0), "Mon 25"),
+            (
+                "2024-12-02",
+                "2025-01-30",
+                true,
+                Some(-3.0),
+                0.0,
+                "UTC",
+                &["Mon 25"][..],
+            ),
+            (
+                "2024-12-02",
+                "2025-01-30",
+                false,
+                Some(-3.0),
+                0.0,
+                "UTC",
+                &["Mon 25"][..],
+            ),
+            // British summer midnight is 23:00Z on the previous date. The October
+            // change lies in whitespace; the March change lies in the final 16 bars.
+            (
+                "2026-09-01",
+                "2026-10-23",
+                true,
+                None,
+                10.0,
+                "Europe/London",
+                &["Mon 26", "Tue 27", "Wed 28", "Thu 29", "Fri 30"][..],
+            ),
+            (
+                "2026-02-02",
+                "2026-04-03",
+                true,
+                None,
+                10.0,
+                "Europe/London",
+                &["Mon 06", "Tue 07", "Wed 08", "Thu 09", "Fri 10"][..],
+            ),
+            // The same weekday rule applies before bars that begin after the March change.
+            (
+                "2026-03-30",
+                "2026-05-01",
+                true,
+                Some(-3.0),
+                0.0,
+                "Europe/London",
+                &["Fri 20", "Mon 23"][..],
+            ),
         ] {
-            let start = Utc.with_ymd_and_hms(2024, 12, 2, 0, 0, 0).unwrap();
-            let last = Utc.with_ymd_and_hms(2025, 1, last_day, 0, 0, 0).unwrap();
+            let Some(zone) = TimezoneId::named(zone) else {
+                continue;
+            };
+            let start: NaiveDate = start.parse().unwrap();
+            let last: NaiveDate = last.parse().unwrap();
             let bars: Vec<_> = (0..)
                 .map(|day| start + Duration::days(day))
-                .take_while(|time| *time <= last)
-                .filter(|time| !weekdays || time.weekday().number_from_monday() <= 5)
-                .map(|time| Bar::new(time, 100.0, 110.0, 100.0, 110.0, 1.0))
+                .take_while(|date| *date <= last)
+                .filter(|date| !weekdays || date.weekday().number_from_monday() <= 5)
+                .map(|date| {
+                    let time = zone
+                        .from_local_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
+                        .single()
+                        .unwrap()
+                        .to_utc();
+                    Bar::new(time, 100.0, 110.0, 100.0, 110.0, 1.0)
+                })
                 .collect();
-            let base = (bars.len() - 1) as f32;
+            let base = (bars.len() - 1) as f64;
             let ctx = egui::Context::default();
             let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
             chart.config.show_volume = false;
+            chart.set_timeframe(Timeframe::Day1);
+            chart.chart_options.time_scale.timezone = TimezoneMode::Timezone(zone.clone());
+            if zone.name() == "Europe/London" {
+                chart
+                    .chart_options
+                    .time_scale
+                    .tick_mark_max_character_length = 1;
+            }
             chart.set_time_formatter(Some(Arc::new(CustomTimeFormatter::new(|time, _| {
                 time.format("%a %d").to_string()
             }))));
             frame(&ctx, &mut chart, 0.0, vec![]);
-            // 80 points per bar.
             let scale = chart.state.time_scale_mut();
             scale.set_bar_spacing(80.0);
-            scale.set_right_offset(right.map_or(6.0, |right| right - base));
+            scale.set_right_offset(right.map_or(offset, |right| right - base));
             let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
             let plot = chart.get_rendered_price_rect();
             let labels: Vec<_> = painted
@@ -5327,12 +5427,17 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            let row = format!("{last_day} January, {right:?}: {labels:?}");
+            let row = format!("{zone}, {start}..{last}, {right:?}: {labels:?}");
             let weekend = labels
                 .iter()
                 .any(|label| label.starts_with("Sat") || label.starts_with("Sun"));
             assert!(!(weekdays && weekend), "{row}");
-            assert!(labels.iter().any(|label| label == expected), "{row}");
+            for expected in expected {
+                assert!(
+                    labels.iter().any(|label| label == expected),
+                    "{expected}: {row}"
+                );
+            }
         }
     }
 
