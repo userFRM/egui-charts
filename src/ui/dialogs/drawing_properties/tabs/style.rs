@@ -88,6 +88,32 @@ impl StyleTab {
                     .labelled_by(label.id);
                     ui.end_row();
                 }
+                let (price, time) = crate::drawings::Drawing::axis_labels_of(settings.tool_type);
+                if price || time {
+                    let label = ui.label(l10n::text(ui.ctx(), "Axis labels"));
+                    ui.horizontal(|ui| {
+                        if price {
+                            ui.checkbox(
+                                &mut settings.price_axis_label,
+                                l10n::text(ui.ctx(), "Price"),
+                            )
+                            .labelled_by(label.id);
+                        }
+                        if price && time {
+                            ui.add_space(
+                                ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x,
+                            );
+                        }
+                        if time {
+                            ui.checkbox(
+                                &mut settings.time_axis_label,
+                                l10n::text(ui.ctx(), "Time"),
+                            )
+                            .labelled_by(label.id);
+                        }
+                    });
+                    ui.end_row();
+                }
             }
 
             if tool.is_some_and(|tool| tool.supports_fill()) {

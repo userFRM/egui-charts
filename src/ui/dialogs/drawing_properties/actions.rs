@@ -266,6 +266,8 @@ impl DrawingProps {
                     regression_trend,
                     vwap,
                     channel_midline,
+                    price_axis_label,
+                    time_axis_label,
                     elliott_degree,
                 );
             }
@@ -474,6 +476,10 @@ mod tests {
             DrawingToolType::Arrow,
             DrawingToolType::Path,
             DrawingToolType::Polyline,
+            DrawingToolType::HorizontalLine,
+            DrawingToolType::HorizontalRay,
+            DrawingToolType::VerticalLine,
+            DrawingToolType::CrossLine,
         ] {
             chart.drawings_mut().drawings.clear();
             chart.drawings_mut().drawings.push(Drawing::new(7, tool));
@@ -505,6 +511,13 @@ mod tests {
             assert_eq!(labels.contains(&"Line end"), line, "{tool:?}");
             let middle = tool.supports_middle_line();
             assert_eq!(labels.contains(&"Middle line"), middle, "{tool:?}");
+            use DrawingToolType as T;
+            let (price, time) = (
+                matches!(tool, T::HorizontalLine | T::HorizontalRay | T::CrossLine),
+                matches!(tool, T::VerticalLine | T::CrossLine),
+            );
+            assert_eq!(labels.contains(&"Price"), price, "{tool:?}");
+            assert_eq!(labels.contains(&"Time"), time, "{tool:?}");
             output.drop_without_applying_deltas();
             let settings = &mut props.tool_settings.as_mut().unwrap().settings;
             settings.fib_config = Some(FibonacciConfig {
@@ -540,6 +553,8 @@ mod tests {
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
+            settings.price_axis_label = false;
+            settings.time_axis_label = false;
             let mut vwap = crate::drawings::VwapConfig::default();
             vwap.bands[2] = crate::drawings::VwapBand::new(true, 0.5).unwrap();
             settings.vwap = Some(vwap);
@@ -577,6 +592,10 @@ mod tests {
             assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
+            assert!(
+                !saved.price_axis_label && !saved.time_axis_label,
+                "{tool:?}"
+            );
             assert_eq!(saved.vwap, Some(vwap));
             assert_eq!(saved.elliott_degree, crate::drawings::ElliottDegree::Minute);
             assert!(saved.italic && !saved.background && !saved.border);
@@ -587,6 +606,7 @@ mod tests {
             assert!(chart.drawings().drawings[1].fib_config.is_none());
             let peer = &chart.drawings().drawings[1];
             assert!(!peer.italic && peer.background && peer.border);
+            assert!(peer.price_axis_label && peer.time_axis_label);
             assert_eq!((peer.text_color, peer.border_color), (None, None));
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
@@ -598,7 +618,10 @@ mod tests {
             chart.drawings_mut().edit_drawing(7, |d| d.locked = true);
             props.font_size = 18.0;
             props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
-            assert_eq!(chart.drawings().drawings[0].font_size, 14.0);
+            assert_eq!(
+                chart.drawings().drawings[0].font_size,
+                Drawing::new(7, tool).font_size
+            );
             assert_eq!(chart.drawings().drawings[1].font_size, 18.0);
             // Malformed ratios or widths cannot partly change another selected drawing.
             for (ratio, width) in [(f32::NAN, 2.0), (1.0, 0.0), (1.0, 100.01), (1.0, f32::NAN)] {
