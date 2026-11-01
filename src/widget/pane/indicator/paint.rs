@@ -523,9 +523,7 @@ impl IndicatorPane {
             return None;
         }
         let theme = painter.ctx().active_theme();
-        let mut job = self.legend_job(indicator, theme.ui.text, theme.chart.bg, theme.text.ohlc);
-        job.wrap.max_width = self.legend_width(rect, theme.spacing.sm);
-        let galley = painter.layout_job(job);
+        let galley = self.legend_galley(painter, rect, indicator, theme.ui.text);
         let x = (rect.left() + theme.spacing.sm + galley.size().x + theme.spacing.md)
             .min(rect.right() - if self.pane_controls { 120.0 } else { 80.0 })
             .max(rect.left());
@@ -555,9 +553,7 @@ impl IndicatorPane {
             return;
         }
         let theme = painter.ctx().active_theme();
-        let mut job = self.legend_job(indicator, text_color, theme.chart.bg, theme.text.ohlc);
-        job.wrap.max_width = self.legend_width(rect, theme.spacing.sm);
-        let galley = painter.layout_job(job);
+        let galley = self.legend_galley(painter, rect, indicator, text_color);
         let pos = Pos2::new(
             rect.left() + theme.spacing.sm,
             rect.top() + self.legend_offset + theme.spacing.sm.min(rect.height() / 2.0),
@@ -575,8 +571,19 @@ impl IndicatorPane {
         painter.galley(pos, galley, text_color);
     }
 
-    fn legend_width(&self, rect: Rect, padding: f32) -> f32 {
-        (rect.width() - if self.pane_controls { 120.0 } else { 80.0 } - 2.0 * padding).max(1.0)
+    pub(in crate::widget) fn legend_galley(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        indicator: &dyn Indicator,
+        text_color: Color32,
+    ) -> std::sync::Arc<egui::Galley> {
+        let theme = painter.ctx().active_theme();
+        let mut job = self.legend_job(indicator, text_color, theme.chart.bg, theme.text.ohlc);
+        job.wrap.max_width =
+            (rect.width() - if self.pane_controls { 120.0 } else { 80.0 } - 2.0 * theme.spacing.sm)
+                .max(1.0);
+        painter.layout_job(job)
     }
 
     fn value_to_y(&self, value: f64, rect: Rect, y_min: f64, y_max: f64) -> f32 {
@@ -955,6 +962,74 @@ mod tests {
                     job.text
                 );
                 assert!(job.text.contains("Instant 5s"), "{}", job.text);
+
+                // A saved visible total uses count units in tags and data-window rows too.
+                let mut settings = study.settings();
+                settings.plots[0].visible = true;
+                study.apply_settings(&[], settings).unwrap();
+                let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 300.0));
+                let map = PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(-10.0, total as f64 * 1.2),
+                    0.0,
+                    300.0,
+                    false,
+                );
+                let coords = crate::chart::coords::ChartMapping::new(rect, 10.0, 0, 1, 0.0, map);
+                for separate in [false, true] {
+                    let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                        if separate {
+                            crate::chart::renderers::render_study_axis(
+                                ui.painter(),
+                                &[&study],
+                                &coords,
+                                rect,
+                                &Default::default(),
+                                None,
+                            );
+                        } else {
+                            crate::chart::rendering::axes::render_study_tags(
+                                ui.painter(),
+                                rect,
+                                &map,
+                                &study,
+                                450.0,
+                                &mut Vec::new(),
+                                None,
+                                &Default::default(),
+                            );
+                        }
+                    });
+                    let labels: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape {
+                                Some(text.galley.text().to_owned())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    output.drop_without_applying_deltas();
+                    assert!(labels.contains(&total.to_string()), "{labels:?}");
+                    assert!(!labels.contains(&format!("{total}.00")), "{labels:?}");
+                }
+                let mut chart =
+                    crate::widget::Chart::new(crate::model::BarData::from_bars(vec![Bar::new(
+                        start, 100.0, 100.0, 100.0, 100.0, 0.0,
+                    )]));
+                chart.set_timeframe(timeframe);
+                chart.add_indicator(Box::new(study));
+                crate::widget::test_frames::frame(
+                    &egui::Context::default(),
+                    &mut chart,
+                    0.0,
+                    vec![],
+                );
+                let rows = chart.study_values_at(0);
+                let total_row = rows.iter().find(|row| row.plot == total_name).unwrap();
+                assert_eq!(total_row.formatted_value(), total.to_string());
             }
         }
     }

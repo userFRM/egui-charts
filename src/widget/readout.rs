@@ -61,7 +61,7 @@ impl Chart {
                 let row = StudyValue {
                     formatted: study
                         .plot_value(line, index)
-                        .map(|value| study.format_value(value)),
+                        .map(|value| study.format_plot_value(line, value)),
                     study: study.name().to_owned(),
                     format: study.value_format(),
                     plot: names.get(line).cloned().unwrap_or_default(),

@@ -1129,3 +1129,75 @@ fn every_pane_shares_hover_readouts_and_uses_its_own_horizontal_scale() {
         }
     }
 }
+
+/// Wrapped headers keep their space when studies share a pane or change paint order.
+#[test]
+fn merged_pane_legends_reserve_their_wrapped_height() {
+    use crate::studies::{CustomIndicator, IndicatorValue};
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        for width in [320.0, 800.0, 1440.0] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+            chart.set_size(Some(Vec2::new(width, 600.0)));
+            let first = chart.add_indicator(Box::new(
+                CustomIndicator::new("Ranges", |bars| {
+                    vec![IndicatorValue::Multiple(vec![12.0, 34.0, 56.0]); bars.len()]
+                })
+                .with_overlay(false)
+                .with_line_count(3)
+                .with_line_names(vec![
+                    "Delta [0, 2] lots".into(),
+                    "Delta [3, 5] lots".into(),
+                    "Delta [10, ∞] lots".into(),
+                ]),
+            ));
+            let second = chart.add_indicator(Box::new(
+                CustomIndicator::new("Following", |bars| {
+                    vec![IndicatorValue::Single(20.0); bars.len()]
+                })
+                .with_overlay(false),
+            ));
+            assert!(chart.move_indicator_to_pane(second, first));
+            chart.set_pane_height(chart.series_pane(first).unwrap(), 260.0);
+            chart.chart_options.hovered_series_on_top = true;
+            crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+            for value in [12.0, 20.0] {
+                let pane = &chart.get_rendered_indicator_panes()[0];
+                let pos = Pos2::new(pane.chart_rect.center().x, pane.mapping.price_to_y(value));
+                let shapes = crate::widget::test_frames::shapes(
+                    &ctx,
+                    &mut chart,
+                    1.0,
+                    vec![Event::PointerMoved(pos)],
+                );
+                let bounds = |name: &str| {
+                    shapes
+                        .iter()
+                        .find_map(|shape| match shape {
+                            egui::Shape::Text(text)
+                                if text.galley.text().starts_with(&format!("{name} ")) =>
+                            {
+                                assert!(
+                                    !text.galley.elided,
+                                    "{width}: {name}: {:?}",
+                                    text.galley.text()
+                                );
+                                Some(Rect::from_min_size(text.pos, text.galley.size()))
+                            }
+                            _ => None,
+                        })
+                        .expect(name)
+                };
+                let first = bounds("Ranges");
+                let second = bounds("Following");
+                assert!(
+                    first.bottom() <= second.top(),
+                    "{width}: {first:?}, {second:?}"
+                );
+                let pane = chart.get_rendered_indicator_panes()[0].chart_rect;
+                assert!(pane.contains_rect(first) && pane.contains_rect(second));
+            }
+        }
+    }
+}

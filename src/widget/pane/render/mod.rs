@@ -551,23 +551,13 @@ impl Chart {
             }
             // The crosshair lines of a pane with host series are drawn above their bars.
             let mut series_crosshair = None;
-            let legend_row_height = ui
-                .painter()
-                .layout_no_wrap(
-                    "Ag".into(),
-                    egui::FontId::proportional(ui.active_theme().text.ohlc),
-                    ui.active_theme().ui.text,
-                )
-                .size()
-                .y
-                + ui.active_theme().spacing.md;
-            let legend_order = entries.clone();
-            entries.sort_by_key(|entry| entry.is_some_and(|(id, _)| Some(id) == on_top));
-            for (paint_row, entry) in entries.into_iter().enumerate() {
-                let member_row = legend_order
-                    .iter()
-                    .position(|original| *original == entry)
-                    .unwrap_or(0);
+            let first = entries
+                .iter()
+                .min_by_key(|entry| entry.is_some_and(|(id, _)| Some(id) == on_top))
+                .copied();
+            let mut panels = Vec::with_capacity(entries.len());
+            let mut legend_offset = 0.0;
+            for entry in entries {
                 let id = entry.map(|(id, _)| id);
                 let study = entry.and_then(|(_, idx)| idx);
                 let indicator: &dyn Indicator = match (study, id) {
@@ -579,7 +569,6 @@ impl Chart {
                         .expect("a series entry has a legend"),
                     (None, None) => &frame,
                 };
-                let key = (pane_id, id);
                 let mut config = IndicatorPaneConfig::from_study(indicator);
                 config.show_name = self.config.show_indicator_labels;
                 config.show_values = self.config.show_indicator_last_val;
@@ -599,7 +588,7 @@ impl Chart {
                 config.show_legend = entry.is_some()
                     && (config.show_name || config.show_values || !config.inputs.is_empty());
                 config.height = height;
-                config.show_grid &= paint_row == 0;
+                config.show_grid &= Some(entry) == first;
                 let mut panel = IndicatorPane::with_config(config);
                 panel.legend_backdrop = self.config.indicator_backdrop_opacity;
                 panel.axis_options = crate::config::PriceAxisOptions {
@@ -627,13 +616,32 @@ impl Chart {
                     panel.axis_rect =
                         Some(Rect::from_x_y_ranges(axis.x_range(), panel_rect.y_range()));
                 }
-                panel.axis_tags = axis_tags.clone();
-                panel.overlay = paint_row > 0;
-
-                panel.legend_offset = member_row as f32 * legend_row_height;
+                panel.legend_offset = legend_offset;
                 panel.pane_controls = true;
                 // A series legend reports its value at any bar, the last close without a crosshair.
                 panel.bar_index = hovered.or(id.filter(|_| study.is_none()).map(|_| 0));
+                let legend_row_height = panel
+                    .legend_galley(
+                        ui.painter(),
+                        pane_plot,
+                        indicator,
+                        ui.active_theme().ui.text,
+                    )
+                    .size()
+                    .y
+                    + ui.active_theme().spacing.md;
+                legend_offset += legend_row_height;
+                panels.push((entry, indicator, panel, legend_row_height));
+            }
+            panels.sort_by_key(|(entry, _, _, _)| entry.is_some_and(|(id, _)| Some(id) == on_top));
+            for (paint_row, (entry, indicator, mut panel, legend_row_height)) in
+                panels.into_iter().enumerate()
+            {
+                let id = entry.map(|(id, _)| id);
+                let study = entry.and_then(|(_, idx)| idx);
+                let key = (pane_id, id);
+                panel.overlay = paint_row > 0;
+                panel.axis_tags = axis_tags.clone();
                 let mut hover = self
                     .axis_hover
                     .map(|(pos, _)| pos)

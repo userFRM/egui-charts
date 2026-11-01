@@ -808,21 +808,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn size_delta_names_identify_the_inclusive_size_buckets() {
-        let study = OrderFlowStudy::new(OrderFlowKind::SizeDelta {
-            ranges: [[0.0, 2.5], [3.0, 5.0], [10.0, f64::MAX]],
-        });
-        assert_eq!(
-            study.line_names(),
-            [
-                "Delta [0, 2.5] lots",
-                "Delta [3, 5] lots",
-                "Delta [10, ∞] lots"
-            ]
-        );
-    }
-
     fn assert_lines(study: &OrderFlowStudy, want: &[[f64; 6]]) {
         let got = lines(study);
         assert_eq!(got.len(), want.len());
@@ -845,6 +830,14 @@ mod tests {
         let mut study = OrderFlowStudy::new(OrderFlowKind::SizeDelta {
             ranges: [[0.0, 9.0], [10.0, 99.0], [100.0, f64::MAX]],
         });
+        assert_eq!(
+            study.line_names(),
+            [
+                "Delta [0, 9] lots",
+                "Delta [10, 99] lots",
+                "Delta [100, ∞] lots"
+            ]
+        );
         fill(&study);
         study.calculate(&data);
         assert_lines(
