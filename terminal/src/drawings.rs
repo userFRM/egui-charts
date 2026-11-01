@@ -858,7 +858,7 @@ mod tests {
         for (tool, filled) in [
             (DrawingToolType::TrendLine, false),
             (DrawingToolType::Rect, true),
-            (DrawingToolType::TextLabel, true),
+            (DrawingToolType::TextLabel, false),
         ] {
             let drawing = &mut terminal.chart_mut().drawings_mut().drawings[0];
             drawing.tool_type = tool;
