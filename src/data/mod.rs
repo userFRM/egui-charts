@@ -20,7 +20,8 @@
 //!
 //! Push executions, quotes and book updates through [`Sink`]. [`Footprint`] holds
 //! executed volume at price; [`DepthHistory`] holds the book over time.
-//! [`ReplayClock`] coordinates host-supplied recorded events. [`resample`] aggregates
+//! [`ReplayDriver`] loads host recordings and drives subscriptions through one [`ReplayClock`].
+//! [`resample`] aggregates
 //! bars into a longer interval, and [`VolumeProfile`] describes volume by price.
 //!
 //! The optional feed methods provide auxiliary study data and records for host UI,
@@ -87,7 +88,7 @@ pub use orders::{
     RestingOrder,
 };
 pub use recording::{RecordingReader, RecordingWriter};
-pub use replay::{MarketEvent, ReplayClock, ReplayEvent};
+pub use replay::{MarketEvent, ReplayClock, ReplayDriver, ReplayEvent};
 #[cfg(feature = "studies")]
 pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session};

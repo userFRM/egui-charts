@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::market::Market;
 use super::orders::Orders;
+use super::replay::capture_book;
 use crate::sampledata::{
     DemoSymbol, SAMPLE_LOGO, dividend_date, dividend_factor, latest_open_end, session_bars,
     us_equity_hours, us_equity_session, us_equity_zone,
@@ -60,6 +61,7 @@ struct Simulation {
     metrics: Vec<MetricSubscription>,
     /// The order book of the subscription, around the last price it was shown.
     market: Option<Market>,
+    capture: super::replay::Capture,
     /// The individual orders behind `market`, on [`ORDER_LEVEL_SYMBOL`] only.
     orders: Option<Orders>,
 }
@@ -95,6 +97,7 @@ impl LiveFeed {
             options: Vec::new(),
             metrics: Vec::new(),
             market: None,
+            capture: super::replay::Capture::new(),
             orders: None,
         };
         while sim.next_trade <= now {
@@ -132,6 +135,7 @@ impl LiveFeed {
             options: Vec::new(),
             metrics: Vec::new(),
             market: None,
+            capture: super::replay::Capture::new(),
             orders: None,
         }))
     }
@@ -210,6 +214,10 @@ impl LiveFeed {
             ));
         }
         bars
+    }
+
+    pub(super) fn recording(&self) -> Vec<u8> {
+        self.state().capture.bytes()
     }
 
     /// The same synthetic metric history supplied through the feed contract.
@@ -410,7 +418,14 @@ impl LiveFeed {
             {
                 sub.sink.advance_time(now);
                 if let Some(quote) = sim.quote(now) {
-                    sub.sink.push_quote(quote);
+                    let sink = sub.sink.clone();
+                    let symbol = sim.symbol.clone();
+                    sim.capture.push(
+                        &symbol,
+                        now,
+                        egui_charts::data::MarketEvent::Quote(quote.clone()),
+                    );
+                    sink.push_quote(quote);
                 }
             }
         }
@@ -677,6 +692,11 @@ impl Simulation {
             && let Some(shown) = self.shown_trade(&trade, sub.extended_hours)
         {
             let price = (shown.price / self.tick_size).round() as i64;
+            self.capture.push(
+                &self.symbol,
+                shown.ts,
+                egui_charts::data::MarketEvent::Trade(shown.clone()),
+            );
             sub.sink.push_tick(shown);
             // A subscription made while no trade was shown gets its book with the first one.
             let market = self.market.get_or_insert_with(|| {
@@ -684,21 +704,63 @@ impl Simulation {
                 self.orders =
                     order_level(&self.symbol, &market, trade.ts, self.tick_size, self.random);
                 push_snapshot(sub, &market, self.orders.as_ref(), trade.ts);
+                capture_book(
+                    &mut self.capture,
+                    &self.symbol,
+                    &market,
+                    self.orders.as_ref(),
+                    trade.ts,
+                );
                 market
             });
             let (sequence, delta) = market.trade(trade.ts, price, side, size);
             match &mut self.orders {
                 Some(orders) => orders.apply(&sub.sink, delta, Some((side, price))),
-                None => sub.sink.push_depth_delta(sequence, delta),
+                None => {
+                    self.capture.push(
+                        &self.symbol,
+                        trade.ts,
+                        egui_charts::data::MarketEvent::DepthDelta {
+                            sequence,
+                            book: delta.clone(),
+                        },
+                    );
+                    sub.sink.push_depth_delta(sequence, delta);
+                }
             }
             for _ in 0..CHURN_PER_TRADE {
                 let (sequence, delta) = market.churn(trade.ts);
                 match &mut self.orders {
                     Some(orders) => orders.apply(&sub.sink, delta, None),
-                    None => sub.sink.push_depth_delta(sequence, delta),
+                    None => {
+                        self.capture.push(
+                            &self.symbol,
+                            trade.ts,
+                            egui_charts::data::MarketEvent::DepthDelta {
+                                sequence,
+                                book: delta.clone(),
+                            },
+                        );
+                        sub.sink.push_depth_delta(sequence, delta);
+                    }
                 }
             }
-            sub.sink.push_quote(market.quote(trade.ts));
+            if let Some(orders) = &mut self.orders {
+                for (sequence, event) in orders.take_recorded() {
+                    self.capture.push(
+                        &self.symbol,
+                        trade.ts,
+                        egui_charts::data::MarketEvent::Order { sequence, event },
+                    );
+                }
+            }
+            let quote = market.quote(trade.ts);
+            self.capture.push(
+                &self.symbol,
+                trade.ts,
+                egui_charts::data::MarketEvent::Quote(quote.clone()),
+            );
+            sub.sink.push_quote(quote);
         }
         if trade.ts < self.retain_from {
             match self.history.last_mut() {
@@ -955,10 +1017,20 @@ impl Datafeed for LiveFeed {
     fn subscribe(&self, subscription: Subscription) {
         let mut sim = self.state();
         subscription.sink.set_server_time(sim.now);
-        for trade in &sim.trades {
-            if let Some(trade) = sim.shown_trade(trade, subscription.extended_hours) {
-                subscription.sink.push_tick(trade);
-            }
+        sim.capture = super::replay::Capture::new();
+        let trades: Vec<_> = sim
+            .trades
+            .iter()
+            .filter_map(|trade| sim.shown_trade(trade, subscription.extended_hours))
+            .collect();
+        for trade in trades {
+            let symbol = sim.symbol.clone();
+            sim.capture.push(
+                &symbol,
+                trade.ts,
+                egui_charts::data::MarketEvent::Trade(trade.clone()),
+            );
+            subscription.sink.push_tick(trade);
         }
         sim.market = None;
         sim.orders = None;
@@ -968,6 +1040,24 @@ impl Datafeed for LiveFeed {
             push_snapshot(&subscription, &market, sim.orders.as_ref(), sim.now);
             subscription.sink.advance_time(sim.now);
             subscription.sink.push_quote(market.quote(sim.now));
+            let symbol = sim.symbol.clone();
+            let now = sim.now;
+            let orders = sim.orders.as_ref().map(Orders::snapshot);
+            let event = match orders {
+                Some((sequence, orders)) => {
+                    egui_charts::data::MarketEvent::OrderSnapshot { sequence, orders }
+                }
+                None => {
+                    let (sequence, book) = market.snapshot(now);
+                    egui_charts::data::MarketEvent::DepthSnapshot { sequence, book }
+                }
+            };
+            sim.capture.push(&symbol, now, event);
+            sim.capture.push(
+                &symbol,
+                now,
+                egui_charts::data::MarketEvent::Quote(market.quote(now)),
+            );
             sim.market = Some(market);
         }
         subscription.sink.set_status(FeedStatus::Live);

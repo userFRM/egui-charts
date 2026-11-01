@@ -208,6 +208,7 @@ pub struct Chart {
     /// Backend state holding OHLCV data and coordinate system (time scale, price range).
     pub(crate) state: ChartState,
     replay: Option<replay::ReplayWindow>,
+    market_replay: Option<replay::MarketReplay>,
     /// Visual configuration controlling colors, padding, grid visibility, and more.
     pub(crate) config: ChartConfig,
     applied_config_scale_mode: crate::scales::PriceScaleMode,

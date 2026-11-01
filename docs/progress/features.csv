@@ -447,8 +447,9 @@ Order flow,Order flow,Liquidity tracker,missing,host,
 Order flow,Order flow,Market structure meters,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
 Order flow,Order flow,Merge and split adjacent profiles,done,library,src/studies/builtin/trade_profile.rs;src/ui/context_menu/trade_profile.rs;src/widget/trade_profile.rs;src/widget/frame.rs;src/ui/context_menu/chart_menus/mod.rs;terminal/src/studies.rs
 Order flow,Order flow,Multi-column footprint,done,library,src/chart/overlays/footprint.rs;src/widget/frame.rs
-Order flow,Order flow,"On-chart order lines with drag to move entry, stop and target",done,host,src/chart/renderers/trading_lines/mod.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs
-Order flow,Order flow,"Order book, heatmap and order-level replay",done,library,src/data/replay.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs
+Order flow,Order flow,"On-chart order lines with drag to move entry, stop and target",done,host,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/chart/renderers/trading_lines/mod.rs
+Order flow,Order flow,Options gamma exposure suite,missing,host,
+Order flow,Order flow,"Order book, heatmap and order-level replay",done,library,src/data/replay.rs;src/data/recording.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/replay.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs
 Order flow,Order flow,Minimum traded volume for imbalances and stacked imbalance zones,missing,library,
 Order flow,Order flow,Order-flow entries offered only for symbols whose feed supplies their data,missing,host,
 Order flow,Order flow,Order-flow event alerts,partial,host,src/services/alerts.rs;src/services/notifications.rs;src/ui/widget_bar/panels/time_and_sales.rs
@@ -472,7 +473,7 @@ Order flow,Order flow,Stop-run detection from bursts of same-side market orders 
 Order flow,Order flow,TPO initial balance period and extension levels,partial,library,src/model/tpo.rs;src/chart/rendering/candles/tpo.rs
 Order flow,Order flow,TPO poor high and poor low marks,partial,library,src/model/tpo.rs;src/chart/rendering/candles/tpo.rs
 Order flow,Order flow,Tape reconstruction and passive fill details,done,library,src/data/trades.rs;src/data/orders.rs;src/model/quote.rs;src/widget/feed/mod.rs;src/ui/widget_bar/panels/time_and_sales.rs
-Order flow,Order flow,Tick-by-tick trade replay with speed control and multi-symbol sessions,done,library,src/data/replay.rs;src/data/mod.rs
+Order flow,Order flow,Tick-by-tick trade replay with speed control and multi-symbol sessions,done,library,src/data/replay.rs;src/data/mod.rs;src/widget/replay.rs;examples/demo/replay.rs
 Order flow,Order flow,Tick-count bars,done,library,src/model/timeframe.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Order flow,Order flow,Time and sales with size filters and sound alerts,done,library,src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs
 Order flow,Order flow,Time price opportunity profiles and single prints,done,library,src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs;src/widget/frame.rs;src/studies/builtin/time_price_opportunity.rs;src/tokens/mod.rs;src/tokens/semantic.rs
@@ -498,7 +499,7 @@ Order flow,Order flow data model,Market-by-order events,done,library,src/data/or
 Order flow,Order flow data model,Memory bounds for trade and depth history,done,library,src/data/trades.rs;src/data/depth_history.rs;src/chart/overlays/volume_bubbles.rs;src/widget/feed/mod.rs;src/data/footprint.rs;src/data/depth.rs
 Order flow,Order flow data model,Order book reconstruction from updates,done,library,src/data/depth.rs;src/model/quote.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Order flow,Order flow data model,Order-flow inputs to studies,done,library,src/studies/indicator_trait.rs;src/data/order_flow.rs;src/widget/feed/mod.rs;src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/widget/feed/pump.rs;src/widget/studies.rs;src/widget/replay.rs;src/data/inbox/sink.rs
-Order flow,Order flow data model,Recording ticks and depth to disk for later sessions and replay,done,library,src/data/recording.rs;src/data/mod.rs
+Order flow,Order flow data model,Recording ticks and depth to disk for later sessions and replay,done,library,src/data/recording.rs;src/data/replay.rs;src/data/mod.rs;examples/demo/replay.rs;examples/demo/live.rs
 Order flow,Order flow data model,Replay clock merging trades and book events in timestamp order,done,library,src/data/replay.rs;src/data/mod.rs
 Order flow,Order flow data model,Streaming path that delivers trades into the chart,done,library,src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/mod.rs;src/widget/frame.rs;src/data/inbox/sink.rs;src/data/trades.rs;benches/regression/mod.rs;benches/check-regressions.sh
 Order flow,Order flow data model,Tick-size-aware integer price keys from symbol metadata,done,library,src/widget/feed/mod.rs;src/data/depth.rs;src/data/footprint.rs;src/data/orders.rs
@@ -857,18 +858,18 @@ Terminal,Replay,Bar replay button and replay mode on/off,done,library,src/ui/top
 Terminal,Replay,Continue the last replay session after a reload,done,library,src/ui/replay/session.rs
 Terminal,Replay,Drawings stay in place during replay,done,library,src/widget/replay.rs;src/widget/series.rs;src/widget/anchors.rs
 Terminal,Replay,Hide future bars and reveal them one at a time,done,library,src/ui/replay/mod.rs;src/widget/replay.rs
-Terminal,Replay,Indicators recompute on replayed bars only,partial,library,src/widget/replay.rs;src/widget/studies_data.rs;src/studies/settings.rs;src/widget/studies.rs
+Terminal,Replay,Indicators recompute on replayed bars only,partial,library,src/widget/replay.rs;src/widget/studies_data.rs;src/studies/settings.rs;src/widget/studies.rs;src/widget/series.rs;src/widget/frame.rs;src/widget/export.rs
 Terminal,Replay,Jump to real time / exit replay and restore full data,done,library,src/widget/replay.rs
 Terminal,Replay,Pick the start bar by clicking on the chart,done,library,src/ui/replay/start.rs
-Terminal,Replay,Play / pause autoplay,done,library,src/ui/replay/mod.rs;src/ui/replay/state.rs
-Terminal,Replay,Playback speed,done,library,src/ui/replay/floating.rs;src/ui/replay/mod.rs;src/ui/replay/state.rs
-Terminal,Replay,Replay on a lower timeframe / change interval during replay,done,library,src/ui/replay/session.rs;src/widget/replay.rs
+Terminal,Replay,Play / pause autoplay,done,library,src/ui/replay/mod.rs;src/ui/replay/state.rs;src/data/replay.rs;src/widget/replay.rs
+Terminal,Replay,Playback speed,done,library,src/ui/replay/floating.rs;src/ui/replay/mod.rs;src/ui/replay/state.rs;src/data/replay.rs
+Terminal,Replay,Replay on a lower timeframe / change interval during replay,done,library,src/ui/replay/session.rs;src/widget/replay.rs;src/data/replay.rs
 Terminal,Replay,Replay trading,done,library,src/services/paper.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs
 Terminal,Replay,"Start options: select date, random bar, first available date",done,library,src/ui/replay/start.rs
 Terminal,Replay,Step forward and back one bar,done,library,src/ui/replay/mod.rs;src/ui/replay/state.rs
-Terminal,Replay,Synchronised replay across the charts of a layout,done,library,src/widget/replay.rs
-Terminal,Replay,Tick replay,done,library,src/data/replay.rs
-Terminal,Replay,Trade-by-trade updates during bar replay,done,library,src/widget/replay.rs;src/ui/replay/floating.rs
+Terminal,Replay,Synchronised replay across the charts of a layout,done,library,src/widget/replay.rs;src/data/replay.rs
+Terminal,Replay,Tick replay,done,library,src/data/replay.rs;src/widget/replay.rs;examples/demo/replay.rs
+Terminal,Replay,Trade-by-trade updates during bar replay,done,library,src/widget/replay.rs;src/ui/replay/floating.rs;src/data/replay.rs;examples/demo/replay.rs
 Terminal,Replay,Update interval smaller than the chart interval,done,library,src/widget/replay.rs;src/ui/replay/floating.rs
 Terminal,Templates and layouts,Autosave,done,library,src/ui/top_toolbar/components/layout_menu.rs
 Terminal,Templates and layouts,Chart settings templates,done,library,src/ui/dialogs/chart_settings/mod.rs
