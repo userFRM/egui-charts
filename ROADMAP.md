@@ -170,7 +170,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] `DepthHistory` retains sampled resting-size columns in bounded tiers; the heatmap uses retained texture tiles and partial updates.
 - [x] Heatmap best bid/ask paths and a side profile of total resting size.
 - [x] Volume bubbles aggregate by chart bar and price, with side/delta colours, linear/square-root/logarithmic sizing and outlier limits.
-- [x] Time-and-sales panel with aggressor colours, size filters and sound intents.
+- [x] Time-and-sales panel with aggressor colours, size filters, sound intents, selectable milliseconds and full execution timestamps on hover.
 - [x] Explicit aggressor identifiers combine split fills into parent orders with total size, price span and fill count.
 - [x] Fixed stream studies calculate quoted spread, resting book totals/difference, execution rate and inside-quote movement.
 - [ ] Add bubble time-window/count grouping, ungrouped execution timestamps, split bid/ask and additional delta/volume colour modes.
