@@ -105,7 +105,7 @@ Chart,Chart settings and themes,Events tab,done,host,src/model/time_scale_event.
 Chart,Chart settings and themes,Grid lines,done,library,src/widget/frame.rs;src/chart/rendering/grid.rs;src/widget/settings/apply.rs;src/widget/indicator_pane.rs;src/painting/dashed_line.rs;src/theme/presets.rs
 Chart,Chart settings and themes,Light and dark themes,done,library,src/widget/mod.rs;src/widget/palette.rs;src/widget/frame.rs;src/config/chart.rs;src/model/markers.rs;src/chart/renderers/markers.rs;src/theme/presets.rs;src/theme/style.rs;examples/demo/controller.rs
 Chart,Chart settings and themes,Navigation and pane buttons,done,library,src/widget/navigation.rs;src/widget/frame.rs;src/widget/pane_layout.rs;src/widget/settings/data.rs
-Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/dialogs/chart_settings/tabs/scales.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
+Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/dialogs/chart_settings/tabs/scales.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs;src/ui/dialogs/chart_settings/tabs/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Chart,Chart settings and themes,Scales text colour and size,done,library,src/widget/settings/data.rs;src/widget/settings/apply.rs;src/chart/rendering/axes.rs;src/chart/renderers/labels.rs
 Chart,Chart settings and themes,Session background shading,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs
 Chart,Chart settings and themes,Status line tab,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
@@ -814,7 +814,7 @@ Terminal,Alerts,Notification: in-app popup when an alert fires,done,library,src/
 Terminal,Alerts,Notification: mobile app push,missing,host,
 Terminal,Alerts,Notification: webhook,missing,host,
 Terminal,Alerts,"Price operators: crossing, crossing up, crossing down, greater than, less than",done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs
-Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,partial,library,src/ui/context_menu/mod.rs;src/chart/renderers/crosshair.rs;src/widget/frame.rs
+Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,done,library,src/ui/context_menu/mod.rs;src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/chart/rendering/axes.rs;src/config/chart.rs;src/widget/settings/apply.rs;src/ui/context_menu/chart_menus/mod.rs
 Terminal,Alerts,Server-side evaluation,done,host,src/services/alerts.rs;src/ui/widget_bar/panels/alerts_panel.rs
 Terminal,Alerts,Trigger frequency,done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs
 Terminal,Alerts,Watchlist alerts,done,host,src/ui/dialogs/alert_dialog/dialog.rs

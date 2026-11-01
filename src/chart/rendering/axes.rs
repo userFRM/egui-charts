@@ -581,9 +581,10 @@ pub(crate) fn render_quote_tags_with_countdown(
     tags
 }
 
-/// Routes a click on a crosshair price tag. A click returns the tagged price
-/// for the host's alert, order or price-line menu. Call before handling price-axis drags.
-/// Pass the resolved label text colour as `foreground` for the hover outline.
+/// Paints a 26 by 20 point circled-plus button joined to the left of `tag`.
+/// A click returns `price` for the host's alert, order or price-line menu. The tag itself
+/// remains available for price-axis drags. Uses the theme's tag fill and `foreground` ink;
+/// call before handling price-axis drags.
 #[cfg(feature = "icons")]
 #[cfg_attr(docsrs, doc(cfg(feature = "icons")))]
 pub fn crosshair_price_action(
@@ -592,18 +593,48 @@ pub fn crosshair_price_action(
     price: f64,
     foreground: Color32,
 ) -> Option<f64> {
-    let response = ui.interact(
+    crosshair_price_action_with_colors(
+        ui,
         tag,
+        price,
+        (foreground, ui.ctx().active_theme().chart.crosshair_label_bg),
+    )
+}
+
+/// The joined button's target, shared by painting and chart gesture handling.
+pub(crate) fn crosshair_price_button_rect(tag: Rect) -> Rect {
+    Rect::from_center_size(
+        tag.left_center() - Vec2::new(13.0, 0.0),
+        Vec2::new(26.0, 20.0),
+    )
+}
+
+/// Keeps the public action's signature while the chart supplies its configured tag fill.
+#[cfg(feature = "icons")]
+pub(crate) fn crosshair_price_action_with_colors(
+    ui: &mut egui::Ui,
+    tag: Rect,
+    price: f64,
+    colors: (Color32, Color32),
+) -> Option<f64> {
+    let (foreground, fill) = colors;
+    let button = crosshair_price_button_rect(tag);
+    let response = ui.interact(
+        button,
         ui.scope_id().with("crosshair_price_action"),
         egui::Sense::click(),
     );
+    ui.painter().rect_filled(button, 1.0, fill);
     if response.hovered() {
-        ui.painter().rect_stroke(
-            tag,
-            1.0,
-            Stroke::new(1.0, foreground),
-            egui::StrokeKind::Inside,
-        );
+        ui.painter()
+            .rect_filled(button, 1.0, foreground.gamma_multiply(0.18));
+    }
+    let center = button.center();
+    let stroke = Stroke::new(1.0, foreground);
+    ui.painter().circle_stroke(center, 6.0, stroke);
+    for offset in [Vec2::new(3.0, 0.0), Vec2::new(0.0, 3.0)] {
+        ui.painter()
+            .line_segment([center - offset, center + offset], stroke);
     }
     let needs_info = response.clicked()
         || response.double_clicked()
@@ -1017,9 +1048,11 @@ mod tests {
         let corner = Rect::from_min_max(Pos2::new(200.0, 200.0), Pos2::new(260.0, 228.0));
         let mut actions = Vec::new();
         for (pos, expected) in [
-            (Pos2::new(110.0, 110.0), "add"),
-            (corner.center(), "settings"),
+            (Pos2::new(87.0, 110.5), Some("add")),
+            (tag.center(), None),
+            (corner.center(), Some("settings")),
         ] {
+            let before = actions.len();
             for pressed in [None, Some(true), Some(false)] {
                 let mut input = RawInput::default();
                 input.events.push(Event::PointerMoved(pos));
@@ -1042,7 +1075,7 @@ mod tests {
                 });
                 output.drop_without_applying_deltas();
             }
-            assert_eq!(actions.last(), Some(&expected));
+            assert_eq!(actions[before..].first().copied(), expected);
         }
         assert_eq!(actions, ["add", "settings"]);
     }

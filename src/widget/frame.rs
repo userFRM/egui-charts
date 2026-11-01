@@ -925,7 +925,11 @@ impl Chart {
                         .or(input.pointer.hover_pos())
                         .is_some_and(|pos| {
                             axis_corner.contains(pos)
-                                || self.axis_hover.is_some_and(|(_, tag)| tag.contains(pos))
+                                || (self.config.show_plus_button
+                                    && self.axis_hover.is_some_and(|(_, tag)| {
+                                        rendering::axes::crosshair_price_button_rect(tag)
+                                            .contains(pos)
+                                    }))
                         })
             });
         if navigation_interaction || realtime_interaction || axis_interaction {
@@ -2741,10 +2745,11 @@ impl Chart {
             .axis_hover
             .filter(|(_, tag)| {
                 ui.input(|input| {
-                    input
-                        .pointer
-                        .hover_pos()
-                        .is_some_and(|pos| tag.contains(pos))
+                    input.pointer.hover_pos().is_some_and(|pos| {
+                        cfg!(feature = "icons")
+                            && self.config.show_plus_button
+                            && rendering::axes::crosshair_price_button_rect(*tag).contains(pos)
+                    })
                 })
             })
             .map(|(pos, _)| pos)
@@ -3148,16 +3153,18 @@ impl Chart {
                 } else {
                     price_map.y_to_price(pos.y)
                 };
-                let foreground = self
-                    .chart_options
-                    .crosshair
-                    .resolved(ui.ctx())
-                    .label_text_color;
-                if let Some(price) =
-                    rendering::axes::crosshair_price_action(ui, tag, price, foreground)
-                {
+                let options = self.chart_options.crosshair.resolved(ui.ctx());
+                if let Some(price) = rendering::axes::crosshair_price_action_with_colors(
+                    ui,
+                    tag,
+                    price,
+                    (
+                        options.label_text_color,
+                        options.horz_label_background_color,
+                    ),
+                ) {
                     self.right_click = Some(RightClickTarget::Background {
-                        pos: tag.left_bottom(),
+                        pos: Pos2::new(tag.left(), tag.bottom().min(price_rect.bottom())),
                         price,
                     });
                 }
@@ -3183,6 +3190,13 @@ impl Chart {
             price_formatter.as_deref(),
         );
         self.measured_axis_width = self.measured_axis_width.max(independent_axis_width);
+        if self.config.show_left_axis
+            && !self.config.show_right_axis
+            && self.config.show_plus_button
+            && let Some(tag) = crosshair_tags[0]
+        {
+            self.measured_axis_width = self.measured_axis_width.max(tag.width() + 26.0);
+        }
         for tag in tags.iter().skip(usize::from(has_currency)).flatten() {
             self.measured_axis_width = self.measured_axis_width.max(tag.width() + 5.0 + 6.0);
         }
@@ -4078,26 +4092,37 @@ mod tests {
     #[cfg(feature = "icons")]
     #[test]
     fn axis_buttons_route_without_scaling() {
-        for (settings, magnet, enabled) in [
-            (false, false, true),
-            (true, false, true),
-            (false, true, true),
-            (false, false, false),
+        for (settings, magnet, enabled, left, bottom) in [
+            (false, false, true, false, false),
+            (true, false, true, false, false),
+            (false, true, true, false, false),
+            (false, false, false, false, false),
+            (false, false, true, true, false),
+            (false, false, true, false, true),
         ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], &[110.0]);
             chart.config.show_plus_button = enabled;
+            chart.config.show_left_axis = left;
+            chart.config.show_right_axis = !left;
+            #[cfg(feature = "studies")]
+            if bottom {
+                chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            }
             if magnet {
                 chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Magnet;
             }
             frame(&ctx, &mut chart, 0.0, vec![]);
             let plot = chart.last_rendered_price_rect;
-            frame(
-                &ctx,
-                &mut chart,
-                0.1,
-                vec![Event::PointerMoved(plot.center() + egui::vec2(0.0, 10.0))],
+            let hover = Pos2::new(
+                plot.center().x,
+                if bottom {
+                    plot.bottom() - 0.5
+                } else {
+                    plot.center().y + 10.0
+                },
             );
+            frame(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(hover)]);
             let map = chart.get_chart_mapping();
             let range = map.price.range();
             let viewport = chart.get_time_scale_state();
@@ -4108,7 +4133,7 @@ mod tests {
                 )
             } else {
                 let (_, tag) = chart.axis_hover.expect("hover tag");
-                tag.left_center() + egui::Vec2::new(10.0, if magnet { 5.0 } else { 0.0 })
+                tag.left_center() - egui::Vec2::new(13.0, 0.0)
             };
             for (step, events) in [
                 vec![Event::PointerMoved(pos)],
@@ -4123,7 +4148,7 @@ mod tests {
             let expected_price = if magnet {
                 100.0
             } else {
-                map.y_to_price(plot.center().y + 10.0)
+                map.y_to_price(hover.y)
             };
             if settings {
                 assert!(chart.take_scale_settings_request());
@@ -4132,12 +4157,34 @@ mod tests {
                 assert!(chart.take_right_click().is_none());
             } else {
                 assert!(
-                    matches!(chart.take_right_click(), Some(super::RightClickTarget::Background { price, .. }) if (price - expected_price).abs() < 0.001)
+                    matches!(chart.take_right_click(), Some(super::RightClickTarget::Background { price, pos }) if (price - expected_price).abs() < 0.001 && pos.y <= plot.bottom())
                 );
             }
             assert_eq!(chart.get_chart_mapping().price.range().min, range.min);
             assert_eq!(chart.get_chart_mapping().price.range().max, range.max);
             assert_eq!(chart.get_time_scale_state(), viewport);
+            if enabled && !settings && !magnet && !bottom {
+                let tag = chart.axis_hover.unwrap().1;
+                let start = tag.center();
+                let end = start + egui::vec2(0.0, 30.0);
+                for (step, events) in [
+                    vec![Event::PointerMoved(start)],
+                    vec![navigation_press(start, true)],
+                    vec![Event::PointerMoved(end)],
+                    vec![navigation_press(end, false)],
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    frame(&ctx, &mut chart, 0.6 + step as f64 * 0.1, events);
+                }
+                assert_ne!(
+                    chart.get_chart_mapping().price.range(),
+                    range,
+                    "drag over the tag"
+                );
+                assert!(chart.take_right_click().is_none());
+            }
         }
     }
 
