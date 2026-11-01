@@ -19,7 +19,7 @@ use crate::theme::ThemeExt;
 use crate::ui::dialogs::templates::TemplateStore;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::filter::FilterWidget;
-use crate::ui_kit::status_message::{MessageKind, status_message};
+use crate::ui_kit::status_message::{MessageKind, status_message, translated_status_message};
 use crate::ui_kit::{EmptyState, LoadingIndicator, PanelHeader};
 
 /// Rows asked for at most.
@@ -483,13 +483,13 @@ impl ScreenerPanel {
         if self.stored
             && let Some(error) = &self.saved.error
         {
-            status_message(
+            translated_status_message(
                 ui,
                 MessageKind::Error,
-                &l10n::format_text(
+                l10n::format_text(
                     ui.ctx(),
                     "Saved screens: {error}",
-                    &[("error", error.to_string().as_str())],
+                    &[("error", error.as_str())],
                 ),
             );
         }
@@ -572,10 +572,10 @@ impl ScreenerPanel {
                 status_message(ui, MessageKind::Info, "This feed supplies no screener.");
             }
             Some(error) => {
-                status_message(
+                translated_status_message(
                     ui,
                     MessageKind::Error,
-                    &l10n::format_text(
+                    l10n::format_text(
                         ui.ctx(),
                         "Screen failed: {error}",
                         &[("error", error.to_string().as_str())],

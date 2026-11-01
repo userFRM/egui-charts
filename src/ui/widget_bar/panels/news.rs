@@ -12,7 +12,7 @@ use crate::data::{Datafeed, FeedError, NewsQuery, NewsStory};
 use crate::icons::icons;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::Button;
-use crate::ui_kit::status_message::{MessageKind, status_message};
+use crate::ui_kit::status_message::{MessageKind, status_message, translated_status_message};
 use crate::ui_kit::{EmptyState, IconButton, LoadingIndicator, PanelHeader};
 
 use super::controls::dropdown;
@@ -356,10 +356,10 @@ impl NewsPanel {
                 status_message(ui, MessageKind::Info, "This feed supplies no stories.");
             }
             Some(error) => {
-                status_message(
+                translated_status_message(
                     ui,
                     MessageKind::Error,
-                    &l10n::format_text(
+                    l10n::format_text(
                         ui.ctx(),
                         "Stories unavailable: {error}",
                         &[("error", error.to_string().as_str())],

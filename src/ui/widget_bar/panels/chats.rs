@@ -17,7 +17,7 @@ use crate::services::{
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::filter::FilterWidget;
-use crate::ui_kit::status_message::{MessageKind, status_message};
+use crate::ui_kit::status_message::{MessageKind, translated_status_message};
 use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
 
 /// Messages kept at most across the rooms; older ones are dropped.
@@ -280,10 +280,10 @@ impl ChatsPanel {
             self.action_error = None;
         }
         if let Some(error) = &self.action_error {
-            status_message(
+            translated_status_message(
                 ui,
                 MessageKind::Error,
-                &l10n::format_text(
+                l10n::format_text(
                     ui.ctx(),
                     "Chat action failed: {error}",
                     &[("error", error.to_string().as_str())],
@@ -309,10 +309,10 @@ impl ChatsPanel {
         });
         let room = self.rooms[self.room].clone();
         if let Some(error) = &self.error {
-            status_message(
+            translated_status_message(
                 ui,
                 MessageKind::Error,
-                &l10n::format_text(
+                l10n::format_text(
                     ui.ctx(),
                     "Message not sent: {error}",
                     &[("error", error.to_string().as_str())],

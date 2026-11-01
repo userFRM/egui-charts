@@ -13,7 +13,7 @@ use crate::data::{CalendarEvent, CalendarKind, CalendarQuery, Datafeed, FeedErro
 use crate::icons::icons;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::Button;
-use crate::ui_kit::status_message::{MessageKind, status_message};
+use crate::ui_kit::status_message::{MessageKind, status_message, translated_status_message};
 use crate::ui_kit::{EmptyState, LoadingIndicator, PanelHeader};
 
 /// The days a calendar lists, in UTC.
@@ -266,10 +266,10 @@ impl CalendarPanel {
                 status_message(ui, MessageKind::Info, "This feed supplies no calendar.");
             }
             Some(error) => {
-                status_message(
+                translated_status_message(
                     ui,
                     MessageKind::Error,
-                    &l10n::format_text(
+                    l10n::format_text(
                         ui.ctx(),
                         "Events unavailable: {error}",
                         &[("error", error.to_string().as_str())],

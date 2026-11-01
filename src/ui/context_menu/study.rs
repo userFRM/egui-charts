@@ -101,32 +101,39 @@ pub(crate) fn other_panes(
     chart: &Chart,
     current: Option<PaneId>,
 ) -> Vec<(PaneId, String)> {
-    let text =
-        |english: &str| ctx.map_or_else(|| english.to_owned(), |ctx| l10n::text(ctx, english));
     chart
         .panes()
         .into_iter()
         .filter(|other| *other != PaneId::MAIN && Some(*other) != current)
         .map(|other| {
-            let title = chart.pane_series(other).first().map_or_else(
-                || text("empty"),
-                |member| {
-                    chart.indicators().find(|(id, _)| id == member).map_or_else(
-                        || {
-                            chart
-                                .series()
-                                .find(|(id, _)| id == member)
-                                .map_or_else(|| text("Series"), |(_, options)| options.name.clone())
-                        },
-                        |(_, study)| study.name().to_owned(),
-                    )
-                },
-            );
+            let (title, builtin) =
+                chart
+                    .pane_series(other)
+                    .first()
+                    .map_or(("empty", true), |member| {
+                        chart.indicators().find(|(id, _)| id == member).map_or_else(
+                            || {
+                                chart
+                                    .series()
+                                    .find(|(id, _)| id == member)
+                                    .map_or(("Series", true), |(_, options)| {
+                                        (options.name.as_str(), false)
+                                    })
+                            },
+                            |(_, study)| (study.name(), false),
+                        )
+                    });
+            let translated = if builtin {
+                ctx.and_then(|ctx| l10n::lookup(ctx, title))
+            } else {
+                None
+            };
+            let title = translated.as_deref().unwrap_or(title);
             (
                 other,
                 match ctx {
-                    Some(ctx) => l10n::format_text(ctx, "{0} pane", &[("0", title.as_str())]),
-                    None => l10n::substitute("{0} pane", &[("0", title.as_str())]),
+                    Some(ctx) => l10n::format_text(ctx, "{0} pane", &[("0", title)]),
+                    None => l10n::substitute("{0} pane", &[("0", title)]),
                 },
             )
         })
