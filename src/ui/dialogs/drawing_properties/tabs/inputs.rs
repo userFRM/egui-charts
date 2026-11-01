@@ -41,6 +41,7 @@ impl InputsTab {
                 | Tool::GannFixed
                 | Tool::GannFan
                 | Tool::BarsPattern
+                | Tool::Image
                 | Tool::GhostFeed
                 | Tool::LongPos
                 | Tool::ShortPos
@@ -65,6 +66,27 @@ impl InputsTab {
     ) {
         ui.space_md();
         match drawing.tool_type {
+            Tool::Image => {
+                let mut config = drawing.image.unwrap_or_default();
+                let mut percent = f32::from(config.opacity) * 100.0 / 255.0;
+                FormGrid::new("image_inputs").show(ui, |ui| {
+                    let label = ui.label(l10n::text(ui.ctx(), "Opacity"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut percent)
+                                .range(0.0..=100.0)
+                                .max_decimals(1)
+                                .suffix("%"),
+                        )
+                    });
+                    ui.end_row();
+                });
+                let opacity = (percent * 255.0 / 100.0).round() as u8;
+                if opacity != config.opacity {
+                    config.opacity = opacity;
+                    drawing.image = Some(config);
+                }
+            }
             Tool::FibonacciRetracement
             | Tool::FibonacciExtension
             | Tool::FibonacciChannel

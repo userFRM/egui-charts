@@ -595,6 +595,9 @@ impl Drawing {
             let corner = self.gann_square_corner(first, second);
             return Some(Rect::from_two_pos(first, corner).expand(PAINT_MARGIN));
         }
+        if self.tool_type == T::Image {
+            return self.image_frame().map(|frame| frame.expand(PAINT_MARGIN));
+        }
         let hull = self.bounding_rect()?;
         // Room for the drawing's text: one and a half ems per character covers the widest glyph
         // advance and the row of a line break.
@@ -995,6 +998,12 @@ mod tests {
                 } else {
                     "Sample".into()
                 });
+                if tool == DrawingToolType::Image {
+                    drawing.image = Some(crate::drawings::ImageConfig {
+                        size: Some([1500.0, 800.0]),
+                        ..Default::default()
+                    });
+                }
                 let Some(bounds) = drawing.paint_bounds() else {
                     continue;
                 };

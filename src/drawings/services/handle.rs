@@ -12,6 +12,7 @@
 //!   with selection highlighting.
 
 use crate::drawings::domain::{Drawing, DrawingToolType, HandlePos};
+use crate::drawings::validation::MAX_IMAGE_SIDE;
 use crate::styles::typography::font_size;
 use crate::theme::ThemeExt;
 use egui::{Color32, Pos2};
@@ -57,6 +58,7 @@ impl HandleService {
     /// - **Rectangle and Gann box**: Four corner handles and four edge handles
     /// - **Single-point tools** (HorizontalLine, VerticalLine): One Start handle
     /// - **Glyphs**: Four resize corners around the centre and a Middle move handle
+    /// - **Image**: One bottom-right corner that resizes with locked proportions
     /// - **Brushes**: One Middle handle on the stroke, which moves it whole
     /// - **Three-anchor channels**: Four indexed handles, one at each line end
     /// - **Bars pattern**: Start and End at the ends of its copy
@@ -170,6 +172,11 @@ impl HandleService {
                 handles.push((HandlePos::Start, c));
                 handles.push((HandlePos::End, Pos2::new(c.x + (b.x - a.x).abs(), c.y)));
             }
+            DrawingToolType::Image => {
+                if let Some(frame) = drawing.image_frame() {
+                    handles.push((HandlePos::BottomRight, frame.max));
+                }
+            }
             // Multi-point tools - show indexed handles
             _ => {
                 for (i, &point) in drawing.points.iter().enumerate() {
@@ -242,6 +249,24 @@ impl HandleService {
             return;
         }
         match drawing.tool_type {
+            DrawingToolType::Image => {
+                let Some(frame) = drawing.image_frame() else {
+                    return;
+                };
+                let (origin, size) = (frame.min, frame.size());
+                let scale = ((new_pos.x - origin.x) / size.x).max((new_pos.y - origin.y) / size.y);
+                // Never below 16 points a side, unless the picture is already smaller.
+                let low = (16.0 / size.min_elem()).min(1.0);
+                let high = MAX_IMAGE_SIDE / size.max_elem();
+                let scale = if scale.is_finite() {
+                    scale.clamp(low, high)
+                } else {
+                    1.0
+                };
+                // Rounding the scale must not put a side above the stored limit.
+                drawing.image.get_or_insert_with(Default::default).size =
+                    Some((size * scale).min(egui::Vec2::splat(MAX_IMAGE_SIDE)).into());
+            }
             // The copy's ends move in time: the start moves the left source anchor with the
             // copy's anchor, the end the right source anchor, so the source gains or loses
             // bars at that end and the copy's other end stays.
@@ -672,6 +697,7 @@ mod tests {
                 DrawingToolType::BarsPattern,
                 vec![pos2(300.0, 200.0), pos2(100.0, 400.0), pos2(500.0, 100.0)],
                 vec![(Start, pos2(500.0, 100.0)), (End, pos2(700.0, 100.0))],
+                None,
             ),
             (
                 DrawingToolType::FontIcon,
@@ -683,6 +709,7 @@ mod tests {
                     (BottomRight, pos2(120.0, 220.0)),
                     (Middle, pos2(100.0, 200.0)),
                 ],
+                None,
             ),
             (
                 DrawingToolType::Sticker,
@@ -694,6 +721,7 @@ mod tests {
                     (BottomRight, pos2(155.0, 255.0)),
                     (Middle, pos2(100.0, 200.0)),
                 ],
+                None,
             ),
             (
                 DrawingToolType::ParallelChannel,
@@ -704,6 +732,7 @@ mod tests {
                     (Point(2), pos2(100.0, 100.0)),
                     (Point(3), pos2(300.0, 300.0)),
                 ],
+                None,
             ),
             (
                 DrawingToolType::FlatTopBottom,
@@ -714,6 +743,7 @@ mod tests {
                     (Point(2), pos2(100.0, 200.0)),
                     (Point(3), pos2(300.0, 200.0)),
                 ],
+                None,
             ),
             (
                 DrawingToolType::DisjointChannel,
@@ -724,11 +754,13 @@ mod tests {
                     (Point(2), pos2(100.0, 300.0)),
                     (Point(3), pos2(300.0, 100.0)),
                 ],
+                None,
             ),
             (
                 DrawingToolType::TrendLine,
                 vec![pos2(100.0, 200.0), pos2(300.0, 400.0)],
                 vec![(Start, pos2(100.0, 200.0)), (End, pos2(300.0, 400.0))],
+                None,
             ),
             (
                 DrawingToolType::Rect,
@@ -743,6 +775,7 @@ mod tests {
                     (Left, pos2(100.0, 200.0)),
                     (Right, pos2(200.0, 200.0)),
                 ],
+                None,
             ),
             (
                 DrawingToolType::GannBox,
@@ -757,6 +790,7 @@ mod tests {
                     (Left, pos2(100.0, 200.0)),
                     (Right, pos2(200.0, 200.0)),
                 ],
+                None,
             ),
             (
                 DrawingToolType::LongPos,
@@ -768,6 +802,7 @@ mod tests {
                     (Point(2), pos2(100.0, 250.0)),
                     (Middle, pos2(250.0, 200.0)),
                 ],
+                None,
             ),
             // Narrower than the minimum width: the width handle sits at the box's drawn edge.
             (
@@ -780,16 +815,19 @@ mod tests {
                     (Point(2), pos2(100.0, 120.0)),
                     (Middle, pos2(200.0, 200.0)),
                 ],
+                None,
             ),
             (
                 DrawingToolType::HorizontalLine,
                 vec![pos2(50.0, 120.0)],
                 vec![(Start, pos2(50.0, 120.0))],
+                None,
             ),
             (
                 DrawingToolType::FibonacciRetracement,
                 vec![pos2(0.0, 0.0), pos2(100.0, 50.0)],
                 vec![(Start, pos2(0.0, 0.0)), (End, pos2(100.0, 50.0))],
+                None,
             ),
             (
                 DrawingToolType::FibonacciChannel,
@@ -799,6 +837,7 @@ mod tests {
                     (Point(1), pos2(30.0, 0.0)),
                     (Point(2), pos2(0.0, 60.0)),
                 ],
+                None,
             ),
             (
                 DrawingToolType::Triangle,
@@ -808,6 +847,7 @@ mod tests {
                     (Point(1), pos2(30.0, 0.0)),
                     (Point(2), pos2(0.0, 60.0)),
                 ],
+                None,
             ),
             (
                 DrawingToolType::Brush,
@@ -819,15 +859,35 @@ mod tests {
                     pos2(120.0, 80.0),
                 ],
                 vec![(Middle, pos2(60.0, 40.0))],
+                None,
             ),
             (
                 DrawingToolType::Highlighter,
                 vec![pos2(0.0, 0.0), pos2(30.0, 20.0)],
                 vec![(Middle, pos2(30.0, 20.0))],
+                None,
+            ),
+            (
+                DrawingToolType::Image,
+                vec![pos2(100.0, 200.0)],
+                vec![(BottomRight, pos2(220.0, 290.0))],
+                None,
+            ),
+            (
+                DrawingToolType::Image,
+                vec![pos2(100.0, 200.0)],
+                vec![(BottomRight, pos2(300.0, 300.0))],
+                Some([200.0, 100.0]),
             ),
         ];
-        for (tool, points, expected) in cases {
-            let drawing = create_test_drawing(tool, points);
+        for (tool, points, expected, image_size) in cases {
+            let mut drawing = create_test_drawing(tool, points);
+            if let Some(size) = image_size {
+                drawing.image = Some(crate::drawings::ImageConfig {
+                    size: Some(size),
+                    ..Default::default()
+                });
+            }
             assert_eq!(HandleService::get_handles(&drawing), expected, "{tool:?}");
         }
         // Renderer control counts, including generated position stops.
@@ -900,7 +960,6 @@ mod tests {
                     DrawingToolType::Signpost,
                     DrawingToolType::PriceNote,
                     DrawingToolType::Callout,
-                    DrawingToolType::Image,
                 ],
                 2,
             ),
@@ -972,6 +1031,55 @@ mod tests {
                         "{tool:?}: no handle at {point:?}"
                     );
                 }
+            }
+        }
+    }
+
+    /// A picture's corner follows the leading pointer axis without changing proportions or
+    /// anchors, stays within loadable sizes and undoes the whole gesture in one step.
+    #[test]
+    fn image_corner_drag_keeps_proportions() {
+        use crate::drawings::{DrawingManager, ImageConfig};
+        for (size, pointer, expected) in [
+            (Some([200.0, 100.0]), pos2(500.0, 150.0), [400.0, 200.0]),
+            (Some([200.0, 100.0]), pos2(150.0, 400.0), [600.0, 300.0]),
+            (Some([200.0, 100.0]), pos2(90.0, 90.0), [32.0, 16.0]),
+            (Some([200.0, 100.0]), pos2(1e6, 0.0), [10_000.0, 5000.0]),
+            (Some([71.0, 20.0]), pos2(1e6, 0.0), [10_000.0, 2816.9014]),
+            (None, pos2(340.0, 190.0), [240.0, 180.0]),
+            (Some([240.0, 1.0]), pos2(100.0, 100.0), [240.0, 1.0]),
+        ] {
+            let mut manager = DrawingManager::new();
+            let mut drawing = create_test_drawing(DrawingToolType::Image, vec![pos2(100.0, 100.0)]);
+            drawing.image = size.map(|size| ImageConfig {
+                size: Some(size),
+                opacity: 128,
+            });
+            let before = drawing.clone();
+            manager.drawings.push(drawing);
+            manager.start_drag_handle(1, HandlePos::BottomRight);
+            manager.update_drag_handle(pointer, x_to_bar, y_to_price, |p, from, to| {
+                p + f64::from(from - to)
+            });
+            let drawing = &manager.drawings[0];
+            let actual = drawing.image.unwrap();
+            for (actual, expected) in actual.size.unwrap().into_iter().zip(expected) {
+                assert!((actual - expected).abs() < 1e-3, "{size:?} {pointer:?}");
+            }
+            assert_eq!(actual.opacity, before.image.map_or(255, |c| c.opacity));
+            assert_eq!(drawing.points, before.points);
+            assert_eq!(drawing.chart_points, before.chart_points);
+            assert!(
+                crate::drawings::persistence::drawing_to_stored(drawing, |bar| bar as i64 * 60_000)
+                    .invalid_field()
+                    .is_none()
+            );
+            manager.end_drag_handle();
+            // The last case is unchanged, so it deliberately adds no history entry.
+            if actual != before.image.unwrap_or_default() {
+                assert!(manager.undo());
+                assert_eq!(manager.drawings[0].image, before.image);
+                assert!(!manager.undo());
             }
         }
     }

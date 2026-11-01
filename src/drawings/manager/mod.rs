@@ -197,6 +197,8 @@ pub struct DrawingManager {
     pane_members: Vec<Option<usize>>,
     pane_clips: std::collections::HashMap<Option<usize>, Rect>,
     pub(crate) text_editor: Option<TextEditState>,
+    /// A newly placed image waiting for a host file request at the end of this frame.
+    pub(crate) image_request: Option<usize>,
 
     // Services
     selection: SelectionService,
@@ -281,6 +283,7 @@ impl DrawingManager {
             pane_members: vec![None],
             pane_clips: std::collections::HashMap::new(),
             text_editor: None,
+            image_request: None,
             selection: SelectionService::new(),
             history: HistoryService::new(),
             snap_service: SnapService::new(),

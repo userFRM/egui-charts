@@ -10,8 +10,8 @@
 
 use super::{
     ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig,
-    FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, PitchforkConfig, PositionSize,
-    PositionSizing, RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig, PitchforkConfig,
+    PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -208,6 +208,9 @@ pub struct Drawing {
     /// Whether a rectangle or parallel channel draws its dashed halfway line.
     #[serde(default)]
     pub channel_midline: bool,
+    /// Frame size and opacity of the image tool; `None` uses the defaults.
+    #[serde(default)]
+    pub image: Option<ImageConfig>,
     /// Whether a polyline joins its last anchor back to its first. Clicking the first anchor
     /// while placing a polyline closes it; older saved drawings are open.
     #[serde(default)]
@@ -503,6 +506,7 @@ impl Drawing {
             .then(PitchforkConfig::default),
             elliott_degree: ElliottDegree::default(),
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
+            image: None,
             closed: false,
             gann: None,
             ghost_feed: None,
