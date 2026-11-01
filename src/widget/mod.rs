@@ -97,6 +97,8 @@ mod palette;
 pub(crate) mod pan_zoom;
 mod pane;
 pub use pane::{ChartLayoutRects, PaneId, PaneOptions, RenderedIndicatorPane};
+#[cfg(feature = "studies")]
+mod trade_profile;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod posts;
@@ -252,6 +254,8 @@ pub struct Chart {
     pub(crate) chart_type: ChartType,
     /// Parameters of the price-based chart types and the baseline
     pub(crate) chart_type_params: ChartTypeParams,
+    #[cfg(feature = "studies")]
+    trade_profiles: trade_profile::TradeProfiles,
     pending_box_sizes: [bool; 4],
     /// Whether older source bars can contribute to the shown series.
     pub(crate) older_bars_drawn: bool,

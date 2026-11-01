@@ -1,22 +1,22 @@
 area,group,feature,status,provided_by,source
 Builder API,Broker API,Account information and account manager,done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs
-Builder API,Broker API,Brackets,done,host,src/model/trading.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs
+Builder API,Broker API,Brackets,done,host,src/model/trading.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/chart/renderers/trading_lines/mod.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Broker capability flags,done,host,src/model/trading.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/services/broker.rs;src/ui/trading/dom.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs
 Builder API,Broker API,Broker connection contract,done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs;src/ui/trading/account_panel/view.rs;src/ui/trading/view.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/dom.rs;src/ui/trading/account_panel/history.rs
 Builder API,Broker API,Broker host callbacks,done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs
-Builder API,Broker API,Buy and sell buttons on the chart,done,host,src/chart/renderers/legend/mod.rs;src/widget/mod.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs
+Builder API,Broker API,Buy and sell buttons on the chart,done,host,src/chart/renderers/legend/mod.rs;src/chart/renderers/legend/quotes.rs;src/widget/mod.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs
 Builder API,Broker API,Depth of market trading ladder,done,host,src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs;src/ui/trading/dom.rs;src/ui/trading/mod.rs
 Builder API,Broker API,Executions shown on the chart,done,host,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/trading/executions.rs
 Builder API,Broker API,Instrument trading info and formatters,partial,host,src/model/trading.rs;src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs;src/ui/trading/format.rs;src/ui/trading/dom.rs
-Builder API,Broker API,Order and position lines on the chart,done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
+Builder API,Broker API,Order and position lines on the chart,done,host,src/chart/renderers/trading_lines/mod.rs;src/chart/renderers/trading_lines/position.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Builder API,Broker API,"Order placement, modification and cancellation",done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/trading/events.rs
 Builder API,Broker API,Order ticket and order or position dialogs,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs;src/ui/trading/widgets.rs
 Builder API,Broker API,"Order, position and execution queries",done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/history.rs;src/ui/trading/account_panel/view.rs
-Builder API,Broker API,Take-profit levels,done,host,src/model/trading.rs;src/services/paper.rs;src/ui/trading/ticket/mod.rs;src/chart/renderers/trading_lines.rs
+Builder API,Broker API,Take-profit levels,done,host,src/model/trading.rs;src/services/paper.rs;src/ui/trading/ticket/mod.rs;src/chart/renderers/trading_lines/mod.rs
 Builder API,Broker API,Trading entry points in the UI,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs;src/ui/dialogs/chart_settings/tabs/trading.rs
 Builder API,Builder integration,Custom drawing tools from a downstream crate,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Builder API,Builder integration,Custom indicator metadata,done,library,src/studies/indicator_trait.rs;src/studies/inputs.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs;src/chart/renderers/study_scale.rs
-Builder API,Builder integration,Custom indicators from a downstream crate,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/widget/series.rs;src/studies/custom.rs
+Builder API,Builder integration,Custom indicators from a downstream crate,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/widget/series.rs;src/studies/custom.rs;terminal/src/studies.rs
 Builder API,Builder integration,Custom series types from a downstream crate,done,library,src/widget/primitives.rs;src/widget/pane/render/mod.rs;src/chart/primitives.rs
 Builder API,Builder integration,Desktop webview integration,missing,library,
 Builder API,Builder integration,Embedding with a data feed,done,host,src/widget/builder.rs;src/widget/frame.rs;src/widget/feed/mod.rs
@@ -84,7 +84,7 @@ Builder API,Widget API and customization,Custom price formatter,done,library,src
 Builder API,Widget API and customization,Export chart data,done,library,src/widget/export.rs;src/model/bar/io.rs
 Builder API,Widget API and customization,Hide or show the main series,done,library,src/widget/series.rs;src/widget/frame.rs;src/widget/marks.rs
 Builder API,Widget API and customization,Locale-aware date formatting,done,library,src/widget/frame.rs;src/scales/time_formatter.rs;Cargo.toml
-Builder API,Widget API and customization,Localisation of UI text,partial,library,src/localization.rs;src/ui/top_toolbar/components/layout_menu.rs;src/chart/renderers/trading_lines.rs;src/chart/renderers/legend/mod.rs;src/ui/context_menu/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/study.rs;src/ui/context_menu/drawing.rs;src/ui/trading/view.rs;src/ui/trading/events.rs;src/ui/trading/account_panel/mod.rs;src/ui_kit/notifications/panel.rs;src/chart/renderers/tooltip.rs;src/chart/renderers/alert_levels.rs;src/chart/rendering/axes.rs;src/drawings/rendering/trading/position.rs;src/ui/timeframe_toolbar/date_picker.rs;src/ui/timeframe_toolbar/toolbar.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/ui/export.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/ui/widget_bar/panels/calendar.rs;src/ui/widget_bar/panels/chats.rs;src/ui/widget_bar/panels/hotlists.rs;src/ui/widget_bar/panels/news.rs;src/ui/widget_bar/panels/screener.rs;src/ui/widget_bar/panels/symbol_details.rs;src/ui/dialogs/indicator_dialog/templates.rs;src/ui/trading/ticket/form.rs;src/widget/stored_drawings.rs;src/ui_kit/status_message/mod.rs
+Builder API,Widget API and customization,Localisation of UI text,partial,library,src/localization.rs;src/ui/top_toolbar/components/layout_menu.rs;src/chart/renderers/trading_lines/mod.rs;src/chart/renderers/legend/mod.rs;src/ui/context_menu/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/study.rs;src/ui/context_menu/drawing.rs;src/ui/trading/view.rs;src/ui/trading/events.rs;src/ui/trading/account_panel/mod.rs;src/ui_kit/notifications/panel.rs;src/chart/renderers/tooltip.rs;src/chart/renderers/alert_levels.rs;src/chart/rendering/axes.rs;src/drawings/rendering/trading/position.rs;src/ui/timeframe_toolbar/date_picker.rs;src/ui/timeframe_toolbar/toolbar.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/ui/export.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/ui/widget_bar/panels/calendar.rs;src/ui/widget_bar/panels/chats.rs;src/ui/widget_bar/panels/hotlists.rs;src/ui/widget_bar/panels/news.rs;src/ui/widget_bar/panels/screener.rs;src/ui/widget_bar/panels/symbol_details.rs;src/ui/dialogs/indicator_dialog/templates.rs;src/ui/trading/ticket/form.rs;src/widget/stored_drawings.rs;src/ui_kit/status_message/mod.rs
 Builder API,Widget API and customization,Multiple charts per widget,done,library,src/widget/layout.rs;src/ui/multi_chart.rs
 Builder API,Widget API and customization,Price scale API,done,library,src/scales/pricescale.rs;src/widget/mod.rs;src/widget/price_series.rs;src/widget/frame.rs
 Builder API,Widget API and customization,Screenshots,done,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed/mod.rs
@@ -132,7 +132,7 @@ Chart,Chart types,Price-based type parameters,done,library,src/model/chart_type.
 Chart,Chart types,"Price-based types: axis, crosshair and legend",done,library,src/widget/series.rs;src/studies/chart_state.rs;src/chart/rendering/candles/price_based.rs;src/widget/frame.rs;src/chart/renderers/crosshair.rs
 Chart,Chart types,Range,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/price_based.rs;src/model/range_bar.rs;src/data/trades.rs;src/widget/series.rs;src/widget/feed/mod.rs
 Chart,Chart types,Renko,done,library,src/chart/rendering/candles/price_based.rs;src/model/renko.rs;src/chart/rendering/candles/japanese.rs;src/ui/dialogs/series_settings/tabs/symbol.rs
-Chart,Chart types,Session volume profile,done,host,src/widget/feed/mod.rs;src/widget/frame.rs;src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/merge.rs;src/data/footprint.rs
+Chart,Chart types,Session volume profile,done,host,src/widget/feed/mod.rs;src/widget/frame.rs;src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/merge.rs;src/data/footprint.rs;src/widget/trade_profile.rs
 Chart,Chart types,Step line,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/line.rs;src/painting/dashed_line.rs
 Chart,Chart types,Time Price Opportunity,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/tpo.rs;src/model/tpo.rs;src/model/session/exchange.rs;src/widget/frame.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/chart/rendering/candles/line.rs;src/tokens/mod.rs;src/tokens/semantic.rs;src/model/chart_type.rs
 Chart,Chart types,Volume candles,done,library,src/widget/frame.rs;src/chart/rendering/candles/candlestick.rs
@@ -161,7 +161,7 @@ Chart,Crosshair and interaction,Price scale and time scale context menus,done,li
 Chart,Crosshair and interaction,Table view of chart data,done,library,src/widget/export.rs;src/ui/dialogs/data_table.rs;src/ui/context_menu/mod.rs
 Chart,Crosshair and interaction,Undo and redo,done,library,src/widget/history.rs;src/widget/feed/mod.rs;examples/demo/controller.rs;src/widget/series.rs;src/widget/replay.rs;src/widget/pane/render/mod.rs;src/widget/events.rs;src/widget/price_series.rs;examples/demo/comparison.rs
 Chart,Crosshair and interaction,Zoom-to-rectangle tool,done,library,src/widget/pan_zoom.rs;src/chart/rendering/overlays/box_zoom.rs
-Chart,Keyboard shortcuts,Copy and paste drawings,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/clipboard.rs;src/model/bar/time.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs
+Chart,Keyboard shortcuts,Copy and paste drawings across symbols,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/clipboard.rs;src/model/bar/time.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs
 Chart,Keyboard shortcuts,Ctrl+Left/Right move further,done,library,src/config/keyboard.rs;src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Delete and Escape on a selected drawing,done,library,src/config/keyboard.rs;src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Digits or comma to change interval,done,library,src/widget/keyboard.rs;src/config/keyboard.rs
@@ -184,7 +184,7 @@ Chart,Keyboard shortcuts,Type to change symbol,done,host,src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Undo and redo,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/history.rs
 Chart,Legend and data window,Data window panel,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs;src/widget/frame.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs
 Chart,Legend and data window,Indicator entries in the legend,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/config/chart.rs;src/theme/presets.rs
-Chart,Legend and data window,Legend buttons,done,library,src/chart/renderers/legend/mod.rs;src/widget/crosshair.rs;src/widget/pane/render/mod.rs
+Chart,Legend and data window,Legend buttons,done,library,src/chart/renderers/legend/mod.rs;src/chart/renderers/legend/study_controls.rs;src/widget/crosshair.rs;src/widget/pane/render/mod.rs
 Chart,Legend and data window,Status line values follow the crosshair,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs
 Chart,Legend and data window,Symbol status line,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/model/session/exchange.rs;src/painting/symbol_mark.rs
 Chart,Legend and data window,Volume in the status line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/scales/price_formatter.rs
@@ -240,7 +240,7 @@ Chart,Scales and axes,Time zone selection,done,library,src/widget/settings/apply
 Drawings,Drawing management,Alerts on drawings,done,library,src/drawings/domain/drawing.rs;src/ui/context_menu/drawing.rs
 Drawings,Drawing management,Anchor markers only on selected drawings,done,library,src/drawings/manager/paint.rs;src/drawings/services/handle.rs;src/drawings/rendering/lines.rs;src/drawings/rendering/measurements.rs;src/drawings/rendering/shapes.rs;src/drawings/rendering/pitchfork.rs;src/drawings/rendering/gann.rs;src/drawings/rendering/fibonacci.rs;src/drawings/rendering/patterns.rs;src/drawings/rendering/elliott.rs;src/drawings/rendering/cycles.rs;src/drawings/rendering/trading/volume_profile.rs;src/drawings/rendering/trading/bars_pattern.rs;src/drawings/rendering/trading/projection.rs;src/drawings/rendering/annotations/text.rs;src/drawings/rendering/annotations/callout.rs;src/drawings/rendering/annotations/notes.rs;src/drawings/rendering/annotations/signpost.rs;src/drawings/rendering/style.rs
 Drawings,Drawing management,Constrain drawings with Shift,done,library,src/widget/tool_interaction/interaction.rs;src/drawings/manager/interaction.rs;src/widget/tool_interaction/selection.rs;src/widget/tool_interaction/mod.rs
-Drawings,Drawing management,Copy and paste drawings,done,library,src/widget/clipboard.rs;src/drawings/manager/mod.rs;src/model/bar/time.rs;src/drawings/manager/edit.rs;src/widget/pane/mod.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs
+Drawings,Drawing management,Copy and paste drawings across symbols,done,library,src/widget/clipboard.rs;src/drawings/manager/mod.rs;src/model/bar/time.rs;src/drawings/manager/edit.rs;src/widget/pane/mod.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs
 Drawings,Drawing management,Creation state machine,done,library,src/config/drawing_tool/behavior.rs;src/widget/tool_interaction/interaction.rs;src/drawings/domain/drawing.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Drawings,Drawing management,Default style per tool,done,library,src/ui/dialogs/drawing_properties/actions.rs;src/drawings/domain/template.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/ui/dialogs/drawing_properties/dialog.rs;src/drawings/domain/drawing.rs;src/drawings/manager/interaction.rs;src/data/volume_profile.rs
 Drawings,Drawing management,Drawing anchors across timeframe and symbol changes,done,library,src/widget/anchors.rs;src/widget/series.rs;src/model/bar/time.rs;src/widget/time_scale.rs;src/widget/feed/mod.rs
@@ -261,7 +261,7 @@ Drawings,Drawing management,Object tree,done,library,src/ui/widget_bar/panels/ob
 Drawings,Drawing management,Per-tool settings dialog,done,library,src/ui/dialogs/drawing_properties/dialog.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/domain/drawing.rs;src/drawings/rendering/trading/position.rs;src/ui/floating_toolbar/toolbar.rs;terminal/src/drawings.rs;terminal/src/studies.rs;examples/demo/controller.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
 Drawings,Drawing management,Persistence of drawings per symbol,done,library,src/widget/stored_drawings.rs;src/widget/frame.rs;src/services/document.rs;src/widget/layout.rs;src/ui/dialogs/storage_conflict.rs;terminal/src/drawings.rs;src/drawings/persistence.rs
 Drawings,Drawing management,Remove all drawings,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/ui/drawing_toolbar/utilities/remove_menu.rs
-Drawings,Drawing management,Select a drawing by clicking its body,done,library,src/drawings/manager/mod.rs;src/drawings/services/interaction.rs;src/widget/tool_interaction/selection.rs;src/drawings/manager/paint.rs;src/drawings/manager/interaction.rs
+Drawings,Drawing management,Select a drawing by clicking its body,done,library,src/drawings/manager/mod.rs;src/drawings/services/interaction.rs;src/drawings/rendering/outline.rs;src/widget/tool_interaction/selection.rs;src/drawings/manager/paint.rs;src/drawings/manager/interaction.rs
 Drawings,Drawing management,Snap anchors to bars in time,done,library,src/widget/tool_interaction/mod.rs;src/widget/tool_interaction/interaction.rs
 Drawings,Drawing management,Stay in drawing mode,done,library,src/drawings/manager/mod.rs
 Drawings,Drawing management,Style settings honoured by renderers,partial,library,src/drawings/rendering/style.rs;src/drawings/rendering/fibonacci.rs;src/painting/dashed_line.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/patterns.rs;src/drawings/rendering/elliott.rs;src/drawings/rendering/cycles.rs;src/drawings/rendering/gann.rs;src/drawings/rendering/channels.rs;src/drawings/rendering/measurements.rs;src/drawings/domain/drawing.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/trading/bars_pattern.rs;src/drawings/rendering/trading/projection.rs;src/drawings/persistence.rs;src/drawings/rendering/trading/position.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
@@ -385,29 +385,29 @@ Drawings,Drawings,Vertical line,done,library,src/drawings/rendering/lines.rs;src
 Drawings,Drawings,XABCD pattern,done,library,src/drawings/rendering/patterns.rs;src/painting/dashed_line.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs
 Order flow,Order flow,Absorption detection,missing,host,
 Order flow,Order flow,Anchored developing VWAP drawing tool,done,library,src/drawings/rendering/trading/volume_profile.rs;src/drawings/rendering/mod.rs
-Order flow,Order flow,Bar POC lines extended until price revisits them,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs
+Order flow,Order flow,Bar POC lines extended until price revisits them,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Best bid and best ask lines drawn across the heatmap,done,library,src/chart/overlays/liquidity_heatmap.rs;src/widget/frame.rs;src/widget/feed/mod.rs
-Order flow,Order flow,Bid/ask split profile and delta profile,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs
+Order flow,Order flow,Bid/ask split profile and delta profile,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs;src/widget/trade_profile.rs
 Order flow,Order flow,Bid/ask spread in ticks plotted over time with alert,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/services/alerts.rs;src/studies/factory/mod.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
 Order flow,Order flow,Big trade zones,done,library,src/services/detectors/big_trades.rs;src/services/detectors/mod.rs;src/data/trades.rs;
 Order flow,Order flow,Book speed,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
 Order flow,Order flow,Book thickness and resting-size delta over time,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/orders.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs
 Order flow,Order flow,"Bubble grouping: automatic, by time window, by price, tick grouping",done,library,src/chart/overlays/volume_bubbles.rs;src/model/clock.rs
-Order flow,Order flow,CVD drawn as candles,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/chart/series/mod.rs
+Order flow,Order flow,CVD drawn as candles,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/chart/series/mod.rs;src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/data/trades.rs
 Order flow,Order flow,"Chart tabs, detached groups and shared crosshair",done,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame.rs
 Order flow,Order flow,Connectors for futures data feeds with aggregated and order-level depth,partial,host,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs;examples/demo/orders.rs
-Order flow,Order flow,Cumulative aggressor volume delta with resets,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs
+Order flow,Order flow,Cumulative aggressor volume delta with resets,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs;src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/data/trades.rs
 Order flow,Order flow,Cumulative iceberg and stop counts over time with alerts,missing,host,
 Order flow,Order flow,Custom range profile drawn on the chart by selection,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/studies/builtin/trade_profile.rs;src/painting/volume_profile.rs;src/drawings/rendering/mod.rs
 Order flow,Order flow,DOM levels panel beside the heatmap,partial,library,src/data/orders.rs;src/widget/feed/mod.rs
-Order flow,Order flow,Delta % and bid/ask ratio highlight markers on bars,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/studies/builtin/footprint_studies.rs
-Order flow,Order flow,Delta POC per bar,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs
+Order flow,Order flow,Delta % and bid/ask ratio highlight markers on bars,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/studies/builtin/footprint_studies.rs;src/widget/frame.rs
+Order flow,Order flow,Delta POC per bar,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Delta split into trade-size ranges,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/data/order_flow.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
 Order flow,Order flow,Depth ladder liquidity and execution columns,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs
 Order flow,Order flow,"Depth ladder order entry, editing and brackets",partial,host,src/ui/trading/dom.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs;src/ui/trading/mod.rs
 Order flow,Order flow,Depth ladder session and resettable profiles,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs
 Order flow,Order flow,Depth ladder with configurable visible levels,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/data/depth.rs
-Order flow,Order flow,Developing POC line through the session,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs
+Order flow,Order flow,Developing POC line through the session,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs;src/widget/trade_profile.rs
 Order flow,Order flow,Diagonal imbalance detection and highlighting,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Execution volume bubbles at trade prices and times,done,library,src/widget/feed/mod.rs;src/chart/overlays/volume_bubbles.rs;src/widget/frame.rs;src/model/clock.rs
 Order flow,Order flow,Footprint cell colour and intensity modes,done,library,src/chart/overlays/footprint.rs;src/data/footprint.rs
@@ -416,7 +416,7 @@ Order flow,Order flow,"Footprint display modes: bid/ask split, total volume, del
 Order flow,Order flow,Footprint histogram and numeric styles,done,library,src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Footprint number formatting and text scaling,done,library,src/chart/overlays/footprint.rs
 Order flow,Order flow,Footprint price aggregation: automatic by zoom or manual ticks per row,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
-Order flow,Order flow,"Footprint single prints, extremes, clusters and pullbacks",done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs
+Order flow,Order flow,"Footprint single prints, extremes, clusters and pullbacks",done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Fresh liquidity detector,missing,host,
 Order flow,Order flow,Heatmap colour scaling,done,library,src/chart/overlays/liquidity_heatmap.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Heatmap depth source and order filters,done,library,src/data/orders.rs;src/data/depth_history.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/chart/overlays/book_profile.rs
@@ -424,32 +424,32 @@ Order flow,Order flow,Heatmap history retention in memory with manual memory rel
 Order flow,Order flow,Heatmap rendering at scale,done,library,src/chart/overlays/liquidity_heatmap.rs;src/data/depth_history.rs;src/data/depth.rs;benches/heatmap.rs;docs/order-flow.md;benches/regression/mod.rs
 Order flow,Order flow,Horizontal bid vs ask imbalance,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Iceberg detection from order-level refills at one price,missing,host,
-Order flow,Order flow,Imbalance zone tracker and rejector,partial,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs
+Order flow,Order flow,Imbalance zone tracker and rejector,partial,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Large aggressive trades and historical loading,done,library,src/chart/overlays/volume_bubbles.rs;src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs;src/services/detectors/big_trades.rs;src/services/detectors/mod.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Large resting order highlight on heatmap and DOM levels,done,library,src/data/orders.rs;src/chart/overlays/book_profile.rs;src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/widget/feed/mod.rs;src/data/depth_history.rs;src/data/inbox/sink.rs;src/chart/overlays/liquidity_heatmap.rs;src/theme/presets.rs
 Order flow,Order flow,Liquidity heatmap: resting limit-order size per price level plotted over time,done,library,src/data/depth_history.rs;src/chart/overlays/liquidity_heatmap.rs;src/widget/frame.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Liquidity tracker,missing,host,
 Order flow,Order flow,Market structure meters,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
-Order flow,Order flow,Merge and split adjacent profiles,done,library,src/studies/builtin/trade_profile.rs;src/ui/context_menu/trade_profile.rs
+Order flow,Order flow,Merge and split adjacent profiles,done,library,src/studies/builtin/trade_profile.rs;src/ui/context_menu/trade_profile.rs;src/widget/trade_profile.rs;src/widget/frame.rs;src/ui/context_menu/chart_menus/mod.rs;terminal/src/studies.rs
 Order flow,Order flow,Multi-column footprint,done,library,src/chart/overlays/footprint.rs;src/widget/frame.rs
-Order flow,Order flow,"On-chart order lines with drag to move entry, stop and target",done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs
+Order flow,Order flow,"On-chart order lines with drag to move entry, stop and target",done,host,src/chart/renderers/trading_lines/mod.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs
 Order flow,Order flow,Options gamma exposure suite,missing,host,
 Order flow,Order flow,"Order book, heatmap and order-level replay",done,library,src/data/replay.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs
 Order flow,Order flow,Order-flow event alerts,partial,host,src/services/alerts.rs;src/services/notifications.rs;src/ui/widget_bar/panels/time_and_sales.rs
 Order flow,Order flow,Order-level trade classification,partial,library,src/data/trades.rs;src/data/orders.rs;src/model/quote.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Passive wall detection,missing,host,
 Order flow,Order flow,Per-bar delta and volume heatmap strip,done,library,src/chart/overlays/heatmap_strip.rs
-Order flow,Order flow,Per-bar delta as histogram or candles,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/chart/series/mod.rs
-Order flow,Order flow,Per-bar order-flow statistics table,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/chart/overlays/mod.rs
-Order flow,Order flow,"Profile POC, value area and VAH/VAL lines",done,library,src/data/footprint.rs;src/data/volume_profile.rs;src/chart/overlays/trade_profile.rs;src/painting/volume_profile.rs
-Order flow,Order flow,Profile peaks and valleys with sensitivity,partial,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs
+Order flow,Order flow,Per-bar delta as histogram or candles,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/chart/series/mod.rs;src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/data/trades.rs
+Order flow,Order flow,Per-bar order-flow statistics table,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/chart/overlays/mod.rs;src/widget/frame.rs
+Order flow,Order flow,"Profile POC, value area and VAH/VAL lines",done,library,src/data/footprint.rs;src/data/volume_profile.rs;src/chart/overlays/trade_profile.rs;src/painting/volume_profile.rs;src/widget/trade_profile.rs
+Order flow,Order flow,Profile peaks and valleys with sensitivity,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/trade_profile.rs
 Order flow,Order flow,Proprietary order-flow models,partial,library,src/model/tpo.rs;src/chart/rendering/candles/tpo.rs
 Order flow,Order flow,Rolling volume/delta sum over N bars,done,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
 Order flow,Order flow,"Session VWAP with daily, weekly or monthly reset",done,library,src/studies/builtin/vwap.rs;src/widget/series.rs
 Order flow,Order flow,Speed of tape,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
 Order flow,Order flow,Split session profiles,done,library,src/studies/builtin/trade_profile.rs;src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs
 Order flow,Order flow,Spoofing and pulled-liquidity detection,missing,host,
-Order flow,Order flow,Stacked imbalances shown as zones,done,library,src/data/footprint.rs;src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/studies/builtin/mod.rs
+Order flow,Order flow,Stacked imbalances shown as zones,done,library,src/data/footprint.rs;src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/studies/builtin/mod.rs;src/widget/frame.rs
 Order flow,Order flow,Stop spotter,missing,host,
 Order flow,Order flow,Stop-run detection from bursts of same-side market orders within milliseconds,missing,host,
 Order flow,Order flow,Tape reconstruction and passive fill details,done,library,src/data/trades.rs;src/data/orders.rs;src/model/quote.rs;src/widget/feed/mod.rs;src/ui/widget_bar/panels/time_and_sales.rs
@@ -457,9 +457,9 @@ Order flow,Order flow,Tick-by-tick trade replay with speed control and multi-sym
 Order flow,Order flow,Tick-count bars,done,library,src/model/timeframe.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Order flow,Order flow,Time and sales with size filters and sound alerts,done,library,src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs
 Order flow,Order flow,Time price opportunity profiles and single prints,done,library,src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs;src/widget/frame.rs;src/studies/builtin/time_price_opportunity.rs;src/tokens/mod.rs;src/tokens/semantic.rs
-Order flow,Order flow,"Trade-based session, composite and visible-range volume profiles",done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs
-Order flow,Order flow,Trade-size filtered CVD,done,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
-Order flow,Order flow,Unfinished auction detection with extension lines,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs
+Order flow,Order flow,"Trade-based session, composite and visible-range volume profiles",done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs;src/widget/trade_profile.rs
+Order flow,Order flow,Trade-size filtered CVD,done,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/data/trades.rs
+Order flow,Order flow,Unfinished auction detection with extension lines,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,"VWAP envelopes: standard deviation or percent bands, three pairs",done,library,src/studies/builtin/vwap.rs;src/chart/renderers/indicator.rs
 Order flow,Order flow,Value area per bar highlighted on the footprint,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Volume POC per bar highlighted in the footprint,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
@@ -488,12 +488,12 @@ Order flow,Order flow data model,Trade tick record with aggressor side,done,libr
 Studies,Custom studies,Custom studies reading other symbols or timeframes,done,library,src/studies/indicator_trait.rs;src/widget/studies_data.rs;src/widget/studies.rs;src/studies/settings.rs
 Studies,Custom studies,Custom study input metadata,done,library,src/studies/inputs.rs;src/studies/custom.rs;src/ui/dialogs/indicator_dialog/settings.rs
 Studies,Custom studies,Custom study plot and style metadata,done,library,src/studies/custom.rs;src/studies/indicator_trait.rs;src/studies/plots.rs;src/chart/renderers/indicator.rs;src/painting/dashed_line.rs
-Studies,Custom studies,Custom study registration,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/ui/dialogs/indicator_dialog/data.rs
+Studies,Custom studies,Custom study registration,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/ui/dialogs/indicator_dialog/data.rs;terminal/src/studies.rs
 Studies,Custom studies,Custom study scale and format metadata,done,library,src/studies/custom.rs;src/studies/settings.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/chart/renderers/study_scale.rs
 Studies,Custom studies,Per-bar study callbacks and calculation helpers,done,library,src/studies/stepper.rs;src/studies/helpers.rs;src/studies/indicator_trait.rs;src/widget/studies.rs
 Studies,Custom studies,Study input editing,done,library,src/studies/indicator_trait.rs;src/studies/inputs.rs;src/studies/custom.rs;src/widget/series.rs
 Studies,Indicator infrastructure,Built-in catalogue and the '130+ indicators' claim,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/data.rs
-Studies,Indicator infrastructure,Create studies by name and list them,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/data.rs
+Studies,Indicator infrastructure,Create studies by name and list them,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/data.rs;terminal/src/studies.rs
 Studies,Indicator infrastructure,Edge cases: very short or flat series,done,library,src/studies/factory/mod.rs;src/studies/builtin/sma.rs;src/studies/builtin/ma_combination.rs;src/studies/builtin/mod.rs
 Studies,Indicator infrastructure,Favourite indicators,done,library,src/ui/dialogs/indicator_dialog/dialog.rs;src/ui/dialogs/indicator_dialog/data.rs;terminal/src/studies.rs;src/services/settings.rs;src/ui/top_toolbar/toolbar.rs
 Studies,Indicator infrastructure,Filled areas and bands between plots,done,library,src/studies/plots.rs;src/studies/custom.rs;src/studies/builtin/bollinger_bands.rs;src/studies/builtin/ichimoku.rs;src/chart/renderers/indicator.rs;src/studies/indicator_trait.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs
@@ -894,16 +894,16 @@ Terminal,Trading panel,Bottom trading panel container,done,library,src/ui/tradin
 Terminal,Trading panel,Brackets: take-profit and stop-loss attached to an entry,done,host,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/ui/trading/mod.rs;src/services/paper.rs
 Terminal,Trading panel,Buy/Sell buttons on the chart,done,host,src/ui/symbol_header.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs
 Terminal,Trading panel,DOM / depth-of-market ladder with click-to-trade,done,host,src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs;src/ui/trading/dom.rs;src/widget/feed/mod.rs
-Terminal,Trading panel,"Drag orders, take-profit and stop-loss on the chart to modify",done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs
+Terminal,Trading panel,"Drag orders, take-profit and stop-loss on the chart to modify",done,host,src/chart/renderers/trading_lines/mod.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs
 Terminal,Trading panel,Execution markers on the chart,done,library,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/trading/executions.rs
-Terminal,Trading panel,Order and position lines on the chart,done,library,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
+Terminal,Trading panel,Order and position lines on the chart,done,library,src/chart/renderers/trading_lines/mod.rs;src/chart/renderers/trading_lines/position.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Terminal,Trading panel,Order ticket,done,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/ui/trading/mod.rs;src/ui/trading/widgets.rs
 Terminal,Trading panel,Paper trading account,done,library,src/services/paper.rs;src/model/trading.rs
 Terminal,Trading panel,Place an order from the chart context menu,done,host,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/context_menu/mod.rs
-Terminal,Trading panel,"Position line with P&L, close and reverse",done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
-Terminal,Trading panel,Several take-profit levels on one order,done,host,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/chart/renderers/trading_lines.rs;src/ui/trading/account_panel/view.rs;src/services/paper.rs
+Terminal,Trading panel,"Position line with P&L, close and reverse",done,host,src/chart/renderers/trading_lines/mod.rs;src/chart/renderers/trading_lines/position.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
+Terminal,Trading panel,Several take-profit levels on one order,done,host,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/chart/renderers/trading_lines/mod.rs;src/ui/trading/account_panel/view.rs;src/services/paper.rs
 Terminal,Trading panel,"Show/hide positions, orders and executions",done,library,src/ui/trading/mod.rs;src/ui/trading/view.rs
-Terminal,Trading panel,Take-profit and stop-loss buttons on working order labels,done,host,src/chart/renderers/trading_lines.rs;src/ui/trading/view.rs
+Terminal,Trading panel,Take-profit and stop-loss buttons on working order labels,done,host,src/chart/renderers/trading_lines/mod.rs;src/ui/trading/view.rs
 Terminal,Trading panel,Time in force and order presets,done,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/ui/trading/widgets.rs
 Terminal,Trading panel,Trade button and broker / paper account picker,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/broker_picker.rs
 Terminal,Trading panel,Trading notifications,done,host,src/ui/trading/mod.rs;src/ui/trading/events.rs

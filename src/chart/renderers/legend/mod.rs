@@ -1,14 +1,22 @@
 //! In-pane series readout and supplementary rows.
 
-use super::{price_decimals, semibold};
+mod quotes;
+mod study_controls;
+
+pub(crate) use study_controls::study_controls;
+
+use quotes::paint_quotes;
+
+use super::labels::semibold;
 use crate::chart::renderers::StyleColors;
 use crate::localization as l10n;
 use crate::model::session::MarketSession;
 use crate::model::{Bar, DataStatus, Instrument, Level1Quote, percent_change};
 use crate::painting::symbol_mark::paint_symbol_mark;
+use crate::scales::price_decimals;
 use crate::studies::Indicator;
 use crate::theme::ThemeExt;
-use egui::{Color32, FontId, ImageSource, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
+use egui::{Color32, FontId, ImageSource, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use std::sync::Arc;
 
 /// A host-supplied status mark. Its text and colours carry no built-in market meaning.
@@ -67,7 +75,7 @@ pub(crate) enum SeriesAction {
 /// An in-pane legend. Historical readout data and current quotes are supplied independently.
 pub struct Legend<'a> {
     /// Host number formatting for this series' readouts.
-    pub formatters: super::super::ValueFormatters<'a>,
+    pub formatters: super::ValueFormatters<'a>,
     /// Fallback title when the instrument has no description.
     pub symbol: &'a str,
     /// Display interval.
@@ -853,143 +861,6 @@ impl<'a> Legend<'a> {
     }
 }
 
-/// The row outline and its hide, settings, remove and more-actions buttons. Returns the first
-/// three buttons and, when the more-actions button is clicked or the row secondary-clicked, the
-/// corner of the study menu.
-pub(crate) fn study_controls(
-    ui: &mut Ui,
-    row: Rect,
-    controls: Rect,
-    id: egui::Id,
-    visible: bool,
-) -> ([Response; 3], Option<Pos2>) {
-    let theme = ui.active_theme();
-    let touch_id = egui::Id::unique("legend_touch_input");
-    let input_touch = ui.input(|input| {
-        if input.any_touches()
-            || input
-                .events
-                .iter()
-                .any(|event| matches!(event, egui::Event::Touch { .. }))
-        {
-            Some(true)
-        } else if input
-            .events
-            .iter()
-            .any(|event| matches!(event, egui::Event::PointerMoved(_)))
-        {
-            Some(false)
-        } else {
-            None
-        }
-    });
-    let touch = ui.ctx().data_mut(|data| {
-        let touch = input_touch.unwrap_or_else(|| data.get_temp::<bool>(touch_id).unwrap_or(false));
-        data.insert_temp(touch_id, touch);
-        touch
-    });
-    let row_response = ui.interact(row, id.with("row"), Sense::click());
-    let controls_label = l10n::text(ui.ctx(), "Study controls");
-    row_response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &controls_label));
-    let mut menu = row_response
-        .secondary_clicked()
-        .then(|| row_response.interact_pointer_pos())
-        .flatten();
-    let clicked_elsewhere = row_response.clicked_elsewhere();
-    let clicked = row_response.clicked();
-    let selected = ui.ctx().data_mut(|data| {
-        let mut selected = data.get_temp::<bool>(id).unwrap_or(false);
-        if clicked_elsewhere || !touch {
-            selected = false;
-        } else if clicked {
-            selected = true;
-        }
-        data.insert_temp(id, selected);
-        selected
-    });
-    // Keep controls focusable while Tab transfers focus from their row.
-    let focused = row_response.has_focus()
-        || row_response.lost_focus()
-        || (0..4_usize).any(|index| ui.memory(|memory| memory.has_focus(id.with(index))));
-    let hovered = !touch
-        && ui.input(|input| input.pointer.hover_pos().is_some())
-        && ui.rect_contains_pointer(row);
-    let revealed = selected || focused || hovered;
-    if revealed {
-        ui.painter()
-            .rect_filled(controls, theme.radius.sm, theme.chart.bg);
-        ui.painter().rect_stroke(
-            row.union(controls.expand2(Vec2::new(0.0, 2.0))),
-            theme.radius.sm,
-            Stroke::new(1.0, theme.ui.accent),
-            egui::StrokeKind::Inside,
-        );
-    }
-    let buttons: [Response; 4] = std::array::from_fn(|index| {
-        let rect = Rect::from_min_size(
-            controls.min + Vec2::new(index as f32 * 20.0, 0.0),
-            Vec2::splat(20.0),
-        )
-        .intersect(controls);
-        let label = l10n::text(
-            ui.ctx(),
-            match index {
-                0 if visible => "Hide study",
-                0 => "Show study",
-                1 => "Study settings",
-                2 => "Remove study",
-                _ => "More actions",
-            },
-        );
-        let response = ui.interact(
-            rect,
-            id.with(index),
-            if revealed {
-                Sense::click()
-            } else {
-                Sense::hover()
-            },
-        );
-        if !revealed {
-            return response;
-        }
-        let response = response.on_hover_text(&label);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-        if response.hovered() {
-            ui.painter()
-                .rect_filled(rect, theme.radius.sm, theme.ui.btn_bg_hover);
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        #[cfg(feature = "icons")]
-        {
-            let icon = match index {
-                0 if visible => &crate::icons::icons::EYE,
-                0 => &crate::icons::icons::EYE_HIDE,
-                1 => &crate::icons::icons::SETTINGS,
-                2 => &crate::icons::icons::TRASH,
-                _ => &crate::icons::icons::UI_MORE_HORIZONTAL,
-            };
-            icon.as_image_tinted(Vec2::splat(14.0), theme.ui.text)
-                .paint_at(ui, rect.shrink(3.0));
-        }
-        #[cfg(not(feature = "icons"))]
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            [if visible { "−" } else { "+" }, "...", "×", "•••"][index],
-            FontId::proportional(14.0),
-            theme.ui.text,
-        );
-        response
-    });
-    let [hide, settings, remove, more] = buttons;
-    if more.clicked() {
-        menu = Some(more.rect.left_bottom());
-    }
-    ([hide, settings, remove], menu)
-}
-
 /// A glyph of the market status pill.
 enum StatusGlyph {
     Session(MarketSession),
@@ -1169,219 +1040,6 @@ impl<'a> Layout<'a> {
             );
         }
     }
-}
-
-/// The Sell and Buy buttons with the spread between them and, under it, `quantity` in a box.
-/// Returns the button clicked and the quantity box, when clicked.
-fn paint_quotes(
-    ui: &mut Ui,
-    layout: &mut Layout<'_>,
-    bid: f64,
-    ask: f64,
-    precision: usize,
-    thousands_sep: Option<char>,
-    quantity: Option<f64>,
-    id: egui::Id,
-) -> (Option<QuoteSide>, Option<Rect>) {
-    let spread =
-        crate::scales::group_thousands(format!("{:.precision$}", ask - bid), thousands_sep);
-    let theme = ui.active_theme();
-    let spread_galley = layout.painter.layout_no_wrap(
-        spread,
-        FontId::proportional(theme.text.tiny),
-        layout.colors.text,
-    );
-    let gap = (spread_galley.size().x + 12.0).max(36.0);
-    let quote = |side: QuoteSide, price: f64, color: Color32| {
-        let price = layout
-            .painter
-            .layout_job(egui::text::LayoutJob::single_section(
-                crate::scales::group_thousands(format!("{price:.precision$}"), thousands_sep),
-                semibold(FontId::proportional(theme.text.ohlc), color),
-            ));
-        let label = layout.painter.layout_no_wrap(
-            l10n::text(
-                ui.ctx(),
-                if side == QuoteSide::Sell {
-                    "SELL"
-                } else {
-                    "BUY"
-                },
-            ),
-            FontId::proportional(theme.text.small),
-            color,
-        );
-        (price, label)
-    };
-    let sell = quote(QuoteSide::Sell, bid, theme.chart.candle_down);
-    let buy = quote(QuoteSide::Buy, ask, theme.ui.accent);
-    let width = 59.0_f32
-        .max(sell.0.size().x + 12.0)
-        .max(buy.0.size().x + 12.0);
-    let size = Vec2::new(width, 34.0);
-    let sell_rect = layout.reserve(size);
-    let sell_response = quote_box(
-        ui,
-        layout.painter,
-        sell_rect,
-        sell,
-        theme.chart.candle_down,
-        &l10n::text(ui.ctx(), "Sell at bid"),
-        id.with("sell"),
-    );
-    let spread_rect = Rect::from_min_size(
-        Pos2::new(sell_rect.right(), sell_rect.top()),
-        Vec2::new(gap, 34.0),
-    );
-    layout.painter.rect_filled(spread_rect, 0.0, theme.chart.bg);
-    let quantity = quantity.map(|quantity| {
-        let text = layout.painter.layout_no_wrap(
-            compact_quantity(quantity),
-            FontId::proportional(theme.text.small),
-            layout.colors.text,
-        );
-        let rect = Rect::from_center_size(
-            Pos2::new(spread_rect.center().x, spread_rect.bottom() - 9.0),
-            Vec2::new((text.size().x + 10.0).max(gap - 8.0), 18.0),
-        );
-        let response = ui
-            .interact(
-                rect.intersect(layout.painter.clip_rect()),
-                id.with("quantity"),
-                Sense::click(),
-            )
-            .on_hover_text(l10n::text(ui.ctx(), "Order quantity"));
-        let label = l10n::text(ui.ctx(), "Order quantity");
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-        let fill = if response.hovered() {
-            theme.ui.btn_bg_active
-        } else {
-            theme.ui.btn_bg_hover
-        };
-        layout.painter.rect_filled(rect, theme.radius.sm, fill);
-        layout
-            .painter
-            .galley(rect.center() - text.size() / 2.0, text, layout.colors.text);
-        (rect, response.clicked())
-    });
-    // With the quantity box under it, the spread sits at the top.
-    let spread_y = match quantity {
-        Some((rect, _)) => (spread_rect.top() + rect.top() - spread_galley.size().y) / 2.0,
-        None => spread_rect.center().y - spread_galley.size().y / 2.0,
-    };
-    layout.painter.galley(
-        Pos2::new(
-            spread_rect.center().x - spread_galley.size().x / 2.0,
-            spread_y,
-        ),
-        spread_galley,
-        layout.colors.text,
-    );
-    layout.pos.x = sell_rect.right() + gap;
-    let buy_rect = layout.reserve(size);
-    let buy_response = quote_box(
-        ui,
-        layout.painter,
-        buy_rect,
-        buy,
-        theme.ui.accent,
-        &l10n::text(ui.ctx(), "Buy at ask"),
-        id.with("buy"),
-    );
-    layout.pos.x = buy_rect.right() + 8.0;
-    let dropdown = layout.reserve(Vec2::new(28.0, size.y));
-    layout.painter.rect(
-        dropdown,
-        4.0,
-        theme.chart.bg,
-        Stroke::new(1.0, theme.ui.border),
-        egui::StrokeKind::Inside,
-    );
-    let c = dropdown.center();
-    let points = [
-        c + egui::vec2(-4.0, -2.0),
-        c + egui::vec2(0.0, 1.5),
-        c + egui::vec2(4.0, -2.0),
-    ];
-    for pair in points.windows(2) {
-        layout
-            .painter
-            .line_segment([pair[0], pair[1]], Stroke::new(1.5, theme.ui.text));
-    }
-    for point in points {
-        layout.painter.circle_filled(point, 0.75, theme.ui.text);
-    }
-    let dropdown = ui
-        .interact(dropdown, id.with("ticket"), Sense::click())
-        .on_hover_text(l10n::text(ui.ctx(), "Order ticket"));
-    let label = l10n::text(ui.ctx(), "Order ticket");
-    dropdown.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-    let action = if dropdown.clicked() {
-        Some(QuoteSide::Ticket)
-    } else if sell_response.clicked() {
-        Some(QuoteSide::Sell)
-    } else if buy_response.clicked() {
-        Some(QuoteSide::Buy)
-    } else {
-        None
-    };
-    let clicked = quantity.and_then(|(rect, clicked)| clicked.then_some(rect));
-    (action, clicked)
-}
-
-fn quote_box(
-    ui: &mut Ui,
-    painter: &egui::Painter,
-    rect: Rect,
-    (price, label): (Arc<egui::Galley>, Arc<egui::Galley>),
-    color: Color32,
-    name: &str,
-    id: egui::Id,
-) -> Response {
-    let response = ui.interact(rect.intersect(painter.clip_rect()), id, Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
-    painter.rect(
-        rect,
-        5.0,
-        ui.active_theme().chart.bg,
-        Stroke::new(1.0, color),
-        egui::StrokeKind::Inside,
-    );
-    painter.galley(
-        Pos2::new(rect.center().x - price.size().x / 2.0, rect.top() + 2.0),
-        price,
-        color,
-    );
-    painter.galley(
-        Pos2::new(
-            rect.center().x - label.size().x / 2.0,
-            rect.bottom() - label.size().y - 2.0,
-        ),
-        label,
-        color,
-    );
-    if response.has_focus() {
-        painter.rect_stroke(
-            rect,
-            5.0,
-            ui.visuals().selection.stroke,
-            egui::StrokeKind::Inside,
-        );
-    }
-    response
-}
-
-fn compact_quantity(quantity: f64) -> String {
-    for (divisor, suffix) in [(1_000_000_000.0, "B"), (1_000_000.0, "M"), (1_000.0, "K")] {
-        if quantity.abs() >= divisor {
-            let number = format!("{:.2}", quantity / divisor);
-            return format!(
-                "{}{suffix}",
-                number.trim_end_matches('0').trim_end_matches('.')
-            );
-        }
-    }
-    quantity.to_string()
 }
 
 fn format_volume(volume: f64) -> String {
@@ -1622,407 +1280,12 @@ mod mark_tests {
 
 #[cfg(all(test, feature = "studies"))]
 mod tests {
+    #[cfg(feature = "icons")]
     use super::*;
+    #[cfg(feature = "icons")]
     use chrono::{TimeZone, Utc};
-    use egui::{Context, Event, Key, PointerButton, Shape};
-
-    #[test]
-    fn study_controls_reveal_on_touch_and_dismiss_outside() {
-        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            let ctx = Context::default();
-            crate::theme::apply_to_egui(&ctx, &theme);
-            // A translator that changes every key must reach the control labels.
-            l10n::set_translator(&ctx, |english| Some(format!("{english}!")));
-            let row = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(220.0, 20.0));
-            let controls = Rect::from_min_size(Pos2::new(150.0, 10.0), Vec2::new(80.0, 20.0));
-            let settings = controls.min + Vec2::new(30.0, 10.0);
-            let frame = |events| {
-                let mut clicked = [false; 3];
-                let mut menu = None;
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        let (buttons, opened) =
-                            study_controls(ui, row, controls, egui::Id::unique("study"), true);
-                        clicked = buttons.map(|response| response.clicked());
-                        menu = opened;
-                    },
-                );
-                // An accent outline 24 px tall, 2 px past the 20 px row on each side.
-                let outline = Rect::from_min_size(Pos2::new(10.0, 8.0), Vec2::new(220.0, 24.0));
-                let painted = output.shapes.iter().any(|s| match &s.shape {
-                    Shape::Rect(r) => r.rect == outline && r.stroke.color == theme.ui.accent,
-                    _ => false,
-                });
-                let buttons_filled = output.shapes.iter().any(|s| {
-                    matches!(&s.shape, Shape::Rect(r) if r.rect == controls && r.fill == theme.chart.bg)
-                });
-                assert_eq!(
-                    buttons_filled, painted,
-                    "only revealed controls mask the chart"
-                );
-                let focused_label = output.platform_output.events.iter().find_map(|event| {
-                    if let egui::output::OutputEvent::FocusGained(info) = event {
-                        info.label.clone()
-                    } else {
-                        None
-                    }
-                });
-                output.drop_without_applying_deltas();
-                (painted, clicked, focused_label, menu)
-            };
-            let touch = |pos, phase| Event::Touch {
-                device_id: egui::TouchDeviceId(0),
-                id: egui::TouchId(0),
-                phase,
-                pos,
-                force: None,
-            };
-            let tap = |pos| {
-                frame(vec![
-                    touch(pos, egui::TouchPhase::Start),
-                    Event::PointerMoved(pos),
-                    Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed: true,
-                        modifiers: Default::default(),
-                    },
-                ]);
-                frame(vec![
-                    touch(pos, egui::TouchPhase::End),
-                    Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed: false,
-                        modifiers: Default::default(),
-                    },
-                    Event::PointerGone,
-                ])
-            };
-            assert!(!frame(vec![Event::PointerGone]).0);
-            let first = tap(settings);
-            assert_eq!(first.1, [false; 3], "the first tap only reveals controls");
-            let second = tap(settings);
-            assert_eq!(
-                second.1,
-                [false, true, false],
-                "the second tap opens settings"
-            );
-            tap(row.left_center() + Vec2::new(10.0, 0.0));
-            assert!(frame(vec![]).0, "touch selection must survive pointer exit");
-            tap(Pos2::new(250.0, 100.0));
-            assert!(!frame(vec![]).0, "outside tap must dismiss controls");
-            assert!(
-                frame(vec![Event::PointerMoved(row.center())]).0,
-                "mouse hover reveals controls"
-            );
-            // A secondary click on the row opens the menu at the pointer.
-            let pos = row.left_center() + Vec2::new(20.0, 0.0);
-            frame(vec![Event::PointerMoved(pos)]);
-            for pressed in [true, false] {
-                let clicked = frame(vec![Event::PointerButton {
-                    pos,
-                    button: PointerButton::Secondary,
-                    pressed,
-                    modifiers: Default::default(),
-                }]);
-                assert_eq!(clicked.3, (!pressed).then_some(pos));
-            }
-            assert!(!frame(vec![Event::PointerGone]).0);
-            for (index, label) in [
-                "Study controls",
-                "Hide study",
-                "Study settings",
-                "Remove study",
-                "More actions",
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let focused = frame(vec![Event::Key {
-                    key: Key::Tab,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: Default::default(),
-                }]);
-                assert!(focused.0, "keyboard focus must reveal {label}");
-                assert_eq!(focused.2, Some(format!("{label}!")));
-                assert!(frame(vec![]).0, "focused controls must stay visible");
-                let activated = frame(vec![Event::Key {
-                    key: Key::Enter,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: Default::default(),
-                }]);
-                assert_eq!(
-                    activated.1,
-                    std::array::from_fn(|button| index == button + 1)
-                );
-                // The menu opens below the more-actions button.
-                assert_eq!(
-                    activated.3,
-                    (index == 4).then(|| controls.min + Vec2::new(60.0, 20.0))
-                );
-            }
-
-            // A wrapped row is selectable over its text, even when the controls wrap below it.
-            let ctx = Context::default();
-            crate::theme::apply_to_egui(&ctx, &theme);
-            let bar = Bar::new(
-                Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
-                100.0,
-                110.0,
-                90.0,
-                105.0,
-                1000.0,
-            );
-            let studies: Vec<Box<dyn Indicator>> = vec![Box::new(
-                crate::studies::CustomIndicator::new("A long overlay study title", |_| Vec::new())
-                    .with_overlay(true),
-            )];
-            let pos = Pos2::new(130.0, 16.0);
-            let frame = |events| {
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        let mut legend = Legend::new("SAMPLE", "1h", &bar);
-                        legend.show_title = false;
-                        legend.show_ohlc = false;
-                        legend.show_change = false;
-                        legend.show_change_percent = false;
-                        legend.show_volume = false;
-                        legend.studies = &studies;
-                        legend.show(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(160.0, 400.0)));
-                    },
-                );
-                let selected = output.shapes.iter().any(|shape| {
-                    matches!(&shape.shape,
-                    Shape::Rect(rect) if rect.stroke.width > 0.0 && rect.rect.contains(pos))
-                });
-                output.drop_without_applying_deltas();
-                selected
-            };
-            frame(vec![]);
-            frame(vec![
-                touch(pos, egui::TouchPhase::Start),
-                Event::PointerMoved(pos),
-                Event::PointerButton {
-                    pos,
-                    button: PointerButton::Primary,
-                    pressed: true,
-                    modifiers: Default::default(),
-                },
-            ]);
-            frame(vec![
-                touch(pos, egui::TouchPhase::End),
-                Event::PointerButton {
-                    pos,
-                    button: PointerButton::Primary,
-                    pressed: false,
-                    modifiers: Default::default(),
-                },
-                Event::PointerGone,
-            ]);
-            assert!(
-                frame(vec![]),
-                "the full wrapped study row must respond to a tap"
-            );
-        }
-    }
-
-    #[test]
-    fn quote_controls_and_collapse_belong_to_each_legend() {
-        for (_, theme) in crate::theme::presets() {
-            let ctx = Context::default();
-            crate::theme::apply_to_egui(&ctx, &theme);
-            let bars = [
-                Bar::new(
-                    Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
-                    100.0,
-                    110.0,
-                    90.0,
-                    105.0,
-                    1_000.0,
-                ),
-                Bar::new(
-                    Utc.timestamp_opt(1_700_003_600, 0).unwrap(),
-                    105.0,
-                    110.0,
-                    90.0,
-                    95.0,
-                    2_000.0,
-                ),
-            ];
-            let instrument = Instrument::new("SAMPLE").with_price_decimals(2);
-            let mut study = crate::studies::BollingerBands::new(2, 2.0);
-            study.calculate(&bars);
-            let studies: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
-            let quote = Level1Quote {
-                ts: bars[1].time,
-                symbol: "SAMPLE".into(),
-                bid: 104.0,
-                ask: 106.0,
-                bid_size: 1.0,
-                ask_size: 1.0,
-            };
-            let frame = |selected: usize, events| {
-                let mut actions = [None; 2];
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        for (index, action) in actions.iter_mut().enumerate() {
-                            let mut legend = Legend::new("SAMPLE", "1h", &bars[selected]);
-                            legend.previous_close = selected.checked_sub(1).map(|i| bars[i].close);
-                            legend.quote = Some(&quote);
-                            legend.instrument = Some(&instrument);
-                            legend.studies = &studies;
-                            legend.study_inputs = &["2 2"];
-                            legend.bar_index = selected;
-                            *action = legend.show(
-                                ui,
-                                Rect::from_min_size(
-                                    Pos2::new(index as f32 * 600.0, 0.0),
-                                    Vec2::new(600.0, 400.0),
-                                ),
-                            );
-                        }
-                    },
-                );
-                let shapes = std::mem::take(&mut output.shapes);
-                output.drop_without_applying_deltas();
-                (shapes, actions)
-            };
-            let texts = |shapes: &[egui::epaint::ClippedShape]| {
-                shapes
-                    .iter()
-                    .filter_map(|shape| match &shape.shape {
-                        Shape::Text(text) => Some(text.galley.text().to_owned()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-            };
-            let (first, _) = frame(0, vec![]);
-            let (second, _) = frame(1, vec![]);
-            let a = texts(&first);
-            let b = texts(&second);
-            for (text, values) in [
-                ("C 105.00", &a),
-                ("Vol 1.00K", &a),
-                ("C 95.00", &b),
-                ("Vol 2.00K", &b),
-                ("-10.00 (-9.52%)", &b),
-            ] {
-                assert!(values.iter().any(|value| value == text), "{text}");
-            }
-            for text in ["BB", "2 2", "110.00", "100.00", "90.00"] {
-                assert!(b.iter().any(|value| value == text), "{text}");
-            }
-            for text in ["104.00", "106.00", "2.00", "SELL", "BUY"] {
-                assert!(a.iter().any(|value| value == text) && b.iter().any(|value| value == text));
-            }
-            let titles: Vec<_> = second
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    Shape::Text(text) if text.galley.text() == "SAMPLE · 1h" => Some(text),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(titles.len(), 2);
-            for (index, title) in titles.iter().enumerate() {
-                assert_eq!(title.pos.x, index as f32 * 600.0 + 31.0);
-                assert_eq!(title.galley.job.sections[0].format.font_id.size, 13.0);
-            }
-            let buttons: Vec<_> = second
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    Shape::Rect(rect) if rect.stroke.width > 0.0 => Some(rect.rect),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(buttons.len(), 8);
-            for (index, side) in [
-                (4, QuoteSide::Sell),
-                (5, QuoteSide::Buy),
-                (6, QuoteSide::Ticket),
-            ] {
-                let pos = buttons[index].center();
-                frame(1, vec![Event::PointerMoved(pos)]);
-                frame(
-                    1,
-                    vec![Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed: true,
-                        modifiers: Default::default(),
-                    }],
-                );
-                let (_, actions) = frame(
-                    1,
-                    vec![Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed: false,
-                        modifiers: Default::default(),
-                    }],
-                );
-                assert_eq!(actions, [None, Some(side)]);
-            }
-            let key = |key, pressed| Event::Key {
-                key,
-                physical_key: None,
-                pressed,
-                repeat: false,
-                modifiers: Default::default(),
-            };
-            // Tab through both legends, then activate each control in the second one.
-            for (index, side) in [
-                (4, Some(QuoteSide::Sell)),
-                (5, Some(QuoteSide::Buy)),
-                (6, Some(QuoteSide::Ticket)),
-                (7, None),
-            ] {
-                let mut reached = false;
-                for _ in 0..24 {
-                    frame(1, vec![key(Key::Tab, true)]);
-                    frame(1, vec![key(Key::Tab, false)]);
-                    reached = ctx
-                        .memory(|memory| memory.focused())
-                        .and_then(|id| ctx.read_response(id))
-                        .is_some_and(|response| response.rect == buttons[index]);
-                    if reached {
-                        break;
-                    }
-                }
-                assert!(reached, "legend control must remain keyboard reachable");
-                let (_, actions) = frame(1, vec![key(Key::Enter, true)]);
-                assert_eq!(actions, [None, side]);
-                frame(1, vec![key(Key::Enter, false)]);
-            }
-            let (collapsed, _) = frame(1, vec![]);
-            let text = texts(&collapsed);
-            assert_eq!(text.iter().filter(|text| *text == "Vol 2.00K").count(), 1);
-            assert_eq!(text.iter().filter(|text| *text == "BB").count(), 1);
-            assert_eq!(text.iter().filter(|text| *text == "104.00").count(), 2);
-            frame(1, vec![key(Key::Enter, true)]);
-            let (restored, _) = frame(1, vec![key(Key::Enter, false)]);
-            assert_eq!(
-                texts(&restored).iter().filter(|text| *text == "BB").count(),
-                2
-            );
-        }
-    }
+    #[cfg(feature = "icons")]
+    use egui::{Context, Shape};
 
     /// The title's hide, settings and remove buttons are keyboard reachable and report their
     /// action, and a hidden series keeps its title and buttons so it can be shown again.
@@ -2104,6 +1367,182 @@ mod tests {
                 let (action, _) = frame(vec![enter(true)]);
                 frame(vec![enter(false)]);
                 assert_eq!(action, Some(expected), "visible: {series_visible}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use crate::model::Bar;
+    use chrono::{TimeZone, Utc};
+    use egui::{Context, Event, Pos2, Rect, Shape};
+
+    /// Legend fields stay inside the plot and keep their positions during hover.
+    #[test]
+    fn legend_fields_stay_inside_the_plot() {
+        use crate::chart::renderers::{Legend, LegendStatus};
+        use crate::theme::apply_to_egui;
+        use egui::Vec2;
+
+        for (_, theme) in crate::theme::presets() {
+            for width in [160.0, 300.0, 387.0, 400.0, 599.0, 600.0, 1200.0, 1440.0] {
+                let ctx = Context::default();
+                #[cfg(feature = "icons")]
+                egui_extras::install_image_loaders(&ctx);
+                apply_to_egui(&ctx, &theme);
+                let plot = Rect::from_min_size(Pos2::new(52.0, 40.0), Vec2::new(width, 400.0));
+                let badge = ctx.load_texture(
+                    "instrument",
+                    egui::ColorImage::filled([18, 18], egui::Color32::BLUE),
+                    Default::default(),
+                );
+                let statuses = [LegendStatus {
+                    text: "S",
+                    color: theme.ui.text,
+                    background: theme.ui.panel_bg_secondary,
+                }];
+                let instrument = crate::model::Instrument::new("Sample equity fund")
+                    .with_data_status(crate::model::DataStatus::Delayed);
+                let bar = Bar::new(
+                    Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+                    749.37,
+                    751.09,
+                    749.13,
+                    750.74,
+                    275_540.0,
+                );
+                let frame = |events| {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let mut legend = Legend::new("Sample equity fund", "1h", &bar);
+                            legend.previous_close = Some(749.42);
+                            legend.badge = Some(egui::ImageSource::Texture(
+                                (badge.id(), Vec2::splat(18.0)).into(),
+                            ));
+                            legend.session = Some(crate::model::session::MarketSession::PostMarket);
+                            legend.statuses = &statuses;
+                            legend.instrument = Some(&instrument);
+                            legend.show_volume = false;
+                            legend.show(ui, plot);
+                        },
+                    )
+                };
+                let mut output = frame(vec![Event::PointerGone]);
+                output.textures_delta.clear();
+                let text: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(text) => Some(text),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!text.is_empty());
+                let marks: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Rect(rect) if rect.fill_texture_id() == badge.id() => {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(marks.len(), 1);
+                let mark = marks[0];
+                assert!(
+                    plot.shrink2(Vec2::new(theme.spacing.lg, theme.spacing.md))
+                        .contains_rect(mark)
+                );
+                for field in &text {
+                    assert!(!mark.intersects(Rect::from_min_size(field.pos, field.galley.size())));
+                }
+                for (index, field) in text.iter().enumerate() {
+                    let bounds = Rect::from_min_size(field.pos, field.galley.size());
+                    for other in &text[index + 1..] {
+                        assert!(
+                            !bounds.intersects(Rect::from_min_size(other.pos, other.galley.size()))
+                        );
+                    }
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            Shape::Rect(rect) if rect.fill == theme.chart.bg && rect.rect.height() >= 22.0 && rect.rect.contains_rect(bounds)
+                        )), "missing row backdrop for {}", field.galley.text());
+                    assert!(
+                        bounds.right() <= plot.right() - 8.0 + 0.1,
+                        "{width}: {} at {bounds:?}",
+                        field.galley.text()
+                    );
+                }
+                for shape in &output.shapes {
+                    if let Shape::Rect(rect) = &shape.shape
+                        && rect.fill == theme.chart.bg
+                        && rect.rect.height() >= 22.0
+                    {
+                        assert!(
+                            text.iter().any(|field| rect
+                                .rect
+                                .intersects(Rect::from_min_size(field.pos, field.galley.size()))),
+                            "{width}: empty legend row at {:?}",
+                            rect.rect
+                        );
+                    }
+                }
+                for (index, field) in ["O 749.37", "H 751.09", "L 749.13", "C 750.74"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    assert_eq!(
+                        text.iter().any(|text| text.galley.text() == field),
+                        width >= 600.0 || index == 3,
+                        "{width}: field visibility for {field}"
+                    );
+                }
+                assert!(
+                    text.iter()
+                        .any(|text| text.galley.text() == "+1.32 (+0.18%)")
+                );
+                assert!(text.iter().any(|text| text.galley.text() == "D"
+                    && text.galley.job.sections[0].format.color == theme.ui.warning));
+                let centres: Vec<_> = text
+                    .iter()
+                    .map(|text| text.pos.y + text.galley.size().y / 2.0)
+                    .collect();
+                if width >= 1200.0 {
+                    assert!(centres.iter().all(|y| (*y - centres[0]).abs() < 0.1));
+                } else if width <= 300.0 {
+                    assert!(centres.iter().any(|y| *y > centres[0]));
+                }
+                for field in text
+                    .iter()
+                    .filter(|text| text.galley.text().starts_with("O "))
+                {
+                    let sections = &field.galley.job.sections;
+                    assert_eq!(sections[0].format.color, theme.ui.text_secondary);
+                    assert_eq!(sections[1].format.color, theme.chart.candle_up);
+                }
+                let idle: Vec<_> = text
+                    .iter()
+                    .map(|text| (text.galley.text().to_owned(), text.pos, text.galley.size()))
+                    .collect();
+                let hovered = frame(vec![Event::PointerMoved(plot.min + Vec2::new(60.0, 20.0))]);
+                let hovered_text: Vec<_> = hovered
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(text) => {
+                            Some((text.galley.text().to_owned(), text.pos, text.galley.size()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                hovered.drop_without_applying_deltas();
+                output.drop_without_applying_deltas();
+                assert_eq!(idle, hovered_text, "hover moved readout at {width}");
             }
         }
     }

@@ -8,6 +8,8 @@ mod book_profile;
 pub use book_profile::{BookProfile, OrderBookView, render_book_profile};
 mod footprint;
 pub(crate) use footprint::footprint_column_width;
+#[cfg(feature = "studies")]
+pub(crate) use footprint::render_footprint_annotations;
 pub use footprint::{
     FootprintColor, FootprintConfig, FootprintMode, pullback_range, render_footprint,
     render_footprint_statistics,
@@ -32,4 +34,4 @@ mod trade_profile;
 pub(crate) use trade_profile::render_session_volume_profiles;
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
-pub use trade_profile::render_trade_profiles;
+pub use trade_profile::{TradeProfileSettings, render_trade_profiles};

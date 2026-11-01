@@ -23,7 +23,7 @@ impl TpoMenu {
             return None;
         }
         let params = chart.chart_type_params().clone();
-        let clock = profile_clock(chart);
+        let clock = chart.profile_clock();
         let bars = chart.bars(SeriesId::MAIN);
         let (start, end) = chart.state().visible_range();
         let tick = chart.instrument().and_then(|i| i.tick_size);
@@ -104,7 +104,7 @@ impl TpoMenu {
         if chart.chart_type() != ChartType::TimePriceOpportunity
             || chart.chart_type_params() != &self.params
             || chart.symbol() != self.symbol
-            || profile_clock(chart) != self.clock
+            || chart.profile_clock() != self.clock
         {
             return;
         }
@@ -127,16 +127,4 @@ impl TpoMenu {
         }
         chart.set_chart_type_params(params);
     }
-}
-
-fn profile_clock(chart: &Chart) -> BarClock {
-    let mut clock = chart.bar_clock();
-    if let Some(zone) = chart
-        .instrument()
-        .filter(|i| i.session.is_none())
-        .and_then(|i| i.time_zone.as_ref())
-    {
-        clock = clock.with_timezone(zone.clone());
-    }
-    clock
 }
