@@ -26,6 +26,15 @@ use crate::widget::Chart;
 use egui::{Painter, Pos2, Rect, Response, Ui};
 
 impl Chart {
+    /// The interval drawings measure on time-based charts with a time axis.
+    pub(super) fn drawing_timeframe(&self) -> Option<crate::model::Timeframe> {
+        let timeframe = self.timeframe.unwrap_or_default();
+        (!timeframe.is_trade_based()
+            && !self.chart_type.is_time_independent()
+            && self.horizontal_scale.is_none())
+        .then_some(timeframe)
+    }
+
     /// Handles drawing tool interaction and rendering
     ///
     /// This is the main entry point for drawing handling, coordinating:
@@ -326,6 +335,17 @@ impl Chart {
 
         drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y);
 
+        // Replay can stop inside a bar, so its drawings sum only executions before the cutoff.
+        let replay_executions = self
+            .replay_time()
+            .filter(|_| {
+                self.drawing_timeframe().is_some()
+                    && drawing_manager
+                        .drawings
+                        .iter()
+                        .any(|drawing| drawing.reads_profile())
+            })
+            .and_then(|time| self.feed_link.as_ref()?.footprint(Some(time)));
         // Render existing drawings against the chart's bars
         let view = ChartView {
             price_formatter: self.value_formatters().price,
@@ -336,10 +356,13 @@ impl Chart {
             price_to_y: &price_to_y,
             y_to_price: &|y| price_map.y_to_price(y),
             time_axis: self.horizontal_scale.is_none(),
-            executions: self
-                .feed_link
-                .as_ref()
-                .and_then(|link| link.footprint.as_ref()),
+            executions: if self.replay_time().is_some() {
+                replay_executions.as_ref()
+            } else {
+                self.feed_link
+                    .as_ref()
+                    .and_then(|link| link.footprint.as_ref())
+            },
         };
         drawing_manager.render_all(painter, price_rect, &view);
         if drawing_manager.text_editor.as_ref().is_some_and(|editor| {

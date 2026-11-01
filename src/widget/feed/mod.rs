@@ -62,8 +62,8 @@ pub(crate) struct FeedLink {
     pub(super) trades: Trades,
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
-    /// The trades as a footprint on the instrument's tick, while the chart type draws from them,
-    /// within [`FOOTPRINT_BARS`] and [`FOOTPRINT_ROWS`].
+    /// The trades as a footprint on the instrument's tick, while the chart type or a volume
+    /// profile drawing reads them, within [`FOOTPRINT_BARS`] and [`FOOTPRINT_ROWS`].
     pub(super) footprint: Option<Footprint>,
     order_book: Option<OrderBook>,
     order_queue: Option<crate::data::OrderQueue>,
@@ -122,7 +122,7 @@ impl FeedLink {
             self.bubbles = Some(self.bubbles(bubbles.config));
         }
         if self.footprint.is_some() {
-            self.footprint = self.footprint();
+            self.footprint = self.footprint(None);
         }
     }
 
@@ -149,7 +149,11 @@ impl FeedLink {
                 .bubbles
                 .as_ref()
                 .map(|bubbles| self.bubbles(bubbles.config.clone())),
-            footprint: self.footprint.is_some().then(|| self.footprint()).flatten(),
+            footprint: self
+                .footprint
+                .is_some()
+                .then(|| self.footprint(None))
+                .flatten(),
             order_book: self.order_book.clone(),
             order_queue: self.order_queue.clone(),
             depth_history: self.depth_history.clone(),
@@ -170,15 +174,24 @@ impl FeedLink {
     /// The held trades as a footprint, or `None` without the instrument's tick size. A trade
     /// older than the one before it is left out, as it is when it arrives live. The bar of the
     /// oldest held trade is incomplete until a trade page reports the start of trade history.
-    fn footprint(&self) -> Option<Footprint> {
+    /// With `before`, includes only executions strictly before that replay cutoff.
+    pub(super) fn footprint(
+        &self,
+        before: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Option<Footprint> {
         let tick_size = self.instrument.as_ref()?.tick_size?;
         let mut flow = Footprint::new(self.clock.clone(), tick_size, 1).ok()?;
         flow.set_budget(FOOTPRINT_BARS, FOOTPRINT_ROWS);
-        for trade in self.trades.iter() {
+        let trades = || {
+            self.trades
+                .iter()
+                .take_while(|trade| before.is_none_or(|time| trade.ts < time))
+        };
+        for trade in trades() {
             let _ = flow.push(trade);
         }
         if let Some(lost) = self.trades.lost_until() {
-            flow.drop_through(lost, self.trades.iter());
+            flow.drop_through(lost, trades());
         }
         if let Some(first) = self.unconfirmed_start() {
             flow.received_from(first);

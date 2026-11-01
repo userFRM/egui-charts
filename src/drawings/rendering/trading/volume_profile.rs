@@ -102,6 +102,25 @@ impl Drawing {
         ));
     }
 
+    /// Whether a visible profile drawing reads the chart's executions and finer bars.
+    pub(crate) fn reads_profile(&self) -> bool {
+        self.visible
+            && matches!(
+                self.tool_type,
+                DrawingToolType::FixedRangeVolumeProfile | DrawingToolType::AnchoredVolumeProfile
+            )
+    }
+
+    /// First index and bars between the anchors, or from the anchor to the last bar.
+    fn profile_span<'b>(&self, bars: &'b [Bar]) -> Option<(usize, &'b [Bar])> {
+        let anchor = |i: usize| self.chart_points.get(i).map(|p| p.bar_idx);
+        match self.tool_type {
+            DrawingToolType::FixedRangeVolumeProfile => bars_between(bars, anchor(0)?, anchor(1)?),
+            DrawingToolType::AnchoredVolumeProfile => bars_between(bars, anchor(0)?, f32::INFINITY),
+            _ => None,
+        }
+    }
+
     /// Renders the volume profile of the bars between the two anchors, with
     /// the point of control and the value area.
     pub(crate) fn render_fixed_range_volume_profile(
@@ -193,16 +212,7 @@ impl Drawing {
     /// [`Footprint::complete_from`](crate::data::Footprint::complete_from), else the bar estimate.
     /// `None` for other tools, a drawing without its anchors, or an empty selection.
     pub fn volume_profile_of(&self, view: &ChartView) -> Option<VolumeProfile> {
-        let anchor = |i: usize| self.chart_points.get(i).map(|p| p.bar_idx);
-        let (first, bars) = match self.tool_type {
-            DrawingToolType::FixedRangeVolumeProfile => {
-                bars_between(view.bars, anchor(0)?, anchor(1)?)?
-            }
-            DrawingToolType::AnchoredVolumeProfile => {
-                bars_between(view.bars, anchor(0)?, f32::INFINITY)?
-            }
-            _ => return None,
-        };
+        let (first, bars) = self.profile_span(view.bars)?;
         self.span_profile(view, first, bars).as_ref().clone()
     }
 }
