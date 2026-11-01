@@ -59,6 +59,7 @@ mod orders;
 mod recording;
 mod replay;
 mod resample;
+mod study;
 mod targets;
 mod volume_profile;
 pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
@@ -90,6 +91,7 @@ pub use replay::{MarketEvent, ReplayClock, ReplayEvent};
 #[cfg(feature = "studies")]
 pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session};
+pub use study::{StudyData, StudyDataRequest};
 pub use targets::PriceTargets;
 pub use trades::{CombinedTrade, ConsumedOrder, combine_trades};
 pub use volume_profile::{
@@ -142,7 +144,8 @@ pub trait Datafeed: MaybeSend + 'static {
     }
 
     /// Describes `symbol`. The default reports [`Instrument::new`] of the symbol.
-    /// Fill [`Instrument::profile_resolutions`] to suggest the bars volume profile studies read.
+    /// Fill [`Instrument::profile_resolutions`] to suggest the bars volume profile studies and
+    /// drawings read.
     fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
         reply.send(Ok(Instrument::new(symbol)));
     }

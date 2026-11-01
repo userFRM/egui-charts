@@ -12,6 +12,15 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// A year of 365.25 days, in milliseconds.
 const YEAR_MS: f64 = 31_557_600_000.0;
 
+/// Keep spreadsheet formula prefixes literal; CSV quoting alone does not prevent evaluation.
+fn csv_text(value: &str) -> String {
+    if value.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{value}")
+    } else {
+        value.to_owned()
+    }
+}
+
 /// Reads none as NaN: serde_json writes a non-finite number as `null`, which a plain `f64` refuses.
 /// [`StrategyReport::performance`] skips a NaN like any non-finite value.
 fn null_as_nan<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
@@ -496,11 +505,13 @@ impl StrategyReport {
     /// `entry_time`, `entry_price`, `exit_time`, `exit_price`, `profit`, `fees`, `label`. Times are
     /// RFC 3339 in UTC (`2024-01-02T00:00:00Z`), numbers use the shortest form that reads back to the
     /// same value, and an open trade leaves the three exit columns empty.
+    /// Text cells starting with `=`, `+`, `-`, `@`, tab or carriage return gain a leading apostrophe
+    /// so spreadsheets treat them as text. Numeric cells, including negative numbers, are unchanged.
     pub fn trades_csv(&self) -> String {
         const IN_MEMORY: &str = "writing CSV to memory cannot fail";
         let mut trades: Vec<&StrategyTrade> = self.trades.iter().filter(|t| t.is_valid()).collect();
         trades.sort_by_key(|t| t.entry_time);
-        let time = |t: DateTime<Utc>| t.to_rfc3339_opts(SecondsFormat::AutoSi, true);
+        let time = |t: DateTime<Utc>| csv_text(&t.to_rfc3339_opts(SecondsFormat::AutoSi, true));
         let mut csv = csv::Writer::from_writer(Vec::new());
         csv.write_record([
             "number",
@@ -538,7 +549,7 @@ impl StrategyReport {
                 exit_price,
                 profit,
                 trade.fees.to_string(),
-                trade.label.clone().unwrap_or_default(),
+                csv_text(trade.label.as_deref().unwrap_or_default()),
             ])
             .expect(IN_MEMORY);
         }
@@ -551,29 +562,52 @@ impl StrategyReport {
     ///
     /// Columns: `section` (`summary` or `properties`), `name` (as the panel labels it), `value`,
     /// `unit` and `currency`. The unit is `money` (in `currency`, empty when the report has none),
-    /// `percent` (100 is 100%), `ratio`, `count` or `text`. Numbers use the shortest form that
-    /// reads back to the same value, with a dot as the decimal separator and no thousands
-    /// separator, and a value that is unavailable is an empty cell, so numeric columns stay numeric
-    /// in a spreadsheet.
+    /// `percent` (100 is 100%), `ratio`, `count` or `text`. Percent values round to 15 significant
+    /// decimal digits to suppress binary multiplication noise; if rounding would overflow `f64`,
+    /// the unrounded finite value is kept. Numbers use the shortest form that reads back to the
+    /// resulting value, with a dot as the decimal separator and no thousands separator. Every
+    /// numeric zero is `0`, and an unavailable value is an empty cell, so numeric columns stay
+    /// numeric in a spreadsheet.
+    ///
+    /// Text cells starting with `=`, `+`, `-`, `@`, tab or carriage return gain a leading apostrophe
+    /// so spreadsheets treat them as text. This also applies to property names and currencies;
+    /// numeric cells, including negative numbers, are unchanged by this protection.
     pub fn summary_csv(
         &self,
         performance: &StrategyPerformance,
         comparison: &StrategyComparison,
     ) -> String {
         const IN_MEMORY: &str = "writing CSV to memory cannot fail";
-        let currency = self.currency.clone().unwrap_or_default();
+        let currency = csv_text(self.currency.as_deref().unwrap_or_default());
         let mut csv = csv::Writer::from_writer(Vec::new());
         csv.write_record(["section", "name", "value", "unit", "currency"])
             .expect(IN_MEMORY);
         let mut row = |section: &str, name: &str, value: String, unit: &str| {
+            let name = csv_text(name);
+            let value = if unit == "text" {
+                csv_text(&value)
+            } else {
+                value
+            };
             let currency = if unit == "money" { &currency } else { "" };
-            csv.write_record([section, name, &value, unit, currency])
+            csv.write_record([section, &name, &value, unit, currency])
                 .expect(IN_MEMORY);
         };
-        let number = |value: Option<f64>| {
+        let number = |value: Option<f64>, percent: bool| {
             value
+                .map(|v| if percent { v * 100.0 } else { v })
                 .filter(|v| v.is_finite())
-                .map_or_else(String::new, |v| v.to_string())
+                .map_or_else(String::new, |v| {
+                    let v = if percent {
+                        let rounded = format!("{v:.14e}")
+                            .parse::<f64>()
+                            .expect("a formatted f64 parses as f64");
+                        if rounded.is_finite() { rounded } else { v }
+                    } else {
+                        v
+                    };
+                    if v == 0.0 { "0".into() } else { v.to_string() }
+                })
         };
         let p = performance;
         for (name, value, unit) in [
@@ -597,12 +631,7 @@ impl StrategyReport {
             ("Largest winning trade", p.largest_winning_trade, "money"),
             ("Largest losing trade", p.largest_losing_trade, "money"),
         ] {
-            let value = if unit == "percent" {
-                value.map(|v| v * 100.0)
-            } else {
-                value
-            };
-            row("summary", name, number(value), unit);
+            row("summary", name, number(value, unit == "percent"), unit);
         }
         for (name, count) in [
             ("Consecutive wins", p.max_consecutive_wins),
@@ -621,7 +650,7 @@ impl StrategyReport {
         row(
             "properties",
             "Initial capital",
-            number(Some(self.initial_capital)),
+            number(Some(self.initial_capital), false),
             "money",
         );
         row(
@@ -633,7 +662,7 @@ impl StrategyReport {
         row(
             "properties",
             "Risk-free rate",
-            number(Some(self.risk_free_rate * 100.0)),
+            number(Some(self.risk_free_rate), true),
             "percent",
         );
         for (name, value) in &self.properties {
@@ -1267,6 +1296,51 @@ mod tests {
              2,long,1,2024-01-02T01:00:00Z,100,2024-01-02T03:00:00Z,101,3,0.5,\n\
              3,short,2,2024-01-02T05:00:00Z,101.5,,,,0,\"Breakout, short\"\n"
         );
+        for (label, expected) in [
+            ("=1+1", "'=1+1"),
+            ("+SUM(1,2)", "'+SUM(1,2)"),
+            ("-1+2", "'-1+2"),
+            ("@SUM(A1)", "'@SUM(A1)"),
+            ("\t=1", "'\t=1"),
+            ("\r=1", "'\r=1"),
+            ("ordinary, \"quoted\"\nline", "ordinary, \"quoted\"\nline"),
+            ("", ""),
+            ("λ=1", "λ=1"),
+            ("'=already text", "'=already text"),
+        ] {
+            let mut trade = closed(-1.25, -0.25);
+            trade.entry_price = -100.0;
+            trade.exit.as_mut().unwrap().price = -101.0;
+            trade.label = Some(label.into());
+            r.trades = vec![trade];
+            let csv = r.trades_csv();
+            let row = csv::Reader::from_reader(csv.as_bytes())
+                .records()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(&row[9], expected, "{label:?}");
+            for (column, expected) in [(4, "-100"), (6, "-101"), (7, "-1.25"), (8, "-0.25")] {
+                assert_eq!(&row[column], expected, "numeric column {column}");
+            }
+        }
+        for (year, expected) in [
+            (-1, "'-0001-01-02T00:00:00Z"),
+            (10_000, "'+10000-01-02T00:00:00Z"),
+        ] {
+            let time = Utc.with_ymd_and_hms(year, 1, 2, 0, 0, 0).unwrap();
+            let mut trade = StrategyTrade::new(OrderSide::Buy, 1.0, time, 100.0);
+            trade.exit = Some(StrategyExit::new(time, 100.0, 0.0));
+            r.trades = vec![trade];
+            let csv = r.trades_csv();
+            let row = csv::Reader::from_reader(csv.as_bytes())
+                .records()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(&row[3], expected);
+            assert_eq!(&row[5], expected);
+        }
     }
 
     #[test]
@@ -1287,7 +1361,7 @@ mod tests {
              summary,Average trade,8.9,money,USD\n\
              summary,Fees,5,money,USD\n\
              summary,Maximum drawdown,90,money,USD\n\
-             summary,Maximum drawdown %,0.8928571428571428,percent,\n\
+             summary,Maximum drawdown %,0.892857142857143,percent,\n\
              summary,Sharpe ratio,,ratio,\n\
              summary,Sortino ratio,,ratio,\n\
              summary,Buy-and-hold return,,percent,\n\
@@ -1308,6 +1382,103 @@ mod tests {
              properties,Risk-free rate,0,percent,\n\
              properties,\"Fast, length\",\"say \"\"hi\"\"\",text,\n"
         );
+        for (text, expected) in [
+            ("=1+1", "'=1+1"),
+            ("+SUM(1,2)", "'+SUM(1,2)"),
+            ("-1+2", "'-1+2"),
+            ("@SUM(A1)", "'@SUM(A1)"),
+            ("\t=1", "'\t=1"),
+            ("\r=1", "'\r=1"),
+            ("ordinary, \"quoted\"\nline", "ordinary, \"quoted\"\nline"),
+            ("", ""),
+            ("λ=1", "λ=1"),
+            ("'=already text", "'=already text"),
+        ] {
+            let mut r = report(1000.0);
+            r.name = text.into();
+            r.symbol = text.into();
+            r.currency = Some(text.into());
+            r.properties.push((text.into(), text.into()));
+            r.trades.push(closed(-1.25, -0.25));
+            let csv = r.summary_csv(&r.performance(), &r.comparison(&[]));
+            let rows: Vec<_> = csv::Reader::from_reader(csv.as_bytes())
+                .records()
+                .map(Result::unwrap)
+                .collect();
+            for name in ["Name", "Symbol", "Currency"] {
+                let row = rows.iter().find(|row| &row[1] == name).unwrap();
+                assert_eq!(&row[2], expected, "{name}: {text:?}");
+            }
+            let property = rows.last().unwrap();
+            assert_eq!(&property[1], expected, "property name: {text:?}");
+            assert_eq!(&property[2], expected, "property value: {text:?}");
+            for row in rows.iter().filter(|row| &row[3] == "money") {
+                assert_eq!(&row[4], expected, "currency: {text:?}");
+            }
+            let loss = rows.iter().find(|row| &row[1] == "Net profit").unwrap();
+            assert_eq!(&loss[2], "-1.25");
+            let fees = rows.iter().find(|row| &row[1] == "Fees").unwrap();
+            assert_eq!(&fees[2], "-0.25");
+        }
+        // Decimal reference: multiplying a fraction by 100 shifts its decimal point twice.
+        for (fraction, expected) in [
+            (0.07, "7"),
+            (0.0725, "7.25"),
+            (-0.0, "0"),
+            (-0.0725, "-7.25"),
+            (1e-20, "0.000000000000000001"),
+            (1.0 / 3.0, "33.3333333333333"),
+            (f64::NAN, ""),
+            (f64::INFINITY, ""),
+            (f64::MAX, ""),
+        ] {
+            r.risk_free_rate = fraction;
+            let mut p = r.performance();
+            p.net_profit_fraction = Some(fraction);
+            p.win_rate = Some(fraction);
+            p.max_drawdown_fraction = Some(fraction);
+            let mut c = r.comparison(&[]);
+            c.buy_and_hold_return = Some(fraction);
+            let csv = r.summary_csv(&p, &c);
+            let rows: Vec<_> = csv::Reader::from_reader(csv.as_bytes())
+                .records()
+                .map(Result::unwrap)
+                .collect();
+            for row in rows.iter().filter(|row| &row[3] == "percent") {
+                assert_eq!(&row[2], expected, "{}: {fraction}", &row[1]);
+            }
+        }
+        // Rounding the largest finite percent to 15 digits would overflow; retain its value.
+        r.risk_free_rate = f64::MAX / 100.0;
+        let csv = r.summary_csv(&r.performance(), &r.comparison(&[]));
+        let rate = csv::Reader::from_reader(csv.as_bytes())
+            .records()
+            .map(Result::unwrap)
+            .find(|row| &row[1] == "Risk-free rate")
+            .unwrap();
+        assert_eq!(rate[2].parse::<f64>().unwrap(), f64::MAX);
+        r.initial_capital = -0.0;
+        let p = StrategyPerformance {
+            net_profit: -0.0,
+            gross_profit: -0.0,
+            gross_loss: -0.0,
+            total_fees: -0.0,
+            profit_factor: Some(-0.0),
+            average_trade: Some(-0.0),
+            largest_winning_trade: Some(-0.0),
+            largest_losing_trade: Some(-0.0),
+            max_drawdown: Some(-0.0),
+            sharpe_ratio: Some(-0.0),
+            sortino_ratio: Some(-0.0),
+            ..Default::default()
+        };
+        let csv = r.summary_csv(&p, &StrategyComparison::default());
+        for row in csv::Reader::from_reader(csv.as_bytes()).records() {
+            let row = row.unwrap();
+            if matches!(&row[3], "money" | "ratio") {
+                assert_eq!(&row[2], "0", "{}", &row[1]);
+            }
+        }
         // Nothing to compute from: counts are zero, everything else is an empty cell.
         let empty = report(0.0);
         let csv = empty.summary_csv(&empty.performance(), &empty.comparison(&[]));

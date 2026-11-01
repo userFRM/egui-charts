@@ -104,6 +104,8 @@ impl Chart {
             time_axis_rect: egui::Rect::NOTHING,
             chart_type: ChartType::Candles,
             chart_type_params: ChartTypeParams::default(),
+            #[cfg(feature = "studies")]
+            trade_profiles: Default::default(),
             pending_box_sizes: [false; 4],
             older_bars_drawn: true,
             tracking_mode_active: false,

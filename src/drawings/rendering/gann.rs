@@ -956,6 +956,8 @@ mod tests {
                         y_to_price: &|_| f64::NAN,
                         time_axis: true,
                         executions: None,
+                        timeframe: None,
+                        finer: &[],
                     },
                 )
             });
@@ -988,6 +990,8 @@ mod tests {
                         y_to_price: &|y| 300.0 - f64::from(y),
                         time_axis: true,
                         executions: None,
+                        timeframe: None,
+                        finer: &[],
                     },
                 )
             });

@@ -169,7 +169,8 @@ impl Default for VolumeProfileConfig {
 /// Where a [`VolumeProfile`]'s volumes come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProfileSource {
-    /// Bar volume spread over each bar's high-low range, split by candle direction.
+    /// Bar volume spread over each bar's high-low range, split by candle direction, from the
+    /// chart's bars or from finer bars where they cover the chart bars.
     Estimated,
     /// Executed volume at each price, split by aggressor side, with unclassified volume
     /// apart. `complete` is false when the span starts before the first bar whose executions
@@ -430,6 +431,33 @@ impl VolumeProfile {
         };
         bars.iter().for_each(|bar| profile.add(bar));
         Some(profile)
+    }
+
+    /// Replaces each of `bars` by the sorted `finer` bars opening inside it, up to the next
+    /// chart bar's open or `end` after the last. Bars without finer inputs keep their estimate.
+    /// Returns the profile and the number of chart bars with finer inputs.
+    #[cfg(any(feature = "studies", feature = "drawings"))]
+    pub(crate) fn of_finer(
+        bars: &[Bar],
+        end: chrono::DateTime<chrono::Utc>,
+        finer: &[Bar],
+        rows: usize,
+        row_size: Option<f64>,
+    ) -> (Option<Self>, usize) {
+        let mut inputs = Vec::new();
+        let mut covered = 0;
+        for (i, bar) in bars.iter().enumerate() {
+            let next = bars.get(i + 1).map_or(end, |next| next.time);
+            let inside = &finer[finer.partition_point(|f| f.time < bar.time)
+                ..finer.partition_point(|f| f.time < next)];
+            if inside.is_empty() {
+                inputs.push(bar.clone());
+            } else {
+                covered += 1;
+                inputs.extend_from_slice(inside);
+            }
+        }
+        (Self::of(&inputs, rows, row_size), covered)
     }
 
     /// Add one completed bar without redistributing earlier bars. Fixed-height grids grow

@@ -2,11 +2,40 @@
 
 use crate::chart::coords::ChartMapping;
 use crate::chart::overlays::{FootprintConfig, FootprintMode};
+use crate::data::NodeSensitivity;
 use crate::model::Bar;
 use crate::studies::TradeProfile;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, FontId, Painter, Rect, Stroke, pos2};
+
+/// Display settings of the chart's execution-based session profiles.
+/// Defaults retain the stacked session histogram, with optional annotations hidden.
+#[derive(Clone, Debug)]
+pub struct TradeProfileSettings {
+    /// Bid/ask stacks, total volume or signed delta; `DeltaVolume` also draws signed delta.
+    pub mode: FootprintMode,
+    /// Trace the total-volume POC after each complete execution bar.
+    pub developing_poc: bool,
+    /// Volume-node smoothing and prominence; `None` hides the node labels.
+    pub nodes: Option<NodeSensitivity>,
+    /// Share of total volume shaded as the contiguous value area; `None` hides it.
+    pub value_area: Option<f64>,
+    /// Draw guides at the outer edges of the value area.
+    pub value_area_guides: bool,
+}
+
+impl Default for TradeProfileSettings {
+    fn default() -> Self {
+        Self {
+            mode: FootprintMode::BidAsk,
+            developing_poc: false,
+            nodes: None,
+            value_area: Some(0.7),
+            value_area_guides: false,
+        }
+    }
+}
 
 /// Draws bid/ask stacks, total volume or signed delta profiles, their POC, value area,
 /// developing POC and volume nodes. `step` is the footprint's grouped price step and
@@ -25,12 +54,12 @@ pub fn render_trade_profiles(
     tick: f64,
     config: &FootprintConfig,
 ) {
-    render_profiles(painter, mapping, bars, profiles, step, tick, config, false);
+    render_profiles(painter, mapping, bars, profiles, step, tick, config, None);
 }
 
 /// Draws the session volume profile chart: each session fills its bar span inside a faint box,
 /// with up volume stacked before down volume, a POC across the session, and the value area shown
-/// by row opacity alone (no guides, node labels or developing POC).
+/// by row opacity. Optional annotations follow the supplied settings.
 /// A session whose profile is not complete is labelled "Partial executions".
 pub(crate) fn render_session_volume_profiles(
     painter: &Painter,
@@ -39,19 +68,39 @@ pub(crate) fn render_session_volume_profiles(
     profiles: &[TradeProfile],
     step: f64,
     tick: f64,
+    settings: &TradeProfileSettings,
 ) {
     let theme = painter.ctx().active_theme();
+    let guide = settings
+        .value_area_guides
+        .then_some(Stroke::new(1.0, theme.chart.axis_text_secondary));
     let config = FootprintConfig {
+        modes: vec![settings.mode],
+        value_area: settings.value_area,
+        node_sensitivity: settings.nodes.unwrap_or_default(),
         ask_color: DESIGN_TOKENS.semantic.brand.accent,
         bid_color: DESIGN_TOKENS.semantic.tpo.period_6,
         neutral_color: theme.chart.axis_text_secondary,
         text_color: DESIGN_TOKENS.semantic.chart.bearish,
-        value_area_high: None,
-        value_area_low: None,
-        min_text_height: f32::INFINITY,
+        value_area_high: guide,
+        value_area_low: guide,
+        min_text_height: if settings.nodes.is_some() {
+            12.0
+        } else {
+            f32::INFINITY
+        },
         ..Default::default()
     };
-    render_profiles(painter, mapping, bars, profiles, step, tick, &config, true);
+    render_profiles(
+        painter,
+        mapping,
+        bars,
+        profiles,
+        step,
+        tick,
+        &config,
+        Some(settings),
+    );
 }
 
 fn render_profiles(
@@ -62,8 +111,9 @@ fn render_profiles(
     step: f64,
     tick: f64,
     config: &FootprintConfig,
-    session: bool,
+    settings: Option<&TradeProfileSettings>,
 ) {
+    let session = settings.is_some();
     if !step.is_finite() || step <= 0.0 || !tick.is_finite() || tick <= 0.0 || bars.is_empty() {
         return;
     }
@@ -226,11 +276,26 @@ fn render_profiles(
                 let y0 = mapping.price_to_y(level as f64 * step - tick * 0.5);
                 let y1 = mapping.price_to_y((level as f64 + 1.0) * step - tick * 0.5);
                 if y0.is_finite() && y1.is_finite() && (y0 - y1).abs() >= config.min_text_height {
-                    painter.text(
-                        pos2(x + width + 3.0, (y0 + y1) * 0.5),
-                        Align2::LEFT_CENTER,
-                        label,
+                    let galley = painter.layout_no_wrap(
+                        label.into(),
                         FontId::monospace(crate::styles::typography::TINY),
+                        config.text_color,
+                    );
+                    if session && galley.size().x + 6.0 > width {
+                        continue;
+                    }
+                    let anchor = if session {
+                        Align2::RIGHT_CENTER
+                    } else {
+                        Align2::LEFT_CENTER
+                    };
+                    let pos = pos2(
+                        x + width + if session { -3.0 } else { 3.0 },
+                        (y0 + y1) * 0.5,
+                    );
+                    painter.galley(
+                        anchor.anchor_size(pos, galley.size()).min,
+                        galley,
                         config.text_color,
                     );
                 }
@@ -250,11 +315,20 @@ fn render_profiles(
                 }
             }
         }
-        if session {
+        if settings.is_some_and(|s| !s.developing_poc) {
             continue;
         }
         let mut previous = None;
-        for &(time, poc) in &profile.developing_poc {
+        for (at, &(time, poc)) in profile.developing_poc.iter().enumerate() {
+            // Earlier bars may still contribute volume after their candles were evicted.
+            if time < bars[0].time
+                && profile
+                    .developing_poc
+                    .get(at + 1)
+                    .is_some_and(|(next, _)| *next <= bars[0].time)
+            {
+                continue;
+            }
             let index = bars.partition_point(|b| b.time < time);
             let point = pos2(
                 mapping.idx_to_x(index),
