@@ -1064,63 +1064,103 @@ mod tests {
                     assert_eq!(fired.load(Ordering::Relaxed), usize::from(diverges));
                 }
                 #[cfg(feature = "widget")]
-                if boundary == "none" {
-                    use crate::model::BarData;
+                if matches!(boundary, "none" | "combined") {
+                    use crate::model::{BarData, LogicalRange, Timeframe};
+                    use crate::theme::Theme;
                     use crate::widget::Chart;
-                    let mut chart = Chart::new(BarData::from_bars(data[..17].to_vec()));
-                    chart.add_indicator(Box::new(study.clone()));
-                    let ctx = egui::Context::default();
-                    let frame = |chart: &mut Chart| {
-                        ctx.run_ui(
-                            egui::RawInput {
-                                screen_rect: Some(egui::Rect::from_min_size(
-                                    egui::Pos2::ZERO,
-                                    egui::vec2(1440., 900.),
-                                )),
-                                ..Default::default()
-                            },
-                            |ui| {
-                                chart.show(ui);
-                            },
-                        )
-                    };
-                    frame(&mut chart).drop_without_applying_deltas();
-                    let output = frame(&mut chart);
-                    let marks: Vec<_> = output
-                        .shapes
-                        .iter()
-                        .filter_map(|shape| match &shape.shape {
-                            egui::Shape::Text(text)
-                                if text.galley.text()
-                                    == if bullish {
-                                        "Bull divergence"
-                                    } else {
-                                        "Bear divergence"
-                                    } =>
-                            {
-                                Some(text.pos)
-                            }
-                            _ => None,
-                        })
-                        .collect();
-                    assert_eq!(
-                        marks.len(),
-                        1,
-                        "the configured study paints its marker once"
-                    );
-                    assert!(
-                        chart.get_rendered_price_rect().contains(marks[0]),
-                        "the marker belongs to the price pane"
-                    );
-                    output.drop_without_applying_deltas();
+                    for theme in [Theme::light(), Theme::dark()] {
+                        for size in [egui::vec2(1440., 900.), egui::vec2(360., 480.)] {
+                            let mut shown = data.to_vec();
+                            let live = shown.last_mut().unwrap();
+                            (live.low, live.high) = if bullish { (96., 98.) } else { (102., 104.) };
+                            live.open = live.low + 0.5;
+                            live.close = live.high - 0.5;
+                            let mut chart = Chart::new(BarData::from_bars(shown));
+                            chart.set_timeframe(Timeframe::Min1);
+                            chart.set_theme_override(Some(theme.clone()));
+                            chart.add_indicator(Box::new(study.clone()));
+                            let ctx = egui::Context::default();
+                            crate::theme::apply_to_egui(&ctx, &theme);
+                            let frame = |chart: &mut Chart| {
+                                ctx.run_ui(
+                                    egui::RawInput {
+                                        screen_rect: Some(egui::Rect::from_min_size(
+                                            egui::Pos2::ZERO,
+                                            size,
+                                        )),
+                                        ..Default::default()
+                                    },
+                                    |ui| {
+                                        chart.show(ui);
+                                    },
+                                )
+                            };
+                            frame(&mut chart).drop_without_applying_deltas();
+                            chart.set_visible_logical_range(LogicalRange::new(-2., 20.));
+                            let output = frame(&mut chart);
+                            let text_rect = |text: &egui::epaint::TextShape| {
+                                egui::Rect::from_min_size(text.pos, text.galley.size())
+                            };
+                            let marks: Vec<_> = output
+                                .shapes
+                                .iter()
+                                .filter_map(|shape| match &shape.shape {
+                                    egui::Shape::Text(text)
+                                        if text.galley.text().contains("divergence") =>
+                                    {
+                                        Some(text_rect(text))
+                                    }
+                                    _ => None,
+                                })
+                                .collect();
+                            assert_eq!(
+                                marks.len(),
+                                1,
+                                "the configured study paints its marker once"
+                            );
+                            assert!(
+                                chart.get_rendered_price_rect().contains_rect(marks[0]),
+                                "the whole caption belongs to the price pane"
+                            );
+                            let title = output
+                                .shapes
+                                .iter()
+                                .find_map(|shape| match &shape.shape {
+                                    egui::Shape::Text(text) if text.galley.text() == "1min" => {
+                                        Some(text_rect(text))
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap();
+                            let legend_row = output
+                                .shapes
+                                .iter()
+                                .filter_map(|shape| match &shape.shape {
+                                    egui::Shape::Rect(rect)
+                                        if rect.fill == theme.chart.bg
+                                            && rect.rect.contains_rect(title) =>
+                                    {
+                                        Some(rect.rect)
+                                    }
+                                    _ => None,
+                                })
+                                .min_by(|a, b| a.area().total_cmp(&b.area()))
+                                .unwrap();
+                            assert!(
+                                !marks[0].intersects(legend_row),
+                                "caption under the price legend: {size:?} {boundary}"
+                            );
+                            output.drop_without_applying_deltas();
+                        }
+                    }
                 }
                 if boundary == "combined" {
                     assert_eq!(
                         study.labels()[0].text,
                         if bullish {
-                            "Bull exhaustion\nBull divergence"
+                            "Bull exhaustion, Bull divergence"
                         } else {
-                            "Bear exhaustion\nBear divergence"
+                            "Bear exhaustion, Bear divergence"
                         }
                     );
                 }

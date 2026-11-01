@@ -247,7 +247,7 @@ impl CvdMarkers {
                             && existing.bar == label.bar
                             && existing.price == label.price
                         {
-                            existing.text.push('\n');
+                            existing.text.push_str(", ");
                             existing.text.push_str(&label.text);
                         } else {
                             self.labels.insert(insert, label);
