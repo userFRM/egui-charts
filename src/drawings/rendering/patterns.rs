@@ -433,6 +433,8 @@ mod tests {
                     y_to_price: &|y| 1000.0 / f64::from(y),
                     time_axis: true,
                     executions: None,
+                    timeframe: None,
+                    finer: &[],
                 },
             );
         });
