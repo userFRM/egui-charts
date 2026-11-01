@@ -915,6 +915,7 @@ impl Chart {
                 time_axis_top + crate::styles::sizing::chart::BOTTOM_PADDING_WITH_TIME,
             ),
         );
+        let show_axis_settings = !self.layout_inactive || ui.rect_contains_pointer(rect);
         let axis_interaction = cfg!(feature = "icons")
             && (self.config.show_right_axis || self.config.show_left_axis)
             && ui.input(|input| {
@@ -924,7 +925,7 @@ impl Chart {
                         .press_origin()
                         .or(input.pointer.hover_pos())
                         .is_some_and(|pos| {
-                            axis_corner.contains(pos)
+                            (show_axis_settings && axis_corner.contains(pos))
                                 || (self.config.show_plus_button
                                     && self.axis_hover.is_some_and(|(_, tag)| {
                                         rendering::axes::crosshair_price_button_rect(tag)
@@ -3169,7 +3170,9 @@ impl Chart {
                     });
                 }
             }
-            if rendering::axes::axis_settings_button(ui, axis_corner).clicked() {
+            if show_axis_settings
+                && rendering::axes::axis_settings_button(ui, axis_corner).clicked()
+            {
                 self.scale_settings_requested = true;
             }
         }

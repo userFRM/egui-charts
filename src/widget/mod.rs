@@ -398,6 +398,8 @@ pub struct Chart {
     // =========================================================================
     // Multi-Chart Sync State
     // =========================================================================
+    /// This chart is an inactive, attached slot in a multi-chart layout for the current frame.
+    pub(crate) layout_inactive: bool,
     /// External crosshair position from synced chart (bar index)
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
     /// Source period retained by time-based setters and resolved against the current bars.
