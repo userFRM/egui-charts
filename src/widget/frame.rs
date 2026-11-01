@@ -5968,6 +5968,93 @@ mod tests {
                 );
             }
         }
+        // A half-point spacing merges pairs. An empty view has the same labels and key
+        // count whether the last pair is complete (1,000 bars) or partial (1,001).
+        use crate::model::{Bar, BarData};
+        use crate::scales::{
+            CustomTimeFormatter, HorizontalScale, TickMark, TickMarkLayout, TimeFormatter,
+        };
+        use chrono::{DateTime, Duration, TimeZone, Utc};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Recorder {
+            keys: Arc<AtomicUsize>,
+            formatter: Box<dyn TimeFormatter>,
+        }
+        impl HorizontalScale for Recorder {
+            fn tick_marks(
+                &self,
+                points: &[(DateTime<Utc>, usize)],
+                layout: &TickMarkLayout,
+            ) -> Vec<TickMark> {
+                self.keys.store(points.len(), Ordering::Relaxed);
+                self.formatter.tick_marks(points, layout)
+            }
+            fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
+                self.formatter.as_ref().format_crosshair(time, bar_seconds)
+            }
+        }
+        for (left, right) in [(2427.0, 3854.0), (28131.0, 29558.0)] {
+            let mut control = None;
+            for count in [1000, 1001] {
+                let start = Utc.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).unwrap();
+                let bars = (0..count)
+                    .map(|day| {
+                        Bar::new(start + Duration::days(day), 100.0, 110.0, 100.0, 110.0, 1.0)
+                    })
+                    .collect();
+                let ctx = egui::Context::default();
+                let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+                chart.config.show_volume = false;
+                let mut options = chart.chart_options().clone();
+                options.time_scale.min_bar_spacing = 0.01;
+                chart.set_chart_options(options);
+                chart.set_time_formatter(Some(Arc::new(CustomTimeFormatter::new(|time, _| {
+                    time.format("%Y-%m-%d").to_string()
+                }))));
+                let keys = Arc::new(AtomicUsize::new(0));
+                chart.set_horizontal_scale(Some(Arc::new(Recorder {
+                    keys: keys.clone(),
+                    formatter: chart.build_time_formatter(),
+                })));
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                assert!(chart.set_visible_logical_range(LogicalRange::new(left, right)));
+                assert!(chart.state.visible_data().is_empty());
+                let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+                let plot = chart.get_rendered_price_rect();
+                let labels: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Text(text)
+                            if text.pos.y > plot.bottom() && text.pos.x < plot.right() =>
+                        {
+                            Some(text.galley.text().to_owned())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let keys = keys.load(Ordering::Relaxed);
+                let row = format!("{count} bars, {left}..{right}, {keys} keys");
+                let range = chart.state.time_scale().visible_logical_range();
+                assert!(
+                    (range.left - left).abs() < 0.01 && (range.right - right).abs() < 0.01,
+                    "{row}: {range:?}"
+                );
+                assert_eq!(chart.merge_groups.factor(), 2, "{row}");
+                assert!(labels.len() >= 3, "{row}: {labels:?}");
+                if let Some((expected_keys, expected_labels)) = &control {
+                    assert_eq!(&labels, expected_labels, "{row}");
+                    assert!(
+                        keys <= *expected_keys + 1,
+                        "{row}: {keys} keys vs {expected_keys}"
+                    );
+                } else {
+                    control = Some((keys, labels));
+                }
+            }
+        }
     }
 
     #[test]
