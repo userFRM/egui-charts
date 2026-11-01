@@ -405,7 +405,13 @@ fn chart(scenario: &Scenario) -> Chart {
         };
         let mut drawing = Drawing::new(k, tool);
         drawing.text = Some("Note".into());
-        drawing.chart_points = (0..tool.required_points().unwrap_or(8))
+        // Curves store their controls as well as the two clicks that place them.
+        let anchors = match tool {
+            DrawingToolType::Curve => 3,
+            DrawingToolType::DoubleCurve => 4,
+            _ => tool.required_points().unwrap_or(8),
+        };
+        drawing.chart_points = (0..anchors)
             .map(|j| {
                 let price = 100.0 + 6.0 * ((k + j) as f64).sin();
                 ChartPoint::new((first + 5 * j) as f32, price)
