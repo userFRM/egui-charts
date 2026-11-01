@@ -793,7 +793,12 @@ fn panes_fit_and_share_the_lowest_time_axis() {
                         if text.galley.text().contains("Jan")
                             || text.galley.text().contains("Dec")
                             || text.galley.text().contains("Feb")
-                            || text.galley.text().contains(':')
+                            || (text.galley.text().contains(':')
+                                && text
+                                    .galley
+                                    .text()
+                                    .chars()
+                                    .all(|c| c.is_ascii_digit() || c == ':'))
                             || (text.pos.y >= bottom
                                 && text.galley.text().chars().all(|c| c.is_ascii_digit())) =>
                     {

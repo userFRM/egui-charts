@@ -130,7 +130,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 ### Study API and Editing
 
 - [x] `Indicator` and `IndicatorRegistry` calculate without egui; `CustomIndicator` accepts downstream calculation code.
-- [x] Typed inputs with validation, mutable settings, plot styles, fills, offsets, precision, visibility and independent scale metadata.
+- [x] Typed inputs with validation, mutable settings, plot styles, fills, offsets, precision, visibility and independent scale metadata. Multi-output legends identify each value and wrap in narrow panes; quantity readouts follow instrument precision.
 - [x] Additional-symbol and additional-interval histories, source selection and confirmed/developing value alignment.
 - [x] Incremental updates or scheduled recalculation as chart data changes.
 - [x] Applied-study editor with Inputs, Style and Visibility pages and atomic validated changes.
@@ -154,8 +154,8 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Execution-based delta histograms and cumulative-delta candles, including intrabar extremes and configurable reset boundaries, render in a supplied pane mapping.
 - [x] Trade profiles aggregate supplied ranges with bid/ask, volume or delta display, developing POC, value area and local volume nodes; public range editing supports merging and splitting.
 - [ ] Bound live footprint retention when trades are evicted, including accumulated bars and price levels.
-- [ ] Integrate size-filtered cumulative delta into a study pane with its own scale and labels.
-- [ ] Provide a combined multi-size-range delta study and rolling volume/delta histogram mode.
+- [x] Size-filtered cumulative delta has a study pane with its own scale and lot-precision readouts.
+- [x] Combined size-range delta labels its inclusive buckets; rolling volume/delta supports histograms.
 - [ ] Add threshold highlights for delta percentage and bid/ask ratio, and a minimum filter for delta POC.
 - [ ] Add fixed-cell, delta-fade and dominant-side colouring, abbreviated values, zero-display controls and value-scaled text.
 - [ ] Add footprint extreme bid/ask-ratio annotations and pullback highlights.
@@ -172,7 +172,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Volume bubbles aggregate by chart bar and price, with side/delta colours, linear/square-root/logarithmic sizing and outlier limits.
 - [x] Time-and-sales panel with aggressor colours, size filters and sound intents.
 - [x] Explicit aggressor identifiers combine split fills into parent orders with total size, price span and fill count.
-- [x] Fixed stream studies calculate quoted spread, resting book totals/difference, execution rate and inside-quote movement.
+- [x] Fixed stream studies calculate quoted spread, resting book totals/difference, execution rate and inside-quote movement. Execution and aggressor rates plot per-second windows by default and keep bar totals in labelled readouts.
 - [ ] Add bubble time-window/count grouping, ungrouped execution timestamps, split bid/ask and additional delta/volume colour modes.
 - [ ] Add dedicated ladder columns for observed size changes, traded bid/ask volume and order counts.
 - [ ] Add session/reset controls and delta/bid-ask modes for the ladder profile.

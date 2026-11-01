@@ -61,7 +61,7 @@ Builder API,Datafeed API,Trade tick input,done,host,src/ui/widget_bar/panels/tim
 Builder API,Datafeed API,Trading session definition from the feed,done,host,src/model/instrument.rs;src/model/session/mod.rs;examples/demo/sampledata.rs;examples/demo/live.rs;src/widget/feed/mod.rs;examples/demo/controller.rs
 Builder API,Datafeed API,Update cost and coalescing of fast streams,done,library,src/widget/series.rs;src/widget/studies.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/data/order_flow.rs;src/widget/feed/pump.rs
 Builder API,Datafeed API,Validation of incoming bars,done,library,src/widget/builder.rs;src/widget/series.rs;src/data/merge.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs
-Builder API,Datafeed API,Volume precision,done,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/tooltip.rs;src/widget/frame.rs;src/scales/price_formatter.rs
+Builder API,Datafeed API,Volume precision,done,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/tooltip.rs;src/widget/frame.rs;src/scales/price_formatter.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/pane/indicator/paint.rs
 Builder API,Datafeed API,Volume profile resolution hint,done,host,src/model/instrument.rs;src/studies/builtin/volume_profile.rs
 Builder API,Save/load adapter,Auto-save trigger,done,library,src/widget/history.rs;src/widget/feed/mod.rs;src/ui/top_toolbar/components/layout_menu.rs
 Builder API,Save/load adapter,Chart templates,done,library,src/ui/dialogs/chart_settings/mod.rs;src/ui/dialogs/templates/store.rs
@@ -185,7 +185,7 @@ Chart,Keyboard shortcuts,Snapshot,done,library,src/config/keyboard.rs;src/widget
 Chart,Keyboard shortcuts,Type to change symbol,done,host,src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Undo and redo,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/history.rs
 Chart,Legend and data window,Data window panel,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs;src/widget/frame.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs
-Chart,Legend and data window,Indicator entries in the legend,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/config/chart.rs;src/theme/presets.rs
+Chart,Legend and data window,Indicator entries in the legend,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/config/chart.rs;src/theme/presets.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs
 Chart,Legend and data window,Legend buttons,done,library,src/chart/renderers/legend/mod.rs;src/chart/renderers/legend/study_controls.rs;src/widget/crosshair.rs;src/widget/pane/render/mod.rs
 Chart,Legend and data window,Status line values follow the crosshair,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs
 Chart,Legend and data window,Symbol status line,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/model/session/exchange.rs;src/painting/symbol_mark.rs
@@ -405,7 +405,7 @@ Order flow,Order flow,Bid/ask split profile and delta profile,done,library,src/s
 Order flow,Order flow,Bid/ask spread in ticks plotted over time with alert,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/services/alerts.rs;src/studies/factory/mod.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
 Order flow,Order flow,Big trade zones,done,library,src/services/detectors/big_trades.rs;src/services/detectors/mod.rs;src/data/trades.rs;
 Order flow,Order flow,Book speed,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
-Order flow,Order flow,Book thickness and resting-size delta over time,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/orders.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs
+Order flow,Order flow,Book thickness and resting-size delta over time,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/orders.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/renderers/legend/mod.rs;src/widget/pane/indicator/paint.rs
 Order flow,Order flow,"Bubble grouping: automatic, by time window, by price, tick grouping",done,library,src/chart/overlays/volume_bubbles.rs;src/model/clock.rs
 Order flow,Order flow,CVD drawn as candles,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/chart/series/mod.rs;src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/data/trades.rs
 Order flow,Order flow,"Chart tabs, detached groups and shared crosshair",done,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame.rs
@@ -417,7 +417,7 @@ Order flow,Order flow,Custom range profile drawn on the chart by selection,parti
 Order flow,Order flow,DOM levels panel beside the heatmap,partial,library,src/data/orders.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Delta % and bid/ask ratio highlight markers on bars,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/studies/builtin/footprint_studies.rs;src/widget/frame.rs
 Order flow,Order flow,Delta POC per bar,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
-Order flow,Order flow,Delta split into trade-size ranges,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/data/order_flow.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
+Order flow,Order flow,Delta split into trade-size ranges,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/data/order_flow.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/renderers/legend/mod.rs;src/widget/pane/indicator/paint.rs
 Order flow,Order flow,Depth ladder liquidity and execution columns,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs
 Order flow,Order flow,"Depth ladder order entry, editing and brackets",partial,host,src/ui/trading/dom.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs;src/ui/trading/mod.rs
 Order flow,Order flow,Depth ladder session and resettable profiles,done,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs
@@ -445,7 +445,7 @@ Order flow,Order flow,Large aggressive trades and historical loading,done,librar
 Order flow,Order flow,Large resting order highlight on heatmap and DOM levels,done,library,src/data/orders.rs;src/chart/overlays/book_profile.rs;src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/widget/feed/mod.rs;src/data/depth_history.rs;src/data/inbox/sink.rs;src/chart/overlays/liquidity_heatmap.rs;src/theme/presets.rs
 Order flow,Order flow,Liquidity heatmap: resting limit-order size per price level plotted over time,done,library,src/data/depth_history.rs;src/chart/overlays/liquidity_heatmap.rs;src/widget/frame.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Liquidity tracker,done,library,src/services/detectors/liquidity.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/model/signal.rs;src/widget/signals.rs
-Order flow,Order flow,Market structure meters,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
+Order flow,Order flow,Market structure meters,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/renderers/legend/mod.rs;src/widget/pane/indicator/paint.rs
 Order flow,Order flow,Merge and split adjacent profiles,done,library,src/studies/builtin/trade_profile.rs;src/ui/context_menu/trade_profile.rs;src/widget/trade_profile.rs;src/widget/frame.rs;src/ui/context_menu/chart_menus/mod.rs;terminal/src/studies.rs
 Order flow,Order flow,Multi-column footprint,done,library,src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,"On-chart order lines with drag to move entry, stop and target",done,host,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/chart/renderers/trading_lines/mod.rs
@@ -462,10 +462,10 @@ Order flow,Order flow,Per-bar order-flow statistics table,done,library,src/data/
 Order flow,Order flow,"Profile POC, value area and VAH/VAL lines",done,library,src/data/footprint.rs;src/data/volume_profile.rs;src/chart/overlays/trade_profile.rs;src/painting/volume_profile.rs;src/widget/trade_profile.rs
 Order flow,Order flow,Profile peaks and valleys with sensitivity,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/trade_profile.rs
 Order flow,Order flow,Proprietary order-flow models,partial,library,src/model/tpo.rs;src/chart/rendering/candles/tpo.rs
-Order flow,Order flow,Rolling volume/delta sum over N bars,done,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
+Order flow,Order flow,Rolling volume/delta sum over N bars,done,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/renderers/legend/mod.rs;src/widget/pane/indicator/paint.rs
 Order flow,Order flow,"Session VWAP with daily, weekly or monthly reset",done,library,src/studies/builtin/vwap.rs;src/widget/series.rs
 Order flow,Order flow,Order-flow page in the indicator browser,missing,library,
-Order flow,Order flow,Speed of tape,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
+Order flow,Order flow,Speed of tape,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/renderers/legend/mod.rs;src/widget/pane/indicator/paint.rs
 Order flow,Order flow,Split session profiles,done,library,src/studies/builtin/trade_profile.rs;src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs
 Order flow,Order flow,Spoofing and pulled-liquidity detection,done,library,src/services/detectors/liquidity.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/model/signal.rs;src/widget/signals.rs;
 Order flow,Order flow,Stacked imbalances shown as zones,done,library,src/data/footprint.rs;src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/studies/builtin/mod.rs;src/widget/frame.rs
@@ -479,9 +479,9 @@ Order flow,Order flow,Tick-count bars,done,library,src/model/timeframe.rs;src/ui
 Order flow,Order flow,Time and sales with size filters and sound alerts,done,library,src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs
 Order flow,Order flow,Time price opportunity profiles and single prints,done,library,src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs;src/widget/frame.rs;src/studies/builtin/time_price_opportunity.rs;src/tokens/mod.rs;src/tokens/semantic.rs;src/chart/renderers/legend/mod.rs
 Order flow,Order flow,"Trade-based session, composite and visible-range volume profiles",done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs;src/widget/trade_profile.rs
-Order flow,Order flow,Trade-size filtered CVD,done,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/data/trades.rs
+Order flow,Order flow,Trade-size filtered CVD,done,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/data/trades.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/renderers/legend/mod.rs
 Order flow,Order flow,Unfinished auction detection with extension lines,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
-Order flow,Order flow,"VWAP envelopes: standard deviation or percent bands, three pairs",done,library,src/studies/builtin/vwap.rs;src/chart/renderers/indicator.rs
+Order flow,Order flow,"VWAP envelopes: standard deviation or percent bands, three pairs",done,library,src/studies/builtin/vwap.rs;src/chart/renderers/indicator.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/renderers/legend/mod.rs;src/widget/pane/indicator/paint.rs
 Order flow,Order flow,Value area per bar highlighted on the footprint,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Volume POC per bar highlighted in the footprint,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Volume bars and delta bars,done,library,src/model/timeframe.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs
@@ -768,7 +768,7 @@ Studies,Indicators,Volatility Stop,done,library,src/studies/builtin/volatility_s
 Studies,Indicators,Volatility Zero Trend Close-to-Close,done,library,src/studies/builtin/zero_trend_vol.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Volume,done,library,src/studies/builtin/volume.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/widget/volume.rs;src/studies/palette.rs
 Studies,Indicators,Volume Delta,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs;src/studies/builtin/volume_delta.rs;src/studies/builtin/lower_interval.rs
-Studies,Indicators,Volume Weighted Average Price,done,library,src/studies/builtin/vwap.rs;src/studies/settings.rs;src/widget/series.rs
+Studies,Indicators,Volume Weighted Average Price,done,library,src/studies/builtin/vwap.rs;src/studies/settings.rs;src/widget/series.rs;src/studies/indicator_trait.rs;src/chart/renderers/legend/mod.rs;src/widget/pane/indicator/paint.rs
 Studies,Indicators,Volume-Weighted Moving Average,done,library,src/studies/builtin/vwma.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Vortex Indicator,done,library,src/studies/builtin/vortex.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs
 Studies,Indicators,Weighted Moving Average,done,library,src/studies/builtin/wma.rs;src/studies/factory/mod.rs;src/widget/series.rs;src/chart/renderers/indicator.rs

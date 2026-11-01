@@ -479,9 +479,8 @@ impl IndicatorPane {
                 .bar_index
                 .or_else(|| indicator.values().len().checked_sub(1))
         {
-            for line in
-                (0..indicator.line_count()).filter(|line| indicator.plot_style(*line).visible)
-            {
+            let names = indicator.line_names();
+            for line in (0..indicator.line_count()).filter(|line| indicator.legend_visible(*line)) {
                 if let Some(value) = indicator.plot_value(line, bar) {
                     if !job.text.is_empty() {
                         job.append(" ", 0.0, format(text_color));
@@ -496,7 +495,12 @@ impl IndicatorPane {
                         job.append("  ", 0.0, swatch);
                         job.append(" ", 0.0, format(text_color));
                     }
-                    let label = indicator.format_value(value);
+                    if indicator.line_count() > 1
+                        && let Some(name) = names.get(line)
+                    {
+                        job.append(&format!("{name}: "), 0.0, format(text_color));
+                    }
+                    let label = indicator.format_plot_value(line, value);
                     job.append(
                         &label,
                         0.0,
@@ -519,12 +523,9 @@ impl IndicatorPane {
             return None;
         }
         let theme = painter.ctx().active_theme();
-        let galley = painter.layout_job(self.legend_job(
-            indicator,
-            theme.ui.text,
-            theme.chart.bg,
-            theme.text.ohlc,
-        ));
+        let mut job = self.legend_job(indicator, theme.ui.text, theme.chart.bg, theme.text.ohlc);
+        job.wrap.max_width = self.legend_width(rect, theme.spacing.sm);
+        let galley = painter.layout_job(job);
         let x = (rect.left() + theme.spacing.sm + galley.size().x + theme.spacing.md)
             .min(rect.right() - if self.pane_controls { 120.0 } else { 80.0 })
             .max(rect.left());
@@ -534,7 +535,7 @@ impl IndicatorPane {
                     x,
                     rect.top()
                         + self.legend_offset
-                        + (galley.size().y + theme.spacing.md - 20.0).max(0.0) / 2.0,
+                        + (theme.text.ohlc + theme.spacing.md - 20.0).max(0.0) / 2.0,
                 ),
                 egui::vec2(80.0, 20.0),
             )
@@ -554,12 +555,9 @@ impl IndicatorPane {
             return;
         }
         let theme = painter.ctx().active_theme();
-        let galley = painter.layout_job(self.legend_job(
-            indicator,
-            text_color,
-            theme.chart.bg,
-            theme.text.ohlc,
-        ));
+        let mut job = self.legend_job(indicator, text_color, theme.chart.bg, theme.text.ohlc);
+        job.wrap.max_width = self.legend_width(rect, theme.spacing.sm);
+        let galley = painter.layout_job(job);
         let pos = Pos2::new(
             rect.left() + theme.spacing.sm,
             rect.top() + self.legend_offset + theme.spacing.sm.min(rect.height() / 2.0),
@@ -575,6 +573,10 @@ impl IndicatorPane {
                 .gamma_multiply(self.legend_backdrop.clamp(0.0, 1.0)),
         );
         painter.galley(pos, galley, text_color);
+    }
+
+    fn legend_width(&self, rect: Rect, padding: f32) -> f32 {
+        (rect.width() - if self.pane_controls { 120.0 } else { 80.0 } - 2.0 * padding).max(1.0)
     }
 
     fn value_to_y(&self, value: f64, rect: Rect, y_min: f64, y_max: f64) -> f32 {
@@ -822,7 +824,12 @@ mod tests {
                 vec![IndicatorValue::Multiple(vec![1.0, 2.0, 3.0])]
             })
             .with_colors(colors.clone())
-            .with_line_count(3);
+            .with_line_count(3)
+            .with_line_names(vec![
+                "Ask levels".into(),
+                "Bid levels".into(),
+                "Total levels".into(),
+            ]);
             study.calculate(&[]);
             let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
             for opacity in [0.0, 0.35, 1.0] {
@@ -840,6 +847,9 @@ mod tests {
                     })
                     .unwrap();
                 let sections = &text.galley.job.sections;
+                for name in study.line_names() {
+                    assert!(text.galley.text().contains(&format!("{name}: ")));
+                }
                 let backdrop = shapes
                     .iter()
                     .find_map(|shape| match &shape.shape {
@@ -870,6 +880,121 @@ mod tests {
                 }
                 assert_eq!(sections[0].format.color, theme.ui.text);
             }
+        }
+    }
+
+    /// Four executions each second, two fills per order, give 4 executions/s and 2 orders/s.
+    /// A bar's 240 or 1200 executions must not enter either rate's automatic range.
+    #[test]
+    fn rates_keep_totals_in_the_legend_without_flattening_per_second_plots() {
+        use crate::data::OrderFlowKind;
+        use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+        use crate::studies::{ConfiguredStudy, OrderFlowStudy};
+        use chrono::{TimeDelta, TimeZone, Utc};
+        let start = Utc.with_ymd_and_hms(2026, 3, 2, 0, 0, 0).unwrap();
+        for (timeframe, duration) in [(Timeframe::Min1, 60), (Timeframe::Min5, 300)] {
+            for (kind, expected_rate, total_name, total) in [
+                (
+                    OrderFlowKind::TradeRate {
+                        volume: false,
+                        seconds: 60,
+                        instant: 5,
+                    },
+                    4.0,
+                    "Bar executions",
+                    duration * 4,
+                ),
+                (
+                    OrderFlowKind::AggressorRate {
+                        seconds: 60,
+                        instant: 5,
+                    },
+                    2.0,
+                    "Bar orders",
+                    duration * 2,
+                ),
+            ] {
+                let clock = BarClock::new(timeframe);
+                let mut study = ConfiguredStudy::new(Box::new(OrderFlowStudy::new(kind)));
+                study.set_bar_clock(&clock);
+                for at in 0..duration * 4 {
+                    study.order_flow_inputs()[0].push_trade(
+                        &clock,
+                        &Tick::new(
+                            start + TimeDelta::milliseconds(at * 250),
+                            100.0,
+                            1.0,
+                            Some(OrderSide::Buy),
+                        )
+                        .with_aggressor_order_id((at / 2) as u64),
+                    );
+                }
+                study.calculate(&[Bar::new(start, 100.0, 100.0, 100.0, 100.0, 0.0)]);
+                let pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
+                let (min, max) = pane.calculate_y_range(&study, &(0..1));
+                assert!(
+                    min < expected_rate && max > expected_rate && max < expected_rate * 2.0,
+                    "{kind:?}: {min}..{max}"
+                );
+                let job = pane.legend_job(&study, Color32::WHITE, Color32::BLACK, 12.0);
+                assert!(
+                    job.text.contains(&format!("{total_name}: {total} ")),
+                    "{}",
+                    job.text
+                );
+                assert!(
+                    job.text.contains(&format!(
+                        "Rolling 60s ({}): {expected_rate:.2}",
+                        if expected_rate == 4.0 {
+                            "executions/s"
+                        } else {
+                            "orders/s"
+                        }
+                    )),
+                    "{}",
+                    job.text
+                );
+                assert!(job.text.contains("Instant 5s"), "{}", job.text);
+            }
+        }
+    }
+
+    /// Wrapped legends keep every named output inside the plot and clear of the controls.
+    #[test]
+    fn multi_output_legend_wraps_inside_narrow_panes() {
+        let ctx = egui::Context::default();
+        let mut study = CustomIndicator::new("Size ranges", |_| {
+            vec![IndicatorValue::Multiple(vec![12.0, 34.0, 56.0])]
+        })
+        .with_line_count(3)
+        .with_line_names(vec![
+            "Delta [0, 2] lots".into(),
+            "Delta [3, 5] lots".into(),
+            "Delta [10, ∞] lots".into(),
+        ]);
+        study.calculate(&[]);
+        let pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
+        for width in [320.0, 800.0, 1440.0] {
+            let mut controls_left = 0.0;
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 150.0));
+                let controls = pane
+                    .legend_controls_rect(ui.painter(), rect, &study)
+                    .unwrap();
+                controls_left = controls.left();
+                pane.draw_legend(ui.painter(), rect, &study, Color32::WHITE);
+            });
+            output.textures_delta.clear();
+            for shape in &output.shapes {
+                if let egui::Shape::Text(text) = &shape.shape {
+                    assert!(text.pos.x + text.galley.size().x <= controls_left);
+                    if width == 320.0 {
+                        assert!(text.galley.rows.len() > 1);
+                    }
+                    assert!(!text.galley.elided);
+                }
+            }
+            output.drop_without_applying_deltas();
         }
     }
 }

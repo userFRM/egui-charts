@@ -199,6 +199,12 @@ pub trait Indicator: Send {
         }
     }
 
+    /// Whether output `line` appears in the legend. Defaults to plot visibility; a study can
+    /// retain a labelled readout for a quantity excluded from its plot and scale by default.
+    fn legend_visible(&self, line: usize) -> bool {
+        self.plot_style(line).visible
+    }
+
     /// Whether plot `line` shows its last value in a tag on the price scale while the chart
     /// shows study values. By default every plot of a study with up to four plots does and no
     /// plot of a study with more, whose values stay in the legend, so that the tags leave the
@@ -367,6 +373,13 @@ pub trait Indicator: Send {
     /// Format a value using the declared units and current precision override.
     fn format_value(&self, value: f64) -> String {
         self.value_format().format(value, self.precision())
+    }
+
+    /// Formats one output, including readouts whose units differ from the study's scale.
+    /// The default uses [`format_value`](Self::format_value).
+    fn format_plot_value(&self, line: usize, value: f64) -> String {
+        let _ = line;
+        self.format_value(value)
     }
 
     /// Decimal places for study readouts, or the format's default precision.

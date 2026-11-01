@@ -714,6 +714,7 @@ impl<'a> Legend<'a> {
                         );
                     }
                     let study_colors = study.colors();
+                    let names = study.line_names();
                     let precision = study.precision().or_else(|| {
                         (study.value_format() == crate::scales::StudyFormat::Price)
                             .then_some(precision)
@@ -721,7 +722,7 @@ impl<'a> Legend<'a> {
                     for index in (0..study.line_count()).filter(|index| {
                         self.show_indicator_values
                             && study.is_visible()
-                            && study.plot_style(*index).visible
+                            && study.legend_visible(*index)
                     }) {
                         let value = study.plot_value(index, self.bar_index).unwrap_or(f64::NAN);
                         let text = if value.is_finite() {
@@ -731,7 +732,7 @@ impl<'a> Legend<'a> {
                                     self.thousands_sep,
                                 )
                             } else {
-                                study.format_value(value)
+                                study.format_plot_value(index, value)
                             }
                         } else {
                             "∅".to_owned()
@@ -741,6 +742,11 @@ impl<'a> Legend<'a> {
                             .get(index)
                             .filter(|color| color.a() != 0)
                             .map_or(colors.text, |color| color.to_opaque());
+                        let text = if study.line_count() > 1 {
+                            format!("{}: {text}", names.get(index).map_or("", String::as_str))
+                        } else {
+                            text
+                        };
                         layout.text(text, theme.text.ohlc, color, bounds.width());
                     }
                 }
@@ -1436,6 +1442,64 @@ mod layout_tests {
                         )), "unprotected study controls");
                     }
                 }
+            }
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn overlay_values_keep_their_output_names_when_rows_wrap() {
+        use crate::chart::renderers::Legend;
+        use crate::studies::{CustomIndicator, Indicator, IndicatorValue};
+        let mut study = CustomIndicator::new("Levels", |_| {
+            vec![IndicatorValue::Multiple(vec![1.0, 2.0, 3.0])]
+        })
+        .with_overlay(true)
+        .with_line_count(3)
+        .with_line_names(vec![
+            "Ask levels".into(),
+            "Bid levels".into(),
+            "Total levels".into(),
+        ]);
+        study.calculate(&[]);
+        let studies: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
+        let ctx = Context::default();
+        let bar = Bar::new(Utc.timestamp_opt(0, 0).unwrap(), 1.0, 1.0, 1.0, 1.0, 0.0);
+        let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(2);
+        for width in [320.0, 800.0, 1440.0] {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let mut legend = Legend::new("SAMPLE", "1m", &bar);
+                legend.studies = &studies;
+                legend.instrument = Some(&instrument);
+                legend.show_indicator_inputs = false;
+                legend.show(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 400.0)),
+                );
+            });
+            output.textures_delta.clear();
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let Shape::Text(text) = &shape.shape {
+                        Some(text)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for (index, name) in ["Ask levels", "Bid levels", "Total levels"]
+                .iter()
+                .enumerate()
+            {
+                let expected = format!("{name}: {:.2}", (index + 1) as f64);
+                let text = texts
+                    .iter()
+                    .find(|text| text.galley.text() == expected)
+                    .expect(&expected);
+                assert!(text.pos.x + text.galley.size().x <= width);
             }
             output.drop_without_applying_deltas();
         }

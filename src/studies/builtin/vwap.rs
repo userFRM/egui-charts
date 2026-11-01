@@ -676,11 +676,10 @@ impl Indicator for VolumeWeightedAvgPrice {
 
     fn line_names(&self) -> Vec<String> {
         std::iter::once("VWAP".to_string())
-            .chain(
-                self.bands
-                    .iter()
-                    .flat_map(|k| [format!("Upper({k})"), format!("Lower({k})")]),
-            )
+            .chain(self.bands.iter().flat_map(|k| {
+                let unit = if self.percentage_bands { "%" } else { "σ" };
+                [format!("Upper {k}{unit}"), format!("Lower {k}{unit}")]
+            }))
             .collect()
     }
 }
@@ -690,6 +689,27 @@ mod tests {
     use super::*;
     use crate::studies::InputValue;
     use chrono::{NaiveDateTime, NaiveTime, TimeZone, Weekday};
+
+    #[test]
+    fn band_names_identify_direction_multiplier_and_unit() {
+        for (study, unit) in [
+            (
+                VolumeWeightedAvgPrice::new().with_std_dev_bands([1.0, 1.5, 3.0]),
+                "σ",
+            ),
+            (
+                VolumeWeightedAvgPrice::new().with_percentage_bands([1.0, 1.5, 3.0]),
+                "%",
+            ),
+        ] {
+            let names = study.line_names();
+            assert_eq!(names[0], "VWAP");
+            for (band, multiplier) in [1.0, 1.5, 3.0].iter().enumerate() {
+                assert_eq!(names[1 + band * 2], format!("Upper {multiplier}{unit}"));
+                assert_eq!(names[2 + band * 2], format!("Lower {multiplier}{unit}"));
+            }
+        }
+    }
 
     struct Case {
         name: &'static str,

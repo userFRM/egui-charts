@@ -924,6 +924,17 @@ impl Indicator for ConfiguredStudy {
                 |formatter| formatter.format(value),
             )
     }
+    fn format_plot_value(&self, line: usize, value: f64) -> String {
+        if self.formatter.is_some() || self.precision() != self.study.precision() {
+            self.format_value(value)
+        } else {
+            self.study.format_plot_value(line, value)
+        }
+    }
+    fn legend_visible(&self, line: usize) -> bool {
+        self.plot_style(line).visible
+            || (self.study.legend_visible(line) && !self.study.plot_style(line).visible)
+    }
     fn value_format(&self) -> crate::scales::StudyFormat {
         self.study.value_format()
     }
