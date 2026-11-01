@@ -1338,7 +1338,7 @@ impl Chart {
         let scale: &dyn crate::scales::HorizontalScale =
             host_scale.as_deref().unwrap_or(&time_scale);
         // The grid and the labels share one set of marks and the merged bars' mapping.
-        let (time_marks, time_points) = if time_grid || self.config.show_time_labels {
+        let (time_marks, time_points, axis_coords) = if time_grid || self.config.show_time_labels {
             // Resolved once: a fixed-offset zone allocates on every clone.
             let calendar = self.calendar_timezone();
             renderers::time_axis_marks(
@@ -1357,7 +1357,7 @@ impl Chart {
                 },
             )
         } else {
-            Default::default()
+            (Vec::new(), Vec::new(), time_coords)
         };
 
         if self.config.show_grid && self.config.show_vertical_grid {
@@ -1370,7 +1370,7 @@ impl Chart {
                     &RenderContext::new(&painter, chart_rect),
                     &time_marks,
                     &time_points,
-                    &time_coords,
+                    &axis_coords,
                     self.config
                         .vertical_grid_color
                         .unwrap_or(self.config.grid_color),
@@ -3265,7 +3265,7 @@ impl Chart {
                 &chart_ctx,
                 time_marks,
                 &time_points,
-                &time_coords,
+                &axis_coords,
                 &colors,
                 time_tags,
                 &self.chart_options.time_scale,
@@ -4865,29 +4865,40 @@ mod tests {
         }
     }
 
-    /// The whitespace after the last bar of a daily series is labelled only on weekdays the
-    /// series has bars on: after weekday bars ending on Thursday 30 or Friday 31 January 2025,
-    /// February is labelled on Monday 3, while a series with weekend bars labels Saturday 1.
+    /// The whitespace on either side of a daily series is labelled only on weekdays the series
+    /// has bars on. After weekday bars ending on Thursday 30 or Friday 31 January 2025, February
+    /// is labelled on Monday 3, while a series with weekend bars labels Saturday 1. Before
+    /// weekday bars starting on Monday 2 December 2024, December is labelled on that Monday and
+    /// the whitespace on the weekdays before it, while a series with weekend bars labels
+    /// Sunday 1.
     #[test]
     fn whitespace_time_labels_skip_days_without_bars() {
         use crate::model::{Bar, BarData};
         use crate::scales::CustomTimeFormatter;
         use chrono::{Datelike, Duration, TimeZone, Utc};
         use std::sync::Arc;
-        // (last day of January 2025, weekdays only, label of the February mark)
-        for (last_day, weekdays, february) in [
-            (30, true, "Mon 03"),
-            (31, true, "Mon 03"),
-            (30, false, "Sat 01"),
+        // (last day of January 2025, weekdays only, logical index at the right edge of the
+        // view or None for six slots past the last bar, a label expected in view)
+        for (last_day, weekdays, right, expected) in [
+            (30, true, None, "Mon 03"),
+            (31, true, None, "Mon 03"),
+            (30, false, None, "Sat 01"),
+            // Partly before the first bar: bar 0 at the right edge.
+            (30, true, Some(0.0), "Mon 25"),
+            (30, false, Some(0.0), "Sun 01"),
+            // Wholly before the first bar.
+            (30, true, Some(-3.0), "Mon 25"),
+            (30, false, Some(-3.0), "Mon 25"),
         ] {
             let start = Utc.with_ymd_and_hms(2024, 12, 2, 0, 0, 0).unwrap();
             let last = Utc.with_ymd_and_hms(2025, 1, last_day, 0, 0, 0).unwrap();
-            let bars = (0..)
+            let bars: Vec<_> = (0..)
                 .map(|day| start + Duration::days(day))
                 .take_while(|time| *time <= last)
                 .filter(|time| !weekdays || time.weekday().number_from_monday() <= 5)
                 .map(|time| Bar::new(time, 100.0, 110.0, 100.0, 110.0, 1.0))
                 .collect();
+            let base = (bars.len() - 1) as f32;
             let ctx = egui::Context::default();
             let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
             chart.config.show_volume = false;
@@ -4895,10 +4906,10 @@ mod tests {
                 time.format("%a %d").to_string()
             }))));
             frame(&ctx, &mut chart, 0.0, vec![]);
-            // 80 points per bar and six bars of whitespace after the last one.
+            // 80 points per bar.
             let scale = chart.state.time_scale_mut();
             scale.set_bar_spacing(80.0);
-            scale.set_right_offset(6.0);
+            scale.set_right_offset(right.map_or(6.0, |right| right - base));
             let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
             let plot = chart.get_rendered_price_rect();
             let labels: Vec<_> = painted
@@ -4912,14 +4923,12 @@ mod tests {
                     _ => None,
                 })
                 .collect();
+            let row = format!("{last_day} January, {right:?}: {labels:?}");
             let weekend = labels
                 .iter()
                 .any(|label| label.starts_with("Sat") || label.starts_with("Sun"));
-            assert_eq!(weekend, !weekdays, "{last_day} January: {labels:?}");
-            assert!(
-                labels.iter().any(|label| label == february),
-                "{last_day} January: {labels:?}"
-            );
+            assert!(!(weekdays && weekend), "{row}");
+            assert!(labels.iter().any(|label| label == expected), "{row}");
         }
     }
 
@@ -5354,8 +5363,8 @@ mod tests {
     }
 
     /// With fewer than two bars in view, on either side of the bars, time labels keep the daily
-    /// precision of the bars, and the legend, the price axis at its fitted range, the grid and
-    /// the scale settings button stay; after the last bar the whitespace keeps its time labels.
+    /// precision of the bars, and the legend, the price axis at its fitted range, the grid, the
+    /// time axis and the scale settings button stay.
     #[test]
     fn views_past_the_bars_keep_the_chart_readable() {
         use crate::model::{LineStyle, LogicalRange};
@@ -5370,12 +5379,12 @@ mod tests {
         let fitted = chart.get_chart_mapping().price.range();
         // The first bar opens at 2023-11-14 22:13:20 UTC, and the bars are a day apart.
         let first = chart.state.data().bars[0].time;
-        // (left, right, bars in view, time axis labelled in view)
-        for (row, (left, right, in_view, labelled)) in [
-            (40.5, 80.5, 42, true),
-            (-30.25, -0.25, 1, false),
-            (-60.0, -20.0, 0, false),
-            (110.0, 150.0, 0, true),
+        // (left, right, bars in view)
+        for (row, (left, right, in_view)) in [
+            (40.5, 80.5, 42),
+            (-30.25, -0.25, 1),
+            (-60.0, -20.0, 0),
+            (110.0, 150.0, 0),
         ]
         .into_iter()
         .enumerate()
@@ -5415,15 +5424,13 @@ mod tests {
             );
             assert_eq!(chart.get_chart_mapping().price.range(), fitted, "{view}");
             assert!(grid(false), "price grid: {view}");
-            if labelled {
-                assert!(
-                    texts
-                        .iter()
-                        .any(|(pos, _)| pos.x < plot.right() && pos.y > plot.bottom()),
-                    "time axis: {view}"
-                );
-                assert!(grid(true), "time grid: {view}");
-            }
+            assert!(
+                texts
+                    .iter()
+                    .any(|(pos, _)| pos.x < plot.right() && pos.y > plot.bottom()),
+                "time axis: {view}"
+            );
+            assert!(grid(true), "time grid: {view}");
             #[cfg(feature = "icons")]
             {
                 let corner = Pos2::new(

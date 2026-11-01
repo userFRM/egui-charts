@@ -196,12 +196,17 @@ fn min_time_label_spacing(options: &TimeScaleOptions) -> f32 {
     }
 }
 
-/// The tick marks of the time axis from `scale`, and the keys they are placed by: the bars in
-/// view with their logical indices, extended by keys that `time_at` maps from the full chart
-/// history, up to ten to the left but not before the first bar, and into the whitespace past
-/// the right edge. With no bar in view the keys start at the left edge of the view. Past the
-/// last bar the keys skip the weekdays on which the series has no bars (`closed_weekdays`), so
-/// a series of weekday bars labels no weekend there.
+type TimeAxisPoints = Vec<(chrono::DateTime<chrono::Utc>, usize)>;
+
+/// The tick marks of the time axis from `scale`, the keys they are placed by and the mapping
+/// that places the keys. The keys are the bars in view, extended by keys that `time_at` maps
+/// from the full chart history: up to ten bars to the left, and into the whitespace two slots
+/// past either edge of the view. With no bar in view the keys start at the left edge of the
+/// view. Next to the bars the keys skip the weekdays on which the series has no bars
+/// (`closed_weekdays`), so a series of weekday bars labels no weekend there.
+///
+/// Keys carry unsigned indices, so when they reach before the first bar every index, and the
+/// bar indices of the returned mapping, are shifted by the same number of slots.
 /// [`render_time_labels`] paints them.
 pub(crate) fn time_axis_marks(
     context: &RenderContext,
@@ -210,39 +215,58 @@ pub(crate) fn time_axis_marks(
     scale: &dyn HorizontalScale,
     options: &TimeScaleOptions,
     time_at: impl Fn(f64) -> Option<chrono::DateTime<chrono::Utc>>,
-) -> (Vec<TickMark>, Vec<(chrono::DateTime<chrono::Utc>, usize)>) {
-    // The logical index at the right edge of the plot.
+) -> (Vec<TickMark>, TimeAxisPoints, ChartMapping) {
+    // The logical indices at the right and left edges of the plot; the left one is negative
+    // when the view reaches before the first bar.
     let right = coords.base_idx as f64 + coords.right_offset;
+    let left = (right + 1.0 - f64::from(context.rect.width() / coords.bar_spacing)).floor();
     let first = if visible_data.is_empty() {
-        // The left edge of the view; keys never go left of the first bar.
-        (right + 1.0 - f64::from(context.rect.width() / coords.bar_spacing))
-            .floor()
-            .max(0.0) as usize
+        left.max(0.0) as usize
     } else {
         coords.start_idx
     };
     let next = first.saturating_add(visible_data.len());
     // Two keys past the right edge, and at least one past the bars in view.
     let end = ((right.ceil() + 2.0).max(0.0) as usize).max(next.saturating_add(1));
+    // Ten keys left of the bars in view keep the marks steady while panning. With whitespace
+    // before the first bar in view, the keys reach two slots past the left edge instead, at
+    // most four slots per point of plot width before the first bar so that a host's tiny bar
+    // spacing cannot build millions of keys.
+    let lead = if left < 0.0 {
+        (left - 2.0).max(-4.0 * f64::from(context.rect.width()).ceil()) as i64
+    } else {
+        first.saturating_sub(10) as i64
+    };
+    let shift = lead.min(0).unsigned_abs() as usize;
 
-    // Ten keys left of the view keep its marks steady while panning. Extrapolation stops where
-    // chrono's range ends, so a bar near it cannot panic.
-    let mut bars: Vec<_> = (first.saturating_sub(10)..first)
+    // Extrapolation stops where chrono's range ends, so a bar near it cannot panic.
+    let mut bars: Vec<_> = (lead..first as i64)
         .rev()
-        .map_while(|index| Some((time_at(index as f64)?, index)))
+        .map_while(|index| Some((time_at(index as f64)?, (index + shift as i64) as usize)))
         .collect();
     bars.reverse();
     bars.extend(
         visible_data
             .iter()
             .enumerate()
-            .map(|(i, bar)| (bar.time, first + i)),
+            .map(|(i, bar)| (bar.time, first + shift + i)),
     );
-    bars.extend((next..=end).map_while(|index| Some((time_at(index as f64)?, index))));
-    // Past the last bar, a daily series gets no keys on the weekdays it has no bars.
-    let closed = closed_weekdays(coords.base_idx, &time_at);
+    bars.extend((next..=end).map_while(|index| Some((time_at(index as f64)?, index + shift))));
+    // Next to the bars, a daily series gets no keys on the weekdays it has no bars.
+    let last = coords.base_idx;
+    let after = closed_weekdays(last.saturating_sub(15)..=last, last as f64 + 1.0, &time_at);
+    let before = if shift > 0 {
+        closed_weekdays(0..=last.min(15), -1.0, &time_at)
+    } else {
+        [false; 7]
+    };
     bars.retain(|(time, index)| {
-        *index <= coords.base_idx || !closed[time.weekday().num_days_from_monday() as usize]
+        let day = time.weekday().num_days_from_monday() as usize;
+        if *index < shift {
+            !before[day]
+        } else {
+            *index <= last + shift || !after[day]
+        }
     });
     let layout = TickMarkLayout {
         width: context.rect.width(),
@@ -250,32 +274,43 @@ pub(crate) fn time_axis_marks(
         min_spacing: min_time_label_spacing(options),
         uniform_distribution: options.uniform_distribution,
     };
-    (scale.tick_marks(&bars, &layout), bars)
+    let mapping = ChartMapping {
+        start_idx: coords.start_idx + shift,
+        base_idx: coords.base_idx + shift,
+        ..*coords
+    };
+    (scale.tick_marks(&bars, &layout), bars, mapping)
 }
 
-/// The weekdays, Monday first, on which none of the 16 keys up to the last bar, `last`, falls,
-/// when those keys span two weeks or more and the next key follows within a day: the days a
-/// daily series has no bars, such as the weekend of a market open on weekdays. A weekday counts
-/// as closed only when both of its dates in those two weeks lack a bar, so one holiday closes
-/// nothing. Weekly and longer intervals, merged daily bars and series shorter than two weeks
-/// close no day. Weekdays are read in UTC, which is consistent because the keys of a daily
-/// series share one time of day.
+/// The weekdays, Monday first, on which none of the keys of `bars` falls, when those keys
+/// span two weeks or more and the key at `outside`, the slot next to the nearer end of
+/// `bars`, lies within a day of it: the days a daily series has no bars, such as the weekend
+/// of a market open on weekdays. `bars` are the 16 bars at one end of the series. A weekday
+/// counts as closed only when both of its dates in those two weeks lack a bar, so one holiday
+/// closes nothing. Weekly and longer intervals, merged daily bars and series shorter than two
+/// weeks close no day. Weekdays are read in UTC, which is consistent because the keys of a
+/// daily series share one time of day.
 fn closed_weekdays(
-    last: usize,
+    bars: std::ops::RangeInclusive<usize>,
+    outside: f64,
     time_at: impl Fn(f64) -> Option<chrono::DateTime<chrono::Utc>>,
 ) -> [bool; 7] {
-    let from = last.saturating_sub(15);
-    let Some((_, end)) = time_at(from as f64)
-        .zip(time_at(last as f64))
-        .filter(|(first, end)| *end - *first >= chrono::Duration::days(13))
+    let Some((first, last)) = time_at(*bars.start() as f64)
+        .zip(time_at(*bars.end() as f64))
+        .filter(|(first, last)| *last - *first >= chrono::Duration::days(13))
     else {
         return [false; 7];
     };
-    if time_at(last as f64 + 1.0).is_none_or(|next| next - end > chrono::Duration::days(1)) {
+    let near = if outside < *bars.start() as f64 {
+        first
+    } else {
+        last
+    };
+    if time_at(outside).is_none_or(|time| (time - near).abs() > chrono::Duration::days(1)) {
         return [false; 7];
     }
     let mut closed = [true; 7];
-    for time in (from..=last).filter_map(|index| time_at(index as f64)) {
+    for time in bars.filter_map(|index| time_at(index as f64)) {
         closed[time.weekday().num_days_from_monday() as usize] = false;
     }
     closed
@@ -372,9 +407,10 @@ pub(crate) fn render_time_grid(
     crate::chart::rendering::grid::render_grid_lines(context.painter, lines, color, style);
 }
 
-/// Paints the time labels of `marks`, placed by the keys of `points` as [`time_axis_marks`]
-/// returns them, below `context.rect` into `slot`, spaced to prevent overlap, with the label
-/// spacing, tick marks, bold labels and border of the time scale `options`.
+/// Paints the time labels of `marks`, placed by the keys of `points` with the mapping
+/// `coords`, as [`time_axis_marks`] returns both, below `context.rect` into `slot`, spaced to
+/// prevent overlap, with the label spacing, tick marks, bold labels and border of the time
+/// scale `options`.
 pub fn render_time_labels(
     context: &RenderContext,
     marks: Vec<TickMark>,
