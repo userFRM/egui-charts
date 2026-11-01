@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::market::Market;
 use super::orders::Orders;
+use super::replay::capture_book;
 use crate::sampledata::{
     DemoSymbol, SAMPLE_LOGO, dividend_date, dividend_factor, latest_open_end, session_bars,
     us_equity_hours, us_equity_session, us_equity_zone,
@@ -55,11 +56,14 @@ struct Simulation {
     /// The ex-date and price factor stay fixed for the life of the feed.
     dividend: Option<(DateTime<Utc>, f64)>,
     subscription: Option<Subscription>,
+    /// Each subscription has its own book; one idle stream per symbol preserves reload history.
+    streams: Vec<LiveFeed>,
     signals: Vec<Events<SignalEvent>>,
     options: Vec<(OptionsVolumeQuery, OptionsVolumeSink)>,
     metrics: Vec<MetricSubscription>,
     /// The order book of the subscription, around the last price it was shown.
     market: Option<Market>,
+    capture: super::replay::Capture,
     /// The individual orders behind `market`, on [`ORDER_LEVEL_SYMBOL`] only.
     orders: Option<Orders>,
 }
@@ -91,10 +95,12 @@ impl LiveFeed {
             dividend: DemoSymbol::has_hours(symbol)
                 .then(|| (dividend_date(symbol, now), dividend_factor(symbol))),
             subscription: None,
+            streams: Vec::new(),
             signals: Vec::new(),
             options: Vec::new(),
             metrics: Vec::new(),
             market: None,
+            capture: super::replay::Capture::new(),
             orders: None,
         };
         while sim.next_trade <= now {
@@ -128,10 +134,12 @@ impl LiveFeed {
             adjusted: sim.adjusted,
             dividend: sim.dividend,
             subscription: None,
+            streams: Vec::new(),
             signals: Vec::new(),
             options: Vec::new(),
             metrics: Vec::new(),
             market: None,
+            capture: super::replay::Capture::new(),
             orders: None,
         }))
     }
@@ -148,7 +156,14 @@ impl LiveFeed {
             let continuous = sim.continuous;
             let adjusted = sim.adjusted;
             let options = std::mem::take(&mut sim.options);
-            *sim = Self::new(symbol, sim.now)
+            let source = sim
+                .streams
+                .iter()
+                .find(|feed| feed.state().symbol == symbol)
+                .map(LiveFeed::fork)
+                .unwrap_or_else(|| Self::new(symbol, sim.now));
+            let streams = std::mem::take(&mut sim.streams);
+            *sim = source
                 .0
                 .into_inner()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -156,6 +171,7 @@ impl LiveFeed {
             sim.continuous = continuous;
             sim.adjusted = adjusted;
             sim.options = options;
+            sim.streams = streams;
             for (query, sink) in &sim.options {
                 sink.push(sim.options_volume(query));
             }
@@ -166,6 +182,11 @@ impl LiveFeed {
         let mut sim = self.state();
         sim.continuous = session == SessionType::Full24x7;
         sim.adjusted = adjusted;
+        for feed in &sim.streams {
+            if feed.state().subscription.is_none() {
+                feed.set_view(session, adjusted);
+            }
+        }
     }
 
     pub(super) fn snapshot(
@@ -212,6 +233,14 @@ impl LiveFeed {
         bars
     }
 
+    pub(super) fn recording(&self) -> Vec<u8> {
+        let sim = self.state();
+        sim.streams
+            .iter()
+            .find(|feed| feed.state().symbol == sim.symbol)
+            .map_or_else(|| sim.capture.bytes(), Self::recording)
+    }
+
     /// The same synthetic metric history supplied through the feed contract.
     pub(super) fn metric_snapshot(&self) -> Vec<MetricPoint> {
         metric_points(&self.state())
@@ -246,7 +275,7 @@ impl LiveFeed {
     /// for the time and sales panel. A new symbol starts with its retained executions.
     pub(super) fn drain_tape(&self) -> Vec<Tick> {
         let mut sim = self.state();
-        let Some(extended_hours) = sim.subscription.as_ref().map(|sub| sub.extended_hours) else {
+        let Some(extended_hours) = sim.extended_hours() else {
             return Vec::new();
         };
         let start = sim
@@ -265,7 +294,7 @@ impl LiveFeed {
     /// The last displayed trade and previous session close, on the chart's session and price basis.
     pub(super) fn day_change(&self) -> Option<(f64, f64)> {
         let sim = self.state();
-        let extended = sim.subscription.as_ref()?.extended_hours;
+        let extended = sim.extended_hours()?;
         let latest =
             sim.trades.back().map_or(sim.now, |trade| trade.ts) + TimeDelta::nanoseconds(1);
         let (time, last) = sim.newest_shown(latest, extended)?;
@@ -373,6 +402,16 @@ impl LiveFeed {
         if sim.paused {
             return std::time::Duration::from_secs(1);
         }
+        sim.streams.retain(|feed| {
+            feed.state()
+                .subscription
+                .as_ref()
+                .is_none_or(|sub| sub.sink.is_active())
+        });
+        let mut to_stream = std::time::Duration::MAX;
+        for feed in &sim.streams {
+            to_stream = to_stream.min(feed.advance(now));
+        }
         let metric_changed = sim.now.timestamp().div_euclid(300) != now.timestamp().div_euclid(300);
         if metric_changed {
             sim.metrics.retain(|sub| sub.sink.is_active());
@@ -410,7 +449,14 @@ impl LiveFeed {
             {
                 sub.sink.advance_time(now);
                 if let Some(quote) = sim.quote(now) {
-                    sub.sink.push_quote(quote);
+                    let sink = sub.sink.clone();
+                    let symbol = sim.symbol.clone();
+                    sim.capture.push(
+                        &symbol,
+                        now,
+                        egui_charts::data::MarketEvent::Quote(quote.clone()),
+                    );
+                    sink.push_quote(quote);
                 }
             }
         }
@@ -418,7 +464,7 @@ impl LiveFeed {
         let to_second = std::time::Duration::from_millis(
             (1000 - now.timestamp_millis().rem_euclid(1000)) as u64,
         );
-        to_trade.min(to_second)
+        to_trade.min(to_second).min(to_stream)
     }
 }
 
@@ -523,6 +569,20 @@ impl Quotes for DemoQuotes {
 }
 
 impl Simulation {
+    /// The displayed symbol's session, also when this is the host rather than its stream.
+    fn extended_hours(&self) -> Option<bool> {
+        self.subscription
+            .as_ref()
+            .map(|sub| sub.extended_hours)
+            .or_else(|| {
+                self.streams.iter().find_map(|feed| {
+                    let sim = feed.state();
+                    let sub = sim.subscription.as_ref()?;
+                    (sub.symbol == self.symbol).then_some(sub.extended_hours)
+                })
+            })
+    }
+
     fn options_volume(&self, query: &OptionsVolumeQuery) -> Vec<OptionsVolume> {
         if query.symbol != self.symbol || query.expiries.is_empty() {
             return Vec::new();
@@ -640,7 +700,16 @@ impl Simulation {
 
     /// The best bid and ask of the subscription's book.
     fn quote(&self, ts: DateTime<Utc>) -> Option<Level1Quote> {
-        Some(self.market.as_ref()?.quote(ts))
+        self.market
+            .as_ref()
+            .map(|market| market.quote(ts))
+            .or_else(|| {
+                self.streams.iter().find_map(|feed| {
+                    let sim = feed.state();
+                    let market = sim.market.as_ref()?;
+                    (sim.symbol == self.symbol).then(|| market.quote(ts))
+                })
+            })
     }
 
     /// The price in ticks a trade at the current price would show at.
@@ -677,6 +746,11 @@ impl Simulation {
             && let Some(shown) = self.shown_trade(&trade, sub.extended_hours)
         {
             let price = (shown.price / self.tick_size).round() as i64;
+            self.capture.push(
+                &self.symbol,
+                shown.ts,
+                egui_charts::data::MarketEvent::Trade(shown.clone()),
+            );
             sub.sink.push_tick(shown);
             // A subscription made while no trade was shown gets its book with the first one.
             let market = self.market.get_or_insert_with(|| {
@@ -684,21 +758,63 @@ impl Simulation {
                 self.orders =
                     order_level(&self.symbol, &market, trade.ts, self.tick_size, self.random);
                 push_snapshot(sub, &market, self.orders.as_ref(), trade.ts);
+                capture_book(
+                    &mut self.capture,
+                    &self.symbol,
+                    &market,
+                    self.orders.as_ref(),
+                    trade.ts,
+                );
                 market
             });
             let (sequence, delta) = market.trade(trade.ts, price, side, size);
             match &mut self.orders {
                 Some(orders) => orders.apply(&sub.sink, delta, Some((side, price))),
-                None => sub.sink.push_depth_delta(sequence, delta),
+                None => {
+                    self.capture.push(
+                        &self.symbol,
+                        trade.ts,
+                        egui_charts::data::MarketEvent::DepthDelta {
+                            sequence,
+                            book: delta.clone(),
+                        },
+                    );
+                    sub.sink.push_depth_delta(sequence, delta);
+                }
             }
             for _ in 0..CHURN_PER_TRADE {
                 let (sequence, delta) = market.churn(trade.ts);
                 match &mut self.orders {
                     Some(orders) => orders.apply(&sub.sink, delta, None),
-                    None => sub.sink.push_depth_delta(sequence, delta),
+                    None => {
+                        self.capture.push(
+                            &self.symbol,
+                            trade.ts,
+                            egui_charts::data::MarketEvent::DepthDelta {
+                                sequence,
+                                book: delta.clone(),
+                            },
+                        );
+                        sub.sink.push_depth_delta(sequence, delta);
+                    }
                 }
             }
-            sub.sink.push_quote(market.quote(trade.ts));
+            if let Some(orders) = &mut self.orders {
+                for (sequence, event) in orders.take_recorded() {
+                    self.capture.push(
+                        &self.symbol,
+                        trade.ts,
+                        egui_charts::data::MarketEvent::Order { sequence, event },
+                    );
+                }
+            }
+            let quote = market.quote(trade.ts);
+            self.capture.push(
+                &self.symbol,
+                trade.ts,
+                egui_charts::data::MarketEvent::Quote(quote.clone()),
+            );
+            sub.sink.push_quote(quote);
         }
         if trade.ts < self.retain_from {
             match self.history.last_mut() {
@@ -933,6 +1049,21 @@ impl Datafeed for LiveFeed {
 
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
         let sim = self.state();
+        if let Some(feed) = sim
+            .streams
+            .iter()
+            .find(|feed| feed.state().symbol == request.symbol)
+        {
+            feed.history(request, reply);
+            return;
+        }
+        if request.symbol != sim.symbol {
+            drop(sim);
+            let feed = self.fork();
+            feed.set_symbol(&request.symbol);
+            feed.history(request, reply);
+            return;
+        }
         // The retained executions are replayed through the subscription, including its partial
         // final count bar. OHLC history cannot reconstruct a count or a smaller time interval.
         let bars = if request.timeframe.duration_ms() >= 60_000
@@ -953,43 +1084,109 @@ impl Datafeed for LiveFeed {
     }
 
     fn subscribe(&self, subscription: Subscription) {
-        let mut sim = self.state();
+        let feed = {
+            let sim = self.state();
+            sim.streams
+                .iter()
+                .find(|feed| feed.state().symbol == subscription.symbol)
+                .map(LiveFeed::fork)
+        };
+        let feed = feed.unwrap_or_else(|| self.fork());
+        feed.set_symbol(&subscription.symbol);
+        let (session, adjusted) = self.view(subscription.extended_hours);
+        feed.set_view(session, adjusted);
+        feed.set_paused(false);
+        let mut sim = feed.state();
         subscription.sink.set_server_time(sim.now);
-        for trade in &sim.trades {
-            if let Some(trade) = sim.shown_trade(trade, subscription.extended_hours) {
-                subscription.sink.push_tick(trade);
-            }
+        sim.capture = super::replay::Capture::new();
+        let trades: Vec<_> = sim
+            .trades
+            .iter()
+            .filter_map(|trade| sim.shown_trade(trade, subscription.extended_hours))
+            .collect();
+        for trade in trades {
+            let symbol = sim.symbol.clone();
+            sim.capture.push(
+                &symbol,
+                trade.ts,
+                egui_charts::data::MarketEvent::Trade(trade.clone()),
+            );
+            subscription.sink.push_tick(trade);
         }
-        sim.market = None;
-        sim.orders = None;
         if let Some(last) = sim.shown_ticks(sim.now, subscription.extended_hours) {
             let market = Market::new(&sim.symbol, sim.tick_size, last, sim.random);
             sim.orders = order_level(&sim.symbol, &market, sim.now, sim.tick_size, sim.random);
             push_snapshot(&subscription, &market, sim.orders.as_ref(), sim.now);
             subscription.sink.advance_time(sim.now);
             subscription.sink.push_quote(market.quote(sim.now));
+            let symbol = sim.symbol.clone();
+            let now = sim.now;
+            let orders = sim.orders.as_ref().map(Orders::snapshot);
+            let event = match orders {
+                Some((sequence, orders)) => {
+                    egui_charts::data::MarketEvent::OrderSnapshot { sequence, orders }
+                }
+                None => {
+                    let (sequence, book) = market.snapshot(now);
+                    egui_charts::data::MarketEvent::DepthSnapshot { sequence, book }
+                }
+            };
+            sim.capture.push(&symbol, now, event);
+            sim.capture.push(
+                &symbol,
+                now,
+                egui_charts::data::MarketEvent::Quote(market.quote(now)),
+            );
             sim.market = Some(market);
         }
         subscription.sink.set_status(FeedStatus::Live);
         sim.subscription = Some(subscription);
+        drop(sim);
+        let mut sim = self.state();
+        sim.streams.retain(|other| {
+            let other = other.state();
+            other.subscription.is_some() || other.symbol != feed.state().symbol
+        });
+        sim.streams.push(feed);
     }
 
     fn unsubscribe(&self, id: SubscriptionId) {
         let mut sim = self.state();
         sim.metrics.retain(|sub| sub.id != id);
-        if sim.subscription.as_ref().is_some_and(|sub| sub.id == id) {
-            sim.subscription = None;
-            sim.market = None;
-            sim.orders = None;
+        let Some(index) = sim.streams.iter().position(|feed| {
+            feed.state()
+                .subscription
+                .as_ref()
+                .is_some_and(|sub| sub.id == id)
+        }) else {
+            return;
+        };
+        let feed = sim.streams.remove(index);
+        let mut source = feed.state();
+        if sim
+            .streams
+            .iter()
+            .any(|other| other.state().symbol == source.symbol)
+        {
+            return;
         }
+        source.subscription = None;
+        source.market = None;
+        source.orders = None;
+        source.continuous = sim.continuous;
+        source.adjusted = sim.adjusted;
+        drop(source);
+        sim.streams.push(feed);
     }
 
     fn request_depth_snapshot(&self, id: SubscriptionId) {
-        let sim = self.state();
-        if let (Some(sub), Some(market)) = (&sim.subscription, &sim.market)
-            && sub.id == id
-        {
-            push_snapshot(sub, market, sim.orders.as_ref(), sim.now);
+        for feed in &self.state().streams {
+            let sim = feed.state();
+            if let (Some(sub), Some(market)) = (&sim.subscription, &sim.market)
+                && sub.id == id
+            {
+                push_snapshot(sub, market, sim.orders.as_ref(), sim.now);
+            }
         }
     }
 
@@ -1054,6 +1251,162 @@ mod tests {
     use egui_charts::ChartBuilder;
     use egui_charts::widget::SeriesId;
     use std::sync::Arc;
+
+    #[test]
+    fn recordings_follow_symbols_and_survive_replay_pause() {
+        let now = "2026-10-23T14:59:59Z".parse().unwrap();
+        let feed = Arc::new(LiveFeed::new("SAMPLE", now));
+        let ctx = egui::Context::default();
+        let symbols = ["SAMPLE", ORDER_LEVEL_SYMBOL];
+        let mut charts = Vec::new();
+        for symbol in symbols {
+            let mut chart = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol(symbol)
+                .with_initial_bars(100)
+                .build();
+            for _ in 0..4 {
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    chart.show(ui);
+                })
+                .drop_without_applying_deltas();
+            }
+            charts.push(chart);
+        }
+        feed.advance(now + TimeDelta::seconds(2));
+        feed.set_paused(true);
+        for (symbol, mut chart) in symbols.into_iter().zip(charts) {
+            feed.set_symbol(symbol);
+            let bytes = feed.recording();
+            let mut reader = egui_charts::data::RecordingReader::new(bytes.as_slice()).unwrap();
+            let mut newest = None;
+            while let Some(event) = reader.read().unwrap() {
+                assert_eq!(event.symbol, symbol);
+                newest = Some(event.time);
+            }
+            assert!(
+                newest.is_some_and(|time| time > now),
+                "{symbol} must include recorded live updates"
+            );
+            chart.set_replay_time(Some(now));
+            assert_eq!(
+                feed.recording(),
+                bytes,
+                "{symbol} must retain its recording when replay unsubscribes"
+            );
+        }
+    }
+
+    /// Resolving and subscribing another symbol must leave the existing histories and streams
+    /// on their own symbols and sessions, including reloads across an hour or the regular close.
+    #[test]
+    fn subscriptions_keep_their_symbols_after_a_third_symbol_resolves() {
+        for (now, session) in [
+            ("2026-10-23T14:59:59Z", SessionType::Full24x7),
+            ("2026-10-23T19:59:59Z", SessionType::ETH),
+        ] {
+            let now = now.parse().unwrap();
+            let feed = Arc::new(LiveFeed::new("SAMPLE", now));
+            feed.set_view(session, false);
+            let ctx = egui::Context::default();
+            let frame = |chart: &mut egui_charts::Chart| {
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    chart.show(ui);
+                })
+                .drop_without_applying_deltas();
+            };
+            let mut charts = Vec::new();
+            let mut references = Vec::new();
+            for (symbol, extended) in [
+                ("SAMPLE", false),
+                ("EURUSD", false),
+                (ORDER_LEVEL_SYMBOL, false),
+                ("SAMPLE", true),
+            ] {
+                let mut chart = ChartBuilder::new()
+                    .with_feed(feed.clone())
+                    .with_symbol(symbol)
+                    .with_initial_bars(100)
+                    .build();
+                chart.set_extended_hours(extended);
+                for _ in 0..4 {
+                    frame(&mut chart);
+                }
+                charts.push(chart);
+                let reference = LiveFeed::new(symbol, now);
+                reference.set_view(session, false);
+                references.push(reference);
+            }
+            for seconds in [2, 4, 6, 8, 10, 12] {
+                if seconds == 12 {
+                    charts.pop();
+                    references.pop();
+                } else if seconds >= 4 {
+                    let chart = &mut charts[(seconds / 2 - 2) as usize];
+                    chart.reload_feed();
+                    for _ in 0..4 {
+                        frame(chart);
+                    }
+                }
+                let at = now + TimeDelta::seconds(seconds);
+                feed.advance(at);
+                for (chart, reference) in charts.iter_mut().zip(&references) {
+                    reference.advance(at);
+                    frame(chart);
+                    let expected = reference.snapshot(
+                        chart.timeframe().unwrap(),
+                        chart.bar_clock(),
+                        chart.extended_hours(),
+                    );
+                    let actual = chart.bars(SeriesId::MAIN);
+                    assert!(!actual.is_empty(), "{}", chart.symbol());
+                    assert_eq!(
+                        actual,
+                        &expected[expected.len() - actual.len()..],
+                        "{} at {at}",
+                        chart.symbol()
+                    );
+                    let state = chart.feed_state(SeriesId::MAIN).unwrap();
+                    assert_eq!(state.rejected_depth, 0, "{}", chart.symbol());
+                    assert_eq!(
+                        chart.order_queue(SeriesId::MAIN).is_some(),
+                        chart.symbol() == ORDER_LEVEL_SYMBOL
+                    );
+                }
+            }
+            drop(charts);
+            for seconds in [14, 16, 18] {
+                let at = now + TimeDelta::seconds(seconds);
+                feed.advance(at);
+                for reference in &references {
+                    reference.advance(at);
+                }
+            }
+            for reference in references {
+                let mut chart = ChartBuilder::new()
+                    .with_feed(feed.clone())
+                    .with_symbol(reference.instrument().symbol)
+                    .with_initial_bars(100)
+                    .build();
+                for _ in 0..4 {
+                    frame(&mut chart);
+                }
+                let expected = reference.snapshot(
+                    chart.timeframe().unwrap(),
+                    chart.bar_clock(),
+                    chart.extended_hours(),
+                );
+                let actual = chart.bars(SeriesId::MAIN);
+                assert!(!actual.is_empty(), "{} after reopening", chart.symbol());
+                assert_eq!(
+                    actual,
+                    &expected[expected.len() - actual.len()..],
+                    "{} after reopening",
+                    chart.symbol()
+                );
+            }
+        }
+    }
 
     #[test]
     fn options_queries_resume_after_switching_back_to_the_underlying() {

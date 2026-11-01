@@ -1,12 +1,87 @@
 //! Host replay wiring: source history, start selection, checkpoints and layout groups.
 
 use super::{DemoApp, live::LiveFeed};
+use chrono::{DateTime, Utc};
+use egui_charts::data::{MarketEvent, RecordingWriter, ReplayDriver, ReplayEvent};
 use egui_charts::model::{Bar, BarClock, Timeframe};
 use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplayStartAction};
 use egui_charts::widget::SeriesId;
 use std::num::NonZeroU64;
+use std::sync::Arc;
+
+/// The demo records its raw executions, quotes and sequenced book messages in memory.
+/// Native hosts can give the same writer a buffered file instead.
+pub(super) struct Capture {
+    writer: RecordingWriter<Vec<u8>>,
+    sequence: u64,
+}
+
+impl Capture {
+    pub(super) fn new() -> Self {
+        Self {
+            writer: RecordingWriter::new(Vec::new()).expect("memory recording"),
+            sequence: 0,
+        }
+    }
+
+    pub(super) fn push(&mut self, symbol: &str, time: DateTime<Utc>, event: MarketEvent) {
+        self.writer
+            .write(&ReplayEvent::new(symbol, time, self.sequence, event))
+            .expect("generated market event");
+        self.sequence += 1;
+    }
+
+    pub(super) fn bytes(&self) -> Vec<u8> {
+        self.writer.get_ref().clone()
+    }
+}
 
 impl DemoApp {
+    pub(super) fn advance_replay(&mut self) {
+        let Some(replay) = self.replay.as_mut() else {
+            return;
+        };
+        let mut playback_time = None;
+        if let Some(driver) = self.chart.replay_driver().cloned() {
+            let now = Utc::now();
+            let elapsed = self
+                .replay_updated
+                .replace(now)
+                .and_then(|previous| (now - previous).to_std().ok())
+                .unwrap_or_default();
+            let speed = if replay.state.is_playing() {
+                replay.state.speed.multiplier()
+            } else {
+                0.0
+            };
+            if let Err(error) = driver
+                .set_speed(f64::from(speed))
+                .and_then(|()| driver.advance(elapsed))
+            {
+                replay.handle_action(ReplayAction::Pause);
+                self.notify(&error.to_string());
+                return;
+            }
+            playback_time = Some(driver.time() + chrono::TimeDelta::nanoseconds(1));
+            if replay.state.is_playing() {
+                let clock = source_clock(&self.chart, self.replay_interval);
+                replay.seek_cutoff(driver.time() + chrono::TimeDelta::nanoseconds(1), &clock);
+                replay.state.playback_state = if driver.is_finished() {
+                    egui_charts::ui::replay::PlaybackState::Finished
+                } else {
+                    egui_charts::ui::replay::PlaybackState::Playing
+                };
+            }
+        } else {
+            replay.update();
+        }
+        if let Some(time) = playback_time {
+            self.apply_replay_window(time, false);
+        } else {
+            self.push_replay_window_to_chart();
+        }
+    }
+
     pub(super) fn toggle_replay(&mut self) {
         if self.replay.is_some() && self.replay_control.is_user_dismissed() {
             self.replay_control.show_control();
@@ -66,6 +141,8 @@ impl DemoApp {
             for extra in &mut self.extra_charts {
                 extra.chart.set_replay_time(None);
             }
+            self.replay_updated = None;
+            self.replay_applied = None;
             self.replay_slots.clear();
             self.chart.set_feed_paused(false);
             self.live.set_paused(self.live_was_paused);
@@ -78,6 +155,12 @@ impl DemoApp {
         self.push_replay_window(false);
     }
 
+    pub(super) fn push_market_replay_window(&mut self) {
+        if let Some(driver) = self.chart.replay_driver() {
+            self.apply_replay_window(driver.time() + chrono::TimeDelta::nanoseconds(1), false);
+        }
+    }
+
     /// Applies the cursor to the charts and the paper account, which restarts when a replay
     /// starts or the cutoff moves back. `kept` keeps it on a move back that undoes no fill.
     fn push_replay_window(&mut self, kept: bool) {
@@ -88,7 +171,14 @@ impl DemoApp {
         let Some(time) = replay.cutoff(&clock) else {
             return;
         };
-        let previous = self.chart.replay_time();
+        self.apply_replay_window(time, kept);
+    }
+
+    fn apply_replay_window(&mut self, time: DateTime<Utc>, kept: bool) {
+        let Some(replay) = self.replay.as_ref() else {
+            return;
+        };
+        let previous = self.replay_applied.replace(time);
         if previous.is_none_or(|previous| time < previous && !kept) {
             self.paper.reset();
             if self.trading.has_broker() {
@@ -156,6 +246,16 @@ impl DemoApp {
             return;
         }
         let cutoff = self.chart.replay_time();
+        if !interval.is_trade_based() && self.chart.replay_driver().is_some() {
+            self.chart.set_market_replay(None);
+            self.chart.set_replay_time(cutoff);
+            for extra in &mut self.extra_charts {
+                if extra.chart.replay_driver().is_some() {
+                    extra.chart.set_market_replay(None);
+                    extra.chart.set_replay_time(cutoff);
+                }
+            }
+        }
         let mut next =
             ReplayController::new(bars.clone(), Vec::new()).with_symbol(self.state.symbol.clone());
         if let Some(cutoff) = cutoff
@@ -175,6 +275,45 @@ impl DemoApp {
         // One-trade updates move the cutoff back only to just after the last trade before it.
         self.push_replay_window(matches!(interval, Timeframe::Ticks(count) if count.get() == 1));
         self.chart.set_replay_source(bars, clock);
+        if interval.is_trade_based() && self.chart.replay_driver().is_none() {
+            let mut instruments = vec![self.live.instrument()];
+            let mut events = self.live.recording();
+            // Concatenate decoded events, rather than binary streams with separate headers.
+            let mut reader = egui_charts::data::RecordingReader::new(events.as_slice())
+                .expect("memory recording");
+            let mut merged = Vec::new();
+            while let Some(event) = reader.read().expect("memory recording") {
+                merged.push(event);
+            }
+            for (index, extra) in self.extra_charts.iter().enumerate() {
+                let slot = if index >= self.layout_slot {
+                    index + 1
+                } else {
+                    index
+                };
+                if !self.replay_slots.contains(&slot)
+                    || instruments
+                        .iter()
+                        .any(|instrument| instrument.symbol == extra.chart.symbol())
+                {
+                    continue;
+                }
+                instruments.push(extra.live.instrument());
+                events = extra.live.recording();
+                let mut reader = egui_charts::data::RecordingReader::new(events.as_slice())
+                    .expect("memory recording");
+                while let Some(event) = reader.read().expect("memory recording") {
+                    merged.push(event);
+                }
+            }
+            let driver =
+                Arc::new(ReplayDriver::new(merged, instruments).expect("captured market data"));
+            if let Some(time) = self.chart.replay_time() {
+                driver.seek(time - chrono::TimeDelta::nanoseconds(1));
+            }
+            self.chart.set_market_replay(Some(driver));
+        }
+        let driver = self.chart.replay_driver().cloned();
         for (index, extra) in self.extra_charts.iter_mut().enumerate() {
             let slot = if index >= self.layout_slot {
                 index + 1
@@ -184,6 +323,9 @@ impl DemoApp {
             if self.replay_slots.contains(&slot) {
                 let (bars, clock) = replay_source(&extra.live, interval, &extra.chart);
                 extra.chart.set_replay_source(bars, clock);
+                if let Some(driver) = &driver {
+                    extra.chart.set_market_replay(Some(driver.clone()));
+                }
             }
         }
         self.configure_replay_intervals();
@@ -349,6 +491,21 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
+        for _ in 0..4 {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.chart.show(ui);
+                },
+            )
+            .drop_without_applying_deltas();
+        }
         let start = chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap();
         let bars = [100.0, 80.0, 110.0]
             .into_iter()
@@ -447,6 +604,24 @@ mod tests {
             !empty(&mut app),
             "switching to trade updates must keep the position"
         );
+        let driver = app.chart.replay_driver().unwrap().clone();
+        let cursor = driver.time() + chrono::TimeDelta::milliseconds(50);
+        driver.seek(cursor);
+        app.handle_replay_control(ReplayControlAction::Close);
+        assert_eq!(driver.time(), cursor, "closing the transport must not seek");
+        assert!(
+            !empty(&mut app),
+            "closing the transport must keep the position"
+        );
+        let range = driver.time_range();
+        assert!(range.is_some(), "the captured recording is not empty");
+        app.handle_replay_control(ReplayControlAction::SetUpdateInterval(app.state.timeframe));
+        app.handle_replay_control(ReplayControlAction::SetUpdateInterval(trade));
+        assert_eq!(
+            app.chart.replay_driver().unwrap().time_range(),
+            range,
+            "returning to trade updates must retain the recording"
+        );
     }
 
     /// The feed keeps trades from 14:00, the hour two hours before 16:30: an hourly chart's
@@ -478,4 +653,24 @@ mod tests {
             );
         }
     }
+}
+
+pub(super) fn capture_book(
+    capture: &mut Capture,
+    symbol: &str,
+    market: &super::market::Market,
+    orders: Option<&super::orders::Orders>,
+    time: DateTime<Utc>,
+) {
+    let event = match orders {
+        Some(orders) => {
+            let (sequence, orders) = orders.snapshot();
+            MarketEvent::OrderSnapshot { sequence, orders }
+        }
+        None => {
+            let (sequence, book) = market.snapshot(time);
+            MarketEvent::DepthSnapshot { sequence, book }
+        }
+    };
+    capture.push(symbol, time, event);
 }

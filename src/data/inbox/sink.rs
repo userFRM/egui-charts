@@ -179,6 +179,10 @@ impl Sink {
             live.taken.ids.clear();
             live.updates = Updates::new(live.updates.trades.empty());
             live.updates.reset = true;
+            live.updates.replay_depth = live.sampler.as_ref().map(|sampler| {
+                crate::data::DepthHistory::new(sampler.config.clone())
+                    .expect("existing depth history configuration")
+            });
             for input in &live.study_inputs {
                 input.clear();
             }
@@ -255,19 +259,20 @@ impl Sink {
     /// outside them only advances the stream's time, and the first one inside the next session
     /// opens that session's slot at the last close. Call from a trusted feed heartbeat, after
     /// seeding a bar or execution; invalid or future clock values obey the same rule as trade
-    /// timestamps.
+    /// timestamps. Heartbeats also close due depth-history periods, including on count intervals.
     pub fn advance_time(&self, now: DateTime<Utc>) {
         let system = Utc::now();
         self.inbox.push(|state| {
             let Some(live) = state.subscriptions.get_mut(&self.id) else {
                 return false;
             };
+            let sampled = live.sample_book(now);
             if live
                 .clock
                 .timeframe()
                 .is_none_or(|tf| tf.duration_ms() <= 0)
             {
-                return false;
+                return sampled;
             }
             if live.ahead(live.clock.bar_open(now), system) {
                 return false;
@@ -275,10 +280,10 @@ impl Sink {
             live.updates.time = live.updates.time.max(Some(now));
             let open = live.clock.bar_open(now);
             let Some(close) = live.last_close else {
-                return !live.study_inputs.is_empty();
+                return sampled || !live.study_inputs.is_empty();
             };
             if !live.clock.is_open(now) || live.forming.is_none_or(|last| open <= last) {
-                return !live.study_inputs.is_empty();
+                return sampled || !live.study_inputs.is_empty();
             }
             live.updates.bars.insert(
                 open,
@@ -733,14 +738,14 @@ impl Live {
     /// opens a new period of the depth history. An update stamped more than a minute after the
     /// feed's time samples nothing: it would hold the open period, and every later column, until
     /// that time passed.
-    fn sample_book(&mut self, ts: DateTime<Utc>) {
+    fn sample_book(&mut self, ts: DateTime<Utc>) -> bool {
         let Some(sampler) = &mut self.sampler else {
-            return;
+            return false;
         };
         if (Utc::now().checked_add_signed(self.offset + TimeDelta::minutes(1)))
             .is_none_or(|limit| ts > limit)
         {
-            return;
+            return false;
         }
         // The orders a filtered history samples, summed and the largest at each price, as they
         // stood before this update, only when the update opens a period.
@@ -753,7 +758,7 @@ impl Live {
                 });
                 let Some((summed, sizes)) = levels else {
                     sampler.lose();
-                    return;
+                    return false;
                 };
                 summed_book = Book::new(self.tick_size);
                 largest_book = Book::new(self.tick_size);
@@ -764,12 +769,18 @@ impl Live {
             _ => (&self.book, None),
         };
         if let Some(column) = sampler.sample(ts, book, largest) {
+            if let Some(history) = &mut self.updates.replay_depth {
+                history.push(column);
+                return true;
+            }
             let columns = &mut self.updates.depth_columns;
             if columns.len() == sampler.config.columns {
                 columns.pop_front();
             }
             columns.push_back(column);
+            return true;
         }
+        false
     }
 
     fn sync_orders(&mut self, sequence: u64, time: DateTime<Utc>, result: Result<(), Lost>) {
