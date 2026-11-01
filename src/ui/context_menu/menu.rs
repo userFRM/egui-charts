@@ -399,13 +399,28 @@ fn draw_item<A>(
         },
     );
     crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.sm);
-    response.widget_info(|| {
-        WidgetInfo::labeled(
-            egui::Role::MenuItem,
-            response.enabled() && item.enabled,
-            l10n::text(ui.ctx(), &item.label),
-        )
-    });
+    let needs_info = response.clicked()
+        || response.double_clicked()
+        || response.triple_clicked()
+        || response.gained_focus()
+        || response.changed()
+        || ui
+            .ctx()
+            .accesskit_node_builder(response.id, |_| ())
+            .is_some();
+    #[cfg(debug_assertions)]
+    let needs_info = needs_info || ui.ctx().global_style().debug.show_interactive_widgets;
+    if needs_info {
+        // egui holds its context lock while calling widget_info's accessibility closure.
+        let label = l10n::text(ui.ctx(), &item.label);
+        response.widget_info(|| {
+            WidgetInfo::labeled(
+                egui::Role::MenuItem,
+                response.enabled() && item.enabled,
+                &label,
+            )
+        });
+    }
 
     let hovered = item.enabled && (response.hovered() || highlighted);
     // (label, icon, trailing text)
