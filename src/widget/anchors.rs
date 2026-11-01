@@ -2,7 +2,7 @@
 
 use super::Chart;
 use crate::drawings::persistence::{
-    DrawingStorage, LoadError, SaveError, SkippedDrawing, StoredCoord, StoredDrawing,
+    DrawingStorage, LoadError, SaveError, SkipReason, SkippedDrawing, StoredCoord, StoredDrawing,
     drawing_to_stored_with, stored_to_drawing_with,
 };
 use crate::drawings::{ChartPoint, Drawing, DrawingManager};
@@ -158,7 +158,7 @@ impl Chart {
     /// Rejects a different symbol or an unreadable file without changing the current drawings,
     /// with a [`LoadError`] that tells a file from a newer release
     /// ([`LoadError::UnsupportedVersion`]) from damaged data; each skipped record carries its
-    /// [`SkipReason`](crate::drawings::persistence::SkipReason).
+    /// [`SkipReason`].
     /// Can run before history arrives: timestamp anchors are projected when bars load.
     /// Restored drawings do not queue writes or enter undo history. Screen coordinates follow
     /// on the next frame. Account, filesystem and cloud storage remain the host's responsibility.
@@ -174,7 +174,7 @@ impl Chart {
         json: &str,
         remap: bool,
     ) -> Result<Vec<SkippedDrawing>, LoadError> {
-        let (storage, skipped) = DrawingStorage::from_json(json)?;
+        let (storage, mut skipped) = DrawingStorage::from_json(json)?;
         if storage.symbol != self.symbol() {
             return Err(LoadError::OtherSymbol);
         }
@@ -190,9 +190,20 @@ impl Chart {
         manager.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
         manager.eraser_mode = self.drawings.eraser_mode;
         manager.curr_timeframe = self.drawings.curr_timeframe.clone();
-        for stored in storage.drawings() {
-            manager.add_synced_drawing(self.restored_drawing(stored, remap));
+        let mut refused = Vec::new();
+        // The n-th loaded drawing is the n-th entry of the file that was not skipped.
+        let read = (0..).filter(|index| skipped.iter().all(|s| s.index != *index));
+        for (index, stored) in read.zip(storage.drawings()) {
+            if let Err(error) = manager.add_synced_drawing(self.restored_drawing(stored, remap)) {
+                refused.push(SkippedDrawing {
+                    index,
+                    id: Some(stored.id.clone()),
+                    error: SkipReason::Invalid(serde::de::Error::custom(error)),
+                });
+            }
         }
+        skipped.extend(refused);
+        skipped.sort_by_key(|skipped| skipped.index);
         self.drawings = manager;
         self.history.clear();
         Ok(skipped)

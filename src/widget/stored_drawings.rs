@@ -938,7 +938,7 @@ mod tests {
             let mut drawing = Drawing::new(0, DrawingToolType::HorizontalLine);
             drawing.chart_points = vec![ChartPoint::new(4.0, 10.5)];
             drawing.completed = true;
-            chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(drawing));
+            chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(drawing).unwrap());
         };
         let host = Arc::new(Host::default());
         host.documents
@@ -1474,7 +1474,7 @@ mod tests {
             // drawing sync.
             let mut volatile = line_at(4.0, 77.0);
             volatile.saveable = false;
-            a.drawings_mut().add_synced_drawing(volatile);
+            a.drawings_mut().add_synced_drawing(volatile).unwrap();
             frames(&mut a, &mut b);
             draw_line(&mut b, line_at(4.0, 8.5));
             frames(&mut a, &mut b);

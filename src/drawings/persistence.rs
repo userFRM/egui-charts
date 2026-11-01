@@ -24,11 +24,10 @@
 //! A restored drawing keeps the id, creation time and notes of its record in
 //! `Drawing::stored_id`, `created_at` and `notes`, and is saved back under
 //! them. Restore drawings through
-//! [`DrawingManager::add_synced_drawing`](crate::drawings::DrawingManager::add_synced_drawing)
-//! or by pushing them onto `DrawingManager::drawings`: either way the manager
-//! gives a new drawing an id that no restored drawing uses. Two managers
-//! restoring the same storage can still hand out the same id: one storage per
-//! manager is the supported use.
+//! [`DrawingManager::add_synced_drawing`](crate::drawings::DrawingManager::add_synced_drawing),
+//! which refuses a drawing that saving would refuse; the manager then gives a new drawing an
+//! id that no restored drawing uses. Two managers restoring the same storage can still hand
+//! out the same id: one storage per manager is the supported use.
 //!
 //! # Storage format
 //!
@@ -1251,9 +1250,13 @@ mod tests {
 
         let mut manager = DrawingManager::new();
         for stored in storage.drawings() {
-            manager.add_synced_drawing(stored_to_drawing(stored, time_to_bar, 0));
+            manager
+                .add_synced_drawing(stored_to_drawing(stored, time_to_bar, 0))
+                .unwrap();
         }
-        manager.add_synced_drawing(manager.drawings[0].clone());
+        manager
+            .add_synced_drawing(manager.drawings[0].clone())
+            .unwrap();
         let (x_to_bar, y_to_price) = (|x: f32| x, |y: f32| f64::from(y));
         let at = egui::Pos2::new(5.0, 90.0);
         manager.start_drawing_with_coords(

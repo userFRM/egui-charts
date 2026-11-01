@@ -411,7 +411,10 @@ fn chart(scenario: &Scenario) -> Chart {
                 ChartPoint::new((first + 5 * j) as f32, price)
             })
             .collect();
-        chart.drawings_mut().add_synced_drawing(drawing);
+        chart
+            .drawings_mut()
+            .add_synced_drawing(drawing)
+            .expect("bench drawings are valid");
     }
     if scenario.annotations != Annotations::None {
         let times: Vec<_> = chart

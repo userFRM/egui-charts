@@ -323,7 +323,7 @@ impl Terminal {
             }
             DrawingToolbarAction::ToggleValuesTooltip => chart.set_tooltip_enabled(values_tooltip),
             DrawingToolbarAction::SelectTool(tool) => {
-                chart.drawings_mut().set_active_tool(Some(tool))
+                chart.drawings_mut().set_active_tool(Some(tool));
             }
             DrawingToolbarAction::ToggleMagnet => {
                 let manager = chart.drawings_mut();
@@ -696,7 +696,8 @@ mod tests {
         terminal
             .chart_mut()
             .drawings_mut()
-            .add_synced_drawing(drawing);
+            .add_synced_drawing(drawing)
+            .unwrap();
         let id = terminal.chart().drawings().drawings[0].id;
         terminal.chart_mut().drawings_mut().select_drawings([id]);
         frame(&mut terminal, SIZE, vec![]);
@@ -844,7 +845,8 @@ mod tests {
             terminal
                 .chart_mut()
                 .drawings_mut()
-                .add_synced_drawing(drawing);
+                .add_synced_drawing(drawing)
+                .unwrap();
             frame(&mut terminal, SIZE, vec![]);
             let points = &terminal.chart().drawings().drawings[0].points;
             let pos = if settings {
@@ -940,8 +942,8 @@ mod tests {
     fn zoom_controls_leave_drawing_history_untouched() {
         let mut terminal = ready();
         let chart = terminal.chart_mut();
-        chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(line(1)));
-        chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(line(2)));
+        chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(line(1)).unwrap());
+        chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(line(2)).unwrap());
         terminal.run(Action::TopToolbar(TopToolbarAction::Undo));
         let drawings = |terminal: &Terminal| {
             terminal
@@ -985,7 +987,8 @@ mod tests {
             terminal
                 .chart_mut()
                 .drawings_mut()
-                .add_synced_drawing(line(id));
+                .add_synced_drawing(line(id))
+                .unwrap();
         }
         let ids: Vec<_> = terminal
             .chart()
@@ -1051,7 +1054,8 @@ mod tests {
         terminal
             .chart_mut()
             .drawings_mut()
-            .add_synced_drawing(line(7));
+            .add_synced_drawing(line(7))
+            .unwrap();
         let id = terminal.chart().drawings().drawings[0].id;
         let original = terminal.chart().drawings().drawings[0].color;
         let color = egui::Color32::from_rgba_unmultiplied(51, 102, 153, 85);
@@ -1081,7 +1085,8 @@ mod tests {
             terminal
                 .chart_mut()
                 .drawings_mut()
-                .add_synced_drawing(line(id));
+                .add_synced_drawing(line(id))
+                .unwrap();
         }
         for period in [3, 5] {
             terminal
@@ -1148,7 +1153,8 @@ mod tests {
             terminal
                 .chart_mut()
                 .drawings_mut()
-                .add_synced_drawing(line(id));
+                .add_synced_drawing(line(id))
+                .unwrap();
         }
         let ids: Vec<_> = terminal
             .chart()
@@ -1254,7 +1260,8 @@ mod tests {
         terminal
             .chart_mut()
             .drawings_mut()
-            .add_synced_drawing(line(0));
+            .add_synced_drawing(line(0))
+            .unwrap();
         let id = terminal.chart().drawings().drawings[0].id;
         terminal.chart_mut().drawings_mut().select_drawings([id]);
         let count = |terminal: &Terminal| terminal.chart().drawings().drawings.len();
@@ -1277,7 +1284,8 @@ mod tests {
             terminal
                 .chart_mut()
                 .drawings_mut()
-                .add_synced_drawing(line(copy));
+                .add_synced_drawing(line(copy))
+                .unwrap();
         }
         let ids: Vec<_> = terminal
             .chart()

@@ -1889,7 +1889,9 @@ impl DemoApp {
 
         let dm = self.chart.drawings_mut();
         match action {
-            DrawingToolbarAction::SelectTool(tool) => dm.set_active_tool(Some(tool)),
+            DrawingToolbarAction::SelectTool(tool) => {
+                dm.set_active_tool(Some(tool));
+            }
             DrawingToolbarAction::ToggleMagnet => {
                 dm.options.magnet_mode = !dm.options.magnet_mode;
                 dm.options.strong_magnet = self.drawing_toolbar.state.magnet_type
@@ -6460,12 +6462,10 @@ mod tests {
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
         app.chart.user_action(|chart| {
-            chart
-                .drawings_mut()
-                .add_synced_drawing(egui_charts::drawings::Drawing::new(
-                    0,
-                    egui_charts::drawings::DrawingToolType::TrendLine,
-                ));
+            use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+            let mut line = Drawing::new(0, DrawingToolType::TrendLine);
+            line.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 101.0)];
+            chart.drawings_mut().add_synced_drawing(line).unwrap();
         });
         app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
         app.drawing_toolbar.state.zoom_mode_active = true;
@@ -6505,7 +6505,10 @@ mod tests {
             let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
             drawing.chart_points = vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 200.0)];
             drawing.completed = true;
-            app.chart.drawings_mut().add_synced_drawing(drawing);
+            app.chart
+                .drawings_mut()
+                .add_synced_drawing(drawing)
+                .unwrap();
         }
         let ids: Vec<_> = app.chart.drawings().drawings.iter().map(|d| d.id).collect();
         app.chart

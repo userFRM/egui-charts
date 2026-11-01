@@ -1466,7 +1466,7 @@ mod tests {
             // A drawing anchored on the bar at 10:03, the fourth.
             let mut drawing = Drawing::new(0, DrawingToolType::HorizontalLine);
             drawing.chart_points.push(ChartPoint::new(3.0, 4.0));
-            chart.drawings_mut().add_synced_drawing(drawing);
+            chart.drawings_mut().add_synced_drawing(drawing).unwrap();
             let revision = chart.state.revision();
             for action in actions {
                 match action {
@@ -1745,7 +1745,7 @@ mod tests {
             let mut chart = Chart::new(BarData::from_bars(start.clone()));
             let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
             drawing.chart_points = points.iter().map(|&at| ChartPoint::new(at, 1.0)).collect();
-            chart.drawings_mut().add_synced_drawing(drawing);
+            chart.drawings_mut().add_synced_drawing(drawing).unwrap();
             chart.apply(incoming);
             let points = &chart.drawings().drawings[0].chart_points;
             let after: Vec<f32> = points.iter().map(|point| point.bar_idx).collect();

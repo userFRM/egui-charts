@@ -920,7 +920,7 @@ mod tests {
         let mut fresh = Drawing::new(0, DrawingToolType::HorizontalLine);
         fresh.chart_points = vec![ChartPoint::new(10.0, 50.0)];
         fresh.update_screen_coords(|bar| bar, |price| price as f32);
-        manager.add_synced_drawing(fresh);
+        manager.add_synced_drawing(fresh).unwrap();
         let fresh_id = manager.drawings.last().unwrap().id;
         assert_eq!(manager.hit_test(on_both), Some(fresh_id));
 
@@ -938,6 +938,11 @@ mod tests {
     /// and deleting it names the record it is stored under.
     #[test]
     fn edits_queue_coalesced_sync_actions() {
+        fn line(id: usize) -> Drawing {
+            let mut drawing = Drawing::new(id, DrawingToolType::HorizontalLine);
+            drawing.chart_points = vec![ChartPoint::new(1.0, 10.0)];
+            drawing
+        }
         type Edit = fn(&mut DrawingManager);
         let cases: [(Edit, &[&str]); 15] = [
             (
@@ -950,7 +955,7 @@ mod tests {
             ),
             (
                 |m| {
-                    m.add_synced_drawing(Drawing::new(1, DrawingToolType::HorizontalLine));
+                    m.add_synced_drawing(line(1)).unwrap();
                     m.reorder_drawings(0, &[(0, 1), (1, 2)]);
                     m.undo();
                     m.redo();
@@ -989,7 +994,9 @@ mod tests {
                 &["Save(1)"],
             ),
             (
-                |m| m.add_synced_drawing(Drawing::new(7, DrawingToolType::HorizontalLine)),
+                |m| {
+                    m.add_synced_drawing(line(7)).unwrap();
+                },
                 &["Save(1)"],
             ),
             (
@@ -1021,7 +1028,7 @@ mod tests {
             (
                 |m| {
                     m.edit_drawing(0, |d| d.stroke_width = 2.0);
-                    m.add_synced_drawing(Drawing::new(1, DrawingToolType::HorizontalLine));
+                    m.add_synced_drawing(line(1)).unwrap();
                     m.delete_drawing(1);
                     m.edit_drawing(0, |d| d.stroke_width = 3.0);
                 },
@@ -1030,9 +1037,9 @@ mod tests {
         ];
         for (case, (edit, expected)) in cases.into_iter().enumerate() {
             let mut manager = DrawingManager::new();
-            let mut restored = Drawing::new(5, DrawingToolType::HorizontalLine);
+            let mut restored = line(5);
             restored.stored_id = Some("a1b2".into());
-            manager.add_synced_drawing(restored);
+            manager.add_synced_drawing(restored).unwrap();
             let before = manager
                 .drawings
                 .iter()
@@ -1329,5 +1336,93 @@ mod tests {
         });
         assert!(manager.is_eraser_mode());
         assert_eq!(manager.active_tool(), None);
+    }
+
+    /// Every path that creates drawings adds only drawings that save: a drawing of a disabled
+    /// tool, a cursor, a non-finite or unmappable anchor or too few anchors is left out, and the
+    /// chart still saves.
+    #[test]
+    fn creation_paths_add_only_drawings_that_save() {
+        use crate::drawings::ToolAvailability;
+        fn line(tool: DrawingToolType, anchors: &[(f32, f64)]) -> Drawing {
+            let mut drawing = Drawing::new(0, tool);
+            drawing.chart_points = anchors
+                .iter()
+                .map(|&(bar, price)| ChartPoint::new(bar, price))
+                .collect();
+            drawing.completed = true;
+            drawing
+        }
+        fn place(m: &mut DrawingManager, tool: DrawingToolType, x_to_bar: fn(f32) -> f32) {
+            let y_to_price = |y: f32| 200.0 - f64::from(y);
+            m.start_drawing_with_coords(tool, Pos2::new(10.0, 95.0), x_to_bar, y_to_price);
+            m.add_point_with_coords(Pos2::new(20.0, 94.0), x_to_bar, y_to_price);
+            m.complete_curr_drawing();
+        }
+        const TWO: &[(f32, f64)] = &[(1.0, 105.0), (2.0, 106.0)];
+        const NAN: &[(f32, f64)] = &[(1.0, 105.0), (2.0, f64::NAN)];
+        const ONE: &[(f32, f64)] = &[(1.0, 105.0)];
+        type Create = fn(&mut DrawingManager);
+        let cases: [(&str, bool, Create); 12] = [
+            ("duplicate, disabled tool", true, |m| {
+                m.duplicate_drawing(m.drawings[0].id)
+            }),
+            ("copy drag, disabled tool", true, |m| {
+                let id = m.drawings[0].id;
+                m.start_drag_body(id, Pos2::ZERO);
+                m.copy_dragged_drawings();
+                m.end_drag_handle();
+            }),
+            ("paste, disabled tool", true, |m| {
+                m.paste_drawings(&m.drawings.clone())
+            }),
+            ("paste, cursor", false, |m| {
+                m.paste_drawings(&[line(DrawingToolType::Eraser, TWO)])
+            }),
+            ("paste, non-finite anchor", false, |m| {
+                m.paste_drawings(&[line(DrawingToolType::TrendLine, NAN)])
+            }),
+            ("paste, one anchor", false, |m| {
+                m.paste_drawings(&[line(DrawingToolType::TrendLine, ONE)])
+            }),
+            ("sync, cursor", false, |m| {
+                let _ = m.add_synced_drawing(line(DrawingToolType::Eraser, TWO));
+            }),
+            ("sync, non-finite anchor", false, |m| {
+                let _ = m.add_synced_drawing(line(DrawingToolType::TrendLine, NAN));
+            }),
+            ("sync, one anchor", false, |m| {
+                let _ = m.add_synced_drawing(line(DrawingToolType::TrendLine, ONE));
+            }),
+            ("pointer, cursor", false, |m| {
+                place(m, DrawingToolType::Eraser, |x| x / 10.0)
+            }),
+            ("pointer, non-finite anchor", false, |m| {
+                place(m, DrawingToolType::TrendLine, |_| f32::NAN)
+            }),
+            ("pointer, unmappable anchor", false, |m| {
+                place(m, DrawingToolType::TrendLine, |x| x * 1e30)
+            }),
+        ];
+        for (case, disable, create) in cases {
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            let id = chart
+                .drawings_mut()
+                .add_drawing(line(DrawingToolType::TrendLine, TWO))
+                .unwrap();
+            if disable {
+                chart.drawings_mut().registry.set_availability(
+                    DrawingToolType::TrendLine,
+                    ToolAvailability {
+                        visible: true,
+                        enabled: false,
+                    },
+                );
+            }
+            create(chart.drawings_mut());
+            let ids: Vec<_> = chart.drawings().drawings.iter().map(|d| d.id).collect();
+            assert_eq!(ids, [id], "{case}");
+            assert!(chart.save_drawings().is_ok(), "{case}");
+        }
     }
 }

@@ -41,7 +41,8 @@ impl Chart {
     /// a newer release, drawings of another symbol ([`LoadError::OtherSymbol`]), drawings that
     /// could not all be read ([`LoadError::Skipped`]) and a chart without the history to place
     /// them ([`LoadError::NeedsHistory`]). The host handles the system clipboard and forwards
-    /// its paste event here.
+    /// its paste event here. Copies of a disabled tool, and copies that saving would refuse,
+    /// are left out.
     pub fn paste_drawings(&mut self, text: &str) -> Result<(), LoadError> {
         let json = text.strip_prefix(PREFIX).ok_or(LoadError::NotClipboard)?;
         let (storage, skipped) = DrawingStorage::from_json(json)?;

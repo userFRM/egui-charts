@@ -1021,7 +1021,7 @@ mod tests {
             .chart_points
             .push(egui_charts::drawings::ChartPoint::new(10.0, 42.0));
         app.chart
-            .user_action(|chart| chart.drawings_mut().add_synced_drawing(drawing));
+            .user_action(|chart| chart.drawings_mut().add_synced_drawing(drawing).unwrap());
         assert!(app.chart.flush_stored_drawings());
         app.chart.drawings_mut().registry.set_availability(
             egui_charts::drawings::DrawingToolType::TrendLine,
