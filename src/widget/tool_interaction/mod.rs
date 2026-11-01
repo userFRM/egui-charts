@@ -539,10 +539,11 @@ mod tests {
         }
     }
 
-    /// Closing uses placed anchors, and Escape keeps only a path with at least two of them.
+    /// Closing uses placed anchors, Escape keeps paths with at least two, and two clicks place
+    /// curves with editable controls between their endpoints.
     #[test]
     fn multi_point_shapes_close_finish_on_escape_and_curves_take_two_clicks() {
-        use DrawingToolType::{Path, Polyline};
+        use DrawingToolType::{Curve, DoubleCurve, Path, Polyline};
         let a = (30, 16.0);
         let b = (50, 14.0);
         let c = (40, 12.0);
@@ -552,6 +553,8 @@ mod tests {
             (Polyline, vec![a], true, None),
             (Path, vec![a, b], true, Some((2, false, 50.0))),
             (Path, vec![a], true, None),
+            (Curve, vec![a, b], false, Some((3, false, 50.0))),
+            (DoubleCurve, vec![a, b], false, Some((4, false, 50.0))),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);

@@ -716,6 +716,9 @@ impl DrawingManager {
             }
             drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
             drawing.align_second_anchor();
+            if drawing.completed {
+                drawing.store_default_curve_controls(&x_to_bar, &y_to_price);
+            }
             if let Some(tool) = drawing
                 .custom_tool
                 .as_deref()

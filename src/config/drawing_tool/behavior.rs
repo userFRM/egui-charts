@@ -345,15 +345,17 @@ impl DrawingToolType {
         }
     }
 
-    /// Returns the number of `ChartPoint`s
-    /// required to complete a drawing of this type, or `None` for tools with
-    /// no fixed point count (`Polyline`, `Brush`, cursors).
+    /// Returns the number of points placed to complete a drawing of this type, or `None` for
+    /// tools with no fixed count (`Polyline`, `Path`, `Brush`, cursors). Some tools store more
+    /// anchors than they are placed with: a long or short position adds its target and stop,
+    /// three anchors in all, and a curve and a double curve add their controls between their
+    /// ends, three and four.
     ///
     /// | Mode | Typical count |
     /// |---|---|
     /// | `SingleClick` | 1 |
     /// | `ClickClick` / `DragToDraw` | 2 |
-    /// | `MultiPoint` | 3--7 depending on tool |
+    /// | `MultiPoint` | 2 to 7 depending on tool |
     /// | `ContinuousDraw` | `None` (unlimited) |
     /// | `NotDrawing` | `None` |
     pub fn required_points(&self) -> Option<usize> {
@@ -363,6 +365,7 @@ impl DrawingToolType {
             DrawingInteractionMode::MultiPoint => {
                 // Multi-point tools have varying requirements
                 match self {
+                    Self::Curve | Self::DoubleCurve => Some(2),
                     Self::FibonacciExtension
                     | Self::FibonacciWedge
                     | Self::TrendBasedFibTime
@@ -370,7 +373,6 @@ impl DrawingToolType {
                     | Self::Arc
                     | Self::Sector
                     | Self::RotatedRect
-                    | Self::Curve
                     | Self::ProjectionTool
                     | Self::FlatTopBottom
                     | Self::DisjointChannel
@@ -385,8 +387,7 @@ impl DrawingToolType {
                     Self::ABCDPattern
                     | Self::ElliottCorrection
                     | Self::ElliottDoubleCombo
-                    | Self::TrianglePattern
-                    | Self::DoubleCurve => Some(4),
+                    | Self::TrianglePattern => Some(4),
                     Self::XABCDPattern | Self::CypherPattern => Some(5),
                     Self::ElliottImpulse | Self::ElliottTriangle | Self::ElliottTripleCombo => {
                         Some(6)
@@ -424,8 +425,8 @@ mod tests {
             (FlatTopBottom, DrawingInteractionMode::MultiPoint, 3),
             (DisjointChannel, DrawingInteractionMode::MultiPoint, 3),
             (FibonacciChannel, DrawingInteractionMode::MultiPoint, 3),
-            (Curve, DrawingInteractionMode::MultiPoint, 3),
-            (DoubleCurve, DrawingInteractionMode::MultiPoint, 4),
+            (Curve, DrawingInteractionMode::MultiPoint, 2),
+            (DoubleCurve, DrawingInteractionMode::MultiPoint, 2),
             (TrianglePattern, DrawingInteractionMode::MultiPoint, 4),
             (ThreeDrivesPattern, DrawingInteractionMode::MultiPoint, 7),
             (ElliottDoubleCombo, DrawingInteractionMode::MultiPoint, 4),
@@ -462,6 +463,30 @@ mod tests {
                 manager.complete_curr_drawing();
             }
             assert_eq!(manager.drawings.len(), 1, "{tool:?}");
+            // A curve placed by its ends stores the bend it is drawn with between them: the
+            // curve's control 0.3 of the chord to the side of its middle, the double curve's at
+            // the chord's thirds, half the chord to either side.
+            let stored: &[(f32, f64)] = match tool {
+                Curve => &[(10.0, 500.0), (90.0, 520.0), (110.0, 600.0)],
+                DoubleCurve => &[
+                    (10.0, 500.0),
+                    (280.0 / 3.0, 1450.0 / 3.0),
+                    (80.0 / 3.0, 1850.0 / 3.0),
+                    (110.0, 600.0),
+                ],
+                _ => &[],
+            };
+            if !stored.is_empty() {
+                let points = &manager.drawings[0].chart_points;
+                assert_eq!(points.len(), stored.len(), "{tool:?}");
+                for (point, &(bar, price)) in points.iter().zip(stored) {
+                    assert!(
+                        (point.bar_idx - bar).abs() < 1e-3 && (point.price - price).abs() < 1e-3,
+                        "{tool:?}: {point:?}"
+                    );
+                }
+            }
+
             if required.is_none() {
                 assert_eq!(manager.drawings[0].chart_points.len(), count, "{tool:?}");
             }

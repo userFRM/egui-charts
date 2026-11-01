@@ -291,14 +291,14 @@ Drawings,Drawings,Callout,done,library,src/drawings/rendering/annotations/callou
 Drawings,Drawings,Circle,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Comment,done,library,src/drawings/rendering/annotations/callout.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/annotations/labels.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
 Drawings,Drawings,Cross line,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs
-Drawings,Drawings,Curve,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs
+Drawings,Drawings,Curve,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/manager/interaction.rs;src/drawings/validation.rs
 Drawings,Drawings,Cyclic lines,done,library,src/drawings/rendering/cycles.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/style.rs
 Drawings,Drawings,Cypher pattern,done,library,src/drawings/rendering/patterns.rs;src/painting/dashed_line.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs
 Drawings,Drawings,Date and price range,done,library,src/drawings/rendering/measurements.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Date range,done,library,src/drawings/rendering/measurements.rs;src/drawings/rendering/mod.rs
 Drawings,Drawings,Demonstration and magic cursors,done,library,src/config/crosshair.rs;src/chart/cursor_modes/mod.rs;src/widget/frame.rs;src/ui/drawing_toolbar/categories/cursors.rs
 Drawings,Drawings,Disjoint channel,done,library,src/drawings/rendering/channels.rs;src/drawings/rendering/mod.rs;src/drawings/services/handle.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs
-Drawings,Drawings,Double curve,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs
+Drawings,Drawings,Double curve,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/manager/interaction.rs;src/drawings/validation.rs
 Drawings,Drawings,Drawing anchor access,done,library,src/widget/drawing_api.rs;src/widget/anchors.rs;src/model/bar/time.rs;src/widget/time_scale.rs
 Drawings,Drawings,Drawing attachment to a study or pane,done,library,src/drawings/domain/drawing.rs;src/widget/drawing_api.rs;src/widget/panes.rs
 Drawings,Drawings,Drawing events,done,library,src/drawings/manager/mod.rs

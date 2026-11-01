@@ -2,7 +2,7 @@
 //!
 //! Includes: rotated rect, double curve, brush, highlighter, path, curve, and sine line.
 
-use crate::drawings::domain::{Drawing, DrawingToolType};
+use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Shape, Stroke};
 
@@ -79,7 +79,7 @@ impl Drawing {
         Some([a, b, b + offset, a + offset])
     }
 
-    /// Cubic Bezier curve with two independently placed control points.
+    /// Cubic Bezier curve with two independently editable control points.
     pub(crate) fn render_double_curve(&self, painter: &egui::Painter) {
         let Some(points) = self.double_curve_points() else {
             return;
@@ -91,10 +91,24 @@ impl Drawing {
         ));
     }
 
-    pub(super) fn double_curve_points(&self) -> Option<Vec<Pos2>> {
-        let &[a, b, c, d, ..] = self.points.as_slice() else {
+    /// The double curve's start, controls and end: its first four anchors, or else, from its
+    /// first and last anchors, controls at the chord's thirds set off half the chord to either
+    /// side, an S bend. `None` below two anchors.
+    pub(super) fn double_curve_controls(&self) -> Option<[Pos2; 4]> {
+        if let &[a, b, c, d, ..] = self.points.as_slice() {
+            return Some([a, b, c, d]);
+        }
+        let (&a, &d) = (self.points.first()?, self.points.last()?);
+        if self.points.len() < 2 {
             return None;
-        };
+        }
+        let chord = d - a;
+        let side = egui::vec2(-chord.y, chord.x) * 0.5;
+        Some([a, a + chord / 3.0 + side, a + chord * (2.0 / 3.0) - side, d])
+    }
+
+    pub(super) fn double_curve_points(&self) -> Option<Vec<Pos2>> {
+        let [a, b, c, d] = self.double_curve_controls()?;
         Some(
             (0..=64)
                 .map(|i| {
@@ -201,6 +215,31 @@ impl Drawing {
         };
         Some([p0, p1, p2])
     }
+
+    /// Stores the bend a curve or double curve placed by its two ends is drawn with as its
+    /// control anchors, between the ends, so its handles reshape it. Other tools, and curves
+    /// that already hold their controls, are left as they are.
+    pub(crate) fn store_default_curve_controls(
+        &mut self,
+        x_to_bar: impl Fn(f32) -> f32,
+        y_to_price: impl Fn(f32) -> f64,
+    ) {
+        let controls = match (self.tool_type, self.points.len()) {
+            (DrawingToolType::Curve, 2) => self.curve_controls().map(|[_, c, _]| vec![c]),
+            (DrawingToolType::DoubleCurve, 2) => {
+                self.double_curve_controls().map(|[_, b, c, _]| vec![b, c])
+            }
+            _ => None,
+        };
+        for (i, control) in controls.into_iter().flatten().enumerate() {
+            self.points.insert(1 + i, control);
+            self.chart_points.insert(
+                1 + i,
+                ChartPoint::new(x_to_bar(control.x), y_to_price(control.y)),
+            );
+        }
+    }
+
     /// The polygon whose even-odd inside the fill colour fills: a polyline's anchors, and an arc
     /// or curve closed by the chord between its ends. `None` for other tools.
     pub(super) fn enclosed_area(&self) -> Option<Vec<Pos2>> {
