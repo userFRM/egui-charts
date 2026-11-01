@@ -20,8 +20,15 @@
 //! last candle: the bar's own close when trading runs to its end, and otherwise its last
 //! trading hours, so a weekly bar of a market closed at the weekend sums its last trading day.
 //! A bar without candles has no value. Until candles are supplied the study sums chart bars,
-//! which has no value on bars longer than a day. The volume is summed in the units the feed
-//! reports.
+//! which has no value on bars longer than a day.
+//!
+//! The Units input defaults to supplied volume. Quote currency assumes the host supplies
+//! volume in base units and sums `volume * close` for each contributing bar, never the
+//! total volume times the chart bar's close. This is an estimate from candles, not execution
+//! turnover. The host must supply [`crate::model::Instrument::currency`] to identify the quote
+//! currency; already quoted volume or contract counts must use supplied units. Negative base
+//! volume or a non-finite volume, close or product makes a quote window unavailable until that
+//! bar leaves it.
 //!
 //! # Example
 //! ```
@@ -44,14 +51,21 @@ use super::lower_interval;
 use crate::model::{Bar, BarClock, Timeframe};
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues, StudyData, StudyDataRequest};
+use crate::studies::{
+    Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, StudyCell, StudyData,
+    StudyDataRequest, StudyInput, StudyTable,
+};
 use chrono::{DateTime, TimeDelta, Utc};
 use egui::Color32;
 use std::collections::VecDeque;
 
 /// Rolling volume over the last 24 hours of calendar time, in a separate pane.
 ///
-/// A bar with a non-finite volume has no value and adds nothing. The chart supplies its
+/// The `units` choice input is 0 for supplied volume (default), 1 for quote currency.
+/// Quote mode requires base-unit volumes and the instrument's price currency metadata.
+///
+/// In supplied units a non-finite volume has no value and adds nothing; in quote units it
+/// makes its entire window unavailable. The chart supplies its
 /// interval through [`Indicator::set_bar_clock`] and the candles through
 /// [`Indicator::update_data`]; a direct caller on bars longer than a day passes a clock of that
 /// interval, without which every bar is summed as an intraday bar.
@@ -63,15 +77,20 @@ pub struct Volume24h {
     clock: BarClock,
     /// Whether `values` were summed from lower-interval candles rather than chart bars.
     from_candles: bool,
+    quote_units: bool,
+    currency: Option<String>,
+    precision: Option<usize>,
+    table: StudyTable,
     color: Color32,
     visible: bool,
 }
 
 #[derive(Clone, Default)]
 struct State {
-    /// Open time and volume of each bar in the window, oldest first.
-    window: VecDeque<(DateTime<Utc>, f64)>,
+    /// Open time and amount of each bar in the window, oldest first; None is invalid quote data.
+    window: VecDeque<(DateTime<Utc>, Option<f64>)>,
     sum: f64,
+    invalid: usize,
 }
 
 impl Volume24h {
@@ -82,9 +101,62 @@ impl Volume24h {
             stepper: Stepper::default(),
             clock: BarClock::new(Timeframe::Min1),
             from_candles: false,
+            quote_units: false,
+            currency: None,
+            precision: None,
+            table: StudyTable::default(),
             color: palette::BLUE,
             visible: true,
         }
+    }
+
+    fn clear(&mut self) {
+        self.values.clear();
+        self.stepper = Stepper::default();
+        self.from_candles = false;
+        self.update_table();
+    }
+
+    fn amount(bar: &Bar, quote_units: bool) -> Option<f64> {
+        let amount = if quote_units {
+            if !bar.close.is_finite() || bar.volume < 0.0 {
+                return None;
+            }
+            bar.volume * bar.close
+        } else {
+            bar.volume
+        };
+        amount.is_finite().then_some(amount)
+    }
+
+    fn unit(&self) -> &str {
+        if self.quote_units {
+            self.currency
+                .as_deref()
+                .unwrap_or("quote currency unavailable")
+        } else {
+            "supplied units"
+        }
+    }
+
+    fn update_table(&mut self) {
+        let value = self
+            .values
+            .len()
+            .checked_sub(1)
+            .and_then(|i| self.values.value(0, i));
+        self.table = StudyTable {
+            title: "24-hour Volume".into(),
+            columns: vec![self.line_names().remove(0)],
+            rows: vec![vec![StudyCell::Text(match value {
+                Some(value) => self.format_value(value),
+                None if self.quote_units && self.currency.is_none() => {
+                    "Quote currency unavailable".into()
+                }
+                None if self.quote_units => "Quote amount unavailable".into(),
+                None => "Volume unavailable".into(),
+            })]],
+        };
     }
 
     /// The lower interval read where chart bars cannot hold exactly the last 24 hours: on
@@ -111,7 +183,7 @@ impl Volume24h {
         }
         let ranges = lower_interval::nest(&self.clock, lower, data, candles, from);
         for (i, range) in (from..).zip(ranges) {
-            if range.is_empty() || !data[i].close.is_finite() {
+            if range.is_empty() || (!self.quote_units && !data[i].close.is_finite()) {
                 continue;
             }
             let last = range.end - 1;
@@ -126,12 +198,26 @@ impl Volume24h {
             // shortcut: sums each window afresh, up to 86,400 candles a bar on one-second
             // candles (intervals of a few seconds that do not divide the day); slide the window
             // if such charts become slow.
-            let sum = candles[first..range.end]
-                .iter()
-                .map(|candle| candle.volume)
-                .sum();
-            self.values.set_value(0, i, sum);
+            let sum = if self.quote_units {
+                candles[first..range.end]
+                    .iter()
+                    .map(|candle| Self::amount(candle, true))
+                    .sum::<Option<f64>>()
+                    .filter(|sum| sum.is_finite())
+                    .filter(|_| self.currency.is_some())
+            } else {
+                Some(
+                    candles[first..range.end]
+                        .iter()
+                        .map(|candle| candle.volume)
+                        .sum(),
+                )
+            };
+            if let Some(sum) = sum {
+                self.values.set_value(0, i, sum);
+            }
         }
+        self.update_table();
     }
 }
 
@@ -142,6 +228,33 @@ impl Default for Volume24h {
 }
 
 impl Indicator for Volume24h {
+    fn inputs(&self) -> Vec<StudyInput> {
+        vec![
+            StudyInput::new(
+                "units",
+                "Units",
+                InputValue::Choice(usize::from(self.quote_units)),
+                InputKind::Choice(vec![
+                    "Supplied volume".into(),
+                    "Quote currency (volume in base units)".into(),
+                ]),
+            )
+            .with_default(InputValue::Choice(0)),
+        ]
+    }
+
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+        if id != "units" {
+            return Err("unknown study input");
+        }
+        let InputValue::Choice(units @ 0..=1) = value else {
+            return Err("study input is outside its accepted values");
+        };
+        self.quote_units = units == 1;
+        self.clear();
+        Ok(())
+    }
+
     fn name(&self) -> &str {
         "24-hour Volume"
     }
@@ -151,7 +264,50 @@ impl Indicator for Volume24h {
     }
 
     fn value_format(&self) -> crate::scales::StudyFormat {
-        crate::scales::StudyFormat::Volume
+        if self.quote_units {
+            crate::scales::StudyFormat::Fixed(2)
+        } else {
+            crate::scales::StudyFormat::Volume
+        }
+    }
+
+    fn precision(&self) -> Option<usize> {
+        self.precision.or(self.quote_units.then_some(2))
+    }
+
+    fn set_label_precision(&mut self, precision: Option<usize>) {
+        self.precision = precision;
+        self.update_table();
+    }
+
+    fn format_value(&self, value: f64) -> String {
+        let value = self.value_format().format(value, self.precision());
+        format!("{value} {}", self.unit())
+    }
+
+    fn line_names(&self) -> Vec<String> {
+        vec![format!(
+            "{} ({})",
+            if self.quote_units { "Amount" } else { "Volume" },
+            self.unit()
+        )]
+    }
+
+    fn table(&self) -> Option<&StudyTable> {
+        Some(&self.table)
+    }
+
+    fn set_instrument(&mut self, instrument: Option<&crate::model::Instrument>) -> bool {
+        let currency = instrument
+            .and_then(|i| i.currency.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if self.currency.as_deref() == currency {
+            return false;
+        }
+        self.currency = currency.map(str::to_owned);
+        self.clear();
+        true
     }
 
     fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {
@@ -178,9 +334,11 @@ impl Indicator for Volume24h {
             .clock
             .timeframe()
             .is_some_and(|timeframe| timeframe.duration_ms() > Timeframe::Day1.duration_ms());
+        let quote_units = self.quote_units;
+        let available = !quote_units || self.currency.is_some();
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                if long_bars || !bar.volume.is_finite() {
+                if long_bars || !available || (!quote_units && !bar.volume.is_finite()) {
                     return IndicatorValue::None;
                 }
                 let start = bar
@@ -192,31 +350,43 @@ impl Indicator for Volume24h {
                     && time <= start
                 {
                     state.window.pop_front();
-                    state.sum -= volume;
-                    largest = largest.max(volume.abs());
+                    if let Some(volume) = volume {
+                        state.sum -= volume;
+                        largest = largest.max(volume.abs());
+                    } else {
+                        state.invalid -= 1;
+                    }
                 }
                 if largest > state.sum.abs() {
                     // A removed volume that dominated the sum leaves its rounding behind:
                     // add the window again so the error does not linger.
-                    state.sum = state.window.iter().map(|&(_, volume)| volume).sum();
+                    state.sum = state.window.iter().filter_map(|&(_, volume)| volume).sum();
                 }
-                state.window.push_back((bar.time, bar.volume));
-                state.sum += bar.volume;
+                let amount = Self::amount(bar, quote_units);
+                state.window.push_back((bar.time, amount));
+                if let Some(amount) = amount {
+                    state.sum += amount;
+                } else {
+                    state.invalid += 1;
+                }
                 // Overflow of a finite sum must not poison later ordinary windows.
                 if !state.sum.is_finite() {
-                    state.sum = state.window.iter().map(|&(_, volume)| volume).sum();
+                    state.sum = state.window.iter().filter_map(|&(_, volume)| volume).sum();
                 }
-                IndicatorValue::Single(state.sum)
+                if state.invalid == 0 && state.sum.is_finite() {
+                    IndicatorValue::Single(state.sum)
+                } else {
+                    IndicatorValue::None
+                }
             });
+        self.update_table();
     }
 
     fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
         let changed = self.clock != *clock;
         if changed {
             self.clock = clock.clone();
-            self.values.clear();
-            self.stepper = Stepper::default();
-            self.from_candles = false;
+            self.clear();
         }
         changed
     }
@@ -233,7 +403,32 @@ impl Indicator for Volume24h {
             return self.update(data, from);
         };
         let from = from.min(self.values.len()).min(data.len());
-        match lower_interval::reply(&lower_interval::request(lower), from, sources) {
+        let request = lower_interval::request(lower);
+        let candles = if self.quote_units {
+            // Validate the series here: invalid amounts affect their own windows, not all history.
+            match sources.iter().find(|source| source.request == request) {
+                Some(source)
+                    if source.timeframe != lower
+                        || (from == 0
+                            && source
+                                .bars
+                                .windows(2)
+                                .any(|pair| pair[0].time >= pair[1].time)) =>
+                {
+                    None
+                }
+                Some(source) => Some(source.bars),
+                None => Some(&[][..]),
+            }
+        } else {
+            lower_interval::reply(&request, from, sources)
+        };
+        match candles {
+            None if self.quote_units => {
+                self.clear();
+                self.values = IndicatorValues::missing(data.len());
+                self.update_table();
+            }
             None => {}
             Some([]) => self.update(data, from),
             Some(candles) => self.sum_candles(data, from, lower, candles),
@@ -279,6 +474,260 @@ impl Indicator for Volume24h {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    /// Both paths use each contributing bar's close, and an unusable quote amount stays
+    /// missing until that candle expires rather than silently becoming supplied volume.
+    #[test]
+    fn units_use_each_candle_close_and_recover_after_expiry() {
+        use crate::model::Instrument;
+        use crate::studies::{InputValue, StudyCell};
+        let bar = |h: i64, volume, close| {
+            Bar::new(
+                Utc.timestamp_opt(h * 3_600, 0).unwrap(),
+                close,
+                close,
+                close,
+                close,
+                volume,
+            )
+        };
+        let five_hours = Timeframe::Custom(std::num::NonZeroU64::new(18_000).unwrap());
+        // 2 + 3 = 5; 2×10 + 3×20 = 80. At hour 24 the first bar expires:
+        // 3 + 4 = 7 and 3×20 + 4×30 = 180. Lower candles end at their close.
+        for (interval, data, candles, supplied, quote) in [
+            (
+                Timeframe::Hour1,
+                vec![
+                    bar(0, 2.0, 10.0),
+                    bar(1, 3.0, 20.0),
+                    bar(24, 4.0, 30.0),
+                    bar(25, 1.0, 40.0),
+                ],
+                vec![],
+                vec![Some(2.0), Some(5.0), Some(7.0), Some(5.0)],
+                vec![Some(20.0), Some(80.0), Some(180.0), Some(160.0)],
+            ),
+            (
+                five_hours,
+                vec![bar(0, 99.0, 100.0), bar(24, 99.0, 100.0)],
+                vec![
+                    bar(0, 2.0, 10.0),
+                    bar(1, 3.0, 20.0),
+                    bar(24, 4.0, 30.0),
+                    bar(25, 1.0, 40.0),
+                ],
+                vec![Some(5.0), Some(5.0)],
+                vec![Some(80.0), Some(160.0)],
+            ),
+            (
+                Timeframe::Week1,
+                vec![bar(4 * 24, 99.0, 100.0), bar(11 * 24, 99.0, 100.0)],
+                vec![
+                    bar(7 * 24 + 15, 7.0, 5.0),
+                    bar(7 * 24 + 16, 2.0, 10.0),
+                    bar(8 * 24 + 15, 3.0, 20.0),
+                    bar(17 * 24, 4.0, 30.0),
+                    bar(17 * 24 + 23, 1.0, 40.0),
+                ],
+                vec![Some(5.0), Some(5.0)],
+                vec![Some(80.0), Some(160.0)],
+            ),
+        ] {
+            for (units, expected) in [(0, supplied), (1, quote)] {
+                let mut study = Volume24h::new();
+                study.set_instrument(Some(&Instrument::new("TEST").with_currency("USD")));
+                study.set_bar_clock(&BarClock::new(interval));
+                study.set_input("units", InputValue::Choice(units)).unwrap();
+                let lower = study.lower_timeframe().unwrap_or(Timeframe::Hour1);
+                let source = StudyData {
+                    request: lower_interval::request(lower),
+                    bars: &candles,
+                    clock: BarClock::new(lower),
+                    instrument: None,
+                    timeframe: lower,
+                };
+                for end in 1..=data.len() {
+                    study.update_data(&data[..end], end - 1, std::slice::from_ref(&source));
+                    assert_eq!(
+                        study.values().value(0, end - 1),
+                        expected[end - 1],
+                        "{interval:?}, units {units}, bar {}",
+                        end - 1
+                    );
+                }
+                study.update_data(&data, 0, &[source]);
+                assert_eq!(
+                    (0..data.len())
+                        .map(|i| study.values().value(0, i))
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+            }
+        }
+        for (volume, close) in [
+            (2.0, f64::NAN),
+            (2.0, f64::INFINITY),
+            (f64::NAN, 10.0),
+            (-2.0, 10.0),
+            (1e308, 10.0),
+        ] {
+            for interval in [Timeframe::Hour1, five_hours, Timeframe::Week1] {
+                let mut study = Volume24h::new();
+                study.set_input("units", InputValue::Choice(1)).unwrap();
+                study.set_instrument(Some(&Instrument::new("TEST").with_currency("USD")));
+                study.set_bar_clock(&BarClock::new(interval));
+                let (data, candles, expected) = if interval == Timeframe::Hour1 {
+                    (
+                        vec![bar(0, volume, close), bar(1, 3.0, 20.0), bar(24, 4.0, 30.0)],
+                        vec![],
+                        vec![None, None, Some(180.0)],
+                    )
+                } else if interval == five_hours {
+                    (
+                        vec![bar(0, 99.0, 100.0), bar(24, 99.0, 100.0)],
+                        vec![bar(0, volume, close), bar(1, 3.0, 20.0), bar(24, 4.0, 30.0)],
+                        vec![None, Some(180.0)],
+                    )
+                } else {
+                    (
+                        vec![bar(4 * 24, 99.0, 100.0), bar(11 * 24, 99.0, 100.0)],
+                        vec![
+                            bar(7 * 24 + 16, volume, close),
+                            bar(8 * 24 + 15, 3.0, 20.0),
+                            bar(17 * 24 + 23, 4.0, 30.0),
+                        ],
+                        vec![None, Some(120.0)],
+                    )
+                };
+                let lower = study.lower_timeframe().unwrap_or(Timeframe::Hour1);
+                let source = StudyData {
+                    request: lower_interval::request(lower),
+                    bars: &candles,
+                    clock: BarClock::new(lower),
+                    instrument: None,
+                    timeframe: lower,
+                };
+                study.update_data(&data, 0, &[source]);
+                assert_eq!(
+                    (0..data.len())
+                        .map(|i| study.values().value(0, i))
+                        .collect::<Vec<_>>(),
+                    expected,
+                    "{interval:?}, {volume} × {close}"
+                );
+                study.set_instrument(None);
+                study.update_data(&data, 0, &[]);
+                assert!((0..data.len()).all(|i| study.values().value(0, i).is_none()));
+                assert_eq!(
+                    study.table().unwrap().rows[0][0],
+                    StudyCell::Text("Quote currency unavailable".into())
+                );
+            }
+        }
+    }
+
+    /// Saved settings retain the unit choice and all public readouts describe the same amount.
+    #[cfg(all(feature = "widget", feature = "drawings"))]
+    #[test]
+    fn units_survive_templates_and_layouts_with_labelled_readouts() {
+        use crate::model::{BarData, Instrument};
+        use crate::studies::{InputValue, StudyTemplate};
+        use crate::widget::{Chart, ChartLayoutMode, SavedLayout};
+        let data = [0_i64, 1].map(|h| {
+            let (volume, close) = if h == 0 { (2.0, 10.0) } else { (3.0, 20.0) };
+            Bar::new(
+                Utc.timestamp_opt(h * 3_600, 0).unwrap(),
+                close,
+                close,
+                close,
+                close,
+                volume,
+            )
+        });
+        for (units, label, value, formatted) in [
+            (0, "Volume (supplied units)", 5.0, "5 supplied units"),
+            (1, "Amount (USD)", 80.0, "80.00 USD"),
+        ] {
+            let mut study = Volume24h::new();
+            study.set_input("units", InputValue::Choice(units)).unwrap();
+            let json = serde_json::to_string(&StudyTemplate::from_study(&study)).unwrap();
+            let restored = serde_json::from_str::<StudyTemplate>(&json)
+                .unwrap()
+                .create()
+                .unwrap();
+            let mut chart = Chart::new(BarData::from_bars(data.to_vec()));
+            chart.set_timeframe(Timeframe::Hour1);
+            chart.set_instrument(Some(Instrument::new("TEST").with_currency("USD")));
+            let id = chart.add_indicator(restored);
+            let study = chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap()
+                .1;
+            assert_eq!(study.values().value(0, 1), Some(value));
+            assert_eq!(study.line_names(), [label]);
+            assert_eq!(study.format_value(value), formatted);
+            let table = chart.data_table();
+            assert_eq!(
+                table.headers.last().unwrap(),
+                &format!("24-hour Volume: {label}")
+            );
+            assert_eq!(
+                table.rows[1].last().unwrap(),
+                if units == 0 { "5.00" } else { "80.00" }
+            );
+            let saved = SavedLayout {
+                mode: ChartLayoutMode::Single,
+                charts: vec![chart.snapshot().unwrap()],
+            };
+            let saved = SavedLayout::from_json(&saved.to_json().unwrap()).unwrap();
+            let mut restored = Chart::new(BarData::from_bars(data.to_vec()));
+            restored.set_instrument(Some(Instrument::new("TEST").with_currency("USD")));
+            restored.restore(&saved.charts[0]).unwrap();
+            let study = restored.indicators().next().unwrap().1;
+            assert_eq!(
+                study
+                    .inputs()
+                    .iter()
+                    .find(|input| input.id == "units")
+                    .unwrap()
+                    .value,
+                InputValue::Choice(units)
+            );
+            assert_eq!(restored.data_table().rows[1].last(), table.rows[1].last());
+            let id = restored.indicators().next().unwrap().0;
+            let study = restored.indicator_mut(id).unwrap();
+            let mut settings = study.settings();
+            settings.precision = Some(1);
+            study.apply_settings(&[], settings).unwrap();
+            assert_eq!(
+                study.format_value(value),
+                if units == 0 {
+                    "5.0 supplied units"
+                } else {
+                    "80.0 USD"
+                }
+            );
+            assert_eq!(
+                restored.data_table().rows[1].last().unwrap(),
+                if units == 0 { "5.0" } else { "80.0" }
+            );
+            let study = restored.indicator_mut(id).unwrap();
+            study.set_input("units", InputValue::Choice(0)).unwrap();
+            study.set_value_formatter(Some(std::sync::Arc::new(crate::scales::VolumeFormatter {
+                precision: 3,
+            })));
+            if units == 0 {
+                study.set_input("units", InputValue::Choice(1)).unwrap();
+            } else {
+                let settings = study.settings();
+                study
+                    .apply_settings(&[("units".into(), InputValue::Choice(1))], settings)
+                    .unwrap();
+            }
+            assert_eq!(study.format_value(80.0), "80.0 USD");
+        }
+    }
 
     /// Each value is the sum of its own window, even after a volume too large for the others to
     /// register in a running sum has left it.
