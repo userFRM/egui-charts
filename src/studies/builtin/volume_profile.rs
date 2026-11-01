@@ -278,8 +278,7 @@ impl ProfileStudy {
     /// emptied for a recompute.
     fn finer(&self) -> Option<Timeframe> {
         let shorter = |source: &Timeframe| {
-            !matches!(source, Timeframe::Ticks(_))
-                && source.duration_ms() < self.interval.duration_ms()
+            !source.is_trade_based() && source.duration_ms() < self.interval.duration_ms()
         };
         // The chart interval may have changed since.
         if let Some((timeframe, _)) = self.held.filter(|_| self.data.is_empty()) {
@@ -288,12 +287,7 @@ impl ProfileStudy {
         if self.source.is_some() || !self.feed_source || self.resolutions.is_empty() {
             return self.source.filter(shorter);
         }
-        let span = self.span()?;
-        self.resolutions
-            .iter()
-            .filter(|hint| shorter(&hint.timeframe) && hint.max_span.is_none_or(|max| span <= max))
-            .min_by_key(|hint| hint.timeframe.duration_ms())
-            .map(|hint| hint.timeframe)
+        ProfileResolution::suggested(&self.resolutions, self.interval, self.span()?)
     }
 
     /// Profile length from first open to last close: visible bars for a visible profile,
@@ -373,30 +367,6 @@ impl ProfileStudy {
             None => self.fine.clear(),
         }
         self.update(data, from);
-    }
-
-    /// The bars that feed the profile of chart bars `range`: the finer bars inside each chart
-    /// bar, or the chart bar itself where there are none, and the share of chart bars with
-    /// finer bars.
-    fn inputs_of(&self, range: &Range<usize>) -> (Vec<Bar>, f64) {
-        let mut bars = Vec::new();
-        let mut covered = 0;
-        for i in range.clone() {
-            let start = self.data[i].time;
-            let end = self
-                .data
-                .get(i + 1)
-                .map_or_else(|| self.close(start), |next| next.time);
-            let inside = &self.fine[self.fine.partition_point(|bar| bar.time < start)
-                ..self.fine.partition_point(|bar| bar.time < end)];
-            if inside.is_empty() {
-                bars.push(self.data[i].clone());
-            } else {
-                covered += 1;
-                bars.extend_from_slice(inside);
-            }
-        }
-        (bars, covered as f64 / range.len() as f64)
     }
 
     /// What each profile in `visible` was built from.
@@ -584,8 +554,19 @@ impl ProfileStudy {
             }) {
                 profiles.push(plot.plot.clone());
             } else if self.finer().is_some() && !self.fine.is_empty() {
-                let (bars, coverage) = self.inputs_of(&range);
-                let Some(profile) = VolumeProfile::from_bars(&bars, config) else {
+                let end = self.data.get(range.end).map_or_else(
+                    || self.close(self.data[range.end - 1].time),
+                    |next| next.time,
+                );
+                let (profile, covered) = VolumeProfile::of_finer(
+                    &self.data[range.clone()],
+                    end,
+                    &self.fine,
+                    config.rows(),
+                    config.row_size(),
+                );
+                let coverage = covered as f64 / range.len() as f64;
+                let Some(profile) = profile else {
                     continue;
                 };
                 let plot = StudyProfile {
@@ -944,6 +925,10 @@ mod tests {
             })
             .collect();
         let instrument = Instrument::new("SYNTH").with_profile_resolutions([
+            ProfileResolution::new(
+                Timeframe::Volume(std::num::NonZeroU64::new(1).unwrap()),
+                None,
+            ),
             ProfileResolution::new(Timeframe::Min1, Some(TimeDelta::hours(2))),
             ProfileResolution::new(Timeframe::Min5, Some(TimeDelta::hours(4))),
             ProfileResolution::new(Timeframe::Min15, None),

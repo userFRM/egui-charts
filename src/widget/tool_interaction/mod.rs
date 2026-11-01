@@ -35,6 +35,28 @@ impl Chart {
         .then_some(timeframe)
     }
 
+    /// Suggested finer histories and first opens of the visible profile drawings' spans.
+    pub(super) fn profile_histories(
+        &self,
+        drawings: &DrawingManager,
+    ) -> Vec<(
+        crate::studies::StudyDataRequest,
+        chrono::DateTime<chrono::Utc>,
+    )> {
+        let (Some(timeframe), Some(instrument)) = (self.drawing_timeframe(), self.instrument())
+        else {
+            return Vec::new();
+        };
+        let bars = self.state.shown();
+        drawings
+            .drawings
+            .iter()
+            .filter_map(|drawing| {
+                drawing.profile_history(bars, timeframe, &instrument.profile_resolutions)
+            })
+            .collect()
+    }
+
     /// Handles drawing tool interaction and rendering
     ///
     /// This is the main entry point for drawing handling, coordinating:
@@ -346,6 +368,15 @@ impl Chart {
                         .any(|drawing| drawing.reads_profile())
             })
             .and_then(|time| self.feed_link.as_ref()?.footprint(Some(time)));
+        let finer = self.study_data.data(
+            self.profile_histories(drawing_manager)
+                .into_iter()
+                .map(|(request, _)| request)
+                .collect(),
+            &self.symbol,
+            self.timeframe,
+            self.replay_time(),
+        );
         // Render existing drawings against the chart's bars
         let view = ChartView {
             price_formatter: self.value_formatters().price,
@@ -363,6 +394,8 @@ impl Chart {
                     .as_ref()
                     .and_then(|link| link.footprint.as_ref())
             },
+            timeframe: self.drawing_timeframe(),
+            finer: &finer,
         };
         drawing_manager.render_all(painter, price_rect, &view);
         if drawing_manager.text_editor.as_ref().is_some_and(|editor| {

@@ -80,6 +80,8 @@ mod tests {
                 y_to_price: &|y| f64::from((y - 200.0) / (direction * 10.0)),
                 time_axis: true,
                 executions: None,
+                timeframe: None,
+                finer: &[],
             };
             let ctx = egui::Context::default();
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {

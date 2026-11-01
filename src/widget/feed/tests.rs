@@ -2665,6 +2665,8 @@ fn profile_drawings_read_executions_on_every_time_based_chart_type() {
             y_to_price: &f64::from,
             time_axis: true,
             executions: chart.feed_link.as_ref().unwrap().footprint.as_ref(),
+            timeframe: None,
+            finer: &[],
         };
         drawing.volume_profile_of(&view)
     };

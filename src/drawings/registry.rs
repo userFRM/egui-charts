@@ -175,6 +175,8 @@ mod tests {
                     revision: 0,
                     time_axis: true,
                     executions: None,
+                    timeframe: None,
+                    finer: &[],
                     bar_to_x: &|x| x,
                     price_to_y: &|y| y as f32,
                     y_to_price: &f64::from,
