@@ -360,6 +360,7 @@ pub use mfi::MoneyFlowIndex;
 pub use obv::OnBalanceVolume;
 pub use twap::TimeWeightedAvgPrice;
 pub use volume::{Volume, VolumeAverage, VolumeColorRule};
+pub(crate) use volume_profile::time_text;
 pub use volume_profile::{
     ProfileInput, VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
     VolProfileSession, VolProfileVisible,

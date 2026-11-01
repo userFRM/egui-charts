@@ -1821,7 +1821,13 @@ impl Chart {
                     .feed_link
                     .as_ref()
                     .and_then(|link| link.footprint.as_ref())
-                    .filter(|_| time_based && self.replay.is_none());
+                    .filter(|_| {
+                        time_based
+                            && self.replay.is_none()
+                            && (self.chart_type == ChartType::VolumeFootprint
+                                || (self.chart_type == ChartType::SessionVolumeProfile
+                                    && cfg!(feature = "studies")))
+                    });
                 let feed_config = feed.map(|_| FootprintConfig {
                     text_color: colors.text,
                     neutral_color: colors.text,

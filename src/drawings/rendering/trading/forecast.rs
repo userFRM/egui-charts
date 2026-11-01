@@ -228,6 +228,8 @@ mod tests {
                             y_to_price: &f64::from,
                             time_axis,
                             executions: None,
+                            timeframe: None,
+                            finer: &[],
                         },
                     );
                 });
