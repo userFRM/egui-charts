@@ -1877,11 +1877,20 @@ mod tests {
                     event: OrderEvent::Cancel { id: 3 },
                 },
             );
+            let events = host.events();
             assert_eq!(
-                of_kind(host.events(), "Spoofing").len(),
+                of_kind(events.clone(), "Spoofing").len(),
                 usize::from(expected),
                 "{name}"
             );
+            if expected {
+                let pulls = of_kind(events, "Pulled liquidity");
+                assert_eq!(pulls.len(), 1);
+                assert_eq!(
+                    pulls[0].label, None,
+                    "the coincident spoof supplies the label"
+                );
+            }
         }
         let host = Host::new(Some(1_000.0));
         let mut settings = host.detectors.settings();

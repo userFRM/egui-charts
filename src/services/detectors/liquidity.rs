@@ -224,13 +224,15 @@ impl Liquidity {
         for price in pulled {
             let level = self.levels.remove(&price).unwrap();
             out.push(Self::zone(price, tick, &level, Some(time)));
-            out.push(Self::marker(
-                DetectionKind::PulledLiquidity,
-                price,
-                time,
-                tick,
-                &level,
-            ));
+            let mut marker =
+                Self::marker(DetectionKind::PulledLiquidity, price, time, tick, &level);
+            if let SignalEvent::Upsert(signal) = &mut marker
+                && out.iter().any(|event| matches!(event, SignalEvent::Upsert(other)
+                    if other.category == DetectionKind::Spoofing.category() && other.shape == signal.shape))
+            {
+                signal.label = None;
+            }
+            out.push(marker);
         }
         for (&price, shown) in &book.levels {
             let added = (shown.size - before.size(price)).max(0.0);
