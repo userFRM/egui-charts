@@ -5157,6 +5157,58 @@ mod tests {
         }
     }
 
+    /// Sixty one-minute slots keep clock labels when a weekend is in view or in the
+    /// prefetched keys, and when an overnight gap falls inside the view.
+    #[test]
+    fn intraday_time_labels_keep_their_density_across_session_gaps() {
+        use crate::model::{Bar, BarData, LogicalRange, Timeframe};
+        use chrono::{Duration, TimeZone, Utc};
+        let bars: Vec<_> = [5, 8, 9]
+            .into_iter()
+            .flat_map(|day| {
+                let open = Utc.with_ymd_and_hms(2024, 1, day, 14, 30, 0).unwrap();
+                (0..390).map(move |minute| {
+                    Bar::new(
+                        open + Duration::minutes(minute),
+                        100.0,
+                        110.0,
+                        100.0,
+                        110.0,
+                        1.0,
+                    )
+                })
+            })
+            .collect();
+        for (name, left, right) in [
+            ("Monday only", 420.5, 480.5),
+            ("weekend left of the view", 390.5, 450.5),
+            ("weekend in view", 360.5, 420.5),
+            ("overnight in view", 750.5, 810.5),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars.clone()));
+            chart.config.show_volume = false;
+            chart.set_timeframe(Timeframe::Min1);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            assert!(chart.set_visible_logical_range(LogicalRange::new(left, right)));
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let labels: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text)
+                        if text.pos.y > plot.bottom() && text.pos.x < plot.right() =>
+                    {
+                        Some(text.galley.text())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let clocks = labels.iter().filter(|label| label.contains(':')).count();
+            assert!(clocks >= 3, "{name}: {labels:?}");
+        }
+    }
+
     #[test]
     fn time_visibility_flags_reach_axis_and_crosshair() {
         use crate::model::{Bar, BarData, Timeframe};

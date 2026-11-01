@@ -69,7 +69,12 @@ impl HorizontalScale for Box<dyn TimeFormatter> {
             max_marks: ((layout.width / layout.min_spacing).ceil() as usize + 2).clamp(6, 24),
             show_subseconds: bar_duration < Duration::seconds(1),
             use_24_hour: true,
-            target_density: (1.0 * zoom_factor).clamp(0.6, 2.5),
+            // The bar span already accounts for zoom; keep clock labels at a steady density.
+            target_density: if bar_duration < Duration::days(1) {
+                1.0
+            } else {
+                (1.0 * zoom_factor).clamp(0.6, 2.5)
+            },
         };
         TickMarkGenerator::with_formatter(config, (**self).clone_box())
             .with_uniform_distribution(layout.uniform_distribution)
