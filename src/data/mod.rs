@@ -9,7 +9,8 @@
 //! required. The chart calls the feed on the UI thread; implementations should
 //! return promptly, answer each request once through [`Reply`] and push live updates
 //! into the [`Sink`] of a [`Subscription`]. Replies and pushes can come from another
-//! thread, runtime or browser task. No network connection or data provider is built in.
+//! thread, runtime or browser task. The optional `http` adapter connects to a host's server;
+//! no market data provider is built in.
 //!
 //! [`Subscription::clock`] and [`HistoryRequest::clock`] carry the same bar boundaries
 //! so history and streaming aggregation agree. Symbol search is a separate
@@ -38,6 +39,8 @@ use std::time::Duration;
 pub(crate) mod depth;
 mod depth_history;
 mod footprint;
+#[cfg(feature = "http")]
+pub mod http;
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -57,6 +60,7 @@ mod orders;
 mod recording;
 mod replay;
 mod resample;
+mod study;
 mod targets;
 mod volume_profile;
 pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
@@ -88,6 +92,7 @@ pub use replay::{MarketEvent, ReplayClock, ReplayDriver, ReplayEvent};
 #[cfg(feature = "studies")]
 pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session};
+pub use study::{StudyData, StudyDataRequest};
 pub use targets::PriceTargets;
 pub use trades::{CombinedTrade, ConsumedOrder, combine_trades};
 pub use volume_profile::{
@@ -140,7 +145,8 @@ pub trait Datafeed: MaybeSend + 'static {
     }
 
     /// Describes `symbol`. The default reports [`Instrument::new`] of the symbol.
-    /// Fill [`Instrument::profile_resolutions`] to suggest the bars volume profile studies read.
+    /// Fill [`Instrument::profile_resolutions`] to suggest the bars volume profile studies and
+    /// drawings read.
     fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
         reply.send(Ok(Instrument::new(symbol)));
     }

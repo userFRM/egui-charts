@@ -307,7 +307,7 @@ impl Bar {
 /// last bar updates, or a bar inside the span is corrected.
 #[cfg(feature = "widget")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SpanFingerprint {
+pub(crate) struct SpanFingerprint {
     first: usize,
     len: usize,
     first_time: i64,
@@ -319,7 +319,7 @@ struct SpanFingerprint {
 
 #[cfg(feature = "widget")]
 impl SpanFingerprint {
-    fn of(first: usize, bars: &[Bar], revision: u64) -> Self {
+    pub(crate) fn of(first: usize, bars: &[Bar], revision: u64) -> Self {
         let (first_bar, last_bar) = match (bars.first(), bars.last()) {
             (Some(first), Some(last)) => (
                 (first.time.timestamp_millis(), first.close.to_bits()),

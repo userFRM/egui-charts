@@ -484,6 +484,10 @@ impl Chart {
         chart.chart_options.time_scale.timezone = self.display_timezone();
         chart.chart_type = self.chart_type;
         chart.chart_type_params = self.chart_type_params.clone();
+        #[cfg(feature = "studies")]
+        {
+            chart.trade_profiles = self.trade_profiles.clone();
+        }
         chart.pending_box_sizes = self.pending_box_sizes;
         chart.main_series_visible = self.main_series_visible;
         chart.main_series_present = self.main_series_present;

@@ -603,6 +603,8 @@ mod tests {
                     instrument: None,
                     bars: &bars,
                     executions: None,
+                    timeframe: None,
+                    finer: &[],
                     revision: 0,
                     bar_to_x: &|b| b,
                     price_to_y: &|p| p as f32,

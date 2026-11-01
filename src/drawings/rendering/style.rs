@@ -485,6 +485,8 @@ mod tests {
                         y_to_price: &f64::from,
                         time_axis: true,
                         executions: None,
+                        timeframe: None,
+                        finer: &[],
                     },
                     selected,
                 );
@@ -994,6 +996,8 @@ mod tests {
                     y_to_price: &f64::from,
                     time_axis: true,
                     executions: None,
+                    timeframe: None,
+                    finer: &[],
                 };
                 drawing.render_original(ui.painter(), pane, &view);
             });

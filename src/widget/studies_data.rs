@@ -197,8 +197,8 @@ impl StudyDataCache {
 }
 
 impl Chart {
-    /// Histories required by the current study inputs, with chart defaults resolved. Hosts
-    /// without a connected feed supply these through [`Self::set_study_data`]. A connected
+    /// Histories required by the current study inputs and profile drawings, with chart defaults
+    /// resolved. Hosts without a connected feed supply these through [`Self::set_study_data`]. A connected
     /// feed receives resolve, history and subscription calls automatically on the next frame.
     pub fn study_data_requests(&self) -> Vec<StudyDataRequest> {
         let mut requests = Vec::new();
@@ -208,6 +208,13 @@ impl Chart {
                 if !requests.contains(&request) {
                     requests.push(request);
                 }
+            }
+        }
+        #[cfg(feature = "drawings")]
+        for (request, _) in self.profile_histories(&self.drawings) {
+            let request = resolved(&request, self.symbol(), self.timeframe());
+            if !requests.contains(&request) {
+                requests.push(request);
             }
         }
         requests
@@ -281,6 +288,14 @@ impl Chart {
                     Some((_, reach)) => *reach = (*reach).min(start),
                     None => reaches.push((request, start)),
                 }
+            }
+        }
+        #[cfg(feature = "drawings")]
+        for (declared, start) in self.profile_histories(&self.drawings) {
+            let request = resolved(&declared, self.symbol(), self.timeframe());
+            match reaches.iter_mut().find(|(known, _)| *known == request) {
+                Some((_, reach)) => *reach = (*reach).min(Some(start)),
+                None => reaches.push((request, Some(start))),
             }
         }
         let first = self.state.data().bars.first().map(|bar| bar.time);
@@ -1592,5 +1607,83 @@ mod tests {
                 .map(|request| (request, Some(DateTime::UNIX_EPOCH)))
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// Drawings request one finer history and page only to their earliest visible anchor.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn drawing_profile_history_stops_at_the_profile_span() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::model::{ChartType, ProfileResolution};
+        use crate::studies::Indicator;
+        let feed = Arc::new(RetryFeed::default());
+        let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&[1.0; 10], 60)));
+        chart.set_symbol("MAIN");
+        chart.set_timeframe(Timeframe::Hour1);
+        chart.set_instrument(Some(Instrument::new("MAIN").with_profile_resolutions([
+            ProfileResolution::new(Timeframe::Min30, Some(Duration::hours(12))),
+        ])));
+        let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+        drawing.chart_points = vec![ChartPoint::new(7.0, 1.0), ChartPoint::new(8.0, 1.0)];
+        chart.drawings_mut().drawings.push(drawing);
+        let request = StudyDataRequest {
+            symbol: "MAIN".into(),
+            timeframe: Some(Timeframe::Min30),
+            metric: None,
+        };
+        assert_eq!(
+            chart.study_data_requests().as_slice(),
+            std::slice::from_ref(&request)
+        );
+        let ctx = egui::Context::default();
+        let fine = bars(&[1.0; 20], 30);
+        let hour = |h| Some(DateTime::UNIX_EPOCH + Duration::hours(h));
+        for (anchor, expected) in [
+            (7.0, vec![None, hour(9), hour(8)]),
+            (5.0, vec![hour(7), hour(6)]),
+        ] {
+            chart.drawings_mut().drawings[0].chart_points[0].bar_idx = anchor;
+            let mut befores = Vec::new();
+            loop {
+                ctx.run_ui(egui::RawInput::default(), |_| {})
+                    .drop_without_applying_deltas();
+                chart.pump_study_data(&ctx, Some(feed.clone()));
+                if let Some(reply) = feed.resolves.lock().unwrap().pop() {
+                    reply.send(Ok(Instrument::new("MAIN")));
+                    continue;
+                }
+                let Some((asked, reply)) = feed.histories.lock().unwrap().pop() else {
+                    break;
+                };
+                befores.push(asked.before);
+                let end =
+                    fine.partition_point(|bar| asked.before.is_none_or(|before| bar.time < before));
+                reply.send(Ok(HistoryPage::new(
+                    fine[end.saturating_sub(2)..end].to_vec(),
+                    end <= 2,
+                )));
+            }
+            assert_eq!(befores, expected, "anchor {anchor}");
+        }
+        // A study sharing the interval still controls its own earlier reach.
+        let mut study = crate::studies::VolProfileFixed::new(2);
+        study
+            .set_input(
+                "source_interval",
+                InputValue::Timeframe(Some(Timeframe::Min30)),
+            )
+            .unwrap();
+        study.set_timeframe(Timeframe::Hour1);
+        study.calculate(&bars(&[1.0; 10], 60));
+        study.set_visible_range(0..10);
+        let id = chart.add_indicator(Box::new(study));
+        assert_eq!(chart.study_data_requests(), [request]);
+        assert_eq!(chart.study_data_reaches()[0].1, hour(0));
+        chart.remove_series(id);
+        chart.drawings_mut().drawings[0].visible = false;
+        assert!(chart.study_data_requests().is_empty());
+        chart.drawings_mut().drawings[0].visible = true;
+        chart.set_chart_type(ChartType::Renko);
+        assert!(chart.study_data_requests().is_empty());
     }
 }

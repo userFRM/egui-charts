@@ -67,6 +67,8 @@
 
 use crate::model::Bar;
 mod footprint_studies;
+#[cfg(feature = "widget")]
+pub(crate) use footprint_studies::footprint_studies_on_rows;
 pub use footprint_studies::{
     FootprintStudy, FootprintStudyConfig, FootprintStudyKind, FootprintStudyState,
     footprint_studies,
@@ -360,6 +362,7 @@ pub use mfi::MoneyFlowIndex;
 pub use obv::OnBalanceVolume;
 pub use twap::TimeWeightedAvgPrice;
 pub use volume::{Volume, VolumeAverage, VolumeColorRule};
+pub(crate) use volume_profile::time_text;
 pub use volume_profile::{
     ProfileInput, VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
     VolProfileSession, VolProfileVisible,
