@@ -1,9 +1,5 @@
 //! Rendering with separate panes above and below the price pane.
 
-use crate::widget::{
-    Chart, IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneId, PaneInteraction,
-    RenderedIndicatorPane,
-};
 use crate::chart::indicators::{
     SelectionDotConfig, hit_test_pane_indicator, render_indicator_selection_dots,
 };
@@ -13,7 +9,39 @@ use crate::localization as l10n;
 use crate::studies::{CustomIndicator, Indicator};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::widget::{
+    Chart, IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneId, PaneInteraction,
+};
 use egui::{Pos2, Rect, Response, Sense, Ui};
+
+/// Information about a rendered indicator pane, used for hit testing and coordinate mapping.
+///
+/// After calling [`Chart::show`], each visible separate-pane indicator
+/// (RSI, MACD, etc.) produces a `RenderedIndicatorPane` entry stored in the chart.
+/// Platform code can use these to implement click-on-indicator-line selection,
+/// tooltip display, or other interactive features.
+///
+/// Retrieve with [`Chart::get_rendered_indicator_panes`].
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct RenderedIndicatorPane {
+    /// Position of the study in [`Chart::indicators`] when the pane was drawn. After a pane's
+    /// close button removed its study, that pane stays in the list until the next frame, and it
+    /// and the panes after it point one position too far.
+    pub indicator_idx: usize,
+    /// Full panel rect (including y-axis labels)
+    pub panel_rect: Rect,
+    /// Chart drawing area rect (excluding y-axis labels)
+    pub chart_rect: Rect,
+    /// Y-axis minimum value
+    pub y_min: f64,
+    /// Y-axis maximum value
+    pub y_max: f64,
+    /// Coordinate parameters for x-axis calculation
+    pub coords: IndicatorCoordParams,
+    /// Full mapping, including manual ranges, scale modes and inversion.
+    pub mapping: crate::chart::coords::ChartMapping,
+}
 
 impl Chart {
     /// Turns the heights requested for the `expanded` panes into stretch factors that give each
