@@ -320,6 +320,7 @@ impl Chart {
             change_marks: None,
             lines: Vec::new(),
         });
+        self.host_events.push(super::ChartEvent::SeriesAdded(id));
         id
     }
 
