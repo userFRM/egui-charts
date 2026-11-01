@@ -531,20 +531,17 @@ mod tests {
                 let time = (start + TimeDelta::milliseconds(inputs[first].0))
                     .format("%H:%M:%S")
                     .to_string();
-                assert!(
-                    h.query_all_by_label(&time).count() > 0,
-                    "{name}: first time"
-                );
                 let price = format!("{:.2}", 100.0 + last as f64 * 0.25);
-                h.get_by_label(&price);
-                assert!(
-                    h.query_all_by_label(&size.to_string()).next().is_some(),
-                    "{name}: total size"
-                );
-                assert!(
-                    h.query_all_by_label(&fills.to_string()).next().is_some(),
-                    "{name}: fill count"
-                );
+                let y = h.get_by_label(&price).rect().center().y;
+                let mut right = 0.0;
+                for label in [time, price, size.to_string(), fills.to_string()] {
+                    let cell = h
+                        .query_all_by_label(&label)
+                        .map(|node| node.rect())
+                        .find(|rect| (rect.center().y - y).abs() < 1.0 && rect.left() >= right)
+                        .unwrap_or_else(|| panic!("{name}: missing {label} in its row and column"));
+                    right = cell.right();
+                }
             }
             if let Some(&(first, last, size, count)) = expected.iter().find(|row| row.3 > 1) {
                 let price = format!("{:.2}", 100.0 + last as f64 * 0.25);
