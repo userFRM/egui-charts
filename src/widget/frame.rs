@@ -924,8 +924,30 @@ impl Chart {
         let drawing_tool_active = self.drawings.active_tool.is_some();
         #[cfg(not(feature = "drawings"))]
         let drawing_tool_active = false;
+        #[cfg(not(feature = "drawings"))]
+        let is_drawing_interaction = false;
+        // The Magic cursor marks while the button is held, so a drag paints rather than pans.
+        #[cfg(feature = "drawings")]
+        let is_drawing_interaction = self.drawings.active_tool.is_some()
+            || self.chart_options.crosshair.style == crate::config::CrosshairStyle::Magic
+            || self.drawings.dragging_handle.is_some()
+            || self.drawings.text_editor.is_some()
+            || self.drawings.curr_drawing.is_some()
+            || ui
+                .input(|i| i.pointer.press_origin().or_else(|| i.pointer.hover_pos()))
+                .is_some_and(|origin| {
+                    self.drawings
+                        .selected_ids()
+                        .any(|id| self.drawings.hit_test_handle_by_id(origin, id).is_some())
+                        || self.drawings.hit_test(origin).is_some_and(|id| {
+                            self.drawings
+                                .drawings
+                                .iter()
+                                .any(|d| d.id == id && !d.locked)
+                        })
+                });
         let show_price_button =
-            self.config.show_plus_button && !eraser_mode && !drawing_tool_active;
+            self.config.show_plus_button && !eraser_mode && !is_drawing_interaction;
         let show_axis_settings = !self.layout_inactive || ui.rect_contains_pointer(rect);
         let axis_interaction = cfg!(feature = "icons")
             && (self.config.show_right_axis || self.config.show_left_axis)
@@ -999,28 +1021,6 @@ impl Chart {
         // Block pan/zoom when drawing tool is active OR when manipulating a drawing
         let time_based = !self.chart_type.is_time_independent();
         let show_volume = self.shows_volume();
-        #[cfg(not(feature = "drawings"))]
-        let is_drawing_interaction = false;
-        // The Magic cursor marks while the button is held, so a drag paints rather than pans.
-        #[cfg(feature = "drawings")]
-        let is_drawing_interaction = self.drawings.active_tool.is_some()
-            || self.chart_options.crosshair.style == crate::config::CrosshairStyle::Magic
-            || self.drawings.dragging_handle.is_some()
-            || self.drawings.text_editor.is_some()
-            || self.drawings.curr_drawing.is_some()
-            || ui
-                .input(|i| i.pointer.press_origin())
-                .is_some_and(|origin| {
-                    self.drawings
-                        .selected_ids()
-                        .any(|id| self.drawings.hit_test_handle_by_id(origin, id).is_some())
-                        || self.drawings.hit_test(origin).is_some_and(|id| {
-                            self.drawings
-                                .drawings
-                                .iter()
-                                .any(|d| d.id == id && !d.locked)
-                        })
-                });
         let pending_price_zoom = self.handle_mouse_wheel(
             ui,
             &time_response,
