@@ -60,6 +60,15 @@ impl Absorption {
         settings: &Detector<AbsorptionRule>,
         out: &mut Vec<SignalEvent>,
     ) {
+        self.advance(
+            fill.ts
+                .checked_sub_signed(TimeDelta::nanoseconds(1))
+                .unwrap_or(fill.ts),
+            tick,
+            book,
+            settings,
+            out,
+        );
         let traded = (fill.price / tick).round() as i64;
         let broken: Vec<_> = self
             .episodes

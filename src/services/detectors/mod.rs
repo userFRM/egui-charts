@@ -553,6 +553,14 @@ impl Tracked {
         settings: &DetectorSettings,
         out: &mut Vec<SignalEvent>,
     ) {
+        self.absorption.advance(
+            time.checked_sub_signed(chrono::TimeDelta::nanoseconds(1))
+                .unwrap_or(time),
+            self.tick,
+            &self.depth,
+            &settings.absorption,
+            out,
+        );
         self.absorption.update(&self.depth, &depth);
         self.liquidity.update(
             &self.depth,
@@ -1481,6 +1489,8 @@ mod tests {
                 ("decimal lots", 0.15, false, false, true),
                 ("less than half remains", 4.0, false, false, false),
                 ("traded through", 10.0, true, false, false),
+                ("idle close before later break", 10.0, true, false, true),
+                ("idle close before withdrawal", 0.0, false, false, true),
                 ("gap", 10.0, false, true, false),
             ] {
                 let host = Host::new(Some(1_000.0));
@@ -1528,20 +1538,27 @@ mod tests {
                     } else {
                         100.25
                     };
+                    let at = time(0)
+                        + chrono::TimeDelta::milliseconds(
+                            if name == "idle close before later break" {
+                                1_500
+                            } else {
+                                500
+                            },
+                        );
                     host.detectors.push(
                         "ES",
-                        time(0) + chrono::TimeDelta::milliseconds(500),
-                        &MarketEvent::Trade(Tick::new(
-                            time(0) + chrono::TimeDelta::milliseconds(500),
-                            price,
-                            1.0,
-                            None,
-                        )),
+                        at,
+                        &MarketEvent::Trade(Tick::new(at, price, 1.0, None)),
                     );
                 }
                 host.detectors.push(
                     "ES",
-                    time(1) + chrono::TimeDelta::milliseconds(200),
+                    if name.starts_with("idle close") {
+                        time(2)
+                    } else {
+                        time(1) + chrono::TimeDelta::milliseconds(200)
+                    },
                     &MarketEvent::DepthDelta {
                         sequence: if gap { 3 } else { 2 },
                         book: book(remaining),
