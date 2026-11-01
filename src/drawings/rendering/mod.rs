@@ -68,7 +68,7 @@ pub struct ChartView<'a> {
     /// Without executions in their span, profile drawings use the interval
     /// [`Instrument::profile_resolutions`](crate::model::Instrument::profile_resolutions)
     /// suggests, replacing covered chart bars with finer bars; `&[]` estimates from `bars`.
-    pub finer: &'a [crate::studies::StudyData<'a>],
+    pub finer: &'a [crate::data::StudyData<'a>],
 }
 
 /// Index of the first bar and the bars from anchor `a` to anchor `b`

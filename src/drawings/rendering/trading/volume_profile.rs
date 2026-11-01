@@ -1,12 +1,11 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
-use crate::data::VolumeProfile;
+use crate::data::{StudyDataRequest, VolumeProfile};
 use crate::drawings::domain::Drawing;
 use crate::drawings::domain::DrawingToolType;
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
 use crate::model::{Bar, ProfileResolution, SpanCache, SpanFingerprint, Timeframe};
 use crate::painting::volume_profile::ProfileStyle;
-use crate::studies::StudyDataRequest;
 use crate::styles::stroke;
 use chrono::{DateTime, Utc};
 use egui::{Color32, Pos2, Shape, Stroke};
@@ -936,7 +935,7 @@ mod tests {
                 volume,
             )
         };
-        let fine = vec![
+        let fine = [
             minute(0, 870, 100.0, 101.0, 60.0),
             minute(0, 871, 109.0, 110.0, 40.0),
             minute(1, 870, 104.0, 106.0, 100.0),

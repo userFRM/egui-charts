@@ -1585,7 +1585,10 @@ mod tests {
             timeframe: Some(Timeframe::Min30),
             metric: None,
         };
-        assert_eq!(chart.study_data_requests(), [request.clone()]);
+        assert_eq!(
+            chart.study_data_requests().as_slice(),
+            std::slice::from_ref(&request)
+        );
         let ctx = egui::Context::default();
         let fine = bars(&[1.0; 20], 30);
         let hour = |h| Some(DateTime::UNIX_EPOCH + Duration::hours(h));
