@@ -207,6 +207,8 @@ pub(crate) struct Market<'a> {
     pub session_open: Option<chrono::DateTime<chrono::Utc>>,
     /// The latest account fill for this symbol.
     pub last_fill: Option<f64>,
+    /// URI of the symbol logo, from the chart instrument or the host description of the symbol.
+    pub logo: Option<&'a str>,
 }
 
 impl<'a> Market<'a> {
@@ -782,6 +784,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            logo: None,
         };
         let ticks = |value| {
             (
@@ -892,6 +895,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            logo: None,
         };
         let ticks = |value| Bracket {
             mode: BracketMode::Ticks,

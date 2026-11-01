@@ -193,6 +193,7 @@ impl Trading {
                             order.request.quantity,
                             self.decimals,
                             false,
+                            self.logo(&order.request.symbol),
                         ),
                     );
                 }
@@ -266,6 +267,7 @@ impl Trading {
                             fill.quantity,
                             self.decimals,
                             true,
+                            self.logo(&executed.symbol),
                         )
                     }
                     None => Toast::success(l10n::format_text(
@@ -463,6 +465,7 @@ fn order_toast(
     quantity: f64,
     decimals: usize,
     executed: bool,
+    logo: Option<&str>,
 ) -> Toast {
     let side = l10n::text(ctx, side_name(request.side));
     let fill = l10n::format_text(
@@ -502,6 +505,7 @@ fn order_toast(
     ));
     toast.trading = Some(crate::ui_kit::notifications::TradingToast {
         symbol: request.symbol.clone(),
+        logo: logo.map(str::to_owned),
         side: request.side,
         quantity,
         price: format!("{price:.decimals$}"),
@@ -983,6 +987,8 @@ mod tests {
             ),
         ] {
             let mut trading = Trading::default();
+            trading
+                .set_instrument(crate::model::Instrument::new("SYM").with_logo("bytes://sym.svg"));
             let mut toasts = Toasts::new();
             let mut request = OrderRequest::new("SYM", OrderSide::Sell, 10.0, kind);
             request.position_bracket = role;
@@ -1004,6 +1010,7 @@ mod tests {
                 Some(format!("{name} order placed on").as_str())
             );
             let details = toast.trading.as_ref().unwrap();
+            assert_eq!(details.logo.as_deref(), Some("bytes://sym.svg"));
             assert_eq!(details.side, OrderSide::Sell);
             assert_eq!(details.quantity, 10.0);
             assert!(!details.executed);
