@@ -649,6 +649,7 @@ fn reaches(change: f64, target: f64) -> bool {
 pub struct AlertFeed {
     feed: std::sync::Arc<dyn crate::data::Datafeed>,
     inbox: std::sync::Arc<crate::data::inbox::Inbox>,
+    wake: std::sync::Arc<std::sync::atomic::AtomicBool>,
     request: crate::data::HistoryRequest,
     metric: Option<String>,
     instrument: Option<crate::model::Instrument>,
@@ -707,6 +708,7 @@ impl AlertFeed {
         Self {
             feed,
             inbox,
+            wake: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             request,
             metric,
             instrument: None,
@@ -772,10 +774,11 @@ impl AlertFeed {
             .iter()
             .enumerate()
             .find_map(|(id, stored)| {
-                let drawing = crate::drawings::persistence::stored_to_drawing(
+                let drawing = crate::drawings::persistence::stored_to_drawing_with(
                     stored,
-                    |ms| {
-                        DateTime::from_timestamp_millis(ms)
+                    |point| {
+                        point
+                            .time()
                             .and_then(|time| {
                                 crate::model::index_at_with_timeframe(
                                     bars,
@@ -807,8 +810,14 @@ impl AlertFeed {
         use crate::data::{
             HistoryPage, MetricPage, MetricRequest, MetricSubscription, Subscription,
         };
-        let wake = ctx.clone();
-        self.inbox.set_waker(move || wake.request_repaint());
+        let repaint = ctx.clone();
+        let viewport = ctx.viewport_id();
+        let wake = std::sync::Arc::clone(&self.wake);
+        self.inbox.set_waker(move || {
+            if wake.load(std::sync::atomic::Ordering::Relaxed) {
+                repaint.request_repaint_of(viewport);
+            }
+        });
         let mut errors = Vec::new();
         let drained = self.inbox.drain();
         for (key, answer) in drained.answers {
@@ -996,6 +1005,8 @@ impl AlertFeed {
 #[cfg(feature = "ui")]
 impl Drop for AlertFeed {
     fn drop(&mut self) {
+        // Unsubscribe may drop a pending reply while the caller holds the context's lock.
+        self.wake.store(false, std::sync::atomic::Ordering::Relaxed);
         if let Some(id) = self.subscription.take() {
             self.inbox.unsubscribe(id);
             self.feed.unsubscribe(id);
@@ -1460,6 +1471,43 @@ mod tests {
         host.engine
             .update("SYM", Timeframe::Min5, &bars, time(1_004), |_, _| None);
         assert!(host.events().is_empty());
+    }
+
+    #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+    #[test]
+    fn dropping_a_feed_under_the_context_lock_does_not_wake_cancelled_replies() {
+        #[derive(Default)]
+        struct Feed(Mutex<Option<Reply<crate::data::HistoryPage>>>);
+        impl crate::data::Datafeed for Feed {
+            fn history(
+                &self,
+                _: crate::data::HistoryRequest,
+                reply: Reply<crate::data::HistoryPage>,
+            ) {
+                *self.0.lock().unwrap() = Some(reply);
+            }
+            fn unsubscribe(&self, _: crate::data::SubscriptionId) {
+                drop(self.0.lock().unwrap().take());
+            }
+        }
+        let (done, finished) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let ctx = egui::Context::default();
+            let host = Arc::new(Feed::default());
+            let mut feed = AlertFeed::new(
+                host.clone(),
+                AlertFeed::history_request("SYM", Timeframe::Min1),
+                None,
+            );
+            assert!(feed.poll(&ctx, time(1000)).is_empty());
+            assert!(host.0.lock().unwrap().is_some());
+            ctx.input(|_| drop(feed));
+            done.send(()).unwrap();
+        });
+        finished
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("dropping cancelled replies must not wait for the context lock");
+        worker.join().unwrap();
     }
 
     #[test]

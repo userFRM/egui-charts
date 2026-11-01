@@ -36,7 +36,7 @@ pub(super) struct State {
 struct Definition {
     sources: Vec<AlertSource>,
     studies: Vec<(SeriesId, Box<dyn Indicator>)>,
-    clock: BarClock,
+    timezone: egui_charts::config::TimezoneMode,
     timeframe: Timeframe,
     scale: PriceScaleMode,
     extended_hours: bool,
@@ -93,11 +93,7 @@ impl Definition {
                 .filter(|(id, study)| required.contains(id) && study.order_flow_inputs().is_empty())
                 .map(|(id, study)| (id, study.clone_box()))
                 .collect(),
-            clock: if chart.timeframe() == alert.timeframe.or(chart.timeframe()) {
-                chart.bar_clock()
-            } else {
-                BarClock::new(alert.timeframe.unwrap_or_default())
-            },
+            timezone: chart.chart_options().time_scale.timezone.clone(),
             timeframe: alert.timeframe.or(chart.timeframe()).unwrap_or_default(),
             scale: chart.config().right_axis_scale_mode,
             extended_hours: chart.extended_hours(),
@@ -108,10 +104,12 @@ impl Definition {
 
     fn request(&self, symbol: &str, timeframe: Timeframe) -> HistoryRequest {
         let mut request = AlertFeed::history_request(symbol, timeframe);
-        request.clock = if self.timeframe == timeframe {
-            self.clock.clone()
-        } else {
-            BarClock::new(timeframe)
+        request.clock = match &self.timezone {
+            egui_charts::config::TimezoneMode::Local => request.clock.with_local_timezone(),
+            zone => request.clock.with_timezone(
+                zone.to_tz()
+                    .unwrap_or_else(egui_charts::model::TimezoneId::utc),
+            ),
         };
         request.count = self.count;
         request.extended_hours = self.extended_hours;
@@ -238,7 +236,6 @@ impl Terminal {
                 && timeframe != definition.timeframe
             {
                 definition.timeframe = timeframe;
-                definition.clock = BarClock::new(timeframe);
             }
             let definition = &*definition;
             for symbol in engine.subjects(id) {
@@ -482,9 +479,12 @@ impl Terminal {
                 alert,
             ))) => self.open_alert(Some(*alert), None),
             Action::ChartMenu(ChartContextAction::Chart(ContextMenuAction::AddAlert {
+                symbol,
                 price,
-                ..
-            })) => self.open_alert(None, Some(price)),
+            })) => self.open_alert(
+                Some(Alert::new(symbol, AlertCondition::Crossing(price))),
+                None,
+            ),
             Action::AlertDialog(AlertDialogAction::Create(alert)) => {
                 let mut alert = *alert;
                 alert.timeframe = alert.timeframe.or(self.chart().timeframe());
@@ -501,15 +501,13 @@ impl Terminal {
                         saved == alert
                     })
                     && let Some(id) = &saved.id
-                {
-                    if self
+                    && self
                         .alerts
                         .definitions
                         .get(id)
                         .is_none_or(|kept| kept.sources != definition.sources)
-                    {
-                        self.alerts.definitions.insert(id.clone(), definition);
-                    }
+                {
+                    self.alerts.definitions.insert(id.clone(), definition);
                 }
             }
             Action::Alerts(AlertPanelAction::ExportLog(csv)) => {
@@ -532,7 +530,7 @@ impl Terminal {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::{SIZE, frame};
+    use crate::test_support::{SIZE, click, frame};
     use crate::{Action, Terminal};
     use chrono::Utc;
     use egui_charts::data::{
@@ -566,7 +564,33 @@ mod tests {
     }
 
     impl Datafeed for Feed {
+        fn resolve(&self, symbol: &str, reply: Reply<egui_charts::model::Instrument>) {
+            use chrono::{NaiveTime, Weekday};
+            use egui_charts::model::{Instrument, Session, SessionWindow};
+            let mut instrument = Instrument::new(symbol);
+            if symbol == "SHOWN" {
+                instrument.session = Some(Session::new([SessionWindow::new(
+                    [
+                        Weekday::Mon,
+                        Weekday::Tue,
+                        Weekday::Wed,
+                        Weekday::Thu,
+                        Weekday::Fri,
+                    ],
+                    NaiveTime::from_hms_opt(9, 32, 0).unwrap(),
+                    NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+                )]));
+            }
+            reply.send(Ok(instrument));
+        }
         fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            if request.symbol == "OTHER" || request.symbol == "THIRD" {
+                assert_eq!(
+                    request.clock,
+                    egui_charts::model::BarClock::new(request.timeframe),
+                    "an always-open member must not inherit the creation chart's session"
+                );
+            }
             let bars = self
                 .history
                 .lock()
@@ -642,6 +666,7 @@ mod tests {
         );
         let mut terminal = Terminal::new(feed.clone())
             .with_symbol("SHOWN")
+            .with_timeframe(Timeframe::Min5)
             .with_alerts(engine.clone());
         let study = terminal.chart_mut().add_indicator(Box::new(SMA::new(2)));
         let mut alert = Alert::new("OTHER", AlertCondition::Above(25.0));
@@ -765,61 +790,108 @@ mod tests {
     }
 
     #[test]
-    fn hidden_drawing_alert_reads_its_symbols_stored_line() {
-        use crate::test_support::MemoryStorage;
-        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
-        let feed = Arc::new(Feed::default());
-        let storage = Arc::new(MemoryStorage::default());
+    fn price_menu_alert_keeps_the_context_symbol() {
         let engine = Arc::new(AlertEngine::new());
-        let mut terminal = Terminal::new(feed.clone())
-            .with_symbol("OTHER")
-            .with_timeframe(Timeframe::Min5)
-            .with_storage(storage.clone())
+        let mut terminal = Terminal::new(Arc::new(Feed::default()))
+            .with_symbol("SHOWN")
             .with_alerts(engine.clone());
         frames(&mut terminal);
-        let mut line = Drawing::new(7, DrawingToolType::TrendLine);
-        line.completed = true;
-        line.chart_points = vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(1.0, 20.0)];
-        terminal
-            .chart_mut()
-            .user_action(|chart| chart.drawings_mut().add_drawing(line).unwrap());
-        let source = terminal
-            .chart()
-            .drawings()
-            .drawings
-            .last()
-            .unwrap()
-            .alert_source(0);
-        frames(&mut terminal);
-        assert!(terminal.flush_storage());
         assert!(
-            storage
-                .get(egui_charts::services::StoreKind::Drawings, "OTHER")
-                .is_some()
+            terminal
+                .run(Action::ChartMenu(
+                    egui_charts::ui::context_menu::ChartContextAction::Chart(
+                        egui_charts::ui::context_menu::ContextMenuAction::AddAlert {
+                            symbol: "OTHER".into(),
+                            price: 25.0,
+                        }
+                    )
+                ))
+                .is_none()
         );
-        terminal.chart_mut().set_symbol("SHOWN");
         frames(&mut terminal);
-        // A price alert already owns this subject's shared reader when drawings are attached.
-        let mut price = Alert::new("OTHER", AlertCondition::Above(1000.0));
-        price.timeframe = Some(Timeframe::Min5);
-        terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
-            price,
-        ))));
+        let screen = frame(&mut terminal, SIZE, vec![]);
+        click(&mut terminal, SIZE, screen.text_at("Save alert").unwrap());
         frames(&mut terminal);
-        let mut alert = Alert::new("OTHER", AlertCondition::Above(25.0));
-        alert.timeframe = Some(Timeframe::Min5);
-        alert.source = source;
-        terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
-            alert,
-        ))));
-        frames(&mut terminal);
-        assert_eq!(engine.alerts().last().unwrap().status, AlertStatus::Active);
-        // The stored line through (0, 10) and (1, 20) has value 30 at bar 2.
-        feed.push("OTHER", Timeframe::Min5, bar(10, 1.0));
-        frames(&mut terminal);
-        assert_eq!(
-            engine.alerts().last().unwrap().status,
-            AlertStatus::Triggered
-        );
+        assert_eq!(engine.alerts()[0].symbol, "OTHER");
+    }
+
+    #[test]
+    fn hidden_drawing_alert_reads_its_symbols_stored_line() {
+        let tick_bar = |nanos, close| {
+            let time = chrono::DateTime::from_timestamp(0, nanos).unwrap();
+            Bar::new(time, close, close, close, close, 1.0)
+        };
+        for (timeframe, history, next) in [
+            (
+                Timeframe::Min5,
+                vec![bar(0, 10.0), bar(5, 20.0)],
+                bar(10, 1.0),
+            ),
+            (
+                "1t".parse().unwrap(),
+                vec![tick_bar(100, 10.0), tick_bar(200, 20.0)],
+                tick_bar(300, 1.0),
+            ),
+        ] {
+            use crate::test_support::MemoryStorage;
+            use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+            let feed = Arc::new(Feed::default());
+            feed.history
+                .lock()
+                .unwrap()
+                .insert(("OTHER".into(), timeframe), history);
+            let storage = Arc::new(MemoryStorage::default());
+            let engine = Arc::new(AlertEngine::new());
+            let mut terminal = Terminal::new(feed.clone())
+                .with_symbol("OTHER")
+                .with_timeframe(timeframe)
+                .with_storage(storage.clone())
+                .with_alerts(engine.clone());
+            frames(&mut terminal);
+            let mut line = Drawing::new(7, DrawingToolType::TrendLine);
+            line.completed = true;
+            line.chart_points = vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(1.0, 20.0)];
+            terminal
+                .chart_mut()
+                .user_action(|chart| chart.drawings_mut().add_drawing(line).unwrap());
+            let source = terminal
+                .chart()
+                .drawings()
+                .drawings
+                .last()
+                .unwrap()
+                .alert_source(0);
+            frames(&mut terminal);
+            assert!(terminal.flush_storage());
+            assert!(
+                storage
+                    .get(egui_charts::services::StoreKind::Drawings, "OTHER")
+                    .is_some()
+            );
+            terminal.chart_mut().set_symbol("SHOWN");
+            frames(&mut terminal);
+            // A price alert already owns this subject's shared reader when drawings are attached.
+            let mut price = Alert::new("OTHER", AlertCondition::Above(1000.0));
+            price.timeframe = Some(timeframe);
+            terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
+                price,
+            ))));
+            frames(&mut terminal);
+            let mut alert = Alert::new("OTHER", AlertCondition::Above(25.0));
+            alert.timeframe = Some(timeframe);
+            alert.source = source;
+            terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
+                alert,
+            ))));
+            frames(&mut terminal);
+            assert_eq!(engine.alerts().last().unwrap().status, AlertStatus::Active);
+            // The stored line through (0, 10) and (1, 20) has value 30 at bar 2.
+            feed.push("OTHER", timeframe, next);
+            frames(&mut terminal);
+            assert_eq!(
+                engine.alerts().last().unwrap().status,
+                AlertStatus::Triggered
+            );
+        }
     }
 }
