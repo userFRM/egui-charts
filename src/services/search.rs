@@ -60,6 +60,20 @@ pub struct SymbolQuery {
     pub limit: usize,
 }
 
+#[cfg(feature = "http")]
+impl SymbolSearch for crate::data::http::HttpDatafeed {
+    fn search(&self, query: SymbolQuery, reply: Reply<Vec<Instrument>>) {
+        self.search_symbols(
+            query.text,
+            query.symbol_type,
+            query.exchange,
+            query.offset,
+            query.limit,
+            reply,
+        );
+    }
+}
+
 /// A fixed list, answered inline: the instruments whose symbol or description contains the text,
 /// ignoring case, and whose type and exchange equal the filters that are set. An instrument whose
 /// symbol equals the text comes first, then those whose symbol starts with it, then the rest, each

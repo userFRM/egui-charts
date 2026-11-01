@@ -78,6 +78,12 @@ pub enum ContextMenuAction {
     MergeTpoNext,
     /// Restore the sessions of the clicked composite TPO profile. Already applied by [`ChartMenus`].
     SplitTpoProfile,
+    /// Merge the clicked execution profile with its previous neighbour. Applied by [`ChartMenus`].
+    MergeTradeProfilePrevious,
+    /// Merge the clicked execution profile with its next neighbour. Applied by [`ChartMenus`].
+    MergeTradeProfileNext,
+    /// Split the clicked execution profile at the selected bar. Applied by [`ChartMenus`].
+    SplitTradeProfile,
     /// Draw a horizontal line at this price in the clicked pane, with the line tool's default
     /// style, and select it. Already applied by [`ChartMenus`].
     DrawHorizontalLine(f64),
@@ -330,7 +336,7 @@ impl ChartContextMenu {
                 .tick_size
                 .filter(|tick| tick.is_finite() && *tick > 0.0)
                 .map_or(self.click_price, |tick| {
-                    crate::chart::to_step(self.click_price, tick, f64::round)
+                    crate::scales::to_step(self.click_price, tick, f64::round)
                 });
             // Above the market a sell waits as a limit order and a buy as a stop order; below it,
             // the other way round. At the market either order can fill immediately.

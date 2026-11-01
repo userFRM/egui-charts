@@ -202,6 +202,9 @@ impl Terminal {
             | ContextMenuAction::MergeTpoPrevious
             | ContextMenuAction::MergeTpoNext
             | ContextMenuAction::SplitTpoProfile
+            | ContextMenuAction::MergeTradeProfilePrevious
+            | ContextMenuAction::MergeTradeProfileNext
+            | ContextMenuAction::SplitTradeProfile
             | ContextMenuAction::DrawHorizontalLine(_) => {}
             menu => return Some(Action::ChartMenu(ChartContextAction::Chart(menu))),
         }

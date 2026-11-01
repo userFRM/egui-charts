@@ -16,7 +16,7 @@ pub use footprint::{
 };
 mod heatmap_strip;
 mod liquidity_heatmap;
-pub use liquidity_heatmap::LiquidityHeatmap;
+pub use liquidity_heatmap::{LiquidityHeatmap, LiquidityHeatmapConfig};
 mod volume_bubbles;
 
 pub use heatmap_strip::{HeatmapCell, HeatmapStrip, HeatmapStripConfig};
@@ -34,4 +34,4 @@ mod trade_profile;
 pub(crate) use trade_profile::render_session_volume_profiles;
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
-pub use trade_profile::render_trade_profiles;
+pub use trade_profile::{TradeProfileSettings, render_trade_profiles};
