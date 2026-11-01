@@ -605,9 +605,17 @@ pub fn crosshair_price_action(
             egui::StrokeKind::Inside,
         );
     }
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Add at price"));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            true,
+            crate::localization::text(ui.ctx(), "Add at price"),
+        )
+    });
     response
-        .on_hover_text("Add at price")
+        .on_hover_ui(|ui| {
+            ui.label(crate::localization::text(ui.ctx(), "Add at price"));
+        })
         .clicked()
         .then_some(price)
 }
@@ -629,8 +637,16 @@ pub fn axis_settings_button(ui: &mut egui::Ui, corner: Rect) -> egui::Response {
             ui,
             Rect::from_center_size(target.center(), Vec2::splat(16.0)),
         );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Scale settings"));
-    response.on_hover_text("Scale settings")
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            true,
+            crate::localization::text(ui.ctx(), "Scale settings"),
+        )
+    });
+    response.on_hover_ui(|ui| {
+        ui.label(crate::localization::text(ui.ctx(), "Scale settings"));
+    })
 }
 
 #[cfg(test)]

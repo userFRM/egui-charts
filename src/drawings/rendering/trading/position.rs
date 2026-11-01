@@ -3,6 +3,7 @@
 use crate::drawings::domain::Drawing;
 use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::drawings::rendering::{ChartView, bars_between};
+use crate::localization as l10n;
 use crate::model::{Bar, percent_change};
 use crate::styles::{stroke, typography};
 use crate::theme::ThemeExt;
@@ -28,7 +29,8 @@ impl Drawing {
             return;
         };
 
-        let theme = painter.ctx().active_theme();
+        let ctx = painter.ctx();
+        let theme = ctx.active_theme();
         let [profit_color, loss_color] = self.position_colors();
         // Opaque, deeper label fills keep white text legible on a light chart too.
         let label_color = |color: Color32| {
@@ -68,7 +70,7 @@ impl Drawing {
             &self.position_sizing,
         );
         let qty_text = qty.map_or_else(
-            || "n/a".to_owned(),
+            || l10n::text(ctx, "n/a"),
             |qty| {
                 if self.position_sizing.quantity_step > 0.0 {
                     let step = self.position_sizing.quantity_step.to_string();
@@ -146,16 +148,30 @@ impl Drawing {
             Stroke::new(line_width, entry_color.gamma_multiply(0.65)),
         );
 
-        let qty_part = format!("Qty: {qty_text}");
+        let capital = qty
+            .and_then(|qty| self.position_sizing.required_capital(entry_price, qty))
+            .map_or_else(|| l10n::text(ctx, "n/a"), |capital| format!("{capital:.2}"));
         let (summary, summary_fill, summary_text) = match exit {
             Some((exit_price, closed, _)) => {
                 let change = side * (exit_price - entry_price);
-                let pnl = money(change).map_or_else(|| "n/a".to_owned(), |pnl| format!("{pnl:.2}"));
+                let pnl =
+                    money(change).map_or_else(|| l10n::text(ctx, "n/a"), |pnl| format!("{pnl:.2}"));
                 let risk_reward = (target_price - entry_price) / (entry_price - stop_price);
-                let summary = format!(
-                    "{} P&L: {pnl} ({:.2}%), {qty_part}\nRisk/Reward: {risk_reward:.2}",
-                    if closed { "Closed" } else { "Open" },
-                    pct(exit_price),
+                let key = if closed {
+                    "Closed P&L: {pnl} ({percent}%), Qty: {quantity}\nRisk/Reward: {ratio}, Capital: {capital}"
+                } else {
+                    "Open P&L: {pnl} ({percent}%), Qty: {quantity}\nRisk/Reward: {ratio}, Capital: {capital}"
+                };
+                let summary = l10n::format_text(
+                    ctx,
+                    key,
+                    &[
+                        ("pnl", pnl.as_str()),
+                        ("percent", format!("{:.2}", pct(exit_price)).as_str()),
+                        ("quantity", qty_text.as_str()),
+                        ("ratio", format!("{risk_reward:.2}").as_str()),
+                        ("capital", capital.as_str()),
+                    ],
                 );
                 let fill = if change >= 0.0 {
                     profit_color
@@ -165,29 +181,41 @@ impl Drawing {
                 (summary, label_color(fill), Color32::WHITE)
             }
             None => (
-                format!("P&L: n/a, {qty_part}\nRisk/Reward: n/a"),
+                l10n::format_text(
+                    ctx,
+                    "P&L: n/a, Qty: {quantity}\nRisk/Reward: n/a, Capital: {capital}",
+                    &[
+                        ("quantity", qty_text.as_str()),
+                        ("capital", capital.as_str()),
+                    ],
+                ),
                 theme.chart.bg_axis,
                 entry_color,
             ),
         };
-        let capital = qty
-            .and_then(|qty| self.position_sizing.required_capital(entry_price, qty))
-            .map_or_else(|| "n/a".to_owned(), |capital| format!("{capital:.2}"));
-        let summary = format!("{summary}, Capital: {capital}");
-        let amount = |price: f64| {
-            money((price - entry_price).abs())
-                .map_or_else(String::new, |amount| format!(", Amount: {amount:.2}"))
+        let amount =
+            |price: f64| money((price - entry_price).abs()).map(|amount| format!("{amount:.2}"));
+        let target_level = format!("{target_price:.2} ({:.2}%)", pct(target_price));
+        let target_label = match amount(target_price) {
+            Some(amount) => l10n::format_text(
+                ctx,
+                "Target: {level}, Amount: {amount}",
+                &[
+                    ("level", target_level.as_str()),
+                    ("amount", amount.as_str()),
+                ],
+            ),
+            None => l10n::format_text(ctx, "Target: {level}", &[("level", target_level.as_str())]),
         };
-        let target_label = format!(
-            "Target: {target_price:.2} ({:.2}%){}",
-            pct(target_price),
-            amount(target_price)
-        );
-        let stop_label = format!(
-            "Stop: {stop_price:.2} ({:.2}%){}",
-            pct(stop_price),
-            amount(stop_price)
-        );
+        let stop_level = format!("{stop_price:.2} ({:.2}%)", pct(stop_price));
+        let stop_label = match amount(stop_price) {
+            Some(amount) => l10n::format_text(
+                ctx,
+                "Stop: {level}, Amount: {amount}",
+                &[("level", stop_level.as_str()), ("amount", amount.as_str())],
+            ),
+            None => l10n::format_text(ctx, "Stop: {level}", &[("level", stop_level.as_str())]),
+        };
 
         // Labels sit on the box's centre line: the stats beside the entry on the stop
         // side, the target and stop levels outside their zones, beyond the stats.
@@ -534,6 +562,37 @@ mod tests {
                         summary.visual_bounding_rect()
                     );
                     output.drop_without_applying_deltas();
+                    if size == PositionSize::RiskAmount(230.0) && !dark && width == 800.0 {
+                        crate::localization::mark_keys(&ctx);
+                        let output = render(&mut chart);
+                        let target_text = if tool == DrawingToolType::LongPos {
+                            "~105.00 (5.00%)~450.00~"
+                        } else {
+                            "~95.00 (5.00%)~450.00~"
+                        };
+                        let stop_text = if tool == DrawingToolType::LongPos {
+                            "~97.50 (-2.50%)~225.00~"
+                        } else {
+                            "~102.50 (-2.50%)~225.00~"
+                        };
+                        let texts: Vec<_> = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                                _ => None,
+                            })
+                            .collect();
+                        output.drop_without_applying_deltas();
+                        for expected in ["~450.00~5.00~0.18~2.00~1800.00~", target_text, stop_text]
+                        {
+                            assert!(
+                                texts.iter().any(|text| text == expected),
+                                "{tool:?}: missing translated {expected}"
+                            );
+                        }
+                    }
+                    crate::localization::clear_translator(&ctx);
                     // Hidden by the visibility flag, then by the timeframe filter alone.
                     for (visible, timeframes) in [
                         (false, crate::drawings::TimeframeVisibility::all()),

@@ -8,6 +8,7 @@
 use super::context::{ChartMapping, RenderContext, StyleColors};
 use super::labels::semibold;
 use crate::config::{TooltipMode, TooltipOptions};
+use crate::localization as l10n;
 use crate::model::{Bar, Instrument, percent_change};
 use crate::scales::price_decimals;
 use crate::scales::{
@@ -226,7 +227,7 @@ pub fn render_floating_tooltip(
 
     let mut rows: Vec<_> = rows
         .into_iter()
-        .map(|(label, value)| (label.to_owned(), value, value_color))
+        .map(|(label, value)| (l10n::text(painter.ctx(), label), value, value_color))
         .collect();
     rows.extend(studies.iter().map(|study| {
         (
@@ -427,16 +428,20 @@ pub fn render_tracking_tooltip(
 
     if options.show_ohlc {
         for (label, value) in [
-            ("O", candle.open),
-            ("H", candle.high),
-            ("L", candle.low),
-            ("C", candle.close),
+            ("O: {value}", candle.open),
+            ("H: {value}", candle.high),
+            ("L: {value}", candle.low),
+            ("C: {value}", candle.close),
         ] {
             let value = formatters.price.map_or_else(
                 || format!("{value:.precision$}"),
                 |formatter| formatter.format(value),
             );
-            parts.push(format!("{label}: {value}"));
+            parts.push(l10n::format_text(
+                painter.ctx(),
+                label,
+                &[("value", value.as_str())],
+            ));
         }
     }
 
@@ -452,7 +457,11 @@ pub fn render_tracking_tooltip(
             },
             |formatter| formatter.format(candle.volume),
         );
-        parts.push(format!("Vol: {volume}"));
+        parts.push(l10n::format_text(
+            painter.ctx(),
+            "Vol: {volume}",
+            &[("volume", volume.as_str())],
+        ));
     }
 
     parts.extend(
@@ -801,6 +810,72 @@ mod tests {
         }
     }
 
+    /// Both tooltip modes translate value labels instead of looking up finished English.
+    #[test]
+    fn readouts_reach_the_translator() {
+        let bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0);
+        let scale = crate::scales::TimeFormatterBuilder::new().build();
+        let plot = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let options = TooltipOptions {
+            show_time: false,
+            ..Default::default()
+        };
+        for tracking in [true, false] {
+            let ctx = egui::Context::default();
+            crate::localization::mark_keys(&ctx);
+            let output = ctx.run_ui(Default::default(), |ui| {
+                if tracking {
+                    render_tracking_tooltip(
+                        ui.painter(),
+                        plot,
+                        &bar,
+                        &options,
+                        &scale,
+                        60,
+                        &[],
+                        None,
+                        ValueFormatters::default(),
+                    );
+                } else {
+                    render_floating_tooltip(
+                        ui.painter(),
+                        HOVER,
+                        plot,
+                        10.0,
+                        &bar,
+                        None,
+                        &options,
+                        egui::Color32::GREEN,
+                        &scale,
+                        60,
+                        &[],
+                        None,
+                        ValueFormatters::default(),
+                    );
+                }
+            });
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert!(!texts.is_empty());
+            for text in &texts {
+                assert!(
+                    !text.chars().any(|c| c.is_ascii_alphabetic()),
+                    "tracking {tracking}: {text}"
+                );
+            }
+            if !tracking {
+                assert_eq!(texts.iter().filter(|text| text.as_str() == "~").count(), 6);
+            }
+        }
+    }
+
     /// Readout text keeps the plot's colour while removing its rendering opacity, and a plot
     /// without any colour falls back to the theme's text colour.
     #[test]
@@ -988,7 +1063,7 @@ mod tests {
                         let labels: Vec<_> = shapes
                             .iter()
                             .filter_map(|shape| match &shape.shape {
-                                egui::Shape::Text(text) => Some(text.galley.text()),
+                                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
                                 _ => None,
                             })
                             .step_by(2)

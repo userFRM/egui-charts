@@ -69,9 +69,9 @@ pub fn render_alert_levels<'a>(
                     pos2(mapping.rect.right(), y + 6.0),
                 )
                 .intersect(mapping.rect);
-                let response = ui
-                    .interact(hit, key, Sense::drag())
-                    .on_hover_text("Drag alert level");
+                let response = ui.interact(hit, key, Sense::drag()).on_hover_ui(|ui| {
+                    ui.label(crate::localization::text(ui.ctx(), "Drag alert level"));
+                });
                 let mut value = staged;
                 if response.dragged()
                     && let Some(pointer) = response.interact_pointer_pos()
