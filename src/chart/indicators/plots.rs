@@ -222,6 +222,8 @@ pub(crate) fn paint_drawings(
         y_to_price: &|y| price.y_to_price(y),
         time_axis: false,
         executions: None,
+        timeframe: None,
+        finer: &[],
     };
     for drawing in mapped_drawings(study, coords, price_to_y) {
         drawing.render(
