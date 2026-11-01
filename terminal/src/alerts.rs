@@ -21,7 +21,16 @@ use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel, RightBarIcon, W
 use egui_charts::widget::SeriesId;
 use std::collections::{HashMap, HashSet};
 
-type Subject = (String, Timeframe, Option<String>);
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct Subject {
+    symbol: String,
+    timeframe: Timeframe,
+    metric: Option<String>,
+    timezone: Option<String>,
+    extended_hours: bool,
+    conversion: Option<String>,
+    count: usize,
+}
 
 #[derive(Default)]
 pub(super) struct State {
@@ -102,6 +111,25 @@ impl Definition {
         }
     }
 
+    fn subject(&self, symbol: &str, timeframe: Timeframe, metric: Option<String>) -> Subject {
+        Subject {
+            symbol: symbol.into(),
+            timeframe,
+            metric,
+            timezone: match &self.timezone {
+                egui_charts::config::TimezoneMode::Local => None,
+                zone => Some(
+                    zone.to_tz()
+                        .unwrap_or_else(egui_charts::model::TimezoneId::utc)
+                        .to_string(),
+                ),
+            },
+            extended_hours: self.extended_hours,
+            conversion: self.conversion.clone(),
+            count: self.count,
+        }
+    }
+
     fn request(&self, symbol: &str, timeframe: Timeframe) -> HistoryRequest {
         let mut request = AlertFeed::history_request(symbol, timeframe);
         request.clock = match &self.timezone {
@@ -171,9 +199,17 @@ impl Definition {
 }
 
 /// A live chart takes over only once it holds data. Replay never supplies alert inputs.
-fn live_chart<'a>(charts: &'a [Chart], symbol: &str, timeframe: Timeframe) -> Option<&'a Chart> {
+fn live_chart<'a>(
+    charts: &'a [Chart],
+    symbol: &str,
+    timeframe: Timeframe,
+    definition: &Definition,
+) -> Option<&'a Chart> {
     charts.iter().find(|chart| {
         chart.symbol() == symbol
+            && chart.extended_hours() == definition.extended_hours
+            && chart.conversion() == definition.conversion.as_deref()
+            && chart.chart_options().time_scale.timezone == definition.timezone
             && chart.timeframe() == Some(timeframe)
             && chart.replay_time().is_none()
             && chart.instrument().is_some()
@@ -197,6 +233,12 @@ impl Terminal {
     }
 
     pub(super) fn alerts_poll(&mut self, ctx: &egui::Context) {
+        self.alerts
+            .panel
+            .set_symbol(self.charts[self.active].symbol());
+        self.alerts
+            .panel
+            .set_sources(self.charts[self.active].alert_sources());
         self.alerts.panel.poll(ctx, &mut self.toasts);
         let Some(service) = self.services.alerts.clone() else {
             return;
@@ -227,9 +269,20 @@ impl Terminal {
                     .iter()
                     .find(|chart| chart.symbol() == alert.symbol)
                     .unwrap_or(&self.charts[self.active]);
-                self.alerts
-                    .definitions
-                    .insert(id.clone(), Definition::new(alert, source));
+                let mut definition = Definition::new(alert, source);
+                if definition
+                    .sources
+                    .iter()
+                    .any(|source| matches!(source, AlertSource::Study { .. }))
+                {
+                    // A chart-local id cannot recover the inputs an alert was created with.
+                    definition.studies.clear();
+                    self.toasts.error(format!(
+                        "Alert {} has no saved study inputs; recreate it from its source chart",
+                        id.0
+                    ));
+                }
+                self.alerts.definitions.insert(id.clone(), definition);
             }
             let definition = self.alerts.definitions.get_mut(id).unwrap();
             if let Some(timeframe) = alert.timeframe
@@ -240,8 +293,8 @@ impl Terminal {
             let definition = &*definition;
             for symbol in engine.subjects(id) {
                 let timeframe = definition.timeframe;
-                let subject = (symbol.clone(), timeframe, None);
-                if live_chart(&self.charts, &symbol, timeframe).is_none() {
+                let subject = definition.subject(&symbol, timeframe, None);
+                if live_chart(&self.charts, &symbol, timeframe, definition).is_none() {
                     needed.insert(subject.clone());
                     self.alerts.feeds.entry(subject.clone()).or_insert_with(|| {
                         AlertFeed::new(
@@ -275,11 +328,11 @@ impl Terminal {
                     };
                     let interval = request.timeframe.unwrap_or(timeframe);
                     if request.metric.is_none()
-                        && live_chart(&self.charts, &other, interval).is_some()
+                        && live_chart(&self.charts, &other, interval, definition).is_some()
                     {
                         continue;
                     }
-                    let subject = (other.clone(), interval, request.metric.clone());
+                    let subject = definition.subject(&other, interval, request.metric.clone());
                     needed.insert(subject.clone());
                     self.alerts.feeds.entry(subject).or_insert_with(|| {
                         AlertFeed::new(
@@ -296,12 +349,16 @@ impl Terminal {
         for (subject, feed) in &mut self.alerts.feeds {
             for error in feed.poll(ctx, now) {
                 self.toasts
-                    .error(format!("Alert data for {}: {error}", subject.0));
+                    .error(format!("Alert data for {}: {error}", subject.symbol));
             }
         }
         for (id, symbol, timeframe) in &tasks {
-            let visible = live_chart(&self.charts, symbol, *timeframe);
-            let feed = self.alerts.feeds.get(&(symbol.clone(), *timeframe, None));
+            let definition = self.alerts.definitions.get_mut(id).unwrap();
+            let visible = live_chart(&self.charts, symbol, *timeframe, definition);
+            let feed = self
+                .alerts
+                .feeds
+                .get(&definition.subject(symbol, *timeframe, None));
             let (bars, clock, instrument) = if let Some(chart) = visible {
                 (
                     chart.bars(SeriesId::MAIN),
@@ -313,7 +370,6 @@ impl Terminal {
             } else {
                 continue;
             };
-            let definition = self.alerts.definitions.get_mut(id).unwrap();
             let data: Vec<_> = definition
                 .studies
                 .iter()
@@ -328,12 +384,13 @@ impl Terminal {
                     let chart = request
                         .metric
                         .is_none()
-                        .then(|| live_chart(&self.charts, other, interval))
+                        .then(|| live_chart(&self.charts, other, interval, definition))
                         .flatten();
-                    let feed =
-                        self.alerts
-                            .feeds
-                            .get(&(other.clone(), interval, request.metric.clone()));
+                    let feed = self.alerts.feeds.get(&definition.subject(
+                        other,
+                        interval,
+                        request.metric.clone(),
+                    ));
                     let (bars, clock, instrument) = if let Some(chart) = chart {
                         (
                             chart.bars(SeriesId::MAIN),
@@ -382,17 +439,17 @@ impl Terminal {
             .filter(|(id, symbol, _)| engine.subjects(id).contains(symbol))
             .flat_map(|(id, symbol, timeframe)| {
                 let definition = &self.alerts.definitions[id];
-                std::iter::once((symbol.clone(), *timeframe, None)).chain(
+                std::iter::once(definition.subject(symbol, *timeframe, None)).chain(
                     definition
                         .studies
                         .iter()
                         .flat_map(|(_, study)| study.data_requests())
                         .map(|request| {
-                            (
+                            definition.subject(
                                 if request.symbol.is_empty() {
-                                    symbol.clone()
+                                    symbol
                                 } else {
-                                    request.symbol
+                                    &request.symbol
                                 },
                                 request.timeframe.unwrap_or(*timeframe),
                                 request.metric,
@@ -550,6 +607,8 @@ mod tests {
         history: Mutex<HashMap<(String, Timeframe), Vec<Bar>>>,
         hold_other: Mutex<bool>,
         held: Mutex<Option<Reply<HistoryPage>>>,
+        page_size: Mutex<Option<usize>>,
+        requests: Mutex<Vec<HistoryRequest>>,
     }
 
     fn bar(minute: i64, close: f64) -> Bar {
@@ -591,6 +650,7 @@ mod tests {
                     "an always-open member must not inherit the creation chart's session"
                 );
             }
+            self.requests.lock().unwrap().push(request.clone());
             let bars = self
                 .history
                 .lock()
@@ -601,7 +661,13 @@ mod tests {
             if *self.hold_other.lock().unwrap() && request.symbol == "OTHER" {
                 *self.held.lock().unwrap() = Some(reply);
             } else {
-                reply.send(Ok(HistoryPage::new(bars, true)));
+                let bars: Vec<_> = bars
+                    .into_iter()
+                    .filter(|bar| request.before.is_none_or(|before| bar.time < before))
+                    .collect();
+                let count = self.page_size.lock().unwrap().unwrap_or(request.count);
+                let start = bars.len().saturating_sub(count);
+                reply.send(Ok(HistoryPage::new(bars[start..].to_vec(), start == 0)));
             }
         }
         fn subscribe(&self, subscription: Subscription) {
@@ -752,6 +818,7 @@ mod tests {
             .with_alerts(engine.clone());
         frames(&mut terminal);
         *feed.hold_other.lock().unwrap() = true;
+        *feed.page_size.lock().unwrap() = Some(1);
         let mut alert = Alert::new("OTHER", AlertCondition::Above(30.0));
         alert.timeframe = Some(Timeframe::Min5);
         terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
@@ -772,7 +839,13 @@ mod tests {
             .unwrap()
             .take()
             .unwrap()
-            .send(Ok(HistoryPage::new(vec![bar(0, 10.0), bar(5, 20.0)], true)));
+            .send(Ok(HistoryPage::new(vec![bar(5, 20.0)], false)));
+        frame(&mut terminal, SIZE, vec![]);
+        assert_eq!(
+            engine.alerts()[0].status,
+            AlertStatus::Active,
+            "a short page must finish loading before evaluation"
+        );
         frames(&mut terminal);
         assert_eq!(engine.alerts()[0].status, AlertStatus::Triggered);
         assert_eq!(feed.count("OTHER", Timeframe::Min5), 0);
@@ -790,29 +863,178 @@ mod tests {
     }
 
     #[test]
-    fn price_menu_alert_keeps_the_context_symbol() {
+    fn restored_study_alert_does_not_borrow_a_chart_local_id() {
+        let feed = Arc::new(Feed::default());
+        let mut terminal = Terminal::new(feed).with_symbol("SHOWN");
+        let study = terminal.chart_mut().add_indicator(Box::new(SMA::new(2)));
+        let mut alert = Alert::new("OTHER", AlertCondition::Above(1.0));
+        alert.timeframe = Some(Timeframe::Min5);
+        alert.source = AlertSource::Study {
+            id: study.0.to_string(),
+            output: 0,
+        };
+        let engine = Arc::new(AlertEngine::new().with_alerts(vec![alert]));
+        terminal = terminal.with_alerts(engine.clone());
+        frames(&mut terminal);
+        assert_eq!(engine.alerts()[0].status, AlertStatus::Active);
+    }
+
+    #[test]
+    fn hidden_feeds_keep_creation_sessions_and_do_not_handoff_to_a_different_view() {
+        let feed = Arc::new(Feed::default());
         let engine = Arc::new(AlertEngine::new());
-        let mut terminal = Terminal::new(Arc::new(Feed::default()))
+        let mut terminal = Terminal::new(feed.clone())
             .with_symbol("SHOWN")
+            .with_timeframe(Timeframe::Min5)
             .with_alerts(engine.clone());
         frames(&mut terminal);
-        assert!(
-            terminal
-                .run(Action::ChartMenu(
-                    egui_charts::ui::context_menu::ChartContextAction::Chart(
-                        egui_charts::ui::context_menu::ContextMenuAction::AddAlert {
-                            symbol: "OTHER".into(),
-                            price: 25.0,
-                        }
-                    )
-                ))
-                .is_none()
+        for extended in [false, true] {
+            terminal.chart_mut().set_extended_hours(extended);
+            let mut alert = Alert::new("OTHER", AlertCondition::Above(1000.0));
+            alert.timeframe = Some(Timeframe::Min5);
+            terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
+                alert,
+            ))));
+            frames(&mut terminal);
+        }
+        assert_eq!(
+            feed.count("OTHER", Timeframe::Min5),
+            2,
+            "distinct sessions need distinct feeds"
         );
+        let requests = feed.requests.lock().unwrap();
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.symbol == "OTHER" && request.extended_hours)
+        );
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.symbol == "OTHER" && !request.extended_hours)
+        );
+        drop(requests);
+        terminal.chart_mut().set_symbol("OTHER");
         frames(&mut terminal);
-        let screen = frame(&mut terminal, SIZE, vec![]);
-        click(&mut terminal, SIZE, screen.text_at("Save alert").unwrap());
-        frames(&mut terminal);
-        assert_eq!(engine.alerts()[0].symbol, "OTHER");
+        assert_eq!(
+            feed.count("OTHER", Timeframe::Min5),
+            2,
+            "only the matching session hands over to the chart"
+        );
+    }
+
+    #[test]
+    fn failed_background_stream_reconnects_and_ignores_its_old_sink() {
+        use egui_charts::data::FeedError;
+        use egui_charts::services::AlertFeed;
+        for error in [
+            FeedError::RateLimited {
+                retry_after: Some(std::time::Duration::ZERO),
+            },
+            FeedError::NotSupported,
+        ] {
+            let host = Arc::new(Feed::default());
+            let ctx = egui::Context::default();
+            let mut reader = AlertFeed::new(
+                host.clone(),
+                AlertFeed::history_request("OTHER", Timeframe::Min5),
+                None,
+            );
+            for _ in 0..3 {
+                assert!(reader.poll(&ctx, Utc::now()).is_empty());
+            }
+            let old = host.subscriptions.lock().unwrap()[0].sink.clone();
+            old.report_error(error.clone());
+            assert_eq!(reader.poll(&ctx, Utc::now()), [error.clone()]);
+            assert!(reader.bars().is_empty());
+            assert_eq!(
+                host.count("OTHER", Timeframe::Min5),
+                usize::from(error.is_recoverable())
+            );
+            old.push_bar(bar(10, 999.0));
+            for _ in 0..3 {
+                assert!(reader.poll(&ctx, Utc::now()).is_empty());
+            }
+            if error.is_recoverable() {
+                assert_eq!(reader.bars().last().unwrap().close, 20.0);
+                host.push("OTHER", Timeframe::Min5, bar(10, 40.0));
+                assert!(reader.poll(&ctx, Utc::now()).is_empty());
+                assert_eq!(reader.bars().last().unwrap().close, 40.0);
+            } else {
+                assert!(reader.bars().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn menu_and_quick_alerts_keep_their_symbols() {
+        for (size, dark) in [
+            (SIZE, false),
+            (SIZE, true),
+            (egui::vec2(480.0, 640.0), false),
+            (egui::vec2(480.0, 640.0), true),
+        ] {
+            let engine = Arc::new(AlertEngine::new());
+            let mut terminal = Terminal::new(Arc::new(Feed::default()))
+                .with_symbol("SHOWN")
+                .with_alerts(engine.clone());
+            for _ in 0..5 {
+                frame(&mut terminal, size, vec![]);
+            }
+            if dark {
+                terminal.run(Action::TopToolbar(
+                    egui_charts::ui::top_toolbar::TopToolbarAction::ThemeToggle,
+                ));
+            }
+            assert!(
+                terminal
+                    .run(Action::ChartMenu(
+                        egui_charts::ui::context_menu::ChartContextAction::Chart(
+                            egui_charts::ui::context_menu::ContextMenuAction::AddAlert {
+                                symbol: "OTHER".into(),
+                                price: 25.0,
+                            }
+                        )
+                    ))
+                    .is_none()
+            );
+            for _ in 0..5 {
+                frame(&mut terminal, size, vec![]);
+            }
+            let screen = frame(&mut terminal, size, vec![]);
+            let save = screen.text_at("Save alert").unwrap();
+            assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains(save));
+            click(&mut terminal, size, save);
+            for _ in 0..5 {
+                frame(&mut terminal, size, vec![]);
+            }
+            assert_eq!(engine.alerts().len(), 1, "size {size:?}, dark {dark}");
+            assert_eq!(engine.alerts()[0].symbol, "OTHER");
+            terminal.run(Action::WidgetBar(
+                egui_charts::ui::widget_bar::WidgetBarAction::Clicked(
+                    egui_charts::ui::widget_bar::RightBarIcon::Alerts,
+                ),
+            ));
+            for _ in 0..5 {
+                frame(&mut terminal, size, vec![]);
+            }
+            let screen = frame(&mut terminal, size, vec![]);
+            click(&mut terminal, size, screen.text_at("Quick alert").unwrap());
+            for _ in 0..5 {
+                frame(&mut terminal, size, vec![]);
+            }
+            let screen = frame(&mut terminal, size, vec![]);
+            click(&mut terminal, size, screen.text_at("Create alert").unwrap());
+            for _ in 0..5 {
+                frame(&mut terminal, size, vec![]);
+            }
+            assert_eq!(
+                engine.alerts().len(),
+                2,
+                "quick form at {size:?}, dark {dark}"
+            );
+            assert_eq!(engine.alerts()[1].symbol, "SHOWN");
+        }
     }
 
     #[test]
@@ -891,6 +1113,46 @@ mod tests {
             assert_eq!(
                 engine.alerts().last().unwrap().status,
                 AlertStatus::Triggered
+            );
+            struct Unavailable;
+            impl egui_charts::services::Storage for Unavailable {
+                fn list(&self, _: egui_charts::services::StoreKind, _: Reply<Vec<String>>) {
+                    panic!("alert reader must only load drawings");
+                }
+                fn save(
+                    &self,
+                    _: egui_charts::services::StoreKind,
+                    _: &str,
+                    _: String,
+                    _: Reply<()>,
+                ) {
+                    panic!("alert reader must not write drawings");
+                }
+                fn delete(&self, _: egui_charts::services::StoreKind, _: &str, _: Reply<()>) {
+                    panic!("alert reader must not delete drawings");
+                }
+                fn load(
+                    &self,
+                    _: egui_charts::services::StoreKind,
+                    _: &str,
+                    reply: Reply<Option<String>>,
+                ) {
+                    reply.send(Err(egui_charts::data::FeedError::Network("offline".into())));
+                }
+            }
+            let source = engine.alerts().last().unwrap().source.clone();
+            let reader = terminal.alerts.feeds.values_mut().next().unwrap();
+            assert_eq!(
+                reader.drawing_value(&source, 2, egui_charts::scales::PriceScaleMode::Normal),
+                Some(30.0)
+            );
+            reader.set_storage(Arc::new(Unavailable));
+            for _ in 0..3 {
+                reader.poll(terminal.ctx.as_ref().unwrap(), Utc::now());
+            }
+            assert_eq!(
+                reader.drawing_value(&source, 2, egui_charts::scales::PriceScaleMode::Normal),
+                None
             );
         }
     }

@@ -739,11 +739,12 @@ impl AlertFeed {
             &self.request.symbol,
         );
         document.follow_changes(storage.as_ref());
+        self.stored = None;
         self.drawings = Some((storage, document));
     }
 
-    /// Bars available after the initial history reply. Updates received before that reply
-    /// remain buffered so evaluation never mistakes an incomplete stream for history.
+    /// Bars available once history reaches the requested count or its end. Live updates stay
+    /// buffered until then so evaluation never mistakes an incomplete stream for history.
     pub fn bars(&self) -> &[Bar] {
         if self.ready { &self.bars } else { &[] }
     }
@@ -846,39 +847,52 @@ impl AlertFeed {
                     (*answer
                         .downcast::<Result<MetricPage, FeedError>>()
                         .expect("alert metric history"))
-                    .map(|page| page.points.into_iter().map(Bar::from).collect::<Vec<_>>())
+                    .map(|page| {
+                        (
+                            page.points.into_iter().map(Bar::from).collect::<Vec<_>>(),
+                            page.end_of_history,
+                            None,
+                        )
+                    })
                 } else {
                     (*answer
                         .downcast::<Result<HistoryPage, FeedError>>()
                         .expect("alert history"))
-                    .map(|page| page.bars)
+                    .map(|page| (page.bars, page.end_of_history, page.continue_before))
                 };
-                result.map(|bars| {
+                result.and_then(|(bars, end, continuation)| {
+                    let before = bars
+                        .iter()
+                        .map(|bar| self.request.clock.bar_open(bar.time))
+                        .min()
+                        .or(continuation);
+                    if !end
+                        && before
+                            .zip(self.request.before)
+                            .is_some_and(|(next, previous)| next >= previous)
+                    {
+                        return Err(FeedError::InvalidData(
+                            "Alert history did not advance".into(),
+                        ));
+                    }
                     let merged = merge(
                         &mut self.bars,
                         &mut self.origins,
                         &self.request.clock,
                         bars.into_iter().map(|bar| (bar, Origin::History)).collect(),
                     );
-                    self.ready = true;
+                    self.ready = end || before.is_none() || self.bars.len() >= self.request.count;
+                    if !self.ready {
+                        self.request.before = before;
+                    }
                     if merged.rejected > 0 {
                         errors.push(FeedError::InvalidData("Invalid alert history bars".into()));
                     }
+                    Ok(())
                 })
             };
             if let Err(error) = result {
-                if error.is_recoverable() {
-                    let delay = match &error {
-                        FeedError::RateLimited {
-                            retry_after: Some(delay),
-                        } => chrono::TimeDelta::from_std(*delay)
-                            .unwrap_or(chrono::TimeDelta::seconds(5)),
-                        _ => chrono::TimeDelta::seconds(5),
-                    };
-                    self.retry = now.checked_add_signed(delay);
-                } else {
-                    self.stopped = true;
-                }
+                self.failed(&error, now);
                 errors.push(error);
             }
         }
@@ -886,6 +900,8 @@ impl AlertFeed {
             if updates.reset {
                 self.bars.clear();
                 self.origins.clear();
+                self.ready = false;
+                self.request.before = None;
             }
             merge(
                 &mut self.bars,
@@ -894,9 +910,16 @@ impl AlertFeed {
                 updates.bars.into_values().collect(),
             );
             if let Some(error) = updates.error {
-                // A lost stream requires fresh history before evaluation resumes.
+                // Discard pending replies and replace a failed subscription before evaluating again.
+                self.unsubscribe();
+                self.inbox = std::sync::Arc::default();
+                self.wake.store(true, std::sync::atomic::Ordering::Relaxed);
+                self.pending = false;
                 self.ready = false;
-                self.retry = Some(now);
+                self.bars.clear();
+                self.origins.clear();
+                self.request.before = None;
+                self.failed(&error, now);
                 errors.push(error);
             }
         }
@@ -956,7 +979,7 @@ impl AlertFeed {
                         MetricRequest {
                             symbol: self.request.symbol.clone(),
                             metric: metric.clone(),
-                            before: None,
+                            before: self.request.before,
                             count: self.request.count,
                         },
                         self.inbox.reply(2),
@@ -986,12 +1009,16 @@ impl AlertFeed {
                                         self.request.symbol.clone(),
                                     ))
                             }
-                            _ => errors.push(FeedError::InvalidData(
-                                "Could not read alert drawings".into(),
-                            )),
+                            _ => {
+                                self.stored = None;
+                                errors.push(FeedError::InvalidData(
+                                    "Could not read alert drawings".into(),
+                                ));
+                            }
                         }
                     }
                     super::document::Received::Failed(error) => {
+                        self.stored = None;
                         errors.push(FeedError::Other(error))
                     }
                     _ => {}
@@ -1000,17 +1027,36 @@ impl AlertFeed {
         }
         errors
     }
-}
 
-#[cfg(feature = "ui")]
-impl Drop for AlertFeed {
-    fn drop(&mut self) {
+    fn failed(&mut self, error: &FeedError, now: DateTime<Utc>) {
+        if error.is_recoverable() {
+            let delay = match error {
+                FeedError::RateLimited {
+                    retry_after: Some(delay),
+                } => chrono::TimeDelta::from_std(*delay).unwrap_or(chrono::TimeDelta::seconds(5)),
+                _ => chrono::TimeDelta::seconds(5),
+            };
+            self.retry = now.checked_add_signed(delay);
+        } else {
+            self.stopped = true;
+            self.unsubscribe();
+        }
+    }
+
+    fn unsubscribe(&mut self) {
         // Unsubscribe may drop a pending reply while the caller holds the context's lock.
         self.wake.store(false, std::sync::atomic::Ordering::Relaxed);
         if let Some(id) = self.subscription.take() {
             self.inbox.unsubscribe(id);
             self.feed.unsubscribe(id);
         }
+    }
+}
+
+#[cfg(feature = "ui")]
+impl Drop for AlertFeed {
+    fn drop(&mut self) {
+        self.unsubscribe();
     }
 }
 
