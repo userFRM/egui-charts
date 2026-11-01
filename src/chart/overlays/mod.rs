@@ -14,7 +14,7 @@ pub use footprint::{
 };
 mod heatmap_strip;
 mod liquidity_heatmap;
-pub use liquidity_heatmap::LiquidityHeatmap;
+pub use liquidity_heatmap::{LiquidityHeatmap, LiquidityHeatmapConfig};
 mod volume_bubbles;
 
 pub use heatmap_strip::{HeatmapCell, HeatmapStrip, HeatmapStripConfig};

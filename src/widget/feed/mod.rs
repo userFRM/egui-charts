@@ -87,6 +87,7 @@ pub(crate) struct FeedLink {
     /// without `continue_before`: no trade before the oldest held one was missed.
     trades_from_start: bool,
     heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
+    heatmap_config: crate::chart::overlays::LiquidityHeatmapConfig,
     /// How the live book is shown by the heatmap's profile and the depth ladder.
     book_view: crate::chart::overlays::OrderBookView,
     study_inputs: Vec<(crate::data::OrderFlowInput, u64)>,
@@ -168,6 +169,7 @@ impl FeedLink {
             trades_complete: false,
             trades_from_start: false,
             heatmap: self.heatmap.is_some().then(Default::default),
+            heatmap_config: self.heatmap_config,
             book_view: self.book_view.clone(),
             study_inputs: Vec::new(),
             time: self.time,
@@ -263,6 +265,7 @@ impl Chart {
             trades_complete: false,
             trades_from_start: false,
             heatmap: None,
+            heatmap_config: Default::default(),
             book_view: Default::default(),
             study_inputs: Vec::new(),
             time: None,
@@ -635,7 +638,8 @@ impl Chart {
 
     /// Shows resting liquidity behind the price series. A feed and instrument tick size are
     /// required. Enabling starts the default depth history if none is configured; disabling
-    /// releases textures and retains that history. Trade bubbles and best bid/ask lines can be
+    /// releases textures and retains that history and the appearance settings. Re-enabling an
+    /// enabled heatmap keeps its textures. Trade bubbles and best bid/ask lines can be
     /// enabled independently through the existing chart options.
     pub fn set_liquidity_heatmap(&mut self, enabled: bool) {
         if enabled && self.depth_history(SeriesId::MAIN).is_none() {
@@ -644,8 +648,33 @@ impl Chart {
             ));
         }
         if let Some(link) = &mut self.feed_link {
-            link.heatmap = enabled.then(|| std::cell::RefCell::new(Default::default()));
+            if enabled {
+                link.heatmap.get_or_insert_with(Default::default);
+            } else {
+                link.heatmap = None;
+            }
         }
+    }
+
+    /// Sets the heatmap's cell brightness and resting-size range from the next frame. A changed
+    /// appearance redraws the held columns once; an unchanged effective setting uploads nothing.
+    /// Retained while disabled and in exported images. Does nothing without a feed; enable the
+    /// heatmap separately with [`set_liquidity_heatmap`](Self::set_liquidity_heatmap).
+    pub fn set_liquidity_heatmap_config(
+        &mut self,
+        config: crate::chart::overlays::LiquidityHeatmapConfig,
+    ) {
+        if let Some(link) = &mut self.feed_link {
+            link.heatmap_config = config;
+        }
+    }
+
+    /// The heatmap appearance supplied by the host, or its default without a feed.
+    pub fn liquidity_heatmap_config(&self) -> crate::chart::overlays::LiquidityHeatmapConfig {
+        self.feed_link
+            .as_ref()
+            .map(|link| link.heatmap_config)
+            .unwrap_or_default()
     }
 
     pub(super) fn paint_liquidity(
@@ -661,7 +690,9 @@ impl Chart {
         ) else {
             return;
         };
-        heatmap.borrow_mut().render(
+        let mut heatmap = heatmap.borrow_mut();
+        heatmap.config = link.heatmap_config;
+        heatmap.render(
             painter,
             mapping,
             history,
@@ -770,6 +801,81 @@ pub(super) fn retry_delay(failures: u32, error: &FeedError) -> Duration {
 /// `wake`, also after a panic while it was held.
 fn lock(wake: &Mutex<Option<ViewportId>>) -> std::sync::MutexGuard<'_, Option<ViewportId>> {
     wake.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+#[test]
+fn heatmap_appearance_survives_visibility_and_frozen_images() {
+    use crate::chart::overlays::LiquidityHeatmapConfig;
+    use crate::data::{DepthColumn, HistoryPage};
+    use crate::model::BarData;
+
+    struct EmptyFeed;
+    impl Datafeed for EmptyFeed {
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            reply.send(Err(FeedError::NotSupported));
+        }
+    }
+
+    let mut chart = Chart::new(BarData::new());
+    chart.attach_feed(Arc::new(EmptyFeed), 0);
+    chart.set_instrument(Some(Instrument::new("TEST").with_tick_size(1.0)));
+    let config = LiquidityHeatmapConfig {
+        brightness: 0.5,
+        lower_cutoff: 10.0,
+        full_intensity_size: Some(999.0),
+    };
+    chart.set_liquidity_heatmap_config(config);
+    chart.set_liquidity_heatmap(true);
+    let mut history = DepthHistory::new(Default::default()).unwrap();
+    history.push(DepthColumn {
+        time: "2026-01-05T10:00:00Z".parse().unwrap(),
+        span: chrono::TimeDelta::seconds(1),
+        bids: vec![(100, 99.0)],
+        asks: vec![(101, 9.0)],
+        ..Default::default()
+    });
+    chart.set_depth_history(Some(history));
+    let ctx = egui::Context::default();
+    for frame in 0..5 {
+        match frame {
+            1 | 4 => {
+                chart.set_liquidity_heatmap(true);
+                chart.set_liquidity_heatmap_config(config);
+            }
+            2 => {
+                chart.set_liquidity_heatmap(false);
+                chart.set_liquidity_heatmap(true);
+            }
+            3 => chart.feed_link = Some(chart.feed_link.as_ref().unwrap().frozen()),
+            _ => {}
+        }
+        assert_eq!(chart.liquidity_heatmap_config(), config);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            chart.paint_liquidity(ui.painter(), &chart.get_chart_mapping());
+        });
+        let alphas: Vec<_> = output
+            .textures_delta
+            .set
+            .values()
+            .flatten()
+            .filter(|delta| delta.pos.is_some() && delta.image.size() == [1, 256])
+            .map(|delta| {
+                let egui::ImageData::Color(image) = &delta.image;
+                [image.pixels[100].a(), image.pixels[101].a()]
+            })
+            .collect();
+        output.textures_delta.clear();
+        // 99 reaches 2/3 intensity: round(255 * 0.75 * 2/3) * 0.5 = 64.
+        assert_eq!(
+            alphas,
+            if frame == 1 || frame == 4 {
+                vec![]
+            } else {
+                vec![[64, 0]]
+            }
+        );
+    }
 }
 
 #[cfg(test)]
