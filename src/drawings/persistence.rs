@@ -1597,12 +1597,14 @@ mod tests {
                 "anchored VWAP band multiplier out of bounds",
                 &["2"][..],
                 0,
+                "invalid",
             ),
             (
                 with_vwap_multiplier(10.5),
                 "anchored VWAP band multiplier out of bounds",
                 &["2"][..],
                 0,
+                "invalid",
             ),
             (
                 with_level_width(0.0),
