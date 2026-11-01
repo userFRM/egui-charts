@@ -1598,14 +1598,15 @@ mod tests {
             (vec![DateTime::<Utc>::MAX_UTC], 0.5),
             (vec![start, start + chrono::Duration::days(1)], 1e-6),
         ] {
-            let mut bars: Vec<_> = times
+            // Each bar closes ten points above the last, which makes completed one-point bricks.
+            let bars = times
                 .iter()
-                .map(|&t| Bar::new(t, 10.0, 12.0, 9.0, 11.0, 1.0))
+                .enumerate()
+                .map(|(i, &t)| {
+                    let lift = 10.0 * i as f64;
+                    Bar::new(t, 10.0, 12.0 + lift, 9.0, 11.0 + lift, 1.0)
+                })
                 .collect();
-            if minimum < 0.25 {
-                // A ten-point close move makes completed one-point bricks.
-                *bars.last_mut().unwrap() = Bar::new(times[1], 11.0, 22.0, 10.0, 21.0, 1.0);
-            }
             let ctx = Context::default();
             let mut chart = Chart::new(BarData::from_bars(bars));
             let mut options = chart.chart_options().clone();
