@@ -403,7 +403,7 @@ Order flow,Order flow,Bar POC lines extended until price revisits them,done,libr
 Order flow,Order flow,Best bid and best ask lines drawn across the heatmap,done,library,src/chart/overlays/liquidity_heatmap.rs;src/widget/frame.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Bid/ask split profile and delta profile,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs;src/widget/trade_profile.rs
 Order flow,Order flow,Bid/ask spread in ticks plotted over time with alert,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/services/alerts.rs;src/studies/factory/mod.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
-Order flow,Order flow,Big trade zones,done,library,src/services/detectors/big_trades.rs;src/services/detectors/mod.rs;src/data/trades.rs;
+Order flow,Order flow,Big trade zones,done,library,src/services/detectors/big_trades.rs;src/services/detectors/mod.rs;src/data/trades.rs;src/widget/signals.rs
 Order flow,Order flow,Book speed,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
 Order flow,Order flow,Book thickness and resting-size delta over time,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/orders.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs
 Order flow,Order flow,"Bubble grouping: automatic, by time window, by price, tick grouping",done,library,src/chart/overlays/volume_bubbles.rs;src/model/clock.rs
@@ -441,7 +441,7 @@ Order flow,Order flow,Heatmap rendering at scale,done,library,src/chart/overlays
 Order flow,Order flow,Horizontal bid vs ask imbalance,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Iceberg detection from order-level refills at one price,done,library,src/services/detectors/icebergs.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/data/orders.rs;
 Order flow,Order flow,Imbalance zone tracker and rejector,partial,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
-Order flow,Order flow,Large aggressive trades and historical loading,done,library,src/chart/overlays/volume_bubbles.rs;src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs;src/services/detectors/big_trades.rs;src/services/detectors/mod.rs;src/widget/feed/mod.rs
+Order flow,Order flow,Large aggressive trades and historical loading,done,library,src/chart/overlays/volume_bubbles.rs;src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs;src/services/detectors/big_trades.rs;src/services/detectors/mod.rs;src/widget/feed/mod.rs;src/widget/signals.rs
 Order flow,Order flow,Large resting order highlight on heatmap and DOM levels,done,library,src/data/orders.rs;src/chart/overlays/book_profile.rs;src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/widget/feed/mod.rs;src/data/depth_history.rs;src/data/inbox/sink.rs;src/chart/overlays/liquidity_heatmap.rs;src/theme/presets.rs
 Order flow,Order flow,Liquidity heatmap: resting limit-order size per price level plotted over time,done,library,src/data/depth_history.rs;src/chart/overlays/liquidity_heatmap.rs;src/widget/frame.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Liquidity tracker,done,library,src/services/detectors/liquidity.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/model/signal.rs;src/widget/signals.rs
