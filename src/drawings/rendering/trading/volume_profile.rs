@@ -382,6 +382,7 @@ fn finer_profile(
         return None;
     }
     // A host replacement can keep the span's fingerprint while changing its middle bars.
+    // shortcut: in-place interior corrections wait for a span change; use a history revision when feeds need those corrections immediately.
     let key = (
         rows,
         row_size,
