@@ -525,94 +525,59 @@ impl Drawing {
         }
     }
 
-    /// Arrow marker from its tail anchor to its head anchor
+    /// Arrow marker: one solid arrow in the drawing colour from the tail anchor to the tip
+    /// anchor, sized by the distance between them; a dot while placing or when they coincide.
     pub(crate) fn render_arrow_marker(&self, painter: &egui::Painter, color: Color32) {
-        self.render_arrow(painter, color, Stroke::new(self.stroke_width, color));
-    }
-
-    /// Render arrow mark up - upward pointing bullish arrow
-    pub(crate) fn render_arrow_mark_up(&self, painter: &egui::Painter) {
-        if !self.points.is_empty() {
-            let pos = self.points[0];
-            let size = typography::MD;
-            let points = vec![
-                Pos2::new(pos.x, pos.y - size),
-                Pos2::new(pos.x - size * 0.6, pos.y + size * 0.5),
-                Pos2::new(pos.x + size * 0.6, pos.y + size * 0.5),
-            ];
-            let fill = DESIGN_TOKENS.semantic.extended.bullish;
-            let border = DESIGN_TOKENS
-                .semantic
-                .extended
-                .bullish
-                .gamma_multiply(200_f32 / 255.0);
-            let shape = egui::epaint::PathShape::convex_polygon(
-                points,
-                fill,
-                Stroke::new(stroke::HAIRLINE, border),
-            );
-            painter.add(shape);
-            self.render_placed_text(
-                painter,
-                Pos2::new(pos.x, pos.y + size * 0.5 + DESIGN_TOKENS.spacing.sm),
-                Align2::CENTER_TOP,
-            );
+        match self
+            .points
+            .get(..2)
+            .and_then(|p| arrow_marker_outline(p[0], p[1]))
+        {
+            // The concave outline fills as a fan from its tip, which sees every corner.
+            Some(outline) => {
+                painter.add(egui::Shape::convex_polygon(
+                    outline.to_vec(),
+                    color,
+                    Stroke::NONE,
+                ));
+                // Keep the label clear of the arrow's widest part, including a reversed arrow.
+                let [tail, tip] = [self.points[0], self.points[1]];
+                let angle = upright_angle(tail, tip);
+                let offset = egui::vec2(angle.sin(), -angle.cos()) * (0.2 * tail.distance(tip));
+                self.render_line_text(painter, tail + offset, tip + offset, true);
+            }
+            None => {
+                if let Some(&point) = self.points.first() {
+                    painter.circle_filled(point, DESIGN_TOKENS.rounding.sm, color);
+                }
+            }
         }
     }
 
-    pub(super) fn render_horizontal_mark(&self, painter: &egui::Painter, direction: f32) {
+    /// A solid triangle in the drawing colour pointing along the unit vector `direction`,
+    /// with its tip on the anchor so a mark beside a bar points at it.
+    pub(super) fn render_arrow_mark(&self, painter: &egui::Painter, direction: egui::Vec2) {
         let Some(&tip) = self.points.first() else {
             return;
         };
         let size = 14.0;
+        let base = tip - direction * size;
+        let across = egui::vec2(-direction.y, direction.x) * (size * 0.6);
         painter.add(egui::Shape::convex_polygon(
-            vec![
-                tip,
-                tip + egui::vec2(-direction * size, -size * 0.6),
-                tip + egui::vec2(-direction * size, size * 0.6),
-            ],
+            vec![tip, base + across, base - across],
             self.color32(),
             Stroke::NONE,
         ));
-        self.render_placed_text(
-            painter,
-            tip + egui::vec2(-direction * (size + DESIGN_TOKENS.spacing.sm), 0.0),
-            if direction > 0.0 {
-                Align2::RIGHT_CENTER
-            } else {
-                Align2::LEFT_CENTER
-            },
-        );
-    }
-
-    /// Render arrow mark down - downward pointing bearish arrow
-    pub(crate) fn render_arrow_mark_down(&self, painter: &egui::Painter) {
-        if !self.points.is_empty() {
-            let pos = self.points[0];
-            let size = typography::MD;
-            let points = vec![
-                Pos2::new(pos.x, pos.y + size),
-                Pos2::new(pos.x - size * 0.6, pos.y - size * 0.5),
-                Pos2::new(pos.x + size * 0.6, pos.y - size * 0.5),
-            ];
-            let fill = DESIGN_TOKENS.semantic.extended.bearish;
-            let border = DESIGN_TOKENS
-                .semantic
-                .extended
-                .bearish
-                .gamma_multiply(200_f32 / 255.0);
-            let shape = egui::epaint::PathShape::convex_polygon(
-                points,
-                fill,
-                Stroke::new(stroke::HAIRLINE, border),
-            );
-            painter.add(shape);
-            self.render_placed_text(
-                painter,
-                Pos2::new(pos.x, pos.y - size * 0.5 - DESIGN_TOKENS.spacing.sm),
-                Align2::CENTER_BOTTOM,
-            );
-        }
+        let anchor = if direction.y < 0.0 {
+            Align2::CENTER_TOP
+        } else if direction.y > 0.0 {
+            Align2::CENTER_BOTTOM
+        } else if direction.x < 0.0 {
+            Align2::LEFT_CENTER
+        } else {
+            Align2::RIGHT_CENTER
+        };
+        self.render_placed_text(painter, base - direction * DESIGN_TOKENS.spacing.sm, anchor);
     }
 }
 
@@ -669,6 +634,29 @@ pub(super) fn ellipse_points(p1: Pos2, p2: Pos2) -> Vec<Pos2> {
         .collect()
 }
 
+/// The outline of an arrow marker from `tail` to `tip`: a shaft that widens from 8% of its
+/// length at the tail to 16% at the neck, then a head 35% of the length long and 40% wide. Tip
+/// first and clockwise on screen, so it fills as a fan from the tip. `None` below one pixel of
+/// length or for non-finite anchors.
+pub(super) fn arrow_marker_outline(tail: Pos2, tip: Pos2) -> Option<[Pos2; 7]> {
+    let length = tail.distance(tip);
+    if !(length.is_finite() && length >= 1.0) {
+        return None;
+    }
+    let along = (tip - tail) / length;
+    let across = egui::vec2(-along.y, along.x) * length;
+    let neck = tip - along * (0.35 * length);
+    Some([
+        tip,
+        neck + across * 0.2,
+        neck + across * 0.08,
+        tail + across * 0.04,
+        tail - across * 0.04,
+        neck - across * 0.08,
+        neck - across * 0.2,
+    ])
+}
+
 /// The half circle around `center` that starts at `edge` and turns clockwise
 /// on screen.
 pub(super) fn arc_points(center: Pos2, edge: Pos2) -> Vec<Pos2> {
@@ -695,7 +683,8 @@ mod tests {
     /// degree normal. The rising line has midpoint (200, 200): up = (-s, -s) from it.
     /// Closes 10, 14, 12 fit y = 11 + x, ending at
     /// (100, 390) and (300, 370): midpoint (200, 380), angle atan(-0.1), up = (-0.0995, -0.9950).
-    /// Up and down marks have their base 6.5 pt from the anchor, side marks their tail 14 pt.
+    /// The marker clears its head by another 20% of its length: (-40, -40) along the normal.
+    /// Every mark has its base 14 pt from the anchor, with text 4 pt beyond it.
     #[test]
     fn line_and_shape_text_sits_on_its_drawing_and_reads_upright() {
         use crate::drawings::{ChartPoint, DrawingToolType as T};
@@ -765,9 +754,9 @@ mod tests {
             (T::Circle, &[(200., 200.), (250., 200.)], 0.0, A::CENTER_CENTER, (200., 200.)),
             (T::Ellipse, &[(100., 100.), (300., 300.)], 0.0, A::CENTER_CENTER, (200., 200.)),
             (T::Arrow, RISING, -FRAC_PI_4, A::CENTER_BOTTOM, (196.4645, 196.4645)),
-            (T::ArrowMarker, RISING, -FRAC_PI_4, A::CENTER_BOTTOM, (196.4645, 196.4645)),
-            (T::ArrowMarkUp, MARK, 0.0, A::CENTER_TOP, (200., 210.5)),
-            (T::ArrowMarkDown, MARK, 0.0, A::CENTER_BOTTOM, (200., 189.5)),
+            (T::ArrowMarker, RISING, -FRAC_PI_4, A::CENTER_BOTTOM, (156.4645, 156.4645)),
+            (T::ArrowMarkUp, MARK, 0.0, A::CENTER_TOP, (200., 218.)),
+            (T::ArrowMarkDown, MARK, 0.0, A::CENTER_BOTTOM, (200., 182.)),
             (T::ArrowMarkLeft, MARK, 0.0, A::LEFT_CENTER, (218., 200.)),
             (T::ArrowMarkRight, MARK, 0.0, A::RIGHT_CENTER, (182., 200.)),
         ];

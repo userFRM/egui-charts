@@ -166,7 +166,6 @@ impl Drawing {
             T::TrendAngle
             | T::InfoLine
             | T::Arrow
-            | T::ArrowMarker
             | T::Path
             | T::Brush
             | T::Highlighter
@@ -185,6 +184,14 @@ impl Drawing {
                 }
             }
             T::Polyline => outline.lines = path(self.closed),
+            T::ArrowMarker => match lines::arrow_marker_outline(first, second) {
+                Some(arrow) => {
+                    outline.lines = edges(&arrow);
+                    // Head and shaft are the convex parts needed for containment.
+                    outline.areas = vec![vec![arrow[0], arrow[1], arrow[6]], arrow[2..6].to_vec()];
+                }
+                None => outline.lines = path(false),
+            },
             T::HeadAndShoulders => {
                 outline.lines = path(false);
                 if let Some((neckline, regions)) = patterns::head_and_shoulders_outline(p) {
@@ -464,10 +471,10 @@ impl Drawing {
             // Arrows (6 tools)
             DrawingToolType::Arrow => self.render_arrow(painter, color, stroke),
             DrawingToolType::ArrowMarker => self.render_arrow_marker(painter, color),
-            DrawingToolType::ArrowMarkUp => self.render_arrow_mark_up(painter),
-            DrawingToolType::ArrowMarkDown => self.render_arrow_mark_down(painter),
-            DrawingToolType::ArrowMarkLeft => self.render_horizontal_mark(painter, -1.0),
-            DrawingToolType::ArrowMarkRight => self.render_horizontal_mark(painter, 1.0),
+            DrawingToolType::ArrowMarkUp => self.render_arrow_mark(painter, egui::Vec2::UP),
+            DrawingToolType::ArrowMarkDown => self.render_arrow_mark(painter, egui::Vec2::DOWN),
+            DrawingToolType::ArrowMarkLeft => self.render_arrow_mark(painter, egui::Vec2::LEFT),
+            DrawingToolType::ArrowMarkRight => self.render_arrow_mark(painter, egui::Vec2::RIGHT),
 
             // Additional tools
             DrawingToolType::Pitchfan => self.render_pitchfork(painter, rect),
@@ -1178,7 +1185,6 @@ mod tests {
             DrawingToolType::InfoLine,
             DrawingToolType::TrendAngle,
             DrawingToolType::Arrow,
-            DrawingToolType::ArrowMarker,
         ] {
             let mut drawing = Drawing::new(7, tool);
             drawing.points = vec![Pos2::new(100., 100.), Pos2::new(300., 100.)];
@@ -1228,6 +1234,147 @@ mod tests {
                     .any(|s| matches!(s,Shape::Rect(r) if r.rect.center() == end)),
                 "{tool:?}: vertical end"
             );
+        }
+    }
+
+    /// Marks are 14 px triangles with their tip on the anchor and an 8.4 px half-base.
+    /// The 200 px marker has a 70 by 80 px head and a shaft widening from 16 to 32 px:
+    /// area 70 * 80 / 2 + 130 * (16 + 32) / 2 = 5920 px², in every direction.
+    /// Saved line ends, extension, fill and line styles must not alter these solid shapes.
+    #[test]
+    fn arrow_tools_paint_one_solid_shape_in_the_drawing_colour() {
+        use crate::drawings::ArrowStyle;
+        use DrawingToolType as T;
+        use egui::epaint::{Mesh, TessellationOptions, Tessellator};
+        let p = Pos2::new;
+        for (tool, anchors, want) in [
+            (
+                T::ArrowMarkUp,
+                vec![p(200., 200.)],
+                vec![p(200., 200.), p(208.4, 214.), p(191.6, 214.)],
+            ),
+            (
+                T::ArrowMarkDown,
+                vec![p(200., 200.)],
+                vec![p(200., 200.), p(191.6, 186.), p(208.4, 186.)],
+            ),
+            (
+                T::ArrowMarkLeft,
+                vec![p(200., 200.)],
+                vec![p(200., 200.), p(214., 191.6), p(214., 208.4)],
+            ),
+            (
+                T::ArrowMarkRight,
+                vec![p(200., 200.)],
+                vec![p(200., 200.), p(186., 208.4), p(186., 191.6)],
+            ),
+            (
+                T::ArrowMarker,
+                vec![p(100., 200.), p(300., 200.)],
+                vec![
+                    p(300., 200.),
+                    p(230., 240.),
+                    p(230., 216.),
+                    p(100., 208.),
+                    p(100., 192.),
+                    p(230., 184.),
+                    p(230., 160.),
+                ],
+            ),
+            (
+                T::ArrowMarker,
+                vec![p(300., 200.), p(100., 200.)],
+                vec![
+                    p(100., 200.),
+                    p(170., 160.),
+                    p(170., 184.),
+                    p(300., 192.),
+                    p(300., 208.),
+                    p(170., 216.),
+                    p(170., 240.),
+                ],
+            ),
+            (
+                T::ArrowMarker,
+                vec![p(100., 300.), p(100., 100.)],
+                vec![
+                    p(100., 100.),
+                    p(140., 170.),
+                    p(116., 170.),
+                    p(108., 300.),
+                    p(92., 300.),
+                    p(84., 170.),
+                    p(60., 170.),
+                ],
+            ),
+        ] {
+            let mut drawing = Drawing::with_color(7, tool, [12, 34, 56, 255]);
+            drawing.points = anchors;
+            drawing.arrow_start_style = ArrowStyle::Circle;
+            drawing.arrow_end_style = ArrowStyle::Arrow;
+            (drawing.extend_left, drawing.extend_right) = (true, true);
+            let shapes = paint(&drawing);
+            let paths: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Path(path) => Some(path),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                !shapes
+                    .iter()
+                    .any(|s| matches!(s, Shape::LineSegment { .. } | Shape::Circle(_))),
+                "{tool:?} line or end"
+            );
+            assert_eq!(paths.len(), 1, "{tool:?}");
+            let path = paths[0];
+            assert_eq!(path.fill, drawing.color32(), "{tool:?} colour");
+            assert!(path.closed && path.stroke.is_empty(), "{tool:?}");
+            assert_eq!(path.points.len(), want.len(), "{tool:?}");
+            for (got, want) in path.points.iter().zip(&want) {
+                assert!(
+                    got.distance(*want) < 1e-3,
+                    "{tool:?}: {:?}, want {want:?}",
+                    path.points
+                );
+            }
+            let mut styled = drawing.clone();
+            styled.fill_color = Some([200, 100, 50, 80]);
+            styled.line_style = crate::model::LineStyle::Dashed;
+            styled.stroke_width = 8.0;
+            assert_eq!(
+                format!("{:?}", paint(&styled)),
+                format!("{shapes:?}"),
+                "{tool:?} style"
+            );
+            if tool == T::ArrowMarker {
+                let mut mesh = Mesh::default();
+                Tessellator::new(1.0, TessellationOptions::default(), [1, 1], Vec::new())
+                    .tessellate_shape(Shape::Path(path.clone()), &mut mesh);
+                let mut area = 0.0;
+                for tri in mesh.indices.as_chunks::<3>().0 {
+                    let vertices = tri.map(|i| mesh.vertices[i as usize]);
+                    if vertices.iter().any(|v| v.color.a() != 255) {
+                        continue;
+                    }
+                    let [a, b, c] = vertices.map(|v| v.pos);
+                    let centre = a + ((b - a) + (c - a)) / 3.0;
+                    let mut inside = false;
+                    for i in 0..want.len() {
+                        let (a, b) = (want[i], want[(i + 1) % want.len()]);
+                        if (a.y > centre.y) != (b.y > centre.y)
+                            && centre.x < (b.x - a.x) * (centre.y - a.y) / (b.y - a.y) + a.x
+                        {
+                            inside = !inside;
+                        }
+                    }
+                    assert!(inside, "triangle outside the arrow: {a:?}, {b:?}, {c:?}");
+                    area += ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() / 2.0;
+                }
+                // Feathering removes at most 10% of the opaque area.
+                assert!((5328.0..=5920.0).contains(&area), "opaque area {area}");
+            }
         }
     }
 
