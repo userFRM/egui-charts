@@ -2,6 +2,7 @@
 //! computed from them.
 
 mod options;
+mod paint;
 mod scales;
 
 pub use options::SeriesOptions;
