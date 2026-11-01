@@ -94,6 +94,14 @@ impl Drawing {
         painter.layout_job(egui::text::LayoutJob::simple_format(text, format))
     }
 
+    /// The drawing's text, or the localised word "Text", so an empty annotation stays selectable.
+    pub(super) fn display_text(&self, ctx: &egui::Context) -> String {
+        match self.text.as_deref() {
+            Some(text) if !text.is_empty() => text.to_owned(),
+            _ => crate::localization::text(ctx, "Text"),
+        }
+    }
+
     /// Apply line patterns and font weight without changing the renderer's widths or fills.
     pub(super) fn finish_style(&self, painter: &Painter, start: usize, rect: Rect) {
         let styled = self.fill_color.is_some()
@@ -485,6 +493,8 @@ mod tests {
                         y_to_price: &f64::from,
                         time_axis: true,
                         executions: None,
+                        timeframe: None,
+                        finer: &[],
                     },
                     selected,
                 );
@@ -526,6 +536,61 @@ mod tests {
         drawing
     }
 
+    /// Empty annotations use one translated default; plain Text and Anchored text paint alike.
+    #[test]
+    fn text_annotations_paint_plainly_with_a_localised_default() {
+        use DrawingToolType::*;
+        let ctx = egui::Context::default();
+        crate::localization::set_translator(&ctx, |s: &str| {
+            (s == "Text").then(|| "Texte".to_owned())
+        });
+        for tool in [
+            TextLabel,
+            AnchoredText,
+            Note,
+            Callout,
+            Comment,
+            Signpost,
+            AnchoredNote,
+            FlagNote,
+        ] {
+            for text in [None, Some("")] {
+                let mut drawing = pattern(tool);
+                drawing.text = text.map(str::to_owned);
+                let shapes = paint_on(&ctx, &drawing, tool == AnchoredNote);
+                let texts: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Text(t) => Some(t.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                let expected = if matches!(tool, AnchoredNote | FlagNote) {
+                    vec![]
+                } else {
+                    vec!["Texte"]
+                };
+                assert_eq!(texts, expected, "{tool:?} {text:?}");
+            }
+        }
+        for boxed in [false, true] {
+            let mut text = pattern(TextLabel);
+            text.text = Some("Hi".into());
+            (text.background, text.border) = (boxed, boxed);
+            let mut anchored = text.clone();
+            anchored.tool_type = AnchoredText;
+            assert_eq!(
+                format!("{:?}", paint(&text)),
+                format!("{:?}", paint(&anchored))
+            );
+        }
+        let mut text = pattern(TextLabel);
+        text.text = Some("Hi".into());
+        let shapes = paint(&text);
+        assert_eq!(shapes.len(), 1, "a plain label paints only its text");
+        assert!(matches!(&shapes[0], Shape::Text(t) if t.pos == Pos2::new(100.0, 300.0)));
+    }
+
     /// Text boxes take the theme's card, or a solid label in the drawing colour, unless their
     /// text, background and border settings say otherwise. Contrast of white on the red is
     /// 1.05 / 0.269 = 3.90 and on the yellow 1.05 / 0.860 = 1.22, so black reads on the yellow.
@@ -554,6 +619,7 @@ mod tests {
                 Signpost,
             ] {
                 let solid = matches!(tool, Comment | PriceNote | Signpost);
+                let plain = matches!(tool, TextLabel | AnchoredText);
                 let border = |color| vec![Stroke::new(1.0, color)];
                 // Settings, text colour, box fills, box strokes and italics.
                 type Case = (
@@ -569,8 +635,12 @@ mod tests {
                         "defaults",
                         |_| {},
                         if solid { Color32::WHITE } else { red },
-                        vec![if solid { red } else { panel }],
-                        border(red),
+                        if plain {
+                            vec![]
+                        } else {
+                            vec![if solid { red } else { panel }]
+                        },
+                        if plain { vec![] } else { border(red) },
                         false,
                     ),
                     (
@@ -580,6 +650,8 @@ mod tests {
                             d.fill_color = Some([255, 235, 59, 255]);
                             d.border_color = Some([0, 128, 0, 255]);
                             d.italic = true;
+                            d.background = true;
+                            d.border = true;
                         },
                         blue,
                         vec![yellow],
@@ -590,8 +662,8 @@ mod tests {
                         "fill only",
                         |d| d.fill_color = Some([255, 235, 59, 255]),
                         if solid { Color32::BLACK } else { red },
-                        vec![yellow],
-                        border(red),
+                        if plain { vec![] } else { vec![yellow] },
+                        if plain { vec![] } else { border(red) },
                         false,
                     ),
                     (
@@ -611,7 +683,7 @@ mod tests {
                     // A red drawing with no text box settings of its own, whatever the tool's.
                     drawing.color = red.to_array();
                     (drawing.fill_color, drawing.text_color) = (None, None);
-                    (drawing.background, drawing.border) = (true, true);
+                    (drawing.background, drawing.border) = (!plain, !plain);
                     drawing.border_color = None;
                     drawing.points = vec![Pos2::new(100.0, 300.0), Pos2::new(200.0, 100.0)];
                     drawing.chart_points = (drawing.points.iter())
@@ -994,6 +1066,8 @@ mod tests {
                     y_to_price: &f64::from,
                     time_axis: true,
                     executions: None,
+                    timeframe: None,
+                    finer: &[],
                 };
                 drawing.render_original(ui.painter(), pane, &view);
             });

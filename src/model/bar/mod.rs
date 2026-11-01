@@ -11,8 +11,6 @@ mod levels;
 mod patterns;
 
 // Re-export main types
-#[cfg(feature = "widget")]
-pub(crate) use bar::SpanCache;
 pub use bar::{Bar, BarColors};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use bar_data::BarData;

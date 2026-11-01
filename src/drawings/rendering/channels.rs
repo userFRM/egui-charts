@@ -4,8 +4,9 @@
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
+use crate::model::Bar;
 use crate::model::math::{LinearFit, Moments};
-use crate::model::{Bar, SpanCache};
+use crate::painting::span_cache::SpanCache;
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -548,6 +549,8 @@ mod tests {
                                     y_to_price: &|y| f64::from((500.0 - y) / 10.0),
                                     time_axis: true,
                                     executions: None,
+                                    timeframe: None,
+                                    finer: &[],
                                 },
                             );
                         },

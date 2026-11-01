@@ -607,6 +607,8 @@ mod tests {
                         y_to_price: &f64::from,
                         time_axis: true,
                         executions: None,
+                        timeframe: None,
+                        finer: &[],
                     };
                     fib.render_fibonacci(ui.painter(), rect, &view);
                 });

@@ -10,6 +10,9 @@
 //! [`ProfileInput`] tells how much of a profile the finer bars cover.
 //! The chart notes each profile "Estimated from bars", also when finer bars cover all of it:
 //! they narrow the estimate without making it exact.
+//!
+//! Row fills stay at or below 35% opacity so price bars remain readable. The point of control
+//! and value-area guides keep their line colours and widths.
 
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
@@ -115,6 +118,29 @@ const DISPLAYS: [ProfileDisplay; 3] = [
     ProfileDisplay::Delta,
 ];
 
+/// UTC times in Inputs, with a fractional second only when one is present.
+const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.f";
+
+/// Saved milliseconds as text, empty for the unset endpoints.
+pub(crate) fn time_text(ms: f64) -> String {
+    if ms.abs() >= 8e15 {
+        return String::new();
+    }
+    DateTime::from_timestamp_millis(ms as i64)
+        .map_or_else(String::new, |time| time.format(TIME_FORMAT).to_string())
+}
+
+/// UTC date and time to the minute or finer, or `unset` for empty text.
+fn parse_time(text: &str, unset: f64) -> Result<f64, &'static str> {
+    if text.is_empty() {
+        return Ok(unset);
+    }
+    chrono::NaiveDateTime::parse_from_str(text, TIME_FORMAT)
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M"))
+        .map(|time| time.and_utc().timestamp_millis() as f64)
+        .map_err(|_| "time must read YYYY-MM-DD HH:MM:SS")
+}
+
 impl ProfileStudy {
     fn new(kind: Kind, rows: usize) -> Self {
         Self {
@@ -195,17 +221,17 @@ impl ProfileStudy {
         if matches!(self.kind, Kind::Fixed | Kind::Anchored) {
             inputs.push(StudyInput::new(
                 "start_time",
-                "Start (Unix ms)",
-                InputValue::Number(self.start_time),
-                InputKind::Number(-8e15, 8e15),
+                "Start (YYYY-MM-DD HH:MM:SS UTC)",
+                InputValue::Text(time_text(self.start_time)),
+                InputKind::Text,
             ));
         }
         if self.kind == Kind::Fixed {
             inputs.push(StudyInput::new(
                 "end_time",
-                "End (Unix ms)",
-                InputValue::Number(self.end_time),
-                InputKind::Number(-8e15, 8e15),
+                "End (YYYY-MM-DD HH:MM:SS UTC)",
+                InputValue::Text(time_text(self.end_time)),
+                InputKind::Text,
             ));
         }
         if self.kind == Kind::Periodic {
@@ -257,8 +283,8 @@ impl ProfileStudy {
             ("source_interval", InputValue::Timeframe(v)) => self.source = v,
             ("feed_source", InputValue::Toggle(v)) => self.feed_source = v,
             ("adaptive_rows", InputValue::Toggle(v)) => self.adaptive = v,
-            ("start_time", InputValue::Number(v)) => self.start_time = v,
-            ("end_time", InputValue::Number(v)) => self.end_time = v,
+            ("start_time", InputValue::Text(text)) => self.start_time = parse_time(&text, -8e15)?,
+            ("end_time", InputValue::Text(text)) => self.end_time = parse_time(&text, 8e15)?,
             ("period", InputValue::Choice(v)) => self.period = PERIODS[v],
             ("anchor", InputValue::Choice(v)) => self.anchor = ANCHORS[v],
             ("length", InputValue::Length(v)) => self.length = v,
@@ -278,8 +304,7 @@ impl ProfileStudy {
     /// emptied for a recompute.
     fn finer(&self) -> Option<Timeframe> {
         let shorter = |source: &Timeframe| {
-            !matches!(source, Timeframe::Ticks(_))
-                && source.duration_ms() < self.interval.duration_ms()
+            !source.is_trade_based() && source.duration_ms() < self.interval.duration_ms()
         };
         // The chart interval may have changed since.
         if let Some((timeframe, _)) = self.held.filter(|_| self.data.is_empty()) {
@@ -288,12 +313,7 @@ impl ProfileStudy {
         if self.source.is_some() || !self.feed_source || self.resolutions.is_empty() {
             return self.source.filter(shorter);
         }
-        let span = self.span()?;
-        self.resolutions
-            .iter()
-            .filter(|hint| shorter(&hint.timeframe) && hint.max_span.is_none_or(|max| span <= max))
-            .min_by_key(|hint| hint.timeframe.duration_ms())
-            .map(|hint| hint.timeframe)
+        ProfileResolution::suggested(&self.resolutions, self.interval, self.span()?)
     }
 
     /// Profile length from first open to last close: visible bars for a visible profile,
@@ -373,30 +393,6 @@ impl ProfileStudy {
             None => self.fine.clear(),
         }
         self.update(data, from);
-    }
-
-    /// The bars that feed the profile of chart bars `range`: the finer bars inside each chart
-    /// bar, or the chart bar itself where there are none, and the share of chart bars with
-    /// finer bars.
-    fn inputs_of(&self, range: &Range<usize>) -> (Vec<Bar>, f64) {
-        let mut bars = Vec::new();
-        let mut covered = 0;
-        for i in range.clone() {
-            let start = self.data[i].time;
-            let end = self
-                .data
-                .get(i + 1)
-                .map_or_else(|| self.close(start), |next| next.time);
-            let inside = &self.fine[self.fine.partition_point(|bar| bar.time < start)
-                ..self.fine.partition_point(|bar| bar.time < end)];
-            if inside.is_empty() {
-                bars.push(self.data[i].clone());
-            } else {
-                covered += 1;
-                bars.extend_from_slice(inside);
-            }
-        }
-        (bars, covered as f64 / range.len() as f64)
     }
 
     /// What each profile in `visible` was built from.
@@ -584,8 +580,19 @@ impl ProfileStudy {
             }) {
                 profiles.push(plot.plot.clone());
             } else if self.finer().is_some() && !self.fine.is_empty() {
-                let (bars, coverage) = self.inputs_of(&range);
-                let Some(profile) = VolumeProfile::from_bars(&bars, config) else {
+                let end = self.data.get(range.end).map_or_else(
+                    || self.close(self.data[range.end - 1].time),
+                    |next| next.time,
+                );
+                let (profile, covered) = VolumeProfile::of_finer(
+                    &self.data[range.clone()],
+                    end,
+                    &self.fine,
+                    config.rows(),
+                    config.row_size(),
+                );
+                let coverage = covered as f64 / range.len() as f64;
+                let Some(profile) = profile else {
                     continue;
                 };
                 let plot = StudyProfile {
@@ -944,6 +951,10 @@ mod tests {
             })
             .collect();
         let instrument = Instrument::new("SYNTH").with_profile_resolutions([
+            ProfileResolution::new(
+                Timeframe::Volume(std::num::NonZeroU64::new(1).unwrap()),
+                None,
+            ),
             ProfileResolution::new(Timeframe::Min1, Some(TimeDelta::hours(2))),
             ProfileResolution::new(Timeframe::Min5, Some(TimeDelta::hours(4))),
             ProfileResolution::new(Timeframe::Min15, None),
@@ -1073,6 +1084,35 @@ mod tests {
                     input.id
                 );
             }
+            // Saved UTC times are displayed and accepted back without changing the range.
+            let times: Vec<_> = study
+                .inputs()
+                .into_iter()
+                .filter_map(|input| match input.value {
+                    InputValue::Text(text) => Some((input.id, text)),
+                    _ => None,
+                })
+                .collect();
+            let expected_times: &[(&str, &str)] = match study.name() {
+                "Vol Profile FR" => &[
+                    ("start_time", "2026-03-06 23:00:00"),
+                    ("end_time", "2026-03-07 00:00:00"),
+                ],
+                "Vol Profile Anchored" => &[("start_time", "2026-03-07 00:00:00")],
+                _ => &[],
+            };
+            assert_eq!(
+                times
+                    .iter()
+                    .map(|(id, text)| (id.as_str(), text.as_str()))
+                    .collect::<Vec<_>>(),
+                expected_times,
+                "{}",
+                study.name()
+            );
+            for (id, text) in times {
+                study.set_input(&id, InputValue::Text(text)).unwrap();
+            }
             study
                 .set_input("value_area", InputValue::Number(70.0))
                 .unwrap();
@@ -1135,6 +1175,42 @@ mod tests {
                 );
             }
         }
+        // Fractions survive the editor, junk changes nothing, and empty fields select all bars.
+        let mut fixed = VolProfileFixed::new(2).with_range(
+            bars[1].time + chrono::Duration::milliseconds(500),
+            bars[2].time,
+        );
+        let start = fixed
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == "start_time")
+            .unwrap();
+        assert_eq!(
+            start.value,
+            InputValue::Text("2026-03-06 23:00:00.500".into())
+        );
+        fixed.set_input("start_time", start.value).unwrap();
+        fixed.calculate(&bars);
+        assert_eq!(fixed.volume_profiles(0..4)[0].bars, 2..3);
+        assert!(
+            fixed
+                .set_input("start_time", InputValue::Text("23:00".into()))
+                .is_err()
+        );
+        assert_eq!(fixed.volume_profiles(0..4)[0].bars, 2..3);
+        fixed
+            .set_input("start_time", InputValue::Text("2026-03-06 23:00".into()))
+            .unwrap();
+        fixed.calculate(&bars);
+        assert_eq!(fixed.volume_profiles(0..4)[0].bars, 1..3);
+        fixed
+            .set_input("start_time", InputValue::Text(String::new()))
+            .unwrap();
+        fixed
+            .set_input("end_time", InputValue::Text(String::new()))
+            .unwrap();
+        fixed.calculate(&bars);
+        assert_eq!(fixed.volume_profiles(0..4)[0].bars, 0..4);
         let mut visible = VolProfileVisible::new(2);
         visible.calculate(&bars);
         assert_eq!(

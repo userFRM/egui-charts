@@ -1064,6 +1064,73 @@ fn executions_link_existing_tape_fills_without_counting_twice() {
     }
 }
 
+/// Appearance reaches the painter, survives visibility changes and image copies, and
+/// repeated enable or configuration calls keep the uploaded texels.
+#[test]
+fn heatmap_appearance_survives_visibility_and_frozen_images() {
+    use crate::chart::overlays::LiquidityHeatmapConfig;
+    use crate::data::DepthColumn;
+
+    let mut chart = fed(&Arc::new(Script::default()), None);
+    chart.set_instrument(Some(Instrument::new("TEST").with_tick_size(1.0)));
+    let config = LiquidityHeatmapConfig {
+        brightness: 0.5,
+        lower_cutoff: 10.0,
+        full_intensity_size: Some(999.0),
+    };
+    chart.set_liquidity_heatmap_config(config);
+    chart.set_liquidity_heatmap(true);
+    let mut history = DepthHistory::new(Default::default()).unwrap();
+    history.push(DepthColumn {
+        time: "2026-01-05T10:00:00Z".parse().unwrap(),
+        span: chrono::TimeDelta::seconds(1),
+        bids: vec![(100, 99.0)],
+        asks: vec![(101, 9.0)],
+        ..Default::default()
+    });
+    chart.set_depth_history(Some(history));
+    let ctx = egui::Context::default();
+    for frame in 0..5 {
+        match frame {
+            1 | 4 => {
+                chart.set_liquidity_heatmap(true);
+                chart.set_liquidity_heatmap_config(config);
+            }
+            2 => {
+                chart.set_liquidity_heatmap(false);
+                chart.set_liquidity_heatmap(true);
+            }
+            3 => chart.feed_link = Some(chart.feed_link.as_ref().unwrap().frozen()),
+            _ => {}
+        }
+        assert_eq!(chart.liquidity_heatmap_config(), config);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            chart.paint_liquidity(ui.painter(), &chart.get_chart_mapping());
+        });
+        let alphas: Vec<_> = output
+            .textures_delta
+            .set
+            .values()
+            .flatten()
+            .filter(|delta| delta.pos.is_some() && delta.image.size() == [1, 256])
+            .map(|delta| {
+                let egui::ImageData::Color(image) = &delta.image;
+                [image.pixels[100].a(), image.pixels[101].a()]
+            })
+            .collect();
+        output.textures_delta.clear();
+        // 99 reaches 2/3 intensity: round(255 * 0.75 * 2/3) * 0.5 = 64.
+        assert_eq!(
+            alphas,
+            if frame == 1 || frame == 4 {
+                vec![]
+            } else {
+                vec![[64, 0]]
+            }
+        );
+    }
+}
+
 #[test]
 fn depth_paging_ends_independently_and_drops_old_settings_replies() {
     let feed = Arc::new(Script::default());
@@ -2611,4 +2678,185 @@ fn host_studies_read_footprints_and_books_as_of_the_replay_cutoff() {
         frames.run(&mut chart);
     }
     assert_eq!(lines(&chart), live, "after replay");
+}
+
+/// Profile drawings use held executions on time-based charts and release them when hidden.
+#[cfg(feature = "drawings")]
+#[test]
+fn profile_drawings_read_executions_on_every_time_based_chart_type() {
+    use crate::data::ProfileSource;
+    use crate::drawings::rendering::ChartView;
+    use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+    use crate::model::OrderSide::{Buy, Sell};
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    feed.page().send(page(bars(5), false));
+    frames.run(&mut chart);
+    // Bar 4 (00:04) trades 100 (4 sold) and 101 (6 bought); bar 5 (00:05) trades 101 (3 bought).
+    // An empty ending page confirms that the first held execution's bar is complete.
+    feed.trades
+        .lock()
+        .unwrap()
+        .pop()
+        .unwrap()
+        .send(Ok(TradePage::new(Vec::new(), true)));
+    let start = bars(5)[4].time;
+    let sink = feed.sink();
+    for (seconds, price, size, side) in [
+        (10, 100.0, 4.0, Sell),
+        (20, 101.0, 6.0, Buy),
+        (70, 101.0, 3.0, Buy),
+    ] {
+        sink.push_tick(Tick::new(
+            start + TimeDelta::seconds(seconds),
+            price,
+            size,
+            Some(side),
+        ));
+    }
+    let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+    drawing.chart_points = vec![ChartPoint::new(4.0, 100.0), ChartPoint::new(5.0, 100.0)];
+    chart.drawings_mut().drawings.push(drawing.clone());
+    let profile = |chart: &Chart, drawing: &Drawing| {
+        let view = ChartView {
+            instrument: None,
+            price_formatter: None,
+            bars: chart.state.shown(),
+            revision: chart.state.revision(),
+            bar_to_x: &|x| x,
+            price_to_y: &|price| price as f32,
+            y_to_price: &f64::from,
+            time_axis: true,
+            executions: chart.feed_link.as_ref().unwrap().footprint.as_ref(),
+            timeframe: None,
+            finer: &[],
+        };
+        drawing.volume_profile_of(&view)
+    };
+    let mut footprint = None;
+    for (chart_type, executed) in [
+        (ChartType::VolumeFootprint, true),
+        (ChartType::Candles, true),
+        (ChartType::Line, true),
+        (ChartType::Heikin, true),
+        (ChartType::Renko, false),
+    ] {
+        chart.set_chart_type(chart_type);
+        frames.run(&mut chart);
+        let held = chart.feed_link.as_ref().unwrap().footprint.is_some();
+        assert_eq!(held, executed, "{chart_type:?}");
+        if !executed {
+            continue;
+        }
+        let profile = profile(&chart, &drawing).unwrap();
+        assert_eq!(
+            profile.source(),
+            ProfileSource::Executions { complete: true },
+            "{chart_type:?}"
+        );
+        match &footprint {
+            None => {
+                assert_eq!((profile.low(), profile.high()), (99.5, 101.5));
+                assert_eq!(profile.volume(), [4.0, 9.0]);
+                assert_eq!(
+                    (profile.up(), profile.down()),
+                    ([0.0, 9.0].as_slice(), [4.0, 0.0].as_slice())
+                );
+                footprint = Some(profile);
+            }
+            Some(reference) => assert_eq!(&profile, reference, "{chart_type:?}"),
+        }
+    }
+    chart.set_chart_type(ChartType::Candles);
+    frames.run(&mut chart);
+    // Holding executions for a drawing must keep the selected candle chart's price series.
+    // Wide bars make footprint cells readable, so accidentally enabling that renderer is visible.
+    chart.apply_synced_time_scale(80.0, 0.0);
+    let colors = [chart.config().bullish_color, chart.config().bearish_color];
+    chart.drawings_mut().drawings[0].visible = false;
+    frames.time += 1.0;
+    let without = shapes(&frames.ctx, &mut chart, frames.time, Vec::new());
+    let reference = colors.map(|color| candle_ys(&without, color));
+    chart.drawings_mut().drawings[0].visible = true;
+    frames.time += 1.0;
+    let with = shapes(&frames.ctx, &mut chart, frames.time, Vec::new());
+    assert_eq!(
+        colors.map(|color| candle_ys(&with, color)),
+        reference,
+        "price candles with a profile drawing"
+    );
+    let mut anchored = drawing.clone();
+    anchored.tool_type = DrawingToolType::AnchoredVolumeProfile;
+    anchored.chart_points.truncate(1);
+    assert_eq!(profile(&chart, &anchored), footprint);
+
+    // Replay inside a bar excludes its execution at the cutoff, including after a rewind.
+    chart.set_feed_paused(true);
+    let source = [(10, 100.0, 4.0), (20, 101.0, 6.0), (70, 101.0, 3.0)]
+        .into_iter()
+        .map(|(second, price, volume)| {
+            Bar::new(
+                start + TimeDelta::seconds(second),
+                price,
+                price,
+                price,
+                price,
+                volume,
+            )
+        })
+        .collect::<Vec<_>>();
+    for (second, expected_high) in [(20, 100.5), (71, 101.5), (20, 100.5)] {
+        chart.set_replay_time(Some(start + TimeDelta::seconds(second)));
+        assert!(chart.set_replay_source(
+            source.clone(),
+            BarClock::new(Timeframe::Ticks(std::num::NonZeroU64::new(1).unwrap()))
+        ));
+        let color = chart.drawings().drawings[0].color;
+        let tint = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 15);
+        frames.time += 1.0 / 60.0;
+        let painted = shapes(&frames.ctx, &mut chart, frames.time, Vec::new());
+        let points: Vec<_> = painted
+            .iter()
+            .flat_map(|shape| match shape {
+                egui::Shape::Rect(rect) if rect.fill == tint => vec![rect.rect.min, rect.rect.max],
+                egui::Shape::Mesh(mesh) => mesh
+                    .vertices
+                    .iter()
+                    .filter(|v| v.color == tint)
+                    .map(|v| v.pos)
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert!(!points.is_empty(), "profile tint");
+        let range = egui::Rect::from_points(&points);
+        let map = chart.get_chart_mapping();
+        // Tessellation snaps the tint to pixels and feathers its edges.
+        assert!(
+            (range.top() - map.price_to_y(expected_high)).abs() < 1.1,
+            "cutoff {second}: tint {range:?}, expected top {}, bottom {}",
+            map.price_to_y(expected_high),
+            map.price_to_y(99.5)
+        );
+        assert!(
+            (range.bottom() - map.price_to_y(99.5)).abs() < 1.1,
+            "cutoff {second}: tint {range:?}, expected top {}, bottom {}",
+            map.price_to_y(expected_high),
+            map.price_to_y(99.5)
+        );
+    }
+    chart.set_replay_time(None);
+    chart.drawings_mut().drawings[0].visible = false;
+    frames.run(&mut chart);
+    assert!(chart.feed_link.as_ref().unwrap().footprint.is_none());
+    chart.drawings_mut().drawings[0].visible = true;
+    frames.run(&mut chart);
+    assert!(chart.feed_link.as_ref().unwrap().footprint.is_some());
+    chart.drawings_mut().drawings.clear();
+    frames.run(&mut chart);
+    assert!(chart.feed_link.as_ref().unwrap().footprint.is_none());
 }

@@ -1,12 +1,14 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
-use crate::data::VolumeProfile;
+use crate::data::{StudyDataRequest, VolumeProfile};
 use crate::drawings::domain::Drawing;
 use crate::drawings::domain::DrawingToolType;
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
-use crate::model::{Bar, SpanCache};
+use crate::model::{Bar, ProfileResolution, Timeframe};
+use crate::painting::span_cache::{SpanCache, SpanFingerprint};
 use crate::painting::volume_profile::ProfileStyle;
 use crate::styles::stroke;
+use chrono::{DateTime, Utc};
 use egui::{Color32, Pos2, Shape, Stroke};
 use std::cell::RefCell;
 use std::ops::Range;
@@ -20,11 +22,17 @@ const VWAP_BAND_COLOR: Color32 = Color32::from_rgb(76, 175, 80);
 
 type ProfileCache = SpanCache<Option<VolumeProfile>, (usize, Option<f64>)>;
 
+/// Rows, row size, the finer span and its history's address.
+type FinerCache = SpanCache<Option<VolumeProfile>, (usize, Option<f64>, SpanFingerprint, usize)>;
+
 thread_local! {
     static VWAP_CHECKPOINTS: RefCell<SpanCache<Vec<VwapSums>>> =
         const { RefCell::new(SpanCache::new(MAX_CACHED_SPANS)) };
     /// Profiles by their number of rows.
     static PROFILES: RefCell<ProfileCache> =
+        const { RefCell::new(SpanCache::new(MAX_CACHED_SPANS)) };
+    /// Profiles built from finer bars.
+    static FINER_PROFILES: RefCell<FinerCache> =
         const { RefCell::new(SpanCache::new(MAX_CACHED_SPANS)) };
 }
 
@@ -102,6 +110,47 @@ impl Drawing {
         ));
     }
 
+    /// Whether a visible profile drawing reads the chart's executions and finer bars.
+    pub(crate) fn reads_profile(&self) -> bool {
+        self.visible
+            && matches!(
+                self.tool_type,
+                DrawingToolType::FixedRangeVolumeProfile | DrawingToolType::AnchoredVolumeProfile
+            )
+    }
+
+    /// First index and bars between the anchors, or from the anchor to the last bar.
+    fn profile_span<'b>(&self, bars: &'b [Bar]) -> Option<(usize, &'b [Bar])> {
+        let anchor = |i: usize| self.chart_points.get(i).map(|p| p.bar_idx);
+        match self.tool_type {
+            DrawingToolType::FixedRangeVolumeProfile => bars_between(bars, anchor(0)?, anchor(1)?),
+            DrawingToolType::AnchoredVolumeProfile => bars_between(bars, anchor(0)?, f32::INFINITY),
+            _ => None,
+        }
+    }
+
+    /// The suggested history this visible profile reads, with the first open of its span.
+    pub(crate) fn profile_history(
+        &self,
+        bars: &[Bar],
+        timeframe: Timeframe,
+        resolutions: &[ProfileResolution],
+    ) -> Option<(StudyDataRequest, DateTime<Utc>)> {
+        if !self.reads_profile() {
+            return None;
+        }
+        let (_, span) = self.profile_span(bars)?;
+        let interval = finer_interval(span, timeframe, resolutions)?;
+        Some((
+            StudyDataRequest {
+                symbol: String::new(),
+                timeframe: Some(interval),
+                metric: None,
+            },
+            span.first()?.time,
+        ))
+    }
+
     /// Renders the volume profile of the bars between the two anchors, with
     /// the point of control and the value area.
     pub(crate) fn render_fixed_range_volume_profile(
@@ -162,7 +211,8 @@ impl Drawing {
     }
 
     /// The profile of `bars`, the span that starts at bar `first`: the executed volume at each
-    /// price when the view holds complete executions in the span, else estimated from the bars.
+    /// price when the view holds complete executions in the span, else the finer bars where they
+    /// cover chart bars, else estimated from the chart bars.
     fn span_profile(
         &self,
         view: &ChartView,
@@ -184,25 +234,20 @@ impl Drawing {
             }
         }
         let config = self.volume_profile.unwrap_or_default();
+        if let Some(profile) = finer_profile(view, config.rows(), config.row_size(), first, bars) {
+            return profile;
+        }
         span_profile(view, config.rows(), config.row_size(), first, bars)
     }
 
     /// The profile that a fixed range or anchored volume profile shows over the view's bars,
     /// with its [source](VolumeProfile::source): executed volume when
     /// [`ChartView::executions`] holds complete bars in the selected span, those from
-    /// [`Footprint::complete_from`](crate::data::Footprint::complete_from), else the bar estimate.
+    /// [`Footprint::complete_from`](crate::data::Footprint::complete_from), else the finer bars
+    /// of [`ChartView::finer`], else the bar estimate.
     /// `None` for other tools, a drawing without its anchors, or an empty selection.
     pub fn volume_profile_of(&self, view: &ChartView) -> Option<VolumeProfile> {
-        let anchor = |i: usize| self.chart_points.get(i).map(|p| p.bar_idx);
-        let (first, bars) = match self.tool_type {
-            DrawingToolType::FixedRangeVolumeProfile => {
-                bars_between(view.bars, anchor(0)?, anchor(1)?)?
-            }
-            DrawingToolType::AnchoredVolumeProfile => {
-                bars_between(view.bars, anchor(0)?, f32::INFINITY)?
-            }
-            _ => return None,
-        };
+        let (first, bars) = self.profile_span(view.bars)?;
         self.span_profile(view, first, bars).as_ref().clone()
     }
 }
@@ -287,6 +332,69 @@ fn span_profile(
             |profile, bar| profile.as_ref()?.with_bar(bar).map(Some),
         )
     })
+}
+
+/// Close of a bar of `timeframe`, saturating at the end of the calendar.
+fn close(open: DateTime<Utc>, timeframe: Timeframe) -> DateTime<Utc> {
+    open.checked_add_signed(timeframe.duration())
+        .unwrap_or(DateTime::<Utc>::MAX_UTC)
+}
+
+/// Suggested interval for a span measured from its first open through its last close.
+fn finer_interval(
+    span: &[Bar],
+    timeframe: Timeframe,
+    resolutions: &[ProfileResolution],
+) -> Option<Timeframe> {
+    let (first, last) = (span.first()?, span.last()?);
+    ProfileResolution::suggested(
+        resolutions,
+        timeframe,
+        close(last.time, timeframe) - first.time,
+    )
+}
+
+/// Replaces chart bars by the suggested finer bars inside them, when any are held in the span.
+fn finer_profile(
+    view: &ChartView,
+    rows: usize,
+    row_size: Option<f64>,
+    first: usize,
+    bars: &[Bar],
+) -> Option<Rc<Option<VolumeProfile>>> {
+    if view.finer.is_empty() {
+        return None;
+    }
+    let timeframe = view.timeframe?;
+    let interval = finer_interval(bars, timeframe, &view.instrument?.profile_resolutions)?;
+    let finer = view
+        .finer
+        .iter()
+        .find(|data| data.timeframe == interval)?
+        .bars;
+    let (start, last) = (bars.first()?.time, bars.last()?.time);
+    let end = view
+        .bars
+        .get(first + bars.len())
+        .map_or_else(|| close(last, timeframe), |next| next.time);
+    let at = finer.partition_point(|bar| bar.time < start);
+    let inside = &finer[at..at + finer[at..].partition_point(|bar| bar.time < end)];
+    if inside.is_empty() {
+        return None;
+    }
+    // shortcut: a host correction of a finer bar inside the span that keeps its fingerprint
+    // shows at the next span change; key on a history revision if feeds need it at once.
+    let key = (
+        rows,
+        row_size,
+        SpanFingerprint::of(at, inside, 0),
+        finer.as_ptr() as usize,
+    );
+    Some(FINER_PROFILES.with_borrow_mut(|cache| {
+        cache.get(key, first, bars, view.revision, |bars| {
+            VolumeProfile::of_finer(bars, end, inside, rows, row_size).0
+        })
+    }))
 }
 
 #[cfg(test)]
@@ -374,6 +482,8 @@ mod tests {
                 y_to_price: &|y| 20.0 - f64::from(y) / 10.0,
                 time_axis: true,
                 executions: None,
+                timeframe: None,
+                finer: &[],
             };
             let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                 let painter = egui::Painter::new(
@@ -522,6 +632,8 @@ mod tests {
                         },
                         time_axis: true,
                         executions: None,
+                        timeframe: None,
+                        finer: &[],
                     };
                     let mut output =
                         egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
@@ -673,6 +785,8 @@ mod tests {
                 y_to_price: &f64::from,
                 time_axis: true,
                 executions: None,
+                timeframe: None,
+                finer: &[],
             };
             let want = VolumeProfile::of(&bars[1..], 24, None);
             assert_eq!(
@@ -731,6 +845,8 @@ mod tests {
             y_to_price: &f64::from,
             time_axis: true,
             executions,
+            timeframe: None,
+            finer: &[],
         };
         let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
         let select = |drawing: &mut Drawing, first, last| {
@@ -788,5 +904,171 @@ mod tests {
             ProfileSource::Executions { complete: false }
         );
         assert_eq!(profile.volume(), [3.0]);
+    }
+
+    /// Finer bars replace only the chart bars they cover; executions still take precedence.
+    /// An anchored span includes a new intrabar even inside the last chart bar.
+    #[test]
+    fn volume_profile_spreads_finer_bars() {
+        use crate::data::{Footprint, ProfileSource, VolumeProfileConfig};
+        use crate::drawings::ChartPoint;
+        use crate::model::{BarClock, Instrument, OrderSide, Tick};
+        use crate::studies::StudyData;
+        let start: DateTime<Utc> = "2026-03-02T00:00:00Z".parse().unwrap();
+        let daily: Vec<_> = (0..3)
+            .map(|day| {
+                Bar::new(
+                    start + chrono::TimeDelta::days(day),
+                    100.0,
+                    110.0,
+                    100.0,
+                    105.0,
+                    100.0,
+                )
+            })
+            .collect();
+        let minute = |day, minutes, low, high, volume| {
+            Bar::new(
+                start + chrono::TimeDelta::days(day) + chrono::TimeDelta::minutes(minutes),
+                low,
+                high,
+                low,
+                (low + high) / 2.0,
+                volume,
+            )
+        };
+        let fine = [
+            minute(0, 870, 100.0, 101.0, 60.0),
+            minute(0, 871, 109.0, 110.0, 40.0),
+            minute(1, 870, 104.0, 106.0, 100.0),
+            minute(2, 870, 102.0, 103.0, 50.0),
+        ];
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Day1), 1.0, 1).unwrap();
+        flow.push(&Tick::new(fine[0].time, 100.0, 5.0, Some(OrderSide::Buy)))
+            .unwrap();
+        let rows = |profile: &VolumeProfile| {
+            (
+                profile.low(),
+                profile.high(),
+                profile.volume().to_vec(),
+                profile.up().to_vec(),
+                profile.down().to_vec(),
+                profile.poc_and_value_area(0.7),
+            )
+        };
+        // Whole daily bars have volume 100 each. The first day has 60 + 40 finer volume,
+        // the second 100, and the new bar of day 3 contributes 50 in place of its daily 100.
+        for (name, anchored, last, count, max_days, executed, inputs, total) in [
+            ("fixed", false, 1.0, 3, 10, false, fine[..3].to_vec(), 200.0),
+            (
+                "partial",
+                false,
+                2.0,
+                3,
+                10,
+                false,
+                vec![
+                    fine[0].clone(),
+                    fine[1].clone(),
+                    fine[2].clone(),
+                    daily[2].clone(),
+                ],
+                300.0,
+            ),
+            (
+                "anchored before",
+                true,
+                2.0,
+                3,
+                10,
+                false,
+                vec![fine[2].clone(), daily[2].clone()],
+                200.0,
+            ),
+            (
+                "anchored after",
+                true,
+                2.0,
+                4,
+                10,
+                false,
+                fine[2..].to_vec(),
+                150.0,
+            ),
+            (
+                "span too long",
+                false,
+                1.0,
+                3,
+                1,
+                false,
+                daily[..2].to_vec(),
+                200.0,
+            ),
+            ("executions", false, 1.0, 3, 10, true, Vec::new(), 5.0),
+        ] {
+            let instrument =
+                Instrument::new("A").with_profile_resolutions([ProfileResolution::new(
+                    Timeframe::Min1,
+                    Some(chrono::TimeDelta::days(max_days)),
+                )]);
+            let history = [StudyData {
+                request: StudyDataRequest {
+                    symbol: "A".into(),
+                    timeframe: Some(Timeframe::Min1),
+                    metric: None,
+                },
+                bars: &fine[..count],
+                clock: BarClock::new(Timeframe::Min1),
+                instrument: None,
+                timeframe: Timeframe::Min1,
+            }];
+            let view = ChartView {
+                instrument: Some(&instrument),
+                price_formatter: None,
+                bars: &daily,
+                revision: 0,
+                bar_to_x: &|x| x,
+                price_to_y: &|price| price as f32,
+                y_to_price: &f64::from,
+                time_axis: true,
+                executions: executed.then_some(&flow),
+                timeframe: Some(Timeframe::Day1),
+                finer: &history,
+            };
+            let mut drawing = Drawing::new(
+                1,
+                if anchored {
+                    DrawingToolType::AnchoredVolumeProfile
+                } else {
+                    DrawingToolType::FixedRangeVolumeProfile
+                },
+            );
+            drawing.chart_points = if anchored {
+                vec![ChartPoint::new(1.0, 100.0)]
+            } else {
+                vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(last, 100.0)]
+            };
+            let profile = drawing.volume_profile_of(&view).unwrap();
+            if executed {
+                assert_eq!(
+                    profile.source(),
+                    ProfileSource::Executions { complete: true },
+                    "{name}"
+                );
+                assert_eq!((profile.low(), profile.high()), (99.5, 100.5));
+                assert_eq!(profile.volume(), [5.0]);
+            } else {
+                let expected =
+                    VolumeProfile::of(&inputs, VolumeProfileConfig::default().rows(), None)
+                        .unwrap();
+                assert_eq!(rows(&profile), rows(&expected), "{name}");
+                assert_eq!(profile.source(), ProfileSource::Estimated, "{name}");
+            }
+            assert!(
+                (profile.volume().iter().sum::<f64>() - total).abs() < 1e-9,
+                "{name}"
+            );
+        }
     }
 }

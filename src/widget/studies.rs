@@ -1,11 +1,271 @@
-//! Calculation order for studies that consume another study's output.
+//! Study registration, settings and calculation order, including dependent studies.
 
-use super::{Chart, SeriesId};
+use super::{Chart, ChartElementId, SeriesId};
 use crate::model::Bar;
 use crate::studies::{Indicator, InputValue, StudySource};
 use web_time::Instant;
 
 impl Chart {
+    /// Caps the studies at `limit`, or lifts the cap with `None`. The cap applies to
+    /// [`try_add_indicator`](Self::try_add_indicator) and to pasting a copied study, which the
+    /// terminal's dialogs and shortcuts use, and to applying a study template set; studies
+    /// already on the chart stay.
+    pub fn set_study_limit(&mut self, limit: Option<usize>) {
+        self.study_limit = limit;
+    }
+
+    /// The cap set with [`set_study_limit`](Self::set_study_limit); `None` when uncapped.
+    pub fn study_limit(&self) -> Option<usize> {
+        self.study_limit
+    }
+
+    /// Whether the chart holds as many studies as its cap allows.
+    pub(crate) fn study_limit_reached(&self) -> bool {
+        self.study_limit
+            .is_some_and(|limit| self.study_ids.len() >= limit)
+    }
+
+    /// Adds a study like [`add_indicator`](Self::add_indicator), unless the chart already holds
+    /// as many as [`study_limit`](Self::study_limit) allows. A refused study leaves the chart
+    /// unchanged.
+    pub fn try_add_indicator(
+        &mut self,
+        indicator: Box<dyn Indicator>,
+    ) -> Result<SeriesId, &'static str> {
+        if self.study_limit_reached() {
+            return Err(Self::STUDY_LIMIT_REACHED);
+        }
+        Ok(self.add_indicator(indicator))
+    }
+
+    pub(crate) const STUDY_LIMIT_REACHED: &'static str = "Study limit reached";
+
+    /// Adds a study, computed at once from the bars, which [`show`](Self::show) draws: on the
+    /// main pane if [`Indicator::is_overlay`], otherwise in a new pane at the bottom. Returns the
+    /// study's id, which stays valid when other studies are removed. Host code adds past the
+    /// cap; the interface goes through [`try_add_indicator`](Self::try_add_indicator).
+    pub fn add_indicator(&mut self, mut indicator: Box<dyn Indicator>) -> SeriesId {
+        if !indicator.has_settings() {
+            indicator = Box::new(crate::studies::ConfiguredStudy::new(indicator));
+        }
+        if let Some(timeframe) = self.timeframe() {
+            indicator.set_timeframe(timeframe);
+        }
+        if indicator.value_format() == crate::scales::StudyFormat::Volume {
+            indicator.set_value_formatter(self.volume_formatter.clone());
+        }
+        indicator.set_instrument(self.instrument());
+        indicator.set_time_scale_events(held_events(
+            &self.time_scale_events,
+            self.frozen_source_events,
+        ));
+        indicator.set_bar_clock(&self.bar_clock());
+        if let Some(crate::studies::StudySource::Study { id, plot }) = indicator.source() {
+            let source = self
+                .study_ids
+                .iter()
+                .position(|candidate| candidate.0 == id)
+                .and_then(|at| self.studies.indicators()[at].values().columns().get(plot));
+            indicator.update_source(
+                &self.state.data().bars,
+                0,
+                source.map_or(&[], Vec::as_slice),
+            );
+        } else {
+            let sources = self.study_data.data(
+                indicator.data_requests(),
+                &self.symbol,
+                self.timeframe,
+                self.replay_time(),
+            );
+            indicator.update_data(&self.state.data().bars, 0, &sources);
+        }
+        let id = SeriesId(self.next_series);
+        self.next_series += 1;
+        self.record_study(id);
+        let overlay = indicator.is_overlay();
+        self.studies.add(indicator);
+        self.study_ids.push(id);
+        self.study_autoscale.push(true);
+        self.study_inputs.push(String::new());
+        self.pending_from.push(None);
+        self.next_refresh.push(f64::NEG_INFINITY);
+        if !overlay {
+            self.add_study_pane(id);
+        }
+        id
+    }
+
+    /// Set the input caption displayed beside a study in the legend.
+    pub fn set_indicator_inputs(&mut self, id: SeriesId, inputs: impl Into<String>) -> bool {
+        let Some(index) = self.study_ids.iter().position(|candidate| *candidate == id) else {
+            return false;
+        };
+        self.record_study(id);
+        self.study_inputs[index] = inputs.into();
+        true
+    }
+
+    /// The host-supplied input caption of a study, if its id is still present.
+    pub fn indicator_inputs(&self, id: SeriesId) -> Option<&str> {
+        self.study_ids
+            .iter()
+            .position(|candidate| *candidate == id)
+            .map(|index| self.study_inputs[index].as_str())
+    }
+
+    pub(super) fn take_study(&mut self, id: SeriesId) -> Option<Box<dyn Indicator>> {
+        let at = self.study_ids.iter().position(|study| *study == id)?;
+        self.record_study(id);
+        #[cfg(feature = "studies")]
+        if self.volume_study == Some(id) {
+            self.volume_study = None;
+            self.config.show_volume = false;
+            self.volume_setting = false;
+        }
+        let indicator = self.studies.remove_indicator(at);
+        self.study_ids.remove(at);
+        self.study_autoscale.remove(at);
+        self.study_inputs.remove(at);
+        self.pending_from.remove(at);
+        self.next_refresh.remove(at);
+        if self.selection.selected_id() == Some(ChartElementId::Indicator(id)) {
+            self.selection.deselect();
+        }
+        indicator
+    }
+
+    /// Shows or hides the study `id`; a hidden study keeps its values. Returns `false` for an id
+    /// that is not a study of the chart.
+    pub fn set_indicator_visible(&mut self, id: SeriesId, visible: bool) -> bool {
+        let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
+            return false;
+        };
+        self.record_study(id);
+        self.studies.indicators_mut()[at].set_visible(visible);
+        true
+    }
+
+    /// Includes or excludes study `id` from the main price auto-scale, without hiding it.
+    /// Defaults to `true`; only visible overlay studies contribute. Returns `false` for an id
+    /// that is not a study of the chart.
+    pub fn set_indicator_autoscale(&mut self, id: SeriesId, autoscale: bool) -> bool {
+        let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
+            return false;
+        };
+        self.record_study(id);
+        self.study_autoscale[at] = autoscale;
+        true
+    }
+
+    /// Pins study `id` to the pane's price scale, a scale of its own or no scale. Returns `false`
+    /// for an id that is not a study of the chart, or a custom presentation that keeps its scale.
+    pub fn set_indicator_scale(&mut self, id: SeriesId, scale: crate::studies::StudyScale) -> bool {
+        let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
+            return false;
+        };
+        self.record_study(id);
+        if let crate::studies::StudyScale::Shared(key) = scale {
+            self.ensure_series_scale(key);
+        }
+        self.studies.indicators_mut()[at].set_scale(scale)
+    }
+
+    /// The chart's studies with their ids, in the order they were added. Their values reflect the
+    /// bars as of the last [`show`](Self::show), or of the call to
+    /// [`add_indicator`](Self::add_indicator). A study that is not updated incrementally can lag
+    /// the bars by its wait between full recomputes, at least 0.25 s; after the bars changed from
+    /// the first one on, as when `set_data` loads other bars or older bars are loaded in front, it
+    /// has no values until it is recomputed. On price-based types these remain the source-bar
+    /// results; [`Self::study_values_at`] returns the displayed element results.
+    pub fn indicators(&self) -> impl Iterator<Item = (SeriesId, &dyn Indicator)> {
+        let studies = self.studies.indicators().iter().map(|study| study.as_ref());
+        self.study_ids.iter().copied().zip(studies)
+    }
+
+    /// The study `id`, to change its settings. Its values reflect the bars as of the last
+    /// [`show`](Self::show); the next one recomputes it in full.
+    pub fn indicator_mut(&mut self, id: SeriesId) -> Option<&mut (dyn Indicator + 'static)> {
+        let at = self.study_ids.iter().position(|study| *study == id)?;
+        self.record_study(id);
+        self.pending_from[at] = Some(0);
+        self.next_refresh[at] = f64::NEG_INFINITY;
+        Some(self.studies.indicators_mut()[at].as_mut())
+    }
+
+    /// Updates every study with a pending change, as of `now` in seconds. An incremental study
+    /// whose change starts at its last bar or later is updated at once. Any other change
+    /// recomputes the study in full, for at most one study per call: of the studies whose change
+    /// starts at the first bar or whose `next_refresh` has passed, the one whose `next_refresh`
+    /// is earliest. Its next full recompute then waits, from the end of this one,
+    /// the longer of a quarter second and four times what this one took. Until its turn, a
+    /// study whose change starts at the first bar has no values, since its values belong to
+    /// other bars. Returns how long until the next waiting study is due, zero if one is due now.
+    pub(super) fn refresh_studies(&mut self, now: f64) -> Option<f64> {
+        let instrument = self.instrument().cloned();
+        let clock = self.bar_clock();
+        let bars = &self.state.data().bars;
+        let events = held_events(&self.time_scale_events, self.frozen_source_events);
+        for (at, study) in self.studies.indicators_mut().iter_mut().enumerate() {
+            let instrument_changed = study.set_instrument(instrument.as_ref());
+            let clock_changed = study.set_bar_clock(&clock);
+            let events_changed = study.set_time_scale_events(events);
+            if instrument_changed || clock_changed || events_changed {
+                self.pending_from[at] = Some(0);
+                self.element_studies.dirty = true;
+            }
+        }
+        let requests = self
+            .studies
+            .indicators()
+            .iter()
+            .flat_map(|study| study.data_requests())
+            .collect();
+        let sources =
+            self.study_data
+                .data(requests, &self.symbol, self.timeframe, self.replay_time());
+        refresh_values(
+            self.studies.indicators_mut(),
+            &self.study_ids,
+            bars,
+            &mut self.pending_from,
+            &mut self.next_refresh,
+            now,
+            &sources,
+        )
+    }
+
+    pub(super) fn refresh_element_studies(&mut self, now: f64) -> Option<f64> {
+        let cutoff = self.replay_time();
+        let cache = &mut self.element_studies;
+        let requests = cache
+            .studies
+            .indicators()
+            .iter()
+            .flat_map(|study| study.data_requests())
+            .collect();
+        let sources = self
+            .study_data
+            .data(requests, &self.symbol, self.timeframe, cutoff);
+        refresh_values(
+            cache.studies.indicators_mut(),
+            &self.study_ids,
+            &cache.bars,
+            &mut cache.pending_from,
+            &mut cache.next_refresh,
+            now,
+            &sources,
+        )
+    }
+
+    pub(super) fn rendered_studies(&self) -> &crate::studies::IndicatorRegistry {
+        if self.chart_type.is_time_independent() {
+            &self.element_studies.studies
+        } else {
+            &self.studies
+        }
+    }
+
     pub(super) fn recalculate_studies(&mut self) {
         let requests = self
             .studies
@@ -13,12 +273,9 @@ impl Chart {
             .iter()
             .flat_map(|study| study.data_requests())
             .collect();
-        let sources = self.study_data.data(
-            requests,
-            &self.symbol,
-            self.timeframe,
-            self.replay.as_ref().map(|replay| replay.time),
-        );
+        let sources =
+            self.study_data
+                .data(requests, &self.symbol, self.timeframe, self.replay_time());
         calculate(
             self.studies.indicators_mut(),
             &self.study_ids,
@@ -79,6 +336,15 @@ impl Chart {
         self.element_studies.dirty = true;
         Ok(())
     }
+}
+
+/// The typed events studies read, without the mark source page an export froze at their end: a page
+/// covers only the visible range, so restarts on it would move while scrolling.
+fn held_events(
+    events: &[crate::model::TimeScaleEvent],
+    frozen: usize,
+) -> &[crate::model::TimeScaleEvent] {
+    &events[..events.len().saturating_sub(frozen)]
 }
 
 /// Updates one study with its source column, keeping values indexed by the input bars.
@@ -276,9 +542,14 @@ const REFRESH_INTERVAL: f64 = 0.25;
 #[cfg(all(test, feature = "studies"))]
 mod tests {
     use crate::model::{Bar, BarData, PriceSource};
+    use crate::studies::Indicator;
     use crate::studies::{InputValue, RSI, SMA, StudySource};
+    use crate::widget::test_frames::frame;
     use crate::widget::{Chart, SeriesId, test_frames::shapes};
-    use chrono::{Duration, Utc};
+    use chrono::{DateTime, Duration, TimeDelta, Utc};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant;
 
     /// SMA(1)(x) = x, including gaps and past values repainted as new swings arrive.
     #[test]
@@ -546,5 +817,261 @@ mod tests {
         assert!(chart.undo());
         settle(&mut chart);
         assert!((output(&chart, 3).unwrap() - 125.0 / 3.0).abs() < 1e-8);
+    }
+    /// A flat bar at `close`, stamped `seconds` after 10:00.
+    fn bar(seconds: i64, close: f64) -> Bar {
+        let t =
+            "2024-03-15T10:00:00Z".parse::<DateTime<Utc>>().unwrap() + TimeDelta::seconds(seconds);
+        Bar::new(t, close, close, close, close, 1.0)
+    }
+
+    /// RSI, counting the calls that recompute it.
+    struct Counted(RSI, Arc<AtomicUsize>, std::time::Duration);
+
+    impl Indicator for Counted {
+        fn name(&self) -> &str {
+            self.0.name()
+        }
+        fn calculate(&mut self, data: &[Bar]) {
+            if !data.is_empty() {
+                self.1.fetch_add(1, Ordering::Relaxed);
+                std::thread::sleep(self.2);
+            }
+            self.0.calculate(data);
+        }
+        fn update(&mut self, data: &[Bar], from: usize) {
+            if !data.is_empty() {
+                self.1.fetch_add(1, Ordering::Relaxed);
+                std::thread::sleep(self.2);
+            }
+            self.0.update(data, from);
+        }
+        fn values(&self) -> &crate::studies::IndicatorValues {
+            self.0.values()
+        }
+        fn colors(&self) -> Vec<egui::Color32> {
+            self.0.colors()
+        }
+        fn set_colors(&mut self, colors: Vec<egui::Color32>) {
+            self.0.set_colors(colors);
+        }
+        fn is_overlay(&self) -> bool {
+            self.0.is_overlay()
+        }
+        fn set_visible(&mut self, visible: bool) {
+            self.0.set_visible(visible);
+        }
+        fn clone_box(&self) -> Box<dyn Indicator> {
+            Box::new(Counted(self.0.clone(), Arc::clone(&self.1), self.2))
+        }
+    }
+
+    /// A replaced series gets one full recompute per frame, even while every wait is still
+    /// running; waiting studies have no stale values and request another frame until the last
+    /// study is current.
+    #[test]
+    fn full_recomputes_run_one_per_frame() {
+        let mut chart = Chart::new(BarData::from_bars(
+            (0..100).map(|i| bar(i * 60, i as f64)).collect(),
+        ));
+        let calls: Vec<_> = (0..3).map(|_| Arc::new(AtomicUsize::new(0))).collect();
+        for counter in &calls {
+            chart.add_indicator(Box::new(Counted(
+                RSI::new(14),
+                counter.clone(),
+                std::time::Duration::ZERO,
+            )));
+            counter.store(0, Ordering::Relaxed);
+        }
+        // The second round replaces the bars while the waits of the first are still running.
+        for (round, close) in [(0, 200.0), (1, 300.0)] {
+            if round == 1 {
+                // Model unequal measured costs without depending on the runner clock.
+                chart.next_refresh.copy_from_slice(&[3.0, 2.0, 1.0]);
+            }
+            for counter in &calls {
+                counter.store(0, Ordering::Relaxed);
+            }
+            chart.set_data(
+                SeriesId::MAIN,
+                (0..100)
+                    .map(|i| bar(i * 60, close + (i * 7 % 13) as f64))
+                    .collect(),
+            );
+            for k in 1..=3 {
+                let now = if round == 0 { k as f64 } else { 3.0 } / 60.0;
+                let wait = chart.refresh_studies(now);
+                let counts: Vec<_> = calls
+                    .iter()
+                    .map(|counter| counter.load(Ordering::Relaxed))
+                    .collect();
+                assert_eq!(counts.iter().sum::<usize>(), k, "round {round}, call {k}");
+                for (j, (_, study)) in chart.indicators().enumerate() {
+                    assert!(counts[j] <= 1, "round {round}, call {k}, study {j}");
+                    assert_eq!(
+                        study.values().is_empty(),
+                        counts[j] == 0,
+                        "round {round}, call {k}, study {j}"
+                    );
+                }
+                assert_eq!(wait, if k < 3 { Some(0.0) } else { None });
+            }
+        }
+        let mut fresh = RSI::new(14);
+        fresh.calculate(chart.bars(SeriesId::MAIN));
+        for (_, study) in chart.indicators() {
+            assert_eq!(
+                format!("{:?}", study.values()),
+                format!("{:?}", fresh.values())
+            );
+        }
+    }
+
+    /// The real cost advances the frame clock: re-arming from the frame start would make
+    /// every frame due again when a recompute takes longer than the minimum wait.
+    #[test]
+    fn a_slow_full_recompute_does_not_take_every_frame() {
+        let mut chart = Chart::new(BarData::from_bars(
+            (0..100).map(|i| bar(i * 60, i as f64)).collect(),
+        ));
+        let calls = Arc::new(AtomicUsize::new(0));
+        chart.add_indicator(Box::new(Counted(
+            RSI::new(14),
+            calls.clone(),
+            std::time::Duration::from_millis(300),
+        )));
+        calls.store(0, Ordering::Relaxed);
+        let mut time = 0.0;
+        for i in 0..10 {
+            chart.update(SeriesId::MAIN, bar(99 * 60, 50.0 + i as f64));
+            let started = Instant::now();
+            chart.refresh_studies(time);
+            time += 1.0 / 60.0 + started.elapsed().as_secs_f64();
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    /// Bars set every frame, as a replay does: each study gets a turn despite recompute costs.
+    /// Resetting the waits on `set_data` gave the first study every frame and the others none.
+    #[test]
+    fn set_data_every_frame_recomputes_each_study_in_turn() {
+        for cost in [
+            std::time::Duration::ZERO,
+            std::time::Duration::from_millis(20),
+        ] {
+            let mut bars: Vec<Bar> = (0..100).map(|i| bar(i * 60, i as f64)).collect();
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            let calls: Vec<_> = (0..3).map(|_| Arc::new(AtomicUsize::new(0))).collect();
+            for counter in &calls {
+                chart.add_indicator(Box::new(Counted(RSI::new(14), counter.clone(), cost)));
+                counter.store(0, Ordering::Relaxed);
+            }
+            for k in 0..120 {
+                bars.push(bar((100 + k) * 60, 50.0 + k as f64));
+                chart.set_data(SeriesId::MAIN, bars.clone());
+                chart.refresh_studies(k as f64 / 60.0);
+            }
+            // Measured costs determine how many turns fit; no study may starve.
+            let calls: Vec<_> = calls.iter().map(|c| c.load(Ordering::Relaxed)).collect();
+            assert!(
+                calls.iter().all(|&count| count > 0),
+                "cost {cost:?}: {calls:?}"
+            );
+        }
+    }
+
+    /// Guards the cost and the freshness of studies while bars stream: a study that does not
+    /// update incrementally is refreshed at most four times a second and once more after the
+    /// stream stops, an incremental one on every frame, and both end equal to a fresh
+    /// calculation. A refresh on every frame, a pending change lost after the last update, or
+    /// the wait applied to an incremental study fails it.
+    #[test]
+    fn slow_studies_refresh_four_times_a_second_and_end_current() {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(
+            (0..100).map(|i| bar(i * 60, i as f64)).collect(),
+        ));
+        let sma = chart.add_indicator(Box::new(SMA::new(5)));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rsi = chart.add_indicator(Box::new(Counted(
+            RSI::new(14),
+            Arc::clone(&calls),
+            std::time::Duration::ZERO,
+        )));
+        let values = |chart: &Chart, id| {
+            let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
+            format!("{:?}", study.values())
+        };
+        let fresh = |chart: &Chart, mut study: Box<dyn Indicator>| {
+            study.calculate(chart.bars(SeriesId::MAIN));
+            format!("{:?}", study.values())
+        };
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        calls.store(0, Ordering::Relaxed);
+        let mut time = 0.0;
+        for i in 0..60 {
+            time += 1.0 / 60.0;
+            // Alternately a new close of the last bar and a new bar.
+            chart.update(
+                SeriesId::MAIN,
+                bar((100 + i / 2) * 60, 50.0 + (i * 7 % 13) as f64),
+            );
+            frame(&ctx, &mut chart, time, Vec::new());
+            assert_eq!(
+                values(&chart, sma),
+                fresh(&chart, Box::new(SMA::new(5))),
+                "SMA at {i}"
+            );
+        }
+        assert!(
+            calls.load(Ordering::Relaxed) <= 4,
+            "{calls:?} refreshes while streaming"
+        );
+        let streamed = calls.load(Ordering::Relaxed);
+        let stop = time;
+        while time < stop + 0.25 {
+            time += 1.0 / 60.0;
+            frame(&ctx, &mut chart, time, Vec::new());
+        }
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            streamed + 1,
+            "one refresh after the stream"
+        );
+        assert_eq!(
+            values(&chart, rsi),
+            fresh(&chart, Box::new(RSI::new(14))),
+            "RSI"
+        );
+    }
+
+    /// A chart capped at two studies refuses a third from the interface and pastes, and stays
+    /// as it was; host code and lifting the cap still add.
+    #[test]
+    fn the_study_limit_refuses_additions_beyond_it() {
+        let mut chart = super::super::test_frames::chart(&[100.0], &[110.0]);
+        let copied = {
+            let id = chart.add_indicator(Box::new(SMA::new(9)));
+            let text = chart.copy_indicator(id).unwrap();
+            chart.remove_series(id);
+            text
+        };
+        chart.set_study_limit(Some(2));
+        for period in [3, 5] {
+            assert!(chart.try_add_indicator(Box::new(SMA::new(period))).is_ok());
+        }
+        let undoable = chart.can_undo();
+        assert!(chart.try_add_indicator(Box::new(SMA::new(7))).is_err());
+        assert!(
+            chart
+                .paste_indicator(&copied, &crate::studies::IndicatorFactory::new())
+                .is_err()
+        );
+        assert_eq!(chart.indicators().count(), 2);
+        assert_eq!(chart.can_undo(), undoable);
+        chart.add_indicator(Box::new(SMA::new(7)));
+        assert_eq!(chart.indicators().count(), 3);
+        chart.set_study_limit(None);
+        assert!(chart.try_add_indicator(Box::new(SMA::new(8))).is_ok());
     }
 }

@@ -5,11 +5,12 @@ use crate::model::{Level1Quote, OrderBook, OrderBookLevel, OrderSide, Tick, Trad
 use chrono::{DateTime, Utc};
 use std::io::{self, Cursor, Read, Write};
 
-const MAGIC: &[u8; 8] = b"EGCFLOW1";
+const MAGIC: &[u8; 8] = b"EGCFLOW2";
 const MAX_RECORD: usize = 16 * 1024 * 1024;
 
 /// Writes a compact binary recording: a version header, then length-framed events with fixed
-/// little-endian numbers, optional-id flags and UTF-8 symbols. No runtime or filesystem policy
+/// little-endian numbers, optional-id flags and UTF-8 symbols. Version 2 retains resting order
+/// participant and placement metadata. No runtime or filesystem policy
 /// is imposed; a host can use a buffered file on native targets or bytes in a browser.
 pub struct RecordingWriter<W: Write> {
     writer: W,
@@ -120,6 +121,24 @@ impl<W: Write> RecordingWriter<W> {
         self.writer.write_all(&bytes)
     }
 
+    /// Records a host event stream until it ends or either reading or writing fails. The first
+    /// error is returned unchanged; previously written complete events remain in the stream.
+    /// Run blocking streams outside the UI thread and call [`Self::finish`] to flush storage.
+    pub fn capture(
+        &mut self,
+        events: impl IntoIterator<Item = io::Result<ReplayEvent>>,
+    ) -> io::Result<()> {
+        for event in events {
+            self.write(&event?)?;
+        }
+        Ok(())
+    }
+
+    /// Borrows the underlying writer without flushing buffered storage.
+    pub fn get_ref(&self) -> &W {
+        &self.writer
+    }
+
     /// Flushes and returns the underlying writer. Propagates disk and stream errors.
     pub fn finish(mut self) -> io::Result<W> {
         self.writer.flush()?;
@@ -127,18 +146,26 @@ impl<W: Write> RecordingWriter<W> {
     }
 }
 
-/// Reads one binary event at a time. Limits allocation to 16 MiB per record, rejects unknown
+/// Reads version 1 or 2 binary events, including order placement and participant metadata in
+/// version 2. Limits allocation to 16 MiB per record, rejects unknown
 /// versions, malformed values and truncated records, and distinguishes clean EOF from truncation.
 pub struct RecordingReader<R: Read> {
     reader: R,
+    order_metadata: bool,
 }
 impl<R: Read> RecordingReader<R> {
     /// Reads and validates the recording header.
     pub fn new(mut reader: R) -> io::Result<Self> {
-        if &read::<8>(&mut reader)? != MAGIC {
-            return Err(invalid());
-        }
-        Ok(Self { reader })
+        let header = read::<8>(&mut reader)?;
+        let order_metadata = match &header {
+            b"EGCFLOW1" => false,
+            MAGIC => true,
+            _ => return Err(invalid()),
+        };
+        Ok(Self {
+            reader,
+            order_metadata,
+        })
     }
 
     /// Reads the next event, or `None` only at a complete record boundary.
@@ -197,14 +224,14 @@ impl<R: Read> RecordingReader<R> {
                     return Err(invalid());
                 }
                 let orders = (0..count)
-                    .map(|_| get_order(&mut reader))
+                    .map(|_| get_order(&mut reader, self.order_metadata))
                     .collect::<io::Result<Vec<_>>>()?;
                 MarketEvent::OrderSnapshot { sequence, orders }
             }
             5 => {
                 let sequence = get_u64(&mut reader)?;
                 let event = match get_byte(&mut reader)? {
-                    0 => OrderEvent::Add(get_order(&mut reader)?),
+                    0 => OrderEvent::Add(get_order(&mut reader, self.order_metadata)?),
                     1 => OrderEvent::Modify {
                         id: get_u64(&mut reader)?,
                         price: get_optional(&mut reader, get_f64)?,
@@ -323,9 +350,17 @@ fn put_order(bytes: &mut Vec<u8>, order: &RestingOrder) {
     bytes.push(u8::from(order.side == OrderSide::Sell));
     put_f64(bytes, order.price);
     put_f64(bytes, order.size);
+    bytes.push(u8::from(order.participant.is_some()));
+    if let Some(participant) = order.participant {
+        put_u64(bytes, participant);
+    }
+    bytes.push(u8::from(order.placed.is_some()));
+    if let Some(placed) = order.placed {
+        put_time(bytes, placed);
+    }
 }
-fn get_order(reader: &mut impl Read) -> io::Result<RestingOrder> {
-    Ok(RestingOrder::new(
+fn get_order(reader: &mut impl Read, metadata: bool) -> io::Result<RestingOrder> {
+    let mut order = RestingOrder::new(
         get_u64(reader)?,
         if get_bool(reader)? {
             OrderSide::Sell
@@ -334,7 +369,12 @@ fn get_order(reader: &mut impl Read) -> io::Result<RestingOrder> {
         },
         get_f64(reader)?,
         get_f64(reader)?,
-    ))
+    );
+    if metadata {
+        order.participant = get_optional(reader, get_u64)?;
+        order.placed = get_optional(reader, get_time)?;
+    }
+    Ok(order)
 }
 fn get_levels(reader: &mut impl Read) -> io::Result<Vec<OrderBookLevel>> {
     let count = u32::from_le_bytes(read(reader)?) as usize;
@@ -378,7 +418,9 @@ mod tests {
             }],
             asks: vec![],
         };
-        let order = RestingOrder::new(9, OrderSide::Sell, 101.25, 5.0);
+        let order = RestingOrder::new(9, OrderSide::Sell, 101.25, 5.0)
+            .with_participant(42)
+            .with_placed(time - chrono::TimeDelta::seconds(30));
         let events = vec![
             MarketEvent::Trade(trade.clone()),
             MarketEvent::Quote(Level1Quote {
@@ -443,7 +485,51 @@ mod tests {
                 );
             }
         }
-        assert!(RecordingReader::new(b"EGCFLOW2".as_slice()).is_err());
+        // Version 1 ended each resting order after its size, without metadata flags.
+        let legacy_event = ReplayEvent::new(
+            "A",
+            time,
+            0,
+            MarketEvent::OrderSnapshot {
+                sequence: 0,
+                orders: vec![RestingOrder::new(1, OrderSide::Buy, 100.0, 2.0)],
+            },
+        );
+        let legacy: &[u8] = &[
+            0x45, 0x47, 0x43, 0x46, 0x4c, 0x4f, 0x57, 0x31, 0x3d, 0x00, 0x00, 0x00, 0x01, 0x00,
+            0x41, 0x00, 0xf1, 0x53, 0x65, 0x00, 0x00, 0x00, 0x00, 0x7b, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x59, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x40,
+        ];
+        assert_eq!(
+            RecordingReader::new(legacy).unwrap().read().unwrap(),
+            Some(legacy_event)
+        );
+
+        struct FailedStorage;
+        impl Write for FailedStorage {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Err(io::Error::new(
+                    io::ErrorKind::StorageFull,
+                    "recording storage full",
+                ))
+            }
+        }
+        assert_eq!(
+            RecordingWriter::new(FailedStorage)
+                .unwrap()
+                .finish()
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::StorageFull
+        );
+        assert!(RecordingReader::new(b"EGCFLOW3".as_slice()).is_err());
         let mut oversized = MAGIC.to_vec();
         oversized.extend_from_slice(&u32::MAX.to_le_bytes());
         assert!(

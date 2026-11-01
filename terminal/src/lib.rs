@@ -461,14 +461,25 @@ mod tests {
                 assert!(returned.is_empty());
             }
         }
-        // Host entries and actions no group performs go back to the host, run or emitted.
+        // Unhandled actions go back to the host; profile edits already applied by the menu do not.
         let mut terminal = Terminal::new(Arc::new(TestFeed)).with_symbol("AAPL");
         frame(&mut terminal, SIZE, vec![]);
-        for action in [
-            Action::TopToolbar(TopToolbarAction::Host("x".into())),
-            Action::Shortcut(ShortcutRequest::SymbolSearch("A".into())),
+        use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
+        let menu = |action| Action::ChartMenu(ChartContextAction::Chart(action));
+        for (action, handled) in [
+            (
+                Action::TopToolbar(TopToolbarAction::Host("x".into())),
+                false,
+            ),
+            (
+                Action::Shortcut(ShortcutRequest::SymbolSearch("A".into())),
+                false,
+            ),
+            (menu(ContextMenuAction::MergeTradeProfilePrevious), true),
+            (menu(ContextMenuAction::MergeTradeProfileNext), true),
+            (menu(ContextMenuAction::SplitTradeProfile), true),
         ] {
-            assert!(terminal.run(action).is_some());
+            assert_eq!(terminal.run(action).is_none(), handled);
         }
         let help = frame(&mut terminal, SIZE, vec![key(Key::F1, Modifiers::NONE)]).actions;
         assert!(matches!(help.as_slice(), [Action::Shortcut(_)]));

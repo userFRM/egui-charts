@@ -102,12 +102,12 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 ### Calculations and Rendering
 
-- [x] `IndicatorFactory` registers 202 indicators with default features and accepts downstream registrations; the study picker uses that registry.
+- [x] `IndicatorFactory` registers 204 indicators with default features and accepts downstream registrations; the study picker groups its built-in results on Indicators, Profiles, Patterns and Order flow pages, each offered only while it has an accepted study.
 - [x] Moving-average families include SMA, EMA, WMA, HMA, ALMA, KAMA and configurable combinations, ribbons and crossing markers.
 - [x] Momentum and trend studies include RSI, MACD, Stochastic, ADX, SuperTrend, Ichimoku and Parabolic SAR.
 - [x] Volatility and channel studies include Bollinger Bands, ATR, Keltner, Donchian and historical volatility.
 - [x] Volume studies include OBV, MFI, accumulation/distribution and VWAP; VWAP supports calendar/session and supplied event anchors with deviation or percentage bands.
-- [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles render chart-bar volume estimates with point of control and value area.
+- [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles render chart-bar volume estimates with translucent rows that keep candles readable, point of control and value area.
 - [x] Regression, rank correlation, pivot levels, ZigZag, candlestick patterns, seasonality and market-structure studies.
 - [x] Majority Rule reports +1, -1 or zero from the majority of rising versus falling closes over its lookback.
 - [x] Automatic trend-line, channel, Fibonacci and pitchfork studies use ZigZag pivots with the `drawings` feature.
@@ -169,12 +169,12 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Public order book and order queue retain tick-aware prices, best quotes and queue priority.
 - [x] `DepthHistory` retains sampled resting-size columns in bounded tiers; the heatmap uses retained texture tiles and partial updates.
 - [x] Heatmap best bid/ask paths and a side profile of total resting size.
-- [x] Volume bubbles aggregate by chart bar and price, with side/delta colours, linear/square-root/logarithmic sizing and outlier limits.
+- [x] Volume bubbles aggregate by chart bar and price, adapt automatic grouping, sizing and borders to screen density, and offer side/delta colours, linear/square-root/logarithmic scaling and outlier limits.
 - [x] Time-and-sales panel with aggressor colours, size filters and sound intents.
 - [x] Explicit aggressor identifiers combine split fills into parent orders with total size, price span and fill count.
 - [x] Fixed stream studies calculate quoted spread, resting book totals/difference, execution rate and inside-quote movement.
 - [ ] Add bubble time-window/count grouping, ungrouped execution timestamps, split bid/ask and additional delta/volume colour modes.
-- [ ] Add dedicated ladder columns for observed size changes, traded bid/ask volume and order counts.
+- [x] Dedicated ladder columns show observed size changes, traded bid/ask volume and order counts with bid/ask labels, complete values and horizontal scrolling in narrow tickets.
 - [ ] Add session/reset controls and delta/bid-ask modes for the ladder profile.
 - [ ] Expose largest-order side profiles and configurable resting-size highlight tiers in the ladder and heatmap.
 - [ ] Connect order-size filtering and aggregated/per-order source selection to heatmap sampling, including metadata for participant exclusions.

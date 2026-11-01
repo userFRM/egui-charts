@@ -229,7 +229,7 @@ impl IndicatorDialog {
         true
     }
 
-    /// Open the dialog on `tab` with the search field focused. Profiles and patterns open
+    /// Open the dialog on `tab` with the search field focused. Dedicated pages open
     /// among the built-ins; an unavailable page opens on the first populated page.
     pub fn open_tab(&mut self, tab: IndicatorTab) {
         if tab != IndicatorTab::Indicators {
@@ -424,6 +424,7 @@ impl IndicatorDialog {
             IndicatorFactory::COMMUNITY => (C::Community, T::Indicators),
             IndicatorFactory::PROFILES => (C::BuiltIns, T::Profiles),
             IndicatorFactory::PATTERNS => (C::BuiltIns, T::Patterns),
+            IndicatorFactory::ORDER_FLOW => (C::BuiltIns, T::OrderFlow),
             _ => (C::BuiltIns, T::Indicators),
         }
     }
@@ -1067,7 +1068,7 @@ mod tests {
         use IndicatorTab::*;
         // (tab, category, search, studies listed, studies not listed). A search covers every
         // built-in page.
-        let cases: [(_, _, _, &[&str], &[&str]); 6] = [
+        let cases: [(_, _, _, &[&str], &[&str]); 9] = [
             (
                 Indicators,
                 BuiltIns,
@@ -1076,6 +1077,9 @@ mod tests {
                 &[
                     "Vol Profile VR",
                     "All Candlestick Patterns",
+                    "Execution Delta",
+                    "Cumulative Execution Delta",
+                    "Host flow",
                     "My SMA",
                     "Shared SMA",
                 ],
@@ -1095,11 +1099,36 @@ mod tests {
                 &["RSI", "Vol Profile VR"],
             ),
             (
+                OrderFlow,
+                BuiltIns,
+                "",
+                &["Execution Delta", "Cumulative Execution Delta", "Host flow"],
+                &["RSI", "Vol Profile VR", "All Candlestick Patterns"],
+            ),
+            (
                 Indicators,
                 BuiltIns,
                 "Vol Profile VR",
                 &["Vol Profile VR"],
                 &["RSI"],
+            ),
+            (
+                OrderFlow,
+                BuiltIns,
+                "delta",
+                &[
+                    "Execution Delta",
+                    "Cumulative Execution Delta",
+                    "Multi-Range Delta",
+                ],
+                &["RSI", "Quoted Spread"],
+            ),
+            (
+                OrderFlow,
+                Favorites,
+                "",
+                &["Execution Delta", "Host flow"],
+                &["Cumulative Execution Delta", "RSI"],
             ),
             (
                 Indicators,
@@ -1119,6 +1148,9 @@ mod tests {
         let factory = || {
             let mut factory = IndicatorFactory::new();
             factory.register("Host SMA", || Box::new(SMA::new(42)));
+            factory.register_in(IndicatorFactory::ORDER_FLOW, "Host flow", || {
+                Box::new(SMA::new(42))
+            });
             factory.register_in(IndicatorFactory::PERSONAL, "My SMA", || {
                 Box::new(SMA::new(42))
             });
@@ -1128,7 +1160,7 @@ mod tests {
             factory
         };
         // The user's scripts and community studies are offered only while a host supplies some.
-        let builtin = IndicatorDialog::new();
+        let mut builtin = IndicatorDialog::new();
         let hosted = IndicatorDialog::new().with_factory(factory());
         for category in [MyScripts, Community] {
             assert!(
@@ -1145,6 +1177,14 @@ mod tests {
             .clone();
         let name = study.name.clone();
         let ctx = egui::Context::default();
+        for tab in [Indicators, OrderFlow] {
+            builtin.active_tab = tab;
+            for ind in &builtin.indicators {
+                if builtin.factory.category(&ind.id) == Some(IndicatorFactory::ORDER_FLOW) {
+                    assert_eq!(builtin.matches(&ctx, ind), tab == OrderFlow, "{}", ind.id);
+                }
+            }
+        }
         l10n::set_translator(&ctx, move |english| {
             (english == name).then(|| "Moyenne locale".into())
         });
@@ -1156,16 +1196,76 @@ mod tests {
             let mut dialog = IndicatorDialog::new().with_factory(factory());
             dialog.active_tab = tab;
             dialog.sel_category = category;
+            dialog
+                .favorites
+                .extend(["Execution Delta".into(), "Host flow".into()]);
             *dialog.search.query_mut() = query.into();
             let lists = |id: &str| {
                 let ind = dialog.indicators.iter().find(|i| i.id == id).unwrap();
                 dialog.matches(&ctx, ind)
             };
             for id in listed {
-                assert!(lists(id), "{tab:?} / {category:?} / {query:?} lists {id}");
+                assert_eq!(
+                    dialog
+                        .indicators
+                        .iter()
+                        .filter(|ind| ind.id == *id && dialog.matches(&ctx, ind))
+                        .count(),
+                    1,
+                    "{tab:?} / {category:?} / {query:?} lists {id} once"
+                );
             }
             for id in unlisted {
                 assert!(!lists(id), "{tab:?} / {category:?} / {query:?} omits {id}");
+            }
+        }
+
+        // A page needs a registered study the dialog accepts; search still spans all pages.
+        for has_flow in [false, true] {
+            for source in [
+                None,
+                Some(StudySource::Price(crate::model::PriceSource::Open)),
+            ] {
+                let mut factory = IndicatorFactory::new();
+                if !has_flow {
+                    for id in factory.list() {
+                        if factory.category(&id) == Some(IndicatorFactory::ORDER_FLOW) {
+                            factory.unregister(&id);
+                        }
+                    }
+                }
+                let mut dialog = IndicatorDialog::new().with_factory(factory);
+                dialog.open_tab(OrderFlow);
+                dialog.source = source;
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    dialog.draw_tabs(ui, &Theme::dark());
+                });
+                let offered = output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Order flow")
+                });
+                let accepted = has_flow && source.is_none();
+                assert_eq!(offered, accepted, "{has_flow} / {source:?}");
+                assert_eq!(
+                    dialog.active_tab,
+                    if accepted { OrderFlow } else { Indicators }
+                );
+                output.drop_without_applying_deltas();
+                dialog.source = None;
+                *dialog.search.query_mut() = "delta".into();
+                for ind in dialog
+                    .indicators
+                    .iter()
+                    .filter(|ind| ind.name.to_lowercase().contains("delta"))
+                {
+                    assert!(dialog.matches(&ctx, ind), "{} / {has_flow}", ind.id);
+                }
+                let ids: Vec<_> = dialog
+                    .indicators
+                    .iter()
+                    .filter(|ind| dialog.matches(&ctx, ind))
+                    .map(|ind| &ind.id)
+                    .collect();
+                assert_eq!(ids.len(), ids.iter().collect::<HashSet<_>>().len());
             }
         }
 
@@ -1173,6 +1273,7 @@ mod tests {
         for (category, selected, tab) in [
             (IndicatorFactory::PROFILES, BuiltIns, Profiles),
             (IndicatorFactory::PATTERNS, BuiltIns, Patterns),
+            (IndicatorFactory::ORDER_FLOW, BuiltIns, OrderFlow),
             (IndicatorFactory::PERSONAL, MyScripts, Indicators),
             (IndicatorFactory::COMMUNITY, Community, Indicators),
         ] {

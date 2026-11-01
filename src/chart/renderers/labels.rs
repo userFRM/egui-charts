@@ -2,7 +2,6 @@ use super::context::{ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering::axes::{PRICE_LABEL_GAP, axis_font};
 use crate::config::{PriceAxisOptions, TimeScaleOptions};
 use crate::model::Bar;
-use crate::scales::price_decimals;
 use crate::scales::{
     HorizontalScale, PriceFormatter, PriceMap, PriceMark, PriceScaleId, TickMark, TickMarkLayout,
 };
@@ -220,6 +219,7 @@ pub(crate) fn time_axis_marks(
     coords: &ChartMapping,
     scale: &dyn HorizontalScale,
     options: &TimeScaleOptions,
+    calendar: Option<&crate::model::TimezoneId>,
     time_at: impl Fn(f64) -> Option<chrono::DateTime<chrono::Utc>>,
 ) -> (Vec<TickMark>, TimeAxisPoints, ChartMapping) {
     // The logical indices at the right and left edges of the plot; the left one is negative
@@ -277,18 +277,29 @@ pub(crate) fn time_axis_marks(
             .map_while(|index| Some((time_at(index as f64)?, index + shift))),
     );
     // Next to the bars, a daily series gets no keys on the weekdays it has no bars.
-    let after = closed_weekdays(last.saturating_sub(15)..=last, last as f64 + 1.0, &time_at);
+    let weekday = |time| {
+        let local = match calendar {
+            Some(zone) => crate::model::local_time(zone.clone(), time),
+            None => crate::model::local_time(chrono::Local, time),
+        };
+        local.weekday().num_days_from_monday() as usize
+    };
+    let after = closed_weekdays(
+        last.saturating_sub(15)..=last,
+        last as f64 + 1.0,
+        &time_at,
+        weekday,
+    );
     let before = if shift > 0 {
-        closed_weekdays(0..=last.min(15), -1.0, &time_at)
+        closed_weekdays(0..=last.min(15), -1.0, &time_at, weekday)
     } else {
         [false; 7]
     };
     bars.retain(|(time, index)| {
-        let day = time.weekday().num_days_from_monday() as usize;
         if *index < shift {
-            !before[day]
+            !before[weekday(*time)]
         } else {
-            *index <= last + shift || !after[day]
+            *index <= last + shift || !after[weekday(*time)]
         }
     });
     let layout = TickMarkLayout {
@@ -311,12 +322,12 @@ pub(crate) fn time_axis_marks(
 /// of a market open on weekdays. `bars` are the 16 bars at one end of the series. A weekday
 /// counts as closed only when both of its dates in those two weeks lack a bar, so one holiday
 /// closes nothing. Weekly and longer intervals, merged daily bars and series shorter than two
-/// weeks close no day. Weekdays are read in UTC, which is consistent because the keys of a
-/// daily series share one time of day.
+/// weeks close no day. `weekday` reads each key's weekday in the chart's calendar zone.
 fn closed_weekdays(
     bars: std::ops::RangeInclusive<usize>,
     outside: f64,
     time_at: impl Fn(f64) -> Option<chrono::DateTime<chrono::Utc>>,
+    weekday: impl Fn(chrono::DateTime<chrono::Utc>) -> usize,
 ) -> [bool; 7] {
     let Some((first, last)) = time_at(*bars.start() as f64)
         .zip(time_at(*bars.end() as f64))
@@ -334,7 +345,7 @@ fn closed_weekdays(
     }
     let mut closed = [true; 7];
     for time in bars.filter_map(|index| time_at(index as f64)) {
-        closed[time.weekday().num_days_from_monday() as usize] = false;
+        closed[weekday(time)] = false;
     }
     closed
 }
@@ -522,11 +533,6 @@ pub fn render_time_labels(
     }
     context.painter.set(slot, labels);
 }
-
-#[path = "legend/mod.rs"]
-mod legend;
-pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
-pub(crate) use legend::{SeriesAction, study_controls};
 
 /// Formats text at weight 600 when the face has a weight axis.
 pub(super) fn semibold(font: FontId, color: Color32) -> egui::text::TextFormat {
@@ -1248,174 +1254,6 @@ mod tests {
         }
     }
 
-    /// Legend fields stay inside the plot and keep their positions during hover.
-    #[test]
-    fn legend_fields_stay_inside_the_plot() {
-        use crate::theme::apply_to_egui;
-        use egui::Vec2;
-
-        for (_, theme) in crate::theme::presets() {
-            for width in [160.0, 300.0, 387.0, 400.0, 599.0, 600.0, 1200.0, 1440.0] {
-                let ctx = Context::default();
-                #[cfg(feature = "icons")]
-                egui_extras::install_image_loaders(&ctx);
-                apply_to_egui(&ctx, &theme);
-                let plot = Rect::from_min_size(Pos2::new(52.0, 40.0), Vec2::new(width, 400.0));
-                let badge = ctx.load_texture(
-                    "instrument",
-                    egui::ColorImage::filled([18, 18], egui::Color32::BLUE),
-                    Default::default(),
-                );
-                let statuses = [super::LegendStatus {
-                    text: "S",
-                    color: theme.ui.text,
-                    background: theme.ui.panel_bg_secondary,
-                }];
-                let instrument = crate::model::Instrument::new("Sample equity fund")
-                    .with_data_status(crate::model::DataStatus::Delayed);
-                let bar = Bar::new(
-                    Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
-                    749.37,
-                    751.09,
-                    749.13,
-                    750.74,
-                    275_540.0,
-                );
-                let frame = |events| {
-                    ctx.run_ui(
-                        egui::RawInput {
-                            events,
-                            ..Default::default()
-                        },
-                        |ui| {
-                            let mut legend = super::Legend::new("Sample equity fund", "1h", &bar);
-                            legend.previous_close = Some(749.42);
-                            legend.badge = Some(egui::ImageSource::Texture(
-                                (badge.id(), Vec2::splat(18.0)).into(),
-                            ));
-                            legend.session = Some(crate::model::session::MarketSession::PostMarket);
-                            legend.statuses = &statuses;
-                            legend.instrument = Some(&instrument);
-                            legend.show_volume = false;
-                            legend.show(ui, plot);
-                        },
-                    )
-                };
-                let mut output = frame(vec![Event::PointerGone]);
-                output.textures_delta.clear();
-                let text: Vec<_> = output
-                    .shapes
-                    .iter()
-                    .filter_map(|shape| match &shape.shape {
-                        Shape::Text(text) => Some(text),
-                        _ => None,
-                    })
-                    .collect();
-                assert!(!text.is_empty());
-                let marks: Vec<_> = output
-                    .shapes
-                    .iter()
-                    .filter_map(|shape| match &shape.shape {
-                        Shape::Rect(rect) if rect.fill_texture_id() == badge.id() => {
-                            Some(rect.rect)
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                assert_eq!(marks.len(), 1);
-                let mark = marks[0];
-                assert!(
-                    plot.shrink2(Vec2::new(theme.spacing.lg, theme.spacing.md))
-                        .contains_rect(mark)
-                );
-                for field in &text {
-                    assert!(!mark.intersects(Rect::from_min_size(field.pos, field.galley.size())));
-                }
-                for (index, field) in text.iter().enumerate() {
-                    let bounds = Rect::from_min_size(field.pos, field.galley.size());
-                    for other in &text[index + 1..] {
-                        assert!(
-                            !bounds.intersects(Rect::from_min_size(other.pos, other.galley.size()))
-                        );
-                    }
-                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-                            Shape::Rect(rect) if rect.fill == theme.chart.bg && rect.rect.height() >= 22.0 && rect.rect.contains_rect(bounds)
-                        )), "missing row backdrop for {}", field.galley.text());
-                    assert!(
-                        bounds.right() <= plot.right() - 8.0 + 0.1,
-                        "{width}: {} at {bounds:?}",
-                        field.galley.text()
-                    );
-                }
-                for shape in &output.shapes {
-                    if let Shape::Rect(rect) = &shape.shape
-                        && rect.fill == theme.chart.bg
-                        && rect.rect.height() >= 22.0
-                    {
-                        assert!(
-                            text.iter().any(|field| rect
-                                .rect
-                                .intersects(Rect::from_min_size(field.pos, field.galley.size()))),
-                            "{width}: empty legend row at {:?}",
-                            rect.rect
-                        );
-                    }
-                }
-                for (index, field) in ["O 749.37", "H 751.09", "L 749.13", "C 750.74"]
-                    .into_iter()
-                    .enumerate()
-                {
-                    assert_eq!(
-                        text.iter().any(|text| text.galley.text() == field),
-                        width >= 600.0 || index == 3,
-                        "{width}: field visibility for {field}"
-                    );
-                }
-                assert!(
-                    text.iter()
-                        .any(|text| text.galley.text() == "+1.32 (+0.18%)")
-                );
-                assert!(text.iter().any(|text| text.galley.text() == "D"
-                    && text.galley.job.sections[0].format.color == theme.ui.warning));
-                let centres: Vec<_> = text
-                    .iter()
-                    .map(|text| text.pos.y + text.galley.size().y / 2.0)
-                    .collect();
-                if width >= 1200.0 {
-                    assert!(centres.iter().all(|y| (*y - centres[0]).abs() < 0.1));
-                } else if width <= 300.0 {
-                    assert!(centres.iter().any(|y| *y > centres[0]));
-                }
-                for field in text
-                    .iter()
-                    .filter(|text| text.galley.text().starts_with("O "))
-                {
-                    let sections = &field.galley.job.sections;
-                    assert_eq!(sections[0].format.color, theme.ui.text_secondary);
-                    assert_eq!(sections[1].format.color, theme.chart.candle_up);
-                }
-                let idle: Vec<_> = text
-                    .iter()
-                    .map(|text| (text.galley.text().to_owned(), text.pos, text.galley.size()))
-                    .collect();
-                let hovered = frame(vec![Event::PointerMoved(plot.min + Vec2::new(60.0, 20.0))]);
-                let hovered_text: Vec<_> = hovered
-                    .shapes
-                    .iter()
-                    .filter_map(|shape| match &shape.shape {
-                        Shape::Text(text) => {
-                            Some((text.galley.text().to_owned(), text.pos, text.galley.size()))
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                hovered.drop_without_applying_deltas();
-                output.drop_without_applying_deltas();
-                assert_eq!(idle, hovered_text, "hover moved readout at {width}");
-            }
-        }
-    }
-
     /// The tick labels and the tags one frame paints in the price axis, with the pointer at
     /// `hover`. A number inside a tag is the tag's own text, not a tick.
     fn price_axis(
@@ -1637,6 +1475,7 @@ mod tests {
                     &coords,
                     &chart.build_time_formatter(),
                     &chart.chart_options.time_scale,
+                    Some(&crate::model::TimezoneId::default()),
                     |index| chart.index_to_time(index),
                 );
                 let whitespace = keys

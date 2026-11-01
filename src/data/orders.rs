@@ -2,6 +2,7 @@
 
 use super::FeedError;
 use super::depth::{Lost, MAX_LEVELS, key};
+use super::footprint::meets_threshold;
 use crate::model::{OrderBook, OrderBookLevel, OrderSide, Tick};
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
@@ -181,7 +182,8 @@ pub enum OrderEvent {
     },
     /// Removes `size` from an order, keeping its priority on a partial fill. A known trade is
     /// pushed through the trade path with `resting_order_id` set. Never also push it without a
-    /// unique trade id. Size must not exceed the order's remaining size.
+    /// unique trade id. Size must not exceed the order's remaining size; a relative tolerance
+    /// of 1e-9, as in footprint volume thresholds, exhausts a rounded remainder.
     Execute {
         /// Venue identifier of the order to change.
         id: u64,
@@ -503,7 +505,7 @@ impl OrderQueue {
                 let order = &mut self.orders[at];
                 if !size.is_finite()
                     || size <= 0.0
-                    || size > order.size
+                    || !meets_threshold(order.size, size)
                     || trade.as_ref().is_some_and(|t| {
                         !super::trades::valid(t)
                             || t.size != size
@@ -519,7 +521,11 @@ impl OrderQueue {
                     }
                     self.executions.push_back(trade);
                 }
-                order.size -= size;
+                order.size = if meets_threshold(size, order.size) {
+                    0.0
+                } else {
+                    order.size - size
+                };
                 if order.size == 0.0 {
                     self.orders.remove(at);
                 }
@@ -620,5 +626,39 @@ mod tests {
             .is_err()
         );
         assert_eq!(book.orders().count(), 0);
+    }
+
+    #[test]
+    fn decimal_executions_consume_the_order_without_losing_sequence() {
+        let mut book = OrderQueue::new(Some(0.25));
+        book.snapshot(
+            1,
+            DateTime::default(),
+            vec![RestingOrder::new(1, Sell, 100.0, 0.3)],
+        )
+        .unwrap();
+        for (sequence, size) in [(2, 0.1), (3, 0.2)] {
+            book.apply(
+                sequence,
+                DateTime::default(),
+                OrderEvent::Execute {
+                    id: 1,
+                    size,
+                    trade: Some(
+                        Tick::new(DateTime::default(), 100.0, size, Some(Buy)).with_id(sequence),
+                    ),
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(book.sequence(), Some(3));
+        assert!(book.aggregate("ES", 0.0).asks.is_empty());
+        assert_eq!(
+            book.take_executions()
+                .iter()
+                .map(|fill| fill.size)
+                .collect::<Vec<_>>(),
+            [0.1, 0.2]
+        );
     }
 }

@@ -14,6 +14,8 @@ mod time_formatter;
 mod timescale_marks;
 
 pub use countdown::bar_countdown;
+#[cfg(feature = "widget")]
+pub(crate) use horizontal::median_bar_duration;
 pub use horizontal::{
     HorizontalScale, MaturityScale, PriceHorizontalScale, TickMarkLayout, key_time, time_key,
 };
@@ -23,7 +25,7 @@ pub use price_formatter::{
     instrument_price_precision,
 };
 #[cfg(feature = "widget")]
-pub(crate) use price_formatter::{group_thousands, price_decimals};
+pub(crate) use price_formatter::{decimals, group_thousands, price_decimals, to_step};
 #[cfg(feature = "widget")]
 pub(crate) use pricescale::auto_scale_span;
 pub use pricescale::{

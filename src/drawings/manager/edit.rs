@@ -29,6 +29,37 @@ impl DrawingManager {
         self.selection.deselect(id);
     }
 
+    /// Stores newly typed text in its placement undo step, or removes an empty placement
+    /// without an undo step. If another operation followed placement, records a normal edit
+    /// or deletion instead.
+    pub(crate) fn finish_new_text(&mut self, id: usize, text: Option<String>) {
+        let Some(index) = self.drawings.iter().position(|d| d.id == id) else {
+            return;
+        };
+        if !self.history.pop_add(id) {
+            self.finished_text_placement = Some(id);
+            match text {
+                Some(text) => self.edit_drawing(id, |d| d.text = Some(text)),
+                None => self.delete_drawing(id),
+            }
+            return;
+        }
+        match text {
+            Some(text) => {
+                self.drawings[index].text = Some(text);
+                self.history.push_add(self.drawings[index].clone());
+                self.queue_update(id);
+            }
+            None => {
+                let drawing = self.drawings.remove(index);
+                if drawing.saveable {
+                    self.queue(DrawingSyncAction::Delete(sync_id(&drawing)));
+                }
+                self.selection.deselect(id);
+            }
+        }
+    }
+
     /// Deletes the selected drawings, keeping any locked ones.
     pub fn delete_selected(&mut self) {
         let before: Vec<_> = self
