@@ -339,18 +339,22 @@ impl ChartContextMenu {
             } else {
                 (OrderSide::Buy, OrderSide::Sell)
             };
-            for (side, order_type, kind) in [
-                (limit, OrderType::Limit(price), "limit"),
-                (stop, OrderType::Stop(price), "stop"),
+            for (side, order_type) in [
+                (limit, OrderType::Limit(price)),
+                (stop, OrderType::Stop(price)),
             ] {
                 if !self.order_types.accepts(&order_type) {
                     continue;
                 }
                 let request = OrderRequest::new(symbol, side, self.order_quantity, order_type);
-                let key = match (side, kind) {
-                    (OrderSide::Buy, "limit") => "Buy {quantity} {symbol} @ {price} limit",
+                let key = match (side, order_type) {
+                    (OrderSide::Buy, OrderType::Limit(_)) => {
+                        "Buy {quantity} {symbol} @ {price} limit"
+                    }
                     (OrderSide::Buy, _) => "Buy {quantity} {symbol} @ {price} stop",
-                    (OrderSide::Sell, "limit") => "Sell {quantity} {symbol} @ {price} limit",
+                    (OrderSide::Sell, OrderType::Limit(_)) => {
+                        "Sell {quantity} {symbol} @ {price} limit"
+                    }
                     (OrderSide::Sell, _) => "Sell {quantity} {symbol} @ {price} stop",
                 };
                 let icon = match side {
