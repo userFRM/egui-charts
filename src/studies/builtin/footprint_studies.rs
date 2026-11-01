@@ -128,7 +128,8 @@ impl Default for FootprintStudyConfig {
 }
 
 /// Finds stacked imbalances, unfinished highs and lows, naked POCs, delta POCs, clusters, single
-/// prints and bars whose delta percentage or bid/ask ratio reaches a threshold.
+/// prints and bars whose delta percentage or bid/ask ratio reaches a threshold, in the bars from
+/// [`Footprint::complete_from`] on.
 ///
 /// Missing price rows break a stack. Stacks, POCs and unfinished levels end at the first
 /// subsequent bar whose executed range revisits them, or expire as `config.extend_bars` says;
