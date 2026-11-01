@@ -112,7 +112,14 @@ impl OrderTicket {
             let result = ConfirmDialog::new(
                 "dom_cancel_confirm",
                 "Cancel orders",
-                format!("Cancel {} working orders for {}?", ids.len(), self.symbol),
+                l10n::format_text(
+                    ui.ctx(),
+                    "Cancel {count} working orders for {symbol}?",
+                    &[
+                        ("count", ids.len().to_string().as_str()),
+                        ("symbol", self.symbol.as_str()),
+                    ],
+                ),
             )
             .confirm_text("Cancel orders")
             .cancel_text("Back")

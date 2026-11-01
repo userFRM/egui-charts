@@ -11,7 +11,7 @@ use egui::{Align2, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use super::ticket::{Action, Market, order_quantity};
 use super::widgets::{
-    FIELD_HEIGHT, chevron, field, grouped, muted, number, side_color, side_fill, side_name, text,
+    FIELD_HEIGHT, chevron, field, grouped, muted, number, side_color, side_fill, text,
     time_in_force_menu,
 };
 use crate::chart::{TradingLineAction, decimals, to_step};
@@ -846,7 +846,10 @@ impl Ladder {
                 .filter(|order| order.request.side == side)
                 .map(|order| order.id.clone())
                 .collect();
-            let label = format!("Cancel all {}s", side_name(side).to_lowercase());
+            let label = match side {
+                OrderSide::Buy => "Cancel all buys",
+                OrderSide::Sell => "Cancel all sells",
+            };
             let response = ui
                 .interact(
                     margin,
@@ -1028,7 +1031,10 @@ impl Ladder {
         ui.columns(3, |thirds| {
             for (index, side) in [(0, OrderSide::Buy), (2, OrderSide::Sell)] {
                 let ui = &mut thirds[index];
-                let label = format!("{} Mkt", side_name(side));
+                let label = match side {
+                    OrderSide::Buy => "Buy Mkt",
+                    OrderSide::Sell => "Sell Mkt",
+                };
                 let button = egui::Button::new(
                     egui::RichText::new(l10n::text(ui.ctx(), label)).color(match side {
                         OrderSide::Buy => theme.ui.accent_text,

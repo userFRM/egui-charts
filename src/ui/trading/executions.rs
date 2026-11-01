@@ -121,10 +121,18 @@ pub(super) fn show(
         let mut rect = Rect::from_two_pos(at(-HALF_WIDTH, 0.0), at(HALF_WIDTH, length));
         let more = (run.len() > MAX_STACK).then(|| format!("+{}", run.len() - MAX_STACK));
         let label = labels.then(|| {
-            format!(
-                "{} {}",
-                l10n::text(ui.ctx(), side_name(side)),
-                numbers.quantity(quantity, quantity_decimals(quantity))
+            l10n::format_text(
+                ui.ctx(),
+                match side {
+                    OrderSide::Buy => "Buy {quantity}",
+                    OrderSide::Sell => "Sell {quantity}",
+                },
+                &[(
+                    "quantity",
+                    numbers
+                        .quantity(quantity, quantity_decimals(quantity))
+                        .as_str(),
+                )],
             )
         });
         let lines: Vec<_> = more
@@ -193,13 +201,16 @@ pub(super) fn show(
                     .iter()
                     .take(MAX_HOVER_FILLS)
                     .map(|(_, fill)| {
-                        format!(
-                            "{} {} at {:.decimals$}, {}",
-                            side_name(fill.side),
-                            fill.quantity,
-                            fill.price,
-                            // With seconds, also on charts of daily bars.
-                            time.format_crosshair(fill.time, 1)
+                        l10n::format_text(
+                            ui.ctx(),
+                            "{side} {quantity} at {price}, {time}",
+                            &[
+                                ("side", l10n::text(ui.ctx(), side_name(fill.side)).as_str()),
+                                ("quantity", fill.quantity.to_string().as_str()),
+                                ("price", format!("{:.decimals$}", fill.price).as_str()),
+                                // With seconds, also on charts of daily bars.
+                                ("time", time.format_crosshair(fill.time, 1).as_str()),
+                            ],
                         )
                     })
                     .collect();

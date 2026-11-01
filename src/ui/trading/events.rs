@@ -5,6 +5,7 @@ use super::widgets::side_name;
 use super::{Trading, valid};
 use crate::chart::TradingLineAction;
 use crate::data::FeedError;
+use crate::localization as l10n;
 use crate::model::{OrderId, OrderPreview, OrderRequest, OrderStatus, OrderType, TradingRules};
 use crate::services::{AccountEvent, HistoryKind, HistoryPage};
 use crate::ui_kit::notifications::{Toast, ToastKind, Toasts};
@@ -22,7 +23,7 @@ impl Trading {
         for (key, answer) in self.inbox.drain().answers {
             if key == self.generation {
                 match answer.downcast::<AccountEvent>() {
-                    Ok(event) => self.apply(*event, toasts),
+                    Ok(event) => self.apply(ctx, *event, toasts),
                     Err(_) => self.restating = false,
                 }
                 continue;
@@ -38,7 +39,11 @@ impl Trading {
                         Err(FeedError::NotSupported) => self.place(order),
                         Err(error) => self.notify(
                             toasts,
-                            Toast::error(format!("Trading rules unavailable: {error}")),
+                            Toast::error(l10n::format_text(
+                                ctx,
+                                "Trading rules unavailable: {error}",
+                                &[("error", error.to_string().as_str())],
+                            )),
                         ),
                         Ok(_) => self.notify(
                             toasts,
@@ -64,7 +69,11 @@ impl Trading {
                             self.preview = None;
                             self.notify(
                                 toasts,
-                                Toast::error(format!("Order preview unavailable: {error}")),
+                                Toast::error(l10n::format_text(
+                                    ctx,
+                                    "Order preview unavailable: {error}",
+                                    &[("error", error.to_string().as_str())],
+                                )),
                             );
                         }
                     }
@@ -73,7 +82,7 @@ impl Trading {
             }
             if let Some(kind) = self.account_panel.loading(key) {
                 if let Ok(answer) = answer.downcast::<Result<HistoryPage, FeedError>>() {
-                    self.history_page(kind, *answer, toasts);
+                    self.history_page(ctx, kind, *answer, toasts);
                 }
                 continue;
             }
@@ -87,7 +96,11 @@ impl Trading {
                         Err(FeedError::NotSupported) => self.rules_ready = true,
                         Err(error) => {
                             self.rules_failed = !self.connection_error(&error);
-                            toasts.error(format!("Trading rules unavailable: {error}"));
+                            toasts.error(l10n::format_text(
+                                ctx,
+                                "Trading rules unavailable: {error}",
+                                &[("error", error.to_string().as_str())],
+                            ));
                         }
                         Ok(_) => {
                             self.rules_failed = true;
@@ -108,12 +121,19 @@ impl Trading {
                     .and_then(|done| done.err()),
             };
             if let Some(error) = error {
-                self.notify(toasts, Toast::error(format!("Order refused: {error}")));
+                self.notify(
+                    toasts,
+                    Toast::error(l10n::format_text(
+                        ctx,
+                        "Order refused: {error}",
+                        &[("error", error.to_string().as_str())],
+                    )),
+                );
             }
         }
     }
 
-    pub(super) fn apply(&mut self, event: AccountEvent, toasts: &mut Toasts) {
+    pub(super) fn apply(&mut self, ctx: &egui::Context, event: AccountEvent, toasts: &mut Toasts) {
         if !valid_event(&event) {
             return;
         }
@@ -167,6 +187,7 @@ impl Trading {
                     self.notify(
                         toasts,
                         order_toast(
+                            ctx,
                             &order.request,
                             price,
                             order.request.quantity,
@@ -178,7 +199,11 @@ impl Trading {
                 match &order.status {
                     OrderStatus::Working => self.orders.push(order),
                     OrderStatus::Rejected(reason) if announce => {
-                        let toast = Toast::error(format!("Order rejected: {reason}"));
+                        let toast = Toast::error(l10n::format_text(
+                            ctx,
+                            "Order rejected: {reason}",
+                            &[("reason", reason.as_str())],
+                        ));
                         self.notify(toasts, toast);
                     }
                     _ => {}
@@ -204,32 +229,73 @@ impl Trading {
             }
             AccountEvent::Execution(fill) if announce => {
                 let order = self.account_panel.fills.orders.get(&fill.order);
-                let mut text = format!("{} {}", side_name(fill.side), fill.quantity);
-                if let Some(order) = order {
-                    text += &format!(" {}", order.symbol);
-                }
-                text += &format!(" at {:.*}", self.decimals, fill.price);
+                let side = l10n::text(ctx, side_name(fill.side));
+                let quantity = fill.quantity.to_string();
+                let price = format!("{:.*}", self.decimals, fill.price);
+                let text = match order {
+                    Some(order) => l10n::format_text(
+                        ctx,
+                        "{side} {quantity} {symbol} at {price}",
+                        &[
+                            ("side", side.as_str()),
+                            ("quantity", quantity.as_str()),
+                            ("symbol", order.symbol.as_str()),
+                            ("price", price.as_str()),
+                        ],
+                    ),
+                    None => l10n::format_text(
+                        ctx,
+                        "{side} {quantity} at {price}",
+                        &[
+                            ("side", side.as_str()),
+                            ("quantity", quantity.as_str()),
+                            ("price", price.as_str()),
+                        ],
+                    ),
+                };
                 let filled = self.account_panel.fills.filled_quantity(&fill.order);
                 // Fills that add up to the order within rounding complete it.
                 let mut toast = match order {
                     Some(order) => {
                         let mut executed = order.clone();
                         executed.side = fill.side;
-                        order_toast(&executed, fill.price, fill.quantity, self.decimals, true)
+                        order_toast(
+                            ctx,
+                            &executed,
+                            fill.price,
+                            fill.quantity,
+                            self.decimals,
+                            true,
+                        )
                     }
-                    None => Toast::success(format!("Filled: {text}")),
+                    None => Toast::success(l10n::format_text(
+                        ctx,
+                        "Filled: {fill}",
+                        &[("fill", text.as_str())],
+                    )),
                 };
                 if let Some(order) = order
                     && filled < order.quantity * (1.0 - 1e-9)
                 {
                     toast.kind = ToastKind::Info;
-                    toast.title = Some(format!(
-                        "{} order partially executed ({filled} of {}) on",
-                        order_name(order),
-                        order.quantity
+                    toast.title = Some(l10n::format_text(
+                        ctx,
+                        "{order} order partially executed ({filled} of {quantity}) on",
+                        &[
+                            ("order", l10n::text(ctx, order_name(order)).as_str()),
+                            ("filled", filled.to_string().as_str()),
+                            ("quantity", order.quantity.to_string().as_str()),
+                        ],
                     ));
-                    toast.message =
-                        format!("Partially filled: {text} ({filled} of {})", order.quantity);
+                    toast.message = l10n::format_text(
+                        ctx,
+                        "Partially filled: {fill} ({filled} of {quantity})",
+                        &[
+                            ("fill", text.as_str()),
+                            ("filled", filled.to_string().as_str()),
+                            ("quantity", order.quantity.to_string().as_str()),
+                        ],
+                    );
                 }
                 self.notify(toasts, toast);
                 if self.display.play_execution_sound {
@@ -265,6 +331,7 @@ impl Trading {
     /// Lists a page of older history the broker answered for `kind`, or stops paging there.
     fn history_page(
         &mut self,
+        ctx: &egui::Context,
         kind: HistoryKind,
         answer: Result<HistoryPage, FeedError>,
         toasts: &mut Toasts,
@@ -282,7 +349,11 @@ impl Trading {
                     self.account_panel.end(kind);
                 }
                 if error != FeedError::NotSupported {
-                    toasts.error(format!("Account history unavailable: {error}"));
+                    toasts.error(l10n::format_text(
+                        ctx,
+                        "Account history unavailable: {error}",
+                        &[("error", error.to_string().as_str())],
+                    ));
                 }
             }
         }
@@ -386,29 +457,48 @@ fn order_name(request: &OrderRequest) -> &'static str {
 }
 
 fn order_toast(
+    ctx: &egui::Context,
     request: &OrderRequest,
     price: f64,
     quantity: f64,
     decimals: usize,
     executed: bool,
 ) -> Toast {
-    let side = side_name(request.side);
+    let side = l10n::text(ctx, side_name(request.side));
+    let fill = l10n::format_text(
+        ctx,
+        "{side} {quantity} {symbol} at {price}",
+        &[
+            ("side", side.as_str()),
+            ("quantity", quantity.to_string().as_str()),
+            ("symbol", request.symbol.as_str()),
+            ("price", format!("{price:.decimals$}").as_str()),
+        ],
+    );
     let mut toast = Toast::new(
         if executed {
             ToastKind::Success
         } else {
             ToastKind::Info
         },
-        format!(
-            "{}: {side} {quantity} {} at {price:.decimals$}",
-            if executed { "Filled" } else { "Placed" },
-            request.symbol
+        l10n::format_text(
+            ctx,
+            if executed {
+                "Filled: {fill}"
+            } else {
+                "Placed: {fill}"
+            },
+            &[("fill", fill.as_str())],
         ),
     )
-    .with_title(format!(
-        "{} order {} on",
-        order_name(request),
-        if executed { "executed" } else { "placed" }
+    .with_title(l10n::format_text(
+        ctx,
+        if executed {
+            "{order} order executed on"
+        } else {
+            "{order} order placed on"
+        },
+        &[("order", l10n::text(ctx, order_name(request)).as_str())],
     ));
     toast.trading = Some(crate::ui_kit::notifications::TradingToast {
         symbol: request.symbol.clone(),
@@ -503,7 +593,7 @@ mod tests {
             trading.poll(&egui::Context::default(), &mut Toasts::new());
             let mut toasts = Toasts::new();
             for event in broker.state.clone() {
-                trading.apply(event, &mut toasts);
+                trading.apply(&egui::Context::default(), event, &mut toasts);
             }
             let messages: Vec<_> = toasts.toasts().iter().map(|t| t.message.as_str()).collect();
             assert_eq!(messages, expected, "{level:?}");
@@ -897,8 +987,16 @@ mod tests {
             let mut request = OrderRequest::new("SYM", OrderSide::Sell, 10.0, kind);
             request.position_bracket = role;
             let order = Order::new(OrderId::new("one"), request, OrderStatus::Working);
-            trading.apply(AccountEvent::Order(order.clone()), &mut toasts);
-            trading.apply(AccountEvent::Order(order), &mut toasts);
+            trading.apply(
+                &egui::Context::default(),
+                AccountEvent::Order(order.clone()),
+                &mut toasts,
+            );
+            trading.apply(
+                &egui::Context::default(),
+                AccountEvent::Order(order),
+                &mut toasts,
+            );
             assert_eq!(toasts.toasts().len(), 1);
             let toast = &toasts.toasts()[0];
             assert_eq!(
@@ -928,7 +1026,7 @@ mod tests {
             AccountEvent::Order(order.clone()),
             AccountEvent::Position(position.clone()),
         ] {
-            trading.apply(event, &mut toasts);
+            trading.apply(&egui::Context::default(), event, &mut toasts);
         }
         for bad in [f64::NAN, f64::INFINITY] {
             let mut invalid_order = order.clone();
@@ -942,7 +1040,7 @@ mod tests {
                 AccountEvent::Order(invalid_level),
                 AccountEvent::Position(Position::new("SYM", bad, 100.0)),
             ] {
-                trading.apply(event, &mut toasts);
+                trading.apply(&egui::Context::default(), event, &mut toasts);
                 assert_eq!(trading.account, Some(account.clone()));
                 assert_eq!(trading.orders.as_slice(), std::slice::from_ref(&order));
                 assert_eq!(
@@ -972,18 +1070,27 @@ mod tests {
             trading.pending = Some(action.clone());
             let mut marked = position.clone();
             marked.unrealized_pnl = Some(5.0);
-            trading.apply(AccountEvent::Position(marked), &mut Toasts::new());
+            trading.apply(
+                &egui::Context::default(),
+                AccountEvent::Position(marked),
+                &mut Toasts::new(),
+            );
             assert!(
                 trading.pending.is_some(),
                 "a price tick preserves confirmation"
             );
             trading.apply(
+                &egui::Context::default(),
                 AccountEvent::Position(Position::new("SYM", 0.0, 100.0)),
                 &mut Toasts::new(),
             );
             let mut filled = order.clone();
             filled.filled = 1.0;
-            trading.apply(AccountEvent::Order(filled), &mut Toasts::new());
+            trading.apply(
+                &egui::Context::default(),
+                AccountEvent::Order(filled),
+                &mut Toasts::new(),
+            );
             assert!(
                 trading.pending.is_none(),
                 "changed exposure invalidates confirmation"
@@ -1068,7 +1175,11 @@ mod tests {
             (FeedStatus::Live, true, None),
             (FeedStatus::Disconnected, false, Some("Offline")),
         ] {
-            trading.apply(AccountEvent::Status(status), &mut Toasts::new());
+            trading.apply(
+                &egui::Context::default(),
+                AccountEvent::Status(status),
+                &mut Toasts::new(),
+            );
             check(&mut trading, &format!("{status:?}"), true, connected, mark);
         }
         // A new stream, as after a lag, starts without the old stream's status.
@@ -1091,7 +1202,11 @@ mod tests {
         let ctx = egui::Context::default();
         let first = HistoryRequest::new(HistoryKind::Journal, 100);
         let report = |trading: &mut Trading, status| {
-            trading.apply(AccountEvent::Status(status), &mut Toasts::new());
+            trading.apply(
+                &egui::Context::default(),
+                AccountEvent::Status(status),
+                &mut Toasts::new(),
+            );
         };
         for (name, error, again) in [
             ("asked while offline", None, true),
