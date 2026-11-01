@@ -657,7 +657,8 @@ fn cell_color(
 /// use unabbreviated volume values when they fit, then compact units. Percentages have one
 /// decimal and ask/bid ratios two decimals.
 /// A column cut by the margin or plot edge is omitted as a whole. When the complete table
-/// cannot fit at a readable size, a zoom-in notice replaces it; values remain in [`FootprintBar`].
+/// cannot fit at a readable size, a zoom-in or resize notice replaces it; values remain in
+/// [`FootprintBar`].
 /// A view without complete executions reports that statistics are unavailable.
 pub fn render_footprint_statistics(
     painter: &Painter,
@@ -676,6 +677,7 @@ pub fn render_footprint_statistics(
         .into_iter()
         .map(|label| painter.layout_no_wrap(label.into(), font.clone(), text_color))
         .collect();
+    let rows_fit = labels.iter().all(|label| label.size().y <= row_height);
     let label_width = labels
         .iter()
         .map(|label| label.size().x)
@@ -718,7 +720,7 @@ pub fn render_footprint_statistics(
     }
     let mut size = 10.0;
     let mut fitted = Vec::new();
-    if mapping.bar_spacing >= 22.0 && row_height >= 10.0 {
+    if mapping.bar_spacing >= 22.0 && rows_fit {
         'fitting: for abbreviate in [false, true] {
             for font_size in [10.0, FONT_LIMITS[0]] {
                 size = font_size;
@@ -770,10 +772,12 @@ pub fn render_footprint_statistics(
         painter.text(
             mapping.rect.center(),
             Align2::CENTER_CENTER,
-            if has_data {
-                "Zoom in for per-bar statistics"
-            } else {
+            if !has_data {
                 "Execution statistics unavailable"
+            } else if !rows_fit {
+                "Enlarge chart for per-bar statistics"
+            } else {
+                "Zoom in for per-bar statistics"
             },
             font,
             text_color,
@@ -1422,8 +1426,9 @@ mod tests {
         }
     }
 
-    /// Shared row labels and complete numeric columns survive narrow detail widths. The first
-    /// bar has 13 buys and 3 sells: delta 10, 62.5%, ask/bid 4.33:1; the second adds 2500 sells.
+    /// Shared row labels and complete numeric columns survive narrow detail widths; a short pane
+    /// reports unavailable detail instead of clipping a row. The first bar has 13 buys and 3 sells:
+    /// delta 10, 62.5%, ask/bid 4.33:1; the second adds 2500 sells.
     #[test]
     fn statistics_keep_shared_rows_and_aligned_values_or_explain_the_overview() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -1443,13 +1448,15 @@ mod tests {
         ];
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 112.0));
         let empty = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
-        for (spacing, available, large) in [
-            (60.0, true, false),
-            (40.0, true, false),
-            (3.0, true, false),
-            (60.0, false, false),
-            (40.0, true, true),
+        for (spacing, available, large, height) in [
+            (60.0, true, false, 112.0),
+            (40.0, true, false, 112.0),
+            (3.0, true, false, 112.0),
+            (60.0, false, false, 112.0),
+            (40.0, true, true, 112.0),
+            (60.0, true, false, 90.0),
         ] {
+            let rect = Rect::from_min_size(rect.min, vec2(rect.width(), height));
             let mut shown = flow.clone();
             let mut bars = bars.clone();
             if large {
@@ -1501,14 +1508,24 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            if spacing == 3.0 || !available {
+            for text in &texts {
+                assert!(
+                    rect.contains_rect(Rect::from_min_size(text.pos, text.galley.size())),
+                    "statistics text is clipped at height {height}: {} {:?}",
+                    text.galley.text(),
+                    Rect::from_min_size(text.pos, text.galley.size()),
+                );
+            }
+            if spacing == 3.0 || !available || height == 90.0 {
                 assert_eq!(texts.len(), 1);
                 assert_eq!(
                     texts[0].galley.text(),
-                    if available {
-                        "Zoom in for per-bar statistics"
-                    } else {
+                    if !available {
                         "Execution statistics unavailable"
+                    } else if height == 90.0 {
+                        "Enlarge chart for per-bar statistics"
+                    } else {
+                        "Zoom in for per-bar statistics"
                     }
                 );
                 continue;
