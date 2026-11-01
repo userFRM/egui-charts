@@ -653,7 +653,7 @@ mod tests {
                 (Tool::Rect, true, true, true),
                 (Tool::Brush, false, false, false),
                 (Tool::TrendLine, false, true, true),
-                (Tool::TextLabel, true, false, true),
+                (Tool::TextLabel, false, false, true),
                 (Tool::Highlighter, false, false, false),
             ] {
                 let mut drawing = Drawing::new(7, tool);
