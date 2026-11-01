@@ -88,9 +88,9 @@ Builder API,Widget API and customization,Hide or show the main series,done,libra
 Builder API,Widget API and customization,Locale-aware date formatting,done,library,src/widget/frame.rs;src/scales/time_formatter.rs;Cargo.toml
 Builder API,Widget API and customization,Localisation of UI text,partial,library,src/localization.rs;src/ui/top_toolbar/components/layout_menu.rs;src/chart/renderers/trading_lines/mod.rs;src/chart/renderers/legend/mod.rs;src/ui/context_menu/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/study.rs;src/ui/context_menu/drawing.rs;src/ui/trading/view.rs;src/ui/trading/events.rs;src/ui/trading/account_panel/mod.rs;src/ui_kit/notifications/panel.rs;src/chart/renderers/tooltip.rs;src/chart/renderers/alert_levels.rs;src/chart/rendering/axes.rs;src/drawings/rendering/trading/position.rs;src/ui/timeframe_toolbar/date_picker.rs;src/ui/timeframe_toolbar/toolbar.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/ui/export.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/ui/widget_bar/panels/calendar.rs;src/ui/widget_bar/panels/chats.rs;src/ui/widget_bar/panels/hotlists.rs;src/ui/widget_bar/panels/news.rs;src/ui/widget_bar/panels/screener.rs;src/ui/widget_bar/panels/symbol_details.rs;src/ui/dialogs/indicator_dialog/templates.rs;src/ui/trading/ticket/form.rs;src/widget/stored_drawings.rs;src/ui_kit/status_message/mod.rs
 Builder API,Widget API and customization,Multiple charts per widget,done,library,src/widget/layout.rs;src/ui/multi_chart.rs
-Builder API,Widget API and customization,Price scale API,done,library,src/scales/pricescale.rs;src/widget/mod.rs;src/widget/series/options.rs;src/widget/frame.rs
+Builder API,Widget API and customization,Price scale API,done,library,src/scales/pricescale.rs;src/widget/mod.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/frame.rs
 Builder API,Widget API and customization,Screenshots,done,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed/mod.rs
-Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/series/options.rs;src/widget/time_scale.rs;src/widget/series/mod.rs
+Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/time_scale.rs;src/widget/series/mod.rs
 Builder API,Widget API and customization,Style overrides,partial,library,src/widget/mod.rs;src/widget/builder.rs;src/widget/frame.rs;src/config/chart.rs
 Builder API,Widget API and customization,Themes and custom colour schemes,done,library,src/widget/mod.rs;src/theme/context.rs;src/widget/frame.rs;src/chart/renderers/markers.rs;src/config/chart.rs;src/widget/palette.rs;src/model/markers.rs;src/theme/presets.rs;src/theme/style.rs
 Builder API,Widget API and customization,Toolbar customisation,done,library,src/ui/top_toolbar/host.rs;src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/config.rs;src/ui/top_toolbar/buttons.rs
@@ -139,10 +139,10 @@ Chart,Chart types,Step line,done,library,src/chart/rendering/candles/mod.rs;src/
 Chart,Chart types,Time Price Opportunity,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/tpo.rs;src/model/tpo.rs;src/model/session/exchange.rs;src/widget/frame.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/chart/rendering/candles/line.rs;src/tokens/mod.rs;src/tokens/semantic.rs;src/model/chart_type.rs
 Chart,Chart types,Volume candles,done,library,src/widget/frame.rs;src/chart/rendering/candles/candlestick.rs
 Chart,Chart types,Volume footprint,done,host,src/widget/feed/mod.rs;src/data/footprint.rs;src/widget/frame.rs;src/chart/overlays/footprint.rs;src/widget/merge.rs;benches/frame_time.rs;src/widget/feed/pump.rs
-Chart,Compare and overlay,Compare on a new price scale,done,host,src/model/series_scale.rs;src/widget/series/options.rs
+Chart,Compare and overlay,Compare on a new price scale,done,host,src/model/series_scale.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs
 Chart,Compare and overlay,Compare symbol,done,host,src/widget/series/options.rs
 Chart,Compare and overlay,Overlay a symbol on the same price scale,done,host,src/widget/series/options.rs;src/widget/series/mod.rs
-Chart,Compare and overlay,Percent scale when comparing,done,library,src/widget/series/options.rs;src/scales/pricescale.rs
+Chart,Compare and overlay,Percent scale when comparing,done,library,src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/scales/pricescale.rs
 Chart,Crosshair and interaction,Auto-scroll to realtime and jump-to-latest button,done,library,src/widget/series/mod.rs;src/widget/frame.rs;src/widget/time_scale.rs
 Chart,Crosshair and interaction,"Chart, series and drawing context menus",partial,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/drawing.rs;src/widget/drawing_api.rs;terminal/src/drawings.rs;terminal/src/studies.rs;src/ui/floating_toolbar/toolbar.rs;examples/demo/controller.rs
 Chart,Crosshair and interaction,Crosshair across all panes,done,library,src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs;src/widget/frame.rs
@@ -204,7 +204,7 @@ Chart,Panes,Collapse pane,done,library,src/widget/pane/mod.rs;src/widget/pane/co
 Chart,Panes,Maximize pane,done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs
 Chart,Panes,"Move indicator to another pane, merge, or new pane",done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs
 Chart,Panes,Move pane up or down,done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs
-Chart,Panes,Per-pane price scales,done,library,src/widget/pane/render/mod.rs;src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/series/options.rs
+Chart,Panes,Per-pane price scales,done,library,src/widget/pane/render/mod.rs;src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs
 Chart,Panes,Programmatic pane and series API,done,library,src/widget/pane/mod.rs;src/widget/series/options.rs;src/widget/series/mod.rs
 Chart,Panes,Remove pane,done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs
 Chart,Panes,Resize panes by dragging the separator,done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs
@@ -219,24 +219,24 @@ Chart,Scales and axes,Extended hours,done,host,src/widget/feed/mod.rs;src/widget
 Chart,Scales and axes,High and low price labels,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Chart,Scales and axes,Index-based time axis,done,library,src/model/timescale.rs;src/widget/frame.rs
 Chart,Scales and axes,Indexed to 100 scale,done,library,src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/studies/chart_state.rs;src/ui/dialogs/series_settings/tabs/scales.rs;src/widget/mod.rs
-Chart,Scales and axes,Indicator labels and last values on the scale,done,library,src/widget/frame.rs;src/chart/rendering/axes.rs;src/widget/settings/apply.rs;src/chart/renderers/study_scale.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/widget/series/options.rs;src/widget/volume.rs;src/studies/settings.rs
+Chart,Scales and axes,Indicator labels and last values on the scale,done,library,src/widget/frame.rs;src/chart/rendering/axes.rs;src/widget/settings/apply.rs;src/chart/renderers/study_scale.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/volume.rs;src/studies/settings.rs
 Chart,Scales and axes,Invert scale,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/scales/pricescale.rs;src/widget/frame.rs
 Chart,Scales and axes,Last price line and label,done,library,src/widget/frame.rs;src/chart/rendering/axes.rs;src/widget/settings/apply.rs;src/painting/dashed_line.rs;src/model/series_style.rs
-Chart,Scales and axes,Left price scale and moving the scale,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/widget/frame.rs;src/widget/series/options.rs;src/ui/context_menu/axis.rs
+Chart,Scales and axes,Left price scale and moving the scale,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/widget/frame.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/ui/context_menu/axis.rs
 Chart,Scales and axes,Lock price to bar ratio,done,library,src/ui/context_menu/axis.rs;src/widget/frame.rs;src/scales/pricescale.rs
 Chart,Scales and axes,Logarithmic scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/frame.rs;src/ui/context_menu/axis.rs;src/scales/pricescale_marks.rs
 Chart,Scales and axes,Maturity horizontal scale,done,library,src/scales/horizontal.rs;src/widget/time_scale.rs
-Chart,Scales and axes,Multiple price scales and pin to scale,done,library,src/model/series_scale.rs;src/widget/series/options.rs
+Chart,Scales and axes,Multiple price scales and pin to scale,done,library,src/model/series_scale.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs
 Chart,Scales and axes,Percent scale,done,library,src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/studies/chart_state.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/scales/price_formatter.rs
 Chart,Scales and axes,Previous close line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/rendering/axes.rs;src/painting/dashed_line.rs
-Chart,Scales and axes,Price label precision,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/chart/renderers/crosshair.rs;src/widget/series/options.rs;src/widget/frame.rs;src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/chart/rendering/axes.rs;src/chart/renderers/labels.rs
+Chart,Scales and axes,Price label precision,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/chart/renderers/crosshair.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/frame.rs;src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/chart/rendering/axes.rs;src/chart/renderers/labels.rs
 Chart,Scales and axes,Regular price scale,done,library,src/scales/pricescale.rs;src/studies/chart_state.rs;src/widget/frame.rs;src/scales/pricescale_marks.rs
 Chart,Scales and axes,Right offset,done,library,src/model/timescale.rs;src/widget/mod.rs;src/widget/builder.rs;src/widget/time_scale.rs;src/widget/pan_zoom.rs;src/widget/sync.rs
 Chart,Scales and axes,Right price scale,done,library,src/widget/mod.rs;src/widget/frame.rs;src/chart/renderers/labels.rs;src/chart/rendering/axes.rs
 Chart,Scales and axes,Scale margins,done,library,src/widget/settings/apply.rs;src/scales/pricescale.rs;src/widget/frame.rs
 Chart,Scales and axes,Session breaks,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/ui/context_menu/axis.rs;src/config/chart.rs;src/widget/palette.rs;src/model/session/exchange.rs;src/model/session/mod.rs;src/model/clock.rs
-Chart,Scales and axes,Symbol name label on the scale,done,library,;src/config/chart.rs;src/chart/rendering/axes.rs;src/widget/frame.rs;src/widget/series/options.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
-Chart,Scales and axes,Thousands grouping in price labels,done,library,src/config/chart.rs;src/scales/price_formatter.rs;src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/chart/rendering/axes.rs;src/chart/renderers/crosshair.rs;src/chart/renderers/labels.rs;src/chart/renderers/legend/mod.rs;src/widget/frame.rs;src/widget/pane/render/mod.rs;src/widget/series/options.rs
+Chart,Scales and axes,Symbol name label on the scale,done,library,;src/config/chart.rs;src/chart/rendering/axes.rs;src/widget/frame.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
+Chart,Scales and axes,Thousands grouping in price labels,done,library,src/config/chart.rs;src/scales/price_formatter.rs;src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/chart/rendering/axes.rs;src/chart/renderers/crosshair.rs;src/chart/renderers/labels.rs;src/chart/renderers/legend/mod.rs;src/widget/frame.rs;src/widget/pane/render/mod.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs
 Chart,Scales and axes,Time axis labels,partial,library,src/scales/timescale_marks.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/chart/renderers/labels.rs;src/widget/frame.rs;src/model/bar/time.rs;src/widget/time_scale.rs;src/styles/sizing.rs;src/model/timezone.rs;src/widget/merge.rs
 Chart,Scales and axes,Time zone selection,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/widget/time_scale.rs;src/model/bar/time.rs;src/chart/renderers/labels.rs;src/model/timezone.rs
 Drawings,Drawing management,Alerts on drawings,done,library,src/drawings/domain/drawing.rs;src/ui/context_menu/drawing.rs

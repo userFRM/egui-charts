@@ -2,6 +2,7 @@
 //! computed from them.
 
 mod options;
+mod scales;
 
 pub use options::SeriesOptions;
 pub(super) use options::{PriceSeries, SeriesLegend, base_line};
