@@ -62,13 +62,16 @@ pub(crate) struct FeedLink {
     pub(super) trades: Trades,
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
-    /// The trades as a footprint on the instrument's tick, while the chart type draws from them,
-    /// within [`FOOTPRINT_BARS`] and [`FOOTPRINT_ROWS`].
+    /// The trades as a footprint on the instrument's tick, while the chart type or a volume
+    /// profile drawing reads them, within [`FOOTPRINT_BARS`] and [`FOOTPRINT_ROWS`].
     pub(super) footprint: Option<Footprint>,
+    /// The footprint of the trades before the replay cutoff, while a replay runs under a visible
+    /// volume profile drawing, rebuilt when the cutoff moves.
+    pub(super) replay_footprint: Option<(chrono::DateTime<chrono::Utc>, Option<Footprint>)>,
     order_book: Option<OrderBook>,
     order_queue: Option<crate::data::OrderQueue>,
     /// The order book over time, when the host turned it on.
-    depth_history: Option<DepthHistory>,
+    pub(super) depth_history: Option<DepthHistory>,
     depth_complete: bool,
     /// Where older history continues after an empty page, by source: bars, trades, depth. The
     /// bar cursor keeps the oldest bar held when the feed named it and lapses once that bar goes.
@@ -83,7 +86,7 @@ pub(crate) struct FeedLink {
     /// A trade page reported that nothing exists before its oldest trade, or came back empty
     /// without `continue_before`: no trade before the oldest held one was missed.
     trades_from_start: bool,
-    heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
+    pub(super) heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
     /// How the live book is shown by the heatmap's profile and the depth ladder.
     book_view: crate::chart::overlays::OrderBookView,
     study_inputs: Vec<(crate::data::OrderFlowInput, u64)>,
@@ -122,7 +125,7 @@ impl FeedLink {
             self.bubbles = Some(self.bubbles(bubbles.config));
         }
         if self.footprint.is_some() {
-            self.footprint = self.footprint();
+            self.footprint = self.footprint(None);
         }
     }
 
@@ -149,7 +152,12 @@ impl FeedLink {
                 .bubbles
                 .as_ref()
                 .map(|bubbles| self.bubbles(bubbles.config.clone())),
-            footprint: self.footprint.is_some().then(|| self.footprint()).flatten(),
+            footprint: self
+                .footprint
+                .is_some()
+                .then(|| self.footprint(None))
+                .flatten(),
+            replay_footprint: self.replay_footprint.clone(),
             order_book: self.order_book.clone(),
             order_queue: self.order_queue.clone(),
             depth_history: self.depth_history.clone(),
@@ -170,15 +178,24 @@ impl FeedLink {
     /// The held trades as a footprint, or `None` without the instrument's tick size. A trade
     /// older than the one before it is left out, as it is when it arrives live. The bar of the
     /// oldest held trade is incomplete until a trade page reports the start of trade history.
-    fn footprint(&self) -> Option<Footprint> {
+    /// With `before`, includes only executions strictly before that replay cutoff.
+    pub(super) fn footprint(
+        &self,
+        before: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Option<Footprint> {
         let tick_size = self.instrument.as_ref()?.tick_size?;
         let mut flow = Footprint::new(self.clock.clone(), tick_size, 1).ok()?;
         flow.set_budget(FOOTPRINT_BARS, FOOTPRINT_ROWS);
-        for trade in self.trades.iter() {
+        let trades = || {
+            self.trades
+                .iter()
+                .take_while(|trade| before.is_none_or(|time| trade.ts < time))
+        };
+        for trade in trades() {
             let _ = flow.push(trade);
         }
         if let Some(lost) = self.trades.lost_until() {
-            flow.drop_through(lost, self.trades.iter());
+            flow.drop_through(lost, trades());
         }
         if let Some(first) = self.unconfirmed_start() {
             flow.received_from(first);
@@ -235,6 +252,7 @@ impl Chart {
             trades: Trades::new(TRADE_CAPACITY),
             bubbles: None,
             footprint: None,
+            replay_footprint: None,
             order_book: None,
             order_queue: None,
             depth_history: None,
@@ -547,23 +565,25 @@ impl Chart {
         }
     }
 
-    /// The order book of `series` the feed sent, if it holds one.
+    /// The order book of `series` the feed sent, if it holds one. Unavailable during candle-only
+    /// replay; attach a market replay driver for recorded book state.
     pub fn order_book(&self, series: SeriesId) -> Option<&OrderBook> {
         let link = self
             .feed_link
             .as_ref()
-            .filter(|_| series == SeriesId::MAIN)?;
+            .filter(|_| series == SeriesId::MAIN && self.replay.is_none())?;
         link.order_book.as_ref()
     }
 
     /// Individual resting orders and their queue priority, when the feed sends order-level data.
     /// Use `OrderQueue::aggregate` with a minimum size for filtered ladders or heatmaps, and
     /// `largest_order` for the largest resting order at a level. Aggregated-only feeds return
-    /// `None`; a lost order book has no orders until a replacement snapshot arrives.
+    /// `None`; a lost order book has no orders until a replacement snapshot arrives. Candle-only
+    /// replay hides the live queue.
     pub fn order_queue(&self, series: SeriesId) -> Option<&crate::data::OrderQueue> {
         self.feed_link
             .as_ref()
-            .filter(|_| series == SeriesId::MAIN)?
+            .filter(|_| series == SeriesId::MAIN && self.replay.is_none())?
             .order_queue
             .as_ref()
     }
@@ -620,7 +640,12 @@ impl Chart {
     /// releases textures and retains that history. Trade bubbles and best bid/ask lines can be
     /// enabled independently through the existing chart options.
     pub fn set_liquidity_heatmap(&mut self, enabled: bool) {
-        if enabled && self.depth_history(SeriesId::MAIN).is_none() {
+        if enabled
+            && self
+                .feed_link
+                .as_ref()
+                .is_none_or(|link| link.depth_history.is_none())
+        {
             self.set_depth_history(Some(
                 DepthHistory::new(Default::default()).expect("default depth history"),
             ));
@@ -635,6 +660,9 @@ impl Chart {
         painter: &egui::Painter,
         mapping: &crate::chart::coords::ChartMapping,
     ) {
+        if self.replay.is_some() {
+            return;
+        }
         let Some(link) = &self.feed_link else { return };
         let (Some(heatmap), Some(history), Some(tick)) = (
             &link.heatmap,
@@ -685,12 +713,12 @@ impl Chart {
     }
 
     /// The order book history of `series`, if [`set_depth_history`](Self::set_depth_history)
-    /// turned it on.
+    /// turned it on. Candle-only replay hides the live history.
     pub fn depth_history(&self, series: SeriesId) -> Option<&DepthHistory> {
         let link = self
             .feed_link
             .as_ref()
-            .filter(|_| series == SeriesId::MAIN)?;
+            .filter(|_| series == SeriesId::MAIN && self.replay.is_none())?;
         link.depth_history.as_ref()
     }
 

@@ -23,9 +23,9 @@ impl Chart {
         }
     }
 
-    /// Formats a timestamp with the chart's zone, clock visibility and the duration of the bars
-    /// in view (of the two bars nearest the view when fewer than two are in it), or a key as the
-    /// crosshair label of the [horizontal scale](Self::set_horizontal_scale) reads.
+    /// Formats a timestamp with the chart's zone, clock visibility and interval, or the median
+    /// spacing of the source bars in or nearest the view for inferred and trade-based intervals.
+    /// On a [horizontal scale](Self::set_horizontal_scale), formats its key as the crosshair does.
     /// Hosts can use this for data windows and other readouts beside the chart.
     pub fn format_time(&self, time: chrono::DateTime<chrono::Utc>) -> String {
         let bar_seconds = self.time_label_seconds();
@@ -110,9 +110,14 @@ impl Chart {
         crate::scales::bar_countdown(last.time, timeframe, now, self.bar_close_time.or(close))
     }
 
-    // Source-bar cadence sets precision even when many elements share one time. With fewer
-    // than two bars in view, the two bars nearest the view set it.
+    // Source-bar cadence sets precision even when many elements share one time.
     fn time_label_seconds(&self) -> i64 {
+        if let Some(timeframe) = self
+            .timeframe
+            .filter(|timeframe| !timeframe.is_trade_based())
+        {
+            return timeframe.duration().num_seconds();
+        }
         let bars = &self.state.data().bars;
         let shown = self.state.shown();
         // An empty range starts at 0 before the first bar and at the bar count after the last.
@@ -122,15 +127,20 @@ impl Chart {
         else {
             return 1;
         };
-        let end = bars.partition_point(|bar| bar.time <= last.time);
+        // At least 16 nearby source bars keep a lone session gap from setting the precision.
+        let end = bars
+            .partition_point(|bar| bar.time <= last.time)
+            .max(16)
+            .min(bars.len());
         let at = bars
             .partition_point(|bar| bar.time < first.time)
-            .min(end.saturating_sub(2));
-        bars.get(at)
-            .zip(bars.get(at + 1))
-            .map_or(1, |(left, right)| {
-                (right.time - left.time).num_seconds().abs()
-            })
+            .min(end.saturating_sub(16));
+        // Bounded, so a zoomed out view does not sort every visible gap on each frame.
+        let end = end.min(at + 256);
+        if end - at < 2 {
+            return 1;
+        }
+        crate::scales::median_bar_duration(bars[at..end].iter().map(|bar| bar.time)).num_seconds()
     }
 
     pub(super) fn display_timezone(&self) -> crate::scales::TimezoneMode {
@@ -461,6 +471,8 @@ impl Chart {
     /// Bars without complete executions are drawn as candles. While cells would be too narrow to
     /// read, every bar is, merged per pixel column when zoomed out.
     /// Price-based chart types keep their normal series because their x-axis is not time.
+    /// `config.studies` enables execution annotations with the `studies` feature;
+    /// `config.statistics` reserves a per-bar table below the price pane.
     pub fn show_footprint(
         &mut self,
         ui: &mut Ui,
@@ -830,12 +842,31 @@ impl Chart {
                 Sense::click_and_drag(),
             ));
         }
-        let layout = self.pane_layout_rects(
+        let mut layout = self.pane_layout_rects(
             rect,
             self.config.show_time_labels && shared_time_axis.is_none(),
         );
+        let time_axis_top = shared_time_axis.map_or(layout.price_rect.bottom(), |axis| axis.top());
+        let statistics_rect = footprint
+            .filter(|(_, config)| {
+                config.statistics
+                    && !self.chart_type.is_time_independent()
+                    && self.main_series_visible
+            })
+            .map(|_| {
+                let bottom = layout.price_rect.bottom();
+                let height = 112.0_f32.min(layout.price_rect.height().max(0.0) * 0.4);
+                layout.price_rect.max.y -= height;
+                if self.shows_volume() {
+                    layout.volume_rect =
+                        super::volume::overlay_rect(layout.price_rect, &self.config);
+                }
+                Rect::from_min_max(
+                    Pos2::new(layout.price_rect.left(), layout.price_rect.bottom()),
+                    Pos2::new(layout.price_rect.right(), bottom),
+                )
+            });
         let chart_rect = layout.price_rect;
-        let time_axis_top = shared_time_axis.map_or(chart_rect.bottom(), |axis| axis.top());
 
         self.handle_secondary_axes(ui, rect, chart_rect);
         let chart_width = chart_rect.width();
@@ -1125,6 +1156,7 @@ impl Chart {
 
         // Get visible range
         let (start_idx, end_idx) = self.state.visible_range();
+        let cutoff = self.replay_time();
         let (registry, bars) = if self.chart_type.is_time_independent() {
             (
                 &mut self.element_studies.studies,
@@ -1145,12 +1177,9 @@ impl Chart {
                 .iter()
                 .flat_map(|study| study.data_requests())
                 .collect();
-            let sources = self.study_data.data(
-                requests,
-                &self.symbol,
-                self.timeframe,
-                self.replay.as_ref().map(|replay| replay.time),
-            );
+            let sources = self
+                .study_data
+                .data(requests, &self.symbol, self.timeframe, cutoff);
             for at in super::studies::order(registry.indicators(), &self.study_ids) {
                 if let Some(crate::studies::StudySource::Study { id, .. }) =
                     registry.indicators()[at].source()
@@ -1355,6 +1384,7 @@ impl Chart {
                 &time_coords,
                 scale,
                 &self.chart_options.time_scale,
+                calendar.as_ref(),
                 |index| {
                     crate::model::time_at_with_timeframe(
                         self.state.shown(),
@@ -1810,7 +1840,13 @@ impl Chart {
                     .feed_link
                     .as_ref()
                     .and_then(|link| link.footprint.as_ref())
-                    .filter(|_| time_based && self.replay.is_none());
+                    .filter(|_| {
+                        time_based
+                            && self.replay.is_none()
+                            && (self.chart_type == ChartType::VolumeFootprint
+                                || (self.chart_type == ChartType::SessionVolumeProfile
+                                    && cfg!(feature = "studies")))
+                    });
                 let feed_config = feed.map(|_| FootprintConfig {
                     text_color: colors.text,
                     neutral_color: colors.text,
@@ -1904,13 +1940,20 @@ impl Chart {
                             flow,
                             config,
                         );
+                        #[cfg(feature = "studies")]
+                        crate::chart::overlays::render_footprint_annotations(
+                            &clipped_painter,
+                            &mapping,
+                            bars,
+                            flow,
+                            config,
+                            response.id,
+                        );
                     }
                     #[cfg(feature = "studies")]
                     if session_profiles
-                        && let Some(ranges) = session_ranges(
-                            bars,
+                        && let Some(ranges) = self.execution_profile_ranges(
                             start_idx + candles..start_idx + visible_data.len(),
-                            &bar_clock,
                         )
                     {
                         let profiles = crate::studies::trade_profiles(flow, &ranges);
@@ -1921,8 +1964,20 @@ impl Chart {
                             &profiles,
                             flow.price_step(),
                             flow.tick_size(),
+                            self.trade_profile_settings(),
                         );
                     }
+                }
+                if let Some(table) = statistics_rect
+                    && let Some((flow, config)) = host
+                {
+                    crate::chart::overlays::render_footprint_statistics(
+                        &painter,
+                        &self.get_chart_mapping().with_rect(table),
+                        self.bars(super::SeriesId::MAIN),
+                        flow,
+                        config.text_color,
+                    );
                 }
                 if let Some((_, Some(volume))) = &merged {
                     rendering::candles::volume::render_volume_bars(
@@ -3369,7 +3424,7 @@ impl Chart {
 /// The sessions of `clock` that the bars `shown` of `bars` belong to, each from the open of its
 /// first bar to the next session's.
 #[cfg(feature = "studies")]
-fn session_ranges(
+pub(super) fn session_ranges(
     bars: &[crate::model::Bar],
     shown: std::ops::Range<usize>,
     clock: &crate::model::BarClock,
@@ -3398,12 +3453,17 @@ fn session_ranges(
         });
     let close = bars
         .get(end)
-        .map_or(chrono::DateTime::<chrono::Utc>::MAX_UTC, |bar| bar.time);
-    let ends = starts.iter().skip(1).map(|&next| bars[next].time);
+        .map_or(chrono::DateTime::<chrono::Utc>::MAX_UTC, |bar| {
+            clock.bar_open(bar.time)
+        });
+    let ends = starts
+        .iter()
+        .skip(1)
+        .map(|&next| clock.bar_open(bars[next].time));
     let ranges = starts
         .iter()
         .zip(ends.chain([close]))
-        .map(|(&start, end)| bars[start].time..end)
+        .map(|(&start, end)| clock.bar_open(bars[start].time)..end)
         .collect();
     crate::studies::TradeProfileRanges::new(ranges).ok()
 }
@@ -3591,6 +3651,203 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The chart paints execution annotations and reserves a separate table; a live revisit
+    /// ends the originating zones and updates the table in the same frame.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn footprint_annotations_and_statistics_follow_executions() {
+        use crate::chart::overlays::FootprintConfig;
+        use crate::data::Footprint;
+        use crate::model::{Bar, BarClock, BarData, OrderSide, Tick, Timeframe};
+        use crate::studies::FootprintStudyConfig;
+        use crate::widget::{Chart, SeriesId};
+        use chrono::TimeDelta;
+        let start: chrono::DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (second, price, size, side) in [
+            (0, 100.0, 1.0, OrderSide::Sell),
+            (1, 100.0, 1.0, OrderSide::Buy),
+            (2, 101.0, 1.0, OrderSide::Sell),
+            (3, 101.0, 4.0, OrderSide::Buy),
+            (4, 102.0, 1.0, OrderSide::Sell),
+            (5, 102.0, 4.0, OrderSide::Buy),
+            (6, 103.0, 4.0, OrderSide::Buy),
+            (60, 110.0, 1.0, OrderSide::Buy),
+            (120, 110.0, 1.0, OrderSide::Buy),
+        ] {
+            flow.push(&Tick::new(
+                start + TimeDelta::seconds(second),
+                price,
+                size,
+                Some(side),
+            ))
+            .unwrap();
+        }
+        let mut bars = vec![
+            Bar::new(start, 100.0, 103.0, 100.0, 103.0, 16.0),
+            Bar::new(
+                start + TimeDelta::minutes(1),
+                110.0,
+                110.0,
+                110.0,
+                110.0,
+                1.0,
+            ),
+            Bar::new(
+                start + TimeDelta::minutes(2),
+                110.0,
+                110.0,
+                110.0,
+                110.0,
+                1.0,
+            ),
+        ];
+        let config = FootprintConfig {
+            auto_row_height: None,
+            show_poc: false,
+            statistics: true,
+            studies: Some(FootprintStudyConfig {
+                cluster_share: Some(0.3),
+                single_print_max: Some(2.0),
+                delta_percent: Some(62.5),
+                ratio: Some(4.0),
+                min_delta: 4.0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        let mut draw = |flow: &Footprint, bars: &[Bar], config: &FootprintConfig| {
+            chart.set_data(SeriesId::MAIN, bars.to_vec());
+            chart.apply_synced_time_scale(220.0, 1.0);
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show_footprint(ui, flow, config);
+                },
+            );
+            output.textures_delta.clear();
+            assert!(
+                chart.get_rendered_volume_rect().bottom()
+                    <= chart.get_rendered_price_rect().bottom()
+            );
+            (output.shapes, chart.get_chart_mapping())
+        };
+        for revisited in [false, true] {
+            if revisited {
+                flow.push(&Tick::new(
+                    start + TimeDelta::seconds(121),
+                    100.0,
+                    2.0,
+                    Some(OrderSide::Sell),
+                ))
+                .unwrap();
+                bars[2] = Bar::new(bars[2].time, 110.0, 110.0, 100.0, 100.0, 3.0);
+            }
+            let (shapes, map) = draw(&flow, &bars, &config);
+            let text = |expected: &str| {
+                shapes.iter().find_map(|s| match &s.shape {
+                    Shape::Text(t) if t.galley.text() == expected => Some(t),
+                    _ => None,
+                })
+            };
+            // First bar: 13 buys, 3 sells, volume 16, delta 10, delta share 62.5%.
+            for expected in [
+                "Vol 16",
+                "Bid 3",
+                "Ask 13",
+                "Delta 10",
+                "Delta % 62.5",
+                "Min -1",
+                "Max 10",
+                "Cluster",
+                "Single",
+                "Delta POC",
+            ] {
+                assert!(
+                    text(expected).is_some(),
+                    "missing {expected}, revisited={revisited}"
+                );
+            }
+            assert!(
+                text("Vol 16").unwrap().pos.y >= map.rect.bottom(),
+                "table overlaps prices"
+            );
+            assert!(text(if revisited { "CVD 10" } else { "CVD 12" }).is_some());
+            let stack_color = if revisited {
+                config.ask_color.gamma_multiply(0.45)
+            } else {
+                config.ask_color
+            };
+            let stack = shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    Shape::Rect(r)
+                        if r.stroke.color == stack_color
+                            && (r.rect.top() - map.price_to_y(103.5)).abs() < 0.01
+                            && (r.rect.bottom() - map.price_to_y(100.5)).abs() < 0.01 =>
+                    {
+                        Some(r)
+                    }
+                    _ => None,
+                })
+                .expect("diagonal ask stack at 101..103 follows its revisit state");
+            assert!((stack.rect.right() - (map.idx_to_x(2) + map.bar_spacing * 0.46)).abs() < 0.01);
+            let level_color = if revisited {
+                config.text_color.gamma_multiply(0.45)
+            } else {
+                config.text_color
+            };
+            for level in [100.0, 101.0] {
+                assert!(shapes.iter().any(|s| matches!(&s.shape, Shape::Rect(r)
+                    if r.stroke.color == level_color
+                        && (r.rect.top() - map.price_to_y(level + 0.5)).abs() < 0.01
+                        && (r.rect.bottom() - map.price_to_y(level - 0.5)).abs() < 0.01
+                        && (r.rect.right() - (map.idx_to_x(2) + map.bar_spacing * 0.46)).abs() < 0.01)),
+                    "unfinished low and naked POC follow their revisit state");
+            }
+            // Delta-share and ratio buy markers on all three bars, until the revisiting sell
+            // turns the last bar to delta -1 of 3 and an ask/bid ratio of 0.5.
+            assert_eq!(
+                shapes
+                    .iter()
+                    .filter(|s| matches!(&s.shape, Shape::Path(p)
+                if p.points.len() == 3 && p.fill == config.ask_color))
+                    .count(),
+                if revisited { 4 } else { 6 }
+            );
+        }
+        let (_, map) = draw(&flow, &bars, &config);
+        let mut grouped = config.clone();
+        grouped.auto_row_height = Some((map.price_to_y(104.0) - map.price_to_y(103.0)).abs() * 1.5);
+        let (shapes, map) = draw(&flow, &bars, &grouped);
+        // Two input rows per cell: 100..101 hold volume 7, delta 3; 102..103 hold 9, delta 7.
+        // Both POCs therefore move to the upper displayed cell, and neither extreme is <= 2.
+        assert!(shapes.iter().any(|s| matches!(&s.shape, Shape::Rect(r)
+            if r.stroke.color == config.text_color
+                && (r.rect.top() - map.price_to_y(103.5)).abs() < 0.01
+                && (r.rect.bottom() - map.price_to_y(101.5)).abs() < 0.01)));
+        assert!(!shapes.iter().any(|s| matches!(&s.shape, Shape::Text(t)
+                    if t.galley.text() == "Single" && t.pos.x < map.idx_to_x(0))));
+        let disabled = FootprintConfig {
+            studies: Some(FootprintStudyConfig {
+                stacked_imbalances: false,
+                naked_poc: false,
+                delta_poc: false,
+                unfinished_auctions: false,
+                ..Default::default()
+            }),
+            ..grouped
+        };
+        let (shapes, _) = draw(&flow, &bars, &disabled);
+        assert!(!shapes.iter().any(|s| matches!(&s.shape, Shape::Text(t)
+            if ["POC", "Delta POC", "Cluster", "Single", "UH", "UL", "Ask stack", "Bid stack"].contains(&t.galley.text()))));
     }
 
     /// The main series' legend actions hide it, request its settings and remove it through the
@@ -5054,6 +5311,153 @@ mod tests {
         }
     }
 
+    /// A session gap at the view's edge never changes minute precision. A known daily
+    /// interval keeps date precision even when the clock change makes one bar 23 hours long.
+    #[test]
+    fn time_precision_follows_the_interval_across_gaps_and_clock_changes() {
+        use crate::model::{Bar, BarData, LogicalRange, Timeframe};
+        use chrono::{Duration, TimeZone, Utc};
+        let session = |day, minutes| {
+            let open = Utc.with_ymd_and_hms(2024, 1, day, 14, 30, 0).unwrap();
+            (0..minutes).map(move |minute| {
+                Bar::new(
+                    open + Duration::minutes(minute),
+                    100.0,
+                    110.0,
+                    100.0,
+                    110.0,
+                    1.0,
+                )
+            })
+        };
+        // (Monday bars, left, right, bar formatted, expected)
+        for (monday, left, right, at, expected) in [
+            (390, 390.5, 450.5, 405, "Mon 08 Jan '24 14:45"),
+            (390, 389.5, 450.5, 405, "Mon 08 Jan '24 14:45"),
+            (1, 400.5, 460.5, 390, "Mon 08 Jan '24 14:30"),
+        ] {
+            for timeframe in [
+                Some(Timeframe::Min1),
+                None,
+                Some(Timeframe::Ticks(std::num::NonZeroU64::new(10).unwrap())),
+            ] {
+                let ctx = egui::Context::default();
+                let bars = session(5, 390).chain(session(8, monday)).collect();
+                let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+                if let Some(timeframe) = timeframe {
+                    chart.set_timeframe(timeframe);
+                }
+                chart.chart_options.tooltip.enabled = false;
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                assert!(chart.set_visible_logical_range(LogicalRange::new(left, right)));
+                let time = chart.state.data().bars[at].time;
+                assert_eq!(
+                    chart.format_time(time),
+                    expected,
+                    "{left}..{right}, {timeframe:?}"
+                );
+                if at as f32 >= left {
+                    let map = chart.get_chart_mapping();
+                    let painted = shapes(
+                        &ctx,
+                        &mut chart,
+                        0.1,
+                        vec![Event::PointerMoved(Pos2::new(
+                            map.idx_to_x(at),
+                            map.rect.center().y,
+                        ))],
+                    );
+                    assert!(
+                        painted.iter().any(|shape| matches!(shape,
+                            Shape::Text(text) if text.galley.text() == expected
+                        )),
+                        "crosshair: {left}..{right}, {timeframe:?}"
+                    );
+                }
+            }
+        }
+        #[cfg(feature = "timezones")]
+        for (left, right) in [(39.5, 69.5), (38.5, 68.5)] {
+            let ctx = egui::Context::default();
+            let first = Utc.with_ymd_and_hms(2024, 2, 1, 5, 0, 0).unwrap();
+            // New York midnight is 05:00Z through March 10, then 04:00Z from March 11.
+            let bars = (0..90)
+                .map(|day| {
+                    let time = first + Duration::days(day)
+                        - if day >= 39 {
+                            Duration::hours(1)
+                        } else {
+                            Duration::zero()
+                        };
+                    Bar::new(time, 100.0, 110.0, 100.0, 110.0, 1.0)
+                })
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Day1);
+            chart.chart_options.time_scale.timezone =
+                crate::scales::TimezoneMode::Timezone("America/New_York".parse().unwrap());
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            assert!(chart.set_visible_logical_range(LogicalRange::new(left, right)));
+            assert_eq!(
+                chart.format_time(chart.state.data().bars[39].time),
+                "Mar 11, 2024",
+                "{left}..{right}"
+            );
+        }
+    }
+
+    /// Sixty one-minute slots keep clock labels when a weekend is in view or in the
+    /// prefetched keys, and when an overnight gap falls inside the view.
+    #[test]
+    fn intraday_time_labels_keep_their_density_across_session_gaps() {
+        use crate::model::{Bar, BarData, LogicalRange, Timeframe};
+        use chrono::{Duration, TimeZone, Utc};
+        let bars: Vec<_> = [5, 8, 9]
+            .into_iter()
+            .flat_map(|day| {
+                let open = Utc.with_ymd_and_hms(2024, 1, day, 14, 30, 0).unwrap();
+                (0..390).map(move |minute| {
+                    Bar::new(
+                        open + Duration::minutes(minute),
+                        100.0,
+                        110.0,
+                        100.0,
+                        110.0,
+                        1.0,
+                    )
+                })
+            })
+            .collect();
+        for (name, left, right) in [
+            ("Monday only", 420.5, 480.5),
+            ("weekend left of the view", 390.5, 450.5),
+            ("weekend in view", 360.5, 420.5),
+            ("overnight in view", 750.5, 810.5),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars.clone()));
+            chart.config.show_volume = false;
+            chart.set_timeframe(Timeframe::Min1);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            assert!(chart.set_visible_logical_range(LogicalRange::new(left, right)));
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let labels: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text)
+                        if text.pos.y > plot.bottom() && text.pos.x < plot.right() =>
+                    {
+                        Some(text.galley.text())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let clocks = labels.iter().filter(|label| label.contains(':')).count();
+            assert!(clocks >= 3, "{name}: {labels:?}");
+        }
+    }
+
     #[test]
     fn time_visibility_flags_reach_axis_and_crosshair() {
         use crate::model::{Bar, BarData, Timeframe};
@@ -5114,51 +5518,150 @@ mod tests {
         }
     }
 
-    /// The whitespace on either side of a daily series is labelled only on weekdays the series
-    /// has bars on. After weekday bars ending on Thursday 30 or Friday 31 January 2025, February
-    /// is labelled on Monday 3, while a series with weekend bars labels Saturday 1. Before
-    /// weekday bars starting on Monday 2 December 2024, December is labelled on that Monday and
-    /// the whitespace on the weekdays before it, while a series with weekend bars labels
-    /// Sunday 1.
+    /// Whitespace on either side labels only the weekdays the daily series contains,
+    /// including clock changes that move local midnight across UTC midnight.
     #[test]
     fn whitespace_time_labels_skip_days_without_bars() {
-        use crate::model::{Bar, BarData};
-        use crate::scales::CustomTimeFormatter;
-        use chrono::{Datelike, Duration, TimeZone, Utc};
+        use crate::model::{Bar, BarData, Timeframe, TimezoneId};
+        use crate::scales::{CustomTimeFormatter, TimezoneMode};
+        use chrono::{Datelike, Duration, NaiveDate, TimeZone};
         use std::sync::Arc;
-        // (last day of January 2025, weekdays only, logical index at the right edge of the
-        // view or None for six slots past the last bar, a label expected in view)
-        for (last_day, weekdays, right, expected) in [
-            (30, true, None, "Mon 03"),
-            (31, true, None, "Mon 03"),
-            (30, false, None, "Sat 01"),
+        // (first and last local dates, weekdays only, logical right edge or None for a
+        // whitespace offset from the last bar, whitespace offset, zone, expected labels)
+        for (start, last, weekdays, right, offset, zone, expected) in [
+            (
+                "2024-12-02",
+                "2025-01-30",
+                true,
+                None,
+                6.0,
+                "UTC",
+                &["Mon 03"][..],
+            ),
+            (
+                "2024-12-02",
+                "2025-01-31",
+                true,
+                None,
+                6.0,
+                "UTC",
+                &["Mon 03"][..],
+            ),
+            (
+                "2024-12-02",
+                "2025-01-30",
+                false,
+                None,
+                6.0,
+                "UTC",
+                &["Sat 01"][..],
+            ),
             // Partly before the first bar: bar 0 at the right edge.
-            (30, true, Some(0.0), "Mon 25"),
-            (30, false, Some(0.0), "Sun 01"),
+            (
+                "2024-12-02",
+                "2025-01-30",
+                true,
+                Some(0.0),
+                0.0,
+                "UTC",
+                &["Mon 25"][..],
+            ),
+            (
+                "2024-12-02",
+                "2025-01-30",
+                false,
+                Some(0.0),
+                0.0,
+                "UTC",
+                &["Sun 01"][..],
+            ),
             // Wholly before the first bar.
-            (30, true, Some(-3.0), "Mon 25"),
-            (30, false, Some(-3.0), "Mon 25"),
+            (
+                "2024-12-02",
+                "2025-01-30",
+                true,
+                Some(-3.0),
+                0.0,
+                "UTC",
+                &["Mon 25"][..],
+            ),
+            (
+                "2024-12-02",
+                "2025-01-30",
+                false,
+                Some(-3.0),
+                0.0,
+                "UTC",
+                &["Mon 25"][..],
+            ),
+            // British summer midnight is 23:00Z on the previous date. The October
+            // change lies in whitespace; the March change lies in the final 16 bars.
+            (
+                "2026-09-01",
+                "2026-10-23",
+                true,
+                None,
+                10.0,
+                "Europe/London",
+                &["Mon 26", "Tue 27", "Wed 28", "Thu 29", "Fri 30"][..],
+            ),
+            (
+                "2026-02-02",
+                "2026-04-03",
+                true,
+                None,
+                10.0,
+                "Europe/London",
+                &["Mon 06", "Tue 07", "Wed 08", "Thu 09", "Fri 10"][..],
+            ),
+            // The same weekday rule applies before bars that begin after the March change.
+            (
+                "2026-03-30",
+                "2026-05-01",
+                true,
+                Some(-3.0),
+                0.0,
+                "Europe/London",
+                &["Fri 20", "Mon 23"][..],
+            ),
         ] {
-            let start = Utc.with_ymd_and_hms(2024, 12, 2, 0, 0, 0).unwrap();
-            let last = Utc.with_ymd_and_hms(2025, 1, last_day, 0, 0, 0).unwrap();
+            let Some(zone) = TimezoneId::named(zone) else {
+                continue;
+            };
+            let start: NaiveDate = start.parse().unwrap();
+            let last: NaiveDate = last.parse().unwrap();
             let bars: Vec<_> = (0..)
                 .map(|day| start + Duration::days(day))
-                .take_while(|time| *time <= last)
-                .filter(|time| !weekdays || time.weekday().number_from_monday() <= 5)
-                .map(|time| Bar::new(time, 100.0, 110.0, 100.0, 110.0, 1.0))
+                .take_while(|date| *date <= last)
+                .filter(|date| !weekdays || date.weekday().number_from_monday() <= 5)
+                .map(|date| {
+                    let time = zone
+                        .from_local_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
+                        .single()
+                        .unwrap()
+                        .to_utc();
+                    Bar::new(time, 100.0, 110.0, 100.0, 110.0, 1.0)
+                })
                 .collect();
-            let base = (bars.len() - 1) as f32;
+            let base = (bars.len() - 1) as f64;
             let ctx = egui::Context::default();
             let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
             chart.config.show_volume = false;
+            chart.set_timeframe(Timeframe::Day1);
+            chart.chart_options.time_scale.timezone = TimezoneMode::Timezone(zone.clone());
+            if zone.name() == "Europe/London" {
+                chart
+                    .chart_options
+                    .time_scale
+                    .tick_mark_max_character_length = 1;
+            }
             chart.set_time_formatter(Some(Arc::new(CustomTimeFormatter::new(|time, _| {
                 time.format("%a %d").to_string()
             }))));
             frame(&ctx, &mut chart, 0.0, vec![]);
-            // 80 points per bar.
             let scale = chart.state.time_scale_mut();
             scale.set_bar_spacing(80.0);
-            scale.set_right_offset(right.map_or(6.0, |right| right - base));
+            scale.set_right_offset(right.map_or(offset, |right| right - base));
             let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
             let plot = chart.get_rendered_price_rect();
             let labels: Vec<_> = painted
@@ -5172,12 +5675,17 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            let row = format!("{last_day} January, {right:?}: {labels:?}");
+            let row = format!("{zone}, {start}..{last}, {right:?}: {labels:?}");
             let weekend = labels
                 .iter()
                 .any(|label| label.starts_with("Sat") || label.starts_with("Sun"));
             assert!(!(weekdays && weekend), "{row}");
-            assert!(labels.iter().any(|label| label == expected), "{row}");
+            for expected in expected {
+                assert!(
+                    labels.iter().any(|label| label == expected),
+                    "{expected}: {row}"
+                );
+            }
         }
     }
 
@@ -5706,6 +6214,93 @@ mod tests {
                     chart.take_scale_settings_request(),
                     "settings button: {view}"
                 );
+            }
+        }
+        // A half-point spacing merges pairs. An empty view has the same labels and key
+        // count whether the last pair is complete (1,000 bars) or partial (1,001).
+        use crate::model::{Bar, BarData};
+        use crate::scales::{
+            CustomTimeFormatter, HorizontalScale, TickMark, TickMarkLayout, TimeFormatter,
+        };
+        use chrono::{DateTime, Duration, TimeZone, Utc};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Recorder {
+            keys: Arc<AtomicUsize>,
+            formatter: Box<dyn TimeFormatter>,
+        }
+        impl HorizontalScale for Recorder {
+            fn tick_marks(
+                &self,
+                points: &[(DateTime<Utc>, usize)],
+                layout: &TickMarkLayout,
+            ) -> Vec<TickMark> {
+                self.keys.store(points.len(), Ordering::Relaxed);
+                self.formatter.tick_marks(points, layout)
+            }
+            fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
+                self.formatter.as_ref().format_crosshair(time, bar_seconds)
+            }
+        }
+        for (left, right) in [(2427.0, 3854.0), (28131.0, 29558.0)] {
+            let mut control = None;
+            for count in [1000, 1001] {
+                let start = Utc.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).unwrap();
+                let bars = (0..count)
+                    .map(|day| {
+                        Bar::new(start + Duration::days(day), 100.0, 110.0, 100.0, 110.0, 1.0)
+                    })
+                    .collect();
+                let ctx = egui::Context::default();
+                let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+                chart.config.show_volume = false;
+                let mut options = chart.chart_options().clone();
+                options.time_scale.min_bar_spacing = 0.01;
+                chart.set_chart_options(options);
+                chart.set_time_formatter(Some(Arc::new(CustomTimeFormatter::new(|time, _| {
+                    time.format("%Y-%m-%d").to_string()
+                }))));
+                let keys = Arc::new(AtomicUsize::new(0));
+                chart.set_horizontal_scale(Some(Arc::new(Recorder {
+                    keys: keys.clone(),
+                    formatter: chart.build_time_formatter(),
+                })));
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                assert!(chart.set_visible_logical_range(LogicalRange::new(left, right)));
+                assert!(chart.state.visible_data().is_empty());
+                let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+                let plot = chart.get_rendered_price_rect();
+                let labels: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Text(text)
+                            if text.pos.y > plot.bottom() && text.pos.x < plot.right() =>
+                        {
+                            Some(text.galley.text().to_owned())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let keys = keys.load(Ordering::Relaxed);
+                let row = format!("{count} bars, {left}..{right}, {keys} keys");
+                let range = chart.state.time_scale().visible_logical_range();
+                assert!(
+                    (range.left - left).abs() < 0.01 && (range.right - right).abs() < 0.01,
+                    "{row}: {range:?}"
+                );
+                assert_eq!(chart.merge_groups.factor(), 2, "{row}");
+                assert!(labels.len() >= 3, "{row}: {labels:?}");
+                if let Some((expected_keys, expected_labels)) = &control {
+                    assert_eq!(&labels, expected_labels, "{row}");
+                    assert!(
+                        keys <= *expected_keys + 1,
+                        "{row}: {keys} keys vs {expected_keys}"
+                    );
+                } else {
+                    control = Some((keys, labels));
+                }
             }
         }
     }

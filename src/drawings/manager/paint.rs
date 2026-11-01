@@ -430,6 +430,8 @@ mod tests {
                                 y_to_price: &|y| f64::from((500.0 - y) / 10.0),
                                 time_axis: true,
                                 executions: None,
+                                timeframe: None,
+                                finer: &[],
                             },
                         );
                     },
@@ -589,6 +591,8 @@ mod tests {
                         y_to_price: &|y| 500.0 - f64::from(y),
                         time_axis: true,
                         executions: None,
+                        timeframe: None,
+                        finer: &[],
                     };
                     manager.render_all(ui.painter(), pane, &view);
                 })
@@ -671,6 +675,8 @@ mod tests {
                     y_to_price: &|y| 500.0 - f64::from(y),
                     time_axis: true,
                     executions: None,
+                    timeframe: None,
+                    finer: &[],
                 };
                 manager.render_all(ui.painter(), pane, &view);
             });

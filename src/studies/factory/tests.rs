@@ -172,7 +172,7 @@ fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
             study
                 .set_input(
                     "end_time",
-                    InputValue::Number(bars[599].time.timestamp_millis() as f64),
+                    InputValue::Text(bars[599].time.format("%Y-%m-%d %H:%M:%S").to_string()),
                 )
                 .unwrap();
         }

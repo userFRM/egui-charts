@@ -469,6 +469,7 @@ mod tests {
                     &coords,
                     &chart.build_time_formatter(),
                     &chart.chart_options.time_scale,
+                    chart.calendar_timezone().as_ref(),
                     |index| chart.index_to_time(index),
                 );
                 // Key indices are shifted by the slots the keys reach before the first bar.
@@ -653,9 +654,8 @@ mod tests {
         assert!(empty.save_drawings().is_err());
     }
 
-    /// A paste refuses other text, drawings of another symbol, drawings that could not all be
-    /// read and a chart without bars to place them, each with its own reason, before changing
-    /// any drawing.
+    /// A paste refuses other text, drawings that could not all be read and a chart without
+    /// bars to place them, each with its own reason, before changing any drawing.
     #[test]
     fn a_refused_paste_reports_why() {
         use crate::drawings::persistence::{LoadError, SkipReason};
@@ -669,9 +669,8 @@ mod tests {
         let copied = source.copy_selected_drawings().unwrap().unwrap();
         let newer = copied.replace("\"TrendLine\"", "\"NewerTool\"");
         type Refused = fn(&LoadError) -> bool;
-        let cases: [(&str, &str, bool, Refused); 4] = [
+        let cases: [(&str, &str, bool, Refused); 3] = [
             ("hello", "A", true, |e| matches!(e, LoadError::NotClipboard)),
-            (&copied, "B", true, |e| matches!(e, LoadError::OtherSymbol)),
             (&newer, "A", true, |e| {
                 matches!(e, LoadError::Skipped(s) if s.len() == 1
                     && matches!(&s[0].error, SkipReason::UnknownTool(t) if t.input == "NewerTool"))

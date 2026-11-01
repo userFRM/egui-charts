@@ -306,6 +306,8 @@ mod tests {
                         y_to_price: &|y| f64::from(y / 10.),
                         time_axis: true,
                         executions: None,
+                        timeframe: None,
+                        finer: &[],
                     },
                 );
             });
