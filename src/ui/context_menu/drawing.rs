@@ -4,6 +4,7 @@
 
 use crate::config::KeyboardAction;
 use crate::icons::icons as embedded_icons;
+use crate::localization as l10n;
 use crate::model::{Alert, AlertComparison, AlertCondition};
 use crate::theme::Theme;
 use crate::ui::context_menu::{MenuEntry, MenuItem, show_menu};
@@ -18,11 +19,21 @@ pub(crate) const DRAWING_MENU_OFFSET: f32 = 6.0;
 
 /// The panes of `chart` other than the one drawing `drawing_id`, the price pane last, by their
 /// stable ids and titles.
-pub(crate) fn move_targets(chart: &Chart, drawing_id: usize) -> Vec<(PaneId, String)> {
+pub(crate) fn move_targets(
+    ctx: Option<&Context>,
+    chart: &Chart,
+    drawing_id: usize,
+) -> Vec<(PaneId, String)> {
     let current = chart.drawing_pane(drawing_id);
-    let mut panes = super::study::other_panes(chart, current);
+    let mut panes = super::study::other_panes(ctx, chart, current);
     if current.is_some_and(|pane| pane != PaneId::MAIN) {
-        panes.push((PaneId::MAIN, "Main pane".into()));
+        panes.push((
+            PaneId::MAIN,
+            ctx.map_or_else(
+                || "Main pane".to_owned(),
+                |ctx| l10n::text(ctx, "Main pane"),
+            ),
+        ));
     }
     panes
 }
@@ -126,7 +137,7 @@ impl DrawingContextMenu {
 
     /// Open the menu on drawing `drawing_id` of `chart`, offering an alert when the chart has a
     /// symbol and the drawing has price levels, and the chart's other panes.
-    pub(crate) fn open_on(&mut self, chart: &Chart, pos: Pos2, drawing_id: usize) {
+    pub(crate) fn open_on(&mut self, ctx: &Context, chart: &Chart, pos: Pos2, drawing_id: usize) {
         let drawing = chart
             .drawings()
             .drawings
@@ -150,7 +161,7 @@ impl DrawingContextMenu {
                     },
                 ))
             });
-        self.panes = move_targets(chart, drawing_id);
+        self.panes = move_targets(Some(ctx), chart, drawing_id);
         self.open(pos, drawing_id);
     }
 
@@ -172,13 +183,18 @@ impl DrawingContextMenu {
     /// Build menu items for the drawing context menu
     pub(crate) fn build_menu_items(
         &self,
+        ctx: &Context,
         shortcuts: &crate::widget::ShortcutMap,
     ) -> Vec<MenuEntry<DrawingContextMenuAction>> {
         let alert = self.alert.iter().flat_map(|alert| {
             [
                 MenuEntry::Item(
                     MenuItem::new(
-                        format!("Add alert on {}…", self.drawing_type),
+                        l10n::format_text(
+                            ctx,
+                            "Add alert on {name}…",
+                            &[("name", l10n::text(ctx, &self.drawing_type).as_str())],
+                        ),
                         DrawingContextMenuAction::AddAlert(Box::new(alert.clone())),
                     )
                     .with_icon(&embedded_icons::ALERTS),
@@ -286,7 +302,7 @@ impl DrawingContextMenu {
         if !self.is_open {
             return;
         }
-        let entries = self.build_menu_items(shortcuts);
+        let entries = self.build_menu_items(ctx, shortcuts);
         let just_opened = std::mem::take(&mut self.just_opened);
         let id = Id::unique("drawing_context_menu");
         if let Some(action) = show_menu(
@@ -326,7 +342,7 @@ mod tests {
                 level.visible = visible.contains(&index);
             }
             chart.drawings_mut().drawings[0].fib_config = Some(config);
-            menu.open_on(&chart, Pos2::ZERO, 7);
+            menu.open_on(&Context::default(), &chart, Pos2::ZERO, 7);
             assert_eq!(
                 menu.alert.as_ref().map(|alert| &alert.condition),
                 visible

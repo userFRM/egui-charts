@@ -21,6 +21,7 @@ use std::collections::HashSet;
 
 use crate::config::KeyboardAction;
 use crate::icons::icons as embedded_icons;
+use crate::localization as l10n;
 use crate::model::{Capabilities, OrderRequest, OrderSide, OrderType};
 use crate::theme::Theme;
 use crate::ui::Control;
@@ -239,6 +240,7 @@ impl ChartContextMenu {
     /// Build the menu items based on current state
     fn build_menu_items(
         &self,
+        ctx: &Context,
         shortcuts: &crate::widget::ShortcutMap,
     ) -> Vec<MenuEntry<ContextMenuAction>> {
         let price_str = format_price(self.click_price);
@@ -253,7 +255,7 @@ impl ChartContextMenu {
             MenuEntry::Separator,
             // Clipboard section
             MenuEntry::Item(MenuItem::new(
-                format!("Copy price {price_str}"),
+                l10n::format_text(ctx, "Copy price {price}", &[("price", price_str.as_str())]),
                 ContextMenuAction::CopyPrice(self.click_price),
             )),
             MenuEntry::Separator,
@@ -263,7 +265,11 @@ impl ChartContextMenu {
         if !symbol.is_empty() && !self.hidden.contains(&Control::Alerts) {
             trading.push(MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add alert on {symbol} at {price_str}…"),
+                    l10n::format_text(
+                        ctx,
+                        "Add alert on {name} at {price}…",
+                        &[("name", symbol.as_str()), ("price", price_str.as_str())],
+                    ),
                     ContextMenuAction::AddAlert {
                         symbol: symbol.clone(),
                         price: self.click_price,
@@ -276,7 +282,11 @@ impl ChartContextMenu {
         if self.horizontal_line && self.click_price.is_finite() {
             trading.push(MenuEntry::Item(
                 MenuItem::new(
-                    format!("Draw horizontal line at {price_str}"),
+                    l10n::format_text(
+                        ctx,
+                        "Draw horizontal line at {price}",
+                        &[("price", price_str.as_str())],
+                    ),
                     ContextMenuAction::DrawHorizontalLine(self.click_price),
                 )
                 .with_icon(&embedded_icons::HORIZONTAL_LINE)
@@ -287,7 +297,11 @@ impl ChartContextMenu {
         }
         if !symbol.is_empty() && !self.watchlists.is_empty() {
             trading.push(MenuEntry::Submenu {
-                label: format!("Add {symbol} to watchlist"),
+                label: l10n::format_text(
+                    ctx,
+                    "Add {symbol} to watchlist",
+                    &[("symbol", symbol.as_str())],
+                ),
                 icon: Some(&embedded_icons::WATCHLIST),
                 entries: self
                     .watchlists
@@ -333,16 +347,26 @@ impl ChartContextMenu {
                     continue;
                 }
                 let request = OrderRequest::new(symbol, side, self.order_quantity, order_type);
-                let (verb, icon) = match side {
-                    OrderSide::Buy => ("Buy", &embedded_icons::LONG_POS),
-                    OrderSide::Sell => ("Sell", &embedded_icons::SHORT_POS),
+                let key = match (side, kind) {
+                    (OrderSide::Buy, "limit") => "Buy {quantity} {symbol} @ {price} limit",
+                    (OrderSide::Buy, _) => "Buy {quantity} {symbol} @ {price} stop",
+                    (OrderSide::Sell, "limit") => "Sell {quantity} {symbol} @ {price} limit",
+                    (OrderSide::Sell, _) => "Sell {quantity} {symbol} @ {price} stop",
+                };
+                let icon = match side {
+                    OrderSide::Buy => &embedded_icons::LONG_POS,
+                    OrderSide::Sell => &embedded_icons::SHORT_POS,
                 };
                 trading.push(MenuEntry::Item(
                     MenuItem::new(
-                        format!(
-                            "{verb} {} {symbol} @ {} {kind}",
-                            self.order_quantity,
-                            format_price(price)
+                        l10n::format_text(
+                            ctx,
+                            key,
+                            &[
+                                ("quantity", self.order_quantity.to_string().as_str()),
+                                ("symbol", symbol.as_str()),
+                                ("price", format_price(price).as_str()),
+                            ],
                         ),
                         ContextMenuAction::Order(request),
                     )
@@ -361,11 +385,15 @@ impl ChartContextMenu {
             // Indicator management
             MenuEntry::Item(if self.indicator_cnt > 0 {
                 MenuItem::new(
-                    format!(
-                        "Remove {} indicator{}",
-                        self.indicator_cnt,
-                        if self.indicator_cnt > 1 { "s" } else { "" }
-                    ),
+                    if self.indicator_cnt == 1 {
+                        l10n::text(ctx, "Remove 1 indicator")
+                    } else {
+                        l10n::format_text(
+                            ctx,
+                            "Remove {count} indicators",
+                            &[("count", self.indicator_cnt.to_string().as_str())],
+                        )
+                    },
                     ContextMenuAction::RemoveAllIndicators,
                 )
                 .danger()
@@ -433,7 +461,7 @@ impl ChartContextMenu {
         if !self.is_open {
             return;
         }
-        let entries = self.build_menu_items(shortcuts);
+        let entries = self.build_menu_items(ctx, shortcuts);
         if entries.is_empty() {
             self.close();
             return;
@@ -508,7 +536,7 @@ mod tests {
             menu.click_price = click;
             menu.order_types = types;
             let entries: Vec<_> = menu
-                .build_menu_items(&crate::widget::ShortcutMap::default())
+                .build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default())
                 .into_iter()
                 .filter_map(|entry| match entry {
                     MenuEntry::Item(MenuItem {
@@ -530,7 +558,7 @@ mod tests {
         let ctx = Context::default();
         ctx.set_os(egui::os::OperatingSystem::Nix);
         let shortcut = ChartContextMenu::new()
-            .build_menu_items(&crate::widget::ShortcutMap::default())
+            .build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default())
             .into_iter()
             .find_map(|entry| match entry {
                 MenuEntry::Item(item) if item.action == ContextMenuAction::ResetChart => {
@@ -544,5 +572,99 @@ mod tests {
             Some(KeyboardAction::ResetChart)
         );
         assert_eq!(ctx.format_shortcut(&shortcut), "Alt+R");
+    }
+    /// Value rows must reach the lookup as templates, including rounded order prices.
+    #[test]
+    fn value_rows_reach_the_translator() {
+        use crate::model::{Alert, AlertCondition};
+        use crate::ui::dialogs::{DrawingContextMenu, SeriesContextMenu};
+        use egui::{RawInput, Rect, Shape, Vec2, pos2};
+
+        let mut chart = ChartContextMenu::new();
+        chart.symbol = "1301".into();
+        chart.watchlists = vec!["7".into()];
+        chart.market_price = Some(100.0);
+        chart.tick_size = Some(1.0);
+        chart.order_quantity = 2.0;
+        chart.indicator_cnt = 2;
+        chart.horizontal_line = true;
+        chart.open(pos2(100.0, 100.0), 101.1);
+        let mut series = SeriesContextMenu::new();
+        series.set_context("1301", 101.1);
+        series.open(pos2(100.0, 100.0), crate::chart::series::SeriesId::MAIN);
+        let mut drawing = DrawingContextMenu::new();
+        drawing.set_context("Trend Line", false, true);
+        drawing.alert = Some(Alert::new("1301", AlertCondition::Crossing(100.0)));
+        drawing.open(pos2(100.0, 100.0), 1);
+        let surfaces: [(&str, &[&str]); 3] = [
+            (
+                "chart",
+                &[
+                    "~101.10~",
+                    "~1301~101.10~",
+                    "~1301~",
+                    "~2~1301~101.00~",
+                    "~2~",
+                ],
+            ),
+            ("series", &["~1301~101.10~", "~1301~", "~101.10~"]),
+            ("drawing", &["~~~"]),
+        ];
+        fn collect(shape: &Shape, texts: &mut Vec<String>) {
+            match shape {
+                Shape::Text(text) => texts.push(text.galley.text().to_owned()),
+                Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, texts)),
+                _ => {}
+            }
+        }
+        for (name, expected) in surfaces {
+            let ctx = Context::default();
+            crate::localization::mark_keys(&ctx);
+            let mut frame = || {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1440.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| match name {
+                        "chart" => chart.show(ui.ctx(), &Theme::dark()),
+                        "series" => series.show(ui.ctx(), &Theme::dark()),
+                        _ => drawing.show(ui.ctx(), &Theme::dark()),
+                    },
+                )
+            };
+            frame().drop_without_applying_deltas();
+            let output = frame();
+            let mut texts = Vec::new();
+            for clipped in &output.shapes {
+                collect(&clipped.shape, &mut texts);
+            }
+            output.drop_without_applying_deltas();
+            assert!(!texts.is_empty(), "{name}");
+            for text in &texts {
+                assert!(
+                    !text.chars().any(|c| c.is_ascii_alphabetic()),
+                    "{name}: {text}"
+                );
+            }
+            for expected in expected {
+                assert!(
+                    texts.iter().any(|text| text == *expected),
+                    "{name}: {expected}: {texts:?}"
+                );
+            }
+            if name == "chart" {
+                assert_eq!(
+                    texts
+                        .iter()
+                        .filter(|text| *text == "~2~1301~101.00~")
+                        .count(),
+                    2
+                );
+            }
+        }
     }
 }

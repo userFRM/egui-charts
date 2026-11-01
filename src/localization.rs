@@ -77,7 +77,11 @@ fn lookup(ctx: &Context, english: &str) -> Option<String> {
 pub(crate) fn substitute(template: &str, values: &[(&str, impl AsRef<str>)]) -> String {
     // Room for every value once: one allocation unless a translation repeats a placeholder.
     let mut output = String::with_capacity(
-        template.len() + values.iter().map(|(_, value)| value.as_ref().len()).sum::<usize>(),
+        template.len()
+            + values
+                .iter()
+                .map(|(_, value)| value.as_ref().len())
+                .sum::<usize>(),
     );
     let mut rest = template;
     while let Some(open) = rest.find('{') {
@@ -96,6 +100,36 @@ pub(crate) fn substitute(template: &str, values: &[(&str, impl AsRef<str>)]) -> 
     }
     output.push_str(rest);
     output
+}
+
+/// Installs a lookup that marks keys while preserving placeholders. Text with digits
+/// outside braces already holds a value and stays unchanged, exposing untranslated phrases.
+#[cfg(test)]
+pub(crate) fn mark_keys(ctx: &Context) {
+    set_translator(ctx, |key| {
+        if !key.chars().any(|c| c.is_ascii_alphabetic()) {
+            return None;
+        }
+        let mut marked = String::from("~");
+        let mut rest = key;
+        while let Some(open) = rest.find('{') {
+            if rest[..open].chars().any(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            rest = &rest[open..];
+            let Some(close) = rest.find('}') else {
+                break;
+            };
+            marked.push_str(&rest[..=close]);
+            marked.push('~');
+            rest = &rest[close + 1..];
+        }
+        if rest.chars().any(|c| c.is_ascii_digit()) {
+            None
+        } else {
+            Some(marked)
+        }
+    });
 }
 
 #[cfg(test)]
@@ -131,7 +165,10 @@ mod tests {
             ),
             (
                 "Name {name}, price {price}",
-                vec![("name", "{price}".to_owned()), ("price", "12.50".to_owned())],
+                vec![
+                    ("name", "{price}".to_owned()),
+                    ("price", "12.50".to_owned()),
+                ],
                 "12.50: {price}; {missing}; {",
             ),
             (

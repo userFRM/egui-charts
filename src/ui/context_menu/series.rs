@@ -5,6 +5,7 @@
 use crate::chart::series::SeriesId;
 use crate::config::KeyboardAction;
 use crate::icons::icons as embedded_icons;
+use crate::localization as l10n;
 use crate::theme::Theme;
 use crate::ui::Control;
 use crate::ui::context_menu::{MenuEntry, MenuItem, POINTER_GAP, format_price, show_menu};
@@ -109,25 +110,23 @@ impl SeriesContextMenu {
     /// Build menu items for the series context menu
     pub(crate) fn build_menu_items(
         &self,
+        ctx: &Context,
         shortcuts: &crate::widget::ShortcutMap,
     ) -> Vec<MenuEntry<SeriesContextMenuAction>> {
         let price_str = format_price(self.click_price);
         let symbol = &self.symbol;
         let has_symbol = !symbol.is_empty();
-        let of_symbol = |prep: &str| {
-            if has_symbol {
-                format!(" {prep} {symbol}")
-            } else {
-                String::new()
-            }
-        };
 
         let mut items = Vec::new();
         // An alert needs an instrument.
         if has_symbol && !self.hidden.contains(&Control::Alerts) {
             items.push(MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add alert on {symbol} at {price_str}…"),
+                    l10n::format_text(
+                        ctx,
+                        "Add alert on {name} at {price}…",
+                        &[("name", symbol.as_str()), ("price", price_str.as_str())],
+                    ),
                     SeriesContextMenuAction::AddAlert,
                 )
                 .with_icon(&embedded_icons::ALERTS)
@@ -137,14 +136,22 @@ impl SeriesContextMenu {
         items.extend([
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add indicator{}…", of_symbol("on")),
+                    if has_symbol {
+                        l10n::format_text(
+                            ctx,
+                            "Add indicator on {name}…",
+                            &[("name", symbol.as_str())],
+                        )
+                    } else {
+                        l10n::text(ctx, "Add indicator…")
+                    },
                     SeriesContextMenuAction::AddIndicator,
                 )
                 .with_icon(&embedded_icons::INDICATORS),
             ),
             MenuEntry::Separator,
             MenuEntry::Item(MenuItem::new(
-                format!("Copy price {price_str}"),
+                l10n::format_text(ctx, "Copy price {price}", &[("price", price_str.as_str())]),
                 SeriesContextMenuAction::CopyPrice,
             )),
             MenuEntry::Separator,
@@ -184,7 +191,7 @@ impl SeriesContextMenu {
         if !self.is_open {
             return;
         }
-        let entries = self.build_menu_items(shortcuts);
+        let entries = self.build_menu_items(ctx, shortcuts);
         if entries.is_empty() {
             self.close();
             return;

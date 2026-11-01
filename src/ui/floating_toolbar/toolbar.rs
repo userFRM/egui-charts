@@ -214,7 +214,7 @@ impl FloatingSelectionToolbar {
         self.stroke = Some((drawing.stroke_width, drawing.line_style));
         // Refresh context without reopening the menu or resetting its dismiss state.
         if !self.menu.is_open() {
-            self.menu.open_on(chart, self.position, id);
+            self.menu.open_on(ui.ctx(), chart, self.position, id);
             self.menu.close();
         }
         let action = self.show_with_shortcuts(ui, chart.shortcuts())?;
