@@ -72,7 +72,7 @@ Builder API,Save/load adapter,User settings persistence,done,host,src/services/s
 Builder API,Widget API and customization,Change interval at runtime,done,library,src/widget/feed/mod.rs;src/widget/events.rs
 Builder API,Widget API and customization,Change symbol at runtime,done,library,src/widget/feed/mod.rs;src/scales/pricescale.rs;src/widget/events.rs
 Builder API,Widget API and customization,Chart events,done,library,src/widget/events.rs;src/widget/feed/mod.rs;src/widget/series.rs;src/widget/frame.rs
-Builder API,Widget API and customization,Chart synchronisation,done,library,src/widget/sync.rs;src/widget/layout.rs;src/model/timescale.rs
+Builder API,Widget API and customization,Chart synchronisation,done,library,src/widget/sync.rs;src/widget/layout.rs;src/model/timescale.rs;src/widget/frame.rs;src/widget/export.rs
 Builder API,Widget API and customization,Chart type switching,done,library,src/widget/builder.rs;src/widget/frame.rs;src/chart/rendering/candles/mod.rs
 Builder API,Widget API and customization,Chart without toolbars,done,library,Cargo.toml;src/lib.rs;src/widget/builder.rs;src/widget/frame.rs
 Builder API,Widget API and customization,Context menu customisation,done,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs
@@ -86,7 +86,7 @@ Builder API,Widget API and customization,Locale-aware date formatting,done,libra
 Builder API,Widget API and customization,Localisation of UI text,done,library,src/localization.rs;src/ui/top_toolbar/components/layout_menu.rs;src/chart/renderers/trading_lines.rs;src/chart/renderers/legend/mod.rs
 Builder API,Widget API and customization,Multiple charts per widget,done,library,src/widget/layout.rs;src/ui/multi_chart.rs
 Builder API,Widget API and customization,Price scale API,done,library,src/scales/pricescale.rs;src/widget/mod.rs;src/widget/price_series.rs;src/widget/frame.rs
-Builder API,Widget API and customization,Screenshots,done,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed/mod.rs
+Builder API,Widget API and customization,Screenshots,done,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed/mod.rs;src/widget/sync.rs;src/widget/frame.rs
 Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/price_series.rs;src/widget/time_scale.rs;src/widget/series.rs
 Builder API,Widget API and customization,Style overrides,partial,library,src/widget/mod.rs;src/widget/builder.rs;src/widget/frame.rs;src/config/chart.rs
 Builder API,Widget API and customization,Themes and custom colour schemes,done,library,src/widget/mod.rs;src/theme/context.rs;src/widget/frame.rs;src/chart/renderers/markers.rs;src/config/chart.rs;src/widget/palette.rs;src/model/markers.rs;src/theme/presets.rs;src/theme/style.rs
@@ -190,7 +190,7 @@ Chart,Legend and data window,Volume in the status line,done,library,src/widget/s
 Chart,Multi-chart and sync,Grid layout presets,done,library,src/widget/layout.rs;src/ui/top_toolbar/components/chart_grid_selector.rs;src/ui/top_toolbar/toolbar.rs
 Chart,Multi-chart and sync,Multi-chart layout container,done,library,src/widget/layout.rs
 Chart,Multi-chart and sync,Symbol and interval sync groups,done,library,src/widget/layout.rs
-Chart,Multi-chart and sync,Sync crosshair,done,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame.rs
+Chart,Multi-chart and sync,Sync crosshair,done,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame.rs;src/widget/export.rs
 Chart,Multi-chart and sync,Sync date range,done,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs
 Chart,Multi-chart and sync,Sync drawings,done,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/stored_drawings.rs
 Chart,Multi-chart and sync,Sync interval,done,host,src/widget/layout.rs;src/widget/feed/mod.rs;src/widget/sync.rs;src/model/timescale.rs
@@ -393,7 +393,7 @@ Order flow,Order flow,Book speed,partial,library,src/data/order_flow.rs;src/stud
 Order flow,Order flow,Book thickness and resting-size delta over time,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/orders.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs
 Order flow,Order flow,"Bubble grouping: automatic, by time window, by price, tick grouping",done,library,src/chart/overlays/volume_bubbles.rs;src/model/clock.rs
 Order flow,Order flow,CVD drawn as candles,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/chart/series/mod.rs
-Order flow,Order flow,"Chart tabs, detached groups and shared crosshair",done,library,src/widget/layout.rs;src/widget/sync.rs
+Order flow,Order flow,"Chart tabs, detached groups and shared crosshair",done,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame.rs
 Order flow,Order flow,Connectors for futures data feeds with aggregated and order-level depth,partial,host,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs;examples/demo/orders.rs
 Order flow,Order flow,Cumulative aggressor volume delta with resets,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs
 Order flow,Order flow,Cumulative iceberg and stop counts over time with alerts,missing,host,
@@ -853,7 +853,7 @@ Terminal,Templates and layouts,"Create new, rename and make a copy of a layout",
 Terminal,Templates and layouts,Drawing serialisation for saved layouts,done,library,src/widget/anchors.rs;src/widget/snapshot.rs
 Terminal,Templates and layouts,Drawing templates,done,library,src/drawings/domain/template.rs;src/ui/dialogs/templates/dialog.rs;src/ui/dialogs/drawing_properties/dialog.rs
 Terminal,Templates and layouts,Export chart data to CSV,done,library,src/widget/export.rs
-Terminal,Templates and layouts,Export dialog image options,done,library,src/ui/export.rs;src/widget/export.rs;src/widget/svg.rs
+Terminal,Templates and layouts,Export dialog image options,done,library,src/ui/export.rs;src/widget/export.rs;src/widget/svg.rs;src/widget/sync.rs;src/widget/frame.rs
 Terminal,Templates and layouts,"Image sharing, hosted links and social posting",done,host,src/ui/top_toolbar/toolbar.rs;src/widget/export.rs
 Terminal,Templates and layouts,Indicator templates,done,library,src/studies/template.rs;src/ui/dialogs/templates/dialog.rs;src/ui/top_toolbar/toolbar.rs
 Terminal,Templates and layouts,Multi-chart layouts,done,library,src/widget/layout.rs
@@ -863,7 +863,7 @@ Terminal,Templates and layouts,Save chart layout,done,library,src/widget/snapsho
 Terminal,Templates and layouts,Share a layout by link,done,host,src/services/sharing.rs;src/ui/share_controls.rs;src/ui/top_toolbar/components/layout_menu.rs
 Terminal,Templates and layouts,Snapshot: copy image to clipboard,done,library,src/ui/export.rs;src/ui/top_toolbar/toolbar.rs
 Terminal,Templates and layouts,Snapshot: download the chart image,done,library,src/widget/export.rs;src/ui/top_toolbar/toolbar.rs
-Terminal,Templates and layouts,Sync between charts,done,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/sync.rs;src/model/timescale.rs
+Terminal,Templates and layouts,Sync between charts,done,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/sync.rs;src/model/timescale.rs;src/widget/frame.rs
 Terminal,Toolbars and panels,Bottom time bar,done,library,src/ui/timeframe_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs;src/theme/mod.rs
 Terminal,Toolbars and panels,Chart settings button and applying the dialog,done,library,src/ui/top_toolbar/toolbar.rs;src/widget/settings/apply.rs
 Terminal,Toolbars and panels,Chart type menu,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/chart_type_selector.rs

@@ -220,6 +220,7 @@ impl Chart {
             last_rendered_indicator_panes: Vec::new(),
             // Multi-chart sync
             synced_crosshair_bar_idx: None,
+            synced_crosshair_period: None,
             synced_crosshair_price: None,
             last_crosshair: None,
             last_hover_bar_idx: None,

@@ -353,7 +353,16 @@ impl Chart {
             theme.chart.bg = egui::Color32::TRANSPARENT;
         }
         chart.theme_override = Some(theme.clone());
-        if let Some((time, price)) = self.last_crosshair.filter(|_| options.include_crosshair) {
+        if options.include_crosshair
+            && self.last_hover_bar_idx.is_none()
+            && let Some(period) = self.synced_crosshair_period
+        {
+            chart.set_synced_crosshair(Some(period), self.synced_crosshair_price);
+            chart.chart_options.crosshair.horz_line_visible &=
+                self.synced_crosshair_price.is_some();
+        } else if let Some((time, price)) =
+            self.last_crosshair.filter(|_| options.include_crosshair)
+        {
             match price {
                 Some(price) => chart.set_crosshair_position(Some((time, price))),
                 None => {
