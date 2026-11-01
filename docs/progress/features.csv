@@ -396,7 +396,6 @@ Options,Options profile,Max pain from open interest,missing,host,
 Options,Options profile,Put/call ratios of volume and open interest,missing,host,
 Order flow,Order flow,"Depth heatmap, order book and volume bubble settings in the chart settings dialog",missing,library,
 Order flow,Order flow,"Footprints on tick, volume, range and delta intervals",missing,library,
-Order flow,Order flow,"Heatmap brightness, lower cutoff and full-intensity size",missing,library,
 Order flow,Order flow,"Prior-session POC, VAH and VAL extended until revisited, and developing value area lines",missing,library,
 Order flow,Order flow,Absorption detection,missing,host,
 Order flow,Order flow,Anchored developing VWAP drawing tool,done,library,src/drawings/rendering/trading/volume_profile.rs;src/drawings/rendering/mod.rs
@@ -508,7 +507,6 @@ Order flow,Order flow data model,Trade tick record with aggressor side,done,libr
 Order flow,Order flow,Cumulative delta divergence markers,missing,library,
 Order flow,Order flow,Delta exhaustion markers,missing,library,
 Order flow,Order flow,Footprint and session volume profile settings in the chart settings dialog,missing,library,
-Order flow,Order flow,Time and sales option to combine the fills of one order,missing,library,
 Studies,Custom studies,Custom studies reading other symbols or timeframes,done,library,src/studies/indicator_trait.rs;src/widget/studies_data.rs;src/widget/studies.rs;src/studies/settings.rs
 Studies,Custom studies,Custom study input metadata,done,library,src/studies/inputs.rs;src/studies/custom.rs;src/ui/dialogs/indicator_dialog/settings.rs
 Studies,Custom studies,Custom study plot and style metadata,done,library,src/studies/custom.rs;src/studies/indicator_trait.rs;src/studies/plots.rs;src/chart/renderers/indicator.rs;src/painting/dashed_line.rs
