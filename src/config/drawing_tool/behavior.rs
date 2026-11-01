@@ -78,6 +78,10 @@ impl DrawingToolType {
                 | Self::SineLine
                 | Self::AnchoredNote
                 | Self::FontIcon
+                | Self::ArrowMarkUp
+                | Self::ArrowMarkDown
+                | Self::ArrowMarkLeft
+                | Self::ArrowMarkRight
                 | Self::Sticker
         )
     }
@@ -93,7 +97,6 @@ impl DrawingToolType {
                 | Self::InfoLine
                 | Self::TrendAngle
                 | Self::Arrow
-                | Self::ArrowMarker
                 | Self::ParallelChannel
                 | Self::FlatTopBottom
                 | Self::DisjointChannel
@@ -169,7 +172,6 @@ impl DrawingToolType {
                 | Self::HorizontalRay
                 | Self::VerticalLine
                 | Self::Arrow
-                | Self::ArrowMarker
                 | Self::Path
                 | Self::Polyline
         )

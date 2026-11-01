@@ -756,6 +756,8 @@ mod tests {
     /// highlighter 16 px wide is hit within 8 px of its line, so a point 7 px off is on it and
     /// one 9 px off is not. The date range is a box between its anchors, so (150, 400) below it misses.
     /// The price range holds (120, 65), 15 px from its edges and 30 px from its centre.
+    /// The marker's head at x = 240 spans y = 200 +- 34.3. At x = 200 its shaft spans
+    /// y = 200 +- 14.2, leaving (200, 225) 10.8 px from the shaft and 30 px from the head.
     /// The ellipse in the box from (0, 0) to (200, 100) is lowest at (100, 100). Every drawing
     /// extends both ways where its tool can: the trend line from (100, 100) to (200, 150) runs on
     /// through (500, 300) and (0, 50). A head and shoulders on a neckline at y = 300 fills its
@@ -910,6 +912,18 @@ mod tests {
                 (50.0, 9.0),
                 None,
                 vec![(0.0, 0.0), (100.0, 0.0)],
+            ),
+            (
+                T::ArrowMarker,
+                (240.0, 230.0),
+                Some(7),
+                vec![(100.0, 200.0), (300.0, 200.0)],
+            ),
+            (
+                T::ArrowMarker,
+                (200.0, 225.0),
+                None,
+                vec![(100.0, 200.0), (300.0, 200.0)],
             ),
             (
                 T::PriceRange,
