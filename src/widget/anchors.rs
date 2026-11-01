@@ -395,6 +395,17 @@ mod tests {
                 date(2024, 1, 29),
                 date(2024, 1, 29),
             ),
+            // Quarter-second bars keep their milliseconds on both sides.
+            (
+                [0, 250, 500]
+                    .map(|ms| date(2024, 3, 4) + Duration::milliseconds(ms))
+                    .to_vec(),
+                Some(Timeframe::Ms250),
+                "UTC",
+                date(2024, 3, 4) - Duration::milliseconds(250),
+                date(2024, 3, 4) + Duration::milliseconds(750),
+                date(2024, 3, 4) + Duration::milliseconds(750),
+            ),
         ] {
             let last = times.len() - 1;
             let right_index = (last + 1) as f32;
@@ -435,11 +446,12 @@ mod tests {
                 assert_eq!(chart.index_to_time(index), Some(midpoint));
                 assert_eq!(chart.time_to_index(midpoint), Some(index));
             }
-            // The label keys must agree even if only the final bar is visible.
+            // The label keys must agree on both sides even if only the final bar is visible.
             let ctx = egui::Context::default();
             let painter =
                 egui::Painter::new(ctx, egui::LayerId::background(), egui::Rect::EVERYTHING);
-            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 300.0));
+            // 20 slots of 100 points reach before the first bar of every series here.
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2000.0, 300.0));
             let price = crate::scales::PriceMap::new(
                 crate::scales::PriceTransform::default(),
                 crate::scales::PriceRange::new(9.0, 12.0),
@@ -451,7 +463,7 @@ mod tests {
                 let coords = crate::chart::renderers::ChartMapping::new(
                     rect, 100.0, start, last, 5.0, price,
                 );
-                let (_, keys) = crate::chart::renderers::time_axis_marks(
+                let (_, keys, axis) = crate::chart::renderers::time_axis_marks(
                     &crate::chart::renderers::RenderContext::new(&painter, rect),
                     &chart.state.shown()[start..],
                     &coords,
@@ -459,12 +471,17 @@ mod tests {
                     &chart.chart_options.time_scale,
                     |index| chart.index_to_time(index),
                 );
-                assert_eq!(
-                    keys.iter()
-                        .find(|(_, index)| *index == right_index as usize)
-                        .map(|(time, _)| *time),
-                    Some(expected_right)
-                );
+                // Key indices are shifted by the slots the keys reach before the first bar.
+                let shift = (axis.base_idx - coords.base_idx) as f32;
+                for (index, expected) in [(-1.0, expected_left), (right_index, expected_right)] {
+                    assert_eq!(
+                        keys.iter()
+                            .find(|(_, key)| *key as f32 - shift == index)
+                            .map(|(time, _)| *time),
+                        Some(expected),
+                        "{timeframe:?}, key {index}"
+                    );
+                }
             }
             let saved = chart.save_drawings().unwrap().to_json().unwrap();
             chart.load_drawings(&saved).unwrap();

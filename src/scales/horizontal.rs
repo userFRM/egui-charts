@@ -36,8 +36,10 @@ pub struct TickMarkLayout {
 /// replaces it.
 pub trait HorizontalScale: Send + Sync {
     /// The marks to label among `points`, the key and logical index of each bar in view in
-    /// order, extended into whitespace using the chart's full-history time mapping. The
-    /// renderer places each mark at its key and skips labels that would overlap.
+    /// order, extended into whitespace on both sides using the chart's full-history time
+    /// mapping. When the keys reach before the first bar, every index is shifted by the same
+    /// number of slots, so only the order of the indices and their differences carry meaning.
+    /// The renderer places each mark at its key and skips labels that would overlap.
     fn tick_marks(
         &self,
         points: &[(DateTime<Utc>, usize)],
