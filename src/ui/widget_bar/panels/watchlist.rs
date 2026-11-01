@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use egui::text::LayoutJob;
 use egui::{
-    Align, Align2, Color32, EventFilter, FontId, Key, Label, Layout, Modifiers, RichText, Sense,
-    Shape, Stroke, TextStyle, Ui, pos2, vec2,
+    Align, Align2, EventFilter, Key, Label, Layout, Modifiers, RichText, Sense, Shape, Stroke,
+    TextStyle, Ui, pos2, vec2,
 };
 
 use super::market_details::WatchlistDetails;
@@ -20,6 +20,7 @@ use crate::data::inbox::Inbox;
 use crate::data::{CalendarEvent, NewsStory};
 use crate::icons::icons;
 use crate::model::Quote;
+use crate::painting::symbol_mark::paint_symbol_mark;
 use crate::scales::StudyFormat;
 use crate::services::{Listener, Quotes, ShareKind, Sharing};
 use crate::theme::ThemeExt;
@@ -307,8 +308,8 @@ impl WatchlistPanel {
         self.decimals.insert(symbol.to_owned(), decimals);
     }
 
-    /// Shows `mark`, such as the issuer's logo, in a circle before `symbol`. Without one, the
-    /// row shows the symbol's first letter on a neutral disc.
+    /// Shows `mark`, such as the issuer's logo, in a circle before `symbol`. Without one, or while
+    /// it loads or cannot be read, the row shows the symbol's first letter or digit on a neutral disc.
     pub fn set_mark(&mut self, symbol: &str, mark: egui::ImageSource<'static>) {
         self.marks.insert(symbol.to_owned(), mark);
     }
@@ -921,25 +922,12 @@ impl WatchlistPanel {
                                 pos2(cells[0].left(), rect.center().y - MARK_SIZE / 2.0),
                                 vec2(MARK_SIZE, MARK_SIZE),
                             );
-                            match marks.get(symbol.as_str()) {
-                                Some(source) => egui::Image::new(source.clone())
-                                    .corner_radius(MARK_SIZE / 2.0)
-                                    .paint_at(ui, mark),
-                                None => {
-                                    painter.circle_filled(
-                                        mark.center(),
-                                        MARK_SIZE / 2.0,
-                                        theme.ui.text_disabled,
-                                    );
-                                    painter.text(
-                                        mark.center(),
-                                        Align2::CENTER_CENTER,
-                                        symbol.chars().next().unwrap_or(' ').to_uppercase(),
-                                        FontId::proportional(MARK_SIZE / 2.0),
-                                        Color32::WHITE,
-                                    );
-                                }
-                            }
+                            paint_symbol_mark(
+                                &painter,
+                                mark,
+                                symbol,
+                                marks.get(symbol.as_str()).cloned(),
+                            );
                             ui.new_child(
                                 egui::UiBuilder::new()
                                     .max_rect(cells[0].with_min_x(mark.right() + 6.0))

@@ -65,12 +65,16 @@ impl Default for CandleColorConfig {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct StatusLineOptions {
-    /// Whether the legend shows the host's instrument logo before the title.
+    /// Whether the legend shows the symbol's logo before the title, or its initial on a neutral
+    /// disc without one.
     pub show_logo: bool,
     /// Whether the legend shows the instrument title.
     pub show_symbol: bool,
     /// Display the description instead of the ticker.
     pub title_as_description: bool,
+    /// Whether the legend shows the market status after the title: the session's state and
+    /// delayed or end-of-day data.
+    pub show_market_status: bool,
     /// Display current bid and ask controls.
     pub show_quote_boxes: bool,
     /// Display study names.
@@ -99,6 +103,7 @@ impl Default for StatusLineOptions {
             show_logo: true,
             show_symbol: true,
             title_as_description: true,
+            show_market_status: true,
             show_quote_boxes: true,
             show_indicator_titles: true,
             show_indicator_inputs: true,

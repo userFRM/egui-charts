@@ -400,6 +400,8 @@ pub struct Chart {
     // =========================================================================
     /// External crosshair position from synced chart (bar index)
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
+    /// Source period retained by time-based setters and resolved against the current bars.
+    synced_crosshair_period: Option<(DateTime<Utc>, DateTime<Utc>)>,
     /// Main-pane price of the external crosshair; `None` centres its horizontal line.
     synced_crosshair_price: Option<f64>,
     /// Time and main-pane price of the crosshair last drawn, for exported images.
@@ -578,7 +580,10 @@ impl Chart {
         self.currency_choice.take()
     }
 
-    /// Supplies a host-owned instrument image for the legend. `None` hides it.
+    /// Supplies an image for the legend's symbol mark in place of
+    /// [`Instrument::logo`](crate::model::Instrument::logo). `None` shows the instrument's logo,
+    /// or the symbol's initial without one;
+    /// [`ChartConfig::show_legend_badge`](crate::config::ChartConfig::show_legend_badge) hides the mark.
     pub fn set_legend_badge(&mut self, badge: Option<egui::ImageSource<'static>>) {
         self.legend_badge = badge;
     }

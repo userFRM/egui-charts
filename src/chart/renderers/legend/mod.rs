@@ -3,7 +3,9 @@
 use super::{price_decimals, semibold};
 use crate::chart::renderers::StyleColors;
 use crate::localization as l10n;
+use crate::model::session::MarketSession;
 use crate::model::{Bar, DataStatus, Instrument, Level1Quote, percent_change};
+use crate::painting::symbol_mark::paint_symbol_mark;
 use crate::studies::Indicator;
 use crate::theme::ThemeExt;
 use egui::{Color32, FontId, ImageSource, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
@@ -78,8 +80,17 @@ pub struct Legend<'a> {
     pub previous_close: Option<f64>,
     /// Current host quote, independent of `bar`. Invalid or crossed quotes are omitted.
     pub quote: Option<&'a Level1Quote>,
-    /// Optional host-owned instrument image.
+    /// Image for the symbol mark before the title, in place of the instrument's logo.
     pub badge: Option<ImageSource<'a>>,
+    /// Show the symbol mark before the title: [`badge`](Self::badge), else the instrument's
+    /// [`logo`](Instrument::logo), else the symbol's first letter or digit on a neutral disc.
+    pub show_logo: bool,
+    /// Show the market status after the title: the session's state, when known, and delayed or
+    /// end-of-day data.
+    pub show_market_status: bool,
+    /// State of the instrument's session at the chart's clock. Only a chart knows its clock, so a
+    /// standalone legend shows the data status alone.
+    pub(crate) session: Option<MarketSession>,
     /// Optional host-owned status marks.
     pub statuses: &'a [LegendStatus<'a>],
     /// Studies on the chart. Overlay studies retain a row while hidden so they can be shown again.
@@ -90,7 +101,7 @@ pub struct Legend<'a> {
     pub bar_index: usize,
     /// Whether this series has volume.
     pub show_volume: bool,
-    /// Display the instrument title and its host status marks.
+    /// Display the title row: the symbol mark, the instrument title and the status marks.
     pub show_title: bool,
     /// Whether the series is shown. A hidden series keeps its title and controls, dimmed, so it
     /// can be shown again.
@@ -134,6 +145,9 @@ impl<'a> Legend<'a> {
             previous_close: None,
             quote: None,
             badge: None,
+            show_logo: true,
+            show_market_status: true,
+            session: None,
             statuses: &[],
             studies: &[],
             study_inputs: &[],
@@ -211,54 +225,65 @@ impl<'a> Legend<'a> {
         #[cfg(feature = "icons")]
         let title_start = layout.pos;
         if self.show_title {
-            if let Some(badge) = &self.badge {
+            let image = self.badge.clone().or_else(|| {
+                self.instrument
+                    .and_then(|instrument| instrument.logo.as_deref())
+                    .map(ImageSource::from)
+            });
+            let mark_symbol = self
+                .instrument
+                .map_or(self.symbol, |instrument| instrument.symbol.as_str());
+            if self.show_logo && (image.is_some() || mark_symbol.chars().any(char::is_alphanumeric))
+            {
                 let rect = layout.reserve(Vec2::splat(18.0));
-                let mut badge_ui = ui.new_child(egui::UiBuilder::new().max_rect(bounds));
-                badge_ui.set_clip_rect(painter.clip_rect());
-                egui::Image::new(badge.clone()).paint_at(&badge_ui, rect);
+                // The title follows 5 points after the mark, closer than the layout's gap.
+                layout.pos.x = rect.right() + 5.0;
+                paint_symbol_mark(&painter, rect, mark_symbol, image);
             }
             let title = self.title();
-            // Delayed and end-of-day data are marked ahead of the host's own marks.
-            let data_status = match self
-                .instrument
-                .and_then(|instrument| instrument.data_status)
-            {
-                Some(DataStatus::Delayed) => Some(("D", "Delayed data")),
-                Some(DataStatus::EndOfDay) => Some(("E", "End-of-day data")),
-                _ => None,
+            let small = FontId::proportional(theme.text.small);
+            // The market status pill: the session's state, then delayed or end-of-day data.
+            let mut pill: Vec<(StatusGlyph, &'static str, Color32, f32)> = Vec::new();
+            if self.show_market_status {
+                if let Some(session) = self.session {
+                    let (label, color) = session_status(session, &theme);
+                    pill.push((StatusGlyph::Session(session), label, color, 20.0));
+                }
+                let data = match self
+                    .instrument
+                    .and_then(|instrument| instrument.data_status)
+                {
+                    Some(DataStatus::Delayed) => Some(("D", "Delayed data")),
+                    Some(DataStatus::EndOfDay) => Some(("E", "End-of-day data")),
+                    _ => None,
+                };
+                if let Some((text, label)) = data {
+                    let galley = painter.layout_no_wrap(
+                        l10n::text(ui.ctx(), text),
+                        small.clone(),
+                        theme.ui.warning,
+                    );
+                    let width = (galley.size().x + 8.0).max(20.0);
+                    pill.push((StatusGlyph::Text(galley), label, theme.ui.warning, width));
+                }
             }
-            .map(|(text, hint)| (l10n::text(ui.ctx(), text), hint));
-            let data_status = data_status.as_ref().map(|(text, hint)| {
-                let color = theme.ui.warning;
-                let background = color.gamma_multiply(0.15);
-                (
-                    LegendStatus {
-                        text,
-                        color,
-                        background,
-                    },
-                    *hint,
-                )
-            });
-            let statuses: Vec<_> = data_status
+            let pill_width: f32 = pill.iter().map(|(.., width)| width).sum();
+            let host_width = self
+                .statuses
                 .iter()
-                .map(|(status, hint)| (status, Some(*hint)))
-                .chain(self.statuses.iter().map(|status| (status, None)))
-                .collect();
-            let status_width = statuses
-                .iter()
-                .map(|(status, _)| {
+                .map(|status| {
                     painter
-                        .layout_no_wrap(
-                            status.text.to_owned(),
-                            FontId::proportional(theme.text.small),
-                            status.color,
-                        )
+                        .layout_no_wrap(status.text.to_owned(), small.clone(), status.color)
                         .size()
                         .x
                         + 16.0
                 })
                 .sum::<f32>();
+            let status_width = if pill.is_empty() {
+                0.0
+            } else {
+                pill_width + 8.0
+            } + host_width;
             let title_width = (bounds.right() - layout.pos.x - status_width - 64.0).max(0.0);
             layout.text(
                 title,
@@ -270,20 +295,44 @@ impl<'a> Legend<'a> {
                 },
                 title_width,
             );
-            for (status, hint) in statuses {
-                let galley = painter.layout_no_wrap(
-                    status.text.to_owned(),
-                    FontId::proportional(theme.text.small),
-                    status.color,
-                );
+            if !pill.is_empty() {
+                let pill_rect = layout.reserve(Vec2::new(pill_width, 18.0));
+                let (mut left, last) = (pill_rect.left(), pill.len() - 1);
+                for (index, (glyph, label, color, width)) in pill.into_iter().enumerate() {
+                    let rect = Rect::from_min_size(
+                        Pos2::new(left, pill_rect.top()),
+                        Vec2::new(width, 18.0),
+                    );
+                    left += width;
+                    // Opaque, so each glyph's contrast is fixed whatever is drawn beneath.
+                    let fill = theme.chart.bg.lerp_to_gamma(color, 0.15);
+                    let mut corners = egui::CornerRadius::from(theme.radius.sm);
+                    if index > 0 {
+                        (corners.nw, corners.sw) = (0, 0);
+                    }
+                    if index < last {
+                        (corners.ne, corners.se) = (0, 0);
+                    }
+                    painter.rect_filled(rect, corners, fill);
+                    paint_status_glyph(&painter, rect.center(), glyph, color, fill);
+                    let name = l10n::text(ui.ctx(), label);
+                    let response = ui
+                        .interact(
+                            rect.intersect(bounds),
+                            id.with(("market_status", index)),
+                            Sense::hover(),
+                        )
+                        .on_hover_text(name.clone());
+                    response
+                        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, &name));
+                }
+            }
+            for status in self.statuses {
+                let galley =
+                    painter.layout_no_wrap(status.text.to_owned(), small.clone(), status.color);
                 let rect = layout.reserve(Vec2::new(galley.size().x + 8.0, 18.0));
                 painter.rect_filled(rect, theme.radius.sm, status.background);
                 painter.galley(rect.center() - galley.size() / 2.0, galley, status.color);
-                if let Some(hint) = hint {
-                    let rect = rect.intersect(bounds);
-                    ui.interact(rect, id.with("data_status"), Sense::hover())
-                        .on_hover_text(l10n::text(ui.ctx(), hint));
-                }
             }
         }
         let precision = self.price_precision(self.bar.close);
@@ -941,6 +990,59 @@ pub(crate) fn study_controls(
     ([hide, settings, remove], menu)
 }
 
+/// A glyph of the market status pill.
+enum StatusGlyph {
+    Session(MarketSession),
+    Text(Arc<egui::Galley>),
+}
+
+/// The tooltip and accessible name of a session state, and the colour of its glyph.
+fn session_status(session: MarketSession, theme: &crate::theme::Theme) -> (&'static str, Color32) {
+    match session {
+        MarketSession::Open => ("Market open", theme.ui.success),
+        MarketSession::PreMarket => ("Pre-market", theme.ui.warning),
+        MarketSession::PostMarket => ("Post-market", theme.ui.info),
+        MarketSession::Closed => ("Market closed", theme.ui.text_muted),
+    }
+}
+
+/// Paints `glyph` centred on `center` in `color`, over a segment filled with `fill`.
+fn paint_status_glyph(
+    painter: &egui::Painter,
+    center: Pos2,
+    glyph: StatusGlyph,
+    color: Color32,
+    fill: Color32,
+) {
+    match glyph {
+        StatusGlyph::Session(MarketSession::Open) => {
+            painter.circle_filled(center, 4.0, color);
+        }
+        StatusGlyph::Session(MarketSession::PreMarket) => {
+            // A rising sun: a core and eight short rays.
+            painter.circle_filled(center, 2.0, color);
+            for ray in 0..8 {
+                let direction = Vec2::angled(ray as f32 * std::f32::consts::TAU / 8.0);
+                painter.line_segment(
+                    [center + direction * 3.5, center + direction * 5.0],
+                    Stroke::new(1.2, color),
+                );
+            }
+        }
+        StatusGlyph::Session(MarketSession::PostMarket) => {
+            // A crescent: a disc with an offset disc of the segment's fill cut out of it.
+            painter.circle_filled(center, 4.0, color);
+            painter.circle_filled(center + Vec2::new(2.0, -1.5), 3.5, fill);
+        }
+        StatusGlyph::Session(MarketSession::Closed) => {
+            painter.circle_stroke(center, 3.5, Stroke::new(1.5, color));
+        }
+        StatusGlyph::Text(galley) => {
+            painter.galley(center - galley.size() / 2.0, galley, color);
+        }
+    }
+}
+
 struct Layout<'a> {
     painter: &'a egui::Painter,
     bounds: Rect,
@@ -1291,6 +1393,233 @@ fn format_volume(volume: f64) -> String {
     format!("{volume:.0}")
 }
 
+#[cfg(test)]
+mod mark_tests {
+    use super::*;
+
+    /// Session and data glyphs have distinct shapes, readable contrast and accessible names.
+    /// The status toggle leaves host marks and the logo independent.
+    #[test]
+    fn legend_names_the_market_state_and_hides_it_independently() {
+        use crate::theme::contrast;
+        use MarketSession::{Closed, Open, PostMarket, PreMarket};
+        use egui::Shape;
+        for (_, theme) in crate::theme::presets() {
+            for (session, data, shown, labels) in [
+                (Some(Open), None, true, &["Market open"][..]),
+                (
+                    Some(PreMarket),
+                    Some(DataStatus::Delayed),
+                    true,
+                    &["Pre-market", "Delayed data"][..],
+                ),
+                (
+                    Some(PostMarket),
+                    Some(DataStatus::EndOfDay),
+                    true,
+                    &["Post-market", "End-of-day data"][..],
+                ),
+                (Some(Closed), None, true, &["Market closed"][..]),
+                (Some(Open), Some(DataStatus::Delayed), false, &[][..]),
+                (None, Some(DataStatus::Delayed), true, &["Delayed data"][..]),
+                (None, Some(DataStatus::Realtime), true, &[][..]),
+            ] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.enable_accesskit();
+                let mut instrument = Instrument::new("ABC");
+                instrument.data_status = data;
+                let bar = Bar::new(chrono::Utc::now(), 1.0, 2.0, 0.0, 1.0, 0.0);
+                let host = [LegendStatus {
+                    text: "HALT",
+                    color: theme.ui.text,
+                    background: theme.ui.panel_bg_secondary,
+                }];
+                let mut output = ctx.run_ui(Default::default(), |ui| {
+                    let mut legend = Legend::new("ABC", "1h", &bar);
+                    legend.instrument = Some(&instrument);
+                    legend.session = session;
+                    legend.show_market_status = shown;
+                    legend.statuses = &host;
+                    legend.show(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0)));
+                });
+                output.textures_delta.clear();
+                let update = output.platform_output.accesskit_update.as_ref().unwrap();
+                let mut nodes: Vec<_> = update
+                    .nodes
+                    .iter()
+                    .map(|(_, node)| node)
+                    .filter(|node| node.role() == egui::Role::Image)
+                    .collect();
+                nodes.sort_by(|a, b| a.bounds().unwrap().x0.total_cmp(&b.bounds().unwrap().x0));
+                assert_eq!(
+                    nodes
+                        .iter()
+                        .map(|node| node.label().unwrap())
+                        .collect::<Vec<_>>(),
+                    labels
+                );
+                let title = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.galley.text() == "ABC · 1h" => Some(text),
+                        _ => None,
+                    })
+                    .unwrap();
+                let mut left = title.pos.x + title.galley.size().x + 8.0;
+                for (index, node) in nodes.iter().enumerate() {
+                    let bounds = node.bounds().unwrap();
+                    let rect = Rect::from_min_size(egui::pos2(left, 9.0), Vec2::new(20.0, 18.0));
+                    assert_eq!(
+                        (bounds.x0, bounds.y0, bounds.x1, bounds.y1),
+                        (
+                            rect.left() as f64,
+                            rect.top() as f64,
+                            rect.right() as f64,
+                            rect.bottom() as f64
+                        )
+                    );
+                    let fill = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            Shape::Rect(segment) if segment.rect == rect => Some(segment.fill),
+                            _ => None,
+                        })
+                        .expect("pill segment");
+                    let color = match labels[index] {
+                        "Market open" => theme.ui.success,
+                        "Pre-market" | "Delayed data" | "End-of-day data" => theme.ui.warning,
+                        "Post-market" => theme.ui.info,
+                        "Market closed" => theme.ui.text_muted,
+                        _ => unreachable!(),
+                    };
+                    let letter = labels[index].ends_with("data");
+                    assert!(contrast(color, fill) >= if letter { 4.5 } else { 3.0 });
+                    let glyph = output.shapes.iter().any(|shape| match &shape.shape {
+                        Shape::Circle(circle) if rect.contains(circle.center) => {
+                            if labels[index] == "Market closed" {
+                                circle.stroke.color == color && circle.stroke.width == 1.5
+                            } else {
+                                circle.fill == color
+                                    && circle.radius
+                                        == if labels[index] == "Pre-market" {
+                                            2.0
+                                        } else {
+                                            4.0
+                                        }
+                            }
+                        }
+                        Shape::Text(text) if letter => {
+                            text.fallback_color == color
+                                && rect.contains_rect(Rect::from_min_size(
+                                    text.pos,
+                                    text.galley.size(),
+                                ))
+                        }
+                        _ => false,
+                    });
+                    assert!(glyph, "{} glyph", labels[index]);
+                    left += 20.0;
+                }
+                for label in ["A", "HALT"] {
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.text() == label)));
+                }
+                if !shown {
+                    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.text() == "D")));
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    /// The mark uses the host override, then the instrument logo, then an initial, and the
+    /// title keeps its five-point gap. Hiding the title or logo removes the mark.
+    #[test]
+    fn legend_marks_the_symbol_before_its_title() {
+        for (_, theme) in crate::theme::presets() {
+            for (badge, logo, shown, title, symbol) in [
+                (true, false, true, true, "ABC"),
+                (true, true, true, true, "ABC"),
+                (false, true, true, true, "ABC"),
+                (false, false, true, true, "ABC"),
+                (true, true, false, true, "ABC"),
+                (false, false, true, false, "ABC"),
+                (false, false, true, true, ""),
+            ] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let texture = ctx.load_texture(
+                    "badge",
+                    egui::ColorImage::filled([18, 18], Color32::BLUE),
+                    Default::default(),
+                );
+                // Without image loaders the instrument's logo stays unreadable.
+                #[cfg(feature = "icons")]
+                {
+                    egui_extras::install_image_loaders(&ctx);
+                    ctx.include_bytes("bytes://logo.svg", br#"<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"><circle cx="9" cy="9" r="9" fill="blue"/></svg>"#);
+                }
+                let logo_ready = logo && cfg!(feature = "icons");
+                let mut instrument = Instrument::new(symbol);
+                if logo {
+                    instrument = instrument.with_logo("bytes://logo.svg");
+                }
+                let bar = Bar::new(chrono::Utc::now(), 1.0, 2.0, 0.0, 1.0, 0.0);
+                let mut output = ctx.run_ui(Default::default(), |ui| {
+                    let mut legend = Legend::new(symbol, "1h", &bar);
+                    legend.instrument = Some(&instrument);
+                    legend.badge = badge
+                        .then(|| ImageSource::Texture((texture.id(), Vec2::splat(18.0)).into()));
+                    legend.show_logo = shown;
+                    legend.show_title = title;
+                    legend.show(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0)));
+                });
+                output.textures_delta.clear();
+                let mark = shown && title && (badge || !symbol.is_empty());
+                let images: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.fill_texture_id() != egui::TextureId::default() =>
+                        {
+                            Some(rect.fill_texture_id() == texture.id())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                // One image, the badge's when supplied, else the instrument's ready logo.
+                let image = (mark && (badge || logo_ready)).then_some(badge);
+                assert_eq!(images, Vec::from_iter(image));
+                let letters = output
+                    .shapes
+                    .iter()
+                    .filter(|shape| {
+                        matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.text() == "A")
+                    })
+                    .count();
+                assert_eq!(letters, usize::from(mark && !badge && !logo_ready));
+                if title {
+                    let label = if symbol.is_empty() { "1h" } else { "ABC · 1h" };
+                    let text = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == label => Some(text),
+                            _ => None,
+                        })
+                        .expect("title");
+                    assert_eq!(text.pos.x, theme.spacing.lg + if mark { 23.0 } else { 0.0 });
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+}
+
 #[cfg(all(test, feature = "studies"))]
 mod tests {
     use super::*;
@@ -1612,7 +1941,7 @@ mod tests {
                 .collect();
             assert_eq!(titles.len(), 2);
             for (index, title) in titles.iter().enumerate() {
-                assert_eq!(title.pos.x, index as f32 * 600.0 + 8.0);
+                assert_eq!(title.pos.x, index as f32 * 600.0 + 31.0);
                 assert_eq!(title.galley.job.sections[0].format.font_id.size, 13.0);
             }
             let buttons: Vec<_> = second

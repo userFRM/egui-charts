@@ -282,12 +282,13 @@ impl Drawing {
                     .map(|w| [w[0], w[1]])
                     .collect();
             }
-            T::Pitchfork | T::SchiffPitchfork | T::ModifiedSchiffPitchfork | T::InsidePitchfork => {
+            T::Pitchfork
+            | T::SchiffPitchfork
+            | T::ModifiedSchiffPitchfork
+            | T::InsidePitchfork
+            | T::Pitchfan => {
                 outline.lines = self.pitchfork_lines(rect)?;
                 outline.areas = self.pitchfork_bands(rect);
-            }
-            T::Pitchfan => {
-                outline.lines = pitchfork::pitchfan_lines(first, second, *p.get(2)?, rect)
             }
             T::GannFan => {
                 let config = self.gann_config();
@@ -462,7 +463,7 @@ impl Drawing {
             DrawingToolType::ArrowMarkRight => self.render_horizontal_mark(painter, 1.0),
 
             // Additional tools
-            DrawingToolType::Pitchfan => self.render_pitchfan(painter, rect),
+            DrawingToolType::Pitchfan => self.render_pitchfork(painter, rect),
             DrawingToolType::Sector => self.render_sector(painter),
             DrawingToolType::Path => self.render_path(painter),
             DrawingToolType::Curve => self.render_curve(painter),

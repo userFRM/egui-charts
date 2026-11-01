@@ -131,6 +131,7 @@ mod tests {
             (Tool::SchiffPitchfork, "Pitchfork levels"),
             (Tool::ModifiedSchiffPitchfork, "Pitchfork levels"),
             (Tool::InsidePitchfork, "Pitchfork levels"),
+            (Tool::Pitchfan, "Pitchfork levels"),
             (Tool::GannBox, "Price levels"),
             (Tool::GannSquare, "Price levels"),
             (Tool::GannFixed, "Price levels"),

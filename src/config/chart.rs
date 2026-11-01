@@ -55,6 +55,12 @@ fn pane_buttons_on_hover() -> NavigationButtons {
     NavigationButtons::OnHover
 }
 
+/// Older saved configurations show the market status, as they showed delayed and end-of-day
+/// data marks.
+fn market_status_shown() -> bool {
+    true
+}
+
 /// Layouts saved before `thousands_sep` existed group thousands like a new chart.
 fn group_thousands_with_comma() -> Option<char> {
     Some(',')
@@ -317,8 +323,13 @@ pub struct ChartConfig {
     pub show_legend_volume: bool,
     /// Show host-supplied study inputs in the legend.
     pub show_indicator_inputs: bool,
-    /// Show the host's legend badge, such as the instrument logo, before the title.
+    /// Show the symbol's logo before the legend title: the legend badge, else the instrument's
+    /// logo, else the symbol's initial on a neutral disc.
     pub show_legend_badge: bool,
+    /// Show the market status after the legend title: the session's state and delayed or
+    /// end-of-day data.
+    #[serde(default = "market_status_shown")]
+    pub show_market_status: bool,
     /// Show the change of the last price from the previous session's close in the legend.
     pub show_last_day_change: bool,
     /// Opacity of the study rows' backdrop, from 0 to 1.
@@ -509,6 +520,7 @@ impl Default for ChartConfig {
             show_legend_volume: true,
             show_indicator_inputs: true,
             show_legend_badge: true,
+            show_market_status: true,
             show_last_day_change: false,
             indicator_backdrop_opacity: 0.6,
             show_currency: true,

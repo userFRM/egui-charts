@@ -1,12 +1,11 @@
 //! Compare symbols dialog.
 
-use super::row::{
-    SEARCH_RADIUS, SYMBOL_ROW_HEIGHT, paint_symbol_mark, paint_symbol_text, search_backdrop,
-};
+use super::row::{SEARCH_RADIUS, SYMBOL_ROW_HEIGHT, paint_symbol_text, search_backdrop};
 use super::service::Search;
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::model::Instrument;
+use crate::painting::symbol_mark::paint_symbol_mark;
 use crate::services::{Storage, SymbolSearch};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -455,7 +454,12 @@ impl CompareSymbolsDialog {
             Pos2::new(rect.min.x + 4.0 + 18.0, rect.center().y),
             Vec2::splat(36.0),
         );
-        paint_symbol_mark(ui, symbol, mark);
+        paint_symbol_mark(
+            ui.painter(),
+            mark,
+            &symbol.symbol,
+            symbol.logo.as_deref().map(egui::ImageSource::from),
+        );
         let left = mark.right() + 8.0;
 
         // Right-hand column, from the edge: country, then the comparison check.

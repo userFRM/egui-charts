@@ -26,6 +26,21 @@ impl Hours {
     }
 }
 
+/// The trading state of an exchange session at one instant, as the legend's market status
+/// shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(feature = "widget", all(test, feature = "timezones")))]
+pub(crate) enum MarketSession {
+    /// Inside regular trading hours.
+    Open,
+    /// Inside extended hours that regular hours of the same trading date follow.
+    PreMarket,
+    /// Inside extended hours that no regular hours of the same trading date follow.
+    PostMarket,
+    /// Outside trading hours, including gaps between windows, weekends and holidays.
+    Closed,
+}
+
 /// Daily session provider for an exchange: a day starts at each session open of its trading
 /// hours, in its time zone, so bars outside the hours stay with the session before them.
 /// Without trading hours a day starts at midnight in the time zone.
@@ -148,8 +163,8 @@ impl ExchangeSessionProvider {
     /// Whether `time` lies in extended hours and outside regular hours.
     pub fn is_extended(&self, time: DateTime<Utc>) -> bool {
         let closes = self.window_closes(time, true);
-        closes.iter().any(|(extended, _)| *extended)
-            && !closes.iter().any(|(extended, _)| !extended)
+        closes.iter().any(|(extended, ..)| *extended)
+            && !closes.iter().any(|(extended, ..)| !extended)
     }
 
     /// Whether the exchange is open, optionally including extended windows.
@@ -162,6 +177,31 @@ impl ExchangeSessionProvider {
             return !session.holidays.contains(&date);
         }
         !self.window_closes(time, extended_hours).is_empty()
+    }
+
+    /// The state of the session at `time`, or `None` without trading hours.
+    #[cfg(any(feature = "widget", all(test, feature = "timezones")))]
+    pub(crate) fn market_session(&self, time: DateTime<Utc>) -> Option<MarketSession> {
+        self.session.as_ref()?;
+        if self.is_open(time, false) {
+            return Some(MarketSession::Open);
+        }
+        let windows = self.window_closes(time, true);
+        let pre = windows.iter().any(|&(_, date, close)| {
+            self.hours_on(date).iter().any(|hours| {
+                !hours.extended
+                    && self
+                        .window_open(date, hours)
+                        .is_some_and(|open| open >= close)
+            })
+        });
+        Some(if pre {
+            MarketSession::PreMarket
+        } else if windows.is_empty() {
+            MarketSession::Closed
+        } else {
+            MarketSession::PostMarket
+        })
     }
 
     /// Closing instant of the active trading window. Outside trading hours, including holidays,
@@ -179,7 +219,7 @@ impl ExchangeSessionProvider {
         }
         self.window_closes(time, extended)
             .into_iter()
-            .map(|(_, close)| close)
+            .map(|(.., close)| close)
             .max()
     }
 
@@ -316,9 +356,14 @@ impl ExchangeSessionProvider {
         Some((self.window_open(close_date, hours)?, close))
     }
 
-    /// The closing instants of the windows containing `time`, each tagged extended or regular.
+    /// The closing instants of the windows containing `time`, each tagged extended or regular
+    /// and with the date it closes on.
     /// Extended windows are left out unless `extended`.
-    fn window_closes(&self, time: DateTime<Utc>, extended: bool) -> Vec<(bool, DateTime<Utc>)> {
+    fn window_closes(
+        &self,
+        time: DateTime<Utc>,
+        extended: bool,
+    ) -> Vec<(bool, NaiveDate, DateTime<Utc>)> {
         let date = self.wall_time(time).date();
         let mut closes = Vec::new();
         for (close_date, next_day) in [(Some(date), false), (date.succ_opt(), true)] {
@@ -333,7 +378,7 @@ impl ExchangeSessionProvider {
                     && time >= open
                     && time < close
                 {
-                    closes.push((hours.extended, close));
+                    closes.push((hours.extended, close_date, close));
                 }
             }
         }
@@ -930,6 +975,41 @@ mod tests {
                 .collect::<Vec<_>>(),
             [true, false, false, true, true, true, true, false]
         );
+        use MarketSession::{Closed, Open, PostMarket, PreMarket};
+        assert_eq!(
+            bars.iter()
+                .map(|bar| provider.market_session(bar.time))
+                .collect::<Vec<_>>(),
+            [
+                PostMarket, Closed, Closed, PreMarket, PreMarket, Open, PostMarket, Closed
+            ]
+            .map(Some)
+        );
+        assert_eq!(
+            ExchangeSessionProvider::new(TimezoneId::utc(), None).market_session(bars[5].time),
+            None
+        );
+        let overnight_pre = ExchangeSessionProvider::new(
+            TimezoneId::utc(),
+            Some(
+                Session::new([SessionWindow::new([Fri], clock(9, 30), clock(16, 0))])
+                    .with_extended_windows([SessionWindow::new([Fri], clock(20, 0), clock(4, 0))]),
+            ),
+        );
+        for (time, state) in [
+            ("2024-07-04T20:00:00Z", PreMarket),
+            ("2024-07-05T03:59:59Z", PreMarket),
+            ("2024-07-05T04:00:00Z", Closed),
+            ("2024-07-05T09:29:59Z", Closed),
+            ("2024-07-05T09:30:00Z", Open),
+            ("2024-07-05T16:00:00Z", Closed),
+        ] {
+            assert_eq!(
+                overnight_pre.market_session(time.parse().unwrap()),
+                Some(state),
+                "{time}"
+            );
+        }
         // Split regular windows do not create a second trading day after lunch.
         let split = ExchangeSessionProvider::new(
             TimezoneId::utc(),
@@ -1131,6 +1211,17 @@ mod tests {
             assert_eq!(provider.is_open(time, false), regular, "{time}");
             assert_eq!(provider.is_open(time, true), extended, "{time}");
             assert_eq!(provider.is_extended(time), shaded, "{time}");
+            assert_eq!(
+                provider.market_session(time),
+                Some(if regular {
+                    MarketSession::Open
+                } else if extended {
+                    MarketSession::PostMarket
+                } else {
+                    MarketSession::Closed
+                }),
+                "{time}"
+            );
             assert_eq!(
                 provider.session_close(time, true),
                 (!close.is_empty()).then(|| at(close)),
