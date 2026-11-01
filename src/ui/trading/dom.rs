@@ -14,9 +14,10 @@ use super::widgets::{
     FIELD_HEIGHT, chevron, field, grouped, muted, number, side_color, side_fill, text,
     time_in_force_menu,
 };
-use crate::chart::{TradingLineAction, decimals, to_step};
+use crate::chart::{TradingLineAction, entry_price};
 use crate::icons::icons;
 use crate::model::{Order, OrderId, OrderRequest, OrderSide, OrderType, Tick, TimeInForce};
+use crate::scales::{decimals, to_step};
 use crate::theme::ThemeExt;
 
 /// Height of a price row.
@@ -110,17 +111,6 @@ fn columns(rect: Rect) -> [Rect; 5] {
         left = right;
         column
     })
-}
-
-/// The price an order waits for: its limit price, its stop price, or the stop of a stop-limit
-/// order.
-fn entry_price(order_type: &OrderType) -> Option<f64> {
-    match *order_type {
-        OrderType::Limit(price)
-        | OrderType::Stop(price)
-        | OrderType::StopLimit { stop: price, .. } => Some(price),
-        _ => None,
-    }
 }
 
 /// The tag of a working order in the ladder's margin.

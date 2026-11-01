@@ -129,7 +129,7 @@ Chart,Chart types,Line,done,library,src/chart/rendering/candles/mod.rs;src/chart
 Chart,Chart types,Line break,done,library,src/chart/rendering/candles/price_based.rs;src/model/line_break.rs;src/chart/rendering/candles/japanese.rs
 Chart,Chart types,Line with markers,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/line.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/painting/dashed_line.rs
 Chart,Chart types,Per-type style options,done,library,src/model/chart_style.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/chart/rendering/candles/area.rs;src/chart/rendering/candles/japanese.rs
-Chart,Chart types,Point and figure,done,library,src/chart/rendering/candles/price_based.rs;src/model/point_figure.rs;src/chart/rendering/candles/japanese.rs
+Chart,Chart types,Point and figure,done,library,src/chart/rendering/candles/price_based.rs;src/model/point_figure.rs;src/model/range_bar.rs;src/chart/rendering/candles/japanese.rs
 Chart,Chart types,Price-based type parameters,done,library,src/model/chart_type.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/chart/rendering/candles/price_based.rs;src/model/chart_style.rs
 Chart,Chart types,"Price-based types: axis, crosshair and legend",done,library,src/widget/series.rs;src/studies/chart_state.rs;src/chart/rendering/candles/price_based.rs;src/widget/frame.rs;src/chart/renderers/crosshair.rs
 Chart,Chart types,Range,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/price_based.rs;src/model/range_bar.rs;src/data/trades.rs;src/widget/series.rs;src/widget/feed/mod.rs
