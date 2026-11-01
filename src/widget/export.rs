@@ -199,12 +199,9 @@ impl Chart {
             .iter()
             .flat_map(|study| study.data_requests())
             .collect();
-        let sources = self.study_data.data(
-            requests,
-            &self.symbol,
-            self.timeframe,
-            self.replay.as_ref().map(|replay| replay.time),
-        );
+        let sources =
+            self.study_data
+                .data(requests, &self.symbol, self.timeframe, self.replay_time());
         super::studies::calculate(&mut studies, &self.study_ids, bars, &sources);
         for (index, study) in studies
             .iter_mut()
@@ -498,7 +495,7 @@ impl Chart {
         chart.price_series = self
             .price_series
             .iter()
-            .map(|series| super::price_series::PriceSeries {
+            .map(|series| super::series::PriceSeries {
                 id: series.id,
                 options: series.options.clone(),
                 visible: series.visible,

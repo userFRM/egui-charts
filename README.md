@@ -135,7 +135,7 @@ The [`terminal`](terminal) package assembles them on your `Datafeed` and perform
 
 ## Status
 
-[![chart](https://userfrm.github.io/egui-charts/docs/progress/badge-chart.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![drawings](https://userfrm.github.io/egui-charts/docs/progress/badge-drawings.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![studies](https://userfrm.github.io/egui-charts/docs/progress/badge-studies.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![order flow](https://userfrm.github.io/egui-charts/docs/progress/badge-order-flow.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![terminal](https://userfrm.github.io/egui-charts/docs/progress/badge-terminal.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![builder api](https://userfrm.github.io/egui-charts/docs/progress/badge-builder-api.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
+[![chart](https://userfrm.github.io/egui-charts/docs/progress/badge-chart.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![drawings](https://userfrm.github.io/egui-charts/docs/progress/badge-drawings.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![studies](https://userfrm.github.io/egui-charts/docs/progress/badge-studies.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![order flow](https://userfrm.github.io/egui-charts/docs/progress/badge-order-flow.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![options](https://userfrm.github.io/egui-charts/docs/progress/badge-options.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![terminal](https://userfrm.github.io/egui-charts/docs/progress/badge-terminal.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![builder api](https://userfrm.github.io/egui-charts/docs/progress/badge-builder-api.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
 
 [![progress map](https://userfrm.github.io/egui-charts/docs/progress/progress.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
 
@@ -179,7 +179,7 @@ cargo run --manifest-path examples/demo/Cargo.toml
 
 For a feed-backed chart, implement `Datafeed` and pass it to `ChartBuilder::with_feed`. Only `history` is required. The chart requests older pages as the user scrolls back; `subscribe` supplies live updates through a `Sink`.
 
-Feed methods run on the UI thread and must return promptly. Fetch data elsewhere and answer through `Reply`, or respond inline when the data is already in memory. [`live_feed.rs`](examples/live_feed.rs) demonstrates paged history and a cancellable stream of sample trades. [`network_feed.rs`](examples/network_feed.rs) loads them from a local HTTP server, natively and in the browser.
+Feed methods run on the UI thread and must return promptly. Fetch data elsewhere and answer through `Reply`, or respond inline when the data is already in memory. [`live_feed.rs`](examples/live_feed.rs) demonstrates paged history and a cancellable stream of sample trades. With the `http` feature, `data::http::HttpDatafeed::new(address)` supplies column history and live bar refresh from your server; run [`network_feed.rs`](examples/network_feed.rs) with `cargo run --features http --example network_feed`, natively or with its documented browser setup.
 
 | Your application supplies | The library consumes it through |
 |---|---|
@@ -232,6 +232,7 @@ The default build includes the chart, studies, drawings and UI components, plus 
 | `alert-engine` | `AlertEngine`, an alerts service that evaluates alerts on the bars the host feeds it, without egui |
 | `detectors` | `OrderFlowDetectors`, a signals service that finds order-flow events in the trades and depth the host feeds it, without egui |
 | `strategies` | `Backtest`, which runs a `Strategy` over bars and returns a `StrategyReport`, without egui |
+| `http` | `HttpDatafeed`, HTTP column history, symbol search and live bar refresh, without egui |
 | None | Data types, scales and host service contracts without egui |
 
 For example:

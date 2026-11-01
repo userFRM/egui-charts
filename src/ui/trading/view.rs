@@ -5,11 +5,12 @@ use super::format::Numbers;
 use super::ticket::{self, Action, Market};
 use super::{Preview, Trading, executions};
 use crate::chart::selection::SeriesId;
-use crate::chart::{TradingLineAction, TradingLineOptions, render_trading_lines, to_step};
+use crate::chart::{TradingLineAction, TradingLineOptions, render_trading_lines};
 use crate::localization as l10n;
 use crate::model::{
     Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType, Position, TradingRules,
 };
+use crate::scales::to_step;
 use crate::theme::ThemeExt;
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
 use crate::widget::Chart;

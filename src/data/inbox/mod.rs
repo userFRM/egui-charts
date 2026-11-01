@@ -12,7 +12,7 @@ pub(crate) use sink::TradeBars;
 pub use sink::{Sink, aggregate_trades, aggregate_trades_with_tick_size};
 
 use super::depth::Book;
-use super::depth_history::{DepthColumn, DepthHistoryConfig, Sampler};
+use super::depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig, Sampler};
 use super::merge::Origin;
 use super::trades::Trades;
 use super::{FeedError, FeedStatus, OrderQueue, SubscriptionId};
@@ -98,6 +98,8 @@ pub(crate) struct Updates {
     /// Columns sampled for the depth history, oldest first, as many as its newest resolution
     /// holds: the oldest make room for new ones.
     pub(crate) depth_columns: VecDeque<DepthColumn>,
+    /// A seek rebuilds every resolution before the next drain, instead of dropping old columns.
+    pub(crate) replay_depth: Option<DepthHistory>,
     /// Latest top-of-book quote pushed in this frame.
     pub(crate) quote: Option<Level1Quote>,
     /// Latest accepted heartbeat, applied to studies after the queued trades are merged.
@@ -130,6 +132,7 @@ impl Updates {
             orders: None,
             orders_changed: false,
             depth_columns: VecDeque::new(),
+            replay_depth: None,
             quote: None,
             time: None,
             resnapshot: false,
@@ -173,6 +176,7 @@ impl Inbox {
         if let Some(live) = self.state().subscriptions.get_mut(&id) {
             live.sampler = config.map(Sampler::new);
             live.updates.depth_columns.clear();
+            live.updates.replay_depth = None;
         }
     }
 

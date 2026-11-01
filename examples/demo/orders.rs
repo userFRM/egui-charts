@@ -20,6 +20,7 @@ pub(super) struct Orders {
     /// Sequence of the last order event, or of the snapshot before the first.
     sequence: u64,
     next_id: u64,
+    recorded: Vec<(u64, OrderEvent)>,
     /// The orders at each (is bid, price in ticks), front of the queue first, each with whether
     /// it is a block order. The other orders at a price sum to the aggregate book's size there.
     levels: BTreeMap<(bool, i64), Vec<(RestingOrder, bool)>>,
@@ -37,6 +38,7 @@ impl Orders {
             random: seed.rotate_left(32) | 1,
             sequence: 0,
             next_id: 0,
+            recorded: Vec::new(),
             levels: BTreeMap::new(),
             blocks: VecDeque::new(),
         };
@@ -57,6 +59,10 @@ impl Orders {
             }
         }
         orders
+    }
+
+    pub(super) fn take_recorded(&mut self) -> impl Iterator<Item = (u64, OrderEvent)> + '_ {
+        self.recorded.drain(..)
     }
 
     /// The sequence and every resting order, in queue order at each price.
@@ -230,6 +236,7 @@ impl Orders {
 
     fn push(&mut self, sink: &Sink, ts: DateTime<Utc>, event: OrderEvent) {
         self.sequence += 1;
+        self.recorded.push((self.sequence, event.clone()));
         sink.push_order_event(self.sequence, ts, event);
     }
 
