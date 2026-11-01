@@ -1,6 +1,6 @@
 //! Rendering with separate panes above and below the price pane.
 
-use super::{
+use crate::widget::{
     Chart, IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneId, PaneInteraction,
     RenderedIndicatorPane,
 };
@@ -43,7 +43,7 @@ impl Chart {
 
     /// Renders the price pane and every other drawn pane in their order, sharing the height by
     /// stretch factor, with x-axes aligned to the price pane and one time axis below them all.
-    pub(super) fn show_with_panes(
+    pub(in crate::widget) fn show_with_panes(
         &mut self,
         ui: &mut Ui,
         footprint: Option<(
@@ -436,7 +436,7 @@ impl Chart {
                     };
                     (
                         item.id,
-                        super::price_series::SeriesLegend::new(
+                        crate::widget::price_series::SeriesLegend::new(
                             item,
                             close,
                             self.series_label_formatter(
@@ -471,7 +471,7 @@ impl Chart {
                         } else {
                             let idx = self.study_ids.iter().position(|study| study == id)?;
                             let study = studies.indicators()[idx].as_ref();
-                            let hit = super::primitives::primitive_at(
+                            let hit = crate::widget::primitives::primitive_at(
                                 self.primitives_of(*id).map(|item| {
                                     (
                                         item,
@@ -728,7 +728,7 @@ impl Chart {
                         self.paint_series(&painter, interaction.chart_rect, item, map);
                         let view = self.primitive_view(item.id, pane_mapping);
                         for primitive in self.primitives_of(item.id) {
-                            primitive.draw(&painter, &view, super::PrimitivePass::Series);
+                            primitive.draw(&painter, &view, crate::widget::PrimitivePass::Series);
                         }
                     }
                     self.measured_axis_width =
@@ -849,7 +849,7 @@ impl Chart {
                             })
                     };
                     let primitive_hit = pointer.and_then(|pos| {
-                        super::primitives::primitive_at(
+                        crate::widget::primitives::primitive_at(
                             pane_primitives().filter(|(item, _)| !item.replaces),
                             pos,
                         )
@@ -866,14 +866,14 @@ impl Chart {
                             .rev()
                             .find_map(|id| {
                                 if self.has_renderer(*id) {
-                                    let hit = super::primitives::primitive_at(
+                                    let hit = crate::widget::primitives::primitive_at(
                                         pane_primitives().filter(|(item, _)| {
                                             item.replaces && item.series == *id
                                         }),
                                         pos,
                                     )?;
                                     return match hit.target {
-                                        super::PointerTarget::Element(id) => Some(id),
+                                        crate::widget::PointerTarget::Element(id) => Some(id),
                                         _ => None,
                                     };
                                 }
@@ -925,7 +925,7 @@ impl Chart {
                             let ChartElementId::Indicator(id) = element else {
                                 return None;
                             };
-                            super::primitives::primitive_at(
+                            crate::widget::primitives::primitive_at(
                                 pane_primitives()
                                     .filter(|(item, _)| item.replaces && item.series == id),
                                 pos,
@@ -941,9 +941,9 @@ impl Chart {
                             ui.ctx().set_cursor_icon(hit.cursor);
                         }
                         self.host_events.target = drawing
-                            .map(super::PointerTarget::Drawing)
+                            .map(crate::widget::PointerTarget::Drawing)
                             .or(primitive_hit.map(|hit| hit.target))
-                            .or_else(|| study_at(pos).map(super::PointerTarget::Element));
+                            .or_else(|| study_at(pos).map(crate::widget::PointerTarget::Element));
                     }
 
                     // Draw selection handles when this pane is selected.
@@ -1093,7 +1093,7 @@ impl Chart {
                     let drawing_hit = pane_response
                         .interact_pointer_pos()
                         .and_then(|pos| drawings.hit_test(pos));
-                    super::tool_interaction::render_pane_eraser_highlight(
+                    crate::widget::tool_interaction::render_pane_eraser_highlight(
                         &ui.painter().with_clip_rect(chart_rect),
                         &drawings,
                         &cursors,
@@ -1129,12 +1129,12 @@ impl Chart {
                                 self.drawings.select(id);
                             }
                         }
-                        super::RightClickTarget::Drawing {
+                        crate::widget::RightClickTarget::Drawing {
                             drawing_id: id,
                             pos,
                         }
                     } else {
-                        super::RightClickTarget::Background {
+                        crate::widget::RightClickTarget::Background {
                             pos,
                             price: map.y_to_price(pos.y),
                         }
@@ -1149,7 +1149,7 @@ impl Chart {
                         && self.is_series_visible(item.series)
                 }) {
                     let view = self.primitive_view(item.series, pane_coords);
-                    item.draw(&painter, &view, super::PrimitivePass::Above);
+                    item.draw(&painter, &view, crate::widget::PrimitivePass::Above);
                 }
             }
             if !collapsed {

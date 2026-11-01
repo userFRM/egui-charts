@@ -1,5 +1,7 @@
 //! Pane placement, layout state and interaction controls.
 
+mod render;
+
 use super::{Chart, SeriesId};
 use crate::config::NavigationButtons;
 #[cfg(feature = "drawings")]

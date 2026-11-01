@@ -100,7 +100,6 @@ mod palette;
 pub(crate) mod pan_zoom;
 mod pane;
 pub use pane::{PaneId, PaneOptions};
-mod panes;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod posts;

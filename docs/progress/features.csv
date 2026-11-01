@@ -17,7 +17,7 @@ Builder API,Broker API,Trading entry points in the UI,done,host,src/ui/top_toolb
 Builder API,Builder integration,Custom drawing tools from a downstream crate,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Builder API,Builder integration,Custom indicator metadata,done,library,src/studies/indicator_trait.rs;src/studies/inputs.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs;src/chart/renderers/study_scale.rs
 Builder API,Builder integration,Custom indicators from a downstream crate,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/widget/series.rs;src/studies/custom.rs
-Builder API,Builder integration,Custom series types from a downstream crate,done,library,src/widget/primitives.rs;src/widget/panes.rs;src/chart/primitives.rs
+Builder API,Builder integration,Custom series types from a downstream crate,done,library,src/widget/primitives.rs;src/widget/pane/render/mod.rs;src/chart/primitives.rs
 Builder API,Builder integration,Desktop webview integration,missing,library,
 Builder API,Builder integration,Embedding with a data feed,done,host,src/widget/builder.rs;src/widget/frame.rs;src/widget/feed/mod.rs
 Builder API,Builder integration,Full trading-terminal UI around the chart,partial,library,src/ui/app_state.rs;src/ui/trading/mod.rs;terminal/src/lib.rs
@@ -143,9 +143,9 @@ Chart,Compare and overlay,Overlay a symbol on the same price scale,done,host,src
 Chart,Compare and overlay,Percent scale when comparing,done,library,src/widget/price_series.rs;src/scales/pricescale.rs
 Chart,Crosshair and interaction,Auto-scroll to realtime and jump-to-latest button,done,library,src/widget/series.rs;src/widget/frame.rs;src/widget/time_scale.rs
 Chart,Crosshair and interaction,"Chart, series and drawing context menus",partial,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/drawing.rs;src/widget/drawing_api.rs;terminal/src/drawings.rs;terminal/src/studies.rs;src/ui/floating_toolbar/toolbar.rs;examples/demo/controller.rs
-Chart,Crosshair and interaction,Crosshair across all panes,done,library,src/widget/panes.rs;src/widget/indicator_pane.rs;src/widget/frame.rs
-Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/painting/dashed_line.rs;src/config/crosshair.rs;src/chart/rendering/axes.rs;src/theme/presets.rs;src/widget/panes.rs;src/scales/horizontal.rs
-Chart,Crosshair and interaction,Cursor types,done,library,src/widget/frame.rs;src/chart/cursor_modes/mod.rs;src/chart/cursor_modes/eraser.rs;src/widget/tool_interaction/selection.rs;src/widget/panes.rs;src/drawings/manager/interaction.rs
+Chart,Crosshair and interaction,Crosshair across all panes,done,library,src/widget/pane/render/mod.rs;src/widget/indicator_pane.rs;src/widget/frame.rs
+Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/painting/dashed_line.rs;src/config/crosshair.rs;src/chart/rendering/axes.rs;src/theme/presets.rs;src/widget/pane/render/mod.rs;src/scales/horizontal.rs
+Chart,Crosshair and interaction,Cursor types,done,library,src/widget/frame.rs;src/chart/cursor_modes/mod.rs;src/chart/cursor_modes/eraser.rs;src/widget/tool_interaction/selection.rs;src/widget/pane/render/mod.rs;src/drawings/manager/interaction.rs
 Chart,Crosshair and interaction,Double-click on axes to reset,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs;src/widget/pane/mod.rs
 Chart,Crosshair and interaction,Drag on the time axis to zoom,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
 Chart,Crosshair and interaction,Drag or wheel on the price axis to zoom,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
@@ -159,7 +159,7 @@ Chart,Crosshair and interaction,Mouse wheel zoom anchored at the cursor,done,lib
 Chart,Crosshair and interaction,Pinch zoom and two-finger pan,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
 Chart,Crosshair and interaction,Price scale and time scale context menus,done,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/axis.rs
 Chart,Crosshair and interaction,Table view of chart data,done,library,src/widget/export.rs;src/ui/dialogs/data_table.rs;src/ui/context_menu/mod.rs
-Chart,Crosshair and interaction,Undo and redo,done,library,src/widget/history.rs;src/widget/feed/mod.rs;examples/demo/controller.rs;src/widget/series.rs;src/widget/replay.rs;src/widget/panes.rs;src/widget/events.rs;src/widget/price_series.rs;examples/demo/comparison.rs
+Chart,Crosshair and interaction,Undo and redo,done,library,src/widget/history.rs;src/widget/feed/mod.rs;examples/demo/controller.rs;src/widget/series.rs;src/widget/replay.rs;src/widget/pane/render/mod.rs;src/widget/events.rs;src/widget/price_series.rs;examples/demo/comparison.rs
 Chart,Crosshair and interaction,Zoom-to-rectangle tool,done,library,src/widget/pan_zoom.rs;src/chart/rendering/overlays/box_zoom.rs
 Chart,Keyboard shortcuts,Copy and paste drawings,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/clipboard.rs;src/model/bar/time.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs
 Chart,Keyboard shortcuts,Ctrl+Left/Right move further,done,library,src/config/keyboard.rs;src/widget/keyboard.rs
@@ -183,8 +183,8 @@ Chart,Keyboard shortcuts,Snapshot,done,library,src/config/keyboard.rs;src/widget
 Chart,Keyboard shortcuts,Type to change symbol,done,host,src/widget/keyboard.rs
 Chart,Keyboard shortcuts,Undo and redo,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/history.rs
 Chart,Legend and data window,Data window panel,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs;src/widget/frame.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs
-Chart,Legend and data window,Indicator entries in the legend,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/widget/panes.rs;src/widget/indicator_pane.rs;src/config/chart.rs;src/theme/presets.rs
-Chart,Legend and data window,Legend buttons,done,library,src/chart/renderers/legend/mod.rs;src/widget/crosshair.rs;src/widget/panes.rs
+Chart,Legend and data window,Indicator entries in the legend,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/widget/pane/render/mod.rs;src/widget/indicator_pane.rs;src/config/chart.rs;src/theme/presets.rs
+Chart,Legend and data window,Legend buttons,done,library,src/chart/renderers/legend/mod.rs;src/widget/crosshair.rs;src/widget/pane/render/mod.rs
 Chart,Legend and data window,Status line values follow the crosshair,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs
 Chart,Legend and data window,Symbol status line,done,library,src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/model/session/exchange.rs;src/painting/symbol_mark.rs
 Chart,Legend and data window,Volume in the status line,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/chart/renderers/legend/mod.rs;src/scales/price_formatter.rs
@@ -198,16 +198,16 @@ Chart,Multi-chart and sync,Sync interval,done,host,src/widget/layout.rs;src/widg
 Chart,Multi-chart and sync,Sync symbol,done,host,src/widget/layout.rs;src/widget/feed/mod.rs
 Chart,Multi-chart and sync,Sync time,done,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs
 Chart,Multi-chart and sync,Up to 16 charts per tab,done,library,src/widget/layout.rs
-Chart,Panes,Collapse pane,done,library,src/widget/pane/mod.rs;src/widget/panes.rs
-Chart,Panes,Maximize pane,done,library,src/widget/pane/mod.rs;src/widget/panes.rs;src/widget/indicator_pane.rs
+Chart,Panes,Collapse pane,done,library,src/widget/pane/mod.rs;src/widget/pane/render/mod.rs
+Chart,Panes,Maximize pane,done,library,src/widget/pane/mod.rs;src/widget/pane/render/mod.rs;src/widget/indicator_pane.rs
 Chart,Panes,"Move indicator to another pane, merge, or new pane",done,library,src/widget/pane/mod.rs
 Chart,Panes,Move pane up or down,done,library,src/widget/pane/mod.rs
-Chart,Panes,Per-pane price scales,done,library,src/widget/panes.rs;src/widget/pane/mod.rs;src/widget/price_series.rs
+Chart,Panes,Per-pane price scales,done,library,src/widget/pane/render/mod.rs;src/widget/pane/mod.rs;src/widget/price_series.rs
 Chart,Panes,Programmatic pane and series API,done,library,src/widget/pane/mod.rs;src/widget/price_series.rs;src/widget/series.rs
-Chart,Panes,Remove pane,done,library,src/widget/pane/mod.rs;src/widget/panes.rs
-Chart,Panes,Resize panes by dragging the separator,done,library,src/widget/pane/mod.rs;src/widget/panes.rs
-Chart,Panes,Separate indicator panes,done,library,src/widget/pane/mod.rs;src/widget/panes.rs
-Chart,Panes,Shared time axis across panes,done,library,src/widget/panes.rs
+Chart,Panes,Remove pane,done,library,src/widget/pane/mod.rs;src/widget/pane/render/mod.rs
+Chart,Panes,Resize panes by dragging the separator,done,library,src/widget/pane/mod.rs;src/widget/pane/render/mod.rs
+Chart,Panes,Separate indicator panes,done,library,src/widget/pane/mod.rs;src/widget/pane/render/mod.rs
+Chart,Panes,Shared time axis across panes,done,library,src/widget/pane/render/mod.rs
 Chart,Panes,Volume area in the main pane,done,library,src/widget/volume.rs;src/widget/frame.rs;src/chart/rendering/candles/volume.rs;src/theme/mod.rs;src/theme/presets.rs
 Chart,Scales and axes,Auto-scale,done,library,src/widget/frame.rs;src/studies/chart_state.rs;src/scales/pricescale.rs;src/ui/top_toolbar/components/settings_menu/menu.rs
 Chart,Scales and axes,Bar spacing and time zoom,done,library,src/model/timescale.rs;src/widget/pan_zoom.rs;src/config/timescale.rs;src/widget/sync.rs;src/widget/mod.rs;src/widget/builder.rs;src/widget/keyboard.rs
@@ -234,7 +234,7 @@ Chart,Scales and axes,Right price scale,done,library,src/widget/mod.rs;src/widge
 Chart,Scales and axes,Scale margins,done,library,src/widget/settings/apply.rs;src/scales/pricescale.rs;src/widget/frame.rs
 Chart,Scales and axes,Session breaks,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs;src/ui/context_menu/axis.rs;src/config/chart.rs;src/widget/palette.rs;src/model/session/exchange.rs;src/model/session/mod.rs;src/model/clock.rs
 Chart,Scales and axes,Symbol name label on the scale,done,library,;src/config/chart.rs;src/chart/rendering/axes.rs;src/widget/frame.rs;src/widget/price_series.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
-Chart,Scales and axes,Thousands grouping in price labels,done,library,src/config/chart.rs;src/scales/price_formatter.rs;src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/chart/rendering/axes.rs;src/chart/renderers/crosshair.rs;src/chart/renderers/labels.rs;src/chart/renderers/legend/mod.rs;src/widget/frame.rs;src/widget/panes.rs;src/widget/price_series.rs
+Chart,Scales and axes,Thousands grouping in price labels,done,library,src/config/chart.rs;src/scales/price_formatter.rs;src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/chart/rendering/axes.rs;src/chart/renderers/crosshair.rs;src/chart/renderers/labels.rs;src/chart/renderers/legend/mod.rs;src/widget/frame.rs;src/widget/pane/render/mod.rs;src/widget/price_series.rs
 Chart,Scales and axes,Time axis labels,partial,library,src/scales/timescale_marks.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/chart/renderers/labels.rs;src/widget/frame.rs;src/model/bar/time.rs;src/widget/time_scale.rs;src/styles/sizing.rs;src/model/timezone.rs;src/widget/merge.rs
 Chart,Scales and axes,Time zone selection,done,library,src/widget/settings/apply.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/widget/time_scale.rs;src/model/bar/time.rs;src/chart/renderers/labels.rs;src/model/timezone.rs
 Drawings,Drawing management,Alerts on drawings,done,library,src/drawings/domain/drawing.rs;src/ui/context_menu/drawing.rs
@@ -244,12 +244,12 @@ Drawings,Drawing management,Copy and paste drawings,done,library,src/widget/clip
 Drawings,Drawing management,Creation state machine,done,library,src/config/drawing_tool/behavior.rs;src/widget/tool_interaction/interaction.rs;src/drawings/domain/drawing.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Drawings,Drawing management,Default style per tool,done,library,src/ui/dialogs/drawing_properties/actions.rs;src/drawings/domain/template.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/ui/dialogs/drawing_properties/dialog.rs;src/drawings/domain/drawing.rs;src/drawings/manager/interaction.rs;src/data/volume_profile.rs
 Drawings,Drawing management,Drawing anchors across timeframe and symbol changes,done,library,src/widget/anchors.rs;src/widget/series.rs;src/model/bar/time.rs;src/widget/time_scale.rs;src/widget/feed/mod.rs
-Drawings,Drawing management,Drawing on indicator panes,done,library,src/widget/tool_interaction/mod.rs;src/widget/panes.rs;src/drawings/domain/drawing.rs
+Drawings,Drawing management,Drawing on indicator panes,done,library,src/widget/tool_interaction/mod.rs;src/widget/pane/render/mod.rs;src/drawings/domain/drawing.rs
 Drawings,Drawing management,Drawing templates,done,library,src/drawings/domain/template.rs;src/ui/dialogs/templates/store.rs;src/ui/dialogs/templates/dialog.rs;src/ui/dialogs/drawing_properties/dialog.rs
 Drawings,Drawing management,Drawing tool keyboard shortcuts,done,library,src/widget/keyboard.rs;src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/shortcuts.rs;src/config/keyboard.rs;src/widget/tool_interaction/mod.rs
 Drawings,Drawing management,Drawings on a logarithmic price scale,done,library,src/widget/tool_interaction/mod.rs;src/drawings/domain/drawing.rs;src/drawings/manager/interaction.rs;src/drawings/services/handle.rs;src/widget/tool_interaction/selection.rs;src/scales/pricescale.rs
 Drawings,Drawing management,Duplicate drawing,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/drawings/manager/interaction.rs;src/widget/tool_interaction/selection.rs;src/widget/frame.rs
-Drawings,Drawing management,Edit anchors with handles and move a drawing,done,library,src/drawings/services/handle.rs;src/widget/tool_interaction/selection.rs;src/drawings/manager/interaction.rs;src/scales/pricescale.rs;src/drawings/manager/mod.rs;src/widget/frame.rs;src/widget/panes.rs;src/drawings/domain/options.rs
+Drawings,Drawing management,Edit anchors with handles and move a drawing,done,library,src/drawings/services/handle.rs;src/widget/tool_interaction/selection.rs;src/drawings/manager/interaction.rs;src/scales/pricescale.rs;src/drawings/manager/mod.rs;src/widget/frame.rs;src/widget/pane/render/mod.rs;src/drawings/domain/options.rs
 Drawings,Drawing management,Hide and show drawings,done,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/ui/drawing_toolbar/utilities/hide_menu.rs
 Drawings,Drawing management,Lock all drawings,done,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawing management,Lock and unlock a drawing,done,library,src/widget/tool_interaction/selection.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/widget/frame.rs;src/drawings/manager/interaction.rs
@@ -300,7 +300,7 @@ Drawings,Drawings,Demonstration and magic cursors,done,library,src/config/crossh
 Drawings,Drawings,Disjoint channel,done,library,src/drawings/rendering/channels.rs;src/drawings/rendering/mod.rs;src/drawings/services/handle.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs
 Drawings,Drawings,Double curve,done,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/manager/interaction.rs;src/drawings/validation.rs
 Drawings,Drawings,Drawing anchor access,done,library,src/widget/drawing_api.rs;src/widget/anchors.rs;src/model/bar/time.rs;src/widget/time_scale.rs
-Drawings,Drawings,Drawing attachment to a study or pane,done,library,src/drawings/domain/drawing.rs;src/widget/drawing_api.rs;src/widget/panes.rs
+Drawings,Drawings,Drawing attachment to a study or pane,done,library,src/drawings/domain/drawing.rs;src/widget/drawing_api.rs;src/widget/pane/render/mod.rs
 Drawings,Drawings,Drawing events,done,library,src/drawings/manager/mod.rs
 Drawings,Drawings,Drawing groups,done,library,src/drawings/domain/drawing.rs;src/drawings/persistence.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
 Drawings,Drawings,Drawing listing and lookup,done,library,src/widget/drawing_api.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs
@@ -342,7 +342,7 @@ Drawings,Drawings,Ideas,done,host,src/drawings/rendering/media.rs;src/widget/too
 Drawings,Drawings,Image,done,library,src/drawings/rendering/media.rs;src/widget/tool_interaction/text.rs;src/drawings/categories.rs;src/drawings/domain/image.rs;src/widget/events.rs;src/widget/drawing_api.rs;src/drawings/services/handle.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs
 Drawings,Drawings,Info line,done,library,src/drawings/rendering/measurements.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/drawings/rendering/style.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Inside pitchfork,done,library,src/drawings/rendering/pitchfork.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/pitchfork.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Long position,done,library,src/drawings/manager/mod.rs;src/drawings/rendering/trading/position.rs;src/drawings/services/handle.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/manager/edit.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/dialog.rs;src/widget/frame.rs;src/widget/panes.rs
+Drawings,Drawings,Long position,done,library,src/drawings/manager/mod.rs;src/drawings/rendering/trading/position.rs;src/drawings/services/handle.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/manager/edit.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/dialog.rs;src/widget/frame.rs;src/widget/pane/render/mod.rs
 Drawings,Drawings,Measure,done,library,src/drawings/rendering/measurements.rs;src/ui/drawing_toolbar/utilities/measure.rs;src/drawings/manager/interaction.rs;src/widget/tool_interaction/selection.rs
 Drawings,Drawings,Modified Schiff pitchfork,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/pitchfork.rs
 Drawings,Drawings,Multi-point drawing creation,done,library,src/widget/drawing_api.rs;src/drawings/manager/mod.rs;src/drawings/validation.rs;src/drawings/manager/interaction.rs
@@ -365,7 +365,7 @@ Drawings,Drawings,Rotated rectangle,done,library,src/drawings/rendering/shapes.r
 Drawings,Drawings,Schiff pitchfork,done,library,src/drawings/rendering/pitchfork.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/pitchfork.rs
 Drawings,Drawings,Screen-anchored drawing creation,done,library,src/drawings/domain/drawing.rs;src/widget/drawing_api.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Drawings,Drawings,Sector,done,library,src/drawings/rendering/shapes.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs
-Drawings,Drawings,Short position,done,library,src/drawings/manager/mod.rs;src/drawings/rendering/trading/position.rs;src/drawings/services/handle.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/manager/edit.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/dialog.rs;src/widget/frame.rs;src/widget/panes.rs
+Drawings,Drawings,Short position,done,library,src/drawings/manager/mod.rs;src/drawings/rendering/trading/position.rs;src/drawings/services/handle.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs;src/drawings/domain/options.rs;src/drawings/manager/edit.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/actions.rs;src/ui/dialogs/drawing_properties/dialog.rs;src/widget/frame.rs;src/widget/pane/render/mod.rs
 Drawings,Drawings,Signpost,done,library,src/drawings/rendering/annotations/signpost.rs;src/widget/tool_interaction/text.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs;src/drawings/manager/interaction.rs;src/drawings/services/handle.rs;src/drawings/rendering/annotations/labels.rs;src/drawings/rendering/style.rs;src/ui/dialogs/drawing_properties/tabs/text.rs
 Drawings,Drawings,Sine line,done,library,src/drawings/rendering/cycles.rs;src/drawings/rendering/style.rs;src/config/drawing_tool/behavior.rs
 Drawings,Drawings,Single-point drawing creation,done,library,src/widget/drawing_api.rs;src/drawings/manager/mod.rs;src/drawings/domain/drawing.rs;src/drawings/manager/edit.rs
@@ -505,11 +505,11 @@ Studies,Indicator infrastructure,Maximum studies per chart,done,library,src/widg
 Studies,Indicator infrastructure,Multi-output studies draw all their lines,done,library,src/studies/builtin/adx.rs;src/studies/builtin/stochastic.rs;src/studies/builtin/stochastic_rsi.rs;src/studies/indicator_trait.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs;src/widget/indicator_pane.rs
 Studies,Indicator infrastructure,Multi-timeframe inputs,partial,library,src/studies/settings.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/builtin/volume_profile.rs
 Studies,Indicator infrastructure,Other-symbol inputs,partial,library,src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/studies_data.rs;src/services/search/expression.rs;src/studies/factory/mod.rs
-Studies,Indicator infrastructure,Overlay versus separate pane,done,library,src/widget/series.rs;src/studies/settings.rs;src/widget/pane/mod.rs;src/widget/panes.rs
+Studies,Indicator infrastructure,Overlay versus separate pane,done,library,src/widget/series.rs;src/studies/settings.rs;src/widget/pane/mod.rs;src/widget/pane/render/mod.rs
 Studies,Indicator infrastructure,Plot offset,done,library,src/studies/indicator_trait.rs;src/studies/custom.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
 Studies,Indicator infrastructure,Plot styles,done,library,src/studies/settings.rs;src/studies/custom.rs;src/chart/renderers/indicator.rs;src/widget/indicator_pane.rs;src/studies/indicator_trait.rs;src/studies/palette.rs;src/painting/dashed_line.rs
 Studies,Indicator infrastructure,Recalculation on realtime updates,done,library,src/widget/series.rs;src/widget/studies.rs;src/studies/settings.rs;src/studies/stepper.rs
-Studies,Indicator infrastructure,Remove a study,done,library,src/widget/series.rs;src/widget/panes.rs
+Studies,Indicator infrastructure,Remove a study,done,library,src/widget/series.rs;src/widget/pane/render/mod.rs
 Studies,Indicator infrastructure,Settings dialog: Inputs tab,done,library,src/ui/dialogs/indicator_dialog/settings.rs;src/studies/settings.rs
 Studies,Indicator infrastructure,Settings dialog: Style tab,partial,library,src/ui/dialogs/indicator_dialog/settings.rs;src/studies/settings.rs
 Studies,Indicator infrastructure,Settings dialog: Visibility tab,done,library,src/ui/dialogs/indicator_dialog/settings.rs;src/studies/settings.rs
