@@ -179,9 +179,9 @@ pub struct DrawingManager {
     /// All completed drawings on the chart.
     pub drawings: Vec<Drawing>,
     /// Currently active drawing tool, or `None` for selection/pointer mode.
-    pub active_tool: Option<DrawingToolType>,
+    pub(crate) active_tool: Option<DrawingToolType>,
     /// The drawing currently being created (not yet completed).
-    pub curr_drawing: Option<Drawing>,
+    pub(crate) curr_drawing: Option<Drawing>,
     /// Whether the last point of `curr_drawing` follows the pointer rather than a click.
     preview_point: bool,
     /// The last finished measurement, shown until the next click on the chart. It is never
@@ -210,7 +210,7 @@ pub struct DrawingManager {
     pub options: DrawingManagerOptions,
 
     /// Currently dragged handle, if any: `(drawing_id, handle_position)`.
-    pub dragging_handle: Option<(usize, HandlePos)>,
+    pub(crate) dragging_handle: Option<(usize, HandlePos)>,
     /// Snapshot of the drawing state before the current drag began (for undo).
     drag_old_state: Option<Drawing>,
     /// Pointer origin of a body or centre-handle translation.
@@ -233,9 +233,7 @@ pub struct DrawingManager {
     pub curr_timeframe: String,
     /// Whether a click deletes the drawing under the pointer instead of selecting it. Set it
     /// with [`Self::set_eraser_mode`].
-    pub eraser_mode: bool,
-    /// Drawing ID currently hovered by the eraser cursor (for visual feedback).
-    pub eraser_hover_drawing: Option<usize>,
+    pub(crate) eraser_mode: bool,
 
     /// Changes to the stored drawings, oldest first, for the host to drain, for example
     /// with `std::mem::take(&mut *manager.pending_sync.lock().unwrap())`. See
@@ -298,13 +296,13 @@ impl DrawingManager {
             stay_in_drawing_mode: false,
             curr_timeframe: String::from("1D"),
             eraser_mode: false,
-            eraser_hover_drawing: None,
             pending_sync: Arc::new(Mutex::new(Vec::new())),
             sync_enabled: true,
         }
     }
 
-    /// Apply the host's tool, snapping, color, eraser and selection state.
+    /// Apply the host's tool, snapping, color, eraser and selection state. A state with both
+    /// a tool and the eraser leaves only the eraser on, as [`Self::set_eraser_mode`] does.
     pub fn sync_from_app_state(&mut self, drawing_state: &DrawingState) {
         if self.active_tool != drawing_state.active_tool {
             self.set_active_tool(drawing_state.active_tool);
@@ -312,7 +310,9 @@ impl DrawingManager {
         self.options.magnet_mode = drawing_state.magnet_mode;
         self.options.default_color = drawing_state.curr_color;
         self.stay_in_drawing_mode = drawing_state.stay_in_drawing_mode;
-        self.eraser_mode = drawing_state.eraser_mode;
+        if self.eraser_mode != drawing_state.eraser_mode {
+            self.set_eraser_mode(drawing_state.eraser_mode);
+        }
 
         // Sync selection
         match (drawing_state.sel_drawing, self.selection.primary()) {
@@ -716,13 +716,16 @@ mod tests {
 
     /// Two clicks and Enter finish a multi-point tool with two anchors. Whatever the
     /// manager finishes must save, and a tool that draws nothing with two anchors (the parallel
-    /// channel) must stay in progress, or the whole storage would refuse to save.
+    /// channel and the pitchforks) must stay in progress, or the whole storage would refuse to save.
     #[test]
     fn a_drawing_finished_early_can_be_saved() {
         use crate::drawings::persistence::{DrawingStorage, drawing_to_stored};
         for (tool, finishes) in [
             (DrawingToolType::Triangle, true),
-            (DrawingToolType::Pitchfork, true),
+            (DrawingToolType::Pitchfork, false),
+            (DrawingToolType::SchiffPitchfork, false),
+            (DrawingToolType::ModifiedSchiffPitchfork, false),
+            (DrawingToolType::InsidePitchfork, false),
             (DrawingToolType::FlatTopBottom, true),
             (DrawingToolType::ParallelChannel, false),
         ] {
@@ -920,7 +923,7 @@ mod tests {
         let mut fresh = Drawing::new(0, DrawingToolType::HorizontalLine);
         fresh.chart_points = vec![ChartPoint::new(10.0, 50.0)];
         fresh.update_screen_coords(|bar| bar, |price| price as f32);
-        manager.add_synced_drawing(fresh);
+        manager.add_synced_drawing(fresh).unwrap();
         let fresh_id = manager.drawings.last().unwrap().id;
         assert_eq!(manager.hit_test(on_both), Some(fresh_id));
 
@@ -938,6 +941,11 @@ mod tests {
     /// and deleting it names the record it is stored under.
     #[test]
     fn edits_queue_coalesced_sync_actions() {
+        fn line(id: usize) -> Drawing {
+            let mut drawing = Drawing::new(id, DrawingToolType::HorizontalLine);
+            drawing.chart_points = vec![ChartPoint::new(1.0, 10.0)];
+            drawing
+        }
         type Edit = fn(&mut DrawingManager);
         let cases: [(Edit, &[&str]); 15] = [
             (
@@ -950,7 +958,7 @@ mod tests {
             ),
             (
                 |m| {
-                    m.add_synced_drawing(Drawing::new(1, DrawingToolType::HorizontalLine));
+                    m.add_synced_drawing(line(1)).unwrap();
                     m.reorder_drawings(0, &[(0, 1), (1, 2)]);
                     m.undo();
                     m.redo();
@@ -989,7 +997,9 @@ mod tests {
                 &["Save(1)"],
             ),
             (
-                |m| m.add_synced_drawing(Drawing::new(7, DrawingToolType::HorizontalLine)),
+                |m| {
+                    m.add_synced_drawing(line(7)).unwrap();
+                },
                 &["Save(1)"],
             ),
             (
@@ -1021,7 +1031,7 @@ mod tests {
             (
                 |m| {
                     m.edit_drawing(0, |d| d.stroke_width = 2.0);
-                    m.add_synced_drawing(Drawing::new(1, DrawingToolType::HorizontalLine));
+                    m.add_synced_drawing(line(1)).unwrap();
                     m.delete_drawing(1);
                     m.edit_drawing(0, |d| d.stroke_width = 3.0);
                 },
@@ -1030,9 +1040,9 @@ mod tests {
         ];
         for (case, (edit, expected)) in cases.into_iter().enumerate() {
             let mut manager = DrawingManager::new();
-            let mut restored = Drawing::new(5, DrawingToolType::HorizontalLine);
+            let mut restored = line(5);
             restored.stored_id = Some("a1b2".into());
-            manager.add_synced_drawing(restored);
+            manager.add_synced_drawing(restored).unwrap();
             let before = manager
                 .drawings
                 .iter()
@@ -1315,5 +1325,107 @@ mod tests {
         let points = &manager.drawings[0].chart_points;
         assert_eq!((points[1].bar_idx, points[1].price), (260.0, 115.0));
         assert_eq!((points[2].bar_idx, points[2].price), (260.0, 95.0));
+    }
+
+    /// A host state with both a tool and the eraser leaves only the eraser on, as
+    /// `set_eraser_mode` does.
+    #[test]
+    fn app_state_with_a_tool_and_the_eraser_leaves_only_the_eraser() {
+        let mut manager = DrawingManager::new();
+        manager.sync_from_app_state(&DrawingState {
+            active_tool: Some(DrawingToolType::TrendLine),
+            eraser_mode: true,
+            ..DrawingState::default()
+        });
+        assert!(manager.is_eraser_mode());
+        assert_eq!(manager.active_tool(), None);
+    }
+
+    /// Every path that creates drawings adds only drawings that save: a drawing of a disabled
+    /// tool, a cursor, a non-finite or unmappable anchor or too few anchors is left out, and the
+    /// chart still saves.
+    #[test]
+    fn creation_paths_add_only_drawings_that_save() {
+        use crate::drawings::ToolAvailability;
+        fn line(tool: DrawingToolType, anchors: &[(f32, f64)]) -> Drawing {
+            let mut drawing = Drawing::new(0, tool);
+            drawing.chart_points = anchors
+                .iter()
+                .map(|&(bar, price)| ChartPoint::new(bar, price))
+                .collect();
+            drawing.completed = true;
+            drawing
+        }
+        fn place(m: &mut DrawingManager, tool: DrawingToolType, x_to_bar: fn(f32) -> f32) {
+            let y_to_price = |y: f32| 200.0 - f64::from(y);
+            m.start_drawing_with_coords(tool, Pos2::new(10.0, 95.0), x_to_bar, y_to_price);
+            m.add_point_with_coords(Pos2::new(20.0, 94.0), x_to_bar, y_to_price);
+            m.complete_curr_drawing();
+        }
+        const TWO: &[(f32, f64)] = &[(1.0, 105.0), (2.0, 106.0)];
+        const NAN: &[(f32, f64)] = &[(1.0, 105.0), (2.0, f64::NAN)];
+        const ONE: &[(f32, f64)] = &[(1.0, 105.0)];
+        type Create = fn(&mut DrawingManager);
+        let cases: [(&str, bool, Create); 12] = [
+            ("duplicate, disabled tool", true, |m| {
+                m.duplicate_drawing(m.drawings[0].id)
+            }),
+            ("copy drag, disabled tool", true, |m| {
+                let id = m.drawings[0].id;
+                m.start_drag_body(id, Pos2::ZERO);
+                m.copy_dragged_drawings();
+                m.end_drag_handle();
+            }),
+            ("paste, disabled tool", true, |m| {
+                m.paste_drawings(&m.drawings.clone())
+            }),
+            ("paste, cursor", false, |m| {
+                m.paste_drawings(&[line(DrawingToolType::Eraser, TWO)])
+            }),
+            ("paste, non-finite anchor", false, |m| {
+                m.paste_drawings(&[line(DrawingToolType::TrendLine, NAN)])
+            }),
+            ("paste, one anchor", false, |m| {
+                m.paste_drawings(&[line(DrawingToolType::TrendLine, ONE)])
+            }),
+            ("sync, cursor", false, |m| {
+                let _ = m.add_synced_drawing(line(DrawingToolType::Eraser, TWO));
+            }),
+            ("sync, non-finite anchor", false, |m| {
+                let _ = m.add_synced_drawing(line(DrawingToolType::TrendLine, NAN));
+            }),
+            ("sync, one anchor", false, |m| {
+                let _ = m.add_synced_drawing(line(DrawingToolType::TrendLine, ONE));
+            }),
+            ("pointer, cursor", false, |m| {
+                place(m, DrawingToolType::Eraser, |x| x / 10.0)
+            }),
+            ("pointer, non-finite anchor", false, |m| {
+                place(m, DrawingToolType::TrendLine, |_| f32::NAN)
+            }),
+            ("pointer, unmappable anchor", false, |m| {
+                place(m, DrawingToolType::TrendLine, |x| x * 1e30)
+            }),
+        ];
+        for (case, disable, create) in cases {
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            let id = chart
+                .drawings_mut()
+                .add_drawing(line(DrawingToolType::TrendLine, TWO))
+                .unwrap();
+            if disable {
+                chart.drawings_mut().registry.set_availability(
+                    DrawingToolType::TrendLine,
+                    ToolAvailability {
+                        visible: true,
+                        enabled: false,
+                    },
+                );
+            }
+            create(chart.drawings_mut());
+            let ids: Vec<_> = chart.drawings().drawings.iter().map(|d| d.id).collect();
+            assert_eq!(ids, [id], "{case}");
+            assert!(chart.save_drawings().is_ok(), "{case}");
+        }
     }
 }

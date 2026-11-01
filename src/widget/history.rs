@@ -868,6 +868,14 @@ mod tests {
     #[cfg(feature = "drawings")]
     use egui::{Context, Event, Key, Modifiers, RawInput};
 
+    /// A valid host trend line for history actions that do not test its geometry.
+    #[cfg(feature = "drawings")]
+    fn host_line() -> Drawing {
+        let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(1.0, 15.0), ChartPoint::new(2.0, 16.0)];
+        drawing
+    }
+
     #[test]
     fn study_history_records_settings_without_cloning_calculations() {
         use std::sync::{
@@ -1277,7 +1285,8 @@ mod tests {
         let host = chart.add_indicator(Box::new(SMA::new(3)));
         chart
             .drawings_mut()
-            .add_synced_drawing(Drawing::new(0, DrawingToolType::TrendLine));
+            .add_synced_drawing(host_line())
+            .unwrap();
         assert!(!chart.can_undo());
         chart.user_action(|chart| {
             chart.user_action(|chart| chart.set_timeframe(Timeframe::Min15));
@@ -1324,12 +1333,12 @@ mod tests {
         chart.user_action(|chart| {
             let mut drawing = Drawing::new(0, DrawingToolType::HorizontalLine);
             drawing.chart_points = vec![ChartPoint::new(1.0, 15.0)];
-            chart.drawings_mut().add_synced_drawing(drawing);
+            chart.drawings_mut().add_synced_drawing(drawing).unwrap();
         });
         chart.user_action(|chart| chart.drawings_mut().clear_all());
-        let mut host = Drawing::new(0, DrawingToolType::TrendLine);
+        let mut host = host_line();
         host.stored_id = Some("host".into());
-        chart.drawings_mut().add_synced_drawing(host);
+        chart.drawings_mut().add_synced_drawing(host).unwrap();
         chart.drawings.pending_sync.lock().unwrap().clear();
         // Prepending real bars remaps commands on both stacks, as it does live drawings.
         let prepend = |chart: &mut Chart, count| {
@@ -1390,7 +1399,8 @@ mod tests {
             chart.user_action(|chart| {
                 chart
                     .drawings_mut()
-                    .add_synced_drawing(Drawing::new(0, DrawingToolType::TrendLine))
+                    .add_synced_drawing(host_line())
+                    .unwrap()
             });
             let id = chart.user_action(|chart| chart.add_indicator(Box::new(RSI::new(14))));
             for (key, shift, studies, drawings) in [
@@ -1448,7 +1458,8 @@ mod tests {
             chart.user_action(|chart| {
                 chart
                     .drawings_mut()
-                    .add_synced_drawing(Drawing::new(0, DrawingToolType::TrendLine))
+                    .add_synced_drawing(host_line())
+                    .unwrap()
             })
         };
         draw(&mut chart);

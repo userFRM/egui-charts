@@ -182,6 +182,8 @@ impl FloatingReplayControl {
 
     /// Supplies source intervals the host can serve. An empty list hides the selector.
     /// Selecting one emits an intent; the host reloads that source and retains the cursor time.
+    /// Offer `Timeframe::Ticks` of one for trade-by-trade updates when the host holds the trades
+    /// (see [`Chart::set_replay_source`](crate::Chart::set_replay_source)).
     pub fn set_update_intervals(
         &mut self,
         current: crate::model::Timeframe,

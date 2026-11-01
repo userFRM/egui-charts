@@ -193,6 +193,7 @@ impl Drawing {
                 | DrawingToolType::SchiffPitchfork
                 | DrawingToolType::ModifiedSchiffPitchfork
                 | DrawingToolType::InsidePitchfork
+                | DrawingToolType::Pitchfan
         );
         let custom_fork = fork && self.pitchfork.is_some();
         // Keep body fills of annotations and legacy forks; analysis labels keep their own fill.

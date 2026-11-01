@@ -238,6 +238,7 @@ impl DrawingPropertiesDialog {
                 drawing.position_stop_color = old.position_stop_color;
                 drawing.volume_profile = old.volume_profile;
                 drawing.regression_trend = old.regression_trend;
+                drawing.vwap = old.vwap;
                 drawing.channel_midline = old.channel_midline;
                 drawing.elliott_degree = old.elliott_degree;
                 drawing.font_weight = old.font_weight;

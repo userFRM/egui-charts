@@ -64,7 +64,9 @@ impl DrawingApp {
         trend_line.color = [33, 150, 243, 255]; // Material Blue
         trend_line.stroke_width = 2.0;
         trend_line.completed = true;
-        drawing_manager.add_synced_drawing(trend_line);
+        drawing_manager
+            .add_drawing(trend_line)
+            .expect("a valid trend line");
 
         // --- Programmatic drawing: Fibonacci Retracement ---
         // From a swing low at bar 50 to a swing high at bar 120
@@ -74,7 +76,9 @@ impl DrawingApp {
         fib.color = [255, 193, 7, 255]; // Amber
         fib.stroke_width = 1.5;
         fib.completed = true;
-        drawing_manager.add_synced_drawing(fib);
+        drawing_manager
+            .add_drawing(fib)
+            .expect("a valid Fibonacci retracement");
 
         // Set the active tool for interactive drawing (users can click the chart)
         // In a full app, this would be controlled by a toolbar.

@@ -6,15 +6,17 @@ use crate::drawings::domain::DrawingToolType;
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
 use crate::model::{Bar, SpanCache};
 use crate::painting::volume_profile::ProfileStyle;
-use crate::styles::{stroke, typography};
-use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Shape, Stroke};
+use crate::styles::stroke;
+use egui::{Color32, Pos2, Shape, Stroke};
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 
 /// Bars between the saved running sums of an anchored VWAP.
 const VWAP_CHECKPOINT: usize = 1024;
+
+/// Colour of the anchored VWAP's bands, its first band's fill included.
+const VWAP_BAND_COLOR: Color32 = Color32::from_rgb(76, 175, 80);
 
 type ProfileCache = SpanCache<Option<VolumeProfile>, (usize, Option<f64>)>;
 
@@ -27,31 +29,19 @@ thread_local! {
 }
 
 impl Drawing {
-    /// Renders the anchored VWAP from the anchor bar to the last bar, with
-    /// bands one and two volume-weighted standard deviations away.
+    /// Renders the anchored VWAP from the anchor bar to the last bar at the drawing's width,
+    /// with the enabled bands of its [`VwapConfig`](crate::drawings::VwapConfig), the first one
+    /// filled at 5%.
     pub(crate) fn render_anchored_vwap(&self, painter: &egui::Painter, view: &ChartView) {
         let Some(anchor_at) = self.chart_points.first() else {
             return;
         };
-        let color = self.color32();
-
         if let Some((first, bars)) = bars_between(view.bars, anchor_at.bar_idx, f32::INFINITY) {
-            self.draw_vwap(painter, view, first, bars, color);
+            self.draw_vwap(painter, view, first, bars);
         }
     }
 
-    fn draw_vwap(
-        &self,
-        painter: &egui::Painter,
-        view: &ChartView,
-        first: usize,
-        bars: &[Bar],
-        color: Color32,
-    ) {
-        // VWAP, then the bands, in standard deviations from it.
-        const OFFSETS: [f64; 5] = [0.0, 1.0, -1.0, 2.0, -2.0];
-        const NAMES: [&str; 4] = ["+1σ", "-1σ", "+2σ", "-2σ"];
-
+    fn draw_vwap(&self, painter: &egui::Painter, view: &ChartView, first: usize, bars: &[Bar]) {
         // Only bars inside the clip rect (plus one on each side) become
         // points; bar_to_x is linear, so they are found without a scan.
         let x0 = (view.bar_to_x)(first as f32);
@@ -72,58 +62,44 @@ impl Drawing {
         let checkpoints = VWAP_CHECKPOINTS.with_borrow_mut(|cache| {
             cache.get((), first, &bars[..covered], view.revision, vwap_checkpoints)
         });
-        let mut lines: [Vec<Pos2>; 5] = Default::default();
-        let mut last_vwap = None;
+        // The VWAP, then the upper and lower line of every enabled band, in standard deviations
+        // from it.
+        let config = self.vwap.unwrap_or_default();
+        let mut offsets = vec![0.0];
+        for band in config.bands.iter().filter(|b| b.enabled) {
+            offsets.extend([band.multiplier(), -band.multiplier()]);
+        }
+        let mut lines = vec![Vec::with_capacity(to - from); offsets.len()];
         for (i, value) in (from..to).zip(anchored_vwap(bars, &checkpoints, from..to)) {
             let Some((vwap, sigma)) = value else { continue };
             let x = (view.bar_to_x)((first + i) as f32);
-            for (line, k) in lines.iter_mut().zip(OFFSETS) {
+            for (line, k) in lines.iter_mut().zip(&offsets) {
                 line.push(Pos2::new(x, (view.price_to_y)(vwap + k * sigma)));
             }
-            last_vwap = Some(vwap);
         }
-        let (Some(vwap), Some(&end)) = (last_vwap, lines[0].last()) else {
+        if lines[0].is_empty() {
             return;
-        };
+        }
 
-        // Bands (the 2σ ones fainter), then the VWAP line, each labelled at
-        // the last drawn bar
-        let font = egui::FontId::proportional(typography::XS);
-        let band_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 150);
-        let [vwap_line, bands @ ..] = lines;
-        for (i, (band, name)) in bands.into_iter().zip(NAMES).enumerate() {
-            let label_at = band.last().map(|p| Pos2::new(p.x - 20.0, p.y));
-            let alpha = if i < 2 { 1.0 } else { 0.5 };
+        if config.bands[0].enabled {
+            super::super::fibonacci::paint_band(
+                painter,
+                &lines[1],
+                &lines[2],
+                VWAP_BAND_COLOR.gamma_multiply(0.05),
+            );
+        }
+        let vwap_line = lines.remove(0);
+        for line in lines {
             painter.add(Shape::line(
-                band,
-                Stroke::new(stroke::HAIRLINE, band_color.gamma_multiply(alpha)),
+                line,
+                Stroke::new(stroke::HAIRLINE, VWAP_BAND_COLOR),
             ));
-            if let Some(pos) = label_at {
-                painter.text(
-                    pos,
-                    egui::Align2::CENTER_CENTER,
-                    name,
-                    font.clone(),
-                    band_color,
-                );
-            }
         }
         painter.add(Shape::line(
             vwap_line,
-            Stroke::new(self.stroke_width.max(2.0), color),
+            Stroke::new(self.stroke_width, self.color32()),
         ));
-
-        let vwap_bg =
-            Rect::from_center_size(Pos2::new(end.x - 60.0, end.y), egui::vec2(80.0, 16.0));
-        painter.rect_filled(vwap_bg, DESIGN_TOKENS.rounding.sm, color);
-        painter.text(
-            vwap_bg.center(),
-            egui::Align2::CENTER_CENTER,
-            format!("VWAP {vwap:.2}"),
-            font,
-            Color32::WHITE,
-        );
     }
 
     /// Renders the volume profile of the bars between the two anchors, with
@@ -319,9 +295,122 @@ mod tests {
     use super::*;
     use crate::drawings::domain::DrawingToolType;
     use crate::drawings::rendering::sample_bars;
+    use egui::Rect;
 
     fn assert_close(got: f64, want: f64) {
         assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
+    }
+
+    /// The line keeps the drawing's width and only the enabled bands are drawn, band 1 filled.
+    #[test]
+    fn anchored_vwap_draws_its_line_and_enabled_bands_only() {
+        use crate::drawings::{ChartPoint, VwapBand, VwapConfig};
+        // From bar 1: V = 1, 2, 8; PV = 10, 22, 88; P²V = 100, 244, 970.
+        // VWAP = 10, 11, 11; deviation = 0, 1, 0.5.
+        let bars: Vec<_> = [(50.0, 0.0), (10.0, 1.0), (12.0, 1.0), (11.0, 6.0)]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (price, volume))| {
+                let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+                Bar::new(time, price, price, price, price, volume)
+            })
+            .collect();
+        let blue = Color32::from_rgb(41, 98, 255);
+        let mid = [100.0, 90.0, 90.0];
+        let mut other_bands = VwapConfig::default();
+        other_bands.bands[0].enabled = false;
+        other_bands.bands[1].enabled = true;
+        other_bands.bands[2] = VwapBand::new(true, 0.5).unwrap();
+        let mut no_bands = VwapConfig::default();
+        no_bands.bands[0].enabled = false;
+        for (name, anchor, config, width, fill, expected) in [
+            (
+                "default",
+                0.0,
+                None,
+                1.0,
+                true,
+                vec![
+                    ([100.0, 80.0, 85.0], VWAP_BAND_COLOR, 1.0),
+                    ([100.0, 100.0, 95.0], VWAP_BAND_COLOR, 1.0),
+                    (mid, blue, 1.0),
+                ],
+            ),
+            (
+                "bands 2 and 3",
+                0.0,
+                Some(other_bands),
+                3.0,
+                false,
+                vec![
+                    ([100.0, 70.0, 80.0], VWAP_BAND_COLOR, 1.0),
+                    ([100.0, 110.0, 100.0], VWAP_BAND_COLOR, 1.0),
+                    ([100.0, 85.0, 87.5], VWAP_BAND_COLOR, 1.0),
+                    ([100.0, 95.0, 92.5], VWAP_BAND_COLOR, 1.0),
+                    (mid, blue, 3.0),
+                ],
+            ),
+            (
+                "no bands",
+                0.0,
+                Some(no_bands),
+                1.0,
+                false,
+                vec![(mid, blue, 1.0)],
+            ),
+            ("past last bar", 4.0, None, 1.0, false, vec![]),
+        ] {
+            let mut drawing = Drawing::new(1, DrawingToolType::AnchoredVWAP);
+            drawing.color = [41, 98, 255, 255];
+            drawing.stroke_width = width;
+            drawing.vwap = config;
+            drawing.chart_points = vec![ChartPoint::new(anchor, 50.0)];
+            let view = ChartView {
+                instrument: None,
+                price_formatter: None,
+                bars: &bars,
+                revision: 0,
+                bar_to_x: &|b| 100.0 + 10.0 * b,
+                price_to_y: &|p| ((20.0 - p) * 10.0) as f32,
+                y_to_price: &|y| 20.0 - f64::from(y) / 10.0,
+                time_axis: true,
+                executions: None,
+            };
+            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                let painter = egui::Painter::new(
+                    ui.ctx().clone(),
+                    egui::LayerId::background(),
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0)),
+                );
+                drawing.render_anchored_vwap(&painter, &view);
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            assert_eq!(shapes.len(), expected.len() + usize::from(fill), "{name}");
+            if fill {
+                let Shape::Mesh(mesh) = &shapes[0].shape else {
+                    panic!("{name}: band fill")
+                };
+                assert!(
+                    mesh.vertices
+                        .iter()
+                        .all(|v| v.color == Color32::from_rgba_premultiplied(4, 9, 4, 13)),
+                    "{name}"
+                );
+            }
+            for (shape, (ys, color, width)) in shapes[usize::from(fill)..].iter().zip(expected) {
+                let Shape::Path(line) = &shape.shape else {
+                    panic!("{name}: unexpected shape")
+                };
+                assert_eq!(line.stroke, Stroke::new(width, color).into(), "{name}");
+                let points: Vec<_> = ys
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, y)| Pos2::new(110.0 + 10.0 * i as f32, y))
+                    .collect();
+                assert_eq!(line.points, points, "{name}");
+            }
+        }
     }
 
     /// Reference: VWAP of (h + l + c) / 3 from bar 1, and the standard

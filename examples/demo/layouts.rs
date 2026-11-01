@@ -760,12 +760,14 @@ impl DemoApp {
         let mut errors = vec![
             self.settings.take_error(),
             self.top_toolbar.layout_menu.take_error(),
-            self.chart.take_storage_error(),
+            self.chart
+                .take_storage_error()
+                .map(|error| error.to_string()),
         ];
         errors.extend(
             self.extra_charts
                 .iter_mut()
-                .map(|c| c.chart.take_storage_error()),
+                .map(|c| c.chart.take_storage_error().map(|error| error.to_string())),
         );
         for error in errors.into_iter().flatten() {
             self.toasts.error(error);
@@ -1019,7 +1021,7 @@ mod tests {
             .chart_points
             .push(egui_charts::drawings::ChartPoint::new(10.0, 42.0));
         app.chart
-            .user_action(|chart| chart.drawings_mut().add_synced_drawing(drawing));
+            .user_action(|chart| chart.drawings_mut().add_synced_drawing(drawing).unwrap());
         assert!(app.chart.flush_stored_drawings());
         app.chart.drawings_mut().registry.set_availability(
             egui_charts::drawings::DrawingToolType::TrendLine,

@@ -118,9 +118,8 @@ impl DrawingLinks {
                         // Not saved where it is mirrored: the chart it was drawn on keeps it, and
                         // a drawing that is not saveable stays when this chart reads its storage.
                         copy.saveable &= !charts[slot].keeps_stored_drawings();
-                        charts[slot].drawings_mut().add_synced_drawing(copy);
-                        if let Some(added) = charts[slot].drawings().drawings.last() {
-                            self.origins.insert((slot, added.id), origin);
+                        if let Ok(added) = charts[slot].drawings_mut().add_synced_drawing(copy) {
+                            self.origins.insert((slot, added), origin);
                         }
                     }
                 } else if let Some(id) = linked {
@@ -274,11 +273,14 @@ mod tests {
         let mut local = Drawing::new(0, DrawingToolType::HorizontalLine);
         local.chart_points.push(ChartPoint::new(0.0, 42.0));
         local.completed = true;
-        charts[1].drawings_mut().add_synced_drawing(local);
+        charts[1].drawings_mut().add_synced_drawing(local).unwrap();
         let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
         drawing.chart_points = vec![ChartPoint::new(2.0, 10.0), ChartPoint::new(4.0, 12.0)];
         drawing.completed = true;
-        charts[0].drawings_mut().add_synced_drawing(drawing);
+        charts[0]
+            .drawings_mut()
+            .add_synced_drawing(drawing)
+            .unwrap();
         let mut refs: Vec<_> = charts.iter_mut().collect();
         links.sync(&mut refs, 4, &groups, false);
         assert_eq!(refs[1].drawings().drawings.len(), 2);
@@ -374,7 +376,8 @@ mod tests {
         target.set_symbol("SAMPLE");
         source
             .drawings_mut()
-            .add_synced_drawing(refs[0].drawings().drawings[0].clone());
+            .add_synced_drawing(refs[0].drawings().drawings[0].clone())
+            .unwrap();
         let mut pending = DrawingLinks::default();
         pending.sync(&mut [&mut source, &mut target], 2, &groups, false);
         assert!(target.drawings().drawings.is_empty());
@@ -388,7 +391,7 @@ mod tests {
         );
         let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
         drawing.chart_points = vec![ChartPoint::new(1.5, 10.0), ChartPoint::new(3.5, 12.0)];
-        source.drawings_mut().add_synced_drawing(drawing);
+        source.drawings_mut().add_synced_drawing(drawing).unwrap();
         source.anchor_drawing_points();
         source.state.set_elements(
             Some(
@@ -409,7 +412,7 @@ mod tests {
         // A drawing of a study pane without a counterpart is not mirrored.
         let mut owned = drawing.clone();
         owned.pane = Some(7);
-        source.drawings_mut().add_synced_drawing(owned);
+        source.drawings_mut().add_synced_drawing(owned).unwrap();
         let mut local = DrawingLinks::default();
         local.sync(&mut [&mut source, &mut target], 2, &groups, false);
         assert!(target.drawings().drawings.iter().all(|d| d.pane.is_none()));
@@ -456,7 +459,7 @@ mod tests {
         drawing.pane = Some(rsi_a.0);
         drawing.chart_points = vec![ChartPoint::new(2.0, 40.0), ChartPoint::new(4.0, 60.0)];
         drawing.completed = true;
-        a.drawings_mut().add_synced_drawing(drawing);
+        a.drawings_mut().add_synced_drawing(drawing).unwrap();
         let source = a.drawings().drawings[0].id;
         let mut sync = |a: &mut Chart, b: &mut Chart| links.sync(&mut [a, b], 2, &groups, false);
         sync(&mut a, &mut b);
@@ -518,7 +521,7 @@ mod tests {
             let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
             drawing.chart_points = vec![ChartPoint::new(4.0, 10.0), ChartPoint::new(6.0, 12.0)];
             drawing.completed = true;
-            source.drawings_mut().add_synced_drawing(drawing);
+            source.drawings_mut().add_synced_drawing(drawing).unwrap();
             links.sync(&mut [&mut source, &mut target], 2, &groups, false);
             target.drawings().pending_sync.lock().unwrap().clear();
             if evict {
