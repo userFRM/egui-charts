@@ -5,7 +5,7 @@ use crate::model::{BarClock, OrderSide, Tick};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::ops::Bound;
+use std::ops::RangeBounds;
 
 /// Inclusive thresholds allow a relative error of 1e-9, which covers the rounding of sizes
 /// summed trade by trade, and is far below one lot at any realistic volume.
@@ -252,7 +252,7 @@ pub struct Footprint {
     max_size: f64,
     max_bars: usize,
     max_rows: usize,
-    /// Bars opening up to this time lack executions that were dropped.
+    /// Bars opening up to this time lack executions that were dropped or never received.
     incomplete_through: Option<DateTime<Utc>>,
 }
 
@@ -292,15 +292,23 @@ impl Footprint {
     }
 
     /// Open of the oldest bar whose executions are all held: earlier bars were cut by the
-    /// budget or by trades dropped from the host's store, and must not be shown as complete.
+    /// budget or by trades dropped from the host's store, or may lack trades that never
+    /// arrived, and must not be shown as complete.
     pub fn complete_from(&self) -> Option<DateTime<Utc>> {
-        let after = self
-            .incomplete_through
-            .map_or(Bound::Unbounded, Bound::Excluded);
+        self.complete_bars(..).next().map(|bar| bar.time)
+    }
+
+    /// The bars in `range` from [`complete_from`](Self::complete_from) on. Panics as
+    /// [`BTreeMap::range`] does.
+    pub(crate) fn complete_bars(
+        &self,
+        range: impl RangeBounds<DateTime<Utc>>,
+    ) -> impl Iterator<Item = &FootprintBar> {
+        let cut = self.incomplete_through;
         self.bars
-            .range((after, Bound::Unbounded))
-            .next()
-            .map(|(time, _)| *time)
+            .range(range)
+            .filter(move |(time, _)| cut.is_none_or(|cut| **time > cut))
+            .map(|(_, bar)| bar)
     }
 
     /// Takes out the executions dropped from the host's store, the newest at `through`, and
@@ -338,6 +346,20 @@ impl Footprint {
             };
         }
         self.rows = self.bars.values().map(|bar| bar.levels.len()).sum();
+    }
+
+    /// Counts the bar holding `first`, the oldest execution held, and earlier bars as
+    /// incomplete: executions before it may exist that never arrived.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(
+            dead_code,
+            reason = "only the chart widget knows where its trades begin"
+        )
+    )]
+    pub(crate) fn received_from(&mut self, first: DateTime<Utc>) {
+        let open = self.clock.bar_open(first);
+        self.incomplete_through = self.incomplete_through.max(Some(open));
     }
 
     fn enforce_budget(&mut self) {
@@ -393,13 +415,14 @@ impl Footprint {
     }
 
     /// The executions of the bars that contain `first` through `last`, inclusive, as one bar
-    /// opening with the first of them: the exact profile of a span of the chart. Empty when
-    /// nothing traded there or `last` precedes `first`.
+    /// opening with the first of them: the exact profile of a span of the chart. Bars before
+    /// [`complete_from`](Self::complete_from) are left out, as their executions are not all
+    /// held. Empty when no complete bar traded there or `last` precedes `first`.
     pub fn profile(&self, first: DateTime<Utc>, last: DateTime<Utc>) -> FootprintBar {
         let (first, last) = (self.clock.bar_open(first), self.clock.bar_open(last));
         let mut profile = FootprintBar::empty(first);
         if first <= last {
-            for bar in self.bars.range(first..=last).map(|(_, bar)| bar) {
+            for bar in self.complete_bars(first..=last) {
                 profile.absorb(bar);
             }
         }

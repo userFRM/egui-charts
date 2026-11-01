@@ -162,7 +162,7 @@ impl Drawing {
     }
 
     /// The profile of `bars`, the span that starts at bar `first`: the executed volume at each
-    /// price when the view holds executions in the span, else estimated from the bars.
+    /// price when the view holds complete executions in the span, else estimated from the bars.
     fn span_profile(
         &self,
         view: &ChartView,
@@ -172,10 +172,8 @@ impl Drawing {
         if let (Some(flow), Some(start), Some(end)) = (view.executions, bars.first(), bars.last()) {
             let executed = flow.profile(start.time, end.time);
             let complete = flow
-                .bars()
-                .keys()
-                .next()
-                .is_some_and(|&t| t <= executed.time);
+                .complete_from()
+                .is_some_and(|from| from <= executed.time);
             if let Some(profile) = VolumeProfile::from_executions(
                 &executed,
                 flow.price_step(),
@@ -191,7 +189,8 @@ impl Drawing {
 
     /// The profile that a fixed range or anchored volume profile shows over the view's bars,
     /// with its [source](VolumeProfile::source): executed volume when
-    /// [`ChartView::executions`] holds any in the selected span, else the bar estimate.
+    /// [`ChartView::executions`] holds complete bars in the selected span, those from
+    /// [`Footprint::complete_from`](crate::data::Footprint::complete_from), else the bar estimate.
     /// `None` for other tools, a drawing without its anchors, or an empty selection.
     pub fn volume_profile_of(&self, view: &ChartView) -> Option<VolumeProfile> {
         let anchor = |i: usize| self.chart_points.get(i).map(|p| p.bar_idx);
@@ -710,14 +709,17 @@ mod tests {
         let bars = sample_bars();
         let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
         // Bar 1 trades 11 (4 sold), 12 (6 bought, 2 unknown); bar 2 trades 12 (3 bought).
-        for (bar, price, size, side) in [
+        let trades: Vec<_> = [
             (1, 11.0, 4.0, Some(OrderSide::Sell)),
             (1, 12.0, 6.0, Some(OrderSide::Buy)),
             (1, 12.0, 2.0, None),
             (2, 12.0, 3.0, Some(OrderSide::Buy)),
-        ] {
-            flow.push(&Tick::new(bars[bar].time, price, size, side))
-                .unwrap();
+        ]
+        .into_iter()
+        .map(|(bar, price, size, side)| Tick::new(bars[bar].time, price, size, side))
+        .collect();
+        for trade in &trades {
+            flow.push(trade).unwrap();
         }
         let view = |executions| ChartView {
             price_formatter: None,
@@ -776,5 +778,15 @@ mod tests {
             profile.source(),
             ProfileSource::Executions { complete: true }
         );
+        // Once the store drops the sell of 4, bar 1 is cut: the same span counts bar 2 alone
+        // and is partial.
+        let mut cut = flow.clone();
+        cut.drop_through(trades[0].ts, &trades[1..]);
+        let profile = drawing.volume_profile_of(&view(Some(&cut))).unwrap();
+        assert_eq!(
+            profile.source(),
+            ProfileSource::Executions { complete: false }
+        );
+        assert_eq!(profile.volume(), [3.0]);
     }
 }

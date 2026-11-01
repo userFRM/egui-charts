@@ -144,6 +144,9 @@ by skipping updates silently:
 `TradeProfileRanges::new` takes ordered, non-overlapping half-open ranges of bar opening times.
 Supply exchange session boundaries, including any pre-market or post-market splits, aligned
 with the footprint's bar clock. `trade_profiles` sums the existing exact rows over each range.
+Bars before `Footprint::complete_from`, whose executions are not all held, are left out, and
+`TradeProfile::complete` is false for a range that starts before it; the chart labels such a
+profile "Partial executions".
 `merge_next` combines neighbours; `split` divides a composite at an interior bar boundary.
 `ui::trade_profile_menu` exposes these operations to a host's menu and returns whether it changed
 the ranges. Recompute profiles when trades or ranges change.

@@ -514,6 +514,8 @@ impl ChartLayout {
             if self.maximized.is_some_and(|slot| slot != index) && !self.detached[index] {
                 continue;
             }
+            charts[index].layout_inactive =
+                count > 1 && index != self.active && !self.detached[index];
             let focus = self.focus_active && index == self.active;
             if self.detached[index] {
                 let id = egui::ViewportId::from_hash_of((ui.scope_id(), "detached_chart", index));
@@ -575,6 +577,7 @@ impl ChartLayout {
                 |ui| {
                     ui.shrink_clip_rect(rect);
                     let response = charts[index].show(ui);
+                    charts[index].layout_inactive = false;
                     if focus {
                         response.request_focus();
                     }
@@ -829,6 +832,59 @@ mod tests {
         chart.set_symbol("SAMPLE");
         chart.set_timeframe(Timeframe::Min1);
         chart
+    }
+
+    /// Only the active and hovered charts expose their scale settings in a layout.
+    #[cfg(feature = "icons")]
+    #[test]
+    fn scale_settings_follow_layout_activity_and_hover() {
+        for (mode, maximized, hovered, expected) in [
+            (ChartLayoutMode::Single, None, false, 1),
+            (ChartLayoutMode::Four, None, false, 1),
+            (ChartLayoutMode::Four, None, true, 2),
+            (ChartLayoutMode::Tabs, None, false, 1),
+            (ChartLayoutMode::Four, Some(2), false, 1),
+        ] {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+            let mut layout = ChartLayout {
+                mode,
+                maximized,
+                ..Default::default()
+            };
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0))),
+                        events: if hovered {
+                            vec![Event::PointerMoved(pos2(900.0, 200.0))]
+                        } else {
+                            vec![Event::PointerGone]
+                        },
+                        ..Default::default()
+                    },
+                    |ui| {
+                        layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                    },
+                );
+                output.textures_delta.clear();
+                let gears = output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .filter(|(_, node)| node.label() == Some("Scale settings"))
+                    .count();
+                assert_eq!(
+                    gears, expected,
+                    "{mode:?}, maximized={maximized:?}, hovered={hovered}"
+                );
+                output.drop_without_applying_deltas();
+            }
+        }
     }
 
     #[test]

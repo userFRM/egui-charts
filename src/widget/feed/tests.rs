@@ -754,6 +754,81 @@ fn footprint_follows_trade_eviction() {
     assert_eq!(flow.complete_from(), Some(start + TimeDelta::minutes(1)));
 }
 
+/// The bar of the oldest held trade is complete only once a trade page reports that nothing
+/// exists before it: without trade history, or with a page that stops short of its start,
+/// that bar is drawn as a candle.
+#[test]
+fn oldest_held_trade_leaves_its_bar_incomplete_until_history_starts() {
+    use crate::model::OrderSide::Buy;
+    enum Step {
+        Reply(Result<TradePage, FeedError>),
+        Trade(Tick),
+    }
+    let (older, forming) = (bars(5)[3].time, bars(5)[4].time);
+    let next = forming + TimeDelta::minutes(1);
+    let buy = |ts, size| Tick::new(ts, 104.0, size, Some(Buy));
+    let held = || {
+        vec![
+            buy(older + TimeDelta::seconds(40), 0.5),
+            buy(forming + TimeDelta::seconds(5), 1.0),
+        ]
+    };
+    for (row, steps) in [
+        // No trade history: the forming bar holds only what arrived live.
+        vec![
+            (Step::Reply(Err(FeedError::NotSupported)), None),
+            (
+                Step::Trade(buy(forming + TimeDelta::seconds(30), 2.0)),
+                None,
+            ),
+            (Step::Trade(buy(next, 1.0)), Some(next)),
+        ],
+        // A page that does not reach the start of trade history.
+        vec![(
+            Step::Reply(Ok(TradePage::new(held(), false))),
+            Some(forming),
+        )],
+        // A page with nothing before it.
+        vec![(Step::Reply(Ok(TradePage::new(held(), true))), Some(older))],
+        // Live trades come first, then an empty page ends trade history.
+        vec![
+            (Step::Trade(buy(forming + TimeDelta::seconds(5), 1.0)), None),
+            (
+                Step::Reply(Ok(TradePage::new(Vec::new(), true))),
+                Some(forming),
+            ),
+        ],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_chart_type(ChartType::VolumeFootprint);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(bars(5), false));
+        frames.run(&mut chart);
+        for (step, expected) in steps {
+            match step {
+                Step::Reply(reply) => feed.trades.lock().unwrap().pop().unwrap().send(reply),
+                Step::Trade(trade) => feed.sink().push_tick(trade),
+            }
+            frames.run(&mut chart);
+            let flow = chart
+                .feed_link
+                .as_ref()
+                .unwrap()
+                .footprint
+                .as_ref()
+                .unwrap();
+            assert_eq!(flow.complete_from(), expected, "row {row}");
+        }
+    }
+}
+
 /// Bars from the first execution on show merged candles while their cells would not be readable.
 #[test]
 fn footprint_draws_candles_from_the_first_execution_at_the_minimum_spacing() {

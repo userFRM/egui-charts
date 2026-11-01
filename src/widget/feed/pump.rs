@@ -202,6 +202,7 @@ impl Chart {
                 self.quote = None;
                 self.session_quote = None;
                 link.trades = Trades::new(TRADE_CAPACITY);
+                link.trades_from_start = false;
                 link.order_book = None;
                 link.order_queue = None;
                 link.depth_history.iter_mut().for_each(DepthHistory::clear);
@@ -256,6 +257,10 @@ impl Chart {
                 && (evicted || Some(lost) != lost_before)
             {
                 flow.drop_through(lost, link.trades.iter());
+            }
+            // Trades before the oldest held one may never have arrived.
+            if let (Some(first), Some(flow)) = (link.unconfirmed_start(), &mut link.footprint) {
+                flow.received_from(first);
             }
             link.time = link.time.max(updates.time);
             if let Some(now) = link.time {
@@ -384,6 +389,7 @@ impl Chart {
         link.depth_complete = false;
         (link.bar_cursor, link.trade_cursor, link.depth_cursor) = (None, None, None);
         link.trades_complete = false;
+        link.trades_from_start = false;
         self.set_quote(None);
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
@@ -588,7 +594,8 @@ impl Chart {
 
     /// Puts a page of older trades in front of the held ones. A page that ends history, names a
     /// continuation, or adds nothing new cannot move the boundary, so the same request is never
-    /// repeated.
+    /// repeated. A page that ends history also confirms that the held trades start where trade
+    /// history starts.
     fn apply_trades(&mut self, link: &mut FeedLink, asked: &TradeRequest, page: TradePage) {
         let empty = page.trades.is_empty();
         let continuation = page.continue_before.filter(|_| empty);
@@ -598,6 +605,9 @@ impl Chart {
             return;
         }
         let end = page.end_of_history || (empty && page.continue_before.is_none());
+        // The oldest held trade's bar is complete once nothing is left before it.
+        let reached_start = end && !link.trades_from_start;
+        link.trades_from_start |= end;
         let bubbles = &mut link.bubbles;
         let mut changed = false;
         let fold = &mut |trade: &Tick, added| {
@@ -609,9 +619,9 @@ impl Chart {
             for (input, _) in &link.study_inputs {
                 input.replace_trades(&link.clock, &link.trades);
             }
-            if link.footprint.is_some() {
-                link.footprint = link.footprint();
-            }
+        }
+        if (changed || reached_start) && link.footprint.is_some() {
+            link.footprint = link.footprint();
         }
         link.trade_cursor = continuation;
         link.trades_complete |=

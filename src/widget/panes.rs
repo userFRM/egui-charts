@@ -627,7 +627,7 @@ impl Chart {
                             })
                             .filter(|pos| plot.contains(*pos))
                     })
-                    .filter(|_| !egui::Popup::is_any_open(ui.ctx()));
+                    .filter(|_| !self.menu_open && !egui::Popup::is_any_open(ui.ctx()));
                 let mut crosshair_options = self.chart_options.crosshair.resolved(ui.ctx());
                 if eraser_mode && crosshair_options.style != crate::config::CrosshairStyle::Hidden {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
