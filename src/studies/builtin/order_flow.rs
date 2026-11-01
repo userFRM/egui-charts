@@ -1,17 +1,30 @@
 //! Fixed aggregations of executions, quotes and synchronized depth, never estimates from bars.
 
+use super::anchor_period::AnchorPeriod;
 use crate::data::{OrderFilter, OrderFlowInput, OrderFlowKind};
 use crate::model::{Bar, BarClock};
 use crate::studies::{
-    Indicator, IndicatorValues, InputKind, InputValue, PlotStyle, PlotType, StudyInput,
+    Indicator, IndicatorValues, InputKind, InputValue, PlotStyle, PlotType, StudyCandle, StudyInput,
 };
 use chrono::TimeDelta;
 use egui::Color32;
 
+const ANCHORS: [Option<AnchorPeriod>; 8] = [
+    None,
+    Some(AnchorPeriod::Session),
+    Some(AnchorPeriod::Week),
+    Some(AnchorPeriod::Month),
+    Some(AnchorPeriod::Quarter),
+    Some(AnchorPeriod::Year),
+    Some(AnchorPeriod::Decade),
+    Some(AnchorPeriod::Century),
+];
+
 /// An order-flow study in a separate pane. Use the factory titles or [`Self::new`].
 ///
-/// Setting an input starts a fresh source: the host must replay historical events if it needs
-/// values before that change. Book size is the last synchronized snapshot in the bar; spread
+/// Changing an aggregation input starts a fresh source: the host must replay historical events
+/// if it needs values before that change. Reset period and representation reuse the held source.
+/// Book size is the last synchronized snapshot in the bar; spread
 /// averages every accepted quote equally. Bars without the relevant stream remain gaps.
 #[derive(Clone)]
 pub struct OrderFlowStudy {
@@ -25,6 +38,11 @@ pub struct OrderFlowStudy {
     visible: bool,
     /// Draw the rolling sums as a histogram rather than lines.
     histogram: bool,
+    /// `Some(false)` is per-bar execution delta; `Some(true)` is cumulative execution delta.
+    delta: Option<bool>,
+    candle_style: bool,
+    candles: Vec<StudyCandle>,
+    anchor: Option<AnchorPeriod>,
 }
 
 impl OrderFlowStudy {
@@ -45,6 +63,33 @@ impl OrderFlowStudy {
             ],
             visible: true,
             histogram: true,
+            delta: None,
+            candle_style: false,
+            candles: Vec::new(),
+            anchor: None,
+        }
+    }
+
+    /// Exact execution delta in a separate pane, as candles by default. With `cumulative`,
+    /// candles carry the total until the selected anchor period changes (each exchange trading
+    /// day by default); otherwise every candle opens at zero. Inputs select an inclusive size
+    /// range and candles or a cumulative line / per-bar histogram. No volume is inferred from
+    /// price bars. The chart connects the same source as Size-Filtered CVD, including its
+    /// historical coverage, retention and replay cutoff.
+    pub fn execution_delta(cumulative: bool) -> Self {
+        Self {
+            delta: Some(cumulative),
+            candle_style: true,
+            anchor: cumulative.then_some(AnchorPeriod::Session),
+            colors: vec![
+                crate::studies::palette::BLUE,
+                crate::studies::palette::UP,
+                crate::studies::palette::DOWN,
+            ],
+            ..Self::new(OrderFlowKind::FilteredCvd {
+                min: 0.0,
+                max: f64::MAX,
+            })
         }
     }
 
@@ -69,9 +114,11 @@ impl OrderFlowStudy {
         let from = if reset_revision != self.reset_revision {
             0
         } else {
-            from.min(data.len())
+            from.min(self.values.len()).min(data.len())
         };
         self.reset_revision = reset_revision;
+        self.candles
+            .truncate(self.candles.partition_point(|c| c.bars.start < from));
         self.values.truncate(from);
         self.values
             .resize(data.len(), crate::studies::IndicatorValue::None);
@@ -93,20 +140,45 @@ impl OrderFlowStudy {
                 }
             }
             OrderFlowKind::FilteredCvd { .. } => {
-                let mut sum = self
+                let sessions = self.clock.sessions();
+                let period =
+                    |bar: &Bar| self.anchor.map(|a| a.key(sessions.trading_date(bar.time)));
+                let mut last = self
                     .values
                     .line(0)
                     .get(..from)
                     .unwrap_or_default()
                     .iter()
+                    .enumerate()
                     .rev()
-                    .find(|v| v.is_finite())
-                    .copied();
+                    .find(|(_, v)| v.is_finite())
+                    .map(|(i, v)| (period(&data[i]), *v));
                 for (at, row) in self.rows(data, from).into_iter().enumerate() {
                     if let Some(row) = row {
-                        let total = sum.unwrap_or(0.0) + row[0];
-                        sum = Some(total);
-                        self.values.set_value(0, from + at, total);
+                        let at = from + at;
+                        let key = period(&data[at]);
+                        let open = last
+                            .filter(|(p, _)| self.delta != Some(false) && *p == key)
+                            .map_or(0.0, |(_, total)| total);
+                        let (high, low, close) = (open + row[1], open + row[2], open + row[0]);
+                        if ![open, high, low, close].iter().all(|v| v.is_finite()) {
+                            continue;
+                        }
+                        self.values.set_value(0, at, close);
+                        if self.delta.is_some() {
+                            self.values.set_value(1, at, f64::NAN);
+                            self.values.set_value(2, at, f64::NAN);
+                        }
+                        if self.delta.is_some() && self.candle_style {
+                            let plot = 1 + usize::from(row[0] < 0.0);
+                            self.values.set_value(plot, at, close);
+                            self.candles.push(StudyCandle {
+                                bars: at..at + 1,
+                                bar: Bar::new(data[at].time, open, high, low, close, 0.0),
+                                plot,
+                            });
+                        }
+                        last = Some((key, close));
                     }
                 }
             }
@@ -134,12 +206,20 @@ impl OrderFlowStudy {
     fn reset(&mut self) {
         self.input = OrderFlowInput::new(self.kind).with_order_filter(self.filter.clone());
         self.values = IndicatorValues::new();
+        self.candles.clear();
         self.reset_revision = 0;
     }
 }
 
 impl Indicator for OrderFlowStudy {
     fn name(&self) -> &str {
+        if let Some(cumulative) = self.delta {
+            return if cumulative {
+                "Cumulative Execution Delta"
+            } else {
+                "Execution Delta"
+            };
+        }
         match self.kind {
             OrderFlowKind::Spread => "Quoted Spread",
             OrderFlowKind::BookSize { .. } => "Book Size",
@@ -175,6 +255,16 @@ impl Indicator for OrderFlowStudy {
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
+    fn candles(&self) -> &[StudyCandle] {
+        &self.candles
+    }
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        if self.delta.is_some() {
+            crate::scales::StudyFormat::Volume
+        } else {
+            crate::scales::StudyFormat::Fixed(2)
+        }
+    }
     fn colors(&self) -> Vec<Color32> {
         self.colors.clone()
     }
@@ -196,6 +286,9 @@ impl Indicator for OrderFlowStudy {
         Box::new(self.clone())
     }
     fn line_count(&self) -> usize {
+        if self.delta.is_some() {
+            return 3;
+        }
         match self.kind {
             OrderFlowKind::FlowSum { .. } => 2,
             OrderFlowKind::FilteredCvd { .. } => 1,
@@ -203,6 +296,9 @@ impl Indicator for OrderFlowStudy {
         }
     }
     fn line_names(&self) -> Vec<String> {
+        if self.delta.is_some() {
+            return ["Delta", "Up", "Down"].map(String::from).to_vec();
+        }
         let names: &[&str] = match self.kind {
             OrderFlowKind::FlowSum { .. } => &["Volume sum", "Delta sum"],
             OrderFlowKind::FilteredCvd { .. } => &["CVD"],
@@ -225,7 +321,8 @@ impl Indicator for OrderFlowStudy {
     fn plot_style(&self, line: usize) -> PlotStyle {
         PlotStyle {
             color: self.colors[line.min(2)],
-            plot_type: if (line == 2 && matches!(self.kind, OrderFlowKind::BookSize { .. }))
+            plot_type: if self.delta == Some(false)
+                || (line == 2 && matches!(self.kind, OrderFlowKind::BookSize { .. }))
                 || (self.histogram && matches!(self.kind, OrderFlowKind::FlowSum { .. }))
             {
                 PlotType::Histogram
@@ -327,7 +424,7 @@ impl Indicator for OrderFlowStudy {
                 ),
             ],
             OrderFlowKind::FilteredCvd { min, max } => {
-                [("min", "Smallest size", min), ("max", "Largest size", max)]
+                let mut inputs = [("min", "Smallest size", min), ("max", "Largest size", max)]
                     .map(|(id, label, value)| {
                         StudyInput::new(
                             id,
@@ -336,7 +433,50 @@ impl Indicator for OrderFlowStudy {
                             InputKind::Number(0.0, f64::MAX),
                         )
                     })
-                    .to_vec()
+                    .to_vec();
+                if self.delta != Some(false) {
+                    inputs.push(
+                        StudyInput::new(
+                            "anchor",
+                            "Reset period",
+                            InputValue::Choice(
+                                ANCHORS.iter().position(|a| *a == self.anchor).unwrap_or(0),
+                            ),
+                            InputKind::Choice(
+                                ANCHORS
+                                    .iter()
+                                    .map(|a| {
+                                        a.map_or_else(
+                                            || "Continuous".to_owned(),
+                                            |a| format!("{a:?}"),
+                                        )
+                                    })
+                                    .collect(),
+                            ),
+                        )
+                        .with_default(InputValue::Choice(usize::from(self.delta == Some(true)))),
+                    );
+                }
+                if self.delta.is_some() {
+                    inputs.push(
+                        StudyInput::new(
+                            "representation",
+                            "Representation",
+                            InputValue::Choice(usize::from(!self.candle_style)),
+                            InputKind::Choice(vec![
+                                "Candles".to_owned(),
+                                if self.delta == Some(false) {
+                                    "Histogram"
+                                } else {
+                                    "Line"
+                                }
+                                .to_owned(),
+                            ]),
+                        )
+                        .with_default(InputValue::Choice(0)),
+                    );
+                }
+                inputs
             }
             OrderFlowKind::AggressorRate { seconds, instant } => vec![
                 length("seconds", "Rolling seconds", seconds, 1, 86400),
@@ -369,6 +509,16 @@ impl Indicator for OrderFlowStudy {
             return Err("invalid order flow input");
         }
         let before = self.kind;
+        if let InputValue::Choice(at) = &value {
+            match id {
+                "anchor" => self.anchor = ANCHORS[*at],
+                "representation" => self.candle_style = *at == 0,
+                _ => return Err("invalid order flow input"),
+            }
+            self.values = IndicatorValues::new();
+            self.candles.clear();
+            return Ok(());
+        }
         if let ("histogram", InputValue::Toggle(on)) = (id, &value) {
             self.histogram = *on;
             return Ok(());
@@ -581,6 +731,92 @@ mod tests {
         }
     }
 
+    /// An overnight exchange session opens at 17:00 UTC. Midnight stays in that session;
+    /// calendar anchors use its closing date, including 31 December's session for 1 January.
+    #[test]
+    fn filtered_cvd_resets_on_exchange_trading_dates_for_every_anchor() {
+        use crate::model::{Session, SessionWindow, Timeframe, TimezoneId};
+        use chrono::{NaiveTime, Weekday};
+
+        let times = [
+            "2025-12-31T16:00:00Z",
+            "2025-12-31T17:00:00Z",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T17:00:00Z",
+            "2026-01-04T17:00:00Z",
+            "2026-02-01T17:00:00Z",
+            "2026-04-01T17:00:00Z",
+        ];
+        let data: Vec<_> = times
+            .map(|t| Bar::new(t.parse().unwrap(), 100.0, 100.0, 100.0, 100.0, 0.0))
+            .to_vec();
+        let clock = BarClock::new(Timeframe::Min1).with_session(
+            TimezoneId::utc(),
+            Session::new([SessionWindow::new(
+                [
+                    Weekday::Mon,
+                    Weekday::Tue,
+                    Weekday::Wed,
+                    Weekday::Thu,
+                    Weekday::Fri,
+                    Weekday::Sat,
+                    Weekday::Sun,
+                ],
+                NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+            )]),
+            false,
+        );
+        let mut study = OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
+            min: 2.0,
+            max: 13.0,
+        });
+        study.set_bar_clock(&clock);
+        let input = study.order_flow_inputs()[0].clone();
+        // The first bar of the new session has no input. Unknown sides and size-one buys
+        // do not add to delta; bounds 2 and 13 are inclusive.
+        for (i, size) in [(0, 4.0), (2, 3.0), (3, 5.0), (4, 7.0), (5, 11.0), (6, 13.0)] {
+            for (offset, size, side) in [
+                (0, size, Some(OrderSide::Buy)),
+                (1, 1.0, Some(OrderSide::Buy)),
+                (2, 2.0, None),
+            ] {
+                input.push_trade(
+                    &clock,
+                    &Tick::new(data[i].time + TimeDelta::seconds(offset), 100.0, size, side),
+                );
+            }
+        }
+        for (anchor, want) in [
+            (0, [4.0, NAN, 7.0, 12.0, 19.0, 30.0, 43.0]),
+            (1, [4.0, NAN, 3.0, 5.0, 7.0, 11.0, 13.0]),
+            (2, [4.0, NAN, 7.0, 12.0, 7.0, 11.0, 13.0]),
+            (3, [4.0, NAN, 3.0, 8.0, 15.0, 11.0, 13.0]),
+            (4, [4.0, NAN, 3.0, 8.0, 15.0, 26.0, 13.0]),
+            (5, [4.0, NAN, 3.0, 8.0, 15.0, 26.0, 39.0]),
+            (6, [4.0, NAN, 7.0, 12.0, 19.0, 30.0, 43.0]),
+            (7, [4.0, NAN, 7.0, 12.0, 19.0, 30.0, 43.0]),
+        ] {
+            study
+                .set_input("anchor", InputValue::Choice(anchor))
+                .unwrap();
+            study.calculate(&data[..2]);
+            study.update(&data, 2);
+            for (got, want) in study.values().line(0).iter().zip(want) {
+                assert!(
+                    got == &want || (got.is_nan() && want.is_nan()),
+                    "anchor {anchor}: {got} against {want}"
+                );
+            }
+            let mut full = study.clone();
+            full.calculate(&data);
+            assert_eq!(
+                format!("{:?}", lines(&study)),
+                format!("{:?}", lines(&full))
+            );
+        }
+    }
+
     /// Signed sizes give -1 then +24 on three-tick/range bars. A sell of eight
     /// splits 4/4 on volume bars; a buy of sixteen splits 12/4 on delta bars.
     #[test]
@@ -654,11 +890,26 @@ mod tests {
                     interval,
                     study.values().line(0).to_vec(),
                     input.values().keys().copied().collect::<Vec<_>>(),
+                    input
+                        .values()
+                        .last_key_value()
+                        .map(|(_, row)| [row[1], row[2]]),
                 ));
+                let last_range = match (interval, min == 0.0) {
+                    ("3t" | "2r", true) => [24.0, -8.0],
+                    ("3t" | "2r", false) => [8.0, 0.0],
+                    ("10v", true) => [2.0, -4.0],
+                    ("10v", false) => [0.0, -4.0],
+                    ("10delta", _) => [4.0, 0.0],
+                    ("1t", true) => [32.0, 0.0],
+                    ("1t", false) => [0.0, 0.0],
+                    _ => unreachable!(),
+                };
                 expected.push((
                     interval,
                     want,
                     data.iter().map(|bar| bar.time).collect::<Vec<_>>(),
+                    Some(last_range),
                 ));
             }
         }
@@ -707,5 +958,185 @@ mod tests {
             ));
         }
         assert_eq!(results, [(10_000.0, false, true), (10.0, true, true)]);
+    }
+
+    /// Executions +5, -8, +5 reach 5, -3, 2. A cumulative candle adds the previous
+    /// total of four until the exchange trading day changes, when its open returns to zero.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn registered_execution_candles_follow_chart_updates_and_reset_with_the_line() {
+        use crate::model::{BarData, Timeframe};
+        use crate::studies::IndicatorFactory;
+        use crate::widget::{Chart, SeriesId};
+        use egui::{Context, RawInput, Rect, Shape, pos2, vec2};
+
+        let start: DateTime<Utc> = "2026-01-04T23:58:00Z".parse().unwrap();
+        let data: Vec<_> = (0..5)
+            .map(|i| {
+                Bar::new(
+                    start + TimeDelta::minutes(i),
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    999.0,
+                )
+            })
+            .collect();
+        let factory = IndicatorFactory::new();
+        for (name, expected) in [
+            (
+                "Execution Delta",
+                vec![
+                    [0.0, 4.0, 0.0, 4.0],
+                    [0.0, 5.0, -3.0, 2.0],
+                    [0.0, 5.0, -3.0, 2.0],
+                ],
+            ),
+            (
+                "Cumulative Execution Delta",
+                vec![
+                    [0.0, 4.0, 0.0, 4.0],
+                    [4.0, 9.0, 1.0, 6.0],
+                    [0.0, 5.0, -3.0, 2.0],
+                ],
+            ),
+        ] {
+            assert_eq!(factory.category(name), Some("Order flow"), "{name}");
+            let mut chart = Chart::new(BarData::default());
+            chart.set_timeframe(Timeframe::Min1);
+            chart.set_data(SeriesId::MAIN, data[..3].to_vec());
+            let id = chart.add_indicator(factory.create(name).unwrap());
+            let input = chart.indicators().next().unwrap().1.order_flow_inputs()[0].clone();
+            let mut trades = crate::data::trades::Trades::new(100);
+            for (second, size, side) in [
+                (0, 4.0, OrderSide::Buy),
+                (60, 5.0, OrderSide::Buy),
+                (61, 8.0, OrderSide::Sell),
+                (62, 5.0, OrderSide::Buy),
+                (120, 5.0, OrderSide::Buy),
+                (121, 8.0, OrderSide::Sell),
+                (122, 5.0, OrderSide::Buy),
+            ] {
+                let trade = Tick::new(start + TimeDelta::seconds(second), 100.0, size, Some(side));
+                input.push_trade(&chart.bar_clock(), &trade);
+                trades.push(trade);
+            }
+            let buy = Color32::from_rgb(10, 200, 40);
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_colors(vec![Color32::BLUE, buy, Color32::RED]);
+            let ctx = Context::default();
+            let frame = |chart: &mut Chart| {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1440.0, 900.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.show(ui);
+                    },
+                )
+            };
+            frame(&mut chart).drop_without_applying_deltas();
+            let output = frame(&mut chart);
+            assert!(output.shapes.iter().any(|s| matches!(&s.shape, Shape::LineSegment { points, stroke } if stroke.color == buy && points[0].x == points[1].x && points[0].y != points[1].y)), "{name} must reach the runtime candle painter");
+            output.drop_without_applying_deltas();
+            let drawn = |chart: &Chart| {
+                chart
+                    .indicators()
+                    .next()
+                    .unwrap()
+                    .1
+                    .candles()
+                    .iter()
+                    .map(|c| [c.bar.open, c.bar.high, c.bar.low, c.bar.close])
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(drawn(&chart), expected, "{name}");
+            // A live buy of three follows an empty bar, retaining the cumulative total.
+            input.push_trade(
+                &chart.bar_clock(),
+                &Tick::new(data[4].time, 100.0, 3.0, Some(OrderSide::Buy)),
+            );
+            chart.update(SeriesId::MAIN, data[3].clone());
+            chart.update(SeriesId::MAIN, data[4].clone());
+            frame(&mut chart).drop_without_applying_deltas();
+            assert_eq!(
+                drawn(&chart).last().unwrap()[3],
+                if name == "Execution Delta" { 3.0 } else { 5.0 }
+            );
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("representation", InputValue::Choice(1))
+                .unwrap();
+            frame(&mut chart).drop_without_applying_deltas();
+            let study = chart.indicators().next().unwrap().1;
+            assert!(study.candles().is_empty());
+            assert!(study.plot_style(0).visible);
+            assert_eq!(
+                study
+                    .inputs()
+                    .iter()
+                    .find(|input| input.id == "representation")
+                    .unwrap()
+                    .default,
+                InputValue::Choice(0)
+            );
+            assert!(
+                matches!(&study.values().to_rows()[0], crate::studies::IndicatorValue::Multiple(values) if values.len() == 3)
+            );
+            assert_eq!(
+                study.plot_style(0).plot_type,
+                if name == "Execution Delta" {
+                    PlotType::Histogram
+                } else {
+                    PlotType::Line
+                }
+            );
+            if name == "Cumulative Execution Delta" {
+                assert_eq!(
+                    (
+                        study.values().value(0, 1),
+                        study.values().value(0, 2),
+                        study.values().value(0, 4)
+                    ),
+                    (Some(6.0), Some(2.0), Some(5.0))
+                );
+                // Continuous keeps the prior six at midnight, on the same source.
+                chart
+                    .indicator_mut(id)
+                    .unwrap()
+                    .set_input("anchor", InputValue::Choice(0))
+                    .unwrap();
+                frame(&mut chart).drop_without_applying_deltas();
+                assert_eq!(
+                    chart.indicators().next().unwrap().1.values().value(0, 4),
+                    Some(11.0)
+                );
+            }
+            // Replaying inside bar 1 includes its first buy and excludes its later sell and buy.
+            input.set_replay(
+                &chart.bar_clock(),
+                Some(start + TimeDelta::seconds(61)),
+                Some(&trades),
+            );
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("representation", InputValue::Choice(0))
+                .unwrap();
+            frame(&mut chart).drop_without_applying_deltas();
+            assert_eq!(
+                drawn(&chart),
+                if name == "Execution Delta" {
+                    vec![[0.0, 4.0, 0.0, 4.0], [0.0, 5.0, 0.0, 5.0]]
+                } else {
+                    vec![[0.0, 4.0, 0.0, 4.0], [4.0, 9.0, 4.0, 9.0]]
+                }
+            );
+        }
     }
 }
