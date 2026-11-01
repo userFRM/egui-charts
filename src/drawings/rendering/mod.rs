@@ -1451,7 +1451,9 @@ mod tests {
                         assert!(mesh.vertices.iter().all(|v| v.color == fill));
                         Some(
                             mesh.indices
-                                .chunks_exact(3)
+                                .as_chunks::<3>()
+                                .0
+                                .iter()
                                 .map(|tri| {
                                     let a = mesh.vertices[tri[0] as usize].pos;
                                     let b = mesh.vertices[tri[1] as usize].pos;

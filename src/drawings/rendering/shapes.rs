@@ -323,7 +323,7 @@ pub(super) fn even_odd_trapezoids(points: &[Pos2]) -> Vec<[Pos2; 4]> {
             .map(|&edge| (x_at(edge, (top + bottom) / 2.0), edge))
             .collect();
         crossing.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for pair in crossing.chunks_exact(2) {
+        for pair in crossing.as_chunks::<2>().0 {
             let (left, right) = (pair[0].1, pair[1].1);
             trapezoids.push([
                 Pos2::new(x_at(left, top), top),
