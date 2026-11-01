@@ -4056,7 +4056,8 @@ mod tests {
             vec![Pos2::new(map.idx_to_x(70), map.price_to_y(110.0))]
         );
         // Trailing whitespace leaves the pulse on the last valued bar; both dots use that
-        // bar's own colour, and a hovered empty slot has no dot.
+        // bar's own colour, and a hovered empty slot has no dot. Vary the hover height to
+        // stay outside the price-action button beside the last bars.
         let mut bars = chart.bars(crate::widget::SeriesId::MAIN).to_vec();
         bars[98].colors = Some(Box::new(crate::model::BarColors {
             color: Some(Color32::GOLD),
@@ -4068,7 +4069,7 @@ mod tests {
         for (time, index, marker) in [(5.2, 98, true), (5.3, 99, false)] {
             let hover = Pos2::new(
                 map.idx_to_x(index),
-                chart.last_rendered_price_rect.center().y,
+                chart.last_rendered_price_rect.center().y + if marker { 20.0 } else { -20.0 },
             );
             let painted = shapes(&ctx, &mut chart, time, vec![Event::PointerMoved(hover)]);
             for radius in [3.0, 5.0] {
