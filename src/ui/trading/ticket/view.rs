@@ -4,13 +4,15 @@ use super::{Action, Market, OrderPreset, OrderTicket, Tab, confirmation, order_q
 use crate::chart::decimals;
 use crate::icons::icons;
 use crate::localization as l10n;
+use crate::painting::symbol_mark::paint_symbol_mark;
 use crate::theme::ThemeExt;
 use crate::ui::connection_status::show_connection_status_with_label;
 use crate::ui::trading::widgets::{SECTION_TITLE_SIZE, hit, side_fill, side_name, text, track};
 use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
 use egui::{
-    Align, Align2, Label, Layout, Rect, RichText, Role, Sense, Ui, UiBuilder, WidgetInfo, vec2,
+    Align, Align2, ImageSource, Label, Layout, Rect, RichText, Role, Sense, Ui, UiBuilder,
+    WidgetInfo, vec2,
 };
 
 impl OrderTicket {
@@ -178,6 +180,13 @@ impl OrderTicket {
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                     .show(|ui| self.more(ui, market, presets, one_click));
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    let (mark, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
+                    paint_symbol_mark(
+                        ui.painter(),
+                        mark,
+                        &self.symbol,
+                        market.logo.map(ImageSource::from),
+                    );
                     // A long symbol gives way, so that the status stays clear of the buttons.
                     let status = market.offline.as_ref().map_or(0.0, |state| {
                         let mut measure = ui.new_child(UiBuilder::new().invisible());
@@ -433,6 +442,7 @@ mod tests {
                     trades: &[],
                     session_open: None,
                     last_fill: None,
+                    logo: None,
                 };
                 ticket.tab = tab;
                 let mut visible_submit = false;
@@ -537,6 +547,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            logo: None,
         };
         let cases = [
             (

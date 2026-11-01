@@ -9,6 +9,7 @@ use egui::{Align2, Context, Order, RichText, Ui, Vec2};
 use super::toast::{Toast, ToastKind};
 use super::toasts::{Toasts, current_time_seconds};
 use crate::icons::icons;
+use crate::painting::symbol_mark::paint_symbol_mark;
 use crate::theme::{Spacing, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
@@ -305,7 +306,7 @@ impl NotificationPanel {
         toast: &Toast,
         trade: &super::TradingToast,
     ) -> bool {
-        use egui::{FontId, Rect, Sense, Stroke, pos2, vec2};
+        use egui::{FontId, ImageSource, Rect, Sense, Stroke, pos2, vec2};
         let theme = ui.active_theme();
         let buy = trade.side == crate::model::OrderSide::Buy;
         let side_color = crate::theme::trading_side_color(&theme, trade.side);
@@ -357,7 +358,7 @@ impl NotificationPanel {
             trade.symbol.clone(),
             FontId::proportional(ui.active_theme().text.title),
             theme.ui.text,
-            (content_width - 12.0).max(1.0),
+            (content_width - 28.0).max(1.0),
         );
         let symbol_at = vec2(0.0, title.size().y + 4.0);
         let second_row = symbol_at.y + symbol.size().y + 4.0 + 12.0;
@@ -433,10 +434,27 @@ impl NotificationPanel {
         let x = tile.right() + 10.0;
         let top = rect.top() + 12.0;
         let symbol_rect =
-            Rect::from_min_size(pos2(x, top) + symbol_at, symbol.size() + vec2(12.0, 4.0));
+            Rect::from_min_size(pos2(x, top) + symbol_at, symbol.size() + vec2(28.0, 4.0));
         content.galley(pos2(x, top), title, theme.ui.text);
         content.rect_filled(symbol_rect, 10.0, theme.ui.btn_bg_hover);
-        content.galley(symbol_rect.min + vec2(6.0, 2.0), symbol, theme.ui.text);
+        let line = symbol
+            .rows
+            .first()
+            .map_or(symbol.size().y, |row| row.rect().height());
+        let mark = Rect::from_center_size(
+            pos2(
+                symbol_rect.left() + 11.0,
+                symbol_rect.top() + 2.0 + line / 2.0,
+            ),
+            vec2(14.0, 14.0),
+        );
+        paint_symbol_mark(
+            &content,
+            mark,
+            &trade.symbol,
+            trade.logo.as_deref().map(ImageSource::from),
+        );
+        content.galley(symbol_rect.min + vec2(22.0, 2.0), symbol, theme.ui.text);
         let side_rect =
             Rect::from_min_size(pos2(x, top + second_row), side.size() + vec2(12.0, 4.0));
         content.rect_filled(side_rect, 4.0, side_color.gamma_multiply(0.12));
@@ -560,6 +578,7 @@ mod tests {
             let mut toast = Toast::info("Limit order placed").with_title("Limit order placed on");
             toast.trading = Some(super::super::TradingToast {
                 symbol: "SYM".into(),
+                logo: None,
                 side: crate::model::OrderSide::Buy,
                 quantity: 1.0,
                 price: "100.00".into(),
@@ -609,6 +628,7 @@ mod tests {
             Toast::info("Placed: Buy 1 AAPL at 100.00").with_title("Limit order placed on");
         newest.trading = Some(super::super::TradingToast {
             symbol: "AAPL".into(),
+            logo: None,
             side: crate::model::OrderSide::Buy,
             quantity: 1.0,
             price: "100.00".into(),
@@ -754,6 +774,7 @@ mod tests {
                             toast = toast.with_title(title);
                             toast.trading = Some(super::super::TradingToast {
                                 symbol: "LONG:SYMBOL".into(),
+                                logo: None,
                                 side: crate::model::OrderSide::Buy,
                                 quantity: 0.5,
                                 price: "123456789.00".into(),
