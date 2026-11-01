@@ -158,7 +158,6 @@ impl LiveFeed {
                 .find(|feed| feed.state().symbol == symbol)
                 .map(LiveFeed::fork)
                 .unwrap_or_else(|| Self::new(symbol, sim.now));
-            source.advance(sim.now);
             let streams = std::mem::take(&mut sim.streams);
             *sim = source
                 .0
@@ -399,9 +398,7 @@ impl LiveFeed {
         });
         let mut to_stream = std::time::Duration::MAX;
         for feed in &sim.streams {
-            if feed.state().subscription.is_some() {
-                to_stream = to_stream.min(feed.advance(now));
-            }
+            to_stream = to_stream.min(feed.advance(now));
         }
         let metric_changed = sim.now.timestamp().div_euclid(300) != now.timestamp().div_euclid(300);
         if metric_changed {
@@ -1033,7 +1030,6 @@ impl Datafeed for LiveFeed {
         let (session, adjusted) = self.view(subscription.extended_hours);
         feed.set_view(session, adjusted);
         feed.set_paused(false);
-        feed.advance(self.now());
         let mut sim = feed.state();
         subscription.sink.set_server_time(sim.now);
         for trade in &sim.trades {
@@ -1238,6 +1234,36 @@ mod tests {
                         chart.symbol() == ORDER_LEVEL_SYMBOL
                     );
                 }
+            }
+            drop(charts);
+            for seconds in [14, 16, 18] {
+                let at = now + TimeDelta::seconds(seconds);
+                feed.advance(at);
+                for reference in &references {
+                    reference.advance(at);
+                }
+            }
+            for reference in references {
+                let mut chart = ChartBuilder::new()
+                    .with_feed(feed.clone())
+                    .with_symbol(reference.instrument().symbol)
+                    .with_initial_bars(100)
+                    .build();
+                for _ in 0..4 {
+                    frame(&mut chart);
+                }
+                let expected = reference.snapshot(
+                    chart.timeframe().unwrap(),
+                    chart.bar_clock(),
+                    chart.extended_hours(),
+                );
+                let actual = chart.bars(SeriesId::MAIN);
+                assert_eq!(
+                    actual,
+                    &expected[expected.len() - actual.len()..],
+                    "{} after reopening",
+                    chart.symbol()
+                );
             }
         }
     }
