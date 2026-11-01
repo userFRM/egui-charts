@@ -92,7 +92,9 @@ use egui_charts::widget::settings::ChartSettingsState;
 use live::LiveFeed;
 use std::sync::Arc;
 
-use crate::sampledata::{SAMPLE_LOGO, SAMPLE_LOGO_SVG, DemoSymbol, us_equity_session, visible_bars_for_range};
+use crate::sampledata::{
+    DemoSymbol, SAMPLE_LOGO, SAMPLE_LOGO_SVG, us_equity_session, visible_bars_for_range,
+};
 
 fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
     study
@@ -979,12 +981,6 @@ impl DemoApp {
         self.bars = self.live.snapshot(tf, clock, self.chart.extended_hours());
         self.chart.set_data(SeriesId::MAIN, self.bars.clone());
         self.chart.set_instrument(Some(self.live.instrument()));
-        self.chart
-            .set_legend_statuses(&[egui_charts::widget::LegendStatus {
-                text: "SIM",
-                color: egui::Color32::from_rgb(38, 166, 154),
-                background: egui::Color32::TRANSPARENT,
-            }]);
         self.chart.set_quote(None);
         self.chart.set_events(Vec::new());
         self.annotate();

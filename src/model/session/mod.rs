@@ -18,6 +18,8 @@
 mod exchange;
 
 pub use exchange::ExchangeSessionProvider;
+#[cfg(feature = "widget")]
+pub(crate) use exchange::MarketSession;
 
 use crate::model::{Bar, TimezoneId, local_instant, local_time};
 use chrono::{DateTime, Datelike, Duration, NaiveTime, Utc, Weekday};

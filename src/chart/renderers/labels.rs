@@ -1234,6 +1234,7 @@ mod tests {
                             legend.badge = Some(egui::ImageSource::Texture(
                                 (badge.id(), Vec2::splat(18.0)).into(),
                             ));
+                            legend.session = Some(crate::model::session::MarketSession::PostMarket);
                             legend.statuses = &statuses;
                             legend.instrument = Some(&instrument);
                             legend.show_volume = false;

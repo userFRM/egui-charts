@@ -84,6 +84,7 @@ impl ChartSettingsState {
         settings.grid_lines.vertical_color =
             config.vertical_grid_color.unwrap_or(config.grid_color);
         settings.status_line.show_logo = config.show_legend_badge;
+        settings.status_line.show_market_status = config.show_market_status;
         settings.status_line.show_symbol = config.show_symbol_labels;
         settings.status_line.title_as_description = config.title_as_description;
         settings.status_line.show_quote_boxes = config.show_quote_boxes;
@@ -319,6 +320,7 @@ impl ChartSettingsState {
         config.pane_buttons = navigation_buttons(self.btns.pane);
         config.show_ohlc_info = self.status_line.show_ohlc;
         config.show_legend_badge = self.status_line.show_logo;
+        config.show_market_status = self.status_line.show_market_status;
         config.show_last_day_change = self.status_line.show_last_day_change;
         config.indicator_backdrop_opacity =
             f32::from(self.status_line.indicator_background_opacity.min(100)) / 100.0;

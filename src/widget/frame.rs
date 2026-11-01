@@ -37,6 +37,20 @@ impl Chart {
         }
     }
 
+    /// The chart's clock: the replay time while replaying, else the server time from
+    /// [`set_server_time`](Self::set_server_time) or the feed, when known.
+    fn chart_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.replay_time().or_else(|| {
+            self.server_time_offset
+                .and_then(|offset| chrono::Utc::now().checked_add_signed(offset))
+                .or_else(|| {
+                    self.feed_link
+                        .as_ref()
+                        .and_then(super::feed::FeedLink::server_time)
+                })
+        })
+    }
+
     fn current_bar_countdown(&self) -> Option<String> {
         if !self.config.show_countdown || !self.config.show_symbol_last_val {
             return None;
@@ -46,16 +60,9 @@ impl Chart {
         if timeframe.is_trade_based() {
             return None;
         }
-        let now = self.replay_time().or_else(|| {
-            self.server_time_offset
-                .and_then(|offset| chrono::Utc::now().checked_add_signed(offset))
-                .or_else(|| {
-                    self.feed_link
-                        .as_ref()
-                        .and_then(super::feed::FeedLink::server_time)
-                })
-                .or_else(|| self.quote.as_ref().map(|quote| quote.ts))
-        })?;
+        let now = self
+            .chart_time()
+            .or_else(|| self.quote.as_ref().map(|quote| quote.ts))?;
         let session = renderers::exchange_session(
             self.instrument(),
             self.config.session_config.as_ref(),
@@ -2778,6 +2785,24 @@ impl Chart {
                     .as_ref()
                     .filter(|_| self.main_series_visible && self.config.show_quote_boxes);
                 legend.show_title = self.main_series_present && self.config.show_symbol_labels;
+                legend.show_market_status = self.config.show_market_status;
+                if legend.show_title && legend.show_market_status {
+                    // The quote's time is not a clock: it stops when quotes stop.
+                    let now = self.chart_time().unwrap_or_else(chrono::Utc::now);
+                    legend.session = renderers::exchange_session(
+                        self.instrument(),
+                        self.config.session_config.as_ref(),
+                        &self.display_timezone(),
+                        crate::model::Timeframe::Min1,
+                    )
+                    .market_session(now);
+                    if legend.session.is_some() && self.replay_time().is_none() {
+                        // Sessions change state on whole minutes.
+                        let seconds = now.timestamp().rem_euclid(60) as u64;
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_secs(60 - seconds));
+                    }
+                }
                 legend.series_visible = self.main_series_visible;
                 legend.title_as_description = self.config.title_as_description;
                 // A whitespace bar has no values to show.
@@ -3521,7 +3546,8 @@ mod tests {
     #[cfg(feature = "studies")]
     #[test]
     fn status_visibility_reaches_the_chart_legend() {
-        use crate::model::{Instrument, Level1Quote};
+        use crate::model::{DataStatus, Instrument, Level1Quote, Session};
+        use crate::theme::ThemeExt;
         for (description, hidden) in [
             (true, 0),
             (false, 0),
@@ -3536,12 +3562,25 @@ mod tests {
             (true, 9),
             (true, 10),
             (true, 11),
+            (true, 12),
+            (true, 13),
         ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], &[110.0]);
             chart.set_instrument(Some(
-                Instrument::new("TICKER").with_description("Instrument description"),
+                Instrument::new("TICKER")
+                    .with_description("Instrument description")
+                    .with_data_status(DataStatus::Delayed)
+                    .with_session(Session::new([])),
             ));
+            let mut settings = crate::widget::settings::ChartSettingsState::from_chart(&chart);
+            settings.status_line.show_logo = hidden != 12;
+            settings.status_line.show_market_status = hidden != 13;
+            settings.apply_to_chart(&mut chart).unwrap();
+            assert_eq!(
+                crate::widget::settings::ChartSettingsState::from_chart(&chart).status_line,
+                settings.status_line
+            );
             let bar = chart.state.data().bars.last().unwrap();
             chart.set_quote(Some(Level1Quote {
                 symbol: "TICKER".into(),
@@ -3589,6 +3628,24 @@ mod tests {
                     _ => None,
                 })
                 .collect();
+            assert_eq!(
+                texts.contains(&"T"),
+                !matches!(hidden, 1 | 12),
+                "logo hidden={hidden}"
+            );
+            assert_eq!(
+                texts.contains(&"D"),
+                !matches!(hidden, 1 | 13),
+                "market status hidden={hidden}"
+            );
+            assert_eq!(
+                painted
+                    .iter()
+                    .any(|shape| matches!(shape, Shape::Circle(circle)
+                if circle.fill == ctx.active_theme().ui.success && circle.radius == 4.0
+                    && chart.last_rendered_price_rect.contains(circle.center))),
+                !matches!(hidden, 1 | 13)
+            );
             for (text, flag) in [
                 ("SELL", 2),
                 ("BUY", 2),

@@ -26,8 +26,17 @@ pub(crate) fn install(ctx: &Context) {
         return;
     }
     ctx.add_image_loader(Arc::new(IconLoader));
-    // Icons painted earlier went through the generic SVG loader, whose textures would otherwise stay cached.
-    ctx.forget_all_images();
+    // Refresh icons painted by the generic loader without discarding the host's registered images.
+    let icons: Vec<_> = ctx
+        .tex_manager()
+        .read()
+        .allocated()
+        .filter(|(_, meta)| meta.name.starts_with(URI_PREFIX))
+        .map(|(_, meta)| meta.name.clone())
+        .collect();
+    for uri in icons {
+        ctx.forget_image(&uri);
+    }
 }
 
 struct IconLoader;

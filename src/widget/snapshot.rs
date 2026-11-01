@@ -926,11 +926,27 @@ mod tests {
                 .remove("thousands_sep")
                 .is_some()
         );
+        for section in ["config", "settings"] {
+            let value = if section == "settings" {
+                &mut legacy["charts"][0][section]["status_line"]
+            } else {
+                &mut legacy["charts"][0][section]
+            };
+            assert!(
+                value
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("show_market_status")
+                    .is_some()
+            );
+        }
+        restored.config_mut().show_market_status = false;
         restored.config_mut().thousands_sep = None;
         let migrated = SavedLayout::from_json(&legacy.to_string()).unwrap();
         restored.restore(&migrated.charts[0]).unwrap();
         assert!(!restored.chart_options().tooltip.show_volume_details);
         assert_eq!(restored.config().thousands_sep, Some(','));
+        assert!(restored.config().show_market_status);
         assert_eq!(restored.config().watermark_text, None);
         assert!(restored.config().watermark_description);
         legacy["version"] = 1.into();

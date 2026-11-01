@@ -20,8 +20,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use super::market::Market;
 use super::orders::Orders;
 use crate::sampledata::{
-    DemoSymbol, SAMPLE_LOGO, dividend_date, dividend_factor, latest_open_end, session_bars, us_equity_hours,
-    us_equity_session, us_equity_zone,
+    DemoSymbol, SAMPLE_LOGO, dividend_date, dividend_factor, latest_open_end, session_bars,
+    us_equity_hours, us_equity_session, us_equity_zone,
 };
 use egui_charts::ui::timeframe_toolbar::SessionType;
 
