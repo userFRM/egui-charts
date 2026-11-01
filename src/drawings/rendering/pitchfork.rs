@@ -84,14 +84,14 @@ impl Drawing {
     }
 
     /// The pitchfork's median and parallels towards the pane edge in their
-    /// direction, then the construction links. `None`
+    /// direction, then the construction legs. `None`
     /// below three anchors.
     fn pitchfork_base_lines(&self, rect: Rect) -> Option<Vec<[Pos2; 2]>> {
         let &[p0, p1, p2, ..] = self.points.as_slice() else {
             return None;
         };
         let mid = |a: Pos2, b: Pos2| a + (b - a) / 2.0;
-        let (origin, through, upper, lower, links) = match self.tool_type {
+        let (origin, through, upper, lower, legs) = match self.tool_type {
             DrawingToolType::Pitchfork | DrawingToolType::SchiffPitchfork => {
                 let schiff = self.tool_type == DrawingToolType::SchiffPitchfork;
                 let (origin, through) = median_line(p0, p1, p2, schiff);
@@ -121,11 +121,11 @@ impl Drawing {
             _ => return None,
         };
         let mut lines = fork_lines(origin, through, upper, lower, rect).to_vec();
-        lines.extend(links);
+        lines.extend(legs);
         Some(lines)
     }
 
-    /// All visible level lines, followed by the construction links, shared with selection.
+    /// All visible level lines, followed by the construction legs, shared with selection.
     pub(super) fn pitchfork_lines(&self, rect: Rect) -> Option<Vec<[Pos2; 2]>> {
         let base = self.pitchfork_base_lines(rect)?;
         let config = self
