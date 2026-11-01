@@ -135,6 +135,8 @@ impl Chart {
         let at = bars
             .partition_point(|bar| bar.time < first.time)
             .min(end.saturating_sub(16));
+        // Bounded, so a zoomed out view does not sort every visible gap on each frame.
+        let end = end.min(at + 256);
         if end - at < 2 {
             return 1;
         }

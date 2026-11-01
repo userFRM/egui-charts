@@ -1649,7 +1649,7 @@ mod tests {
                     &coords,
                     &chart.build_time_formatter(),
                     &chart.chart_options.time_scale,
-                    chart.chart_options.time_scale.timezone.to_tz().as_ref(),
+                    Some(&crate::model::TimezoneId::default()),
                     |index| chart.index_to_time(index),
                 );
                 let whitespace = keys
