@@ -24,7 +24,10 @@ that cannot contain whole candles of that size uses one-second intrabars. The Lo
 input chooses another interval; one that is not shorter than the chart's or does not divide it
 reads the automatic one. Subsecond and tick-count charts have no request. 24-hour Volume
 requests the automatic interval only where chart bars cannot hold exactly 24 hours, on intervals
-longer than a day or that do not divide one, and sums chart bars until it is supplied. Supply
+longer than a day or that do not divide one, and sums chart bars until it is supplied. Its Units input sums the supplied volume (default) or, for
+volume in base units, an estimate of the quote amount: each candle's volume times its own close,
+labelled with `Instrument::currency`, which the host must set. Without it, or with a non-finite or
+negative value in the window, the quote amount is missing. Supply
 the same symbol and session as the chart. Read the request again after a symbol, interval or
 input change:
 

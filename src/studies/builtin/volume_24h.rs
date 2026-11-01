@@ -28,7 +28,8 @@
 //! turnover. The host must supply [`crate::model::Instrument::currency`] to identify the quote
 //! currency; already quoted volume or contract counts must use supplied units. Negative base
 //! volume or a non-finite volume, close or product makes a quote window unavailable until that
-//! bar leaves it.
+//! bar leaves it. Quote readouts end with the currency code, and legends, tooltips and exports name
+//! the selected units.
 //!
 //! # Example
 //! ```
@@ -80,7 +81,8 @@ pub struct Volume24h {
     quote_units: bool,
     currency: Option<String>,
     precision: Option<usize>,
-    table: StudyTable,
+    /// The report shown when quote units have no latest value.
+    table: Option<StudyTable>,
     color: Color32,
     visible: bool,
 }
@@ -104,7 +106,7 @@ impl Volume24h {
             quote_units: false,
             currency: None,
             precision: None,
-            table: StudyTable::default(),
+            table: None,
             color: palette::BLUE,
             visible: true,
         }
@@ -140,23 +142,20 @@ impl Volume24h {
     }
 
     fn update_table(&mut self) {
-        let value = self
+        let unavailable = self
             .values
             .len()
             .checked_sub(1)
-            .and_then(|i| self.values.value(0, i));
-        self.table = StudyTable {
+            .is_some_and(|i| self.quote_units && self.values.value(0, i).is_none());
+        self.table = unavailable.then(|| StudyTable {
             title: "24-hour Volume".into(),
             columns: vec![self.line_names().remove(0)],
-            rows: vec![vec![StudyCell::Text(match value {
-                Some(value) => self.format_value(value),
-                None if self.quote_units && self.currency.is_none() => {
-                    "Quote currency unavailable".into()
-                }
-                None if self.quote_units => "Quote amount unavailable".into(),
-                None => "Volume unavailable".into(),
+            rows: vec![vec![StudyCell::Text(if self.currency.is_none() {
+                "Quote currency unavailable".into()
+            } else {
+                "Quote amount unavailable".into()
             })]],
-        };
+        });
     }
 
     /// The lower interval read where chart bars cannot hold exactly the last 24 hours: on
@@ -282,7 +281,10 @@ impl Indicator for Volume24h {
 
     fn format_value(&self, value: f64) -> String {
         let value = self.value_format().format(value, self.precision());
-        format!("{value} {}", self.unit())
+        match &self.currency {
+            Some(currency) if self.quote_units => format!("{value} {currency}"),
+            _ => value,
+        }
     }
 
     fn line_names(&self) -> Vec<String> {
@@ -294,7 +296,7 @@ impl Indicator for Volume24h {
     }
 
     fn table(&self) -> Option<&StudyTable> {
-        Some(&self.table)
+        self.table.as_ref()
     }
 
     fn set_instrument(&mut self, instrument: Option<&crate::model::Instrument>) -> bool {
@@ -645,7 +647,7 @@ mod tests {
             )
         });
         for (units, label, value, formatted) in [
-            (0, "Volume (supplied units)", 5.0, "5 supplied units"),
+            (0, "Volume (supplied units)", 5.0, "5"),
             (1, "Amount (USD)", 80.0, "80.00 USD"),
         ] {
             let mut study = Volume24h::new();
@@ -665,6 +667,7 @@ mod tests {
                 .unwrap()
                 .1;
             assert_eq!(study.values().value(0, 1), Some(value));
+            assert!(study.table().is_none());
             assert_eq!(study.line_names(), [label]);
             assert_eq!(study.format_value(value), formatted);
             let table = chart.data_table();
@@ -702,11 +705,7 @@ mod tests {
             study.apply_settings(&[], settings).unwrap();
             assert_eq!(
                 study.format_value(value),
-                if units == 0 {
-                    "5.0 supplied units"
-                } else {
-                    "80.0 USD"
-                }
+                if units == 0 { "5.0" } else { "80.0 USD" }
             );
             assert_eq!(
                 restored.data_table().rows[1].last().unwrap(),
