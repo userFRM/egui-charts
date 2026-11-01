@@ -234,7 +234,11 @@ impl LiveFeed {
     }
 
     pub(super) fn recording(&self) -> Vec<u8> {
-        self.state().capture.bytes()
+        let sim = self.state();
+        sim.streams
+            .iter()
+            .find(|feed| feed.state().symbol == sim.symbol)
+            .map_or_else(|| sim.capture.bytes(), Self::recording)
     }
 
     /// The same synthetic metric history supplied through the feed contract.
@@ -1247,6 +1251,51 @@ mod tests {
     use egui_charts::ChartBuilder;
     use egui_charts::widget::SeriesId;
     use std::sync::Arc;
+
+    #[test]
+    fn recordings_follow_symbols_and_survive_replay_pause() {
+        let now = "2026-10-23T14:59:59Z".parse().unwrap();
+        let feed = Arc::new(LiveFeed::new("SAMPLE", now));
+        let ctx = egui::Context::default();
+        let symbols = ["SAMPLE", ORDER_LEVEL_SYMBOL];
+        let mut charts = Vec::new();
+        for symbol in symbols {
+            let mut chart = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol(symbol)
+                .with_initial_bars(100)
+                .build();
+            for _ in 0..4 {
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    chart.show(ui);
+                })
+                .drop_without_applying_deltas();
+            }
+            charts.push(chart);
+        }
+        feed.advance(now + TimeDelta::seconds(2));
+        feed.set_paused(true);
+        for (symbol, mut chart) in symbols.into_iter().zip(charts) {
+            feed.set_symbol(symbol);
+            let bytes = feed.recording();
+            let mut reader = egui_charts::data::RecordingReader::new(bytes.as_slice()).unwrap();
+            let mut newest = None;
+            while let Some(event) = reader.read().unwrap() {
+                assert_eq!(event.symbol, symbol);
+                newest = Some(event.time);
+            }
+            assert!(
+                newest.is_some_and(|time| time > now),
+                "{symbol} must include recorded live updates"
+            );
+            chart.set_replay_time(Some(now));
+            assert_eq!(
+                feed.recording(),
+                bytes,
+                "{symbol} must retain its recording when replay unsubscribes"
+            );
+        }
+    }
 
     /// Resolving and subscribing another symbol must leave the existing histories and streams
     /// on their own symbols and sessions, including reloads across an hour or the regular close.
