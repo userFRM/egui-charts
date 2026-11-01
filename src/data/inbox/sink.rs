@@ -207,6 +207,9 @@ impl Sink {
                 live.event_closed = false;
                 live.delta = 0.0;
                 live.last_trade = Some(slot);
+                for input in &live.study_inputs {
+                    input.set_trade_bar(slot);
+                }
             }
             if live.forming.is_none_or(|last| slot >= last) {
                 if !bar.is_whitespace() {
@@ -473,7 +476,125 @@ impl TakenIds {
     }
 }
 
+/// Exact execution allocations shared by chart bars and standalone stream inputs.
+#[derive(Clone, Default)]
+pub(crate) struct TradeBars {
+    pub(crate) forming: Option<DateTime<Utc>>,
+    current: Option<(Bar, u64)>,
+    delta: f64,
+    closed: bool,
+    last: Option<DateTime<Utc>>,
+}
+
+impl TradeBars {
+    pub(crate) fn push(
+        &mut self,
+        timeframe: crate::model::Timeframe,
+        tick: &Tick,
+        tick_size: Option<f64>,
+    ) -> Result<Vec<(Bar, f64)>, ()> {
+        use crate::model::{OrderSide, Timeframe};
+        if self.last.is_some_and(|last| tick.ts < last) {
+            return Err(());
+        }
+        let mut forming = self.forming;
+        let mut current = self.current.clone();
+        let (mut delta, mut closed) = (self.delta, self.closed);
+        let mut remaining = tick.size;
+        let mut bars = Vec::new();
+        loop {
+            if bars.len() == 100_000 {
+                return Err(());
+            }
+            let starts = closed || current.is_none();
+            let (old, count) = if starts {
+                let time = match forming.filter(|last| *last >= tick.ts) {
+                    Some(last) => last
+                        .checked_add_signed(TimeDelta::nanoseconds(1))
+                        .ok_or(())?,
+                    None => tick.ts,
+                };
+                delta = 0.0;
+                (
+                    Bar::new(time, tick.price, tick.price, tick.price, tick.price, 0.0),
+                    0,
+                )
+            } else {
+                current.clone().ok_or(())?
+            };
+            let size = match timeframe {
+                Timeframe::Volume(limit) => remaining.min(limit.get() as f64 - old.volume),
+                Timeframe::Delta(limit) => match tick.side {
+                    Some(OrderSide::Buy) => remaining.min(limit.get() as f64 - delta),
+                    Some(OrderSide::Sell) => remaining.min(limit.get() as f64 + delta),
+                    None => remaining,
+                },
+                _ => remaining,
+            };
+            let fill = Bar::new(
+                old.time, tick.price, tick.price, tick.price, tick.price, size,
+            );
+            let bar = fold(&old, &fill).ok_or(())?;
+            delta += match tick.side {
+                Some(OrderSide::Buy) => size,
+                Some(OrderSide::Sell) => -size,
+                None => 0.0,
+            };
+            closed = match timeframe {
+                Timeframe::Ticks(limit) => count + 1 >= limit.get(),
+                Timeframe::Volume(limit) => bar.volume >= limit.get() as f64,
+                Timeframe::Delta(limit) => delta.abs() >= limit.get() as f64,
+                Timeframe::Range(ticks) => {
+                    let tick_size = tick_size.filter(|s| s.is_finite() && *s > 0.0).ok_or(())?;
+                    let range = ticks.get() as f64 * tick_size;
+                    if !range.is_finite() {
+                        return Err(());
+                    }
+                    (bar.high / tick_size).round() - (bar.low / tick_size).round()
+                        >= ticks.get() as f64
+                }
+                _ => return Err(()),
+            };
+            forming = Some(bar.time);
+            current = Some((bar.clone(), count + 1));
+            bars.push((bar, size));
+            let left = remaining - size;
+            if left <= 0.0 {
+                break;
+            }
+            if left == remaining {
+                return Err(());
+            }
+            remaining = left;
+        }
+        self.forming = forming;
+        self.current = current;
+        self.delta = delta;
+        self.closed = closed;
+        self.last = Some(tick.ts);
+        Ok(bars)
+    }
+}
+
 impl Live {
+    #[cfg(feature = "widget")]
+    pub(super) fn connect_study_inputs(&mut self, inputs: Vec<crate::data::OrderFlowInput>) {
+        if self.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+            for input in &inputs {
+                if !self.study_inputs.iter().any(|old| input.same_source(old)) {
+                    // The chart rebuilt drained history; include the executions still queued.
+                    for trade in self.updates.trades.iter() {
+                        input.push_trade(&self.clock, trade);
+                    }
+                    if let Some(open) = self.forming {
+                        input.set_trade_bar(open);
+                    }
+                }
+            }
+        }
+        self.study_inputs = inputs;
+    }
+
     fn bound_bars(&mut self) {
         while self.updates.bars.len() > MAX_PENDING_BARS {
             self.updates.bars.pop_first();
@@ -585,88 +706,24 @@ impl Live {
         }
     }
 
-    /// Folds exact volume and delta thresholds atomically; raw fills stay intact for order flow.
+    /// Folds exact thresholds before publishing any execution allocation to studies.
     fn fold_trade_bar(&mut self, tick: &Tick) -> Result<(), ()> {
-        use crate::model::{OrderSide, Timeframe};
-        let timeframe = self.clock.timeframe().ok_or(())?;
-        let mut forming = self.forming;
-        let mut current = self.count_bar.clone();
-        let (mut delta, mut closed) = (self.delta, self.event_closed);
-        let mut remaining = tick.size;
-        let mut bars = Vec::new();
-        loop {
-            if bars.len() == 100_000 {
-                return Err(());
+        let mut state = TradeBars {
+            forming: self.forming,
+            current: self.count_bar.clone(),
+            delta: self.delta,
+            closed: self.event_closed,
+            last: self.last_trade,
+        };
+        let bars = state.push(self.clock.timeframe().ok_or(())?, tick, self.tick_size)?;
+        self.forming = state.forming;
+        self.count_bar = state.current;
+        self.delta = state.delta;
+        self.event_closed = state.closed;
+        for (i, (bar, size)) in bars.into_iter().enumerate() {
+            for input in &self.study_inputs {
+                input.push_trade_part(tick, bar.time, size, i == 0);
             }
-            let starts = closed || current.is_none();
-            let (old, count) = if starts {
-                let time = match forming.filter(|last| *last >= tick.ts) {
-                    Some(last) => last
-                        .checked_add_signed(TimeDelta::nanoseconds(1))
-                        .ok_or(())?,
-                    None => tick.ts,
-                };
-                delta = 0.0;
-                (
-                    Bar::new(time, tick.price, tick.price, tick.price, tick.price, 0.0),
-                    0,
-                )
-            } else {
-                current.clone().ok_or(())?
-            };
-            let size = match timeframe {
-                Timeframe::Volume(limit) => remaining.min(limit.get() as f64 - old.volume),
-                Timeframe::Delta(limit) => match tick.side {
-                    Some(OrderSide::Buy) => remaining.min(limit.get() as f64 - delta),
-                    Some(OrderSide::Sell) => remaining.min(limit.get() as f64 + delta),
-                    None => remaining,
-                },
-                _ => remaining,
-            };
-            let fill = Bar::new(
-                old.time, tick.price, tick.price, tick.price, tick.price, size,
-            );
-            let bar = fold(&old, &fill).ok_or(())?;
-            delta += match tick.side {
-                Some(OrderSide::Buy) => size,
-                Some(OrderSide::Sell) => -size,
-                None => 0.0,
-            };
-            closed = match timeframe {
-                Timeframe::Ticks(limit) => count + 1 >= limit.get(),
-                Timeframe::Volume(limit) => bar.volume >= limit.get() as f64,
-                Timeframe::Delta(limit) => delta.abs() >= limit.get() as f64,
-                Timeframe::Range(ticks) => {
-                    let tick_size = self
-                        .tick_size
-                        .filter(|s| s.is_finite() && *s > 0.0)
-                        .ok_or(())?;
-                    let range = ticks.get() as f64 * tick_size;
-                    if !range.is_finite() {
-                        return Err(());
-                    }
-                    (bar.high / tick_size).round() - (bar.low / tick_size).round()
-                        >= ticks.get() as f64
-                }
-                _ => return Err(()),
-            };
-            forming = Some(bar.time);
-            current = Some((bar.clone(), count + 1));
-            bars.push(bar);
-            let left = remaining - size;
-            if left <= 0.0 {
-                break;
-            }
-            if left == remaining {
-                return Err(());
-            }
-            remaining = left;
-        }
-        self.forming = forming;
-        self.count_bar = current;
-        self.delta = delta;
-        self.event_closed = closed;
-        for bar in bars {
             self.updates.bars.insert(bar.time, (bar, Origin::Live));
         }
         Ok(())

@@ -191,6 +191,7 @@ pub(crate) fn render_study_tags(
             continue;
         };
         if !plot_style.visible
+            || !study.plot_tagged(line)
             || matches!(
                 plot_style.plot_type,
                 crate::studies::PlotType::BarColor | crate::studies::PlotType::BackgroundColor

@@ -299,7 +299,12 @@ impl Chart {
         } else if drawing_manager.drawings.len() > count_before
             && drawing_manager.dragging_handle.is_none()
         {
-            drawing_manager.drawings.last().map(|d| d.id)
+            // A card placed with its post has its content; there is nothing to type.
+            drawing_manager
+                .drawings
+                .last()
+                .filter(|d| d.post.is_none())
+                .map(|d| d.id)
         } else if response.double_clicked() || response.triple_clicked() {
             response
                 .interact_pointer_pos()
@@ -335,7 +340,13 @@ impl Chart {
                 .iter()
                 .any(|d| d.id == editor.id && drawing_manager.owns_pane(d))
         }) {
-            text::show_editor(ui, drawing_manager, response.id, price_rect);
+            text::show_editor(
+                ui,
+                drawing_manager,
+                response.id,
+                price_rect,
+                self.post_source.is_some(),
+            );
         }
     }
 

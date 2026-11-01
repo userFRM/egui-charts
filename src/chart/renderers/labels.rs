@@ -1025,26 +1025,29 @@ mod tests {
                     Color32::from_rgb(41, 98, 255),
                     Color32::from_rgb(255, 167, 38),
                 ];
+                let untagged = Color32::from_rgb(171, 71, 188);
                 let id = chart.add_indicator(Box::new(
                     CustomIndicator::new("Colliding", |bars| {
                         vec![
-                            IndicatorValue::Multiple(vec![105.0, 105.0, 106.0, f64::NAN]);
+                            IndicatorValue::Multiple(vec![105.0, 105.0, 106.0, f64::NAN, 107.0]);
                             bars.len()
                         ]
                     })
                     .with_overlay(overlay)
-                    .with_line_count(4)
+                    .with_line_count(5)
                     .with_colors(vec![
                         colors[0],
                         colors[1],
                         Color32::RED,
                         Color32::GREEN,
+                        untagged,
                     ]),
                 ));
                 let study = chart.indicator_mut(id).unwrap();
                 let mut settings = study.settings();
                 settings.precision = Some(4);
                 settings.plots[2].visible = false;
+                settings.untagged_plots = vec![4];
                 study.apply_settings(&[], settings).unwrap();
                 frame(&ctx, &mut chart, 0.0, vec![]);
                 let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
@@ -1060,8 +1063,14 @@ mod tests {
                         _ => None,
                     })
                     .collect();
+                assert!(
+                    !painted
+                        .iter()
+                        .any(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == untagged)),
+                    "an untagged plot keeps its value off the scale"
+                );
                 assert!(!painted.iter().any(|shape| matches!(shape,
-                    Shape::Text(text) if text.galley.text() == "106.0000"
+                    Shape::Rect(rect) if rect.fill == Color32::RED
                 )));
                 assert_eq!(
                     tags.len(),

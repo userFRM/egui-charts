@@ -1,8 +1,8 @@
 //! Media rendering implementations
 //!
 //! Includes: font icon, image, post and idea. An image drawing's text is the URI of its image,
-//! resolved by the egui image loaders the host installs; a post or idea drawing's text is the
-//! content the host or user supplies, its first line naming the author or the title.
+//! resolved by the egui image loaders the host installs; a post or idea drawing shows the
+//! content its link resolved to, or its text, the first line naming the author or the title.
 
 use crate::drawings::domain::Drawing;
 use crate::localization as l10n;
@@ -10,7 +10,48 @@ use crate::painting::dashed_line::finite_clip;
 use crate::styles::{stroke, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind, load::TexturePoll};
+use egui::{
+    Color32, Pos2, Rect, Stroke,
+    epaint::{Galley, StrokeKind},
+    load::TexturePoll,
+};
+use std::sync::Arc;
+
+/// A post or idea card laid out at the drawing's first anchor.
+struct Card {
+    rect: Rect,
+    first: (Pos2, Arc<Galley>),
+    rest: (Pos2, Arc<Galley>),
+    /// The box of the content's picture, and its address.
+    picture: Option<(Rect, String)>,
+    /// The Open row of a card with a post link.
+    open: Option<(Pos2, Arc<Galley>)>,
+}
+
+/// Paints the picture at `uri`, loaded through the host's egui image loaders, fitted inside
+/// `frame` without stretching, and returns where; otherwise the line saying that it is loading or
+/// could not be loaded. The loaders repaint once a pending load finishes.
+fn paint_fitted(painter: &egui::Painter, uri: &str, frame: Rect) -> Result<Rect, &'static str> {
+    match painter.ctx().try_load_texture(
+        uri,
+        egui::TextureOptions::LINEAR,
+        egui::SizeHint::default(),
+    ) {
+        Ok(TexturePoll::Ready { texture }) if texture.size.min_elem() > 0.0 => {
+            let scale = (frame.width() / texture.size.x).min(frame.height() / texture.size.y);
+            let rect = Rect::from_center_size(frame.center(), texture.size * scale);
+            painter.image(
+                texture.id,
+                rect,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
+            Ok(rect)
+        }
+        Ok(TexturePoll::Pending { .. }) => Err("Loading image…"),
+        _ => Err("Could not load image"),
+    }
+}
 
 impl Drawing {
     /// Renders the image whose URI is the drawing's text, fitted inside the frame between its
@@ -51,30 +92,13 @@ impl Drawing {
             .map_or(pos, |p2| Pos2::new(pos.x.min(p2.x), pos.y.min(p2.y)));
         let frame_rect = Rect::from_min_size(origin, egui::vec2(width, height));
 
-        // The host's image loaders resolve the URI; they repaint once a pending load finishes.
         let uri = self
             .text
             .as_deref()
             .map(str::trim)
             .filter(|uri| !uri.is_empty());
-        let poll = uri.map(|uri| {
-            painter.ctx().try_load_texture(
-                uri,
-                egui::TextureOptions::LINEAR,
-                egui::SizeHint::default(),
-            )
-        });
-        let status = match poll {
-            Some(Ok(TexturePoll::Ready { texture })) if texture.size.min_elem() > 0.0 => {
-                let scale =
-                    (frame_rect.width() / texture.size.x).min(frame_rect.height() / texture.size.y);
-                let rect = Rect::from_center_size(frame_rect.center(), texture.size * scale);
-                painter.image(
-                    texture.id,
-                    rect,
-                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                    Color32::WHITE,
-                );
+        let status = match uri.map(|uri| paint_fitted(painter, uri, frame_rect)) {
+            Some(Ok(rect)) => {
                 painter.rect_stroke(
                     rect,
                     0.0,
@@ -83,9 +107,8 @@ impl Drawing {
                 );
                 return;
             }
+            Some(Err(status)) => status,
             None => "Double-click to add",
-            Some(Ok(TexturePoll::Pending { .. })) => "Loading image…",
-            Some(_) => "Could not load image",
         };
         let theme = painter.ctx().active_theme();
 
@@ -183,97 +206,31 @@ impl Drawing {
         );
     }
 
-    /// Renders a post card from the drawing's text: its first line as the author and the
-    /// following lines as the post, wrapped to the card, which grows to fit them.
+    /// Renders a post card from its linked content or hand-typed text, growing to fit it.
     pub(crate) fn render_post(&self, painter: &egui::Painter) {
-        if self.points.is_empty() {
+        let Some(card) = self.card(painter.ctx()) else {
             return;
-        }
-        let pos = self.points[0];
+        };
         let theme = painter.ctx().active_theme();
-        let accent = theme.ui.info;
-        let card_width = DESIGN_TOKENS.sizing.media.tweet_card_width;
-        let padding = DESIGN_TOKENS.spacing.lg;
-        let (author, body) = self.content(
-            painter.ctx(),
-            "Post",
-            "Double-click to add the author on the first line, then the post",
-        );
-        let author = painter.layout(
-            author,
-            egui::FontId::proportional(typography::LG),
-            theme.ui.text,
-            card_width - 2.0 * padding,
-        );
-        let body = painter.layout(
-            body,
-            egui::FontId::proportional(typography::SM),
-            theme.ui.text_secondary,
-            card_width - 2.0 * padding,
-        );
-        let gap = DESIGN_TOKENS.spacing.sm;
-        let card_height = DESIGN_TOKENS
-            .sizing
-            .media
-            .tweet_card_height
-            .max(2.0 * padding + author.size().y + gap + body.size().y);
-        let card_rect = Rect::from_min_size(pos, egui::vec2(card_width, card_height));
-
-        painter.rect_filled(card_rect, DESIGN_TOKENS.rounding.xl, theme.ui.panel_bg);
+        painter.rect_filled(card.rect, DESIGN_TOKENS.rounding.xl, theme.ui.panel_bg);
         painter.rect_stroke(
-            card_rect,
+            card.rect,
             DESIGN_TOKENS.rounding.xl,
             Stroke::new(stroke::HAIRLINE, theme.ui.border),
             StrokeKind::Outside,
         );
-        let text = card_rect.min + egui::vec2(padding, padding);
-        let below = text + egui::vec2(0.0, author.size().y + gap);
-        painter.galley(text, author, theme.ui.text);
-        painter.galley(below, body, theme.ui.text);
-
-        // Anchor point
-        painter.circle_filled(pos, DESIGN_TOKENS.rounding.md, accent);
+        Self::paint_post_content(painter, card);
+        painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.md, theme.ui.info);
     }
 
-    /// Renders an idea card from the drawing's text: its first line as the title and the
-    /// following lines as the description, wrapped to the card, which grows to fit them.
+    /// Renders an idea card from its linked content or hand-typed text, growing to fit it.
     pub(crate) fn render_idea(&self, painter: &egui::Painter) {
-        if self.points.is_empty() {
+        let Some(card) = self.card(painter.ctx()) else {
             return;
-        }
-        let pos = self.points[0];
+        };
+        let card_rect = card.rect;
         let theme = painter.ctx().active_theme();
         let accent = theme.ui.accent;
-        let card_width = DESIGN_TOKENS.sizing.media.idea_card_width;
-        let text_left = 60.0;
-        let padding = DESIGN_TOKENS.spacing.lg;
-        let wrap = card_width - text_left - padding;
-        let (title, description) = self.content(
-            painter.ctx(),
-            "Idea",
-            "Double-click to add the title on the first line, then the idea",
-        );
-        let title = painter.layout(
-            title,
-            egui::FontId::proportional(typography::LG),
-            theme.ui.text,
-            wrap,
-        );
-        let description = painter.layout(
-            description,
-            egui::FontId::proportional(typography::SM),
-            theme.ui.text_secondary,
-            wrap,
-        );
-        let gap = DESIGN_TOKENS.spacing.xs;
-        let card_height = DESIGN_TOKENS
-            .sizing
-            .media
-            .idea_card_height
-            .max(2.0 * padding + title.size().y + gap + description.size().y);
-        let card_rect = Rect::from_min_size(pos, egui::vec2(card_width, card_height));
-
-        // Card background
         painter.rect_filled(card_rect, DESIGN_TOKENS.rounding.lg, theme.ui.panel_bg);
         painter.rect_stroke(
             card_rect,
@@ -321,23 +278,176 @@ impl Drawing {
             );
         }
 
-        let text = Pos2::new(card_rect.min.x + text_left, card_rect.min.y + padding);
-        let below = text + egui::vec2(0.0, title.size().y + gap);
-        painter.galley(text, title, theme.ui.text);
-        painter.galley(below, description, theme.ui.text);
-
-        // Anchor point
-        painter.circle_filled(pos, DESIGN_TOKENS.rounding.md, accent);
+        Self::paint_post_content(painter, card);
+        painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.md, accent);
         painter.circle_stroke(
-            pos,
+            self.points[0],
             DESIGN_TOKENS.rounding.md,
             Stroke::new(stroke::MEDIUM, theme.ui.text),
         );
     }
 
-    /// The first line of the drawing's text and the lines after it, or `empty` and `prompt`
-    /// while it has no text.
+    /// One layout for painting the card and hitting its Open row.
+    fn card(&self, ctx: &egui::Context) -> Option<Card> {
+        let &pos = self.points.first()?;
+        let sizing = &DESIGN_TOKENS.sizing.media;
+        let spacing = &DESIGN_TOKENS.spacing;
+        let (width, min_height, left, gap, empty, prompt) = match self.tool_type {
+            crate::drawings::DrawingToolType::Tweet => (
+                sizing.tweet_card_width,
+                sizing.tweet_card_height,
+                spacing.lg,
+                spacing.sm,
+                "Post",
+                "Double-click to add the author on the first line, then the post",
+            ),
+            crate::drawings::DrawingToolType::Idea => (
+                sizing.idea_card_width,
+                sizing.idea_card_height,
+                60.0,
+                spacing.xs,
+                "Idea",
+                "Double-click to add the title on the first line, then the idea",
+            ),
+            _ => return None,
+        };
+        let theme = ctx.active_theme();
+        let column = width - left - spacing.lg;
+        let mut y = pos.y + spacing.lg;
+        let picture = self
+            .post
+            .as_ref()
+            .and_then(|post| post.content.as_ref())
+            .and_then(|content| content.picture.as_deref())
+            .map(str::trim)
+            .filter(|uri| !uri.is_empty())
+            .map(|uri| {
+                let rect = Rect::from_min_size(
+                    Pos2::new(pos.x + left, y),
+                    egui::vec2(column, column * 0.75),
+                );
+                y = rect.bottom() + gap;
+                (rect, uri.to_owned())
+            });
+        let (first, rest) = self.content(ctx, empty, prompt);
+        let first = ctx.fonts_mut(|fonts| {
+            fonts.layout(
+                first,
+                egui::FontId::proportional(typography::LG),
+                theme.ui.text,
+                column,
+            )
+        });
+        let first = (Pos2::new(pos.x + left, y), first);
+        y += first.1.size().y + gap;
+        let rest = ctx.fonts_mut(|fonts| {
+            fonts.layout(
+                rest,
+                egui::FontId::proportional(typography::SM),
+                theme.ui.text_secondary,
+                column,
+            )
+        });
+        let rest = (Pos2::new(pos.x + left, y), rest);
+        y += rest.1.size().y;
+        let open = self.post.as_ref().map(|_| {
+            y += gap;
+            let label = l10n::text(ctx, "Open");
+            let galley = ctx.fonts_mut(|fonts| {
+                fonts.layout(
+                    label,
+                    egui::FontId::proportional(typography::SM),
+                    theme.ui.info,
+                    column,
+                )
+            });
+            let row = (Pos2::new(pos.x + left, y), galley);
+            y += row.1.size().y;
+            row
+        });
+        Some(Card {
+            rect: Rect::from_min_size(
+                pos,
+                egui::vec2(width, min_height.max(y + spacing.lg - pos.y)),
+            ),
+            first,
+            rest,
+            picture,
+            open,
+        })
+    }
+
+    fn paint_post_content(painter: &egui::Painter, card: Card) {
+        let theme = painter.ctx().active_theme();
+        painter.galley(card.first.0, card.first.1, theme.ui.text);
+        painter.galley(card.rest.0, card.rest.1, theme.ui.text_secondary);
+        if let Some((box_rect, uri)) = card.picture
+            && let Err(status) = paint_fitted(painter, &uri, box_rect)
+        {
+            painter.rect_stroke(
+                box_rect,
+                0.0,
+                Stroke::new(stroke::HAIRLINE, theme.ui.border),
+                StrokeKind::Outside,
+            );
+            painter.text(
+                box_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                l10n::text(painter.ctx(), status),
+                egui::FontId::proportional(typography::XS),
+                theme.ui.text_secondary,
+            );
+        }
+        if let Some((pos, galley)) = card.open {
+            painter.galley(pos, galley, theme.ui.info);
+        }
+    }
+
+    /// Where a post or idea card with a post link shows its Open row.
+    pub(crate) fn open_row(&self, ctx: &egui::Context) -> Option<Rect> {
+        let (pos, galley) = self.card(ctx)?.open?;
+        Some(Rect::from_min_size(pos, galley.size()))
+    }
+
+    /// Linked content or the first line of the drawing's text and the lines after it, with
+    /// `empty` and `prompt` for a hand-typed card that has no text yet.
     fn content(&self, ctx: &egui::Context, empty: &str, prompt: &str) -> (String, String) {
+        if let Some(post) = &self.post {
+            if let Some(content) = &post.content {
+                let title = content.title.trim();
+                let author = content.author.trim();
+                let first = if !title.is_empty() { title } else { author };
+                let first = if first.is_empty() {
+                    l10n::text(ctx, empty)
+                } else {
+                    first.to_owned()
+                };
+                let time = content.time.format("%Y-%m-%d %H:%M");
+                let mut rest = if !title.is_empty() && !author.is_empty() {
+                    format!("{author} \u{b7} {time}")
+                } else {
+                    time.to_string()
+                };
+                if !content.text.trim().is_empty() {
+                    rest.push('\n');
+                    rest.push_str(content.text.trim());
+                }
+                return (first, rest);
+            }
+            let mut rest = l10n::text(
+                ctx,
+                if post.failed {
+                    "Could not load this link"
+                } else {
+                    "Loading…"
+                },
+            );
+            if !post.link.trim().is_empty() {
+                rest.push('\n');
+                rest.push_str(post.link.trim());
+            }
+            return (l10n::text(ctx, empty), rest);
+        }
         match self
             .text
             .as_deref()
@@ -409,6 +519,8 @@ impl Drawing {
 mod tests {
     use super::*;
     use crate::drawings::domain::DrawingToolType;
+    use crate::model::{PostContent, PostLink};
+    use chrono::{TimeZone, Utc};
     use egui::load::{ImageLoadResult, ImageLoader, ImagePoll, LoadError};
     use egui::{ColorImage, Context, LayerId, Painter, RawInput, Shape, SizeHint};
     use std::sync::Arc;
@@ -497,17 +609,28 @@ mod tests {
         }
     }
 
-    /// Guards #985: media drawings show the content in their text, an image fitted inside its
-    /// frame without stretching, and say when it is missing, loading or cannot be loaded.
+    /// Media drawings show typed or linked content, fit pictures without stretching and report
+    /// missing, loading and failed content. Linked cards keep a distinct Open row.
     #[test]
     fn media_drawings_show_their_content() {
         let fitted = Rect::from_min_max(Pos2::new(50.0, 0.0), Pos2::new(150.0, 100.0));
+        let time = Utc.with_ymd_and_hms(2026, 10, 30, 9, 30, 0).unwrap();
+        let mut post = PostContent::new("Ada", time, "Rates hold");
+        post.picture = Some("test://square".into());
+        let mut idea = PostContent::new("Ada", time, "Above the range");
+        idea.title = "Breakout".into();
+        idea.picture = Some("test://square".into());
+        let mut pending = PostContent::new("Ada", time, "Above the range");
+        pending.picture = Some("test://pending".into());
+        let mut failed = PostLink::new("https://example.invalid/i/3");
+        failed.failed = true;
         for (_, theme) in crate::theme::presets() {
-            for (tool, text, texts, picture) in [
+            for (tool, text, texts, picture, post) in [
                 (
                     DrawingToolType::Image,
                     None,
                     vec!["Double-click to add"],
+                    None,
                     None,
                 ),
                 (
@@ -515,11 +638,13 @@ mod tests {
                     Some("test://pending"),
                     vec!["Loading image…"],
                     None,
+                    None,
                 ),
                 (
                     DrawingToolType::Image,
                     Some("other://picture.png"),
                     vec!["Image unavailable"],
+                    None,
                     None,
                 ),
                 // The square picture fills the 100 px height of the 200 x 100 frame, centred.
@@ -528,17 +653,20 @@ mod tests {
                     Some(" test://square\n"),
                     vec![],
                     Some(fitted),
+                    None,
                 ),
                 (
                     DrawingToolType::Tweet,
                     Some("Ada\nRates hold\nfor now"),
                     vec!["Ada", "Rates hold\nfor now"],
                     None,
+                    None,
                 ),
                 (
                     DrawingToolType::Idea,
                     Some("Supplied title\nSupplied description"),
                     vec!["Supplied title", "Supplied description"],
+                    None,
                     None,
                 ),
                 (
@@ -549,11 +677,76 @@ mod tests {
                         "Double-click to add the title on the first line, then the idea",
                     ],
                     None,
+                    None,
+                ),
+                (
+                    DrawingToolType::Tweet,
+                    None,
+                    vec!["Ada", "2026-10-30 09:30\nRates hold", "Open"],
+                    Some(Rect::from_min_max(
+                        Pos2::new(41.0, 8.0),
+                        Pos2::new(239.0, 206.0),
+                    )),
+                    Some(PostLink::resolved(
+                        "https://example.invalid/p/1",
+                        post.clone(),
+                    )),
+                ),
+                (
+                    DrawingToolType::Idea,
+                    None,
+                    vec![
+                        "Breakout",
+                        "Ada · 2026-10-30 09:30\nAbove the range",
+                        "Open",
+                    ],
+                    Some(Rect::from_min_max(
+                        Pos2::new(76.5, 8.0),
+                        Pos2::new(175.5, 107.0),
+                    )),
+                    Some(PostLink::resolved(
+                        "https://example.invalid/i/1",
+                        idea.clone(),
+                    )),
+                ),
+                (
+                    DrawingToolType::Idea,
+                    None,
+                    vec![
+                        "Ada",
+                        "2026-10-30 09:30\nAbove the range",
+                        "Loading image…",
+                        "Open",
+                    ],
+                    None,
+                    Some(PostLink::resolved(
+                        "https://example.invalid/i/2",
+                        pending.clone(),
+                    )),
+                ),
+                (
+                    DrawingToolType::Tweet,
+                    Some("Typed\nby hand"),
+                    vec!["Post", "Loading…\nhttps://example.invalid/p/2", "Open"],
+                    None,
+                    Some(PostLink::new("https://example.invalid/p/2")),
+                ),
+                (
+                    DrawingToolType::Idea,
+                    None,
+                    vec![
+                        "Idea",
+                        "Could not load this link\nhttps://example.invalid/i/3",
+                        "Open",
+                    ],
+                    None,
+                    Some(failed.clone()),
                 ),
             ] {
                 let mut drawing = Drawing::new(1, tool);
                 drawing.points = vec![Pos2::ZERO, Pos2::new(200.0, 100.0)];
                 drawing.text = text.map(Into::into);
+                drawing.post = post.clone();
                 let ctx = Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 crate::localization::set_translator(&ctx, |key| {
@@ -579,6 +772,8 @@ mod tests {
                         if let Shape::Text(text) = &shape.shape {
                             let expected = if text.galley.text() == texts[0] {
                                 theme.ui.text
+                            } else if text.galley.text() == "Open" {
+                                theme.ui.info
                             } else {
                                 theme.ui.text_secondary
                             };

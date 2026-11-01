@@ -98,6 +98,9 @@ pub(crate) mod pan_zoom;
 mod pane_layout;
 pub use pane_layout::{PaneId, PaneOptions};
 mod panes;
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+mod posts;
 mod price_series;
 mod primitives;
 mod raster;
@@ -359,6 +362,8 @@ pub struct Chart {
     frozen_source_events: usize,
     event_visibility: crate::model::EventVisibility,
     mark_source: Option<marks::MarkSource>,
+    #[cfg(feature = "drawings")]
+    post_source: Option<posts::PostSource>,
     signal_sources: Vec<signals::SignalSource>,
     targets: targets::TargetState,
     show_price_targets: bool,

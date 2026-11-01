@@ -1,7 +1,7 @@
 //! Reusable drawing properties without geometry or record identity.
 
 /// Drawing properties without anchors or record identity. Apply to an existing drawing of the
-/// same type; its coordinates, name, notes, layer and persistence identity stay intact.
+/// same type; its coordinates, name, notes, layer, post link and persistence identity stay intact.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DrawingTemplate {
     /// Tool and reusable properties. Serialization omits anchors and record identity.
@@ -17,6 +17,7 @@ impl DrawingTemplate {
         settings.created_at = None;
         settings.notes = None;
         settings.label = None;
+        settings.post = None;
         settings.points.clear();
         settings.chart_points.clear();
         settings.level_ys.clear();
@@ -52,6 +53,7 @@ impl DrawingTemplate {
             created_at: drawing.created_at,
             notes: drawing.notes.clone(),
             label: drawing.label.clone(),
+            post: drawing.post.clone(),
             points: drawing.points.clone(),
             chart_points: drawing.chart_points.clone(),
             level_ys: drawing.level_ys.clone(),

@@ -199,6 +199,16 @@ pub trait Indicator: Send {
         }
     }
 
+    /// Whether plot `line` shows its last value in a tag on the price scale while the chart
+    /// shows study values. By default every plot of a study with up to four plots does and no
+    /// plot of a study with more, whose values stay in the legend, so that the tags leave the
+    /// scale's tick labels readable. A study on a chart starts from this choice and keeps the
+    /// user's in [`StudySettings::untagged_plots`](super::StudySettings::untagged_plots).
+    fn plot_tagged(&self, line: usize) -> bool {
+        let _ = line;
+        self.line_count() <= 4
+    }
+
     /// The output whose visibility in the style tab also applies to plot `line`, for a plot past
     /// [`line_count`](Self::line_count) that draws zones or candles for one of the outputs. The
     /// default is `line` itself.
@@ -259,6 +269,9 @@ pub trait Indicator: Send {
             levels,
             fill_between_levels,
             level_fill_color,
+            untagged_plots: (0..self.line_count())
+                .filter(|&line| !self.plot_tagged(line))
+                .collect(),
         }
     }
 

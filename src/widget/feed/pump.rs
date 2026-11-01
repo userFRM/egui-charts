@@ -243,8 +243,10 @@ impl Chart {
                     if let Some(flow) = footprint {
                         let _ = flow.push(trade);
                     }
-                    for (input, _) in inputs {
-                        input.push_trade(clock, trade);
+                    if clock.timeframe().is_none_or(|tf| !tf.is_trade_based()) {
+                        for (input, _) in inputs {
+                            input.push_trade(clock, trade);
+                        }
                     }
                 }
             };
