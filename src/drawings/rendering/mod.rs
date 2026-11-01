@@ -29,7 +29,8 @@ pub(crate) use outline::Outline;
 pub use traits::DrawingRenderer;
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
-use crate::model::{Bar, SpanCache};
+use crate::model::Bar;
+use crate::painting::span_cache::SpanCache;
 use egui::Rect;
 use std::rc::Rc;
 

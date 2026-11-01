@@ -169,12 +169,12 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Public order book and order queue retain tick-aware prices, best quotes and queue priority.
 - [x] `DepthHistory` retains sampled resting-size columns in bounded tiers; the heatmap uses retained texture tiles and partial updates.
 - [x] Heatmap best bid/ask paths and a side profile of total resting size.
-- [x] Volume bubbles aggregate by chart bar and price, with side/delta colours, linear/square-root/logarithmic sizing and outlier limits.
+- [x] Volume bubbles aggregate by chart bar and price, adapt automatic grouping, sizing and borders to screen density, and offer side/delta colours, linear/square-root/logarithmic scaling and outlier limits.
 - [x] Time-and-sales panel with aggressor colours, size filters and sound intents.
 - [x] Explicit aggressor identifiers combine split fills into parent orders with total size, price span and fill count.
 - [x] Fixed stream studies calculate quoted spread, resting book totals/difference, execution rate and inside-quote movement.
 - [ ] Add bubble time-window/count grouping, ungrouped execution timestamps, split bid/ask and additional delta/volume colour modes.
-- [ ] Add dedicated ladder columns for observed size changes, traded bid/ask volume and order counts.
+- [x] Dedicated ladder columns show observed size changes, traded bid/ask volume and order counts with bid/ask labels, complete values and horizontal scrolling in narrow tickets.
 - [ ] Add session/reset controls and delta/bid-ask modes for the ladder profile.
 - [ ] Expose largest-order side profiles and configurable resting-size highlight tiers in the ladder and heatmap.
 - [ ] Connect order-size filtering and aggregated/per-order source selection to heatmap sampling, including metadata for participant exclusions.
