@@ -98,6 +98,11 @@ impl Chart {
         if let (Some(live), Some(replay)) = (&feed, &mut self.feed_link) {
             replay.heatmap = live.heatmap.as_ref().map(|_| Default::default());
         }
+        self.set_volume_bubbles(
+            feed.as_ref()
+                .and_then(|link| link.bubbles.as_ref())
+                .map(|bubbles| bubbles.config.clone()),
+        );
         self.set_depth_history(history);
         self.set_order_book_view(view);
         self.replace_main_data(Vec::new());
@@ -768,6 +773,10 @@ mod tests {
         );
         chart.set_replay_time(None);
         assert!(chart.order_book(SeriesId::MAIN).is_some());
+        chart.set_volume_bubbles(Some(crate::chart::overlays::VolumeBubblesConfig {
+            min_size_filter: Some(2.0),
+            ..Default::default()
+        }));
         chart.set_chart_type(crate::model::ChartType::VolumeFootprint);
         for _ in 0..4 {
             chart.pump(&ctx);
@@ -782,6 +791,17 @@ mod tests {
             chart.pump(&ctx);
         }
         assert_eq!(chart.bars(SeriesId::MAIN), &original[..1]);
+        assert_eq!(
+            chart
+                .feed_link
+                .as_ref()
+                .unwrap()
+                .bubbles
+                .as_ref()
+                .map(|bubbles| bubbles.config.min_size_filter),
+            Some(Some(2.0)),
+            "market replay keeps the configured trade bubbles"
+        );
         assert_eq!(
             chart
                 .feed_link

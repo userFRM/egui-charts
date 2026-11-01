@@ -1135,6 +1135,7 @@ impl Chart {
 
         // Get visible range
         let (start_idx, end_idx) = self.state.visible_range();
+        let cutoff = self.replay_time();
         let (registry, bars) = if self.chart_type.is_time_independent() {
             (
                 &mut self.element_studies.studies,
@@ -1155,12 +1156,9 @@ impl Chart {
                 .iter()
                 .flat_map(|study| study.data_requests())
                 .collect();
-            let sources = self.study_data.data(
-                requests,
-                &self.symbol,
-                self.timeframe,
-                self.replay.as_ref().map(|replay| replay.time),
-            );
+            let sources = self
+                .study_data
+                .data(requests, &self.symbol, self.timeframe, cutoff);
             for at in super::studies::order(registry.indicators(), &self.study_ids) {
                 if let Some(crate::studies::StudySource::Study { id, .. }) =
                     registry.indicators()[at].source()

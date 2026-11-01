@@ -1267,6 +1267,7 @@ mod tests {
     fn replay_hides_the_future_of_other_histories() {
         let hourly = bars(&[1.0; 3], 60);
         let mut chart = Chart::new(crate::model::BarData::from_bars(hourly));
+        chart.set_symbol("LOCAL");
         chart.set_timeframe(Timeframe::Hour1);
         let id = chart.add_indicator(Box::new(SMA::new(1)));
         chart
@@ -1284,9 +1285,16 @@ mod tests {
                 shapes(&ctx, chart, frame, Vec::new());
             }
             let study = chart.indicators().next().unwrap().1;
-            (0..study.values().len())
+            let shown: Vec<_> = (0..study.values().len())
                 .map(|at| study.values().value(0, at))
-                .collect::<Vec<_>>()
+                .collect();
+            let exported = chart.export_csv().unwrap();
+            let exported: Vec<Option<f64>> = csv::Reader::from_reader(exported.as_bytes())
+                .records()
+                .map(|row| row.unwrap().iter().next_back().unwrap().parse().ok())
+                .collect();
+            assert_eq!(exported, shown, "export uses the same replay cutoff");
+            shown
         };
         let minute = |m: i64| DateTime::UNIX_EPOCH + Duration::minutes(m);
         chart.set_replay_time(Some(minute(90)));
@@ -1301,6 +1309,37 @@ mod tests {
         chart.set_replay_time(Some(minute(90)));
         assert_eq!(values(&mut chart), [Some(10.0), None]);
         chart.set_replay_time(None);
+        assert_eq!(values(&mut chart), [Some(10.0), Some(14.0), Some(24.0)]);
+
+        let driver = Arc::new(
+            crate::data::ReplayDriver::new(
+                (0..180)
+                    .map(|m| {
+                        crate::data::ReplayEvent::new(
+                            chart.symbol(),
+                            minute(m),
+                            m as u64,
+                            crate::data::MarketEvent::Trade(crate::model::Tick::new(
+                                minute(m),
+                                1.0,
+                                1.0,
+                                None,
+                            )),
+                        )
+                    })
+                    .collect(),
+                vec![crate::model::Instrument::new(chart.symbol())],
+            )
+            .unwrap(),
+        );
+        driver.seek(minute(90));
+        chart.set_market_replay(Some(driver.clone()));
+        assert_eq!(values(&mut chart), [Some(10.0), None]);
+        driver.seek(minute(150));
+        assert_eq!(values(&mut chart), [Some(10.0), Some(14.0), None]);
+        driver.seek(minute(90));
+        assert_eq!(values(&mut chart), [Some(10.0), None]);
+        chart.set_market_replay(None);
         assert_eq!(values(&mut chart), [Some(10.0), Some(14.0), Some(24.0)]);
     }
 

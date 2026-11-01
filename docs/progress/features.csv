@@ -835,7 +835,7 @@ Terminal,Replay,Bar replay button and replay mode on/off,done,library,src/ui/top
 Terminal,Replay,Continue the last replay session after a reload,done,library,src/ui/replay/session.rs
 Terminal,Replay,Drawings stay in place during replay,done,library,src/widget/replay.rs;src/widget/series.rs;src/widget/anchors.rs
 Terminal,Replay,Hide future bars and reveal them one at a time,done,library,src/ui/replay/mod.rs;src/widget/replay.rs
-Terminal,Replay,Indicators recompute on replayed bars only,partial,library,src/widget/replay.rs;src/widget/studies_data.rs;src/studies/settings.rs;src/widget/studies.rs
+Terminal,Replay,Indicators recompute on replayed bars only,partial,library,src/widget/replay.rs;src/widget/studies_data.rs;src/studies/settings.rs;src/widget/studies.rs;src/widget/series.rs;src/widget/frame.rs;src/widget/export.rs
 Terminal,Replay,Jump to real time / exit replay and restore full data,done,library,src/widget/replay.rs
 Terminal,Replay,Pick the start bar by clicking on the chart,done,library,src/ui/replay/start.rs
 Terminal,Replay,Play / pause autoplay,done,library,src/ui/replay/mod.rs;src/ui/replay/state.rs;src/data/replay.rs;src/widget/replay.rs
