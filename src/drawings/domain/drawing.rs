@@ -167,6 +167,14 @@ pub struct Drawing {
     pub arrow_end_style: ArrowStyle,
     /// Per-timeframe visibility
     pub timeframe_visibility: TimeframeVisibility,
+    /// Whether a horizontal line, horizontal ray or cross line shows its price as a tag on the
+    /// price axis. Other tools ignore it. Drawings saved without it show the tag.
+    #[serde(default = "enabled")]
+    pub price_axis_label: bool,
+    /// Whether a vertical line or cross line shows its time as a tag on the time axis. Other
+    /// tools ignore it. Drawings saved without it show the tag.
+    #[serde(default = "enabled")]
+    pub time_axis_label: bool,
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Quantity of the long and short position tools
@@ -454,6 +462,8 @@ impl Drawing {
                 ArrowStyle::None
             },
             timeframe_visibility: TimeframeVisibility::all(),
+            price_axis_label: true,
+            time_axis_label: true,
             position_size: None,
             position_sizing: PositionSizing::default(),
             position_target_color: None,
@@ -844,6 +854,19 @@ impl Drawing {
     #[inline]
     pub fn is_visible_on_timeframe(&self, timeframe: &str) -> bool {
         self.visible && self.timeframe_visibility.is_visible_on(timeframe)
+    }
+
+    /// Whether drawings of `tool` can tag their price on the price axis and their time on the
+    /// time axis: horizontal lines and rays their price, vertical lines their time, cross
+    /// lines both.
+    pub(crate) fn axis_labels_of(tool: DrawingToolType) -> (bool, bool) {
+        use DrawingToolType as T;
+        match tool {
+            T::HorizontalLine | T::HorizontalRay => (true, false),
+            T::VerticalLine => (false, true),
+            T::CrossLine => (true, true),
+            _ => (false, false),
+        }
     }
 
     /// Get the z-order of this drawing

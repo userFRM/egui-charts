@@ -240,6 +240,8 @@ impl DrawingPropertiesDialog {
                 drawing.regression_trend = old.regression_trend;
                 drawing.vwap = old.vwap;
                 drawing.channel_midline = old.channel_midline;
+                drawing.price_axis_label = old.price_axis_label;
+                drawing.time_axis_label = old.time_axis_label;
                 drawing.elliott_degree = old.elliott_degree;
                 drawing.font_weight = old.font_weight;
                 drawing.italic = old.italic;
@@ -747,6 +749,8 @@ mod tests {
                 let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;
                 settings.position_target_color = Some([40, 100, 220, 255]);
                 settings.position_stop_color = Some([220, 140, 40, 255]);
+                settings.price_axis_label = false;
+                settings.time_axis_label = false;
                 settings.italic = true;
                 settings.text_color = Some([1, 2, 3, 255]);
                 dialog.coordinates.points[1].price = "125".into();
@@ -760,6 +764,7 @@ mod tests {
                 let preview = &chart.drawings().drawings[0];
                 assert_eq!(preview.position_target_color, Some([40, 100, 220, 255]));
                 assert_eq!(preview.position_stop_color, Some([220, 140, 40, 255]));
+                assert!(!preview.price_axis_label && !preview.time_axis_label);
                 assert!(preview.italic);
                 assert_eq!(preview.text_color, Some([1, 2, 3, 255]));
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
@@ -803,6 +808,10 @@ mod tests {
             let restored = &chart.drawings().drawings[0];
             assert_eq!(restored.position_target_color, None, "{finish}");
             assert_eq!(restored.position_stop_color, None, "{finish}");
+            assert!(
+                restored.price_axis_label && restored.time_axis_label,
+                "{finish}"
+            );
             assert!(!restored.italic, "{finish}");
             assert_eq!(restored.text_color, None, "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");

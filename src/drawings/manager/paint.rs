@@ -1,11 +1,11 @@
 //! The painted-geometry cache, painting and hit testing of the drawings.
 
 use super::{DrawingManager, PaintedDrawing};
-use crate::drawings::domain::{Drawing, DrawingToolType};
+use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType};
 use crate::drawings::rendering::ChartView;
 use crate::drawings::services::{DrawingInteraction, HandleService, in_z_order};
 use egui::epaint::{ClippedShape, Mesh, TessellationOptions, Tessellator, emath::TSTransform};
-use egui::{Pos2, Rect, Shape};
+use egui::{Color32, Pos2, Rect, Shape};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
@@ -296,6 +296,70 @@ impl DrawingManager {
             }
             self.render_handles(painter, drawing);
         }
+    }
+}
+
+/// A tag a drawing puts on an axis of its pane.
+#[derive(Clone, Copy)]
+pub(crate) enum DrawingAxisTag {
+    /// `price` on the price axis, on a `color` tag.
+    Price { price: f64, color: Color32 },
+    /// The time of `anchor` on the time axis at screen `x`, on an opaque `color` tag.
+    Time {
+        x: f32,
+        anchor: ChartPoint,
+        color: Color32,
+    },
+}
+
+impl DrawingManager {
+    /// The axis tags of visible drawings of the pane last handled, in drawing order: enabled
+    /// price and time labels of horizontal, vertical and cross lines reaching `plot`, and
+    /// position levels, whose entry takes `entry_color`. Call after the pane handles input so
+    /// tags follow a drag in the same frame. Line tags use opaque RGB so their text stays legible.
+    pub(crate) fn axis_tags(
+        &self,
+        plot: Rect,
+        entry_color: Color32,
+    ) -> impl Iterator<Item = DrawingAxisTag> + '_ {
+        self.drawings
+            .iter()
+            .filter(|drawing| {
+                self.owns_pane(drawing) && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+            })
+            .flat_map(move |drawing| {
+                let (price, time) = Drawing::axis_labels_of(drawing.tool_type);
+                let (price, time) = (
+                    price && drawing.price_axis_label,
+                    time && drawing.time_axis_label,
+                );
+                let [r, g, b, _] = drawing.color;
+                let color = Color32::from_rgb(r, g, b);
+                let at = drawing.chart_points.first().zip(drawing.points.first());
+                // A ray starting right of the plot draws nothing in it.
+                let price = at
+                    .filter(|(_, point)| {
+                        price
+                            && (drawing.tool_type != DrawingToolType::HorizontalRay
+                                || point.x <= plot.right())
+                    })
+                    .map(|(anchor, _)| DrawingAxisTag::Price {
+                        price: anchor.price,
+                        color,
+                    });
+                let time = at
+                    .filter(|(_, point)| time && plot.x_range().contains(point.x))
+                    .map(|(anchor, point)| DrawingAxisTag::Time {
+                        x: point.x,
+                        anchor: *anchor,
+                        color,
+                    });
+                drawing
+                    .position_price_tags(entry_color)
+                    .into_iter()
+                    .map(|(price, color)| DrawingAxisTag::Price { price, color })
+                    .chain([price, time].into_iter().flatten())
+            })
     }
 }
 

@@ -2130,25 +2130,6 @@ impl Chart {
             )));
         }
         let mut pending_values = Vec::new();
-        #[cfg(feature = "drawings")]
-        for drawing in self.drawings.drawings.iter().filter(|drawing| {
-            drawing.is_visible_on_timeframe(&self.drawings.curr_timeframe)
-                && (drawing.pane.is_none()
-                    || self
-                        .study_ids
-                        .iter()
-                        .zip(self.rendered_studies().indicators())
-                        .any(|(id, study)| drawing.pane == Some(id.0) && study.is_overlay()))
-        }) {
-            pending_values.extend(
-                drawing
-                    .position_price_tags(ui.active_theme().chart.axis_text_secondary)
-                    .into_iter()
-                    .map(|(price, fill)| {
-                        (price, (rendering::axes::tag_text_color(fill), fill), false)
-                    }),
-            );
-        }
         for (_, line) in self.price_lines.iter().filter(|_| self.main_series_visible) {
             rendering::render_price_line(
                 &painter,
@@ -2687,6 +2668,71 @@ impl Chart {
         self.paint_primitives(&painter, &coords, PrimitivePass::Above);
 
         let bar_seconds = self.time_label_seconds();
+
+        // Placed after the drawings handled this frame's input, so a dragged line's tags move
+        // with it in the same frame.
+        #[cfg(feature = "drawings")]
+        {
+            let mut prices = Vec::new();
+            for tag in self
+                .drawings
+                .axis_tags(price_rect, ui.active_theme().chart.axis_text_secondary)
+            {
+                match tag {
+                    crate::drawings::manager::DrawingAxisTag::Price { price, color } => {
+                        if show_price_axis
+                            && price.is_finite()
+                            && price_map
+                                .range()
+                                .contains(price_map.transform().to_scale(price))
+                        {
+                            prices.push((price_map.price_to_y(price), price, color));
+                        }
+                    }
+                    crate::drawings::manager::DrawingAxisTag::Time { x, anchor, color } => {
+                        if self.config.show_time_labels
+                            && let Some(time) = self.drawing_point_time(&anchor)
+                        {
+                            time_tags.push(Some(rendering::axes::paint_crosshair_tag(
+                                &painter,
+                                Pos2::new(x, time_axis_top + 1.5),
+                                egui::Align2::CENTER_TOP,
+                                chart_rect.left()..=chart_rect.right(),
+                                scale.format_crosshair(time, bar_seconds),
+                                (rendering::axes::tag_text_color(color), color),
+                                25.0,
+                                None,
+                            )));
+                        }
+                    }
+                }
+            }
+            if !prices.is_empty() {
+                // As the price lines' tags: tags closer than a tag is high stack in price order.
+                prices.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut ys: Vec<_> = prices.iter().map(|price| price.0).collect();
+                if !self.config.price_axis.allow_label_overlap {
+                    ys = rendering::axes::spread_axis_ys(&painter, &ys);
+                }
+                for ((_, price, color), y) in prices.into_iter().zip(ys) {
+                    let label = price_map.label(
+                        price_map.transform().to_scale(price),
+                        rendering::axes::tag_decimals(&price_map, price_map.price_to_y(price)),
+                        price_formatter.as_deref(),
+                    );
+                    tags.push(rendering::axes::render_axis_value(
+                        &painter,
+                        price_rect,
+                        axis_edge,
+                        y,
+                        label,
+                        (rendering::axes::tag_text_color(color), color),
+                        &tags,
+                        self.config.price_axis.allow_label_overlap,
+                    ));
+                }
+            }
+        }
 
         // Draw crosshair with options from chart_options. The pointer still hovers the chart
         // while a context menu is open, so the crosshair, its labels and the tooltip wait until
@@ -3954,6 +4000,153 @@ mod tests {
                 assert_eq!(painted.iter().any(|shape| matches!(shape, Shape::Text(text) if text.galley.text().contains("00:30"))), countdown);
             }
         }
+    }
+
+    /// Line tags use the anchor, stay clear of the last price and follow this frame's drag.
+    /// Bar 51 is 1,700,000,000 + 51 * 86,400 = Jan 4, 2024 at 22:13:20 UTC;
+    /// bar 61 is ten days later. Yellow's contrast with white is 1.22, so its text is black.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn line_drawings_tag_their_price_and_time_on_the_axes() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType as T, TimeframeVisibility};
+        use egui::{Color32, Modifiers, PointerButton, vec2};
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.config.show_symbol_last_val = true;
+        for (id, tool, bar, price, color) in [
+            (1, T::HorizontalLine, 90.0, 105.37, [255, 235, 59, 128]),
+            (2, T::HorizontalRay, 51.0, 112.63, [11, 102, 35, 255]),
+            (3, T::CrossLine, 61.0, 108.41, [101, 31, 147, 255]),
+            (4, T::VerticalLine, 51.0, 100.0, [23, 57, 181, 255]),
+            (5, T::HorizontalLine, 90.0, 116.29, [200, 0, 0, 255]),
+            (6, T::HorizontalLine, 90.0, 102.71, [200, 0, 0, 255]),
+            (7, T::HorizontalLine, 90.0, 118.13, [200, 0, 0, 255]),
+            (8, T::VerticalLine, 71.0, 100.0, [200, 0, 0, 255]),
+            (9, T::CrossLine, 81.0, 103.59, [9, 9, 9, 255]),
+            (10, T::HorizontalRay, 1000.0, 114.71, [200, 0, 0, 255]),
+            (11, T::HorizontalLine, 90.0, 120.0, [140, 70, 20, 255]),
+        ] {
+            let mut drawing = Drawing::with_color(id, tool, color);
+            drawing.chart_points = vec![ChartPoint::new(bar, price)];
+            match id {
+                5 | 9 => drawing.price_axis_label = false,
+                8 => drawing.time_axis_label = false,
+                6 => drawing.visible = false,
+                7 => drawing.timeframe_visibility = TimeframeVisibility::specific(&["1h"]),
+                _ => {}
+            }
+            chart.drawings_mut().drawings.push(drawing);
+        }
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let plot = chart.last_rendered_price_rect;
+        let price_texts: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) if text.pos.x >= plot.right() => Some(text.galley.text()),
+                _ => None,
+            })
+            .collect();
+        for (label, shown) in [
+            ("105.37", true),
+            ("112.63", true),
+            ("108.41", true),
+            ("116.29", false),
+            ("102.71", false),
+            ("118.13", false),
+            ("103.59", false),
+            ("114.71", false),
+        ] {
+            assert_eq!(price_texts.contains(&label), shown, "price {label}");
+        }
+        let time_texts: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) if text.pos.y >= plot.bottom() => Some(text.galley.text()),
+                _ => None,
+            })
+            .collect();
+        for (label, shown) in [
+            ("Jan 04, 2024", true),
+            ("Jan 14, 2024", true),
+            ("Jan 24, 2024", false),
+            ("Feb 03, 2024", true),
+        ] {
+            assert_eq!(time_texts.contains(&label), shown, "time {label}");
+        }
+        let price_text = painted
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Text(text) if text.galley.text() == "105.37" => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(price_text.fallback_color, Color32::BLACK);
+        let tag_rect = |painted: &[Shape], color| {
+            painted
+                .iter()
+                .find_map(|shape| match shape {
+                    Shape::Rect(rect) if rect.fill == color && rect.rect.left() >= plot.right() => {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .expect("drawing price tag")
+        };
+        assert!(tag_rect(&painted, Color32::from_rgb(255, 235, 59)).contains(price_text.pos));
+        let close_y = chart.last_price_map.price_to_y(120.0);
+        let last = painted
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Rect(rect)
+                    if rect.fill == chart.config.bullish_color
+                        && (rect.rect.center().y - close_y).abs() < 1.0
+                        && rect.rect.width() > 20.0 =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("last-price tag");
+        let line = tag_rect(&painted, Color32::from_rgb(140, 70, 20));
+        assert!(line.bottom() <= last.top() + 0.01 || line.top() >= last.bottom() - 0.01);
+
+        let start = Pos2::new(plot.right() - 10.0, chart.last_price_map.price_to_y(105.37));
+        frame(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(start)]);
+        frame(
+            &ctx,
+            &mut chart,
+            0.3,
+            vec![Event::PointerButton {
+                pos: start,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        frame(
+            &ctx,
+            &mut chart,
+            0.4,
+            vec![Event::PointerMoved(start + vec2(0.0, 20.0))],
+        );
+        let painted = shapes(
+            &ctx,
+            &mut chart,
+            0.5,
+            vec![Event::PointerMoved(start + vec2(0.0, 60.0))],
+        );
+        let price = chart.drawings().drawings[0].chart_points[0].price;
+        assert!(price < 104.0, "the line moved: {price}");
+        assert!(
+            (tag_rect(&painted, Color32::from_rgb(255, 235, 59))
+                .center()
+                .y
+                - chart.last_price_map.price_to_y(price))
+            .abs()
+                < 1.0,
+            "tag follows the current frame's anchor"
+        );
     }
 
     /// On a logarithmic scale 100 lies halfway between 10 and 1,000 (ln 100 is the mean of ln 10 and
