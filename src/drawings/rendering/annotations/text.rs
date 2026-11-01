@@ -13,7 +13,7 @@ impl Drawing {
             return;
         };
         let colors = self.text_box_colors(painter.ctx());
-        let text = self.display_text(painter.ctx()).into_owned();
+        let text = self.display_text(painter.ctx());
         let galley = self.annotation_galley(painter, text, colors.text);
         if colors.fill.a() > 0 || !colors.border.is_empty() {
             let padding = egui::vec2(

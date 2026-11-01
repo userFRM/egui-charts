@@ -210,15 +210,14 @@ impl ChartHistory {
         if let Some(mut history) = history {
             drawings.swap_history(&mut history);
             if let Some(id) = placement
-                && let Some(previous) = self.undo.last_mut()
-                && previous.drawings.merge_text_placement(
-                    id,
-                    &mut history,
-                    drawings.drawings.iter().find(|drawing| drawing.id == id),
-                )
+                && let Some(index) = self.undo.iter().rposition(|action| action.drawings.can_undo())
+                && let drawing = drawings.drawings.iter().find(|drawing| drawing.id == id)
+                // Cancelling empty text must not undo unrelated chart settings first.
+                && (drawing.is_none() || index + 1 == self.undo.len())
+                && self.undo[index].drawings.merge_text_placement(id, &mut history, drawing)
             {
-                if previous.is_empty() {
-                    self.undo.pop();
+                if self.undo[index].is_empty() {
+                    self.undo.remove(index);
                 }
                 self.edits += 1;
                 self.drawing_edits += 1;

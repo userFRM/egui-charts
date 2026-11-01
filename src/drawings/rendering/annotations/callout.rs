@@ -31,7 +31,7 @@ impl Drawing {
 
         // Callout box
         let text = self.display_text(painter.ctx());
-        let galley = self.annotation_galley(painter, text.into_owned(), colors.text);
+        let galley = self.annotation_galley(painter, text, colors.text);
         let padding = egui::vec2(
             DESIGN_TOKENS.sizing.annotation.callout_padding_x,
             DESIGN_TOKENS.sizing.annotation.callout_padding_y,
@@ -83,7 +83,7 @@ impl Drawing {
         let Some(&anchor) = self.points.first() else {
             return;
         };
-        let text = self.display_text(painter.ctx()).into_owned();
+        let text = self.display_text(painter.ctx());
         let colors = self.text_box_colors(painter.ctx());
         let galley = self.annotation_galley(painter, text, colors.text);
         let padding = egui::vec2(

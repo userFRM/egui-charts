@@ -95,10 +95,10 @@ impl Drawing {
     }
 
     /// The drawing's text, or the localised word "Text", so an empty annotation stays selectable.
-    pub(super) fn display_text(&self, ctx: &egui::Context) -> std::borrow::Cow<'_, str> {
+    pub(super) fn display_text(&self, ctx: &egui::Context) -> String {
         match self.text.as_deref() {
-            Some(text) if !text.is_empty() => text.into(),
-            _ => crate::localization::text(ctx, "Text").into(),
+            Some(text) if !text.is_empty() => text.to_owned(),
+            _ => crate::localization::text(ctx, "Text"),
         }
     }
 

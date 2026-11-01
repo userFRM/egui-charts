@@ -23,15 +23,6 @@ fn edits_in_place(tool: DrawingToolType) -> bool {
     )
 }
 
-/// A pin or flag is a marker with optional text; the other inline annotations need content.
-fn text_is_content(tool: DrawingToolType) -> bool {
-    edits_in_place(tool)
-        && !matches!(
-            tool,
-            DrawingToolType::AnchoredNote | DrawingToolType::FlagNote
-        )
-}
-
 pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize, placed: bool) {
     let Some(drawing) = manager
         .drawings
@@ -88,7 +79,10 @@ pub(super) fn show_editor(
     let opened_frame = *editor.opened_frame.get_or_insert(frame);
     let request_focus = std::mem::take(&mut editor.focus);
     if editor.inline {
-        let tool = drawing.tool_type;
+        let content = !matches!(
+            drawing.tool_type,
+            DrawingToolType::AnchoredNote | DrawingToolType::FlagNote
+        );
         let old = drawing.text.clone();
         let shown = editor.shown_text(ui.ctx());
         let caret = drawing.text_box_colors(ui.ctx()).text;
@@ -132,6 +126,7 @@ pub(super) fn show_editor(
                         field.request_focus();
                     }
                     if field.changed() {
+                        ui.ctx().request_discard("drawing text changed");
                         ui.ctx().request_repaint();
                     }
                     outside = frame > opened_frame && field.clicked_elsewhere();
@@ -146,29 +141,18 @@ pub(super) fn show_editor(
             if editor.placed {
                 match (cancel, text) {
                     (false, Some(text)) => manager.finish_new_text(editor.id, Some(text)),
-                    _ if text_is_content(tool) => manager.finish_new_text(editor.id, None),
+                    _ if content => manager.finish_new_text(editor.id, None),
                     _ => {}
                 }
-            } else if !cancel {
-                match text {
-                    None if text_is_content(tool) => manager.delete_drawing(editor.id),
-                    text if text != old => manager.edit_drawing(editor.id, |d| d.text = text),
-                    _ => {}
-                }
+            } else if !cancel && text != old {
+                manager.edit_drawing(editor.id, |d| d.text = text);
             }
         } else {
             manager.text_editor = Some(editor);
         }
         return;
     }
-    // Tools whose first anchor is the point they annotate keep their text at the second.
-    let label = usize::from(matches!(
-        drawing.tool_type,
-        DrawingToolType::Callout
-            | DrawingToolType::Note
-            | DrawingToolType::PriceNote
-            | DrawingToolType::Signpost
-    ));
+    let label = usize::from(drawing.tool_type == DrawingToolType::PriceNote);
     let Some(mut pos) = drawing
         .points
         .get(label)
@@ -543,18 +527,32 @@ mod tests {
         }
     }
 
-    /// Drafts paint on the annotation, with aligned invisible editor glyphs, and empty text
-    /// follows the content/marker deletion rules without leaving a placement undo step.
+    /// Drafts and carets align in the input frame. Empty placements leave no undo step,
+    /// while empty edits retain existing anchors, on both themes and in narrow windows.
     #[test]
     fn inline_editor_types_into_the_drawing_and_drops_empty_text() {
-        use crate::widget::test_frames::shapes;
-        use egui::{Color32, Shape};
-        for tool in [
+        use egui::{Color32, RawInput, Shape};
+        for (tool, dark, width) in [
             DrawingToolType::TextLabel,
             DrawingToolType::Callout,
+            DrawingToolType::Comment,
             DrawingToolType::AnchoredNote,
-        ] {
+        ]
+        .into_iter()
+        .flat_map(|tool| {
+            [
+                (tool, false, 320.0),
+                (tool, true, 320.0),
+                (tool, false, 800.0),
+                (tool, true, 800.0),
+            ]
+        }) {
             let ctx = Context::default();
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
             crate::localization::set_translator(&ctx, |s| {
                 (s == "Add text").then(|| "Ajouter".into())
             });
@@ -562,7 +560,28 @@ mod tests {
             let mut time = 0.0;
             let mut step = |chart: &mut crate::Chart, events| {
                 time += 0.1;
-                shapes(&ctx, chart, time, events)
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 600.0),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            chart.show(ui);
+                        });
+                    },
+                );
+                let painted = std::mem::take(&mut output.shapes)
+                    .into_iter()
+                    .map(|s| s.shape)
+                    .collect::<Vec<_>>();
+                output.drop_without_applying_deltas();
+                painted
             };
             let key = |key, modifiers| Event::Key {
                 key,
@@ -586,6 +605,7 @@ mod tests {
                 (" \n", false),
                 ("Discard", true),
                 ("Intervening", false),
+                ("Intervening", true),
                 ("", false),
             ] {
                 chart.drawings_mut().set_active_tool(Some(tool));
@@ -612,8 +632,10 @@ mod tests {
                 assert_eq!(
                     texts
                         .iter()
-                        .filter(|t| t.galley.text() == "Ajouter"
-                            && t.galley.job.sections[0].format.color.a() == 128)
+                        .filter(|t| t.galley.text() == "Ajouter" && {
+                            let c = t.galley.job.sections[0].format.color;
+                            c.r() == c.g() && c.g() == c.b() && c.a() > 0
+                        })
                         .count(),
                     1,
                     "{tool:?} placeholder"
@@ -644,6 +666,21 @@ mod tests {
                 if draft == "Intervening" {
                     let grid = chart.config.show_grid;
                     chart.user_action(|chart| chart.config_mut().show_grid = !grid);
+                    if cancel && tool != DrawingToolType::AnchoredNote {
+                        step(&mut chart, vec![key(Key::Escape, Modifiers::NONE)]);
+                        assert!(chart.drawings().drawings.is_empty());
+                        assert!(chart.undo());
+                        assert_eq!(chart.config.show_grid, grid);
+                        assert!(
+                            chart.drawings().drawings.is_empty(),
+                            "undo must not resurrect empty text"
+                        );
+                        assert!(!chart.can_undo());
+                        assert!(chart.redo());
+                        assert!(chart.drawings().drawings.is_empty());
+                        assert!(chart.undo());
+                        continue;
+                    }
                     step(&mut chart, vec![Event::Text("Hi".into())]);
                     assert_eq!(
                         chart
@@ -690,8 +727,7 @@ mod tests {
                 chart.drawings_mut().drawings[0].font_size = 24.0;
                 chart.drawings_mut().drawings[0].italic = true;
                 step(&mut chart, vec![]);
-                step(&mut chart, vec![Event::Text("Hi".into())]);
-                let painted = step(&mut chart, vec![]);
+                let painted = step(&mut chart, vec![Event::Text("Hi".into())]);
                 let texts: Vec<_> = painted
                     .iter()
                     .filter_map(|s| match s {
@@ -744,33 +780,14 @@ mod tests {
                     ],
                 );
                 step(&mut chart, vec![key(Key::Enter, Modifiers::COMMAND)]);
-                if tool == DrawingToolType::AnchoredNote {
-                    assert_eq!(chart.drawings().drawings.len(), 1);
-                    assert_eq!(chart.drawings().drawings[0].text, None);
-                } else {
-                    assert!(
-                        chart.drawings().drawings.is_empty(),
-                        "{tool:?} emptied text"
-                    );
-                    assert!(chart.undo());
-                    assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some("Hi"));
-                    chart.drawings_mut().drawings[0].text = None;
-                    step(&mut chart, vec![]);
-                    for _ in 0..2 {
-                        step(
-                            &mut chart,
-                            vec![Event::PointerMoved(hit), button(hit, true)],
-                        );
-                        step(&mut chart, vec![button(hit, false)]);
-                    }
-                    step(&mut chart, vec![key(Key::Enter, Modifiers::COMMAND)]);
-                    assert!(
-                        chart.drawings().drawings.is_empty(),
-                        "{tool:?} committed without stored text"
-                    );
-                    assert!(chart.undo());
-                    assert_eq!(chart.drawings().drawings[0].text, None);
-                }
+                assert_eq!(
+                    chart.drawings().drawings.len(),
+                    1,
+                    "{tool:?} keeps its anchors"
+                );
+                assert_eq!(chart.drawings().drawings[0].text, None);
+                assert!(chart.undo());
+                assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some("Hi"));
             }
         }
     }

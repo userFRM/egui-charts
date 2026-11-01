@@ -144,12 +144,16 @@ impl TextEditState {
         }
     }
 
-    /// The drawing with its draft, fading the placeholder in its own text colour.
+    /// The drawing with its draft, or a neutral placeholder while it is empty.
     pub(crate) fn preview(&self, drawing: &Drawing, ctx: &egui::Context) -> Drawing {
         let mut shown = drawing.clone();
         if self.draft.is_empty() {
-            let faded = drawing.text_box_colors(ctx).text.gamma_multiply(0.5);
-            shown.text_color = Some(faded.to_srgba_unmultiplied());
+            shown.text_color = Some(
+                ctx.global_style()
+                    .visuals
+                    .weak_text_color()
+                    .to_srgba_unmultiplied(),
+            );
         }
         shown.text = Some(self.shown_text(ctx));
         shown

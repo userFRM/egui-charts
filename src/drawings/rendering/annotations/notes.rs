@@ -35,7 +35,7 @@ impl Drawing {
         let Some(&anchor) = self.points.first() else {
             return;
         };
-        let text = self.display_text(painter.ctx()).into_owned();
+        let text = self.display_text(painter.ctx());
         let color = self.color32();
         let galley =
             self.annotation_galley(painter, text, self.text_box_colors(painter.ctx()).text);
