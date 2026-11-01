@@ -425,8 +425,9 @@ impl Liquidity {
                 direction: direction(depth::side(price)),
             },
             category: kind.category().into(),
-            label: (kind != DetectionKind::FreshLiquidity).then(|| kind.category().into()),
-            tooltip: Some(Self::tooltip(level)),
+            label: (!matches!(kind, DetectionKind::FreshLiquidity | DetectionKind::Wall))
+                .then(|| kind.category().into()),
+            tooltip: Some(format!("{}: {}", kind.category(), Self::tooltip(level))),
         })
     }
 
