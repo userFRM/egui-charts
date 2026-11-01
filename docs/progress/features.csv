@@ -132,9 +132,9 @@ Chart,Chart types,Price-based type parameters,done,library,src/model/chart_type.
 Chart,Chart types,"Price-based types: axis, crosshair and legend",done,library,src/widget/series.rs;src/studies/chart_state.rs;src/chart/rendering/candles/price_based.rs;src/widget/frame.rs;src/chart/renderers/crosshair.rs
 Chart,Chart types,Range,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/price_based.rs;src/model/range_bar.rs;src/data/trades.rs;src/widget/series.rs;src/widget/feed/mod.rs
 Chart,Chart types,Renko,done,library,src/chart/rendering/candles/price_based.rs;src/model/renko.rs;src/chart/rendering/candles/japanese.rs;src/ui/dialogs/series_settings/tabs/symbol.rs
-Chart,Chart types,Session volume profile,done,host,src/widget/feed/mod.rs;src/widget/frame.rs;src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/merge.rs;src/data/footprint.rs;src/widget/trade_profile.rs
+Chart,Chart types,Session volume profile,done,host,src/widget/feed/mod.rs;src/widget/frame.rs;src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/merge.rs;src/data/footprint.rs;src/widget/trade_profile.rs;src/studies/chart_state.rs
 Chart,Chart types,Step line,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/line.rs;src/painting/dashed_line.rs
-Chart,Chart types,Time Price Opportunity,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/tpo.rs;src/model/tpo.rs;src/model/session/exchange.rs;src/widget/frame.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/chart/rendering/candles/line.rs;src/tokens/mod.rs;src/tokens/semantic.rs;src/model/chart_type.rs
+Chart,Chart types,Time Price Opportunity,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/tpo.rs;src/model/tpo.rs;src/model/session/exchange.rs;src/widget/frame.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/chart/rendering/candles/line.rs;src/tokens/mod.rs;src/tokens/semantic.rs;src/model/chart_type.rs;src/studies/chart_state.rs
 Chart,Chart types,Volume candles,done,library,src/widget/frame.rs;src/chart/rendering/candles/candlestick.rs
 Chart,Chart types,Volume footprint,done,host,src/widget/feed/mod.rs;src/data/footprint.rs;src/widget/frame.rs;src/chart/overlays/footprint.rs;src/widget/merge.rs;benches/frame_time.rs;src/widget/feed/pump.rs
 Chart,Compare and overlay,Compare on a new price scale,done,host,src/model/series_scale.rs;src/widget/price_series.rs
@@ -387,7 +387,7 @@ Order flow,Order flow,Absorption detection,missing,host,
 Order flow,Order flow,Anchored developing VWAP drawing tool,done,library,src/drawings/rendering/trading/volume_profile.rs;src/drawings/rendering/mod.rs
 Order flow,Order flow,Bar POC lines extended until price revisits them,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,Best bid and best ask lines drawn across the heatmap,done,library,src/chart/overlays/liquidity_heatmap.rs;src/widget/frame.rs;src/widget/feed/mod.rs
-Order flow,Order flow,Bid/ask split profile and delta profile,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs;src/widget/trade_profile.rs
+Order flow,Order flow,Bid/ask split profile and delta profile,done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs;src/widget/trade_profile.rs;src/studies/chart_state.rs
 Order flow,Order flow,Bid/ask spread in ticks plotted over time with alert,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/services/alerts.rs;src/studies/factory/mod.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs
 Order flow,Order flow,Big trade zones,done,library,src/services/detectors/big_trades.rs;src/services/detectors/mod.rs;src/data/trades.rs;
 Order flow,Order flow,Book speed,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs

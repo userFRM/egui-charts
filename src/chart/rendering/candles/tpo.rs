@@ -332,6 +332,48 @@ pub fn render_live_tpo(
     if visible.is_empty() || visible.end > full_data.len() {
         return;
     }
+    let render_config = TpoRenderConfig {
+        poc_color: painter.ctx().active_theme().ui.text,
+        ..Default::default()
+    };
+    visit_profiles(
+        full_data,
+        visible,
+        revision,
+        (base_config, instrument_tick),
+        clock,
+        (price_map, price_rect, |i| idx_to_coord(i, chart_rect_min_x)),
+        |profile, config, anchor_x, column_width, labels| {
+            draw_session_profile(
+                painter,
+                price_rect,
+                price_map,
+                profile,
+                config,
+                &render_config,
+                anchor_x,
+                column_width,
+                labels,
+                bullish_color,
+                bearish_color,
+            );
+        },
+    );
+}
+
+/// Visits the renderer's placed distributions, for painting and price fitting.
+pub(crate) fn visit_profiles(
+    full_data: &[Bar],
+    visible: Range<usize>,
+    revision: u64,
+    (base_config, instrument_tick): (&TPOConfig, Option<f64>),
+    clock: &BarClock,
+    (price_map, price_rect, idx_to_coord): (&PriceMap, Rect, impl Fn(usize) -> f32),
+    mut visit: impl FnMut(&TPOProfile, &TPOConfig, f32, f32, bool),
+) {
+    if visible.is_empty() || visible.end > full_data.len() {
+        return;
+    }
 
     let Some(config) = row_config(base_config, instrument_tick, price_map) else {
         return;
@@ -348,32 +390,14 @@ pub fn render_live_tpo(
         clock,
         &sessions,
     );
-    let render_config = TpoRenderConfig {
-        poc_color: painter.ctx().active_theme().ui.text,
-        ..Default::default()
-    };
     place_profiles(
         &units,
         full_data,
         price_rect,
         &config,
         &sessions,
-        |i| idx_to_coord(i, chart_rect_min_x),
-        |profile, anchor_x, column_width, labels| {
-            draw_session_profile(
-                painter,
-                price_rect,
-                price_map,
-                profile,
-                &config,
-                &render_config,
-                anchor_x,
-                column_width,
-                labels,
-                bullish_color,
-                bearish_color,
-            );
-        },
+        idx_to_coord,
+        |profile, anchor, column, labels| visit(profile, &config, anchor, column, labels),
     );
 }
 
