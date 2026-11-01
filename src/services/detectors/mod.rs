@@ -370,11 +370,11 @@ impl OrderFlowDetectors {
                     .get_or_insert_with(|| OrderQueue::new(Some(tracked.tick)));
                 let valid = queue.set_snapshot(*sequence, time, orders.clone()).is_ok();
                 let trades = queue.take_executions();
-                if valid {
-                    let depth = Depth::from_orders(queue, tracked.tick);
-                    for trade in trades {
-                        tracked.trade(&trade, settings, false, &mut out);
-                    }
+                let depth = valid.then(|| Depth::from_orders(queue, tracked.tick));
+                for trade in trades {
+                    tracked.trade(&trade, settings, false, &mut out);
+                }
+                if let Some(depth) = depth {
                     tracked.update_depth(depth, time, true, settings, &mut out);
                 }
             }
@@ -1076,6 +1076,43 @@ mod tests {
 
         host.subscribe();
         assert_eq!(host.events(), detections);
+
+        let host = Host::new(Some(10.0));
+        let trade = fill(2, 100.0, 12.0, OrderSide::Buy, None).with_id(7);
+        assert!(
+            host.push(MarketEvent::Order {
+                sequence: 2,
+                event: OrderEvent::Execute {
+                    id: 1,
+                    size: 12.0,
+                    trade: Some(trade.clone())
+                }
+            })
+            .is_empty()
+        );
+        assert!(
+            host.push(MarketEvent::Order {
+                sequence: 3,
+                event: OrderEvent::Cancel { id: 99 }
+            })
+            .is_empty()
+        );
+        let events = host.push(MarketEvent::OrderSnapshot {
+            sequence: 1,
+            orders: vec![RestingOrder::new(1, OrderSide::Sell, 100.0, 12.0)],
+        });
+        assert_eq!(
+            events,
+            [
+                marker(1, 2, 100.0, Direction::Up, "12"),
+                zone(1, 2, None, 99.875, 100.125)
+            ],
+            "the validated fill precedes the invalid cancel in the snapshot buffer"
+        );
+        assert!(
+            host.push(MarketEvent::Trade(trade)).is_empty(),
+            "the tape copy counts once"
+        );
     }
     #[test]
     fn stop_runs_require_a_fast_monotone_burst_and_distinct_known_aggressors() {
