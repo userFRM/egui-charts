@@ -335,15 +335,16 @@ impl Chart {
                 .drawings
                 .last()
                 .filter(|d| d.post.is_none())
-                .map(|d| d.id)
+                .map(|d| (d.id, true))
         } else if response.double_clicked() || response.triple_clicked() {
             response
                 .interact_pointer_pos()
                 .and_then(|pos| drawing_manager.hit_test(pos))
+                .map(|id| (id, false))
         } else {
             None
         };
-        if let Some(id) = edit_id {
+        if let Some((id, placed)) = edit_id {
             if drawing_manager.drawings.len() > count_before
                 && drawing_manager
                     .drawings
@@ -352,7 +353,7 @@ impl Chart {
             {
                 drawing_manager.image_request = Some(id);
             }
-            text::begin_edit(drawing_manager, id);
+            text::begin_edit(drawing_manager, id, placed);
         }
 
         drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y);

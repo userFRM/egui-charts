@@ -6,7 +6,24 @@ use crate::localization as l10n;
 use crate::model::PostLink;
 use egui::{Id, Key, Modifiers, Rect, Ui};
 
-pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize) {
+/// Tools whose text can be edited directly over the drawing. Price notes prefix the price;
+/// tables, images, posts and ideas retain their separate editors.
+fn edits_in_place(tool: DrawingToolType) -> bool {
+    use DrawingToolType as T;
+    matches!(
+        tool,
+        T::TextLabel
+            | T::AnchoredText
+            | T::Note
+            | T::AnchoredNote
+            | T::FlagNote
+            | T::Callout
+            | T::Comment
+            | T::Signpost
+    )
+}
+
+pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize, placed: bool) {
     let Some(drawing) = manager
         .drawings
         .iter()
@@ -28,6 +45,8 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize) {
         },
         focus: true,
         opened_frame: None,
+        placed,
+        inline: edits_in_place(drawing.tool_type),
     });
     manager.select(id);
 }
@@ -48,14 +67,94 @@ pub(super) fn show_editor(
     }) else {
         return;
     };
-    // Tools whose first anchor is the point they annotate keep their text at the second.
-    let label = usize::from(matches!(
-        drawing.tool_type,
-        DrawingToolType::Callout
-            | DrawingToolType::Note
-            | DrawingToolType::PriceNote
-            | DrawingToolType::Signpost
-    ));
+    let id = chart_id.with(("drawing_text", editor.id));
+    let (cancel, commit) = ui.input_mut(|input| {
+        (
+            input.consume_key(Modifiers::NONE, Key::Escape),
+            input.consume_key(Modifiers::COMMAND, Key::Enter)
+                || input.consume_key(Modifiers::CTRL, Key::Enter),
+        )
+    });
+    let frame = ui.ctx().cumulative_frame_nr();
+    let opened_frame = *editor.opened_frame.get_or_insert(frame);
+    let request_focus = std::mem::take(&mut editor.focus);
+    if editor.inline {
+        let content = !matches!(
+            drawing.tool_type,
+            DrawingToolType::AnchoredNote | DrawingToolType::FlagNote
+        );
+        let old = drawing.text.clone();
+        let shown = editor.shown_text(ui.ctx());
+        let caret = drawing.text_box_colors(ui.ctx()).text;
+        let mut outside = false;
+        if let Some((pos, galley)) = manager.painted_text(editor.id, &shown)
+            && let Some(section) = galley.job.sections.first()
+        {
+            let format = egui::TextFormat {
+                color: egui::Color32::TRANSPARENT,
+                ..section.format.clone()
+            };
+            let mut layouter = |ui: &Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
+                let job =
+                    egui::text::LayoutJob::simple_format(text.as_str().to_owned(), format.clone());
+                ui.fonts_mut(|fonts| fonts.layout_job(job))
+            };
+            egui::Area::new(id)
+                .order(egui::Order::Foreground)
+                .fixed_pos(pos)
+                .constrain(false)
+                .movable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.set_clip_rect(pane);
+                    if ui.is_sizing_pass() {
+                        editor.focus = request_focus;
+                        ui.ctx().request_discard("inline text editor layout");
+                    }
+                    ui.visuals_mut().text_cursor.stroke.color = caret;
+                    ui.visuals_mut().selection.bg_fill =
+                        ui.visuals().selection.bg_fill.gamma_multiply(0.5);
+                    let field = ui.add(
+                        egui::TextEdit::multiline(&mut editor.draft)
+                            .id(id.with("field"))
+                            .frame(egui::Frame::NONE)
+                            .margin(egui::Margin::ZERO)
+                            .desired_width(galley.size().x)
+                            .desired_rows(1)
+                            .layouter(&mut layouter),
+                    );
+                    if request_focus {
+                        field.request_focus();
+                    }
+                    if field.changed() {
+                        ui.ctx().request_discard("drawing text changed");
+                        ui.ctx().request_repaint();
+                    }
+                    outside = frame > opened_frame && field.clicked_elsewhere();
+                });
+        } else {
+            // Off-pane drafts keep their editor and its initial focus request until visible.
+            editor.focus = request_focus;
+        }
+        if cancel || commit || outside {
+            ui.ctx().request_discard("drawing text editor closed");
+            ui.ctx().request_repaint();
+            ui.memory_mut(|memory| memory.surrender_focus(id.with("field")));
+            let text = (!editor.draft.trim().is_empty()).then_some(editor.draft);
+            if editor.placed {
+                match (cancel, text) {
+                    (false, Some(text)) => manager.finish_new_text(editor.id, Some(text)),
+                    _ if content => manager.finish_new_text(editor.id, None),
+                    _ => {}
+                }
+            } else if !cancel && text != old {
+                manager.edit_drawing(editor.id, |d| d.text = text);
+            }
+        } else {
+            manager.text_editor = Some(editor);
+        }
+        return;
+    }
+    let label = usize::from(drawing.tool_type == DrawingToolType::PriceNote);
     let Some(mut pos) = drawing
         .points
         .get(label)
@@ -70,17 +169,6 @@ pub(super) fn show_editor(
     // A table editor shows about six rows of cells above its buttons.
     let height = if table { 240.0_f32 } else { 160.0 }.min(pane.height());
     pos.y = pos.y.min(pane.bottom() - height).max(pane.top());
-    let id = chart_id.with(("drawing_text", editor.id));
-    let (cancel, commit) = ui.input_mut(|input| {
-        (
-            input.consume_key(Modifiers::NONE, Key::Escape),
-            input.consume_key(Modifiers::COMMAND, Key::Enter)
-                || input.consume_key(Modifiers::CTRL, Key::Enter),
-        )
-    });
-    let frame = ui.ctx().cumulative_frame_nr();
-    let opened_frame = *editor.opened_frame.get_or_insert(frame);
-    let request_focus = std::mem::take(&mut editor.focus);
     let font_size = crate::styles::typography::font_size(drawing.font_size);
     let hint = match drawing.tool_type {
         DrawingToolType::Image => "Image address (https://… or file://…)",
@@ -192,7 +280,7 @@ mod tests {
         use egui::{Id, RawInput, Rect, vec2};
         for dark in [false, true] {
             for (tool, width) in [
-                DrawingToolType::TextLabel,
+                DrawingToolType::PriceNote,
                 DrawingToolType::Table,
                 DrawingToolType::Image,
                 DrawingToolType::Tweet,
@@ -213,7 +301,7 @@ mod tests {
                 drawing.points.push(pane.right_bottom() - vec2(10.0, 10.0));
                 drawing.text = Some("Long draft\n".repeat(30));
                 manager.drawings.push(drawing);
-                super::begin_edit(&mut manager, 7);
+                super::begin_edit(&mut manager, 7, false);
                 let chart_id = Id::NULL.with("editor_bounds");
                 let mut time = 0.0;
                 let mut step = |manager: &mut DrawingManager, events| {
@@ -266,8 +354,8 @@ mod tests {
         }
     }
 
-    /// Completing an annotation focuses its inline editor. Commit is one undoable
-    /// edit; double-click reopens it, and Escape discards the draft without deselecting.
+    /// Completing an annotation focuses its editor. Inline text joins the placement undo step;
+    /// double-click reopens it, and Escape discards the draft without deselecting.
     #[test]
     fn placement_and_double_click_edit_annotation_text() {
         for (tool, pane) in [
@@ -373,7 +461,11 @@ mod tests {
                 Some(expected)
             );
             assert!(chart.undo());
-            assert_eq!(chart.drawings().drawings[0].text, None);
+            if super::edits_in_place(tool) {
+                assert!(chart.drawings().drawings.is_empty());
+            } else {
+                assert_eq!(chart.drawings().drawings[0].text, None);
+            }
             assert!(chart.redo());
             step(&mut chart, vec![]);
             let id = chart.drawings().drawings[0].id;
@@ -434,6 +526,274 @@ mod tests {
                 ],
             );
             assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some(expected));
+        }
+    }
+
+    /// Drafts and carets align in the input frame. Empty placements leave no undo step,
+    /// while empty edits retain existing anchors, on both themes and in narrow windows.
+    #[test]
+    fn inline_editor_types_into_the_drawing_and_drops_empty_text() {
+        use egui::{Color32, RawInput, Shape};
+        for (tool, dark, width) in [
+            DrawingToolType::TextLabel,
+            DrawingToolType::Callout,
+            DrawingToolType::Comment,
+            DrawingToolType::AnchoredNote,
+        ]
+        .into_iter()
+        .flat_map(|tool| {
+            [
+                (tool, false, 320.0),
+                (tool, true, 320.0),
+                (tool, false, 800.0),
+                (tool, true, 800.0),
+            ]
+        }) {
+            let ctx = Context::default();
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            crate::localization::set_translator(&ctx, |s| {
+                (s == "Add text").then(|| "Ajouter".into())
+            });
+            let mut chart = chart(&[10.0], &[20.0]);
+            let mut time = 0.0;
+            let mut step = |chart: &mut crate::Chart, events| {
+                time += 0.1;
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 600.0),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            chart.show(ui);
+                        });
+                    },
+                );
+                let painted = std::mem::take(&mut output.shapes)
+                    .into_iter()
+                    .map(|s| s.shape)
+                    .collect::<Vec<_>>();
+                output.drop_without_applying_deltas();
+                painted
+            };
+            let key = |key, modifiers| Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            };
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            step(&mut chart, vec![]);
+            let rect = chart.get_rendered_price_rect();
+            let from = rect.min + rect.size() * egui::vec2(0.4, 0.4);
+            let to = rect.min + rect.size() * egui::vec2(0.6, 0.7);
+            for (draft, cancel) in [
+                ("", true),
+                (" \n", false),
+                ("Discard", true),
+                ("Intervening", false),
+                ("Intervening", true),
+                ("", false),
+            ] {
+                chart.drawings_mut().set_active_tool(Some(tool));
+                step(&mut chart, vec![Event::PointerMoved(from)]);
+                step(&mut chart, vec![button(from, true)]);
+                if tool == DrawingToolType::Callout {
+                    step(
+                        &mut chart,
+                        vec![Event::PointerMoved(from + egui::vec2(8.0, 0.0))],
+                    );
+                    step(&mut chart, vec![Event::PointerMoved(to)]);
+                    step(&mut chart, vec![button(to, false)]);
+                } else {
+                    step(&mut chart, vec![button(from, false)]);
+                }
+                let painted = step(&mut chart, vec![]);
+                let texts: Vec<_> = painted
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Text(t) => Some(t),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    texts
+                        .iter()
+                        .filter(|t| t.galley.text() == "Ajouter" && {
+                            let c = t.galley.job.sections[0].format.color;
+                            c.r() == c.g() && c.g() == c.b() && c.a() > 0
+                        })
+                        .count(),
+                    1,
+                    "{tool:?} placeholder"
+                );
+                assert!(!texts.iter().any(
+                    |t| t.galley.text().contains("Ctrl/Cmd+Enter") || t.galley.text() == "Text"
+                ));
+                if draft.is_empty() && cancel {
+                    let on_placeholder = texts
+                        .iter()
+                        .find(|t| t.galley.text() == "Ajouter")
+                        .unwrap()
+                        .visual_bounding_rect()
+                        .center();
+                    step(
+                        &mut chart,
+                        vec![
+                            Event::PointerMoved(on_placeholder),
+                            button(on_placeholder, true),
+                        ],
+                    );
+                    step(&mut chart, vec![button(on_placeholder, false)]);
+                    assert!(
+                        chart.drawings().text_editor.is_some(),
+                        "{tool:?} placeholder is part of the field"
+                    );
+                }
+                if draft == "Intervening" {
+                    let grid = chart.config.show_grid;
+                    chart.user_action(|chart| chart.config_mut().show_grid = !grid);
+                    if cancel && tool != DrawingToolType::AnchoredNote {
+                        step(&mut chart, vec![key(Key::Escape, Modifiers::NONE)]);
+                        assert!(chart.drawings().drawings.is_empty());
+                        assert!(chart.undo());
+                        assert_eq!(chart.config.show_grid, grid);
+                        assert!(
+                            chart.drawings().drawings.is_empty(),
+                            "undo must not resurrect empty text"
+                        );
+                        assert!(!chart.can_undo());
+                        assert!(chart.redo());
+                        assert!(chart.drawings().drawings.is_empty());
+                        assert!(chart.undo());
+                        continue;
+                    }
+                    step(&mut chart, vec![Event::Text("Hi".into())]);
+                    assert_eq!(
+                        chart
+                            .drawings()
+                            .text_editor
+                            .as_ref()
+                            .map(|e| e.draft.as_str()),
+                        Some("Hi"),
+                        "{tool:?} typing after a chart action"
+                    );
+                    step(&mut chart, vec![key(Key::Enter, Modifiers::COMMAND)]);
+                    assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some("Hi"));
+                    assert!(chart.undo());
+                    assert_eq!(chart.drawings().drawings[0].text, None);
+                    assert!(chart.undo());
+                    assert_eq!(chart.config.show_grid, grid);
+                    assert!(chart.undo());
+                    assert!(chart.drawings().drawings.is_empty());
+                    assert!(!chart.can_undo());
+                    continue;
+                }
+                if cancel || !draft.is_empty() {
+                    if !draft.is_empty() {
+                        step(&mut chart, vec![Event::Text(draft.into())]);
+                    }
+                    let close = if cancel {
+                        key(Key::Escape, Modifiers::NONE)
+                    } else {
+                        key(Key::Enter, Modifiers::CTRL)
+                    };
+                    let painted = step(&mut chart, vec![close]);
+                    assert!(!painted.iter().any(|shape| {
+                        matches!(shape, Shape::Text(text) if text.galley.text() == "Ajouter" || text.galley.text() == "Discard")
+                    }), "{tool:?} closed editor must not leave its draft visible");
+                    if tool == DrawingToolType::AnchoredNote {
+                        assert_eq!(chart.drawings().drawings.len(), 1);
+                        assert_eq!(chart.drawings().drawings[0].text, None);
+                        assert!(chart.undo());
+                    }
+                    assert!(
+                        chart.drawings().drawings.is_empty(),
+                        "{tool:?} cancelled placement"
+                    );
+                    assert!(!chart.can_undo());
+                    continue;
+                }
+                chart.drawings_mut().drawings[0].font_size = 24.0;
+                chart.drawings_mut().drawings[0].italic = true;
+                step(&mut chart, vec![]);
+                let painted = step(&mut chart, vec![Event::Text("Hi".into())]);
+                let texts: Vec<_> = painted
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Text(t) if t.galley.text() == "Hi" => Some(t),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(texts.len(), 2, "{tool:?} drawing and editor");
+                let drawing = texts
+                    .iter()
+                    .find(|t| t.galley.job.sections[0].format.color.a() == 255)
+                    .unwrap();
+                let editor = texts
+                    .iter()
+                    .find(|t| t.galley.job.sections[0].format.color == Color32::TRANSPARENT)
+                    .unwrap();
+                assert!(
+                    drawing.pos.distance(editor.pos) <= 0.5,
+                    "{tool:?}: {:?} vs {:?}",
+                    drawing.pos,
+                    editor.pos
+                );
+                assert!(editor.galley.job.sections[0].format.italics);
+                assert_eq!(editor.galley.job.sections[0].format.font_id.size, 24.0);
+                let hit = if tool == DrawingToolType::AnchoredNote {
+                    chart.drawings().drawings[0].points[0] - egui::vec2(0.0, 12.0)
+                } else {
+                    drawing.visual_bounding_rect().center()
+                };
+                step(&mut chart, vec![key(Key::Enter, Modifiers::COMMAND)]);
+                assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some("Hi"));
+                assert!(chart.undo());
+                assert!(chart.drawings().drawings.is_empty());
+                assert!(!chart.can_undo());
+                assert!(chart.redo());
+                assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some("Hi"));
+                step(&mut chart, vec![]);
+                for _ in 0..2 {
+                    step(
+                        &mut chart,
+                        vec![Event::PointerMoved(hit), button(hit, true)],
+                    );
+                    step(&mut chart, vec![button(hit, false)]);
+                }
+                step(
+                    &mut chart,
+                    vec![
+                        key(Key::A, Modifiers::COMMAND),
+                        key(Key::Backspace, Modifiers::NONE),
+                    ],
+                );
+                step(&mut chart, vec![key(Key::Enter, Modifiers::COMMAND)]);
+                assert_eq!(
+                    chart.drawings().drawings.len(),
+                    1,
+                    "{tool:?} keeps its anchors"
+                );
+                assert_eq!(chart.drawings().drawings[0].text, None);
+                assert!(chart.undo());
+                assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some("Hi"));
+            }
         }
     }
 
