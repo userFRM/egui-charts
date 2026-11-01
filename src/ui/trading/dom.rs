@@ -50,9 +50,6 @@ enum Accumulation {
 /// the volume traded at the bid and the ask.
 const EXTRAS: [&str; 3] = ["Orders", "Obs. chg", "Traded"];
 
-/// Width of one optional column.
-const EXTRA: f32 = 48.0;
-
 /// Where the ladder stands between frames.
 #[derive(Default)]
 pub(super) struct Ladder {
@@ -102,10 +99,10 @@ fn traded(trades: &[&Tick], tick: f64, top: i64, rows: usize) -> Vec<[f64; 3]> {
 
 /// The column edges of the ladder: the margin of the buy orders, the bid sizes, the prices, the
 /// ask sizes and the margin of the sell orders.
-fn columns(rect: Rect) -> [Rect; 5] {
+fn columns(rect: Rect, widths: [f32; 5]) -> [Rect; 5] {
     let mut left = rect.left();
-    [0.15, 0.21, 0.28, 0.21, 0.15].map(|share| {
-        let right = left + rect.width() * share;
+    widths.map(|width| {
+        let right = left + width;
         let column = Rect::from_x_y_ranges(left..=right, rect.y_range());
         left = right;
         column
@@ -201,127 +198,30 @@ impl Ladder {
         };
         let mut action = None;
 
-        // The header over the size columns, with the menu of the columns and the profile.
-        let extras: Vec<usize> = (0..EXTRAS.len()).filter(|&i| self.columns[i]).collect();
-        let strip = EXTRA * extras.len() as f32;
-        let ladder_of =
-            |rect: Rect| Rect::from_x_y_ranges(rect.left()..=rect.right() - strip, rect.y_range());
-        let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-        let [_, bid_column, price_header, ask_column, _] = columns(ladder_of(header));
-        for (column, long, short) in [
-            (bid_column, "Bid size", "Bid"),
-            (ask_column, "Ask size", "Ask"),
-        ] {
-            // The optional columns narrow the ladder until the long label spills into the price.
-            let label = if column.width() < 48.0 { short } else { long };
-            let at = column.center();
-            text(
-                ui,
-                at,
-                Align2::CENTER_CENTER,
-                label,
-                12.0,
-                theme.ui.text_muted,
-            );
-        }
-        for (n, &i) in extras.iter().enumerate() {
-            let at = pos2(
-                header.right() - strip + (n as f32 + 0.5) * EXTRA,
-                header.center().y,
-            );
-            text(
-                ui,
-                at,
-                Align2::CENTER_CENTER,
-                EXTRAS[i],
-                10.0,
-                theme.ui.text_muted,
-            );
-        }
-        let view = ui.interact(
-            price_header,
-            ui.make_persistent_id("dom_view"),
-            Sense::click(),
-        );
-        let translated_label = l10n::text(ui.ctx(), "Ladder view");
-        view.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label));
-        let ink = if view.hovered() {
-            theme.ui.text
-        } else {
-            theme.ui.text_muted
-        };
-        text(
-            ui,
-            price_header.center() - vec2(6.0, 0.0),
-            Align2::CENTER_CENTER,
-            "View",
-            12.0,
-            ink,
-        );
-        chevron(
-            ui,
-            pos2(price_header.center().x + 14.0, price_header.center().y),
-            ink,
-            false,
-        );
-        egui::Popup::menu(&view).show(|ui| {
-            muted(ui, "Columns");
-            for (i, label) in [
-                "Order count",
-                "Observed size change",
-                "Traded at bid and ask",
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                ui.checkbox(&mut self.columns[i], l10n::text(ui.ctx(), label));
-            }
-            muted(ui, "Profile");
-            for (profile, label) in [
-                (Profile::Total, "Total volume"),
-                (Profile::Delta, "Delta"),
-                (Profile::BidAsk, "Bid and ask"),
-            ] {
-                ui.selectable_value(&mut self.profile, profile, l10n::text(ui.ctx(), label));
-            }
-            muted(ui, "Accumulate");
-            for (accumulation, label) in [
-                (Accumulation::Retained, "Retained history"),
-                (Accumulation::Session, "Current session"),
-                (Accumulation::Manual, "Since reset"),
-            ] {
-                ui.selectable_value(
-                    &mut self.accumulation,
-                    accumulation,
-                    l10n::text(ui.ctx(), label),
-                );
-            }
-            if ui.button(l10n::text(ui.ctx(), "Reset")).clicked() {
-                self.accumulation = Accumulation::Manual;
-                self.reset_after = market
-                    .trades
-                    .last()
-                    .map(|trade| trade.ts)
-                    .or(self.reset_after);
-            }
-        });
-
         let footer =
             28.0 + 28.0 + 28.0 + FIELD_HEIGHT + 24.0 + if self.details { 64.0 } else { 0.0 };
         let spacing = ui.spacing().item_spacing.y;
-        let height = ui.available_height() - footer - 6.0 * spacing;
+        let mut scroll_style = ui.spacing().scroll;
+        scroll_style.floating = false;
+        let extras: Vec<usize> = (0..EXTRAS.len()).filter(|&i| self.columns[i]).collect();
+        let header_height = if extras.is_empty() { 18.0 } else { 32.0 };
+        let height = ui.available_height()
+            - header_height
+            - footer
+            - 7.0 * spacing
+            - scroll_style.allocated_width();
         let rows = ((height / ROW).floor() as i64).max(3);
-        let (full, response) = ui.allocate_exact_size(
-            vec2(ui.available_width(), rows as f32 * ROW),
-            Sense::click(),
+        let viewport = ui.available_rect_before_wrap();
+        let body = Rect::from_min_size(
+            viewport.min + vec2(0.0, header_height + spacing),
+            vec2(viewport.width(), rows as f32 * ROW),
         );
-        let rect = ladder_of(full);
 
         // Scroll by whole rows; without the lock the market stays in view.
         // Keep the price under a press or drag stable through its release frame.
         let interacting =
             ui.input(|input| input.pointer.any_down() || input.pointer.any_released());
-        if response.hovered() && !interacting {
+        if ui.rect_contains_pointer(body) && !interacting {
             self.scroll += ui.input(|input| input.smooth_scroll_delta.y);
             let moved = (self.scroll / ROW).trunc();
             self.scroll -= moved * ROW;
@@ -348,26 +248,10 @@ impl Ladder {
             }
             _ => {}
         }
-        let Some(centre) = self.centre else {
-            text(
-                ui,
-                rect.center(),
-                Align2::CENTER_CENTER,
-                "No price yet",
-                13.0,
-                theme.ui.text_muted,
-            );
-            return None;
-        };
+        let centre = self.centre.unwrap_or_default();
         let top = top(centre);
         let row_of =
             |tick_index: i64| (visible(centre, tick_index)).then(|| (top - tick_index) as usize);
-        let row_rect = |row: usize, column: Rect| {
-            Rect::from_x_y_ranges(
-                column.x_range(),
-                rect.top() + row as f32 * ROW..=rect.top() + (row + 1) as f32 * ROW,
-            )
-        };
 
         let volumes = traded(
             self.accumulated(market.trades, market.session_open),
@@ -432,13 +316,6 @@ impl Ladder {
             .iter()
             .map(|(bid, price, color)| ((usize::from(!bid), ticks(*price)), *color))
             .collect();
-        let [
-            buy_margin,
-            bid_column,
-            price_column,
-            ask_column,
-            sell_margin,
-        ] = columns(rect);
         // The columns and the hover text of a row say the same: a side with no resting size has
         // no order count, and a count the feed did not send is unavailable.
         let order_count = |row: usize, side: usize| {
@@ -448,482 +325,702 @@ impl Ladder {
         let change = |row: usize, side: usize| {
             (self.changes[side].get(&(top - row as i64))).map(|n| format!("{n:+}"))
         };
-        let painter = ui.painter();
-        let grid = Stroke::new(1.0, theme.ui.border);
-        for (row, [bid, ask]) in sizes.iter().enumerate() {
-            let tick_index = top - row as i64;
-            for (side, ((size, _), column, color)) in
-                [(bid, bid_column, buy), (ask, ask_column, sell)]
-                    .into_iter()
-                    .enumerate()
-            {
-                if *size > 0.0 {
-                    let cell = row_rect(row, column);
-                    painter.rect_filled(cell, 0.0, color.gamma_multiply(0.3));
-                    if let Some(tier) = highlights.get(&(side, tick_index)) {
-                        painter.rect_stroke(
-                            cell.shrink(1.0),
-                            0.0,
-                            Stroke::new(2.0, *tier),
-                            egui::StrokeKind::Inside,
-                        );
-                    }
-                    let at = cell.center();
-                    text(
-                        ui,
-                        at,
-                        Align2::CENTER_CENTER,
-                        &format_size(*size),
-                        theme.text.body,
-                        theme.ui.text,
-                    );
-                }
-            }
-            let cell = row_rect(row, price_column);
-            let [bid_volume, ask_volume, _] = volumes[row];
-            let volume: f64 = volumes[row].iter().sum();
-            let (centre, half) = (cell.center().x, cell.width() / 2.0);
-            let bar = |from: f32, to: f32, color: Color32, opacity: f32| {
-                let bar = Rect::from_x_y_ranges(from.min(to)..=from.max(to), cell.y_range());
-                painter.rect_filled(bar, 0.0, color.gamma_multiply(opacity));
-            };
-            match self.profile {
-                Profile::Total if max_volume > 0.0 && volume > 0.0 => {
-                    let width = cell.width() * (volume / max_volume) as f32;
-                    bar(cell.left(), cell.left() + width, theme.ui.accent, 0.16);
-                }
-                Profile::Delta if max_delta > 0.0 && ask_volume != bid_volume => {
-                    let delta = ask_volume - bid_volume;
-                    let color = if delta > 0.0 { buy } else { sell };
-                    bar(
-                        centre,
-                        centre + half * (delta / max_delta) as f32,
-                        color,
-                        0.35,
-                    );
-                }
-                Profile::BidAsk if max_side > 0.0 => {
-                    bar(
-                        centre,
-                        centre - half * (bid_volume / max_side) as f32,
-                        sell,
-                        0.35,
-                    );
-                    bar(
-                        centre,
-                        centre + half * (ask_volume / max_side) as f32,
-                        buy,
-                        0.35,
-                    );
-                }
-                _ => {}
-            }
-            for (n, &i) in extras.iter().enumerate() {
-                let left = rect.right() + n as f32 * EXTRA;
-                let cell = Rect::from_x_y_ranges(left..=left + EXTRA, cell.y_range());
-                let traded = |value: f64| (value > 0.0).then(|| format_size(value));
-                let [bid, ask] = match i {
-                    0 => [0, 1].map(|side| {
-                        order_count(row, side)
-                            .map(|n| n.map_or("n/a".to_owned(), |n| n.to_string()))
-                    }),
-                    1 => [change(row, 0), change(row, 1)],
-                    _ => [traded(bid_volume), traded(ask_volume)],
-                };
-                let dash = |value: Option<String>| value.unwrap_or_else(|| "-".to_owned());
-                let label = format!("{}|{}", dash(bid), dash(ask));
-                text(
-                    ui,
-                    cell.center(),
-                    Align2::CENTER_CENTER,
-                    &label,
-                    10.0,
-                    theme.ui.text,
-                );
-            }
-            let color = match last {
-                Some(last) if tick_index > last => sell,
-                Some(last) if tick_index < last => buy,
-                Some(_) => {
-                    // The price of the last trade.
-                    painter.rect_filled(cell, 0.0, theme.ui.btn_bg_active);
-                    theme.ui.text
-                }
-                None => theme.ui.text,
-            };
-            let label = numbers.price(price(tick_index));
-            text(
-                ui,
-                cell.center(),
-                Align2::CENTER_CENTER,
-                &label,
-                theme.text.body,
-                color,
-            );
-            if market
-                .last_fill
-                .is_some_and(|fill| ticks(fill) == tick_index)
-            {
-                painter.rect_stroke(
-                    cell.shrink(1.0),
-                    0.0,
-                    Stroke::new(2.0, theme.ui.accent),
-                    egui::StrokeKind::Inside,
-                );
-            }
-        }
-        let ladder = Rect::from_x_y_ranges(bid_column.left()..=full.right(), rect.y_range());
-        for row in 0..=rows {
-            painter.hline(ladder.x_range(), rect.top() + row as f32 * ROW, grid);
-        }
-        for x in [
-            bid_column.left(),
-            price_column.left(),
-            price_column.right(),
-            ask_column.right(),
-        ]
-        .into_iter()
-        .chain((0..extras.len()).map(|n| rect.right() + (n + 1) as f32 * EXTRA))
-        {
-            painter.vline(x, rect.y_range(), grid);
-        }
-        if market.ladder_unavailable.is_some() {
-            text(
-                ui,
-                ladder.center(),
-                Align2::CENTER_CENTER,
-                "Order-level depth unavailable",
-                12.0,
-                theme.ui.text_muted,
-            );
-        }
-
-        if let Some(pos) = response.hover_pos() {
-            let row = ((pos.y - rect.top()) / ROW).floor() as usize;
-            if row < sizes.len() {
-                let unavailable =
-                    |value: Option<String>, none: &str| value.unwrap_or_else(|| none.to_owned());
-                let counts = |side| match order_count(row, side) {
-                    Some(Some(count)) => count.to_string(),
-                    Some(None) => "unavailable".to_owned(),
-                    None => "none".to_owned(),
-                };
-                let delta = |side| unavailable(change(row, side), "none observed");
-                let [bid_traded, ask_traded, unknown] = volumes[row];
-                let span = match self.accumulation {
-                    Accumulation::Retained => "retained feed trades",
-                    Accumulation::Session => "current session",
-                    Accumulation::Manual => "since reset",
-                };
-                response.clone().on_hover_text(l10n::format_text(ui.ctx(), "Bid orders: {0} · Ask orders: {1}\nObserved size change, not confirmed execution or cancellation: bid {2}, ask {3}\nTraded at bid: {4} · at ask: {5}\nUnclassified: {6} · Total: {7}\nProfile: {8}{9}", &[("0", counts(0)), ("1", counts(1)), ("2", delta(0)), ("3", delta(1)), ("4", format_size(bid_traded)), ("5", format_size(ask_traded)), ("6", format_size(unknown)), ("7", format_size(bid_traded + ask_traded + unknown)), ("8", span.to_owned()), ("9", (if market.last_fill.is_some_and(|fill| ticks(fill) == top - row as i64) {
-                        "\nLast account fill"
-                    } else { "" }).to_string())]));
-            }
-        }
-
-        // Clicking a size cell places a limit order on the passive side of the market and a stop
-        // order beyond it.
-        let pointer_row = |pos: egui::Pos2| {
-            ((pos.y - rect.top()) / ROW)
-                .floor()
-                .clamp(0.0, (rows - 1) as f32) as usize
+        let prices: Vec<_> = if self.centre.is_some() {
+            (0..rows)
+                .map(|row| numbers.price(price(top - row)))
+                .collect()
+        } else {
+            Vec::new()
         };
-        let cell_order = |pos: egui::Pos2| {
-            let (side, column) = if bid_column.contains(pos) {
-                (OrderSide::Buy, bid_column)
-            } else if ask_column.contains(pos) {
-                (OrderSide::Sell, ask_column)
-            } else {
-                return None;
-            };
-            let row = pointer_row(pos);
-            let at = price(top - row as i64);
-            let touch = match side {
-                OrderSide::Buy => market.ask,
-                OrderSide::Sell => market.bid,
-            }
-            .or(market.last);
-            let limit = touch.is_none_or(|touch| match side {
-                OrderSide::Buy => at <= touch,
-                OrderSide::Sell => at >= touch,
-            });
-            let order_type = if limit {
-                market.capabilities.limit.then_some(OrderType::Limit(at))
-            } else {
-                market.capabilities.stop.then_some(OrderType::Stop(at))
-            }?;
-            Some((side, order_type, row_rect(row, column)))
-        };
-        if let Some(pos) = response.hover_pos()
-            && let Some((side, order_type, cell)) = cell_order(pos)
-        {
-            match order(side, order_type) {
-                Ok(request) => {
-                    let color = side_color(&theme, side);
-                    let outline = cell.shrink(1.0);
-                    let corners = [
-                        outline.left_top(),
-                        outline.right_top(),
-                        outline.right_bottom(),
-                        outline.left_bottom(),
-                        outline.left_top(),
-                    ];
-                    painter.extend(egui::Shape::dashed_line(
-                        &corners,
-                        Stroke::new(1.0, color),
-                        3.0,
-                        2.0,
-                    ));
-                    let margin = if side == OrderSide::Buy {
-                        buy_margin
-                    } else {
-                        sell_margin
+        let size_labels: Vec<_> = sizes
+            .iter()
+            .map(|sides| sides.map(|(size, _)| format_size(size)))
+            .collect();
+        let totals = [0, 1].map(|side| format_size(sizes.iter().map(|row| row[side].0).sum()));
+        let extra_labels: Vec<[String; 3]> = (0..rows as usize)
+            .map(|row| {
+                std::array::from_fn(|i| {
+                    if !self.columns[i] {
+                        return String::new();
+                    }
+                    let traded = |value: f64| (value > 0.0).then(|| format_size(value));
+                    let [bid, ask] = match i {
+                        0 => [0, 1].map(|side| {
+                            order_count(row, side)
+                                .map(|n| n.map_or("n/a".to_owned(), |n| n.to_string()))
+                        }),
+                        1 => [change(row, 0), change(row, 1)],
+                        _ => [traded(volumes[row][0]), traded(volumes[row][1])],
                     };
-                    let tag_box = row_rect(pointer_row(pos), margin);
-                    painter.rect_filled(tag_box, 2.0, theme.ui.border);
-                    text(
-                        ui,
-                        tag_box.center(),
-                        Align2::CENTER_CENTER,
-                        tag(&request.order_type),
-                        theme.text.tiny,
-                        theme.ui.text_muted,
-                    );
-                    if response.clicked() {
-                        action = Some(Action::Place(request));
-                    }
-                }
-                Err(reason) => {
-                    response.clone().on_hover_text(l10n::text(ui.ctx(), reason));
-                }
-            }
-        }
-
-        // The working orders in the margin of their side: drag one to move it, right-click it to
-        // cancel it.
-        let pointer = ui.input(|input| input.pointer.interact_pos());
-        let mut groups = BTreeMap::<_, Vec<_>>::new();
-        for working in &orders {
-            if let Some(at) = entry_price(&working.request.order_type) {
-                groups
-                    .entry((ticks(at), working.request.side == OrderSide::Buy))
-                    .or_default()
-                    .push(*working);
-            }
-        }
-        for group in groups.values() {
-            let working = group
-                .iter()
-                .find(|order| self.selected.as_ref() == Some(&order.id))
-                .copied()
-                .unwrap_or(group[0]);
-            let at = entry_price(&working.request.order_type).expect("a priced order");
-            let side = working.request.side;
-            let margin = if side == OrderSide::Buy {
-                buy_margin
-            } else {
-                sell_margin
-            };
-            let id = ui.make_persistent_id(("dom_order", &working.id.0));
-            let dragging = ui.ctx().is_being_dragged(id);
-            let row = match pointer.filter(|_| dragging) {
-                Some(pos) => Some(pointer_row(pos)),
-                None => row_of(ticks(at)),
-            };
-            let Some(row) = row else {
-                continue;
-            };
-            let cell = row_rect(row, margin).shrink(2.0);
-            let tag_response = ui.interact(cell, id, Sense::click_and_drag());
-            let color = side_color(&theme, side);
-            let painter = ui.painter();
-            painter.rect_filled(cell, 2.0, color.gamma_multiply(0.25));
-            painter.rect_stroke(cell, 2.0, Stroke::new(1.0, color), egui::StrokeKind::Inside);
-            let label = tag(&working.request.order_type);
-            let shown = if group.len() > 1 {
-                format!("{label} +{}", group.len() - 1)
-            } else {
-                label.to_owned()
-            };
-            text(
-                ui,
-                cell.center(),
-                Align2::CENTER_CENTER,
-                &shown,
-                10.0,
-                color,
-            );
-            if group.len() > 1 {
-                egui::Popup::menu(&tag_response).show(|ui| {
-                    ui.label(l10n::text(ui.ctx(), "Choose an order to drag or cancel"));
-                    for order in group {
-                        let label = format!(
-                            "{} {} · {}",
-                            format_size(order.request.quantity - order.filled),
-                            tag(&order.request.order_type),
-                            order.id.0,
-                        );
-                        if ui
-                            .selectable_label(order.id == working.id, l10n::text(ui.ctx(), label))
-                            .clicked()
-                        {
-                            self.selected = Some(order.id.clone());
-                        }
-                    }
-                });
-            }
-            let tag_response = tag_response.on_hover_text(l10n::format_text(ui.ctx(), "{0} {1} @ {2} {label} · {3}. Drag to move, right-click to cancel. {4} order(s) here; click to choose", &[("0", side.label().to_string()), ("1", numbers.quantity(working.request.quantity - working.filled, quantity_decimals)), ("2", numbers.price(at)), ("label", label.to_string()), ("3", working.id.0.to_string()), ("4", format!("{}", group.len()))]));
-            if tag_response.secondary_clicked() {
-                action = Some(Action::Confirm(Box::new(TradingLineAction::Cancel(
-                    working.clone(),
-                ))));
-            }
-            if tag_response.drag_stopped()
-                && market.capabilities.modify
-                && let Some(pos) = pointer
-            {
-                let moved = price(top - pointer_row(pos) as i64);
-                if moved > 0.0 && moved != at {
-                    let shift = |other: f64| to_step(other + moved - at, tick, f64::round);
-                    let mut changed = working.request.clone();
-                    changed.order_type = match changed.order_type {
-                        OrderType::Limit(_) => OrderType::Limit(moved),
-                        OrderType::Stop(_) => OrderType::Stop(moved),
-                        OrderType::StopLimit { limit, .. } => OrderType::StopLimit {
-                            stop: moved,
-                            limit: shift(limit),
-                        },
-                        other => other,
-                    };
-                    changed.take_profit = changed.take_profit.map(shift);
-                    for level in &mut changed.take_profit_levels {
-                        level.price = shift(level.price);
-                    }
-                    changed.stop_loss = changed.stop_loss.map(shift);
-                    let valid = |price: f64| price.is_finite() && price > 0.0;
-                    if changed.take_profit.is_none_or(valid)
-                        && changed.take_profit_levels.iter().all(|l| valid(l.price))
-                        && changed.stop_loss.is_none_or(valid)
-                        && match changed.order_type {
-                            OrderType::StopLimit { limit, .. } => valid(limit),
-                            _ => true,
-                        }
-                    {
-                        let modify = TradingLineAction::Modify(working.clone(), changed);
-                        action = Some(Action::Confirm(Box::new(modify)));
-                    }
-                }
-            }
-        }
-
-        // The sizes in view, the lock and the buttons that cancel every buy or every sell.
-        let (totals, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
-        let [
-            buy_margin,
-            bid_column,
-            price_column,
-            ask_column,
-            sell_margin,
-        ] = columns(totals);
-        for (side, margin, column, index) in [
-            (OrderSide::Buy, buy_margin, bid_column, 0),
-            (OrderSide::Sell, sell_margin, ask_column, 1),
-        ] {
-            let color = side_color(&theme, side);
-            let total: f64 = sizes.iter().map(|sizes| sizes[index].0).sum();
-            let cell = column.shrink2(vec2(2.0, 2.0));
+                    let dash = |value: Option<String>| value.unwrap_or_else(|| "-".to_owned());
+                    format!("{} | {}", dash(bid), dash(ask))
+                })
+            })
+            .collect();
+        let measure = |label: &str, size| {
             ui.painter()
-                .rect_filled(cell, 2.0, color.gamma_multiply(0.3));
-            text(
-                ui,
-                cell.center(),
-                Align2::CENTER_CENTER,
-                &format_size(total),
-                theme.text.body,
-                theme.ui.text,
-            );
-            let ids: Vec<_> = (orders.iter())
-                .filter(|order| order.request.side == side)
-                .map(|order| order.id.clone())
-                .collect();
-            let label = match side {
-                OrderSide::Buy => "Cancel all buys",
-                OrderSide::Sell => "Cancel all sells",
-            };
-            let response = ui
-                .interact(
-                    margin,
-                    ui.make_persistent_id(("dom_cancel", index)),
-                    Sense::click(),
+                .layout_no_wrap(
+                    l10n::text(ui.ctx(), label),
+                    egui::FontId::proportional(size),
+                    theme.ui.text,
                 )
-                .on_hover_text(l10n::text(ui.ctx(), label));
-            let translated_label = l10n::text(ui.ctx(), label);
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::Button, !ids.is_empty(), &translated_label)
-            });
-            let ink = if response.hovered() && !ids.is_empty() {
-                theme.ui.text
+                .size()
+                .x
+                .ceil()
+        };
+        let widest_tag = if orders.len() > 1 {
+            format!("STP LMT +{}", orders.len() - 1)
+        } else {
+            "STP LMT".to_owned()
+        };
+        let margin = measure(&widest_tag, 10.0) + 8.0;
+        let margin = margin.max(measure(&orders.len().to_string(), 12.0) + 28.0);
+        let size_width = |side: usize, header: &str| {
+            size_labels
+                .iter()
+                .map(|row| measure(&row[side], theme.text.body))
+                .fold(measure(&totals[side], theme.text.body), f32::max)
+                .max(measure(header, 12.0))
+                + 8.0
+        };
+        let mut widths = [
+            margin,
+            size_width(0, "Bid size"),
+            prices
+                .iter()
+                .map(|label| measure(label, theme.text.body))
+                .fold(measure("View", 12.0) + 20.0, f32::max)
+                + 8.0,
+            size_width(1, "Ask size"),
+            margin,
+        ];
+        let extra_widths: [f32; 3] = std::array::from_fn(|i| {
+            if self.columns[i] {
+                extra_labels.iter().map(|row| measure(&row[i], 10.0)).fold(
+                    measure(EXTRAS[i], 10.0).max(measure("Bid | Ask", 10.0)),
+                    f32::max,
+                ) + 8.0
             } else {
-                theme.ui.text_muted
-            };
-            let (cross, count) = if index == 0 {
-                (
-                    margin.left_center() + vec2(8.0, 0.0),
-                    margin.left_center() + vec2(20.0, 0.0),
-                )
-            } else {
-                (
-                    margin.right_center() - vec2(8.0, 0.0),
-                    margin.right_center() - vec2(20.0, 0.0),
-                )
-            };
-            let painter = ui.painter();
-            let stroke = Stroke::new(1.3, ink);
-            painter.line_segment([cross + vec2(-4.0, -4.0), cross + vec2(4.0, 4.0)], stroke);
-            painter.line_segment([cross + vec2(-4.0, 4.0), cross + vec2(4.0, -4.0)], stroke);
-            let align = if index == 0 {
-                Align2::LEFT_CENTER
-            } else {
-                Align2::RIGHT_CENTER
-            };
-            text(ui, count, align, &ids.len().to_string(), 12.0, ink);
-            if response.clicked() && !ids.is_empty() {
-                action = Some(Action::Cancel(ids));
+                0.0
             }
-        }
-        let lock = Rect::from_center_size(price_column.center(), vec2(24.0, 24.0));
-        let lock_response = ui
-            .interact(lock, ui.make_persistent_id("dom_lock"), Sense::click())
-            .on_hover_text(l10n::text(
-                ui.ctx(),
-                if self.locked {
-                    "Re-centre the ladder on the market"
-                } else {
-                    "Keep the ladder from re-centring on the market"
-                },
-            ));
-        let translated_label = l10n::text(ui.ctx(), "Lock the ladder");
-        lock_response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::Role::Button, true, self.locked, &translated_label)
         });
-        if lock_response.clicked() {
-            self.locked = !self.locked;
-            if !self.locked {
-                self.centre = middle;
-            }
+        let strip: f32 = extra_widths.iter().sum();
+        let minimum = widths.iter().sum::<f32>() + strip;
+        let width = ui.available_width().max(minimum);
+        let spare = width - minimum;
+        for (width, share) in widths.iter_mut().zip([0.15, 0.21, 0.28, 0.21, 0.15]) {
+            *width += spare * share;
         }
-        let icon = if self.locked {
-            &icons::LOCK
-        } else {
-            &icons::UNLOCK
-        };
-        let ink = if self.locked || lock_response.hovered() {
-            theme.ui.text
-        } else {
-            theme.ui.text_muted
-        };
-        icon.as_image_tinted(vec2(16.0, 16.0), ink)
-            .paint_at(ui, Rect::from_center_size(lock.center(), vec2(16.0, 16.0)));
+        ui.scope(|ui| {
+            // Vertical wheel movement changes price rows; shift-wheel and the bar scroll columns.
+            ui.style_mut().always_scroll_the_only_direction = false;
+            ui.spacing_mut().scroll = scroll_style;
+            egui::ScrollArea::horizontal()
+                .id_salt("dom_columns")
+                .content_margin(0)
+                .auto_shrink([false, true])
+                .scroll_source(egui::scroll_area::ScrollSource {
+                    drag: egui::scroll_area::DragScroll::Never,
+                    ..Default::default()
+                })
+                .show(ui, |ui| {
+                    ui.set_min_width(width);
+                    // The header, rows and totals share the same measured column edges.
+                    let (header, _) =
+                        ui.allocate_exact_size(vec2(width, header_height), Sense::hover());
+                    let [_, bid_column, price_header, ask_column, _] = columns(header, widths);
+                    for (column, label) in [
+                        (bid_column, "Bid size"),
+                        (ask_column, "Ask size"),
+                    ] {
+                        let at = column.center();
+                        text(
+                            ui,
+                            at,
+                            Align2::CENTER_CENTER,
+                            label,
+                            12.0,
+                            theme.ui.text_muted,
+                        );
+                    }
+                    let mut left = header.right() - strip;
+                    let extra_columns = extra_widths.map(|width| {
+                        let column = Rect::from_x_y_ranges(left..=left + width, header.y_range());
+                        left += width;
+                        column
+                    });
+                    for &i in &extras {
+                        for (label, y) in [
+                            (EXTRAS[i], header.top() + 8.0),
+                            ("Bid | Ask", header.top() + 23.0),
+                        ] {
+                            text(
+                                ui,
+                                pos2(extra_columns[i].center().x, y),
+                                Align2::CENTER_CENTER,
+                                label,
+                                10.0,
+                                theme.ui.text_muted,
+                            );
+                        }
+                    }
+                    let view = ui.interact(
+                        price_header,
+                        ui.make_persistent_id("dom_view"),
+                        Sense::click(),
+                    );
+                    let translated_label = l10n::text(ui.ctx(), "Ladder view");
+                    view.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label));
+                    let ink = if view.hovered() {
+                        theme.ui.text
+                    } else {
+                        theme.ui.text_muted
+                    };
+                    text(
+                        ui,
+                        price_header.center() - vec2(6.0, 0.0),
+                        Align2::CENTER_CENTER,
+                        "View",
+                        12.0,
+                        ink,
+                    );
+                    chevron(
+                        ui,
+                        pos2(price_header.center().x + 14.0, price_header.center().y),
+                        ink,
+                        false,
+                    );
+                    egui::Popup::menu(&view).show(|ui| {
+                        muted(ui, "Columns");
+                        for (i, label) in [
+                            "Order count",
+                            "Observed size change",
+                            "Traded at bid and ask",
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            ui.checkbox(&mut self.columns[i], l10n::text(ui.ctx(), label));
+                        }
+                        muted(ui, "Profile");
+                        for (profile, label) in [
+                            (Profile::Total, "Total volume"),
+                            (Profile::Delta, "Delta"),
+                            (Profile::BidAsk, "Bid and ask"),
+                        ] {
+                            ui.selectable_value(&mut self.profile, profile, l10n::text(ui.ctx(), label));
+                        }
+                        muted(ui, "Accumulate");
+                        for (accumulation, label) in [
+                            (Accumulation::Retained, "Retained history"),
+                            (Accumulation::Session, "Current session"),
+                            (Accumulation::Manual, "Since reset"),
+                        ] {
+                            ui.selectable_value(
+                                &mut self.accumulation,
+                                accumulation,
+                                l10n::text(ui.ctx(), label),
+                            );
+                        }
+                        if ui.button(l10n::text(ui.ctx(), "Reset")).clicked() {
+                            self.accumulation = Accumulation::Manual;
+                            self.reset_after = market
+                                .trades
+                                .last()
+                                .map(|trade| trade.ts)
+                                .or(self.reset_after);
+                        }
+                    });
+
+                    let (full, response) =
+                        ui.allocate_exact_size(vec2(width, rows as f32 * ROW), Sense::click());
+                    let rect = Rect::from_x_y_ranges(full.left()..=full.right() - strip, full.y_range());
+                    if self.centre.is_none() {
+                        text(
+                            ui,
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            "No price yet",
+                            13.0,
+                            theme.ui.text_muted,
+                        );
+                        return;
+                    }
+                    let row_rect = |row: usize, column: Rect| {
+                        Rect::from_x_y_ranges(
+                            column.x_range(),
+                            rect.top() + row as f32 * ROW..=rect.top() + (row + 1) as f32 * ROW,
+                        )
+                    };
+                    let [buy_margin, bid_column, price_column, ask_column, sell_margin] =
+                        columns(rect, widths);
+                    let painter = ui.painter();
+                    let grid = Stroke::new(1.0, theme.ui.border);
+                    for (row, [bid, ask]) in sizes.iter().enumerate() {
+                        let tick_index = top - row as i64;
+                        for (side, ((size, _), column, color)) in
+                            [(bid, bid_column, buy), (ask, ask_column, sell)]
+                                .into_iter()
+                                .enumerate()
+                        {
+                            if *size > 0.0 {
+                                let cell = row_rect(row, column);
+                                painter.rect_filled(cell, 0.0, color.gamma_multiply(0.3));
+                                if let Some(tier) = highlights.get(&(side, tick_index)) {
+                                    painter.rect_stroke(
+                                        cell.shrink(1.0),
+                                        0.0,
+                                        Stroke::new(2.0, *tier),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                }
+                                let at = cell.center();
+                                text(
+                                    ui,
+                                    at,
+                                    Align2::CENTER_CENTER,
+                                    &size_labels[row][side],
+                                    theme.text.body,
+                                    theme.ui.text,
+                                );
+                            }
+                        }
+                        let cell = row_rect(row, price_column);
+                        let [bid_volume, ask_volume, _] = volumes[row];
+                        let volume: f64 = volumes[row].iter().sum();
+                        let (centre, half) = (cell.center().x, cell.width() / 2.0);
+                        let bar = |from: f32, to: f32, color: Color32, opacity: f32| {
+                            let bar = Rect::from_x_y_ranges(from.min(to)..=from.max(to), cell.y_range());
+                            painter.rect_filled(bar, 0.0, color.gamma_multiply(opacity));
+                        };
+                        match self.profile {
+                            Profile::Total if max_volume > 0.0 && volume > 0.0 => {
+                                let width = cell.width() * (volume / max_volume) as f32;
+                                bar(cell.left(), cell.left() + width, theme.ui.accent, 0.16);
+                            }
+                            Profile::Delta if max_delta > 0.0 && ask_volume != bid_volume => {
+                                let delta = ask_volume - bid_volume;
+                                let color = if delta > 0.0 { buy } else { sell };
+                                bar(
+                                    centre,
+                                    centre + half * (delta / max_delta) as f32,
+                                    color,
+                                    0.35,
+                                );
+                            }
+                            Profile::BidAsk if max_side > 0.0 => {
+                                bar(
+                                    centre,
+                                    centre - half * (bid_volume / max_side) as f32,
+                                    sell,
+                                    0.35,
+                                );
+                                bar(
+                                    centre,
+                                    centre + half * (ask_volume / max_side) as f32,
+                                    buy,
+                                    0.35,
+                                );
+                            }
+                            _ => {}
+                        }
+                        for &i in &extras {
+                            let cell = row_rect(row, extra_columns[i]);
+                            text(
+                                ui,
+                                cell.center(),
+                                Align2::CENTER_CENTER,
+                                &extra_labels[row][i],
+                                10.0,
+                                theme.ui.text,
+                            );
+                        }
+                        let color = match last {
+                            Some(last) if tick_index > last => sell,
+                            Some(last) if tick_index < last => buy,
+                            Some(_) => {
+                                // The price of the last trade.
+                                painter.rect_filled(cell, 0.0, theme.ui.btn_bg_active);
+                                theme.ui.text
+                            }
+                            None => theme.ui.text,
+                        };
+                        text(
+                            ui,
+                            cell.center(),
+                            Align2::CENTER_CENTER,
+                            &prices[row],
+                            theme.text.body,
+                            color,
+                        );
+                        if market
+                            .last_fill
+                            .is_some_and(|fill| ticks(fill) == tick_index)
+                        {
+                            painter.rect_stroke(
+                                cell.shrink(1.0),
+                                0.0,
+                                Stroke::new(2.0, theme.ui.accent),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+                    }
+                    let ladder = Rect::from_x_y_ranges(bid_column.left()..=full.right(), rect.y_range());
+                    for row in 0..=rows {
+                        painter.hline(ladder.x_range(), rect.top() + row as f32 * ROW, grid);
+                    }
+                    for x in [
+                        bid_column.left(),
+                        price_column.left(),
+                        price_column.right(),
+                        ask_column.right(),
+                        rect.right(),
+                    ]
+                    .into_iter()
+                    .chain(extras.iter().map(|&i| extra_columns[i].right()))
+                    {
+                        painter.vline(x, rect.y_range(), grid);
+                    }
+                    if market.ladder_unavailable.is_some() {
+                        text(
+                            ui,
+                            ladder.center(),
+                            Align2::CENTER_CENTER,
+                            "Order-level depth unavailable",
+                            12.0,
+                            theme.ui.text_muted,
+                        );
+                    }
+
+                    if let Some(pos) = response.hover_pos() {
+                        let row = ((pos.y - rect.top()) / ROW).floor() as usize;
+                        if row < sizes.len() {
+                            let unavailable =
+                                |value: Option<String>, none: &str| value.unwrap_or_else(|| none.to_owned());
+                            let counts = |side| match order_count(row, side) {
+                                Some(Some(count)) => count.to_string(),
+                                Some(None) => "unavailable".to_owned(),
+                                None => "none".to_owned(),
+                            };
+                            let delta = |side| unavailable(change(row, side), "none observed");
+                            let [bid_traded, ask_traded, unknown] = volumes[row];
+                            let span = match self.accumulation {
+                                Accumulation::Retained => "retained feed trades",
+                                Accumulation::Session => "current session",
+                                Accumulation::Manual => "since reset",
+                            };
+                            response.clone().on_hover_text(l10n::format_text(ui.ctx(), "Bid orders: {0} · Ask orders: {1}\nObserved size change, not confirmed execution or cancellation: bid {2}, ask {3}\nTraded at bid: {4} · at ask: {5}\nUnclassified: {6} · Total: {7}\nProfile: {8}{9}", &[("0", counts(0)), ("1", counts(1)), ("2", delta(0)), ("3", delta(1)), ("4", format_size(bid_traded)), ("5", format_size(ask_traded)), ("6", format_size(unknown)), ("7", format_size(bid_traded + ask_traded + unknown)), ("8", span.to_owned()), ("9", (if market.last_fill.is_some_and(|fill| ticks(fill) == top - row as i64) {
+                                    "\nLast account fill"
+                                } else { "" }).to_string())]));
+                        }
+                    }
+
+                    // Clicking a size cell places a limit order on the passive side of the market and a stop
+                    // order beyond it.
+                    let pointer_row = |pos: egui::Pos2| {
+                        ((pos.y - rect.top()) / ROW)
+                            .floor()
+                            .clamp(0.0, (rows - 1) as f32) as usize
+                    };
+                    let cell_order = |pos: egui::Pos2| {
+                        let (side, column) = if bid_column.contains(pos) {
+                            (OrderSide::Buy, bid_column)
+                        } else if ask_column.contains(pos) {
+                            (OrderSide::Sell, ask_column)
+                        } else {
+                            return None;
+                        };
+                        let row = pointer_row(pos);
+                        let at = price(top - row as i64);
+                        let touch = match side {
+                            OrderSide::Buy => market.ask,
+                            OrderSide::Sell => market.bid,
+                        }
+                        .or(market.last);
+                        let limit = touch.is_none_or(|touch| match side {
+                            OrderSide::Buy => at <= touch,
+                            OrderSide::Sell => at >= touch,
+                        });
+                        let order_type = if limit {
+                            market.capabilities.limit.then_some(OrderType::Limit(at))
+                        } else {
+                            market.capabilities.stop.then_some(OrderType::Stop(at))
+                        }?;
+                        Some((side, order_type, row_rect(row, column)))
+                    };
+                    if let Some(pos) = response.hover_pos()
+                        && let Some((side, order_type, cell)) = cell_order(pos)
+                    {
+                        match order(side, order_type) {
+                            Ok(request) => {
+                                let color = side_color(&theme, side);
+                                let outline = cell.shrink(1.0);
+                                let corners = [
+                                    outline.left_top(),
+                                    outline.right_top(),
+                                    outline.right_bottom(),
+                                    outline.left_bottom(),
+                                    outline.left_top(),
+                                ];
+                                painter.extend(egui::Shape::dashed_line(
+                                    &corners,
+                                    Stroke::new(1.0, color),
+                                    3.0,
+                                    2.0,
+                                ));
+                                let margin = if side == OrderSide::Buy {
+                                    buy_margin
+                                } else {
+                                    sell_margin
+                                };
+                                let tag_box = row_rect(pointer_row(pos), margin);
+                                painter.rect_filled(tag_box, 2.0, theme.ui.border);
+                                text(
+                                    ui,
+                                    tag_box.center(),
+                                    Align2::CENTER_CENTER,
+                                    tag(&request.order_type),
+                                    theme.text.tiny,
+                                    theme.ui.text_muted,
+                                );
+                                if response.clicked() {
+                                    action = Some(Action::Place(request));
+                                }
+                            }
+                            Err(reason) => {
+                                response.clone().on_hover_text(l10n::text(ui.ctx(), reason));
+                            }
+                        }
+                    }
+
+                    // The working orders in the margin of their side: drag one to move it, right-click it to
+                    // cancel it.
+                    let pointer = ui.input(|input| input.pointer.interact_pos());
+                    let mut groups = BTreeMap::<_, Vec<_>>::new();
+                    for working in &orders {
+                        if let Some(at) = entry_price(&working.request.order_type) {
+                            groups
+                                .entry((ticks(at), working.request.side == OrderSide::Buy))
+                                .or_default()
+                                .push(*working);
+                        }
+                    }
+                    for group in groups.values() {
+                        let working = group
+                            .iter()
+                            .find(|order| self.selected.as_ref() == Some(&order.id))
+                            .copied()
+                            .unwrap_or(group[0]);
+                        let at = entry_price(&working.request.order_type).expect("a priced order");
+                        let side = working.request.side;
+                        let margin = if side == OrderSide::Buy {
+                            buy_margin
+                        } else {
+                            sell_margin
+                        };
+                        let id = ui.make_persistent_id(("dom_order", &working.id.0));
+                        let dragging = ui.ctx().is_being_dragged(id);
+                        let row = match pointer.filter(|_| dragging) {
+                            Some(pos) => Some(pointer_row(pos)),
+                            None => row_of(ticks(at)),
+                        };
+                        let Some(row) = row else {
+                            continue;
+                        };
+                        let cell = row_rect(row, margin).shrink(2.0);
+                        let tag_response = ui.interact(cell, id, Sense::click_and_drag());
+                        let color = side_color(&theme, side);
+                        let painter = ui.painter();
+                        painter.rect_filled(cell, 2.0, color.gamma_multiply(0.25));
+                        painter.rect_stroke(cell, 2.0, Stroke::new(1.0, color), egui::StrokeKind::Inside);
+                        let label = tag(&working.request.order_type);
+                        let shown = if group.len() > 1 {
+                            format!("{label} +{}", group.len() - 1)
+                        } else {
+                            label.to_owned()
+                        };
+                        text(
+                            ui,
+                            cell.center(),
+                            Align2::CENTER_CENTER,
+                            &shown,
+                            10.0,
+                            color,
+                        );
+                        if group.len() > 1 {
+                            egui::Popup::menu(&tag_response).show(|ui| {
+                                ui.label(l10n::text(ui.ctx(), "Choose an order to drag or cancel"));
+                                for order in group {
+                                    let label = format!(
+                                        "{} {} · {}",
+                                        format_size(order.request.quantity - order.filled),
+                                        tag(&order.request.order_type),
+                                        order.id.0,
+                                    );
+                                    if ui
+                                        .selectable_label(order.id == working.id, l10n::text(ui.ctx(), label))
+                                        .clicked()
+                                    {
+                                        self.selected = Some(order.id.clone());
+                                    }
+                                }
+                            });
+                        }
+                        let tag_response = tag_response.on_hover_text(l10n::format_text(ui.ctx(), "{0} {1} @ {2} {label} · {3}. Drag to move, right-click to cancel. {4} order(s) here; click to choose", &[("0", side.label().to_string()), ("1", numbers.quantity(working.request.quantity - working.filled, quantity_decimals)), ("2", numbers.price(at)), ("label", label.to_string()), ("3", working.id.0.to_string()), ("4", format!("{}", group.len()))]));
+                        if tag_response.secondary_clicked() {
+                            action = Some(Action::Confirm(Box::new(TradingLineAction::Cancel(
+                                working.clone(),
+                            ))));
+                        }
+                        if tag_response.drag_stopped()
+                            && market.capabilities.modify
+                            && let Some(pos) = pointer
+                        {
+                            let moved = price(top - pointer_row(pos) as i64);
+                            if moved > 0.0 && moved != at {
+                                let shift = |other: f64| to_step(other + moved - at, tick, f64::round);
+                                let mut changed = working.request.clone();
+                                changed.order_type = match changed.order_type {
+                                    OrderType::Limit(_) => OrderType::Limit(moved),
+                                    OrderType::Stop(_) => OrderType::Stop(moved),
+                                    OrderType::StopLimit { limit, .. } => OrderType::StopLimit {
+                                        stop: moved,
+                                        limit: shift(limit),
+                                    },
+                                    other => other,
+                                };
+                                changed.take_profit = changed.take_profit.map(shift);
+                                for level in &mut changed.take_profit_levels {
+                                    level.price = shift(level.price);
+                                }
+                                changed.stop_loss = changed.stop_loss.map(shift);
+                                let valid = |price: f64| price.is_finite() && price > 0.0;
+                                if changed.take_profit.is_none_or(valid)
+                                    && changed.take_profit_levels.iter().all(|l| valid(l.price))
+                                    && changed.stop_loss.is_none_or(valid)
+                                    && match changed.order_type {
+                                        OrderType::StopLimit { limit, .. } => valid(limit),
+                                        _ => true,
+                                    }
+                                {
+                                    let modify = TradingLineAction::Modify(working.clone(), changed);
+                                    action = Some(Action::Confirm(Box::new(modify)));
+                                }
+                            }
+                        }
+                    }
+
+                    // The sizes in view, the lock and the buttons that cancel every buy or every sell.
+                    let (total_rect, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());
+                    let [
+                        buy_margin,
+                        bid_column,
+                        price_column,
+                        ask_column,
+                        sell_margin,
+                    ] = columns(total_rect, widths);
+                    for (side, margin, column, index) in [
+                        (OrderSide::Buy, buy_margin, bid_column, 0),
+                        (OrderSide::Sell, sell_margin, ask_column, 1),
+                    ] {
+                        let color = side_color(&theme, side);
+                        let cell = column.shrink2(vec2(2.0, 2.0));
+                        ui.painter()
+                            .rect_filled(cell, 2.0, color.gamma_multiply(0.3));
+                        text(
+                            ui,
+                            cell.center(),
+                            Align2::CENTER_CENTER,
+                            &totals[index],
+                            theme.text.body,
+                            theme.ui.text,
+                        );
+                        let ids: Vec<_> = (orders.iter())
+                            .filter(|order| order.request.side == side)
+                            .map(|order| order.id.clone())
+                            .collect();
+                        let label = match side {
+                            OrderSide::Buy => "Cancel all buys",
+                            OrderSide::Sell => "Cancel all sells",
+                        };
+                        let response = ui
+                            .interact(
+                                margin,
+                                ui.make_persistent_id(("dom_cancel", index)),
+                                Sense::click(),
+                            )
+                            .on_hover_text(l10n::text(ui.ctx(), label));
+                        let translated_label = l10n::text(ui.ctx(), label);
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Button, !ids.is_empty(), &translated_label)
+                        });
+                        let ink = if response.hovered() && !ids.is_empty() {
+                            theme.ui.text
+                        } else {
+                            theme.ui.text_muted
+                        };
+                        let (cross, count) = if index == 0 {
+                            (
+                                margin.left_center() + vec2(8.0, 0.0),
+                                margin.left_center() + vec2(20.0, 0.0),
+                            )
+                        } else {
+                            (
+                                margin.right_center() - vec2(8.0, 0.0),
+                                margin.right_center() - vec2(20.0, 0.0),
+                            )
+                        };
+                        let painter = ui.painter();
+                        let stroke = Stroke::new(1.3, ink);
+                        painter.line_segment([cross + vec2(-4.0, -4.0), cross + vec2(4.0, 4.0)], stroke);
+                        painter.line_segment([cross + vec2(-4.0, 4.0), cross + vec2(4.0, -4.0)], stroke);
+                        let align = if index == 0 {
+                            Align2::LEFT_CENTER
+                        } else {
+                            Align2::RIGHT_CENTER
+                        };
+                        text(ui, count, align, &ids.len().to_string(), 12.0, ink);
+                        if response.clicked() && !ids.is_empty() {
+                            action = Some(Action::Cancel(ids));
+                        }
+                    }
+                    let lock = Rect::from_center_size(price_column.center(), vec2(24.0, 24.0));
+                    let lock_response = ui
+                        .interact(lock, ui.make_persistent_id("dom_lock"), Sense::click())
+                        .on_hover_text(l10n::text(
+                            ui.ctx(),
+                            if self.locked {
+                                "Re-centre the ladder on the market"
+                            } else {
+                                "Keep the ladder from re-centring on the market"
+                            },
+                        ));
+                    let translated_label = l10n::text(ui.ctx(), "Lock the ladder");
+                    lock_response.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::Role::Button, true, self.locked, &translated_label)
+                    });
+                    if lock_response.clicked() {
+                        self.locked = !self.locked;
+                        if !self.locked {
+                            self.centre = middle;
+                        }
+                    }
+                    let icon = if self.locked {
+                        &icons::LOCK
+                    } else {
+                        &icons::UNLOCK
+                    };
+                    let ink = if self.locked || lock_response.hovered() {
+                        theme.ui.text
+                    } else {
+                        theme.ui.text_muted
+                    };
+                    icon.as_image_tinted(vec2(16.0, 16.0), ink)
+                        .paint_at(ui, Rect::from_center_size(lock.center(), vec2(16.0, 16.0)));
+
+                });
+        });
+        self.centre?;
 
         // The position and its profit or loss.
         ui.columns(2, |halves| {
@@ -1132,6 +1229,245 @@ fn boxed(ui: &mut Ui, label: &str, color: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Full prices, totals and paired quantities fit their grid cells, including in a narrow ticket.
+    #[test]
+    fn numeric_columns_fit_their_content_and_scroll_together() {
+        use crate::model::{Capabilities, OrderBook, OrderBookLevel, TradingRules};
+
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [300.0, 800.0] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut ladder = Ladder {
+                    columns: [true; 3],
+                    ..Default::default()
+                };
+                let rules = TradingRules::new("ES");
+                let now = Utc::now();
+                let trades = [
+                    Tick::new(now, 6107.0, 1018.0, Some(OrderSide::Sell)),
+                    Tick::new(now, 6107.0, 1637.0, Some(OrderSide::Buy)),
+                ];
+                let trades: Vec<_> = trades.iter().collect();
+                let mut frame = |changed, events| {
+                    let book = OrderBook {
+                        ts: now,
+                        symbol: "ES".into(),
+                        bids: (0..48)
+                            .map(|i| OrderBookLevel {
+                                price: 6107.0 - i as f64 * 0.25,
+                                size: 1018.0 + if changed { 1234.0 } else { 0.0 },
+                                order_cnt: Some(1018),
+                            })
+                            .collect(),
+                        asks: (0..48)
+                            .map(|i| OrderBookLevel {
+                                price: 6107.25 + i as f64 * 0.25,
+                                size: 1637.0,
+                                order_cnt: Some(1637),
+                            })
+                            .collect(),
+                    };
+                    let market = Market {
+                        symbol: "ES",
+                        formatter: None,
+                        pip_value: None,
+                        last: Some(6107.0),
+                        bid: Some(6107.0),
+                        ask: Some(6107.25),
+                        tick: 0.25,
+                        decimals: 2,
+                        currency: "USD",
+                        balance: None,
+                        capabilities: Capabilities::default(),
+                        rules: &rules,
+                        rules_ready: true,
+                        offline: None,
+                        ladder: Some(std::borrow::Cow::Borrowed(&book)),
+                        ladder_unavailable: None,
+                        highlights: Vec::new(),
+                        orders: &[],
+                        positions: &[],
+                        trades: &trades,
+                        session_open: None,
+                        last_fill: None,
+                        logo: None,
+                    };
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(width, 900.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            ladder.show(ui, "ES", &market, &mut 1.0, &mut TimeInForce::Day);
+                        },
+                    );
+                    output.textures_delta.clear();
+                    output
+                };
+                for _ in 0..30 {
+                    frame(false, vec![]).drop_without_applying_deltas();
+                }
+                let output = frame(true, vec![]);
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            text.galley.rect.translate(text.pos.to_vec2()),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                let price = labels
+                    .iter()
+                    .find(|(text, _)| text == "6,107.00")
+                    .unwrap()
+                    .1;
+                let mut edges: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::LineSegment { points, .. }
+                            if points[0].x == points[1].x
+                                && points[0].y <= price.top()
+                                && points[1].y >= price.bottom() =>
+                        {
+                            Some(points[0].x)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                edges.sort_by(f32::total_cmp);
+                let grid = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::LineSegment { points, .. }
+                            if points[0].x == edges[0] && points[0].x == points[1].x =>
+                        {
+                            Some(Rect::from_two_pos(points[0], points[1]))
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                for (label, rect) in labels
+                    .iter()
+                    .filter(|(_, rect)| grid.y_range().contains(rect.center().y))
+                {
+                    let cell = edges
+                        .windows(2)
+                        .find(|edge| edge[0] <= rect.center().x && rect.center().x <= edge[1])
+                        .unwrap();
+                    assert!(
+                        rect.left() >= cell[0] && rect.right() <= cell[1],
+                        "{label} exceeds its cell at width {width}: {rect:?}, {cell:?}"
+                    );
+                }
+                assert!(labels.iter().any(|(text, _)| text == "1,018 | 1,637"));
+                assert!(labels.iter().any(|(text, _)| text == "+1234 | -"));
+                assert_eq!(
+                    labels
+                        .iter()
+                        .filter(|(text, _)| text == "Bid | Ask")
+                        .count(),
+                    3
+                );
+                let rect_for = |output: &egui::FullOutput, label: &str| {
+                    output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == label => {
+                                Some(text.galley.rect.translate(text.pos.to_vec2()))
+                            }
+                            _ => None,
+                        })
+                        .unwrap()
+                };
+                let header = labels
+                    .iter()
+                    .find(|(text, _)| text == "Bid size")
+                    .unwrap()
+                    .1;
+                let (total_label, total) = labels
+                    .iter()
+                    .find(|(_, rect)| {
+                        (rect.center().x - header.center().x).abs() < 0.5
+                            && rect.top() > grid.bottom()
+                    })
+                    .unwrap();
+                assert!(total.left() >= edges[0] && total.right() <= edges[1]);
+                let footer = ["Buy Mkt", "Sell Mkt"].map(|label| rect_for(&output, label));
+                assert!(
+                    footer
+                        .iter()
+                        .all(|rect| rect.left() >= 0.0 && rect.right() <= width)
+                );
+                output.drop_without_applying_deltas();
+
+                let pointer = pos2(width / 2.0, price.center().y);
+                let wheel = |delta| egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta,
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: Default::default(),
+                };
+                frame(
+                    true,
+                    vec![egui::Event::PointerMoved(pointer), wheel(vec2(-40.0, 0.0))],
+                )
+                .drop_without_applying_deltas();
+                let output = frame(true, vec![]);
+                let shifted = rect_for(&output, "6,107.00");
+                let moved = shifted.left() - price.left();
+                assert_eq!(
+                    moved < 0.0,
+                    width == 300.0,
+                    "scroll only when columns overflow"
+                );
+                assert_eq!(
+                    shifted.top(),
+                    price.top(),
+                    "horizontal scroll keeps price rows"
+                );
+                assert!((rect_for(&output, total_label).left() - total.left() - moved).abs() < 0.1);
+                assert_eq!(
+                    ["Buy Mkt", "Sell Mkt"].map(|label| rect_for(&output, label)),
+                    footer,
+                    "footer stays in the ticket"
+                );
+                output.drop_without_applying_deltas();
+
+                // Let horizontal wheel smoothing finish before checking the other axis.
+                for _ in 0..30 {
+                    frame(true, vec![]).drop_without_applying_deltas();
+                }
+                let output = frame(true, vec![]);
+                let before = rect_for(&output, "6,107.00");
+                output.drop_without_applying_deltas();
+                frame(true, vec![wheel(vec2(0.0, 40.0))]).drop_without_applying_deltas();
+                for _ in 0..30 {
+                    frame(true, vec![]).drop_without_applying_deltas();
+                }
+                let output = frame(true, vec![]);
+                let after = rect_for(&output, "6,107.00");
+                assert_eq!(after.left(), before.left(), "vertical wheel keeps columns");
+                assert!(
+                    after.top() > before.top(),
+                    "vertical wheel moves price rows"
+                );
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
 
     /// The profile sums the retained trades, those since the session open, or those after the last
     /// reset, which later live trades extend and an earlier session open does not move.
@@ -1386,12 +1722,12 @@ mod tests {
         ladder.columns[1] = true;
         let rules = TradingRules::new("ES");
         for (size, expected) in [
-            (Some(5.0), "-|-"),
-            (Some(0.0), "-5|-"),
-            (Some(3.0), "+3|-"),
-            (None, "-|-"),
-            (Some(4.0), "-|-"),
-            (Some(2.0), "-2|-"),
+            (Some(5.0), "- | -"),
+            (Some(0.0), "-5 | -"),
+            (Some(3.0), "+3 | -"),
+            (None, "- | -"),
+            (Some(4.0), "- | -"),
+            (Some(2.0), "-2 | -"),
         ] {
             let book = size.map(|size| OrderBook {
                 ts: chrono::Utc::now(),
