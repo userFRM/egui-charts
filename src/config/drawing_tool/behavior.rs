@@ -102,6 +102,10 @@ impl DrawingToolType {
                 | Self::DisjointChannel
                 | Self::PriceRange
                 | Self::DateAndPriceRange
+                | Self::Pitchfork
+                | Self::SchiffPitchfork
+                | Self::ModifiedSchiffPitchfork
+                | Self::InsidePitchfork
                 | Self::RegressionTrend
         )
     }
@@ -314,16 +318,16 @@ impl DrawingToolType {
             Self::ParallelChannel
             | Self::RotatedRect
             | Self::FibonacciWedge
+            | Self::Pitchfork
+            | Self::SchiffPitchfork
+            | Self::ModifiedSchiffPitchfork
+            | Self::InsidePitchfork
             | Self::Pitchfan
             | Self::Sector => 3,
             Self::DoubleCurve => 4,
             Self::Triangle
             | Self::FlatTopBottom
             | Self::DisjointChannel
-            | Self::Pitchfork
-            | Self::SchiffPitchfork
-            | Self::ModifiedSchiffPitchfork
-            | Self::InsidePitchfork
             | Self::Polyline
             | Self::Path
             | Self::GhostFeed
