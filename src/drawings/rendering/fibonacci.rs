@@ -1337,6 +1337,8 @@ mod tests {
                     y_to_price: &|y| map.y_to_price(y),
                     time_axis: true,
                     executions: None,
+                    timeframe: None,
+                    finer: &[],
                 };
                 let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                     drawing.render_original(&ui.painter().with_clip_rect(rect), rect, &view)
@@ -1476,6 +1478,8 @@ mod tests {
                     y_to_price: &|y| 600.0 - f64::from(y),
                     time_axis: true,
                     executions: None,
+                    timeframe: None,
+                    finer: &[],
                 };
                 let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                     drawing.render_original(ui.painter(), rect, &view)
@@ -1850,6 +1854,8 @@ mod tests {
                         y_to_price: &f64::from,
                         time_axis: true,
                         executions: None,
+                        timeframe: None,
+                        finer: &[],
                     },
                 )
             });
