@@ -1415,7 +1415,8 @@ impl Chart {
                 .and_then(|instrument| instrument.tick_size);
             let config = self.chart_type_params.tpo_config(tick);
             // Automatic rows depend on the scale span. Revisit after fitting until the rows
-            // actually drawn, including their outer half-tick edges, fit in the scale.
+            // actually drawn, including their outer half-tick edges, fit in the scale. Retain
+            // fitted edges when the grid changes, so non-nested grids cannot alternate ranges.
             let initial = self.state.price_scale().range();
             let mut fitted = data_range;
             loop {
@@ -1424,7 +1425,7 @@ impl Chart {
                         .price_scale()
                         .map(transform, price_rect.top(), price_rect.bottom());
                 let range = map.range();
-                let (mut low, mut high) = data_range;
+                let (mut low, mut high) = fitted;
                 let (mut traded_low, mut traded_high) = data_range;
                 let mapping = self.get_chart_mapping().with_rect(price_rect);
                 rendering::candles::tpo::visit_profiles(
@@ -7507,25 +7508,37 @@ mod tests {
                     "compact cropped profiles advertise their hover readout"
                 );
                 if kind == ChartType::TimePriceOpportunity {
-                    let mut chart = crate::widget::Chart::new(crate::model::BarData::from_bars(
-                        bars[8..]
-                            .iter()
-                            .map(|bar| Bar::from_value(bar.time, 100.0))
-                            .collect(),
-                    ));
-                    chart.set_chart_type(kind);
-                    chart.set_chart_type_params(crate::model::ChartTypeParams {
-                        tpo_letters: letters,
-                        ..Default::default()
-                    });
-                    chart.set_visible_bars(8);
-                    chart.set_start_idx(0);
-                    draw(&mut chart);
-                    assert_eq!(
-                        chart.state.price_scale().range(),
-                        crate::scales::PriceRange::new(99.875, 100.125),
-                        "automatic rows preserve the flat-session minimum range"
-                    );
+                    for (prices, expected) in [
+                        (
+                            [100.0, 100.0],
+                            crate::scales::PriceRange::new(99.875, 100.125),
+                        ),
+                        // Rows of 2 cover 7..73; rows of 2.5 cover 8.75..71.25. Starting over
+                        // would alternate between spans 66/0.8 = 82.5 and 62.5/0.8 = 78.125.
+                        ([8.9, 71.0], crate::scales::PriceRange::new(-1.25, 81.25)),
+                    ] {
+                        let mut chart =
+                            crate::widget::Chart::new(crate::model::BarData::from_bars(
+                                bars[8..]
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, bar)| Bar::from_value(bar.time, prices[i % 2]))
+                                    .collect(),
+                            ));
+                        chart.set_chart_type(kind);
+                        chart.set_chart_type_params(crate::model::ChartTypeParams {
+                            tpo_letters: letters,
+                            ..Default::default()
+                        });
+                        chart.set_visible_bars(8);
+                        chart.set_start_idx(0);
+                        draw(&mut chart);
+                        assert_eq!(
+                            chart.state.price_scale().range(),
+                            expected,
+                            "automatic rows converge and preserve flat-session bounds: {prices:?}"
+                        );
+                    }
                 }
             }
         }
