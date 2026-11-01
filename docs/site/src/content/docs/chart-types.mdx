@@ -6,7 +6,7 @@ title: Chart types and series
 candlesticks, OHLC bars, line and area charts, Heikin Ashi, Renko, Kagi,
 Point & Figure, Line Break, range bars, Market Profile (TPO), Volume Footprint and Session Volume Profile.
 
-The two execution chart types use retained and incoming feed trades on time-based intervals and require the instrument's tick size. Without those inputs they draw candles, as do bars before the first retained execution. Session Volume Profile also requires the `studies` feature.
+The two execution chart types use retained and incoming feed trades on time-based intervals and require the instrument's tick size. Without those inputs they draw candles, as do bars before the first bar whose executions are all retained; the bar of the oldest retained trade counts only once the feed reports that no older trades exist. Session Volume Profile also requires the `studies` feature.
 
 ```rust
 use egui_charts::{Chart, ChartType, model::BarData};

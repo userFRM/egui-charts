@@ -252,7 +252,7 @@ pub struct Footprint {
     max_size: f64,
     max_bars: usize,
     max_rows: usize,
-    /// Bars opening up to this time lack executions that were dropped.
+    /// Bars opening up to this time lack executions that were dropped or never received.
     incomplete_through: Option<DateTime<Utc>>,
 }
 
@@ -292,7 +292,8 @@ impl Footprint {
     }
 
     /// Open of the oldest bar whose executions are all held: earlier bars were cut by the
-    /// budget or by trades dropped from the host's store, and must not be shown as complete.
+    /// budget or by trades dropped from the host's store, or may lack trades that never
+    /// arrived, and must not be shown as complete.
     pub fn complete_from(&self) -> Option<DateTime<Utc>> {
         let after = self
             .incomplete_through
@@ -338,6 +339,20 @@ impl Footprint {
             };
         }
         self.rows = self.bars.values().map(|bar| bar.levels.len()).sum();
+    }
+
+    /// Counts the bar holding `first`, the oldest execution held, and earlier bars as
+    /// incomplete: executions before it may exist that never arrived.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(
+            dead_code,
+            reason = "only the chart widget knows where its trades begin"
+        )
+    )]
+    pub(crate) fn received_from(&mut self, first: DateTime<Utc>) {
+        let open = self.clock.bar_open(first);
+        self.incomplete_through = self.incomplete_through.max(Some(open));
     }
 
     fn enforce_budget(&mut self) {
