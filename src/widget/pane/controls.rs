@@ -185,7 +185,7 @@ impl Chart {
         }
     }
 
-    pub(super) fn pane_maximize_button(&mut self, ui: &mut Ui, id: PaneId, rect: Rect, plot: Rect) {
+    fn pane_maximize_button(&mut self, ui: &mut Ui, id: PaneId, rect: Rect, plot: Rect) {
         if rect.height() < 24.0 || self.config.pane_buttons == NavigationButtons::Never {
             return;
         }
@@ -234,7 +234,7 @@ impl Chart {
         }
     }
 
-    pub(in crate::widget) fn pane_actions(
+    pub(super) fn pane_actions(
         &mut self,
         ui: &mut Ui,
         pane_idx: usize,
