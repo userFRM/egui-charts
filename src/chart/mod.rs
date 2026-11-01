@@ -21,6 +21,8 @@ pub(crate) mod rendering;
 pub(crate) mod state;
 
 // Axis composition for hosts that allocate their own pane and input regions.
+#[cfg(feature = "ui")]
+pub(crate) use renderers::entry_price;
 pub use renderers::{
     PnlUnit, RenderContext, TradingLabelAlignment, TradingLineAction, TradingLineOptions,
     TradingLines, alert_shortcut_price, render_alert_levels, render_axis_currency,

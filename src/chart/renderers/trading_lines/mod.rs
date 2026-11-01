@@ -677,7 +677,7 @@ impl ExitButtons<'_> {
 }
 
 /// The price an order waits for: its limit or stop price, or the stop of a stop-limit order.
-fn entry_price(order_type: &OrderType) -> Option<f64> {
+pub(crate) fn entry_price(order_type: &OrderType) -> Option<f64> {
     match *order_type {
         OrderType::Limit(price)
         | OrderType::Stop(price)
