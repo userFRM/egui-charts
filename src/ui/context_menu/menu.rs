@@ -412,12 +412,12 @@ fn draw_item<A>(
     let needs_info = needs_info || ui.ctx().global_style().debug.show_interactive_widgets;
     if needs_info {
         // egui holds its context lock while calling widget_info's accessibility closure.
-        let label = l10n::text(ui.ctx(), &item.label);
+        let label = l10n::lookup(ui.ctx(), &item.label);
         response.widget_info(|| {
             WidgetInfo::labeled(
                 egui::Role::MenuItem,
                 response.enabled() && item.enabled,
-                &label,
+                label.as_deref().unwrap_or(&item.label),
             )
         });
     }

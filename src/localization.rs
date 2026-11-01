@@ -67,7 +67,7 @@ pub fn format_text(ctx: &Context, english: &str, values: &[(&str, impl AsRef<str
 }
 
 /// The host's translation of `english`, or `None` to keep the English text.
-fn lookup(ctx: &Context, english: &str) -> Option<String> {
+pub(crate) fn lookup(ctx: &Context, english: &str) -> Option<String> {
     let translator = ctx.data(|data| data.get_temp::<Translator>(translator_id()));
     translator.and_then(|lookup| (lookup.0)(english))
 }

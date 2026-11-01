@@ -618,8 +618,14 @@ pub fn crosshair_price_action(
     let needs_info = needs_info || ui.ctx().global_style().debug.show_interactive_widgets;
     if needs_info {
         // Translation must run outside the context lock held by widget_info.
-        let label = crate::localization::text(ui.ctx(), "Add at price");
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+        let label = crate::localization::lookup(ui.ctx(), "Add at price");
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::Button,
+                true,
+                label.as_deref().unwrap_or("Add at price"),
+            )
+        });
     }
     response
         .on_hover_ui(|ui| {
@@ -659,8 +665,14 @@ pub fn axis_settings_button(ui: &mut egui::Ui, corner: Rect) -> egui::Response {
     let needs_info = needs_info || ui.ctx().global_style().debug.show_interactive_widgets;
     if needs_info {
         // Translation must run outside the context lock held by widget_info.
-        let label = crate::localization::text(ui.ctx(), "Scale settings");
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+        let label = crate::localization::lookup(ui.ctx(), "Scale settings");
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::Button,
+                true,
+                label.as_deref().unwrap_or("Scale settings"),
+            )
+        });
     }
     response.on_hover_ui(|ui| {
         ui.label(crate::localization::text(ui.ctx(), "Scale settings"));
