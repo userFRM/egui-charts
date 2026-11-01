@@ -743,13 +743,14 @@ impl OrderFlowInput {
                     distinct.lost_until = lost;
                 }
             }
-            let paged = trades.paged_until().filter(|_| trade_based);
             // Paged executions belong to history bars, which the chart did not fold from them.
             // shortcut: after the store evicts a live execution, a new source starts its trade
             // bars at the oldest held one; keep the sink's allocations if hosts need it exact.
-            let mut sorted: Vec<_> = (trades.iter())
-                .filter(|trade| paged.is_none_or(|until| trade.ts > until))
-                .collect();
+            let mut sorted: Vec<_> = if trade_based {
+                trades.live().collect()
+            } else {
+                trades.iter().collect()
+            };
             sorted.sort_by_key(|trade| trade.ts);
             for trade in sorted {
                 self.push_trade(clock, trade);
@@ -789,11 +790,7 @@ impl OrderFlowInput {
                 let mut part = State::new(Source::Fixed(kind));
                 let mut open = None;
                 // History pages did not form the chart's live trade bars.
-                let paged = trades.paged_until();
-                let mut sorted: Vec<_> = trades
-                    .iter()
-                    .filter(|trade| paged.is_none_or(|until| trade.ts > until))
-                    .collect();
+                let mut sorted: Vec<_> = trades.live().collect();
                 sorted.sort_by_key(|trade| trade.ts);
                 for trade in sorted {
                     let Ok(parts) = part.trade_bars.push(timeframe, trade, state.tick_size) else {
@@ -1343,7 +1340,7 @@ mod tests {
                 inbox.study_inputs(sink.id, vec![spread.clone(), book.clone(), flow.clone()]);
             }
             let at = start + TimeDelta::seconds(second);
-            sink.push_tick(Tick::new(at, 100.0, 1.0, Some(OrderSide::Buy)));
+            sink.push_tick(Tick::new(at, 100.0, 1.0, Some(OrderSide::Buy)).with_id(second as u64));
             sink.push_quote(Level1Quote {
                 ts: at + TimeDelta::milliseconds(100),
                 symbol: "A".into(),
@@ -1393,7 +1390,8 @@ mod tests {
             1.0,
             Some(OrderSide::Buy),
         );
-        held.prepend(vec![old], &mut |_, _| ());
+        let boundary = Tick::new(start, 100.0, 1.0, Some(OrderSide::Buy)).with_id(99);
+        held.prepend(vec![old, boundary], &mut |_, _| ());
         let rebuilt = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
         for input in [&flow, &rebuilt] {
             input.replace_trades(&clock, &held);
