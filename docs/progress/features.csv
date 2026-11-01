@@ -64,7 +64,7 @@ Builder API,Datafeed API,Volume profile resolution hint,done,host,src/model/inst
 Builder API,Save/load adapter,Auto-save trigger,done,library,src/widget/history.rs;src/widget/feed/mod.rs;src/ui/top_toolbar/components/layout_menu.rs
 Builder API,Save/load adapter,Chart templates,done,library,src/ui/dialogs/chart_settings/mod.rs;src/ui/dialogs/templates/store.rs
 Builder API,Save/load adapter,Drawing templates,done,library,src/drawings/domain/template.rs;src/ui/dialogs/templates/dialog.rs;src/ui/dialogs/templates/store.rs
-Builder API,Save/load adapter,Drawings persistence,done,library,src/widget/anchors.rs;src/widget/stored_drawings.rs;src/widget/frame.rs;src/widget/time_scale.rs;src/model/bar/time.rs;src/drawings/persistence.rs;src/widget/pane_layout.rs
+Builder API,Save/load adapter,Drawings persistence,done,library,src/widget/anchors.rs;src/widget/stored_drawings.rs;src/widget/frame.rs;src/widget/time_scale.rs;src/model/bar/time.rs;src/drawings/persistence.rs;src/widget/pane/mod.rs
 Builder API,Save/load adapter,Save and load layout UI,done,library,src/ui/top_toolbar/components/layout_menu.rs
 Builder API,Save/load adapter,Save and restore the complete chart state,partial,library,src/widget/snapshot.rs;src/studies/template.rs;src/studies/factory/mod.rs;src/studies/builtin/ma_combination.rs;src/widget/builder.rs;src/studies/builtin/trading_sessions.rs;src/studies/builtin/vwap.rs;src/studies/builtin/auto_drawing.rs
 Builder API,Save/load adapter,Storage adapter contract,done,host,src/services/storage.rs;src/services/document.rs;src/ui/dialogs/templates/store.rs;src/ui/top_toolbar/components/layout_menu.rs
@@ -78,7 +78,7 @@ Builder API,Widget API and customization,Chart type switching,done,library,src/w
 Builder API,Widget API and customization,Chart without toolbars,done,library,Cargo.toml;src/lib.rs;src/widget/builder.rs;src/widget/frame.rs
 Builder API,Widget API and customization,Context menu customisation,done,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs
 Builder API,Widget API and customization,Create and edit drawings from code,done,library,src/widget/drawing_api.rs;src/widget/anchors.rs;src/drawings/manager/mod.rs;src/widget/mod.rs;src/drawings/manager/edit.rs
-Builder API,Widget API and customization,Create and remove studies,done,library,src/widget/series.rs;src/studies/settings.rs;src/widget/pane_layout.rs
+Builder API,Widget API and customization,Create and remove studies,done,library,src/widget/series.rs;src/studies/settings.rs;src/widget/pane/mod.rs
 Builder API,Widget API and customization,Custom date and time formatters,done,library,src/widget/frame.rs;src/scales/time_formatter.rs
 Builder API,Widget API and customization,Custom price formatter,done,library,src/widget/frame.rs
 Builder API,Widget API and customization,Export chart data,done,library,src/widget/export.rs;src/model/bar/io.rs
@@ -104,7 +104,7 @@ Chart,Chart settings and themes,Crosshair appearance,done,library,src/widget/set
 Chart,Chart settings and themes,Events tab,done,host,src/model/time_scale_event.rs;src/widget/settings/apply.rs;src/widget/frame.rs;src/ui/dialogs/chart_settings/tabs/trading.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
 Chart,Chart settings and themes,Grid lines,partial,library,src/widget/frame.rs;src/chart/renderers/labels.rs;src/chart/rendering/grid.rs;src/widget/settings/apply.rs;src/widget/indicator_pane.rs;src/painting/dashed_line.rs;src/theme/presets.rs;src/scales/timescale_marks.rs;src/scales/horizontal.rs;src/model/timezone.rs;src/widget/merge.rs
 Chart,Chart settings and themes,Light and dark themes,done,library,src/widget/mod.rs;src/widget/palette.rs;src/widget/frame.rs;src/config/chart.rs;src/model/markers.rs;src/chart/renderers/markers.rs;src/theme/presets.rs;src/theme/style.rs;examples/demo/controller.rs
-Chart,Chart settings and themes,Navigation and pane buttons,done,library,src/widget/navigation.rs;src/widget/frame.rs;src/widget/pane_layout.rs;src/widget/settings/data.rs
+Chart,Chart settings and themes,Navigation and pane buttons,done,library,src/widget/navigation.rs;src/widget/frame.rs;src/widget/pane/mod.rs;src/widget/settings/data.rs
 Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/dialogs/chart_settings/tabs/scales.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs;src/ui/dialogs/chart_settings/tabs/mod.rs;src/widget/frame.rs;src/chart/rendering/axes.rs
 Chart,Chart settings and themes,Scales text colour and size,done,library,src/widget/settings/data.rs;src/widget/settings/apply.rs;src/chart/rendering/axes.rs;src/chart/renderers/labels.rs
 Chart,Chart settings and themes,Session background shading,done,library,src/widget/frame.rs;src/chart/renderers/session_breaks.rs
@@ -146,7 +146,7 @@ Chart,Crosshair and interaction,"Chart, series and drawing context menus",partia
 Chart,Crosshair and interaction,Crosshair across all panes,done,library,src/widget/panes.rs;src/widget/indicator_pane.rs;src/widget/frame.rs
 Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/painting/dashed_line.rs;src/config/crosshair.rs;src/chart/rendering/axes.rs;src/theme/presets.rs;src/widget/panes.rs;src/scales/horizontal.rs
 Chart,Crosshair and interaction,Cursor types,done,library,src/widget/frame.rs;src/chart/cursor_modes/mod.rs;src/chart/cursor_modes/eraser.rs;src/widget/tool_interaction/selection.rs;src/widget/panes.rs;src/drawings/manager/interaction.rs
-Chart,Crosshair and interaction,Double-click on axes to reset,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs;src/widget/pane_layout.rs
+Chart,Crosshair and interaction,Double-click on axes to reset,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs;src/widget/pane/mod.rs
 Chart,Crosshair and interaction,Drag on the time axis to zoom,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
 Chart,Crosshair and interaction,Drag or wheel on the price axis to zoom,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
 Chart,Crosshair and interaction,Drag to pan,done,library,src/widget/frame.rs;src/widget/pan_zoom.rs
@@ -198,15 +198,15 @@ Chart,Multi-chart and sync,Sync interval,done,host,src/widget/layout.rs;src/widg
 Chart,Multi-chart and sync,Sync symbol,done,host,src/widget/layout.rs;src/widget/feed/mod.rs
 Chart,Multi-chart and sync,Sync time,done,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs
 Chart,Multi-chart and sync,Up to 16 charts per tab,done,library,src/widget/layout.rs
-Chart,Panes,Collapse pane,done,library,src/widget/pane_layout.rs;src/widget/panes.rs
-Chart,Panes,Maximize pane,done,library,src/widget/pane_layout.rs;src/widget/panes.rs;src/widget/indicator_pane.rs
-Chart,Panes,"Move indicator to another pane, merge, or new pane",done,library,src/widget/pane_layout.rs
-Chart,Panes,Move pane up or down,done,library,src/widget/pane_layout.rs
-Chart,Panes,Per-pane price scales,done,library,src/widget/panes.rs;src/widget/pane_layout.rs;src/widget/price_series.rs
-Chart,Panes,Programmatic pane and series API,done,library,src/widget/pane_layout.rs;src/widget/price_series.rs;src/widget/series.rs
-Chart,Panes,Remove pane,done,library,src/widget/pane_layout.rs;src/widget/panes.rs
-Chart,Panes,Resize panes by dragging the separator,done,library,src/widget/pane_layout.rs;src/widget/panes.rs
-Chart,Panes,Separate indicator panes,done,library,src/widget/pane_layout.rs;src/widget/panes.rs
+Chart,Panes,Collapse pane,done,library,src/widget/pane/mod.rs;src/widget/panes.rs
+Chart,Panes,Maximize pane,done,library,src/widget/pane/mod.rs;src/widget/panes.rs;src/widget/indicator_pane.rs
+Chart,Panes,"Move indicator to another pane, merge, or new pane",done,library,src/widget/pane/mod.rs
+Chart,Panes,Move pane up or down,done,library,src/widget/pane/mod.rs
+Chart,Panes,Per-pane price scales,done,library,src/widget/panes.rs;src/widget/pane/mod.rs;src/widget/price_series.rs
+Chart,Panes,Programmatic pane and series API,done,library,src/widget/pane/mod.rs;src/widget/price_series.rs;src/widget/series.rs
+Chart,Panes,Remove pane,done,library,src/widget/pane/mod.rs;src/widget/panes.rs
+Chart,Panes,Resize panes by dragging the separator,done,library,src/widget/pane/mod.rs;src/widget/panes.rs
+Chart,Panes,Separate indicator panes,done,library,src/widget/pane/mod.rs;src/widget/panes.rs
 Chart,Panes,Shared time axis across panes,done,library,src/widget/panes.rs
 Chart,Panes,Volume area in the main pane,done,library,src/widget/volume.rs;src/widget/frame.rs;src/chart/rendering/candles/volume.rs;src/theme/mod.rs;src/theme/presets.rs
 Chart,Scales and axes,Auto-scale,done,library,src/widget/frame.rs;src/studies/chart_state.rs;src/scales/pricescale.rs;src/ui/top_toolbar/components/settings_menu/menu.rs
@@ -240,7 +240,7 @@ Chart,Scales and axes,Time zone selection,done,library,src/widget/settings/apply
 Drawings,Drawing management,Alerts on drawings,done,library,src/drawings/domain/drawing.rs;src/ui/context_menu/drawing.rs
 Drawings,Drawing management,Anchor markers only on selected drawings,done,library,src/drawings/manager/paint.rs;src/drawings/services/handle.rs;src/drawings/rendering/lines.rs;src/drawings/rendering/measurements.rs;src/drawings/rendering/shapes.rs;src/drawings/rendering/pitchfork.rs;src/drawings/rendering/gann.rs;src/drawings/rendering/fibonacci.rs;src/drawings/rendering/patterns.rs;src/drawings/rendering/elliott.rs;src/drawings/rendering/cycles.rs;src/drawings/rendering/trading/volume_profile.rs;src/drawings/rendering/trading/bars_pattern.rs;src/drawings/rendering/trading/projection.rs;src/drawings/rendering/annotations/text.rs;src/drawings/rendering/annotations/callout.rs;src/drawings/rendering/annotations/notes.rs;src/drawings/rendering/annotations/signpost.rs;src/drawings/rendering/style.rs
 Drawings,Drawing management,Constrain drawings with Shift,done,library,src/widget/tool_interaction/interaction.rs;src/drawings/manager/interaction.rs;src/widget/tool_interaction/selection.rs;src/widget/tool_interaction/mod.rs
-Drawings,Drawing management,Copy and paste drawings,done,library,src/widget/clipboard.rs;src/drawings/manager/mod.rs;src/model/bar/time.rs;src/drawings/manager/edit.rs;src/widget/pane_layout.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs
+Drawings,Drawing management,Copy and paste drawings,done,library,src/widget/clipboard.rs;src/drawings/manager/mod.rs;src/model/bar/time.rs;src/drawings/manager/edit.rs;src/widget/pane/mod.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs
 Drawings,Drawing management,Creation state machine,done,library,src/config/drawing_tool/behavior.rs;src/widget/tool_interaction/interaction.rs;src/drawings/domain/drawing.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs
 Drawings,Drawing management,Default style per tool,done,library,src/ui/dialogs/drawing_properties/actions.rs;src/drawings/domain/template.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/ui/dialogs/drawing_properties/dialog.rs;src/drawings/domain/drawing.rs;src/drawings/manager/interaction.rs;src/data/volume_profile.rs
 Drawings,Drawing management,Drawing anchors across timeframe and symbol changes,done,library,src/widget/anchors.rs;src/widget/series.rs;src/model/bar/time.rs;src/widget/time_scale.rs;src/widget/feed/mod.rs
@@ -505,7 +505,7 @@ Studies,Indicator infrastructure,Maximum studies per chart,done,library,src/widg
 Studies,Indicator infrastructure,Multi-output studies draw all their lines,done,library,src/studies/builtin/adx.rs;src/studies/builtin/stochastic.rs;src/studies/builtin/stochastic_rsi.rs;src/studies/indicator_trait.rs;src/studies/factory/mod.rs;src/chart/renderers/indicator.rs;src/widget/indicator_pane.rs
 Studies,Indicator infrastructure,Multi-timeframe inputs,partial,library,src/studies/settings.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/builtin/volume_profile.rs
 Studies,Indicator infrastructure,Other-symbol inputs,partial,library,src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/studies_data.rs;src/services/search/expression.rs;src/studies/factory/mod.rs
-Studies,Indicator infrastructure,Overlay versus separate pane,done,library,src/widget/series.rs;src/studies/settings.rs;src/widget/pane_layout.rs;src/widget/panes.rs
+Studies,Indicator infrastructure,Overlay versus separate pane,done,library,src/widget/series.rs;src/studies/settings.rs;src/widget/pane/mod.rs;src/widget/panes.rs
 Studies,Indicator infrastructure,Plot offset,done,library,src/studies/indicator_trait.rs;src/studies/custom.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs
 Studies,Indicator infrastructure,Plot styles,done,library,src/studies/settings.rs;src/studies/custom.rs;src/chart/renderers/indicator.rs;src/widget/indicator_pane.rs;src/studies/indicator_trait.rs;src/studies/palette.rs;src/painting/dashed_line.rs
 Studies,Indicator infrastructure,Recalculation on realtime updates,done,library,src/widget/series.rs;src/widget/studies.rs;src/studies/settings.rs;src/studies/stepper.rs

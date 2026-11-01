@@ -98,8 +98,8 @@ mod layout;
 mod navigation;
 mod palette;
 pub(crate) mod pan_zoom;
-mod pane_layout;
-pub use pane_layout::{PaneId, PaneOptions};
+mod pane;
+pub use pane::{PaneId, PaneOptions};
 mod panes;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
@@ -131,7 +131,7 @@ mod studies_data;
 pub use crate::chart::primitives::{
     PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
 };
-pub use pane_layout::VisualOrder;
+pub use pane::VisualOrder;
 pub use price_series::SeriesOptions;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId};
 #[cfg(feature = "ui")]
@@ -224,7 +224,7 @@ pub struct Chart {
     pub(crate) chart_options: ChartOptions,
     pub(crate) keyboard: keyboard::KeyboardState,
     history: history::ChartHistory,
-    pane_layout: pane_layout::PaneLayout,
+    pane_layout: pane::PaneLayout,
     pane_options: PaneOptions,
     /// Starting index of visible range (for backward compatibility)
     pub(crate) start_idx: usize,
