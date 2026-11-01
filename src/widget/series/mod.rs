@@ -1,6 +1,11 @@
 //! The chart's bars, merged by one set of rules for history and live updates, and the studies
 //! computed from them.
 
+mod options;
+
+pub use options::SeriesOptions;
+pub(super) use options::{PriceSeries, SeriesLegend, base_line};
+
 use super::change_marks::ChangeMarks;
 use super::{Chart, ChartElementId, SeriesId};
 use crate::data::FeedState;

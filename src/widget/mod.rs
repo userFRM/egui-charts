@@ -100,7 +100,6 @@ pub use pane::{ChartLayoutRects, PaneId, PaneOptions, RenderedIndicatorPane};
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod posts;
-mod price_series;
 mod primitives;
 mod raster;
 mod readout;
@@ -130,7 +129,7 @@ pub use crate::chart::primitives::{
     PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
 };
 pub use pane::VisualOrder;
-pub use price_series::SeriesOptions;
+pub use series::SeriesOptions;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId};
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
@@ -216,7 +215,7 @@ pub struct Chart {
     pub(crate) main_series_visible: bool,
     main_series_present: bool,
     main_series_scale: crate::model::SeriesScale,
-    price_series: Vec<price_series::PriceSeries>,
+    price_series: Vec<series::PriceSeries>,
     heikin_ashi: crate::chart::rendering::candles::HeikinAshiCache,
     series_scales: std::collections::HashMap<crate::model::SeriesScale, PriceScale>,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).

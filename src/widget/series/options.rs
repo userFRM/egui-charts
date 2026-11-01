@@ -1,6 +1,5 @@
 //! Host-fed bar series and their shared price scales.
 
-use super::{Chart, ChartElementId, PaneId, SeriesId};
 use crate::chart::renderers::{RenderContext, StyleColors};
 use crate::chart::rendering;
 use crate::data::FeedState;
@@ -15,6 +14,7 @@ use crate::scales::{PriceMap, PriceScale, PriceScaleMode, PriceScaleOptions, Pri
 use crate::studies::{Indicator, IndicatorValues, PlotStyle, PlotType};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::widget::{Chart, ChartElementId, PaneId, SeriesId};
 use chrono::{DateTime, Utc};
 use egui::{Color32, Pos2, Rect};
 use serde::{Deserialize, Serialize};
@@ -149,7 +149,7 @@ impl SeriesOptions {
 }
 
 /// The base line of a percentage or indexed scale mapped by `map`, at 0% or 100.
-pub(super) fn base_line(map: &PriceMap) -> Option<PriceLine> {
+pub(in crate::widget) fn base_line(map: &PriceMap) -> Option<PriceLine> {
     let transform = map.transform();
     matches!(
         transform.mode,
@@ -163,7 +163,7 @@ pub(super) fn base_line(map: &PriceMap) -> Option<PriceLine> {
     })
 }
 
-pub(super) struct PriceSeries {
+pub(in crate::widget) struct PriceSeries {
     pub id: SeriesId,
     pub options: SeriesOptions,
     pub visible: bool,
@@ -172,15 +172,15 @@ pub(super) struct PriceSeries {
     pub revision: u64,
     pub heikin_ashi: rendering::candles::HeikinAshiCache,
     pub feed: FeedState,
-    pub markers: super::marks::TimeOrdered<Marker>,
+    pub markers: crate::widget::marks::TimeOrdered<Marker>,
     pub marker_options: MarkerOptions,
-    pub change_marks: Option<super::change_marks::ChangeMarks>,
-    pub lines: Vec<(super::PriceLineId, PriceLine)>,
+    pub change_marks: Option<crate::widget::change_marks::ChangeMarks>,
+    pub lines: Vec<(crate::widget::PriceLineId, PriceLine)>,
 }
 
 impl PriceSeries {
     /// The prices of `bar` that the series draws, lowest first.
-    pub(super) fn extremes(&self, bar: &Bar) -> [f64; 2] {
+    pub(in crate::widget) fn extremes(&self, bar: &Bar) -> [f64; 2] {
         if self.options.chart_type.uses_ohlc() {
             [bar.low, bar.high]
         } else {
@@ -189,7 +189,7 @@ impl PriceSeries {
     }
 
     /// The last-value tag colour: the bar's own colour, or its direction for the OHLC types.
-    pub(super) fn value_color(&self, bar: &Bar) -> Color32 {
+    pub(in crate::widget) fn value_color(&self, bar: &Bar) -> Color32 {
         if let Some(color) = bar.colors.as_ref().and_then(|own| own.color) {
             return color;
         }
@@ -206,7 +206,7 @@ impl PriceSeries {
 /// holds no values to plot; its output reports the close at the crosshair, or the last close,
 /// at every bar.
 #[derive(Clone)]
-pub(super) struct SeriesLegend {
+pub(in crate::widget) struct SeriesLegend {
     name: String,
     style: PlotStyle,
     close: Option<f64>,
@@ -219,7 +219,7 @@ pub(super) struct SeriesLegend {
 }
 
 impl SeriesLegend {
-    pub(super) fn new(
+    pub(in crate::widget) fn new(
         item: &PriceSeries,
         close: Option<f64>,
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
@@ -320,7 +320,8 @@ impl Chart {
             change_marks: None,
             lines: Vec::new(),
         });
-        self.host_events.push(super::ChartEvent::SeriesAdded(id));
+        self.host_events
+            .push(crate::widget::ChartEvent::SeriesAdded(id));
         id
     }
 
@@ -559,7 +560,7 @@ impl Chart {
         ))
     }
 
-    pub(super) fn ensure_series_scale(&mut self, scale: SeriesScale) {
+    pub(in crate::widget) fn ensure_series_scale(&mut self, scale: SeriesScale) {
         if scale != self.main_series_scale {
             self.series_scales
                 .entry(scale)
@@ -567,7 +568,7 @@ impl Chart {
         }
     }
 
-    pub(super) fn prune_series_scales(&mut self) {
+    pub(in crate::widget) fn prune_series_scales(&mut self) {
         self.series_scales.retain(|scale, _| {
             self.price_series
                 .iter()
@@ -597,7 +598,7 @@ impl Chart {
             .filter(|(first, last)| first <= last)
     }
 
-    pub(super) fn series_range(&self, item: &PriceSeries) -> std::ops::Range<usize> {
+    pub(in crate::widget) fn series_range(&self, item: &PriceSeries) -> std::ops::Range<usize> {
         match self.visible_times() {
             Some((first, last)) => {
                 item.bars.partition_point(|bar| bar.time < first)
@@ -618,9 +619,9 @@ impl Chart {
     }
 
     /// The prices of price-anchored markers of `markers` and `more` in view, when `options` fit them.
-    pub(super) fn marker_prices<'a>(
+    pub(in crate::widget) fn marker_prices<'a>(
         &self,
-        markers: &'a super::marks::TimeOrdered<Marker>,
+        markers: &'a crate::widget::marks::TimeOrdered<Marker>,
         more: &'a [Marker],
         options: MarkerOptions,
     ) -> impl Iterator<Item = f64> + 'a {
@@ -657,14 +658,16 @@ impl Chart {
     }
 
     /// The visible host series drawn on the price pane.
-    pub(super) fn main_pane_series(&self) -> impl DoubleEndedIterator<Item = &PriceSeries> {
+    pub(in crate::widget) fn main_pane_series(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &PriceSeries> {
         self.price_series
             .iter()
             .filter(|item| item.visible && !self.in_pane(item.id))
     }
 
     /// The close of `item` at the time of the shown bar `bar`, if it has a bar then.
-    pub(super) fn series_close_at(&self, item: &PriceSeries, bar: usize) -> Option<f64> {
+    pub(in crate::widget) fn series_close_at(&self, item: &PriceSeries, bar: usize) -> Option<f64> {
         let time = self.state.shown().get(bar)?.time;
         item.bars
             .binary_search_by_key(&time, |bar| bar.time)
@@ -676,7 +679,7 @@ impl Chart {
 
     /// The range the bars of `item` in view contribute to the fit of its scale: the prices its
     /// chart type draws and the columns' base, or what its autoscale provider makes of them.
-    pub(super) fn series_fit(&self, item: &PriceSeries) -> Option<(f64, f64)> {
+    pub(in crate::widget) fn series_fit(&self, item: &PriceSeries) -> Option<(f64, f64)> {
         let heikin_ashi = (item.options.chart_type == ChartType::Heikin)
             .then(|| item.heikin_ashi.bars(&item.bars, item.revision));
         let bars = &heikin_ashi.as_deref().unwrap_or(&item.bars)[self.series_range(item)];
@@ -724,7 +727,7 @@ impl Chart {
     }
 
     /// Fits every independent range and returns the secondary values sharing the main range.
-    pub(super) fn fit_secondary_series(&mut self) -> Vec<f64> {
+    pub(in crate::widget) fn fit_secondary_series(&mut self) -> Vec<f64> {
         let keys: Vec<_> = self
             .studies
             .indicators()
@@ -818,7 +821,7 @@ impl Chart {
         main
     }
 
-    pub(super) fn update_shared_study_maps(&mut self, rect: Rect) {
+    pub(in crate::widget) fn update_shared_study_maps(&mut self, rect: Rect) {
         let (start, end) = self.state.visible_range();
         let maps: Vec<_> = self
             .study_ids
@@ -882,13 +885,13 @@ impl Chart {
         }
     }
 
-    pub(super) fn series_map(&self, item: &PriceSeries, rect: Rect) -> PriceMap {
+    pub(in crate::widget) fn series_map(&self, item: &PriceSeries, rect: Rect) -> PriceMap {
         self.secondary_scale(item.options.scale)
             .map(self.series_transform(item), rect.top(), rect.bottom())
             .with_thousands_sep(self.config.thousands_sep)
     }
 
-    pub(super) fn secondary_axis_values(
+    pub(in crate::widget) fn secondary_axis_values(
         &self,
         key: SeriesScale,
         rect: Rect,
@@ -915,7 +918,7 @@ impl Chart {
     /// The text of a value tag of `item` on `map`. Hosts' formatters write it; otherwise it has
     /// the scale's precision, led by the series name for the last value when the axis shows
     /// names.
-    pub(super) fn series_tag_label(
+    pub(in crate::widget) fn series_tag_label(
         &self,
         item: &PriceSeries,
         map: &PriceMap,
@@ -937,7 +940,7 @@ impl Chart {
 
     /// The price-line labels and the last close that `item` shows on its price axis, each with
     /// its tag colours and whether it is the last close.
-    pub(super) fn series_axis_values<'a>(
+    pub(in crate::widget) fn series_axis_values<'a>(
         &'a self,
         item: &'a PriceSeries,
     ) -> impl Iterator<Item = (f64, (Color32, Color32), bool)> + 'a {
@@ -964,7 +967,7 @@ impl Chart {
             )
     }
 
-    pub(super) fn series_axis_keys(&self) -> Vec<SeriesScale> {
+    pub(in crate::widget) fn series_axis_keys(&self) -> Vec<SeriesScale> {
         let mut keys = Vec::new();
         for item in self.main_pane_series() {
             let key = item.options.scale;
@@ -988,7 +991,7 @@ impl Chart {
         keys
     }
 
-    pub(super) fn hit_price_series(
+    pub(in crate::widget) fn hit_price_series(
         &self,
         item: &PriceSeries,
         pos: Pos2,
@@ -1067,7 +1070,7 @@ impl Chart {
     /// Paints the bars, price lines, change marks and markers of `item` in `rect` with `map`.
     /// Markers placed above the series are left to `paint_marks` on the price pane; in another
     /// pane they are painted here, after the pane's studies.
-    pub(super) fn paint_series(
+    pub(in crate::widget) fn paint_series(
         &self,
         plot: &egui::Painter,
         rect: Rect,
@@ -1188,14 +1191,15 @@ impl Chart {
     }
 
     /// Paints the markers of `item` with `map`, each at the time and price of its bar.
-    pub(super) fn paint_series_markers(
+    pub(in crate::widget) fn paint_series_markers(
         &self,
         plot: &egui::Painter,
         rect: Rect,
         item: &PriceSeries,
         map: PriceMap,
     ) {
-        let (from, to) = super::marks::window(self.state.shown(), &self.get_chart_mapping(), rect);
+        let (from, to) =
+            crate::widget::marks::window(self.state.shown(), &self.get_chart_mapping(), rect);
         for marker in item
             .markers
             .within(from, to)
@@ -1234,7 +1238,7 @@ impl Chart {
 
     /// Paints a legend row for each of `items`, the first at `top`. The values follow a pointer
     /// over `rect`. Returns the bottom of the last row, or `top` without rows.
-    pub(super) fn paint_secondary_legend<'a>(
+    pub(in crate::widget) fn paint_secondary_legend<'a>(
         &self,
         ui: &egui::Ui,
         painter: &egui::Painter,
@@ -1316,7 +1320,11 @@ impl Chart {
         bottom
     }
 
-    pub(super) fn secondary_axes(&self, widget: Rect, rect: Rect) -> Vec<(SeriesScale, Rect)> {
+    pub(in crate::widget) fn secondary_axes(
+        &self,
+        widget: Rect,
+        rect: Rect,
+    ) -> Vec<(SeriesScale, Rect)> {
         let keys = self.series_axis_keys();
         let left_count = keys
             .iter()
@@ -1375,7 +1383,12 @@ impl Chart {
             .collect()
     }
 
-    pub(super) fn handle_secondary_axes(&mut self, ui: &egui::Ui, widget: Rect, rect: Rect) {
+    pub(in crate::widget) fn handle_secondary_axes(
+        &mut self,
+        ui: &egui::Ui,
+        widget: Rect,
+        rect: Rect,
+    ) {
         for (key, axis) in self.secondary_axes(widget, rect) {
             let response = ui.interact(
                 axis,
@@ -1411,7 +1424,7 @@ impl Chart {
         }
     }
 
-    pub(super) fn paint_series_axes(
+    pub(in crate::widget) fn paint_series_axes(
         &self,
         ui: &egui::Ui,
         painter: &egui::Painter,
