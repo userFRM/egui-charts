@@ -449,6 +449,7 @@ impl Drawing {
     /// Render arc - semicircle
     pub(crate) fn render_arc(&self, painter: &egui::Painter, color: Color32, stroke: Stroke) {
         if self.points.len() >= 2 {
+            self.paint_enclosed_fill(painter);
             for pair in self.arc_path().windows(2) {
                 painter.line_segment([pair[0], pair[1]], stroke);
             }
@@ -494,8 +495,10 @@ impl Drawing {
             .collect()
     }
 
-    /// Render polyline - connected line segments through all points
+    /// Render polyline: connected line segments through all points, joined back to the first
+    /// when closed, over its fill.
     pub(crate) fn render_polyline(&self, painter: &egui::Painter, color: Color32, stroke: Stroke) {
+        self.paint_enclosed_fill(painter);
         for (i, &point) in self.points.iter().enumerate() {
             if i > 0 {
                 painter.line_segment([self.points[i - 1], point], stroke);
@@ -503,6 +506,9 @@ impl Drawing {
             if !self.completed {
                 painter.circle_filled(point, DESIGN_TOKENS.rounding.sm, color);
             }
+        }
+        if self.closed && self.points.len() >= 3 {
+            painter.line_segment([self.points[self.points.len() - 1], self.points[0]], stroke);
         }
     }
 

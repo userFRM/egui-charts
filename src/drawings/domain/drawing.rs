@@ -167,6 +167,14 @@ pub struct Drawing {
     pub arrow_end_style: ArrowStyle,
     /// Per-timeframe visibility
     pub timeframe_visibility: TimeframeVisibility,
+    /// Whether a horizontal line, horizontal ray or cross line shows its price as a tag on the
+    /// price axis. Other tools ignore it. Drawings saved without it show the tag.
+    #[serde(default = "enabled")]
+    pub price_axis_label: bool,
+    /// Whether a vertical line or cross line shows its time as a tag on the time axis. Other
+    /// tools ignore it. Drawings saved without it show the tag.
+    #[serde(default = "enabled")]
+    pub time_axis_label: bool,
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Quantity of the long and short position tools
@@ -200,6 +208,10 @@ pub struct Drawing {
     /// Whether a rectangle or parallel channel draws its dashed halfway line.
     #[serde(default)]
     pub channel_midline: bool,
+    /// Whether a polyline joins its last anchor back to its first. Clicking the first anchor
+    /// while placing a polyline closes it; older saved drawings are open.
+    #[serde(default)]
+    pub closed: bool,
     /// Level lines and band fill of the pitchfork tools.
     #[serde(default)]
     pub pitchfork: Option<PitchforkConfig>,
@@ -279,7 +291,7 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
         T::Rect => filled(PURPLE, 51),
         T::RotatedRect => filled(GREEN, 51),
         T::Circle | T::Ellipse => filled(RED, 51),
-        // Polylines and arcs paint no fill yet, so they start unfilled.
+        // Polylines and arcs start unfilled.
         T::Polyline | T::Brush => colored(CYAN),
         T::Arc => colored(PINK),
         T::Sector => DefaultStyle {
@@ -450,6 +462,8 @@ impl Drawing {
                 ArrowStyle::None
             },
             timeframe_visibility: TimeframeVisibility::all(),
+            price_axis_label: true,
+            time_axis_label: true,
             position_size: None,
             position_sizing: PositionSizing::default(),
             position_target_color: None,
@@ -484,6 +498,7 @@ impl Drawing {
             .then(PitchforkConfig::default),
             elliott_degree: ElliottDegree::default(),
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
+            closed: false,
             gann: None,
             ghost_feed: None,
             // Z-order (default: 0, higher values render on top)
@@ -839,6 +854,19 @@ impl Drawing {
     #[inline]
     pub fn is_visible_on_timeframe(&self, timeframe: &str) -> bool {
         self.visible && self.timeframe_visibility.is_visible_on(timeframe)
+    }
+
+    /// Whether drawings of `tool` can tag their price on the price axis and their time on the
+    /// time axis: horizontal lines and rays their price, vertical lines their time, cross
+    /// lines both.
+    pub(crate) fn axis_labels_of(tool: DrawingToolType) -> (bool, bool) {
+        use DrawingToolType as T;
+        match tool {
+            T::HorizontalLine | T::HorizontalRay => (true, false),
+            T::VerticalLine => (false, true),
+            T::CrossLine => (true, true),
+            _ => (false, false),
+        }
     }
 
     /// Get the z-order of this drawing

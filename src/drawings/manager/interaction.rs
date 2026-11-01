@@ -716,6 +716,9 @@ impl DrawingManager {
             }
             drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
             drawing.align_second_anchor();
+            if drawing.completed {
+                drawing.store_default_curve_controls(&x_to_bar, &y_to_price);
+            }
             if let Some(tool) = drawing
                 .custom_tool
                 .as_deref()
@@ -779,6 +782,24 @@ impl DrawingManager {
             drawing.completed = true;
             self.finish_curr_drawing();
         }
+    }
+
+    /// Closes the built-in polyline being placed when `point` is within reach of its first
+    /// anchor's handle and at least three anchors are placed. Returns whether it finished.
+    pub(crate) fn close_curr_polyline(&mut self, point: Pos2) -> bool {
+        let reach = self.options.handle_config.size * 1.5;
+        let preview = usize::from(self.preview_point);
+        let Some(drawing) = self.curr_drawing.as_mut().filter(|d| {
+            d.tool_type == DrawingToolType::Polyline
+                && d.custom_tool.is_none()
+                && d.points.len().saturating_sub(preview) >= 3
+                && d.points[0].distance(point) <= reach
+        }) else {
+            return false;
+        };
+        drawing.closed = true;
+        self.complete_curr_drawing();
+        true
     }
 
     /// Moves the completed current drawing to the drawing list and queues it to be saved, or
@@ -1120,5 +1141,19 @@ mod tests {
         manager.tool_defaults.insert(DrawingToolType::Rect, saved);
         let rect = place(&mut manager, DrawingToolType::Rect);
         assert_eq!((rect.color, rect.fill_color), ([9, 9, 9, 255], None));
+
+        // Closure belongs to the outline, so a saved default cannot close a new polyline.
+        let mut closed = Drawing::new(0, DrawingToolType::Polyline);
+        closed.closed = true;
+        manager.tool_defaults.insert(
+            DrawingToolType::Polyline,
+            crate::drawings::DrawingTemplate::from_drawing(&closed),
+        );
+        assert!(!place(&mut manager, DrawingToolType::Polyline).closed);
+        let open = Drawing::new(0, DrawingToolType::Polyline);
+        crate::drawings::DrawingTemplate::from_drawing(&open)
+            .apply_to(&mut closed)
+            .unwrap();
+        assert!(closed.closed);
     }
 }
