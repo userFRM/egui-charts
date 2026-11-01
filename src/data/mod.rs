@@ -9,7 +9,8 @@
 //! required. The chart calls the feed on the UI thread; implementations should
 //! return promptly, answer each request once through [`Reply`] and push live updates
 //! into the [`Sink`] of a [`Subscription`]. Replies and pushes can come from another
-//! thread, runtime or browser task. No network connection or data provider is built in.
+//! thread, runtime or browser task. The optional `http` adapter connects to a host's server;
+//! no market data provider is built in.
 //!
 //! [`Subscription::clock`] and [`HistoryRequest::clock`] carry the same bar boundaries
 //! so history and streaming aggregation agree. Symbol search is a separate
@@ -19,7 +20,8 @@
 //!
 //! Push executions, quotes and book updates through [`Sink`]. [`Footprint`] holds
 //! executed volume at price; [`DepthHistory`] holds the book over time.
-//! [`ReplayClock`] coordinates host-supplied recorded events. [`resample`] aggregates
+//! [`ReplayDriver`] loads host recordings and drives subscriptions through one [`ReplayClock`].
+//! [`resample`] aggregates
 //! bars into a longer interval, and [`VolumeProfile`] describes volume by price.
 //!
 //! The optional feed methods provide auxiliary study data and records for host UI,
@@ -37,6 +39,8 @@ use std::time::Duration;
 pub(crate) mod depth;
 mod depth_history;
 mod footprint;
+#[cfg(feature = "http")]
+pub mod http;
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -60,7 +64,7 @@ mod study;
 mod targets;
 mod volume_profile;
 pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
-#[cfg(feature = "studies")]
+#[cfg(any(feature = "studies", feature = "detectors"))]
 pub(crate) use footprint::meets_threshold;
 pub use footprint::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
 pub use market::{
@@ -84,7 +88,7 @@ pub use orders::{
     RestingOrder,
 };
 pub use recording::{RecordingReader, RecordingWriter};
-pub use replay::{MarketEvent, ReplayClock, ReplayEvent};
+pub use replay::{MarketEvent, ReplayClock, ReplayDriver, ReplayEvent};
 #[cfg(feature = "studies")]
 pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session};

@@ -1448,6 +1448,10 @@ mod tests {
         // Pasting drawing text adds the copies once; other text is left for the commands group.
         terminal.chart_mut().drawings_mut().select_drawings([id]);
         let text = terminal.chart().copy_selected_drawings().unwrap().unwrap();
+        terminal.chart_mut().set_symbol("MSFT");
+        for _ in 0..8 {
+            frame(&mut terminal, SIZE, vec![]);
+        }
         let before = count(&terminal);
         let paste = |text: &str| Action::Shortcut(ShortcutRequest::PasteDrawing(text.into()));
         assert!(terminal.run(paste(&text)).is_none());

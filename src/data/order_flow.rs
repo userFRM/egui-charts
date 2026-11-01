@@ -68,8 +68,9 @@ pub enum OrderFlowKind {
         /// Bars in the rolling sum.
         bars: usize,
     },
-    /// Buy minus sell volume per bar of executions whose size lies in the inclusive range,
-    /// which a study accumulates into a cumulative volume delta. The sum starts at the oldest
+    /// Buy minus sell volume, its highest and lowest running value including zero, per bar,
+    /// counting executions whose size lies in the inclusive range. A study accumulates the
+    /// delta into a cumulative volume delta. The sum starts at the oldest
     /// bar with a retained value, so it starts again from a later bar after the input drops its
     /// oldest bars (see [`OrderFlowInput`]).
     FilteredCvd {
@@ -742,13 +743,14 @@ impl OrderFlowInput {
                     distinct.lost_until = lost;
                 }
             }
-            let paged = trades.paged_until().filter(|_| trade_based);
             // Paged executions belong to history bars, which the chart did not fold from them.
             // shortcut: after the store evicts a live execution, a new source starts its trade
             // bars at the oldest held one; keep the sink's allocations if hosts need it exact.
-            let mut sorted: Vec<_> = (trades.iter())
-                .filter(|trade| paged.is_none_or(|until| trade.ts > until))
-                .collect();
+            let mut sorted: Vec<_> = if trade_based {
+                trades.live().collect()
+            } else {
+                trades.iter().collect()
+            };
             sorted.sort_by_key(|trade| trade.ts);
             for trade in sorted {
                 self.push_trade(clock, trade);
@@ -787,7 +789,8 @@ impl OrderFlowInput {
             {
                 let mut part = State::new(Source::Fixed(kind));
                 let mut open = None;
-                let mut sorted: Vec<_> = trades.iter().collect();
+                // History pages did not form the chart's live trade bars.
+                let mut sorted: Vec<_> = trades.live().collect();
                 sorted.sort_by_key(|trade| trade.ts);
                 for trade in sorted {
                     let Ok(parts) = part.trade_bars.push(timeframe, trade, state.tick_size) else {
@@ -1048,8 +1051,9 @@ impl State {
                 ]
             }
             OrderFlowKind::FilteredCvd { min, max } => {
-                let old = self.bars.get(&open).map_or(0.0, |(v, _)| v[0]);
-                [old + signed_size(trade, min, max, size), 0.0, 0.0]
+                let old = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
+                let delta = old[0] + signed_size(trade, min, max, size);
+                [delta, old[1].max(delta), old[2].min(delta)]
             }
             _ => return,
         };
@@ -1315,7 +1319,8 @@ mod tests {
     }
 
     /// Quotes and books between fills belong to the current three-tick bar, even when
-    /// the feed sends the entire burst before the chart drains it.
+    /// the feed sends the entire burst before the chart drains it. Paging older executions
+    /// must keep that allocation during replay too.
     #[cfg(feature = "widget")]
     #[test]
     fn trade_bar_streams_share_the_sinks_allocation_before_drain() {
@@ -1335,7 +1340,7 @@ mod tests {
                 inbox.study_inputs(sink.id, vec![spread.clone(), book.clone(), flow.clone()]);
             }
             let at = start + TimeDelta::seconds(second);
-            sink.push_tick(Tick::new(at, 100.0, 1.0, Some(OrderSide::Buy)));
+            sink.push_tick(Tick::new(at, 100.0, 1.0, Some(OrderSide::Buy)).with_id(second as u64));
             sink.push_quote(Level1Quote {
                 ts: at + TimeDelta::milliseconds(100),
                 symbol: "A".into(),
@@ -1385,7 +1390,8 @@ mod tests {
             1.0,
             Some(OrderSide::Buy),
         );
-        held.prepend(vec![old], &mut |_, _| ());
+        let boundary = Tick::new(start, 100.0, 1.0, Some(OrderSide::Buy)).with_id(99);
+        held.prepend(vec![old, boundary], &mut |_, _| ());
         let rebuilt = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
         for input in [&flow, &rebuilt] {
             input.replace_trades(&clock, &held);
@@ -1394,7 +1400,7 @@ mod tests {
         assert_eq!([flow.values(), rebuilt.values()], [live.clone(), live]);
         let cutoff = start + TimeDelta::seconds(2);
         for input in [&spread, &book, &flow] {
-            input.set_replay(&clock, Some(cutoff), Some(&updates.trades));
+            input.set_replay(&clock, Some(cutoff), Some(&held));
         }
         assert_eq!(flow.values(), BTreeMap::from([(start, [2.0, 2.0, 0.0])]));
         assert!(
@@ -1406,12 +1412,12 @@ mod tests {
             "past depth cannot be reconstructed"
         );
         for input in [&spread, &book, &flow] {
-            input.set_replay(&clock, Some(opens[1]), Some(&updates.trades));
+            input.set_replay(&clock, Some(opens[1]), Some(&held));
         }
         assert_eq!(spread.values().keys().copied().collect::<Vec<_>>(), [start]);
         assert_eq!(book.values().keys().copied().collect::<Vec<_>>(), [start]);
         assert_eq!(flow.values(), BTreeMap::from([(start, [3.0, 3.0, 0.0])]));
-        let mut trades = updates.trades;
+        let mut trades = held;
         for second in [6, 7] {
             let trade = Tick::new(
                 start + TimeDelta::seconds(second),

@@ -47,7 +47,7 @@ struct Action {
     scale: Option<PriceScale>,
     /// Scales that differ from the chart's, by assignment; `None` where the chart has none.
     series_scales: std::collections::HashMap<crate::model::SeriesScale, Option<PriceScale>>,
-    panes: Option<super::pane_layout::PaneLayout>,
+    panes: Option<super::pane::PaneLayout>,
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
     studies: Vec<StudyChange>,

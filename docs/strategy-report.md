@@ -57,7 +57,11 @@ CSV exports only valid trades using `StrategyReport::trades_csv`, retaining its 
 columns, quoting and UTC timestamps. Export summary CSV returns
 `StrategyReportAction::ExportSummaryCsv` with a suggested file name and the metrics and
 properties shown, as `StrategyReport::summary_csv` writes them: a dot as the decimal
-separator, no thousands separator, and an empty cell for an unavailable value.
+separator, no thousands separator, and an empty cell for an unavailable value. Percent
+values keep 15 significant decimal digits, so a rate of `0.07` reads `7`, and a zero is
+always `0`. Both exports prefix a text cell that starts with `=`, `+`, `-`, `@`, a tab or a
+carriage return with an apostrophe, so a spreadsheet shows it as text; numeric cells,
+including negative numbers, are unchanged.
 
 ## Metric definitions
 

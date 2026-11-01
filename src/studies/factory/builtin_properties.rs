@@ -186,6 +186,8 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
             min: x(100.0),
             max: f64::MAX,
         })),
+        Box::new(OrderFlowStudy::execution_delta(false)),
+        Box::new(OrderFlowStudy::execution_delta(true)),
         Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsTradedThrough {
             seconds: l(0),
         })),
