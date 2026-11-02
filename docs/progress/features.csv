@@ -412,7 +412,7 @@ Order flow,Order flow,"Chart tabs, detached groups and shared crosshair",done,li
 Order flow,Order flow,Combine fills in time and sales,done,library,src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs,
 Order flow,Order flow,Connectors for futures data feeds with aggregated and order-level depth,partial,host,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs;examples/demo/orders.rs,
 Order flow,Order flow,Cumulative aggressor volume delta with resets,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs;src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/data/trades.rs,
-Order flow,Order flow,Cumulative iceberg and stop counts over time with alerts,missing,host,,
+Order flow,Order flow,Cumulative iceberg and stop counts over time with alerts,done,library,src/services/detectors/alerts.rs;src/services/detectors/mod.rs,1148
 Order flow,Order flow,Current order book profile with quantity key and exact row readout,done,library,src/chart/overlays/book_profile.rs;src/widget/feed/mod.rs,
 Order flow,Order flow,Custom range profile drawn on the chart by selection,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/studies/builtin/trade_profile.rs;src/painting/volume_profile.rs;src/drawings/rendering/mod.rs,
 Order flow,Order flow,DOM levels panel beside the heatmap,partial,library,src/data/orders.rs;src/widget/feed/mod.rs,
@@ -454,7 +454,7 @@ Order flow,Order flow,Options gamma exposure suite,partial,host,;src/data/option
 Order flow,Order flow,"Order book, heatmap and order-level replay",done,library,src/data/replay.rs;src/data/recording.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/replay.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs,
 Order flow,Order flow,Minimum traded volume for imbalances and stacked imbalance zones,missing,library,,
 Order flow,Order flow,Order-flow entries offered only for symbols whose feed supplies their data,missing,host,,
-Order flow,Order flow,Order-flow event alerts,partial,host,src/services/alerts.rs;src/services/notifications.rs;src/ui/widget_bar/panels/time_and_sales.rs,
+Order flow,Order flow,Order-flow event alerts,partial,host,src/services/detectors/alerts.rs;src/services/detectors/mod.rs;src/services/notifications.rs;src/ui/widget_bar/panels/time_and_sales.rs,1148;1149
 Order flow,Order flow,Order-level trade classification,partial,library,src/data/trades.rs;src/data/orders.rs;src/model/quote.rs;src/widget/feed/mod.rs,
 Order flow,Order flow,Passive wall detection,done,library,src/services/detectors/liquidity.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/model/signal.rs;src/widget/signals.rs,
 Order flow,Order flow,Per-bar delta and volume heatmap strip,done,library,src/chart/overlays/heatmap_strip.rs,

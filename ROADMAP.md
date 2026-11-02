@@ -165,6 +165,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ### Depth, Tape and Heatmap
 
+- [x] Order-flow detectors count new detections in feed-time windows, keep loaded history silent, and deliver live and rising-edge count alerts through the notification service.
 - [x] Sequenced aggregated-depth snapshots/deltas and per-order add, modify, cancel and execute events, with gap detection and resynchronisation.
 - [x] Public order book and order queue retain tick-aware prices, best quotes and queue priority.
 - [x] `DepthHistory` retains sampled resting-size columns in bounded tiers; the heatmap uses retained texture tiles and partial updates.
