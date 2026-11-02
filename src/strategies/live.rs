@@ -401,6 +401,23 @@ mod tests {
                     &bars[..count.saturating_sub(1)],
                     &lower,
                 );
+                let asynchronous = {
+                    let mut strategy = Script::default();
+                    let mut future = std::pin::pin!(engine.run_async(
+                        &mut strategy,
+                        &bars[..count.saturating_sub(1)],
+                        &lower,
+                    ));
+                    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+                    loop {
+                        if let std::task::Poll::Ready(report) =
+                            std::future::Future::poll(future.as_mut(), &mut context)
+                        {
+                            break report;
+                        }
+                    }
+                };
+                assert_eq!(asynchronous, full, "async prefix {count}");
                 assert_eq!(
                     engine.report(),
                     Some(&full),

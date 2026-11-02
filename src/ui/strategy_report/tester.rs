@@ -227,6 +227,11 @@ impl StrategyTester {
         self.report.set_report(report, bars);
     }
 
+    /// Show only the report, without the tester form, while a host-managed run supplies updates.
+    pub fn show_report(&mut self, ui: &mut Ui) -> StrategyReportAction {
+        self.report.show(ui)
+    }
+
     /// Supply both histories for the exact pending request. A superseded reply is rejected.
     /// Empty finer history is refused rather than silently using chart-bar fills.
     pub fn set_history(
@@ -472,7 +477,7 @@ impl StrategyTester {
         let mut edited = false;
         match self.tab {
             Tab::Report => {
-                let action = self.report.show(ui);
+                let action = self.show_report(ui);
                 if action != StrategyReportAction::None {
                     actions.push(StrategyTesterAction::Report(action));
                 }

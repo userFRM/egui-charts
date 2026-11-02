@@ -106,6 +106,11 @@ impl DemoApp {
                         self.start_live_strategy();
                     }
                 });
+                if self.live_strategy.is_some() {
+                    return vec![StrategyTesterAction::Report(
+                        self.strategy_report.show_report(ui),
+                    )];
+                }
                 let bars = self.chart.bars(SeriesId::MAIN);
                 self.strategy_report.show(
                     ui,
@@ -412,6 +417,34 @@ mod tests {
                     |s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Clear report")
                 ));
                 empty.drop_without_applying_deltas();
+                app.execute_search_command(&ctx, "backtest");
+                for _ in 0..3 {
+                    frame(&mut app, vec![]).drop_without_applying_deltas();
+                }
+                let output = frame(&mut app, vec![]);
+                let forward = text_at(&output, "Forward test");
+                output.drop_without_applying_deltas();
+                click(&mut app, forward);
+                assert!(app.live_strategy.is_some());
+                for _ in 0..3 {
+                    frame(&mut app, vec![]).drop_without_applying_deltas();
+                }
+                let output = frame(&mut app, vec![]);
+                assert!(
+                    !output
+                        .shapes
+                        .iter()
+                        .any(|shape| matches!(&shape.shape, Shape::Text(text)
+                            if text.galley.text() == "Strategy tester")),
+                    "live refreshes must not offer tester jobs that they would cancel"
+                );
+                let stop = text_at(&output, "Stop forward test");
+                output.drop_without_applying_deltas();
+                click(&mut app, stop);
+                assert!(app.live_strategy.is_none());
+                let output = frame(&mut app, vec![]);
+                text_at(&output, "Strategy tester");
+                output.drop_without_applying_deltas();
                 app.execute_search_command(&ctx, "backtest");
                 let report = app
                     .strategy_report
