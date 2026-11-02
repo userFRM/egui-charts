@@ -4244,7 +4244,7 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct AppStorage(std::collections::HashMap<String, String>);
+    pub(super) struct AppStorage(std::collections::HashMap<String, String>);
 
     impl eframe::Storage for AppStorage {
         fn get_string(&self, key: &str) -> Option<String> {

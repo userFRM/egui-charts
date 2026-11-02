@@ -70,11 +70,14 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
     }));
     for (name, _) in egui_charts::theme::presets() {
         commands.push(
-            Command::new(format!("appearance:{name}"), format!("Appearance: {name}"))
-                .category("Settings"),
+            Command::new(
+                format!("appearance:{name}"),
+                format!("Appearance: {}", super::formatting::appearance_label(name)),
+            )
+            .category("Settings"),
         );
     }
-    commands.push(Command::new("appearance:system", "Appearance: system").category("Settings"));
+    commands.push(Command::new("appearance:system", "Appearance: System").category("Settings"));
     for category in DrawingToolType::categories() {
         for tool in DrawingToolType::by_category(category) {
             if !tool.is_cursor() {
@@ -179,10 +182,6 @@ impl DemoApp {
                 return;
             }
             "backtest" => {
-                if self.chart.state().shown().len() < 22 {
-                    self.notify("Load at least 22 bars before running the sample backtest");
-                    return;
-                }
                 self.run_sample_backtest();
                 return;
             }
@@ -290,12 +289,6 @@ impl DemoApp {
                 return;
             }
             "pane" => {
-                if self.comparisons.len() >= super::DemoSymbol::catalog().len() - 1 {
-                    self.notify(
-                        "All demo symbols are already present. Remove one before adding a pane.",
-                    );
-                    return;
-                }
                 self.add_series_pane();
                 return;
             }
@@ -355,21 +348,6 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct Storage(std::collections::HashMap<String, String>);
-    impl eframe::Storage for Storage {
-        fn get_string(&self, key: &str) -> Option<String> {
-            self.0.get(key).cloned()
-        }
-        fn set_string(&mut self, key: &str, value: String) {
-            self.0.insert(key.into(), value);
-        }
-        fn remove_string(&mut self, key: &str) {
-            self.0.remove(key);
-        }
-        fn flush(&mut self) {}
-    }
-
     #[test]
     fn formatting_samples_survive_restart_and_reach_readouts_and_export() {
         use eframe::App;
@@ -386,7 +364,7 @@ mod tests {
         ] {
             click(&mut app, &ctx, label);
         }
-        let mut storage = Storage::default();
+        let mut storage = super::super::tests::AppStorage::default();
         app.save(&mut storage);
         egui::Popup::close_all(&ctx);
         drop(app);
