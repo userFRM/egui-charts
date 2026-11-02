@@ -197,11 +197,11 @@ impl StudyDataCache {
 }
 
 impl Chart {
-    /// Histories required by the current study inputs and profile drawings, with chart defaults
-    /// resolved. Hosts without a connected feed supply these through [`Self::set_study_data`]. A connected
+    /// Histories required by feed-backed series, study inputs and profile drawings, with chart
+    /// defaults resolved. Hosts without a connected feed supply these through [`Self::set_study_data`]. A connected
     /// feed receives resolve, history and subscription calls automatically on the next frame.
     pub fn study_data_requests(&self) -> Vec<StudyDataRequest> {
-        let mut requests = Vec::new();
+        let mut requests = self.fed_requests();
         for (_, study) in self.indicators() {
             for request in study.data_requests() {
                 let request = resolved(&request, self.symbol(), self.timeframe());
@@ -268,6 +268,7 @@ impl Chart {
             }
         }
         self.element_studies.dirty = true;
+        self.fill_fed_series();
     }
 
     /// [`Self::study_data_requests`], each with how far back the connected feed loads it: to
@@ -278,7 +279,11 @@ impl Chart {
         // Price-based chart types run their studies on elements; the source studies asked
         // here are not given the view, so their histories load in full.
         let full = self.chart_type.is_time_independent();
-        let mut reaches: Vec<(StudyDataRequest, Option<_>)> = Vec::new();
+        let mut reaches: Vec<(StudyDataRequest, Option<_>)> = self
+            .fed_requests()
+            .into_iter()
+            .map(|request| (request, None))
+            .collect();
         for (_, study) in self.indicators() {
             for declared in study.data_requests() {
                 let start = study.data_start(&declared).filter(|_| !full);
@@ -372,6 +377,7 @@ impl Chart {
             }
         }
         let extended = self.extended_hours();
+        let adjusted = self.dividend_adjusted();
         let now = ctx.input(|input| input.time);
         let count = self.state.data().bars.len().max(300);
         let mut changed = removed || self.study_data.series.len() != previous;
@@ -582,6 +588,7 @@ impl Chart {
                     since: None,
                     count,
                     extended_hours: extended,
+                    adjusted,
                     conversion: stream.conversion.clone(),
                 });
                 stream.request(&series.request);

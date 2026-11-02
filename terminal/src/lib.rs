@@ -115,7 +115,6 @@ pub struct Terminal {
     alerts: alerts::State,
     panels: panels::State,
     trading: trading::State,
-    #[allow(dead_code, reason = "the group keeps its state here")]
     layouts: layouts::State,
     #[allow(dead_code, reason = "the group keeps its state here")]
     compare: compare::State,

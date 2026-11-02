@@ -476,6 +476,9 @@ pub struct HistoryRequest {
     pub count: usize,
     /// Include the instrument's extended trading hours, as well as regular hours.
     pub extended_hours: bool,
+    /// Request dividend-adjusted bars when the instrument supports them. An unsupported feed
+    /// returns unadjusted bars; [`Instrument::dividend_adjustment`] advertises the choice.
+    pub adjusted: bool,
     /// The currency or unit the host chose, in which the bars are wanted, as
     /// [`Datafeed::resolve_converted`] described the symbol. `None` asks for the instrument's own.
     pub conversion: Option<String>,
