@@ -20,7 +20,7 @@ Builder API,Builder integration,Custom indicators from a downstream crate,done,l
 Builder API,Builder integration,Custom series types from a downstream crate,done,library,src/widget/primitives.rs;src/widget/pane/render/mod.rs;src/chart/primitives.rs
 Builder API,Builder integration,Desktop webview integration,missing,library,
 Builder API,Builder integration,Embedding with a data feed,done,host,src/widget/builder.rs;src/widget/frame.rs;src/widget/feed/mod.rs
-Builder API,Builder integration,Full trading-terminal UI around the chart,partial,library,src/ui/app_state.rs;src/ui/trading/mod.rs;terminal/src/lib.rs;terminal/src/core.rs;terminal/src/services.rs;terminal/src/layout.rs;terminal/src/trading.rs
+Builder API,Builder integration,Full trading-terminal UI around the chart,partial,library,src/ui/app_state.rs;src/ui/trading/mod.rs;terminal/src/lib.rs;terminal/src/core.rs;terminal/src/services.rs;terminal/src/layout.rs;terminal/src/trading.rs;terminal/src/panels.rs
 Builder API,Builder integration,Minimal embedding,done,library,src/widget/builder.rs;src/widget/frame.rs
 Builder API,Builder integration,Pluggable formatters and session rules,done,library,src/widget/frame.rs;src/widget/builder.rs;src/model/session/mod.rs
 Builder API,Builder integration,Public API surface and structure,done,library,src/prelude.rs;src/lib.rs;src/widget/mod.rs;src/model/mod.rs;src/widget/pan_zoom.rs;src/widget/interaction.rs;src/widget/builder.rs;src/styles/mod.rs
@@ -49,7 +49,7 @@ Builder API,Datafeed API,Live bar stream lifecycle,done,host,src/widget/feed/mod
 Builder API,Datafeed API,Paginated symbol search,done,host,src/services/search.rs;src/ui/dialogs/symbol_search/service.rs;src/ui/dialogs/symbol_search/mod.rs
 Builder API,Datafeed API,Per-symbol resolution capabilities,done,host,src/model/instrument.rs;src/widget/feed/mod.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs
 Builder API,Datafeed API,Price precision from symbol metadata,done,host,src/model/instrument.rs;src/scales/price_formatter.rs;src/widget/frame.rs;src/ui/trading/mod.rs;src/widget/feed/mod.rs
-Builder API,Datafeed API,Quotes for watchlist and details,done,host,src/services/quotes.rs;src/ui/widget_bar/panels/watchlist.rs;src/ui/trading/mod.rs;examples/demo/live.rs;examples/demo/sampledata.rs
+Builder API,Datafeed API,Quotes for watchlist and details,done,host,src/services/quotes.rs;src/ui/widget_bar/panels/watchlist.rs;src/ui/trading/mod.rs;examples/demo/live.rs;examples/demo/sampledata.rs;terminal/src/panels.rs
 Builder API,Datafeed API,Realtime bar updates,done,host,src/data/merge.rs;src/widget/series/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Builder API,Datafeed API,Resolve symbol to symbol metadata,done,host,src/data/mod.rs;src/model/instrument.rs;src/widget/feed/mod.rs
 Builder API,Datafeed API,Server time,done,host,src/widget/mod.rs;src/widget/frame.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
@@ -144,7 +144,7 @@ Chart,Compare and overlay,Compare symbol,done,host,src/widget/series/options.rs
 Chart,Compare and overlay,Overlay a symbol on the same price scale,done,host,src/widget/series/options.rs;src/widget/series/mod.rs
 Chart,Compare and overlay,Percent scale when comparing,done,library,src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/scales/pricescale.rs
 Chart,Crosshair and interaction,Auto-scroll to realtime and jump-to-latest button,done,library,src/widget/series/mod.rs;src/widget/frame.rs;src/widget/time_scale.rs
-Chart,Crosshair and interaction,"Chart, series and drawing context menus",partial,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/drawing.rs;src/widget/drawing_api.rs;terminal/src/drawings.rs;terminal/src/studies.rs;src/ui/floating_toolbar/toolbar.rs;examples/demo/controller.rs
+Chart,Crosshair and interaction,"Chart, series and drawing context menus",partial,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/drawing.rs;src/widget/drawing_api.rs;terminal/src/drawings.rs;terminal/src/studies.rs;src/ui/floating_toolbar/toolbar.rs;examples/demo/controller.rs;terminal/src/panels.rs
 Chart,Crosshair and interaction,Crosshair across all panes,done,library,src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs;src/widget/frame.rs
 Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame.rs;src/scales/time_formatter.rs;src/painting/dashed_line.rs;src/config/crosshair.rs;src/chart/rendering/axes.rs;src/theme/presets.rs;src/widget/pane/render/mod.rs;src/scales/horizontal.rs
 Chart,Crosshair and interaction,Cursor types,done,library,src/widget/frame.rs;src/chart/cursor_modes/mod.rs;src/chart/cursor_modes/eraser.rs;src/widget/tool_interaction/selection.rs;src/widget/pane/render/mod.rs;src/drawings/manager/interaction.rs
@@ -844,19 +844,19 @@ Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,d
 Terminal,Alerts,Server-side evaluation,done,host,src/services/alerts.rs;src/ui/widget_bar/panels/alerts_panel.rs
 Terminal,Alerts,Trigger frequency,done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs
 Terminal,Alerts,Watchlist alerts,done,host,src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs;terminal/src/alerts.rs
-Terminal,"News, calendar and social",Dividend and IPO calendars,done,host,src/ui/widget_bar/panels/calendar.rs
-Terminal,"News, calendar and social",Earnings calendar,done,host,src/ui/widget_bar/panels/calendar.rs
+Terminal,"News, calendar and social",Dividend and IPO calendars,done,host,src/ui/widget_bar/panels/calendar.rs;terminal/src/panels.rs
+Terminal,"News, calendar and social",Earnings calendar,done,host,src/ui/widget_bar/panels/calendar.rs;terminal/src/panels.rs
 Terminal,"News, calendar and social","Earnings, dividends and splits marked on the chart",done,host,src/model/time_scale_event.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs
-Terminal,"News, calendar and social",Economic calendar,done,host,src/ui/widget_bar/panels/calendar.rs
+Terminal,"News, calendar and social",Economic calendar,done,host,src/ui/widget_bar/panels/calendar.rs;terminal/src/panels.rs
 Terminal,"News, calendar and social",Economic events on the chart,done,host,src/model/time_scale_event.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs
-Terminal,"News, calendar and social",Filtered headline stream,done,host,src/ui/widget_bar/panels/news.rs;src/data/market.rs
+Terminal,"News, calendar and social",Filtered headline stream,done,host,src/ui/widget_bar/panels/news.rs;src/data/market.rs;terminal/src/panels.rs
 Terminal,"News, calendar and social",Ideas and community feed,done,host,src/ui/ideas.rs
-Terminal,"News, calendar and social",News alerts,missing,host,
+Terminal,"News, calendar and social",News alerts,done,host,src/services/notifications.rs;src/ui/widget_bar/panels/notifications.rs;terminal/src/panels.rs
 Terminal,"News, calendar and social",News headlines marked on the chart time scale,done,host,src/model/time_scale_event.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs
-Terminal,"News, calendar and social",Private chats,done,host,src/services/chats.rs;src/ui/widget_bar/panels/chats.rs
-Terminal,"News, calendar and social","Profiles, following and social notifications",done,host,src/services/profiles.rs;src/services/profile_directory.rs;src/services/notifications.rs;src/ui/profile/mod.rs;src/ui/widget_bar/panels/notifications.rs
+Terminal,"News, calendar and social",Private chats,done,host,src/services/chats.rs;src/ui/widget_bar/panels/chats.rs;terminal/src/panels.rs
+Terminal,"News, calendar and social","Profiles, following and social notifications",done,host,src/services/profiles.rs;src/services/profile_directory.rs;src/services/notifications.rs;src/ui/profile/mod.rs;src/ui/widget_bar/panels/notifications.rs;terminal/src/panels.rs
 Terminal,"News, calendar and social",Publish an idea from the chart,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/ideas.rs;src/widget/export.rs
-Terminal,"News, calendar and social",Symbol news in the right panel,done,host,src/ui/widget_bar/panels/news.rs
+Terminal,"News, calendar and social",Symbol news in the right panel,done,host,src/ui/widget_bar/panels/news.rs;terminal/src/panels.rs
 Terminal,Replay,Bar replay button and replay mode on/off,done,library,src/ui/top_toolbar/toolbar.rs
 Terminal,Replay,Continue the last replay session after a reload,done,library,src/ui/replay/session.rs
 Terminal,Replay,Drawings stay in place during replay,done,library,src/widget/replay.rs;src/widget/series/mod.rs;src/widget/anchors.rs
@@ -897,7 +897,7 @@ Terminal,Toolbars and panels,Chart settings button and applying the dialog,done,
 Terminal,Toolbars and panels,Chart type menu,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/chart_type_selector.rs
 Terminal,Toolbars and panels,Compare / add symbol dialog,done,library,src/ui/dialogs/symbol_search/compare.rs;src/ui/dialogs/symbol_search/row.rs;src/ui/dialogs/symbol_search/service.rs
 Terminal,Toolbars and panels,Custom intervals,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs;src/model/timeframe.rs;src/model/session/exchange.rs
-Terminal,Toolbars and panels,Data window,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/frame.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs
+Terminal,Toolbars and panels,Data window,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/frame.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;terminal/src/panels.rs
 Terminal,Toolbars and panels,Depth ladder for analysis without a trading account,missing,library,
 Terminal,Toolbars and panels,Favourite drawing tools floating bar,partial,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/toolbar/floating.rs;src/ui/drawing_toolbar/state.rs;src/ui/drawing_toolbar/utilities/favorites.rs;src/services/settings.rs;examples/demo/layouts.rs
 Terminal,Toolbars and panels,Favourite intervals pinned to the toolbar,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs
@@ -906,15 +906,15 @@ Terminal,Toolbars and panels,Indicators button,done,library,src/ui/top_toolbar/t
 Terminal,Toolbars and panels,Interval menu presets,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Keyboard shortcuts for application actions,done,library,src/widget/keyboard.rs
 Terminal,Toolbars and panels,Left drawing toolbar shell,done,library,src/ui/drawing_toolbar/toolbar/mod.rs;terminal/src/drawings.rs;src/ui/drawing_toolbar/components/svg_helpers.rs;src/ui/drawing_toolbar/components/icon_button.rs;src/ui/drawing_toolbar/components/separator.rs
-Terminal,Toolbars and panels,Notifications / toasts,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs;src/ui_kit/notifications/panel.rs;src/ui_kit/notifications/toasts.rs
+Terminal,Toolbars and panels,Notifications / toasts,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs;src/ui_kit/notifications/panel.rs;src/ui_kit/notifications/toasts.rs;terminal/src/panels.rs
 Terminal,Toolbars and panels,Object tree panel,done,library,src/ui/widget_bar/panels/object_tree/chart_actions.rs;src/ui/widget_bar/panels/object_tree/panel.rs;terminal/src/drawings.rs
 Terminal,Toolbars and panels,Order-flow panels and layouts offered only for symbols whose feed supplies their data,missing,host,
 Terminal,Toolbars and panels,Quick search / command palette,done,library,src/ui/top_toolbar/toolbar.rs;src/ui_kit/command_palette/palette.rs
-Terminal,Toolbars and panels,Right widget bar icon strip,done,library,src/ui/widget_bar/toolbar.rs;src/theme/presets.rs
+Terminal,Toolbars and panels,Right widget bar icon strip,done,library,src/ui/widget_bar/toolbar.rs;src/theme/presets.rs;terminal/src/panels.rs
 Terminal,Toolbars and panels,Selected drawing toolbar,done,library,src/ui/floating_toolbar/toolbar.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs
 Terminal,Toolbars and panels,Strategy Report panel,done,library,src/ui/strategy_report/mod.rs
 Terminal,Toolbars and panels,Symbol search dialog with asset tabs and filters,done,host,src/ui/dialogs/symbol_search/mod.rs;src/ui/dialogs/symbol_search/row.rs;src/ui/dialogs/symbol_search/service.rs;src/ui_kit/tab_bar/mod.rs;terminal/src/studies.rs
-Terminal,Toolbars and panels,Time and sales panel,missing,library,
+Terminal,Toolbars and panels,Time and sales panel,done,library,src/ui/widget_bar/panels/time_and_sales.rs;src/widget/feed/mod.rs;terminal/src/panels.rs
 Terminal,Toolbars and panels,Top toolbar: symbol button,done,library,src/ui/top_toolbar/toolbar.rs
 Terminal,Toolbars and panels,Undo / redo,partial,library,src/widget/history.rs;src/widget/feed/mod.rs;src/widget/series/options.rs;terminal/src/core.rs;examples/demo/controller.rs;src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs;src/widget/series/mod.rs;src/widget/replay.rs
 Terminal,Toolbars and panels,Zoom in / zoom out buttons in the drawing toolbar,done,library,src/ui/drawing_toolbar/utilities/zoom.rs;src/widget/mod.rs;terminal/src/drawings.rs
@@ -936,16 +936,16 @@ Terminal,Trading panel,Take-profit and stop-loss buttons on working order labels
 Terminal,Trading panel,Time in force and order presets,done,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/ui/trading/widgets.rs
 Terminal,Trading panel,Trade button and broker / paper account picker,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/broker_picker.rs
 Terminal,Trading panel,Trading notifications,done,host,src/ui/trading/mod.rs;src/ui/trading/events.rs
-Terminal,Watchlists and screeners,Add to watchlist from the chart context menu,done,library,src/ui/context_menu/mod.rs;src/ui/widget_bar/panels/watchlist.rs
-Terminal,Watchlists and screeners,Advanced watchlist view,done,library,src/ui/widget_bar/panels/watchlist.rs;src/ui/widget_bar/panels/market_details.rs;src/ui/widget_bar/panels/symbol_details.rs
+Terminal,Watchlists and screeners,Add to watchlist from the chart context menu,done,library,src/ui/context_menu/mod.rs;src/ui/widget_bar/panels/watchlist.rs;terminal/src/panels.rs
+Terminal,Watchlists and screeners,Advanced watchlist view,done,library,src/ui/widget_bar/panels/watchlist.rs;src/ui/widget_bar/panels/market_details.rs;src/ui/widget_bar/panels/symbol_details.rs;terminal/src/panels.rs
 Terminal,Watchlists and screeners,Colour flags and the flagged list,done,library,src/ui/widget_bar/panels/watchlist.rs;src/model/watchlist.rs
-Terminal,Watchlists and screeners,"ETF, bond, crypto coin, CEX pair and DEX pair screeners",done,host,src/ui/widget_bar/panels/screener.rs;src/data/market.rs;src/services/storage.rs;src/ui/dialogs/templates/store.rs
-Terminal,Watchlists and screeners,Flip through list symbols on the chart,done,library,src/ui/widget_bar/panels/watchlist.rs
-Terminal,Watchlists and screeners,Hotlists,done,host,src/ui/widget_bar/panels/hotlists.rs
-Terminal,Watchlists and screeners,Import and export a list as a .txt file,done,library,src/ui/widget_bar/panels/watchlist.rs
-Terminal,Watchlists and screeners,Market heatmaps,done,host,src/ui/widget_bar/panels/market_heatmap.rs;src/services/settings.rs
-Terminal,Watchlists and screeners,Multiple named lists,done,library,src/ui/widget_bar/panels/watchlist.rs;src/model/watchlist.rs
-Terminal,Watchlists and screeners,Natural-language screener,done,host,src/ui/widget_bar/panels/screener.rs;src/data/market.rs;src/data/mod.rs
+Terminal,Watchlists and screeners,"ETF, bond, crypto coin, CEX pair and DEX pair screeners",done,host,src/ui/widget_bar/panels/screener.rs;src/data/market.rs;src/services/storage.rs;src/ui/dialogs/templates/store.rs;terminal/src/panels.rs
+Terminal,Watchlists and screeners,Flip through list symbols on the chart,done,library,src/ui/widget_bar/panels/watchlist.rs;terminal/src/panels.rs
+Terminal,Watchlists and screeners,Hotlists,done,host,src/ui/widget_bar/panels/hotlists.rs;terminal/src/panels.rs
+Terminal,Watchlists and screeners,Import and export a list as a .txt file,done,library,src/ui/widget_bar/panels/watchlist.rs;terminal/src/panels.rs
+Terminal,Watchlists and screeners,Market heatmaps,done,host,src/ui/widget_bar/panels/market_heatmap.rs;src/services/settings.rs;terminal/src/panels.rs
+Terminal,Watchlists and screeners,Multiple named lists,done,library,src/ui/widget_bar/panels/watchlist.rs;src/model/watchlist.rs;terminal/src/panels.rs
+Terminal,Watchlists and screeners,Natural-language screener,done,host,src/ui/widget_bar/panels/screener.rs;src/data/market.rs;src/data/mod.rs;terminal/src/panels.rs
 Terminal,Watchlists and screeners,Quote and order-book data contract for lists and panels,done,host,src/services/quotes.rs;src/ui/widget_bar/panels/watchlist.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs
 Terminal,Watchlists and screeners,Quote columns with live updates,done,host,src/ui/widget_bar/panels/watchlist.rs;src/model/quote.rs
 Terminal,Watchlists and screeners,Sections inside a list,done,library,src/ui/widget_bar/panels/watchlist.rs

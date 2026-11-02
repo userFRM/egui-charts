@@ -766,6 +766,9 @@ mod tests {
     fn selected_toolbar_styles_and_more_menu_reach_the_chart() {
         use super::super::test_support::click;
         let mut terminal = ready();
+        terminal.run(Action::WidgetBar(WidgetBarAction::Clicked(
+            RightBarIcon::Watchlist,
+        )));
         let mut drawing = line(0);
         // A red line, so that picking the palette blue changes it.
         drawing.color = [242, 54, 69, 255];
@@ -914,6 +917,9 @@ mod tests {
             (DrawingToolType::TextLabel, false),
         ] {
             let mut terminal = ready();
+            terminal.run(Action::WidgetBar(WidgetBarAction::Clicked(
+                RightBarIcon::Watchlist,
+            )));
             let mut drawing = line(0);
             drawing.tool_type = tool;
             drawing.text = Some("Annotation".into());

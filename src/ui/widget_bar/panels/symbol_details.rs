@@ -109,6 +109,7 @@ pub struct SymbolDetailsPanel {
     requests: HashMap<u64, Request>,
     next: u64,
     financials_requested: bool,
+    hide_financials: bool,
 }
 
 impl SymbolDetailsPanel {
@@ -180,6 +181,15 @@ impl SymbolDetailsPanel {
     /// Shows update times in `timezone`, such as the chart's.
     pub fn set_timezone(&mut self, timezone: TimezoneId) {
         self.timezone = timezone;
+    }
+
+    /// Shows or hides the Financials action, visible by default. Hide it when the host
+    /// cannot supply company financials.
+    pub fn set_financials_visible(&mut self, visible: bool) {
+        self.hide_financials = !visible;
+        if !visible {
+            self.financials_requested = false;
+        }
     }
 
     /// Whether the user chose Financials in the More menu since the last call.
@@ -397,6 +407,7 @@ impl SymbolDetailsPanel {
             error,
             notes,
             financials_requested,
+            hide_financials,
             ..
         } = self;
         let Some(instrument) = instrument else {
@@ -412,7 +423,7 @@ impl SymbolDetailsPanel {
                 .tooltip("More")
                 .show(ui);
             egui::Popup::menu(&more).show(|ui| {
-                if ui.button(l10n::text(ui.ctx(), "Financials")).clicked() {
+                if !*hide_financials && ui.button(l10n::text(ui.ctx(), "Financials")).clicked() {
                     *financials_requested = true;
                 }
                 if ui.button(l10n::text(ui.ctx(), "Copy symbol")).clicked() {
