@@ -35,7 +35,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [ ] Include comparison series and price-based chart studies in main-pane crosshair snapping.
 - [ ] Correct box-zoom overlay alpha and use theme colours.
 - [ ] Add the instrument title to the floating historical readout.
-- [ ] Provide a table view of loaded bars and study values.
+- [x] The terminal opens a table of loaded bars and visible study values, with column selection, copy and CSV export.
 
 ### Scales and Panes
 
@@ -225,10 +225,10 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Chart settings apply backgrounds, grids, candle parts and colours, previous-close colouring, crosshair styling, session shading and watermarks.
 - [x] Status settings control supplied logos, last day change and study backdrops; legend text and controls have opaque backing over profiles; Symbol settings request dividend-adjusted history from the host.
 - [x] Object tree supports selection, filtering, visibility, locks, ordering, rename, duplication, pane moves and bulk actions; a data window shows OHLCV and study values.
-- [x] Editable shortcut bindings are shared by chart input, help and menu hints; quick search uses a command palette.
+- [x] Editable shortcut bindings are shared by chart input, help and menu hints; the terminal routes quick search and shortcut requests to their controls, and hosts can register their own palette commands.
 - [x] Watchlists support named lists, sections, sorting, row reordering, flags, symbol navigation and text import/export.
 - [x] Feed-backed panels render symbol details, news, calendars, hotlists, screener tables and grouped market heatmaps; `FinancialsPanel` charts and tabulates supplied financial figures.
-- [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them. `Terminal` performs chart type, theme, undo, redo and fullscreen and returns every other action to the application.
+- [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them. `Terminal` handles chart, drawing, study and alert controls, quick search, command shortcuts, exports and the loaded-data table; the remaining action groups and demo migration are incomplete.
 - [ ] Provide a shared docked tab container for account, strategy report, study editor and replay-trading surfaces.
 - [ ] Open the drawing toolbar's colour popup from a visible control and render its saved favourites bar.
 - [ ] Persist and restore indicator favourites in the assembled UI.
@@ -253,7 +253,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 - [x] `Chart::export_csv` exports OHLCV and study values with timestamps and missing-value handling.
 - [x] `Chart::export_png` renders an isolated chart frame on the CPU after font initialisation; export controls include size, title, timestamp, crosshair and transparency.
-- [x] Export dialog and demo actions save images/data or copy images through application facilities. The terminal's file callback returns save errors and carries a host request to open an exported image.
+- [x] Export dialog and demo actions save images/data or copy images through application facilities. The terminal exports PNG, SVG and CSV through its file callback, copies images and data through egui, and reports save or open errors in the export dialog.
 - [ ] Capture composed panels, trading overlays, external textures and feed-backed order-flow visuals in a complete terminal image.
 - [ ] Add an export watermark switch, vector image output and print/PDF output.
 - [ ] Integrate a native save-file chooser and provide an `Exportable` adapter for direct chart export.

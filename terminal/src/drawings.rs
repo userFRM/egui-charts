@@ -1456,7 +1456,7 @@ mod tests {
         let paste = |text: &str| Action::Shortcut(ShortcutRequest::PasteDrawing(text.into()));
         assert!(terminal.run(paste(&text)).is_none());
         assert_eq!(count(&terminal), before + 1);
-        assert!(terminal.run(paste("egui-charts-study\n{}")).is_some());
+        assert!(terminal.run(paste("egui-charts-study\n{}")).is_none());
         assert_eq!(count(&terminal), before + 1);
     }
 

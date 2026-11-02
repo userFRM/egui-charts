@@ -405,9 +405,9 @@ impl Drop for Terminal {
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{self, MemoryStorage, SIZE, TestFeed, click, frame, key};
+    use super::test_support::{self, MemoryStorage, SIZE, TestFeed, click, frame};
     use super::*;
-    use egui::{Key, Modifiers, vec2};
+    use egui::vec2;
     use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
     use egui_charts::ui::top_toolbar::TopToolbarAction;
     use egui_charts::widget::ShortcutRequest;
@@ -468,7 +468,7 @@ mod tests {
             ),
             (
                 Action::Shortcut(ShortcutRequest::SymbolSearch("A".into())),
-                false,
+                true,
             ),
             (menu(ContextMenuAction::MergeTradeProfilePrevious), true),
             (menu(ContextMenuAction::MergeTradeProfileNext), true),
@@ -476,8 +476,6 @@ mod tests {
         ] {
             assert_eq!(terminal.run(action).is_none(), handled);
         }
-        let help = frame(&mut terminal, SIZE, vec![key(Key::F1, Modifiers::NONE)]).actions;
-        assert!(matches!(help.as_slice(), [Action::Shortcut(_)]));
     }
 
     #[test]
