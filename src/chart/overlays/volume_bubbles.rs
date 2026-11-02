@@ -37,7 +37,8 @@ pub struct VolumeBubblesConfig {
     pub scaling_mode: BubbleScalingMode,
     /// Volumes more than this many standard deviations above the mean of the visible bubbles
     /// draw at the maximum diameter, so one large print does not shrink the rest. Infinity
-    /// turns the clamp off.
+    /// turns the clamp off and is saved as `null` in JSON.
+    #[serde(deserialize_with = "null_as_infinity")]
     pub clamp_std_devs: f64,
     /// Show border around bubbles, fainter in crowded automatic views.
     pub show_border: bool,
@@ -47,6 +48,11 @@ pub struct VolumeBubblesConfig {
     pub min_size_filter: Option<f64>,
     /// Which trades share a bubble.
     pub grouping: BubbleGrouping,
+}
+
+// JSON writes infinity as null; retain the supported unclamped setting when loading it.
+fn null_as_infinity<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(f64::INFINITY))
 }
 
 impl Default for VolumeBubblesConfig {

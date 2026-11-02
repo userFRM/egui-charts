@@ -556,9 +556,9 @@ mod tests {
     fn order_flow_settings_round_trip_and_render_independently() {
         use crate::chart::overlays::{BubbleColor, BubbleGrouping, BubbleScalingMode};
         use crate::widget::{ChartBuilder, ChartSnapshot};
-        for kind in [
-            crate::model::ChartType::Candles,
-            crate::model::ChartType::Line,
+        for (kind, clamp_std_devs) in [
+            (crate::model::ChartType::Candles, 3.0),
+            (crate::model::ChartType::Line, f64::INFINITY),
         ] {
             for flags in 0..8 {
                 let ctx = Context::default();
@@ -592,6 +592,7 @@ mod tests {
                     BubbleGrouping::TimeWindow(chrono::TimeDelta::milliseconds(250));
                 flow.volume_bubbles.scaling_mode = BubbleScalingMode::SquareRoot;
                 flow.volume_bubbles.min_size_filter = Some(3.0);
+                flow.volume_bubbles.clamp_std_devs = clamp_std_devs;
                 settings.apply_to_chart(&mut chart).unwrap();
                 assert_eq!(chart.chart_type(), kind);
                 assert_eq!(
