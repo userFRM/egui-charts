@@ -275,7 +275,7 @@ impl DemoApp {
         }
         if let Some(id) = self.quick_search.show(ui.ctx()) {
             self.sample_scene = None;
-            self.execute_search_edit(ui.ctx(), &id);
+            self.execute_search_command(ui.ctx(), &id);
         }
         true
     }
