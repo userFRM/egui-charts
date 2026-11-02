@@ -670,13 +670,13 @@ impl Indicator for OrderFlowStudy {
             )],
         }
     }
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         if !self
             .inputs()
             .iter()
             .any(|i| i.id == id && i.accepts(&value))
         {
-            return Err("invalid order flow input");
+            return Err(crate::studies::StudyError::rejected(&self.inputs(), id));
         }
         match (id, &value) {
             ("divergence", InputValue::Toggle(on)) => self.markers.divergence = *on,
@@ -699,7 +699,7 @@ impl Indicator for OrderFlowStudy {
             match id {
                 "anchor" => self.anchor = ANCHORS[*at],
                 "representation" => self.candle_style = *at == 0,
-                _ => return Err("invalid order flow input"),
+                _ => return Err(crate::studies::StudyError::invalid_input(id)),
             }
             self.values = IndicatorValues::new();
             self.candles.clear();
@@ -714,7 +714,7 @@ impl Indicator for OrderFlowStudy {
             (OrderFlowKind::SizeDelta { ranges }, id, InputValue::Number(v)) => {
                 let index = id[3..]
                     .parse::<usize>()
-                    .map_err(|_| "invalid order flow input")?;
+                    .map_err(|_| crate::studies::StudyError::invalid_input(id))?;
                 ranges[index][usize::from(id.starts_with("max"))] = v;
             }
             (OrderFlowKind::FlowSum { bars }, "bars", InputValue::Length(v)) => *bars = v,
@@ -758,7 +758,7 @@ impl Indicator for OrderFlowStudy {
             (OrderFlowKind::LevelsExecuted { reversal, .. }, "reversal", InputValue::Toggle(v)) => {
                 *reversal = v
             }
-            _ => return Err("invalid order flow input"),
+            _ => return Err(crate::studies::StudyError::invalid_input(id)),
         }
         if self.kind != before {
             self.reset();

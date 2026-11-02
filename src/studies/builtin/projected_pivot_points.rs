@@ -135,7 +135,7 @@ impl Indicator for ProjectedPivotPoints {
         &mut self,
         id: &str,
         value: crate::studies::InputValue,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::studies::StudyError> {
         self.pivots.set_input(id, value)?;
         self.projections.clear();
         Ok(())

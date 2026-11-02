@@ -133,6 +133,46 @@ pub struct ChartSnapshot {
     pub drawings: Option<serde_json::Value>,
 }
 
+/// Why [`Chart::restore`] did not show a snapshot.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RestoreError {
+    /// A saved study cannot be rebuilt, or reads a study or plot the snapshot does not have.
+    Study {
+        /// The study's position in [`ChartSnapshot::studies`].
+        index: usize,
+        /// Why.
+        error: crate::studies::StudyError,
+    },
+    /// The saved chart settings are invalid.
+    Settings(super::settings::ChartSettingsError),
+    /// The saved panes, scales, series or view are out of range; the text says which.
+    Layout(&'static str),
+    /// The saved drawings cannot be read.
+    Drawings(crate::drawings::persistence::LoadError),
+}
+
+impl std::fmt::Display for RestoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Study { index, error } => write!(f, "saved study {index}: {error}"),
+            Self::Settings(error) => write!(f, "{error}"),
+            Self::Layout(reason) => f.write_str(reason),
+            Self::Drawings(error) => write!(f, "saved drawings: {error}"),
+        }
+    }
+}
+impl std::error::Error for RestoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Study { error, .. } => Some(error),
+            Self::Settings(error) => Some(error),
+            Self::Drawings(error) => Some(error),
+            Self::Layout(_) => None,
+        }
+    }
+}
+
 impl Chart {
     /// Captures the chart's state. Fails while stored drawings are loading, for an unregistered
     /// study, when a drawing cannot be saved (see [`save_drawings`](Self::save_drawings)) or
@@ -256,7 +296,13 @@ impl Chart {
     /// without bars and under new ids: look each up with
     /// [`restored_series_id`](Self::restored_series_id) and supply its bars with
     /// [`set_data`](Self::set_data), as for the chart's own feed.
-    pub fn restore(&mut self, snapshot: &ChartSnapshot) -> Result<Vec<SkippedDrawing>, String> {
+    ///
+    /// Errors distinguish a saved [`RestoreError::Study`], invalid [`RestoreError::Settings`],
+    /// [`RestoreError::Layout`] geometry and unreadable [`RestoreError::Drawings`].
+    pub fn restore(
+        &mut self,
+        snapshot: &ChartSnapshot,
+    ) -> Result<Vec<SkippedDrawing>, RestoreError> {
         self.restore_with(snapshot, &IndicatorFactory::new())
     }
 
@@ -267,7 +313,7 @@ impl Chart {
         &mut self,
         snapshot: &ChartSnapshot,
         factory: &IndicatorFactory,
-    ) -> Result<Vec<SkippedDrawing>, String> {
+    ) -> Result<Vec<SkippedDrawing>, RestoreError> {
         let (studies, drawings) = check(snapshot, factory)?;
         self.set_symbol(snapshot.symbol.clone());
         if let Some(interval) = snapshot.interval {
@@ -281,7 +327,10 @@ impl Chart {
         self.set_chart_type_params(snapshot.chart_type_params.clone());
         self.set_main_series_visible(snapshot.main_series_visible);
         self.main_series_style.alerts = snapshot.main_series_alerts;
-        snapshot.settings.apply_to_chart(self)?;
+        snapshot
+            .settings
+            .apply_to_chart(self)
+            .map_err(RestoreError::Settings)?;
         if let Some(config) = &snapshot.config {
             self.config = config.clone();
             // Layouts saved before the description followed the symbol held it as fixed text.
@@ -389,7 +438,7 @@ impl Chart {
             Some(json) => {
                 let skipped = self
                     .load_drawings_remapped(&json, true)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(RestoreError::Drawings)?;
                 self.history.drawing_edits += 1;
                 self.save_restored_drawings();
                 skipped
@@ -422,14 +471,23 @@ impl Chart {
 type Checked = (Vec<Box<dyn crate::studies::Indicator>>, Option<String>);
 
 /// Checks `snapshot` as [`Chart::restore_with`] does before changing the chart.
-fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked, String> {
+fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked, RestoreError> {
     let studies = snapshot
         .studies
         .iter()
-        .map(|saved| saved.study.create_with(factory))
+        .enumerate()
+        .map(|(index, saved)| {
+            saved
+                .study
+                .create_with(factory)
+                .map_err(|error| RestoreError::Study { index, error })
+        })
         .collect::<Result<Vec<_>, _>>()?;
     check_source_links(&snapshot.studies, &studies)?;
-    snapshot.settings.validate()?;
+    snapshot
+        .settings
+        .validate()
+        .map_err(RestoreError::Settings)?;
     let valid_scale = |scale: &crate::scales::PriceScale| {
         let range = scale.range();
         let margins = scale.options().scale_margins;
@@ -489,7 +547,7 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
             .maximized
             .is_some_and(|pane| pane >= snapshot.panes.len())
     {
-        return Err("Invalid layout geometry".into());
+        return Err(RestoreError::Layout("Invalid layout geometry"));
     }
     // JSON has no NaN or infinity: serde writes them as null, which a number field then
     // refuses, so the next save of such a value could not be loaded.
@@ -497,12 +555,12 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         .and_then(serde_json::from_value::<ChartSnapshot>)
         .is_err()
     {
-        return Err("Layout values must be finite".into());
+        return Err(RestoreError::Layout("Layout values must be finite"));
     }
     if let Some(options) = &snapshot.options
         && !(options.crosshair.vert_line_width > 0.0 && options.crosshair.horz_line_width > 0.0)
     {
-        return Err("Crosshair width must be above zero".into());
+        return Err(RestoreError::Layout("Crosshair width must be above zero"));
     }
     // A frame below this spacing shows a hundred bars per point; 0 sets no limit.
     if let Some(options) = &snapshot.options
@@ -513,7 +571,9 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         .into_iter()
         .any(|spacing| spacing != 0.0 && !(0.01..).contains(&spacing))
     {
-        return Err("Bar spacing limits must be 0 or at least 0.01".into());
+        return Err(RestoreError::Layout(
+            "Bar spacing limits must be 0 or at least 0.01",
+        ));
     }
     let font_sizes = &crate::styles::typography::FONT_SIZES;
     if snapshot
@@ -525,14 +585,16 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         }))
         .any(|size| !font_sizes.contains(&size))
     {
-        return Err("Font sizes must be between 1 and 256".into());
+        return Err(RestoreError::Layout("Font sizes must be between 1 and 256"));
     }
     let drawings = match &snapshot.drawings {
         Some(drawings) => {
             let json = drawings.to_string();
-            let (storage, _) = DrawingStorage::from_json(&json).map_err(|e| e.to_string())?;
+            let (storage, _) = DrawingStorage::from_json(&json).map_err(RestoreError::Drawings)?;
             if storage.symbol != snapshot.symbol {
-                return Err("The drawings belong to another symbol".into());
+                return Err(RestoreError::Drawings(
+                    crate::drawings::persistence::LoadError::OtherSymbol,
+                ));
             }
             Some(json)
         }
@@ -547,7 +609,7 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
 fn check_source_links(
     studies: &[SavedStudy],
     built: &[Box<dyn crate::studies::Indicator>],
-) -> Result<(), String> {
+) -> Result<(), RestoreError> {
     let mut parents = vec![Vec::new(); studies.len()];
     for (at, saved) in studies.iter().enumerate() {
         for (_, value) in &saved.study.inputs {
@@ -556,11 +618,21 @@ fn check_source_links(
                 plot,
             }) = value
             {
-                let parent = studies
-                    .iter()
-                    .position(|other| other.id == *id)
-                    .filter(|parent| *plot < built[*parent].line_count())
-                    .ok_or("A study source names no study or plot of the layout")?;
+                let parent = studies.iter().position(|other| other.id == *id).ok_or(
+                    RestoreError::Study {
+                        index: at,
+                        error: crate::studies::StudyError::UnknownSourceStudy(*id),
+                    },
+                )?;
+                if *plot >= built[parent].line_count() {
+                    return Err(RestoreError::Study {
+                        index: at,
+                        error: crate::studies::StudyError::UnknownSourcePlot {
+                            id: *id,
+                            plot: *plot,
+                        },
+                    });
+                }
                 parents[at].push(parent);
             }
         }
@@ -572,8 +644,11 @@ fn check_source_links(
     {
         resolved[at] = true;
     }
-    if resolved.contains(&false) {
-        return Err("Study sources form a cycle".into());
+    if let Some(index) = resolved.iter().position(|done| !done) {
+        return Err(RestoreError::Study {
+            index,
+            error: crate::studies::StudyError::CyclicSource,
+        });
     }
     Ok(())
 }

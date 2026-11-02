@@ -95,9 +95,9 @@ impl Indicator for UpDownVolume {
     fn inputs(&self) -> Vec<StudyInput> {
         vec![lower_interval::input(self.lower_interval)]
     }
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         let ("lower_interval", InputValue::Timeframe(chosen)) = (id, value) else {
-            return Err("invalid up/down volume input");
+            return Err(crate::studies::StudyError::rejected(&self.inputs(), id));
         };
         self.lower_interval = chosen;
         self.calculate(&[]);

@@ -993,14 +993,14 @@ impl Indicator for ChartPatterns {
         inputs
     }
 
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         let schema = self
             .inputs()
             .into_iter()
             .find(|input| input.id == id)
-            .ok_or("unknown study input")?;
+            .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
         if !schema.accepts(&value) {
-            return Err("study input is outside its accepted values");
+            return Err(crate::studies::StudyError::invalid_input(id));
         }
         match (id, value) {
             ("strength", InputValue::Length(v)) => self.config.strength = v,
@@ -1016,10 +1016,10 @@ impl Indicator for ChartPatterns {
                     .strip_prefix("patterns[")
                     .and_then(|rest| rest.strip_suffix(']'))
                     .and_then(|k| k.parse::<usize>().ok())
-                    .ok_or("unknown study input")?;
+                    .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
                 self.enabled[slot] = on;
             }
-            _ => return Err("unknown study input"),
+            _ => return Err(crate::studies::StudyError::UnknownInput(id.into())),
         }
         self.calculate(&[]);
         Ok(())

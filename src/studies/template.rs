@@ -116,18 +116,21 @@ impl StudyTemplate {
 
     /// Reconstruct a built-in study. Unknown names or invalid inputs leave the host chart intact.
     /// Hosts reconstruct the entire set successfully before replacing their current studies.
-    pub fn create(&self) -> Result<Box<dyn Indicator>, String> {
+    pub fn create(&self) -> Result<Box<dyn Indicator>, crate::studies::StudyError> {
         self.create_with(&IndicatorFactory::new())
     }
 
     /// Reconstruct a study through `factory`, which resolves [`name`](Self::name) to a built-in
     /// or host-registered study. Fails like [`create`](Self::create).
-    pub fn create_with(&self, factory: &IndicatorFactory) -> Result<Box<dyn Indicator>, String> {
+    pub fn create_with(
+        &self,
+        factory: &IndicatorFactory,
+    ) -> Result<Box<dyn Indicator>, crate::studies::StudyError> {
         let upgraded = self.upgraded();
         let template = upgraded.as_ref().unwrap_or(self);
         let study = factory
             .create(&template.name)
-            .ok_or_else(|| format!("Unknown study: {}", template.name))?;
+            .ok_or_else(|| crate::studies::StudyError::UnknownStudy(template.name.clone()))?;
         // Automatic drawings saved before their swings could follow volatility used the fixed
         // percentage they were saved with.
         let saved = |id| template.inputs.iter().any(|(saved, _)| saved == id);
@@ -140,9 +143,7 @@ impl StudyTemplate {
             .chain(template.inputs.iter().cloned())
             .collect();
         let mut study = ConfiguredStudy::new(study);
-        study
-            .apply_settings(&inputs, template.settings.clone())
-            .map_err(str::to_owned)?;
+        study.apply_settings(&inputs, template.settings.clone())?;
         study.set_visible(template.visible);
         if let Some(scale) = template.scale {
             study.set_scale(scale);

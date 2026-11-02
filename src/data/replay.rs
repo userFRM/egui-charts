@@ -149,14 +149,20 @@ impl ReplayClock {
     pub fn new(mut events: Vec<ReplayEvent>) -> Result<Self, FeedError> {
         events
             .sort_by(|a, b| (a.time, a.sequence, &a.symbol).cmp(&(b.time, b.sequence, &b.symbol)));
-        if events.iter().any(|e| !valid(e))
-            || events.windows(2).any(|w| {
-                (w[0].time, w[0].sequence, &w[0].symbol) == (w[1].time, w[1].sequence, &w[1].symbol)
-            })
-        {
-            return Err(FeedError::InvalidData(
-                "invalid replay event or duplicate merge key".into(),
-            ));
+        if let Some(event) = events.iter().find(|event| !valid(event)) {
+            return Err(FeedError::InvalidData(format!(
+                "replay event of {:?} at {} with sequence {} is invalid",
+                event.symbol, event.time, event.sequence
+            )));
+        }
+        if let Some(pair) = events.windows(2).find(|w| {
+            (w[0].time, w[0].sequence, &w[0].symbol) == (w[1].time, w[1].sequence, &w[1].symbol)
+        }) {
+            let event = &pair[0];
+            return Err(FeedError::InvalidData(format!(
+                "replay events of {:?} at {} share sequence {}",
+                event.symbol, event.time, event.sequence
+            )));
         }
         let time = events.first().map_or(DateTime::default(), |e| e.time);
         Ok(Self {
@@ -179,7 +185,9 @@ impl ReplayClock {
     /// Sets a finite non-negative multiplier, preserving sub-nanosecond elapsed time.
     pub fn set_speed(&mut self, speed: f64) -> Result<(), FeedError> {
         if !speed.is_finite() || speed < 0.0 {
-            return Err(FeedError::InvalidData("invalid replay speed".into()));
+            return Err(FeedError::InvalidData(format!(
+                "replay speed must be finite and at least 0, got {speed:?}"
+            )));
         }
         self.speed = speed;
         Ok(())

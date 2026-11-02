@@ -14,7 +14,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Line, line with markers, step line, area, HLC area, baseline, columns and high-low charts; line and area charts accept a `PriceSource`.
 - [x] Heikin-Ashi, Renko, Kagi, line break, point and figure, and range-bar transformations and rendering.
 - [x] Renko box sizing and wicks, line-break lookback, and price-based chart parameters are configurable.
-- [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles; autoscale fits the full displayed distributions and cropped profiles retain their session and central-level readouts.
+- [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles; autoscale fits the full displayed distributions and cropped profiles retain their session and central-level readouts. POC, value-area and midpoint captions keep a gutter at the first or offscreen session opening, separate nearby levels and reveal their prices on hover.
 - [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time-based intervals with an instrument tick size; unsupported intervals and bars without retained trades use candles. Session profiles require `studies`; autoscale includes their full price rows after range edits, and manual crops retain session and POC/value-area readouts.
 - [ ] Change Kagi line thickness at shoulder and waist crossings within a continuing leg.
 - [ ] Expose the standalone point-and-figure close-only source in chart parameters and settings.
@@ -138,7 +138,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [ ] Offer interval and wait-for-close inputs for OHLC-based studies as well as source-aware studies.
 - [ ] Expose every supported plot type in the Style editor.
 - [ ] Add a configurable per-chart study limit and rejection feedback.
-- [ ] Restore custom registered studies and remap study-source dependencies through a library-owned template operation.
+- [x] Restore custom registered studies and remap study-source dependencies through a library-owned template operation, including the terminal's indicator templates.
 - [ ] Provide a study editor surface with host callbacks for submitted content.
 
 ## Order Flow
@@ -210,7 +210,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] `AlertsPanel` uses `services::Alerts` to list, edit, pause/enable and remove alerts, and to show supplied trigger events in toasts and an exportable log.
 - [ ] Add user-controlled sorting and cloning to the alerts panel.
 - [ ] Offer inline creation and series-level alert settings alongside the shared dialog.
-- [ ] Add channel-drawing alert geometry.
+- [x] Drawing alerts follow fork, pitchfan and regression lines on linear and logarithmic scales, with entry, exit, inside and outside conditions resolving both moving boundaries.
 - [ ] Model persistent inside/outside-channel conditions and once-per-minute frequency.
 - [ ] Expose message placeholder and per-alert notification-schedule configuration for host processing.
 
@@ -264,7 +264,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Main-pane drawings synchronise between grouped charts by timestamp.
 - [x] `ChartSnapshot` saves symbol, interval, chart configuration, built-in studies, panes, scales, viewport and drawings in versioned documents.
 - [x] Layout menus create, copy, rename, list, save, open and delete layouts, with debounced autosave through supplied storage.
-- [x] Chart, study and drawing template catalogues support named save, replace, apply and delete operations.
+- [x] Chart, study and drawing template catalogues support named save, replace, apply and delete operations; the terminal wires indicator templates to host storage and applies their studies, links and shared panes as one undoable edit.
 - [x] `SettingsStore` persists preferences with debouncing, failed-write retry and error reporting.
 - [ ] Preserve added/custom series, markers, price lines and custom-study reconstruction in chart snapshots, with explicit reattachment of application services and formatters.
 - [ ] Add layout favourites to the catalogue and menu.
@@ -295,7 +295,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Accessibility roles/states, keyboard focus and a textual bar/study readout.
 - [x] Reusable `ui_kit` buttons, inputs, colour pickers, dialogs, lists, tabs, panels, command palette and toast components.
 - [x] Native and browser examples and CI checks cover library, feature combinations and demo builds.
-- [x] The guide and site landing page share light and dark navigation, a working first-chart example and a live sample chart; the full demo stays at `/demo/`.
+- [x] The guide and site landing page share light and dark navigation, a working first-chart example and a live sample chart with consistent text sizing and a compact readout at phone widths; the full demo stays at `/demo/`.
 - [ ] Route remaining direct English UI labels through the translation lookup.
 - [ ] Make session-quote/volume tags and marker outlines fully theme-configurable.
 - [ ] Add a runnable desktop-webview integration example.
@@ -304,7 +304,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 The crate renders supplied data and exposes interfaces for application services. The application supplies market data, broker execution, accounts and durable storage. These interfaces also allow services to run remotely.
 
-- `Datafeed`, `SymbolSearch`, `Quotes` and `Marks` connect instrument discovery, history, live prices, executions, depth and chart events. Feed queries also supply metrics, options volume, listed option expiries and live or historical option chains with quotes, open interest, implied volatility and Greeks, analyst targets, symbol details, news, calendars, screeners, hotlists and market heatmaps. The headless `OptionChain` handle retains the latest validated snapshot and error; the host supplies all option data.
+- `Datafeed`, `SymbolSearch`, `Quotes` and `Marks` connect instrument discovery, history, live prices, executions, depth and chart events. Feed queries also supply metrics, options volume, listed option expiries and live or historical option chains with quotes, open interest, implied volatility and Greeks, analyst targets, symbol details, news, calendars, screeners, hotlists and market heatmaps. The headless `OptionChain` handle retains the latest validated snapshot and error; the host supplies all option data. `OptionExposure::gamma` computes exposure per 1% underlying move by expiry and strike, counting contracts with missing inputs and using positive call and negative put signs as a convention. `Datafeed::option_exposure` supplies gamma, delta, vanna or charm snapshots with their units and model label; `OptionExposureHandle` retains the latest valid observation and prefers it unchanged over computed gamma.
 - `Broker` supplies real or paper-account state, trading rules, execution and account updates. Trading components submit actions and render the reported orders, positions, fills and history.
 - `Storage` supplies layouts, drawings, settings and template documents; an application may use local or remote storage and manage accounts, synchronisation and sharing.
 - `Alerts` stores and evaluates alert conditions and reports changes and triggers. The crate edits models and draws levels, dialogs, logs and toasts; the application supplies sound, schedules and external delivery.

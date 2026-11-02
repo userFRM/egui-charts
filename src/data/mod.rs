@@ -74,7 +74,11 @@ pub use market::{
     NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,
     ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
 };
-pub use option_chain::{OptionChain, OptionChainQuery, OptionChainSink, OptionKind, OptionQuote};
+pub use option_chain::{
+    OptionChain, OptionChainQuery, OptionChainSink, OptionExposure, OptionExposureHandle,
+    OptionExposureKind, OptionExposureQuery, OptionExposureRow, OptionExposureSink, OptionKind,
+    OptionQuote,
+};
 #[cfg(feature = "studies")]
 pub(crate) use options_volume::OptionsVolumeSource;
 pub use options_volume::{OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink};
@@ -270,6 +274,18 @@ pub trait Datafeed: MaybeSend + 'static {
     /// assert_eq!(chain.error(), None);
     /// ```
     fn option_chain(&self, query: OptionChainQuery, sink: OptionChainSink) {
+        let _ = query;
+        sink.report_error(FeedError::NotSupported);
+    }
+
+    /// Push complete exposure snapshots for the underlying, inclusive expiry range and kind.
+    /// Without [`as_of`](OptionExposureQuery::as_of), keep pushing until the sink is inactive;
+    /// with it, answer once for that instant or report [`FeedError::NotSupported`] (the default).
+    /// Declared by [`FeedService::OptionExposure`]. The host supplies the data and model.
+    ///
+    /// [`OptionExposureHandle::snapshot_or_gamma`] prefers the supplied snapshot unchanged over
+    /// computed gamma. See [`OptionExposureSink::push`] for atomic validation and replacement.
+    fn option_exposure(&self, query: OptionExposureQuery, sink: OptionExposureSink) {
         let _ = query;
         sink.report_error(FeedError::NotSupported);
     }
