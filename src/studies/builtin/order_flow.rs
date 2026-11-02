@@ -44,6 +44,7 @@ pub struct OrderFlowStudy {
     candle_style: bool,
     candles: Vec<StudyCandle>,
     anchor: Option<AnchorPeriod>,
+    volume_precision: Option<usize>,
     markers: CvdMarkers,
 }
 
@@ -69,6 +70,7 @@ impl OrderFlowStudy {
             candle_style: false,
             candles: Vec::new(),
             anchor: None,
+            volume_precision: None,
             markers: CvdMarkers::default(),
         }
     }
@@ -270,6 +272,10 @@ impl Indicator for OrderFlowStudy {
         self.clock = clock.clone();
         changed
     }
+    fn set_instrument(&mut self, instrument: Option<&crate::model::Instrument>) -> bool {
+        self.volume_precision = instrument.and_then(|i| i.volume_decimals.map(usize::from));
+        false
+    }
     fn calculate(&mut self, data: &[Bar]) {
         self.refresh(data, 0);
     }
@@ -292,11 +298,62 @@ impl Indicator for OrderFlowStudy {
         self.delta == Some(true)
     }
     fn value_format(&self) -> crate::scales::StudyFormat {
-        if self.delta.is_some() {
-            crate::scales::StudyFormat::Volume
-        } else {
-            crate::scales::StudyFormat::Fixed(2)
+        use crate::scales::StudyFormat;
+        match self.kind {
+            OrderFlowKind::Spread
+            | OrderFlowKind::TradeRate { .. }
+            | OrderFlowKind::AggressorRate { .. } => StudyFormat::Fixed(2),
+            OrderFlowKind::LevelsExecuted { .. } | OrderFlowKind::LevelsTradedThrough { .. } => {
+                StudyFormat::Fixed(0)
+            }
+            _ => StudyFormat::Volume,
         }
+    }
+    fn precision(&self) -> Option<usize> {
+        if matches!(
+            self.kind,
+            OrderFlowKind::TradeRate { volume: false, .. } | OrderFlowKind::AggressorRate { .. }
+        ) {
+            return None;
+        }
+        if matches!(self.kind, OrderFlowKind::TradeRate { volume: true, .. }) {
+            return self.volume_precision.map(|decimals| decimals.max(2));
+        }
+        match self.value_format() {
+            crate::scales::StudyFormat::Volume => self.volume_precision,
+            crate::scales::StudyFormat::Fixed(decimals) => Some(decimals),
+            _ => None,
+        }
+    }
+    fn format_value(&self, value: f64) -> String {
+        let format = self.value_format();
+        let precision = self
+            .precision()
+            .or((format == crate::scales::StudyFormat::Volume && self.delta.is_none()).then_some(2))
+            .filter(|_| format != crate::scales::StudyFormat::Volume || value.abs() < 1_000.0);
+        format.format(value, precision)
+    }
+    fn format_plot_value(&self, line: usize, value: f64) -> String {
+        use crate::scales::StudyFormat;
+        if line == 0 {
+            match self.kind {
+                OrderFlowKind::TradeRate { volume: true, .. } => {
+                    return StudyFormat::Volume.format(
+                        value,
+                        (value.abs() < 1_000.0).then_some(self.volume_precision.unwrap_or(2)),
+                    );
+                }
+                OrderFlowKind::TradeRate { volume: false, .. }
+                | OrderFlowKind::AggressorRate { .. } => {
+                    return StudyFormat::Fixed(0).format(value, None);
+                }
+                _ => {}
+            }
+        }
+        self.format_value(value)
+    }
+    fn legend_visible(&self, line: usize) -> bool {
+        line < self.line_count() && (self.plot_style(line).visible || line == 0)
     }
     fn colors(&self) -> Vec<Color32> {
         self.colors.clone()
@@ -345,16 +402,42 @@ impl Indicator for OrderFlowStudy {
             return names;
         }
         let names: &[&str] = match self.kind {
-            OrderFlowKind::FlowSum { .. } => &["Volume sum", "Delta sum"],
-            OrderFlowKind::FilteredCvd { .. } => &["CVD"],
-            OrderFlowKind::SizeDelta { .. } => &["Delta 1", "Delta 2", "Delta 3"],
-            OrderFlowKind::Spread => &["Last (ticks)", "Mean (ticks)", "Maximum (ticks)"],
-            OrderFlowKind::BookSize { .. } => &["Bid size", "Ask size", "Difference"],
-            OrderFlowKind::TradeRate { .. } => {
-                &["Bar total", "Rolling / second", "Instant / second"]
+            OrderFlowKind::TradeRate {
+                volume,
+                seconds,
+                instant,
+            } => {
+                let unit = if volume { "lots" } else { "executions" };
+                return vec![
+                    format!("Bar {unit}"),
+                    format!("Rolling {seconds}s ({unit}/s)"),
+                    format!("Instant {instant}s ({unit}/s)"),
+                ];
             }
-            OrderFlowKind::AggressorRate { .. } => {
-                &["Bar orders", "Rolling / second", "Instant / second"]
+            OrderFlowKind::AggressorRate { seconds, instant } => {
+                return vec![
+                    "Bar orders".into(),
+                    format!("Rolling {seconds}s (orders/s)"),
+                    format!("Instant {instant}s (orders/s)"),
+                ];
+            }
+            OrderFlowKind::SizeDelta { ranges } => {
+                return ranges
+                    .iter()
+                    .map(|[min, max]| {
+                        if *max == f64::MAX {
+                            format!("Delta [{min}, ∞] lots")
+                        } else {
+                            format!("Delta [{min}, {max}] lots")
+                        }
+                    })
+                    .collect();
+            }
+            OrderFlowKind::FlowSum { .. } => &["Volume sum (lots)", "Delta sum (lots)"],
+            OrderFlowKind::FilteredCvd { .. } => &["CVD (lots)"],
+            OrderFlowKind::Spread => &["Last (ticks)", "Mean (ticks)", "Maximum (ticks)"],
+            OrderFlowKind::BookSize { .. } => {
+                &["Bid size (lots)", "Ask size (lots)", "Difference (lots)"]
             }
             OrderFlowKind::LevelsExecuted { .. } => &["Ask levels", "Bid levels", "Total levels"],
             OrderFlowKind::LevelsTradedThrough { .. } => {
@@ -379,7 +462,12 @@ impl Indicator for OrderFlowStudy {
             },
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
-            visible: self.delta != Some(true) || line < 3,
+            visible: (self.delta != Some(true) || line < 3)
+                && !(line == 0
+                    && matches!(
+                        self.kind,
+                        OrderFlowKind::TradeRate { .. } | OrderFlowKind::AggressorRate { .. }
+                    )),
         }
     }
     fn inputs(&self) -> Vec<StudyInput> {
@@ -720,6 +808,106 @@ mod tests {
         study.values().columns().to_vec()
     }
 
+    /// Counts are integral; quantities use the instrument's lot precision, while rates and
+    /// mean tick spreads retain fractions. The configured chart presentation preserves this.
+    #[test]
+    fn count_and_quantity_formats_follow_their_units() {
+        use crate::model::Instrument;
+        use crate::studies::ConfiguredStudy;
+        let unconfigured = OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
+            min: 0.0,
+            max: f64::MAX,
+        });
+        assert_eq!(unconfigured.format_value(18.125), "18.12");
+        for (kind, value, whole, fractional) in [
+            (
+                OrderFlowKind::LevelsExecuted {
+                    seconds: 0,
+                    reversal: false,
+                },
+                18.0,
+                "18",
+                "18",
+            ),
+            (
+                OrderFlowKind::LevelsTradedThrough { seconds: 60 },
+                18.0,
+                "18",
+                "18",
+            ),
+            (
+                OrderFlowKind::FilteredCvd {
+                    min: 0.0,
+                    max: f64::MAX,
+                },
+                18.125,
+                "18",
+                "18.125",
+            ),
+            (
+                OrderFlowKind::SizeDelta {
+                    ranges: [[0.0, 10.0]; 3],
+                },
+                18.125,
+                "18",
+                "18.125",
+            ),
+            (
+                OrderFlowKind::BookSize {
+                    levels: 10,
+                    distance: 0.0,
+                },
+                18.125,
+                "18",
+                "18.125",
+            ),
+            (OrderFlowKind::FlowSum { bars: 2 }, 18.125, "18", "18.125"),
+            (OrderFlowKind::FlowSum { bars: 2 }, 4554.0, "4.55K", "4.55K"),
+            (OrderFlowKind::Spread, 1.25, "1.25", "1.25"),
+            (
+                OrderFlowKind::TradeRate {
+                    volume: false,
+                    seconds: 60,
+                    instant: 5,
+                },
+                1.25,
+                "1.25",
+                "1.25",
+            ),
+            (
+                OrderFlowKind::AggressorRate {
+                    seconds: 60,
+                    instant: 5,
+                },
+                1.25,
+                "1.25",
+                "1.25",
+            ),
+            (
+                OrderFlowKind::TradeRate {
+                    volume: true,
+                    seconds: 60,
+                    instant: 5,
+                },
+                1.125,
+                "1.12",
+                "1.125",
+            ),
+        ] {
+            let mut study = ConfiguredStudy::new(Box::new(OrderFlowStudy::new(kind)));
+            for (decimals, want) in [(0, whole), (3, fractional)] {
+                study.set_instrument(Some(
+                    &Instrument::new("SAMPLE").with_volume_decimals(decimals),
+                ));
+                assert_eq!(study.format_value(value), want, "{kind:?}, {decimals}");
+            }
+            if matches!(kind, OrderFlowKind::TradeRate { volume: false, .. }) {
+                study.set_input("volume", InputValue::Toggle(true)).unwrap();
+                assert_eq!(study.format_value(1.125), "1.125");
+            }
+        }
+    }
+
     fn assert_lines(study: &OrderFlowStudy, want: &[[f64; 6]]) {
         let got = lines(study);
         assert_eq!(got.len(), want.len());
@@ -742,6 +930,14 @@ mod tests {
         let mut study = OrderFlowStudy::new(OrderFlowKind::SizeDelta {
             ranges: [[0.0, 9.0], [10.0, 99.0], [100.0, f64::MAX]],
         });
+        assert_eq!(
+            study.line_names(),
+            [
+                "Delta [0, 9] lots",
+                "Delta [10, 99] lots",
+                "Delta [100, ∞] lots"
+            ]
+        );
         fill(&study);
         study.calculate(&data);
         assert_lines(
@@ -935,6 +1131,12 @@ mod tests {
                 study
                     .set_input("divergence", InputValue::Toggle(true))
                     .unwrap();
+                let configured = crate::studies::ConfiguredStudy::new(Box::new(study.clone()));
+                for line in 0..configured.line_count() {
+                    assert_eq!(configured.plot_style(line).visible, line < 3);
+                    assert_eq!(configured.legend_visible(line), line < 3);
+                    assert_eq!(configured.plot_tagged(line), line < 3);
+                }
                 let highs = [
                     97., 98., 99., 101., 99., 98., 97., 96., 95., 96., 100., 101., 103., 101.,
                     100., 99., 98., 97.,

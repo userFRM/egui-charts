@@ -9,7 +9,7 @@ mod types;
 
 pub use data::{
     AlertsSettings, ButtonsSettings, CandleColorConfig, ChartBasicStylesSettings,
-    ChartSettingsState, CrosshairSettings, GridLinesSettings, MarginsSettings,
+    ChartSettingsState, CrosshairSettings, GridLinesSettings, MarginsSettings, OrderFlowSettings,
     ScalesAndLinesSettings, ScalesAppearanceSettings, StatusLineOptions, TradingNotifications,
     TradingSettings, WatermarkSettings,
 };
