@@ -887,7 +887,7 @@ Terminal,Templates and layouts,Indicator templates,done,library,src/studies/temp
 Terminal,Templates and layouts,Multi-chart layouts,done,library,src/widget/layout.rs;terminal/src/layouts.rs,
 Terminal,Templates and layouts,Open a saved layout; layout list with favourites and delete,done,library,src/ui/top_toolbar/components/layout_menu.rs;src/services/settings.rs;terminal/src/layouts.rs,
 Terminal,Templates and layouts,Persist preferences,partial,library,src/services/settings.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs;terminal/src/time.rs,205;383
-Terminal,Templates and layouts,Save chart layout,done,library,src/widget/snapshot.rs;src/ui/top_toolbar/components/layout_menu.rs;src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs;src/widget/series/options.rs;terminal/src/layouts.rs,
+Terminal,Templates and layouts,Save chart layout,done,library,src/widget/snapshot.rs;src/ui/top_toolbar/components/layout_menu.rs;src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs;src/widget/series/options.rs;terminal/src/layouts.rs;examples/demo/storage.rs;examples/demo/layouts.rs,
 Terminal,Templates and layouts,Share a layout by link,done,host,src/services/sharing.rs;src/ui/share_controls.rs;src/ui/top_toolbar/components/layout_menu.rs,
 Terminal,Templates and layouts,Snapshot: copy image to clipboard,done,library,src/ui/export.rs;src/ui/top_toolbar/toolbar.rs,
 Terminal,Templates and layouts,Snapshot: download the chart image,done,library,src/widget/export.rs;src/ui/top_toolbar/toolbar.rs,

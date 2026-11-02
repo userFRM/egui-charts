@@ -465,7 +465,7 @@ impl DemoApp {
                         self.toasts.error(error);
                         return;
                     }
-                    self.restore_layout(name, layout);
+                    self.restore_layout(name, layout, Ok(comparisons));
                     self.save_layout();
                 }
                 Err(error) => self.toasts.error(error),
@@ -532,7 +532,9 @@ impl DemoApp {
         Ok(SavedLayout { mode, charts })
     }
 
-    fn capture_comparisons(&self) -> Result<Vec<Vec<super::comparison::SavedComparison>>, String> {
+    pub(super) fn capture_comparisons(
+        &self,
+    ) -> Result<Vec<Vec<super::comparison::SavedComparison>>, String> {
         let active = super::comparison::capture(&self.chart, &self.comparisons, &self.spreads)?;
         let mut slots = self
             .extra_charts
@@ -564,12 +566,17 @@ impl DemoApp {
     }
 
     /// Shows a stored layout in the current tab, which takes its name.
-    fn restore_layout(&mut self, name: String, layout: SavedLayout) {
+    pub(super) fn restore_layout(
+        &mut self,
+        name: String,
+        layout: SavedLayout,
+        comparisons: Result<Vec<Vec<super::comparison::SavedComparison>>, String>,
+    ) -> bool {
         if let Some(index) = self.layout_tabs.iter().position(|t| t.name == name)
             && index != self.layout_tab
         {
             self.select_layout(index);
-            return;
+            return true;
         }
         if layout.charts.is_empty()
             || (layout.mode != ChartLayoutMode::Tabs
@@ -577,32 +584,32 @@ impl DemoApp {
         {
             self.toasts
                 .error("Could not open layout: invalid chart count");
-            return;
+            return false;
         }
-        let mut comparisons = match self.storage.comparisons(&name) {
+        let mut comparisons = match comparisons {
             Ok(saved) if saved.is_empty() => (0..layout.charts.len()).map(|_| Vec::new()).collect(),
             Ok(saved) if saved.len() == layout.charts.len() => saved,
             Ok(_) => {
                 self.toasts
                     .error("Could not open comparisons: invalid chart count");
-                return;
+                return false;
             }
             Err(error) => {
                 self.toasts.error(error);
-                return;
+                return false;
             }
         };
         for (saved, snapshot) in comparisons.iter().zip(&layout.charts) {
             if let Err(error) = super::comparison::validate(saved, snapshot.panes.len()) {
                 self.toasts.error(error);
-                return;
+                return false;
             }
         }
         for snapshot in &layout.charts {
             let mut check = Chart::new(egui_charts::model::BarData::new());
             if let Err(error) = check.restore(snapshot) {
                 self.toasts.error(format!("Could not open layout: {error}"));
-                return;
+                return false;
             }
         }
         self.layout_tabs[self.layout_tab].name = name;
@@ -688,6 +695,7 @@ impl DemoApp {
             adjust_for_dividends: self.timeframe_toolbar.state.adjust_for_dividends,
             ..egui_charts::widget::settings::ChartSettingsState::from_chart(&self.chart)
         };
+        true
     }
 
     /// The settings the demo keeps between sessions.
@@ -765,7 +773,8 @@ impl DemoApp {
         }
         let previous = self.top_toolbar.layout_menu.curr_layout.clone();
         if let Some((name, layout)) = self.top_toolbar.layout_menu.poll(ctx) {
-            self.restore_layout(name, layout);
+            let comparisons = self.storage.comparisons(&name);
+            self.restore_layout(name, layout, comparisons);
         } else if self.top_toolbar.layout_menu.curr_layout != previous
             && let Some(name) = &self.top_toolbar.layout_menu.curr_layout
         {

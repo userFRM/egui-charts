@@ -3,12 +3,120 @@
 
 use egui_charts::data::Reply;
 use egui_charts::services::{Storage, StoreKind};
+use egui_charts::widget::SavedLayout;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The eframe key of the map, where earlier releases of the demo kept templates.
 const KEY: &str = "templates";
+const WORKSPACE: &str = "workspace";
+
+#[derive(Default)]
+pub(super) struct WorkspaceRecovery {
+    checked_at: Option<f64>,
+    unreadable: bool,
+    save_error: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedWorkspace {
+    version: u32,
+    #[serde(flatten)]
+    layout: SavedLayout,
+    comparisons: Vec<Vec<super::comparison::SavedComparison>>,
+    active_slot: usize,
+}
+
+impl super::DemoApp {
+    pub(super) fn restore_workspace(&mut self) {
+        let json = self
+            .storage
+            .documents
+            .lock()
+            .unwrap()
+            .get(WORKSPACE)
+            .cloned();
+        let Some(json) = json else { return };
+        let saved = (|| {
+            let mut saved: SavedWorkspace =
+                serde_json::from_str(&json).map_err(|e| e.to_string())?;
+            saved.layout = SavedLayout::from_json(&json).map_err(|e| e.to_string())?;
+            if saved.active_slot >= saved.layout.charts.len() {
+                return Err("invalid active chart slot".to_owned());
+            }
+            Ok(saved)
+        })();
+        match saved {
+            Ok(saved) => {
+                if self.restore_layout("Unnamed".into(), saved.layout, Ok(saved.comparisons)) {
+                    self.activate_chart_slot(saved.active_slot);
+                } else {
+                    self.workspace_recovery.unreadable = true;
+                }
+            }
+            Err(error) => {
+                self.workspace_recovery.unreadable = true;
+                self.toasts
+                    .error(format!("Could not open unnamed workspace: {error}"));
+            }
+        }
+        if self.workspace_recovery.unreadable {
+            self.toasts.warning("Opened a default chart. The unreadable workspace was kept; save a named layout to keep new work.");
+        }
+    }
+
+    pub(super) fn checkpoint_workspace(&mut self) {
+        if self.workspace_recovery.unreadable
+            || self
+                .top_toolbar
+                .layout_menu
+                .layouts
+                .contains(&self.layout_tabs[self.layout_tab].name)
+        {
+            return;
+        }
+        let document = (|| {
+            let saved = SavedWorkspace {
+                version: SavedLayout::VERSION,
+                layout: self.capture_layout()?,
+                comparisons: self.capture_comparisons()?,
+                active_slot: self.layout_slot,
+            };
+            serde_json::to_string(&saved).map_err(|e| e.to_string())
+        })();
+        match document {
+            Ok(json) => {
+                let mut documents = self.storage.documents.lock().unwrap();
+                if documents.get(WORKSPACE) != Some(&json) {
+                    documents.insert(WORKSPACE.into(), json);
+                    self.storage.changed.store(true, Ordering::Relaxed);
+                }
+                self.workspace_recovery.save_error = None;
+            }
+            Err(error) => {
+                if self.workspace_recovery.save_error.as_ref() != Some(&error) {
+                    self.toasts
+                        .error(format!("Could not save unnamed workspace: {error}"));
+                }
+                self.workspace_recovery.save_error = Some(error);
+            }
+        }
+    }
+
+    pub(super) fn poll_workspace(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|input| input.time);
+        if self
+            .workspace_recovery
+            .checked_at
+            .is_none_or(|last| now - last >= 1.0)
+        {
+            self.checkpoint_workspace();
+            self.workspace_recovery.checked_at = Some(now);
+        }
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+    }
+}
 
 #[derive(Default)]
 pub(super) struct DemoStorage {
@@ -199,6 +307,169 @@ mod tests {
             assert_eq!(favorites, expected);
             assert!(app.indicator_dialog.favorites.contains("Host study"));
             app.indicator_dialog.favorites.remove("RSI");
+        }
+    }
+
+    #[test]
+    fn unnamed_workspace_recovers_chart_settings_and_keeps_named_save_policy() {
+        use egui_charts::model::ChartType;
+        use egui_charts::scales::PriceScaleMode;
+        use egui_charts::ui::top_toolbar::{CompareAction, TopToolbarAction};
+        use egui_charts::widget::ChartLayoutMode;
+        for mode in [ChartLayoutMode::Single, ChartLayoutMode::TwoHorizontal] {
+            let ctx = egui::Context::default();
+            let mut storage = AppStorage::default();
+            let mut app = restart(&ctx, &storage);
+            app.ensure_chart_slots(mode);
+            app.activate_chart_slot(mode.chart_count() - 1);
+            app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
+            app.chart
+                .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
+            let rsi = app
+                .chart
+                .add_indicator(Box::new(egui_charts::studies::RSI::new(5)));
+            let pane = app.chart.series_pane(rsi).unwrap();
+            app.chart.move_pane(pane, 0);
+            app.chart.set_pane_stretch_factor(pane, 2.25);
+            app.chart.price_scale_mut().mode = PriceScaleMode::Logarithmic;
+            app.chart.price_scale_mut().set_range(2.0, 6.0);
+            app.chart
+                .set_crosshair_style(egui_charts::config::CrosshairStyle::Dot);
+            app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
+            app.save(&mut storage);
+            app = restart(&ctx, &storage);
+            assert_eq!(app.layout.mode, mode);
+            assert_eq!(app.layout_slot, mode.chart_count() - 1);
+            assert_eq!(app.chart.chart_type(), ChartType::Line);
+            assert_eq!(
+                app.chart.state().price_scale().mode,
+                PriceScaleMode::Logarithmic
+            );
+            assert_eq!(app.chart.state().price_scale().range().min, 2.0);
+            assert_eq!(app.chart.state().price_scale().range().max, 6.0);
+            assert_eq!(
+                app.chart.chart_options().crosshair.style,
+                egui_charts::config::CrosshairStyle::Dot
+            );
+            let studies: Vec<_> = app
+                .chart
+                .indicators()
+                .map(|(_, study)| (study.name().to_owned(), study.inputs()[0].value.clone()))
+                .collect();
+            assert_eq!(
+                studies,
+                [
+                    ("SMA".into(), egui_charts::studies::InputValue::Length(7)),
+                    ("RSI".into(), egui_charts::studies::InputValue::Length(5)),
+                ]
+            );
+            let rsi = app
+                .chart
+                .indicators()
+                .find(|(_, study)| study.name() == "RSI")
+                .unwrap()
+                .0;
+            let pane = app.chart.series_pane(rsi).unwrap();
+            assert_eq!(app.chart.panes()[0], pane);
+            assert_eq!(app.chart.pane_stretch_factor(pane), Some(2.25));
+            assert_eq!(app.comparisons.len(), 1);
+            assert!(!app.chart.bars(app.comparisons[0].1).is_empty());
+            assert!(app.top_toolbar.layout_menu.layouts.is_empty());
+
+            // Recovery is also checkpointed during frames, before eframe's periodic save.
+            app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Area));
+            ctx.run_ui(
+                egui::RawInput {
+                    time: Some(2.0),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.ui(ui, &mut eframe::Frame::_new_kittest());
+                },
+            )
+            .drop_without_applying_deltas();
+            app.storage.persist(&mut storage);
+            app = restart(&ctx, &storage);
+            assert_eq!(app.chart.chart_type(), ChartType::Area);
+
+            app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
+            app.poll_storage(&ctx);
+            app.save(&mut storage);
+            for autosave in [false, true] {
+                app = restart(&ctx, &storage);
+                app.poll_storage(&ctx);
+                assert_eq!(app.chart.chart_type(), ChartType::Area);
+                app.top_toolbar.layout_menu.autosave = autosave;
+                app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
+                for _ in 0..3 {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            time: Some(ctx.input(|input| input.time) + 2.0),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            app.ui(ui, &mut eframe::Frame::_new_kittest());
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                }
+                app.save(&mut storage);
+                app = restart(&ctx, &storage);
+                app.poll_storage(&ctx);
+                assert_eq!(
+                    app.chart.chart_type(),
+                    if autosave {
+                        ChartType::Line
+                    } else {
+                        ChartType::Area
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unreadable_workspace_opens_a_default_chart_without_overwriting_the_document() {
+        let ctx = egui::Context::default();
+        let mut app = restart(&ctx, &AppStorage::default());
+        let mut valid: serde_json::Value =
+            serde_json::from_str(&app.capture_layout().unwrap().to_json().unwrap()).unwrap();
+        valid["active_slot"] = 0.into();
+        valid["comparisons"] = serde_json::json!([[]]);
+        let valid = valid.to_string();
+        let invalid_slot = valid.replace("\"active_slot\":0", "\"active_slot\":99");
+        let invalid_chart = valid.replace("\"charts\":[", "\"charts\":[{\"symbol\":false},");
+        let unsupported = valid.replace("\"version\":3", "\"version\":999");
+        for json in [
+            "{",
+            invalid_slot.as_str(),
+            invalid_chart.as_str(),
+            unsupported.as_str(),
+        ] {
+            let mut storage = AppStorage::default();
+            eframe::set_value(&mut storage, KEY, &HashMap::from([("workspace", json)]));
+            let mut app = restart(&ctx, &storage);
+            assert_eq!(
+                app.chart.chart_type(),
+                egui_charts::model::ChartType::Candles
+            );
+            assert!(
+                app.toasts
+                    .toasts()
+                    .iter()
+                    .any(|toast| toast.message.contains("Could not open"))
+            );
+            assert!(
+                app.toasts
+                    .toasts()
+                    .iter()
+                    .any(|toast| toast.message.contains("default chart"))
+            );
+            app.chart
+                .set_chart_type(egui_charts::model::ChartType::Line);
+            app.save(&mut storage);
+            let kept: HashMap<String, String> = eframe::get_value(&storage, KEY).unwrap();
+            assert_eq!(kept["workspace"], json);
         }
     }
 }
