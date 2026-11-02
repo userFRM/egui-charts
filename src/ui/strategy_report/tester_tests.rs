@@ -26,7 +26,7 @@ fn bars() -> Vec<Bar> {
 #[test]
 fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
     for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-        for width in [320.0, 640.0, 1440.0] {
+        for width in [240.0, 320.0, 640.0, 1440.0] {
             let mut tester = StrategyTester::default();
             tester.select_strategy("Consecutive Up/Down").unwrap();
             let mut h = Harness::builder()
@@ -106,6 +106,13 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
                 h.state().0.report().unwrap().trades[0].entry_time,
                 bars()[1].time
             );
+            h.get_by_role_and_label(Role::Tab, "Inputs").click();
+            h.run();
+            h.get_by_role_and_label(Role::Tab, "Report").scroll_to_me();
+            h.run();
+            h.get_by_role_and_label(Role::Tab, "Report").click();
+            h.run();
+            assert!(h.state().0.tab == Tab::Report);
         }
     }
 }

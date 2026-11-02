@@ -460,11 +460,15 @@ impl StrategyTester {
         if let Some(error) = &self.error {
             ui.colored_label(ui.active_theme().ui.error, l10n::text(ui.ctx(), error));
         }
-        TabBar::new(
-            &[Tab::Inputs, Tab::Properties, Tab::Optimisation, Tab::Report],
-            &mut self.tab,
-        )
-        .show(ui);
+        egui::ScrollArea::horizontal()
+            .id_salt("tester_tabs")
+            .show(ui, |ui| {
+                TabBar::new(
+                    &[Tab::Inputs, Tab::Properties, Tab::Optimisation, Tab::Report],
+                    &mut self.tab,
+                )
+                .show(ui);
+            });
         let mut edited = false;
         match self.tab {
             Tab::Report => {
