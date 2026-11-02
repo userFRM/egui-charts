@@ -796,7 +796,11 @@ fn period_returns(bars: &[Bar]) -> Vec<PeriodReturn> {
         ("1M", last.time.checked_sub_signed(TimeDelta::days(30))),
         ("3M", last.time.checked_sub_signed(TimeDelta::days(91))),
         ("6M", last.time.checked_sub_signed(TimeDelta::days(182))),
-        ("YTD", Some(year_start)),
+        // The last close of the previous year: a bar stamped at the year's start opens it.
+        (
+            "YTD",
+            year_start.checked_sub_signed(TimeDelta::nanoseconds(1)),
+        ),
         ("1Y", last.time.checked_sub_signed(TimeDelta::days(365))),
     ]
     .into_iter()
@@ -1155,7 +1159,8 @@ mod tests {
             bar("2026-01-01T00:00:00Z", 100.0, 110.0),
         ];
         let returns = period_returns(&bars);
-        for (period, expected) in [("1W", 10.0), ("YTD", 0.0), ("1Y", 0.0)] {
+        // YTD runs from the last close of 2025, not from the 2026 bar itself.
+        for (period, expected) in [("1W", 10.0), ("YTD", 10.0), ("1Y", 0.0)] {
             let found = returns
                 .iter()
                 .find(|row| row.period == period)
