@@ -250,11 +250,21 @@ fn copy_series(chart: &mut Chart, source: &Chart, id: SeriesId) -> Option<Series
 
 pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused: bool) {
     let timeframe = chart.timeframe().unwrap_or(Timeframe::Hour1);
+    let clock = chart.bar_clock();
+    let extended_hours = chart.extended_hours();
+    let session = if !clock.has_session() {
+        egui_charts::ui::timeframe_toolbar::SessionType::Full24x7
+    } else if extended_hours {
+        egui_charts::ui::timeframe_toolbar::SessionType::ETH
+    } else {
+        egui_charts::ui::timeframe_toolbar::SessionType::RTH
+    };
     for spread in spreads {
         if chart.series_order(spread.id).is_none() {
             continue;
         }
         for feed in &spread.feeds {
+            feed.set_view(session, chart.conversion() == Some("adjusted"));
             feed.set_paused(paused);
             feed.advance(chrono::Utc::now());
         }
@@ -269,7 +279,7 @@ pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused:
         let histories: Vec<_> = spread
             .feeds
             .iter()
-            .map(|feed| feed.snapshot(timeframe, chart.bar_clock(), chart.extended_hours()))
+            .map(|feed| feed.snapshot(timeframe, clock.clone(), extended_hours))
             .collect();
         let symbols = spread.expression.symbols();
         let history = |symbol: &str| {
@@ -597,54 +607,67 @@ mod tests {
         )];
         refresh_spreads(&mut chart, &mut spreads, true);
         assert!(!chart.bars(id).is_empty());
-        for timeframe in [Timeframe::Min1, Timeframe::Min5] {
-            chart.set_timeframe(timeframe);
-            for extended in [false, true] {
-                chart.set_extended_hours(extended);
-                refresh_spreads(&mut chart, &mut spreads, true);
-                let histories: Vec<_> = spreads[0]
-                    .feeds
-                    .iter()
-                    .map(|feed| feed.snapshot(timeframe, chart.bar_clock(), extended))
-                    .collect();
-                let expected = spreads[0]
-                    .expression
-                    .bars(|symbol| Some(&histories[usize::from(symbol == "MSFT")][..]))
-                    .unwrap();
-                assert_eq!(chart.bars(id), expected);
-                chart.drain_events().for_each(drop);
-                for _ in 0..3 {
+        for sessions in [false, true] {
+            chart.set_instrument(sessions.then(|| {
+                egui_charts::model::Instrument::new("SAMPLE")
+                    .with_time_zone(crate::sampledata::us_equity_zone())
+                    .with_session(crate::sampledata::us_equity_session())
+            }));
+            for timeframe in [Timeframe::Min1, Timeframe::Min5] {
+                chart.set_timeframe(timeframe);
+                for extended in [false, true] {
+                    chart.set_extended_hours(extended);
                     refresh_spreads(&mut chart, &mut spreads, true);
+                    let histories: Vec<_> = spreads[0]
+                        .feeds
+                        .iter()
+                        .map(|feed| feed.snapshot(timeframe, chart.bar_clock(), extended))
+                        .collect();
+                    let expected = spreads[0]
+                        .expression
+                        .bars(|symbol| Some(&histories[usize::from(symbol == "MSFT")][..]))
+                        .unwrap();
+                    assert_eq!(chart.bars(id), expected);
+                    if sessions {
+                        assert!(chart.bars(id).iter().all(|bar| {
+                            crate::sampledata::us_equity_hours().is_open(bar.time, extended)
+                        }));
+                    }
+
+                    chart.drain_events().for_each(drop);
+                    for _ in 0..3 {
+                        refresh_spreads(&mut chart, &mut spreads, true);
+                    }
+                    assert!(
+                        !chart
+                            .drain_events()
+                            .any(|event| matches!(event, ChartEvent::DataLoaded { .. })),
+                        "unchanged spreads must not reload history"
+                    );
+                    for feed in &spreads[0].feeds {
+                        feed.set_paused(false);
+                        feed.advance(feed.now() + chrono::TimeDelta::seconds(2));
+                    }
+                    refresh_spreads(&mut chart, &mut spreads, true);
+                    let last = chart.bars(id).last().unwrap();
+                    let closes: Vec<_> = spreads[0]
+                        .feeds
+                        .iter()
+                        .map(|feed| {
+                            feed.snapshot(timeframe, chart.bar_clock(), extended)
+                                .last()
+                                .unwrap()
+                                .close
+                        })
+                        .collect();
+                    assert!((last.close - (closes[0] - closes[1])).abs() < 1e-9);
+                    chart.set_data(id, Vec::new());
+                    refresh_spreads(&mut chart, &mut spreads, true);
+                    assert!(
+                        !chart.bars(id).is_empty(),
+                        "restore must reload cleared bars"
+                    );
                 }
-                assert!(
-                    !chart
-                        .drain_events()
-                        .any(|event| matches!(event, ChartEvent::DataLoaded { .. })),
-                    "unchanged spreads must not reload history"
-                );
-                for feed in &spreads[0].feeds {
-                    feed.set_paused(false);
-                    feed.advance(feed.now() + chrono::TimeDelta::seconds(2));
-                }
-                refresh_spreads(&mut chart, &mut spreads, true);
-                let last = chart.bars(id).last().unwrap();
-                let closes: Vec<_> = spreads[0]
-                    .feeds
-                    .iter()
-                    .map(|feed| {
-                        feed.snapshot(timeframe, chart.bar_clock(), extended)
-                            .last()
-                            .unwrap()
-                            .close
-                    })
-                    .collect();
-                assert!((last.close - (closes[0] - closes[1])).abs() < 1e-9);
-                chart.set_data(id, Vec::new());
-                refresh_spreads(&mut chart, &mut spreads, true);
-                assert!(
-                    !chart.bars(id).is_empty(),
-                    "restore must reload cleared bars"
-                );
             }
         }
         for time in [chrono::DateTime::UNIX_EPOCH, spreads[0].feeds[0].now()] {
