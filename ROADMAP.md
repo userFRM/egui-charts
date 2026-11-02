@@ -222,7 +222,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 - [x] Top toolbar with symbol search, comparison, interval/type selection, study, alert, replay, history, settings, save and layout actions.
 - [x] Symbol search supports text, type, exchange and source filters, pagination, keyboard navigation and host results; the terminal loads comparisons from the chart feed on shared percentage scales, separate scales or panes, and displays arithmetic spreads as candles in their own panes.
-- [x] Timeframe toolbar provides range presets, go-to-date, time zone, regular/extended session and adjustment requests.
+- [x] Timeframe toolbar provides range presets, go-to-date, time zone, regular/extended session and adjustment requests. `Terminal` fits ranges to loaded history, navigates dates in the chart time zone, switches intervals and sessions, restores interval favourites, and requests host-supplied dividend adjustment.
 - [x] Drawing toolbar categories, cursor modes, snapping, repeated placement, locking and template actions; favourites can be stored.
 - [x] Chart settings apply backgrounds, grids, candle parts and colours, previous-close colouring, crosshair styling, session shading and watermarks.
 - [x] Status settings control supplied logos, last day change and study backdrops; legend text and controls have opaque backing over profiles; Symbol settings request dividend-adjusted history from the host.
@@ -230,14 +230,14 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Editable shortcut bindings are shared by chart input, help and menu hints; quick search uses a command palette.
 - [x] Watchlists support named lists, sections, sorting, row reordering, flags, symbol navigation and text import/export.
 - [x] Feed-backed panels render symbol details, news, calendars, hotlists, screener tables and grouped market heatmaps; `FinancialsPanel` charts and tabulates supplied financial figures.
-- [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them. `Terminal` also runs the widget bar and side panels, persists watchlists, routes panel symbol selections, derives performance and seasonality from chart bars, and opens host-fed profile cards. It also handles comparisons, spread selection and host-supplied dividend adjustment, and runs multi-chart grids, layout tabs, saved layouts, favourites, autosave and Ctrl+S. Remaining action groups and the demo migration are unfinished.
+- [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them. `Terminal` also runs the widget bar and side panels, persists watchlists, routes panel symbol selections, derives performance and seasonality from chart bars, and opens host-fed profile cards. It also handles time controls, comparisons, spread selection and host-supplied dividend adjustment, and runs multi-chart grids, layout tabs, saved layouts, favourites, autosave and Ctrl+S. Remaining action groups and the demo migration are unfinished.
 - [ ] Provide a shared docked tab container for account, strategy report, study editor and replay-trading surfaces.
 - [ ] Open the drawing toolbar's colour popup from a visible control and render its saved favourites bar.
 - [ ] Persist and restore indicator favourites in the assembled UI.
 - [ ] Show and route the standalone floating selection toolbar's settings, duplicate, lock, visibility, delete and colour actions.
 - [ ] Connect the standalone quick settings menu, its scale-settings action and all of its configuration fields.
 - [ ] Handle the series context menu's Copy price action.
-- [ ] Complete default interval-entry, rectangle-tool and selected-chart-maximise shortcut routing.
+- [ ] Complete default rectangle-tool and selected-chart-maximise shortcut routing. Interval entry and go-to-date shortcuts run in `Terminal`.
 - [ ] Add main-symbol legend controls for visibility, settings and removal.
 - [x] Watchlists duplicate lists, filter flags, add symbols from the chart menu and open an advanced view in the terminal. The host supplies its earnings, dividends and headlines.
 
