@@ -449,6 +449,8 @@ mod tests {
                             pane,
                             &ChartView {
                                 price_formatter: None,
+                                time_formatter: None,
+                                bar_seconds: 0,
                                 instrument: None,
                                 bars,
                                 revision: 0,
@@ -610,6 +612,8 @@ mod tests {
                 ctx.run_ui(RawInput::default(), |ui| {
                     let view = ChartView {
                         price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
                         instrument: None,
                         bars: &[],
                         revision: 0,
@@ -694,6 +698,8 @@ mod tests {
                 ctx.set_transform_layer(ui.layer_id(), layer);
                 let view = ChartView {
                     price_formatter: None,
+                    time_formatter: None,
+                    bar_seconds: 0,
                     instrument: None,
                     bars: &[],
                     revision: 0,

@@ -279,6 +279,8 @@ mod tests {
             instrument.price_decimals = decimals;
             let view = ChartView {
                 price_formatter: formatter,
+                time_formatter: None,
+                bar_seconds: 0,
                 instrument: (tick_size.is_some() || decimals.is_some()).then_some(&instrument),
                 bars: &[],
                 revision: 0,

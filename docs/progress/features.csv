@@ -81,7 +81,7 @@ Builder API,Widget API and customization,Chart without toolbars,done,library,Car
 Builder API,Widget API and customization,Context menu customisation,done,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs,
 Builder API,Widget API and customization,Create and edit drawings from code,done,library,src/widget/drawing_api.rs;src/widget/anchors.rs;src/drawings/manager/mod.rs;src/widget/mod.rs;src/drawings/manager/edit.rs,
 Builder API,Widget API and customization,Create and remove studies,done,library,src/widget/series/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/widget/pane/mod.rs,
-Builder API,Widget API and customization,Custom date and time formatters,done,library,src/scales/time_formatter.rs;src/widget/format.rs,
+Builder API,Widget API and customization,Custom date and time formatters,done,library,src/scales/time_formatter.rs;src/widget/format.rs;src/widget/tool_interaction/mod.rs;src/drawings/rendering/trading/forecast.rs,
 Builder API,Widget API and customization,Custom price formatter,done,library,src/widget/tool_interaction/mod.rs;src/drawings/rendering/mod.rs;src/widget/format.rs,
 Builder API,Widget API and customization,Export chart data,done,library,src/widget/export.rs;src/model/bar/io.rs,
 Builder API,Widget API and customization,Hide or show the main series,done,library,src/widget/series/mod.rs;src/widget/marks.rs;src/widget/frame/mod.rs,

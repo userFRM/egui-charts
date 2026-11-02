@@ -2482,6 +2482,8 @@ impl Chart {
             }
         }
 
+        let bar_seconds = self.time_label_seconds();
+
         // Handle drawing tools
         #[cfg(feature = "drawings")]
         {
@@ -2502,6 +2504,7 @@ impl Chart {
                 &price_map,
                 &painter,
                 &timescale,
+                (time_scale.as_ref(), bar_seconds),
             );
 
             // Render eraser highlight if in eraser mode
@@ -2515,8 +2518,6 @@ impl Chart {
         }
         self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::Top);
         self.paint_primitives(&painter, &coords, PrimitivePass::Above);
-
-        let bar_seconds = self.time_label_seconds();
 
         // Placed after the drawings handled this frame's input, so a dragged line's tags move
         // with it in the same frame.
