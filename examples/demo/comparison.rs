@@ -12,6 +12,7 @@ pub(super) struct Spread {
     expression: SymbolExpression,
     id: SeriesId,
     feeds: Vec<Arc<LiveFeed>>,
+    snapshot: Option<Vec<super::live::ComparisonSnapshot>>,
 }
 
 impl Spread {
@@ -26,12 +27,14 @@ impl Spread {
             expression,
             id,
             feeds,
+            snapshot: None,
         }
     }
 
     pub(super) fn copy(&self, chart: &mut Chart, source: &Chart) -> Option<Self> {
         Some(Self {
             expression: self.expression.clone(),
+            snapshot: None,
             id: copy_series(chart, source, self.id)?,
             feeds: self
                 .feeds
@@ -251,14 +254,22 @@ pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused:
         if chart.series_order(spread.id).is_none() {
             continue;
         }
+        for feed in &spread.feeds {
+            feed.set_paused(paused);
+            feed.advance(chrono::Utc::now());
+        }
+        let key: Vec<_> = spread
+            .feeds
+            .iter()
+            .map(|feed| feed.comparison_snapshot(chart, spread.id))
+            .collect();
+        if spread.snapshot.as_ref() == Some(&key) {
+            continue;
+        }
         let histories: Vec<_> = spread
             .feeds
             .iter()
-            .map(|feed| {
-                feed.set_paused(paused);
-                feed.advance(chrono::Utc::now());
-                feed.snapshot(timeframe, chart.bar_clock(), chart.extended_hours())
-            })
+            .map(|feed| feed.snapshot(timeframe, chart.bar_clock(), chart.extended_hours()))
             .collect();
         let symbols = spread.expression.symbols();
         let history = |symbol: &str| {
@@ -266,7 +277,26 @@ pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused:
             Some(&histories[at][..])
         };
         if let Ok(bars) = spread.expression.bars(history) {
-            chart.set_data(spread.id, bars);
+            let loaded = chart.bars(spread.id);
+            let tail = loaded.len().saturating_sub(1);
+            if !loaded.is_empty()
+                && chart.replay_time().is_none()
+                && bars.len() >= loaded.len()
+                && bars[..tail] == loaded[..tail]
+            {
+                for bar in bars.into_iter().skip(tail) {
+                    chart.update(spread.id, bar);
+                }
+            } else {
+                chart.set_data(spread.id, bars);
+            }
+            spread.snapshot = Some(
+                spread
+                    .feeds
+                    .iter()
+                    .map(|feed| feed.comparison_snapshot(chart, spread.id))
+                    .collect(),
+            );
         }
     }
 }
@@ -547,6 +577,87 @@ mod tests {
                     .drain_events()
                     .any(|event| matches!(event, ChartEvent::DataLoaded { .. })),
                 "an empty replay window must not reload retained history"
+            );
+        }
+    }
+
+    /// Paused spreads leave loaded history intact, but trades, view changes and restoration
+    /// still update it. Replay moves window the retained bars without rebuilding the expression.
+    #[test]
+    fn unchanged_spreads_do_not_reload_history() {
+        use egui_charts::model::BarData;
+        use egui_charts::widget::ChartEvent;
+
+        let mut chart = Chart::new(BarData::new());
+        chart.set_timeframe(Timeframe::Min1);
+        let id = chart.add_comparison("AAPL-MSFT", egui::Color32::BLUE);
+        let mut spreads = vec![Spread::new(
+            SymbolExpression::parse("AAPL-MSFT").unwrap(),
+            id,
+        )];
+        refresh_spreads(&mut chart, &mut spreads, true);
+        assert!(!chart.bars(id).is_empty());
+        for timeframe in [Timeframe::Min1, Timeframe::Min5] {
+            chart.set_timeframe(timeframe);
+            for extended in [false, true] {
+                chart.set_extended_hours(extended);
+                refresh_spreads(&mut chart, &mut spreads, true);
+                let histories: Vec<_> = spreads[0]
+                    .feeds
+                    .iter()
+                    .map(|feed| feed.snapshot(timeframe, chart.bar_clock(), extended))
+                    .collect();
+                let expected = spreads[0]
+                    .expression
+                    .bars(|symbol| Some(&histories[usize::from(symbol == "MSFT")][..]))
+                    .unwrap();
+                assert_eq!(chart.bars(id), expected);
+                chart.drain_events().for_each(drop);
+                for _ in 0..3 {
+                    refresh_spreads(&mut chart, &mut spreads, true);
+                }
+                assert!(
+                    !chart
+                        .drain_events()
+                        .any(|event| matches!(event, ChartEvent::DataLoaded { .. })),
+                    "unchanged spreads must not reload history"
+                );
+                for feed in &spreads[0].feeds {
+                    feed.set_paused(false);
+                    feed.advance(feed.now() + chrono::TimeDelta::seconds(2));
+                }
+                refresh_spreads(&mut chart, &mut spreads, true);
+                let last = chart.bars(id).last().unwrap();
+                let closes: Vec<_> = spreads[0]
+                    .feeds
+                    .iter()
+                    .map(|feed| {
+                        feed.snapshot(timeframe, chart.bar_clock(), extended)
+                            .last()
+                            .unwrap()
+                            .close
+                    })
+                    .collect();
+                assert!((last.close - (closes[0] - closes[1])).abs() < 1e-9);
+                chart.set_data(id, Vec::new());
+                refresh_spreads(&mut chart, &mut spreads, true);
+                assert!(
+                    !chart.bars(id).is_empty(),
+                    "restore must reload cleared bars"
+                );
+            }
+        }
+        for time in [chrono::DateTime::UNIX_EPOCH, spreads[0].feeds[0].now()] {
+            chart.set_replay_time(Some(time));
+            chart.drain_events().for_each(drop);
+            refresh_spreads(&mut chart, &mut spreads, true);
+            chart.drain_events().for_each(drop);
+            refresh_spreads(&mut chart, &mut spreads, true);
+            assert!(
+                !chart
+                    .drain_events()
+                    .any(|event| matches!(event, ChartEvent::DataLoaded { .. })),
+                "a replay window must not repeatedly rebuild its source"
             );
         }
     }

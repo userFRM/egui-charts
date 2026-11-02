@@ -43,7 +43,7 @@ pub(super) struct LiveFeed(
 
 /// The inputs of the last comparison history a feed loaded; an unchanged key skips the reload.
 #[derive(PartialEq, Eq)]
-struct ComparisonSnapshot {
+pub(super) struct ComparisonSnapshot {
     timeframe: Timeframe,
     clock: BarClock,
     extended_hours: bool,
@@ -226,8 +226,25 @@ impl LiveFeed {
         let timeframe = chart.timeframe().unwrap_or(Timeframe::Hour1);
         let clock = chart.bar_clock();
         let extended_hours = chart.extended_hours();
+        let mut key = self.comparison_snapshot(chart, id);
         let sim = self.state();
-        let mut key = ComparisonSnapshot {
+        if sim.comparison_snapshot.as_ref() == Some(&key) {
+            return;
+        }
+        drop(sim);
+        let bars = self.snapshot(timeframe, clock, extended_hours);
+        chart.set_data(id, bars);
+        key.empty = chart.bars(id).is_empty();
+        self.state().comparison_snapshot = Some(key);
+    }
+
+    /// The source and view inputs shared by ordinary comparisons and arithmetic spreads.
+    pub(super) fn comparison_snapshot(&self, chart: &Chart, id: SeriesId) -> ComparisonSnapshot {
+        let timeframe = chart.timeframe().unwrap_or(Timeframe::Hour1);
+        let clock = chart.bar_clock();
+        let extended_hours = chart.extended_hours();
+        let sim = self.state();
+        ComparisonSnapshot {
             timeframe,
             clock: clock.clone(),
             extended_hours,
@@ -240,15 +257,7 @@ impl LiveFeed {
                 clock.bar_open(sim.now)
             },
             empty: chart.bars(id).is_empty(),
-        };
-        if sim.comparison_snapshot.as_ref() == Some(&key) {
-            return;
         }
-        drop(sim);
-        let bars = self.snapshot(timeframe, clock, extended_hours);
-        chart.set_data(id, bars);
-        key.empty = chart.bars(id).is_empty();
-        self.state().comparison_snapshot = Some(key);
     }
 
     pub(super) fn snapshot(
