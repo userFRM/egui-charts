@@ -1,6 +1,6 @@
 //! Chart history records UI actions, not ordinary host API calls.
 
-use super::price_series::{PriceSeries, SeriesOptions};
+use super::series::{PriceSeries, SeriesOptions};
 use super::{Chart, ChartElementId, ChartEvent, SeriesId};
 use crate::config::{ChartConfig, ChartOptions};
 #[cfg(feature = "drawings")]
@@ -47,12 +47,36 @@ struct Action {
     scale: Option<PriceScale>,
     /// Scales that differ from the chart's, by assignment; `None` where the chart has none.
     series_scales: std::collections::HashMap<crate::model::SeriesScale, Option<PriceScale>>,
-    panes: Option<super::pane_layout::PaneLayout>,
+    panes: Option<super::pane::PaneLayout>,
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
     studies: Vec<StudyChange>,
     #[cfg(feature = "drawings")]
     drawings: HistoryService,
+}
+
+impl Action {
+    fn is_empty(&self) -> bool {
+        #[cfg(feature = "drawings")]
+        let drawings_changed = self.drawings.can_undo();
+        #[cfg(not(feature = "drawings"))]
+        let drawings_changed = false;
+        self.symbol.is_none()
+            && self.series.is_none()
+            && self.view.is_none()
+            && self.config.is_none()
+            && self.main_series.is_none()
+            && self.main_series_visible.is_none()
+            && self.price_targets_visible.is_none()
+            && self.options.is_none()
+            && self.scale.is_none()
+            && self.series_scales.is_empty()
+            && self.panes.is_none()
+            && self.chart_type.is_none()
+            && self.interval.is_none()
+            && self.studies.is_empty()
+            && !drawings_changed
+    }
 }
 
 /// The added series of one state of the chart: their draw order, display settings and
@@ -182,9 +206,23 @@ impl ChartHistory {
         drawings: &mut DrawingManager,
         history: Option<HistoryService>,
     ) {
+        let placement = drawings.finished_text_placement.take();
         if let Some(mut history) = history {
             drawings.swap_history(&mut history);
-            if history.can_undo() {
+            if let Some(id) = placement
+                && let Some(index) = self.undo.iter().rposition(|action| action.drawings.can_undo())
+                && let drawing = drawings.drawings.iter().find(|drawing| drawing.id == id)
+                // Cancelling empty text must not undo unrelated chart settings first.
+                && (drawing.is_none() || index + 1 == self.undo.len())
+                && self.undo[index].drawings.merge_text_placement(id, &mut history, drawing)
+            {
+                if self.undo[index].is_empty() {
+                    self.undo.remove(index);
+                }
+                self.edits += 1;
+                self.drawing_edits += 1;
+                self.redo.clear();
+            } else if history.can_undo() {
                 self.push(Action {
                     drawings: history,
                     ..Action::default()
@@ -387,26 +425,7 @@ impl Chart {
                 _ => true,
             },
         );
-        #[cfg(feature = "drawings")]
-        let drawings_changed = action.drawings.can_undo();
-        #[cfg(not(feature = "drawings"))]
-        let drawings_changed = false;
-        if action.symbol.is_none()
-            && action.series.is_none()
-            && action.view.is_none()
-            && action.config.is_none()
-            && action.main_series.is_none()
-            && action.main_series_visible.is_none()
-            && action.price_targets_visible.is_none()
-            && action.options.is_none()
-            && action.scale.is_none()
-            && action.series_scales.is_empty()
-            && action.panes.is_none()
-            && action.chart_type.is_none()
-            && action.interval.is_none()
-            && action.studies.is_empty()
-            && !drawings_changed
-        {
+        if action.is_empty() {
             return;
         }
         // Edits after a symbol change belong to the new symbol, so they are undone first.
@@ -1600,7 +1619,7 @@ mod tests {
     #[test]
     fn series_alert_styles_stay_distinct_through_undo_and_snapshot() {
         let mut chart = chart(&[1.0], &[2.0]);
-        let other = chart.add_series(crate::widget::price_series::SeriesOptions::default());
+        let other = chart.add_series(crate::widget::series::SeriesOptions::default());
         let main_alerts = SeriesAlerts {
             visible: false,
             labels: false,

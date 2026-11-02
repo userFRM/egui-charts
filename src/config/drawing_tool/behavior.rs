@@ -76,6 +76,9 @@ impl DrawingToolType {
                 | Self::Path
                 | Self::CyclicLines
                 | Self::SineLine
+                // Text boxes are coloured with their background, in the Text tab.
+                | Self::TextLabel
+                | Self::AnchoredText
                 | Self::AnchoredNote
                 | Self::FontIcon
                 | Self::ArrowMarkUp

@@ -1,6 +1,11 @@
 //! A signal service that finds order-flow events in the executions and depth the host streams.
 
+mod absorption;
 mod big_trades;
+mod depth;
+mod icebergs;
+mod liquidity;
+mod stops;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
@@ -11,8 +16,17 @@ use super::{Events, SignalEvent, Signals};
 use crate::data::depth::Book;
 use crate::data::{FeedError, MarketEvent, OrderQueue};
 use crate::model::{BarClock, Instrument, Signal, Tick, Timeframe, TimezoneId};
+use absorption::Absorption;
+pub use absorption::AbsorptionRule;
 pub use big_trades::BigTradeRule;
 use big_trades::BigTrades;
+use depth::Depth;
+pub use icebergs::IcebergRule;
+use icebergs::Icebergs;
+use liquidity::Liquidity;
+pub use liquidity::LiquidityRule;
+pub use stops::{StopRunRule, StopSweepRule};
+use stops::{StopRuns, StopSweeps};
 
 /// Detections of a symbol kept for the next subscription, most recent last.
 const RETAINED: usize = 5_000;
@@ -78,6 +92,26 @@ pub enum DetectionKind {
     BigTrade,
     /// The prices a large aggressive execution traded at, as a zone: see [`BigTradeRule`].
     BigTradeZone,
+    /// A rapid sequence of same-side aggressive fills.
+    StopRun,
+    /// A closed bar meeting the stop sweep rule.
+    StopSweep,
+    /// Repeated visible refills at one price, exact or estimated.
+    Iceberg,
+    /// Aggressive volume absorbed at an inside price.
+    Absorption,
+    /// A large resting level followed from its arrival.
+    LargeLiquidity,
+    /// A resting level rejecting aggression as the inside moves away.
+    Wall,
+    /// A large level traded away before price passes it.
+    LiquiditySweep,
+    /// A large level withdrawn from the book.
+    PulledLiquidity,
+    /// A large individual order quickly withdrawn with little execution.
+    Spoofing,
+    /// Size added at one nearby price in a single update.
+    FreshLiquidity,
 }
 
 impl DetectionKind {
@@ -86,6 +120,16 @@ impl DetectionKind {
         match self {
             Self::BigTrade => "Big trades",
             Self::BigTradeZone => "Big trade zones",
+            Self::StopRun => "Stop runs",
+            Self::StopSweep => "Stop sweeps",
+            Self::Iceberg => "Icebergs",
+            Self::Absorption => "Absorption",
+            Self::LargeLiquidity => "Large liquidity",
+            Self::Wall => "Walls",
+            Self::LiquiditySweep => "Liquidity sweeps",
+            Self::PulledLiquidity => "Pulled liquidity",
+            Self::Spoofing => "Spoofing",
+            Self::FreshLiquidity => "Fresh liquidity",
         }
     }
 }
@@ -96,6 +140,16 @@ impl DetectionKind {
 pub struct DetectorSettings {
     /// Large aggressive executions and their zones.
     pub big_trades: Detector<BigTradeRule>,
+    /// Rapid same-side execution bursts.
+    pub stop_runs: Detector<StopRunRule>,
+    /// Directional footprint bars with exceptional volume.
+    pub stop_sweeps: Detector<StopSweepRule>,
+    /// Exact order refills and estimates from aggregate depth.
+    pub icebergs: Detector<IcebergRule>,
+    /// Aggressive volume absorbed at a resting inside price.
+    pub absorption: Detector<AbsorptionRule>,
+    /// Large resting levels, walls, sweeps, pulls and fresh size.
+    pub liquidity: Detector<LiquidityRule>,
 }
 
 /// The settings of one detector.
@@ -154,11 +208,17 @@ struct Tracked {
     tick: f64,
     book: Book,
     orders: Option<OrderQueue>,
+    depth: Depth,
+    icebergs: Icebergs,
+    absorption: Absorption,
+    liquidity: Liquidity,
     /// Ids of the latest trades, oldest first, and the same as a set.
     trade_ids: VecDeque<u64>,
     seen_ids: HashSet<u64>,
     detections: VecDeque<Signal>,
     big_trades: BigTrades,
+    stop_runs: StopRuns,
+    stop_sweeps: StopSweeps,
 }
 
 impl Default for OrderFlowDetectors {
@@ -224,15 +284,27 @@ impl OrderFlowDetectors {
         self.lock().settings.clone()
     }
 
-    /// Replaces the settings of every detector from the next event on. Detections already made
-    /// stay. Panics if a fixed threshold is not positive and finite.
+    /// Replaces the settings of every detector from the next event on. Completed detections
+    /// stay; a disabled liquidity tracker drops its unfinished zones. Panics if a fixed
+    /// threshold is not positive and finite, or the refill count is zero.
     pub fn set_settings(&self, settings: DetectorSettings) {
-        if let Threshold::Fixed(size) = settings.big_trades.rule.threshold {
-            assert!(
-                size.is_finite() && size > 0.0,
-                "fixed threshold must be positive and finite"
-            );
+        for threshold in [
+            settings.big_trades.rule.threshold,
+            settings.absorption.rule.threshold,
+            settings.liquidity.rule.threshold,
+            settings.liquidity.rule.fresh_threshold,
+        ] {
+            if let Threshold::Fixed(size) = threshold {
+                assert!(
+                    size.is_finite() && size > 0.0,
+                    "fixed threshold must be positive and finite"
+                );
+            }
         }
+        assert!(
+            settings.icebergs.rule.refills > 0,
+            "iceberg refills must be positive"
+        );
         self.lock().settings = settings;
     }
 
@@ -251,33 +323,115 @@ impl OrderFlowDetectors {
         let mut out = Vec::new();
         // A loss clears the book, which waits for the next snapshot, and is not a detection.
         match event {
-            MarketEvent::Trade(trade) => tracked.trade(trade, settings, &mut out),
+            MarketEvent::Trade(trade) => tracked.trade(trade, settings, true, &mut out),
             MarketEvent::Quote(_) => {}
             MarketEvent::DepthSnapshot { sequence, book } => {
-                tracked.orders = None;
-                let _ = tracked.book.snapshot(*sequence, book.clone());
+                if tracked.orders.take().is_some() {
+                    tracked.book = Book::new(Some(tracked.tick));
+                    tracked.lose_depth(&mut out);
+                }
+                if tracked.book.snapshot(*sequence, book.clone()).is_ok() {
+                    tracked.update_depth(
+                        Depth::from_book(&tracked.book, tracked.tick),
+                        time,
+                        true,
+                        None,
+                        settings,
+                        &mut out,
+                    );
+                } else {
+                    tracked.lose_depth(&mut out);
+                }
             }
             MarketEvent::DepthDelta { sequence, book } => {
-                tracked.orders = None;
-                let _ = tracked.book.delta(*sequence, book);
+                if tracked.orders.take().is_some() {
+                    tracked.book = Book::new(Some(tracked.tick));
+                    tracked.lose_depth(&mut out);
+                }
+                let replayed = tracked
+                    .book
+                    .sequence()
+                    .is_some_and(|last| *sequence <= last);
+                if tracked.book.delta(*sequence, book).is_err() {
+                    tracked.lose_depth(&mut out);
+                } else if !replayed {
+                    tracked.update_depth(
+                        Depth::from_book(&tracked.book, tracked.tick),
+                        time,
+                        false,
+                        Some(book),
+                        settings,
+                        &mut out,
+                    );
+                }
             }
             MarketEvent::OrderSnapshot { sequence, orders } => {
-                let tick = Some(tracked.tick);
-                let queue = tracked.orders.get_or_insert_with(|| OrderQueue::new(tick));
-                let _ = queue.set_snapshot(*sequence, time, orders.clone());
-                for trade in queue.take_executions() {
-                    tracked.trade(&trade, settings, &mut out);
+                tracked.lose_depth(&mut out);
+                let queue = tracked
+                    .orders
+                    .get_or_insert_with(|| OrderQueue::new(Some(tracked.tick)));
+                let valid = queue.set_snapshot(*sequence, time, orders.clone()).is_ok();
+                let trades = queue.take_executions();
+                let depth = valid.then(|| Depth::from_orders(queue, tracked.tick));
+                for trade in trades {
+                    tracked.trade(&trade, settings, false, &mut out);
+                }
+                if let Some(depth) = depth {
+                    tracked.update_depth(depth, time, true, None, settings, &mut out);
                 }
             }
             MarketEvent::Order { sequence, event } => {
-                let tick = Some(tracked.tick);
-                let queue = tracked.orders.get_or_insert_with(|| OrderQueue::new(tick));
-                let _ = queue.event(*sequence, time, event.clone());
-                for trade in queue.take_executions() {
-                    tracked.trade(&trade, settings, &mut out);
+                let queue = tracked
+                    .orders
+                    .get_or_insert_with(|| OrderQueue::new(Some(tracked.tick)));
+                let replayed = queue.sequence().is_some_and(|last| *sequence <= last);
+                let id = match event {
+                    crate::data::OrderEvent::Add(order) => order.id,
+                    crate::data::OrderEvent::Modify { id, .. }
+                    | crate::data::OrderEvent::Cancel { id }
+                    | crate::data::OrderEvent::Execute { id, .. } => *id,
+                };
+                let before = queue.orders().find(|order| order.id == id).cloned();
+                let valid = queue.event(*sequence, time, event.clone()).is_ok();
+                let trades = queue.take_executions();
+                if !valid {
+                    tracked.lose_depth(&mut out);
+                } else if !replayed {
+                    let depth = Depth::from_orders(queue, tracked.tick);
+                    for trade in trades {
+                        tracked.trade(&trade, settings, true, &mut out);
+                    }
+                    tracked.icebergs.order(
+                        event,
+                        before.as_ref(),
+                        time,
+                        tracked.tick,
+                        &settings.icebergs,
+                        &mut out,
+                    );
+                    tracked.liquidity.order(
+                        event,
+                        before.as_ref(),
+                        &depth,
+                        time,
+                        tracked.tick,
+                        &settings.liquidity,
+                        &mut out,
+                    );
+                    tracked.update_depth(depth, time, false, None, settings, &mut out);
                 }
             }
         }
+        tracked.absorption.advance(
+            time,
+            tracked.tick,
+            &tracked.depth,
+            &settings.absorption,
+            &mut out,
+        );
+        tracked
+            .stop_sweeps
+            .advance(time, settings.stop_sweeps.enabled, &mut out);
         deliver(Some(tracked), subscriptions.get_mut(symbol), out);
     }
 
@@ -296,7 +450,7 @@ impl OrderFlowDetectors {
         };
         let mut out = Vec::new();
         for trade in trades {
-            tracked.trade(trade, settings, &mut out);
+            tracked.trade(trade, settings, false, &mut out);
         }
         deliver(Some(tracked), subscriptions.get_mut(symbol), out);
     }
@@ -308,7 +462,7 @@ impl Signals for OrderFlowDetectors {
         let State {
             symbols,
             subscriptions,
-            ..
+            settings,
         } = &mut *state;
         let new = !subscriptions.contains_key(symbol);
         let subscription = subscriptions
@@ -318,6 +472,20 @@ impl Signals for OrderFlowDetectors {
                 streams: Vec::new(),
             });
         if let Some(tracked) = symbols.get_mut(symbol) {
+            if new || subscription.timeframe != timeframe {
+                let mut changes: Vec<_> = tracked
+                    .detections
+                    .iter()
+                    .filter(|signal| signal.category == DetectionKind::StopSweep.category())
+                    .map(|signal| SignalEvent::Remove(signal.id.clone()))
+                    .collect();
+                tracked.stop_sweeps.set_clock(
+                    clock(&tracked.instrument, timeframe),
+                    &settings.stop_sweeps,
+                    &mut changes,
+                );
+                deliver(Some(tracked), Some(subscription), changes);
+            }
             for signal in &tracked.detections {
                 events.push(SignalEvent::Upsert(signal.clone()));
             }
@@ -341,13 +509,24 @@ impl State {
             tick,
             book: Book::new(Some(tick)),
             orders: None,
+            depth: Depth::default(),
+            icebergs: Icebergs::default(),
+            absorption: Absorption::default(),
+            liquidity: Liquidity::default(),
             trade_ids: VecDeque::new(),
             seen_ids: HashSet::new(),
             detections: VecDeque::new(),
             big_trades: BigTrades::new(tick, instrument.volume_decimals),
+            stop_runs: StopRuns::default(),
+            stop_sweeps: StopSweeps::new(tick),
         };
         let timeframe = subscription.as_ref().map(|s| s.timeframe);
         (tracked.big_trades).set_clock(timeframe.and_then(|tf| clock(instrument, tf)));
+        tracked.stop_sweeps.set_clock(
+            timeframe.and_then(|tf| clock(instrument, tf)),
+            &self.settings.stop_sweeps,
+            &mut Vec::new(),
+        );
         if self
             .symbols
             .insert(instrument.symbol.clone(), tracked)
@@ -359,7 +538,53 @@ impl State {
 }
 
 impl Tracked {
-    fn trade(&mut self, trade: &Tick, settings: &DetectorSettings, out: &mut Vec<SignalEvent>) {
+    fn lose_depth(&mut self, out: &mut Vec<SignalEvent>) {
+        self.depth = Depth::default();
+        self.icebergs.clear();
+        self.absorption.clear();
+        self.liquidity.clear(out);
+    }
+
+    fn update_depth(
+        &mut self,
+        depth: Depth,
+        time: DateTime<Utc>,
+        snapshot: bool,
+        changes: Option<&crate::model::OrderBook>,
+        settings: &DetectorSettings,
+        out: &mut Vec<SignalEvent>,
+    ) {
+        self.absorption.advance(
+            time.checked_sub_signed(chrono::TimeDelta::nanoseconds(1))
+                .unwrap_or(time),
+            self.tick,
+            &self.depth,
+            &settings.absorption,
+            out,
+        );
+        self.absorption.update(&self.depth, &depth);
+        self.liquidity.update(
+            &self.depth,
+            &depth,
+            time,
+            self.tick,
+            snapshot,
+            changes,
+            &settings.liquidity,
+            out,
+        );
+        self.depth = depth;
+        self.icebergs
+            .update(&self.depth, time, self.tick, &settings.icebergs, out);
+    }
+
+    fn trade(
+        &mut self,
+        trade: &Tick,
+        settings: &DetectorSettings,
+        live: bool,
+        out: &mut Vec<SignalEvent>,
+    ) {
         if !trade.price.is_finite() || !trade.size.is_finite() || trade.size < 0.0 {
             return;
         }
@@ -374,6 +599,21 @@ impl Tracked {
                 self.seen_ids.remove(&old);
             }
         }
+        if live {
+            self.icebergs.trade(trade, self.tick, &self.depth);
+            self.absorption
+                .trade(trade, self.tick, &self.depth, &settings.absorption, out);
+            self.liquidity.trade(
+                trade,
+                self.tick,
+                settings.liquidity.enabled,
+                &self.depth,
+                out,
+            );
+        }
+        self.stop_runs
+            .trade(trade, self.tick, settings.stop_runs.enabled, out);
+        self.stop_sweeps.trade(trade, &settings.stop_sweeps, out);
         let big = &settings.big_trades;
         (self.big_trades).trade(trade, &big.rule, big.enabled, out);
     }
@@ -399,6 +639,7 @@ fn deliver(
                                 && let Some(old) = detections.pop_front()
                             {
                                 tracked.big_trades.forget(&old.id);
+                                tracked.liquidity.forget(&old.id);
                                 delivered.push(SignalEvent::Remove(old.id));
                             }
                             detections.push_back(signal);
@@ -503,6 +744,11 @@ mod tests {
             instrument.tick_size = Some(0.25);
             detectors.track(&instrument).unwrap();
             let mut settings = DetectorSettings::default();
+            settings.icebergs.enabled = false;
+            settings.absorption.enabled = false;
+            settings.liquidity.enabled = false;
+            settings.stop_runs.enabled = false;
+            settings.stop_sweeps.enabled = false;
             if let Some(size) = threshold {
                 settings.big_trades.rule.threshold = Threshold::Fixed(size);
             }
@@ -832,5 +1078,1085 @@ mod tests {
 
         host.subscribe();
         assert_eq!(host.events(), detections);
+
+        let host = Host::new(Some(10.0));
+        let trade = fill(2, 100.0, 12.0, OrderSide::Buy, None).with_id(7);
+        assert!(
+            host.push(MarketEvent::Order {
+                sequence: 2,
+                event: OrderEvent::Execute {
+                    id: 1,
+                    size: 12.0,
+                    trade: Some(trade.clone())
+                }
+            })
+            .is_empty()
+        );
+        assert!(
+            host.push(MarketEvent::Order {
+                sequence: 3,
+                event: OrderEvent::Cancel { id: 99 }
+            })
+            .is_empty()
+        );
+        let events = host.push(MarketEvent::OrderSnapshot {
+            sequence: 1,
+            orders: vec![RestingOrder::new(1, OrderSide::Sell, 100.0, 12.0)],
+        });
+        assert_eq!(
+            events,
+            [
+                marker(1, 2, 100.0, Direction::Up, "12"),
+                zone(1, 2, None, 99.875, 100.125)
+            ],
+            "the validated fill precedes the invalid cancel in the snapshot buffer"
+        );
+        assert!(
+            host.push(MarketEvent::Trade(trade)).is_empty(),
+            "the tape copy counts once"
+        );
+
+        let host = Host::new(Some(1_000.0));
+        let mut settings = host.detectors.settings();
+        settings.icebergs.enabled = true;
+        host.detectors.set_settings(settings);
+        host.push(MarketEvent::DepthDelta {
+            sequence: 2,
+            book: depth_book(&[], &[(100.0, 10.0)]),
+        });
+        host.push(MarketEvent::DepthSnapshot {
+            sequence: 1,
+            book: depth_book(&[], &[(100.0, 10.0)]),
+        });
+        host.push(MarketEvent::Trade(fill(
+            0,
+            100.0,
+            30.0,
+            OrderSide::Buy,
+            None,
+        )));
+        for sequence in [2, 3] {
+            let signals = of_kind(
+                host.push(MarketEvent::DepthDelta {
+                    sequence,
+                    book: depth_book(&[], &[(100.0, 10.0)]),
+                }),
+                "Icebergs",
+            );
+            assert_eq!(
+                signals.len(),
+                usize::from(sequence == 3),
+                "only a new book update confirms the retained level"
+            );
+        }
+    }
+
+    #[test]
+    fn stop_runs_require_a_fast_monotone_burst_and_distinct_known_aggressors() {
+        for (name, ids, gap, prices, known, expected) in [
+            (
+                "three aggressors",
+                vec![1, 1, 2, 2, 3],
+                20,
+                vec![400, 401, 401, 402, 403],
+                true,
+                true,
+            ),
+            (
+                "no ids",
+                vec![],
+                10,
+                vec![400, 401, 401, 402, 403],
+                true,
+                true,
+            ),
+            (
+                "one aggressor",
+                vec![1; 5],
+                10,
+                vec![400, 401, 401, 402, 403],
+                true,
+                false,
+            ),
+            (
+                "gap",
+                vec![],
+                21,
+                vec![400, 401, 401, 402, 403],
+                true,
+                false,
+            ),
+            (
+                "reversal",
+                vec![],
+                10,
+                vec![400, 401, 400, 402, 403],
+                true,
+                false,
+            ),
+            (
+                "unknown side",
+                vec![],
+                10,
+                vec![400, 401, 401, 402, 403],
+                false,
+                false,
+            ),
+        ] {
+            for side in [OrderSide::Buy, OrderSide::Sell] {
+                let host = Host::new(Some(1_000.0));
+                let mut settings = host.detectors.settings();
+                settings.stop_runs.enabled = true;
+                host.detectors.set_settings(settings);
+                let mut events = Vec::new();
+                for (i, price) in prices.iter().enumerate() {
+                    let price = if side == OrderSide::Buy {
+                        *price
+                    } else {
+                        800 - price
+                    };
+                    let mut fill = Tick::new(
+                        time(0) + chrono::TimeDelta::milliseconds(i as i64 * gap),
+                        price as f64 * 0.25,
+                        2.0,
+                        known.then_some(side),
+                    );
+                    fill.aggressor_order_id = ids.get(i).copied();
+                    events.extend(host.push(MarketEvent::Trade(fill)));
+                }
+                let signals: Vec<_> = events
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        SignalEvent::Upsert(signal) if signal.category == "Stop runs" => {
+                            Some(signal)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(signals.len(), usize::from(expected), "{name} {side:?}");
+                if let Some(signal) = signals.first() {
+                    assert_eq!(
+                        signal.tooltip.as_deref(),
+                        Some(format!("5 fills, 3 ticks, size 10, {} ms", gap * 4).as_str())
+                    );
+                    assert_eq!(
+                        signal.shape,
+                        SignalShape::Marker {
+                            time: time(0) + chrono::TimeDelta::milliseconds(gap * 4),
+                            price: Some(if side == OrderSide::Buy {
+                                100.75
+                            } else {
+                                99.25
+                            }),
+                            direction: stops::direction(side),
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stop_sweeps_use_closed_footprints_and_rebuild_on_interval_changes() {
+        for (name, buy_size, close, extra_low, extra_sell, expected) in [
+            ("qualifies", 10.0, 100.75, 0.0, 0.0, true),
+            ("ratio below three", 2.0, 100.75, 30.0, 0.0, false),
+            ("small body", 10.0, 100.25, 0.0, 0.0, false),
+            ("low volume", 3.0, 100.75, 0.0, 0.0, false),
+            ("opposite delta", 10.0, 100.75, 0.0, 40.0, false),
+            ("truncated executions", 10.0, 100.75, 0.0, 0.0, false),
+        ] {
+            let mut host = Host::new(Some(1_000.0));
+            let mut settings = host.detectors.settings();
+            settings.stop_sweeps.enabled = true;
+            host.detectors.set_settings(settings);
+            // Eleven preceding bars: the first may be partial, the next ten each have volume 20.
+            for minute in 0..11 {
+                host.push(MarketEvent::Trade(fill(
+                    minute * 60,
+                    100.0,
+                    20.0,
+                    OrderSide::Buy,
+                    None,
+                )));
+            }
+            // Bid at 100, 100.25, 100.5 is 1 each. Ask at the next three ticks is 10 each:
+            // diagonal ratios 10:1, volume 33, delta 27 (81.8%), full-range body, baseline 20.
+            for (second, price, size, side) in [
+                (660, 100.0, 1.0, OrderSide::Sell),
+                (661, 100.25, 1.0, OrderSide::Sell),
+                (662, 100.5, 1.0, OrderSide::Sell),
+                (663, 100.25, buy_size, OrderSide::Buy),
+                (664, 100.5, buy_size, OrderSide::Buy),
+                (665, 100.75, buy_size, OrderSide::Buy),
+                (665, 100.0, extra_low, OrderSide::Buy),
+                (665, 100.75, extra_sell, OrderSide::Sell),
+            ] {
+                host.push(MarketEvent::Trade(fill(second, price, size, side, None)));
+            }
+            if name == "truncated executions" {
+                let trades: Vec<_> =
+                    std::iter::repeat_n(fill(665, 100.25, 0.001, OrderSide::Buy, None), 100_001)
+                        .collect();
+                host.detectors.push_history("ES", &trades);
+                host.events();
+            }
+            host.push(MarketEvent::Trade(fill(
+                666,
+                close,
+                0.1,
+                OrderSide::Buy,
+                None,
+            )));
+            // An unclassified print advances feed time without entering the footprint history.
+            host.detectors.push(
+                "ES",
+                time(720),
+                &MarketEvent::Trade(Tick::new(time(720), 100.75, 1.0, None)),
+            );
+            let events = host.events();
+            let sweeps: Vec<_> = events
+                .into_iter()
+                .filter(|event| {
+                    matches!(event,
+                SignalEvent::Upsert(signal) if signal.category == "Stop sweeps")
+                })
+                .collect();
+            assert_eq!(sweeps.len(), usize::from(expected), "{name}");
+            let (listener, events) = Listener::new(&host.inbox, 1);
+            host.listeners.push(listener);
+            host.detectors.subscribe("ES", Timeframe::Min5, events);
+            let events = host.events();
+            assert!(
+                !events.iter().any(|event| matches!(event,
+                SignalEvent::Upsert(signal) if signal.category == "Stop sweeps")),
+                "{name}: rebuilt five-minute bars"
+            );
+            if expected {
+                assert!(events.iter().any(|event| matches!(event,
+                    SignalEvent::Remove(id) if id.0 == "stop-sweep-660000")));
+            }
+            host.listeners.clear();
+            host.subscribe();
+            assert_eq!(
+                of_kind(host.events(), "Stop sweeps").len(),
+                usize::from(expected),
+                "{name}: rebuilt back at one minute after the last sided execution"
+            );
+        }
+    }
+    fn depth_book(bids: &[(f64, f64)], asks: &[(f64, f64)]) -> OrderBook {
+        let levels = |rows: &[(f64, f64)]| {
+            rows.iter()
+                .map(|&(price, size)| OrderBookLevel {
+                    price,
+                    size,
+                    order_cnt: None,
+                })
+                .collect()
+        };
+        OrderBook {
+            ts: time(0),
+            symbol: "ES".into(),
+            bids: levels(bids),
+            asks: levels(asks),
+        }
+    }
+
+    fn of_kind(events: Vec<SignalEvent>, category: &str) -> Vec<Signal> {
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                SignalEvent::Upsert(signal) if signal.category == category => Some(signal),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn icebergs_count_exact_refills_and_confirm_aggregate_estimates_against_the_book() {
+        for exact in [false, true] {
+            for consumed in [false, true] {
+                let host = Host::new(Some(1_000.0));
+                let mut settings = host.detectors.settings();
+                settings.icebergs.enabled = true;
+                host.detectors.set_settings(settings);
+                let push = |ms, event| {
+                    host.detectors.push(
+                        "ES",
+                        time(0) + chrono::TimeDelta::milliseconds(ms),
+                        &event,
+                    );
+                    of_kind(host.events(), "Icebergs")
+                };
+                let initial = if exact {
+                    MarketEvent::OrderSnapshot {
+                        sequence: 1,
+                        orders: vec![RestingOrder::new(1, OrderSide::Sell, 100.0, 10.0)],
+                    }
+                } else {
+                    MarketEvent::DepthSnapshot {
+                        sequence: 1,
+                        book: depth_book(&[], &[(100.0, 10.0)]),
+                    }
+                };
+                push(0, initial);
+                let mut found = Vec::new();
+                for index in 0..3 {
+                    let mut trade = fill(0, 100.0, 10.0, OrderSide::Buy, None);
+                    trade.ts += chrono::TimeDelta::milliseconds(index * 20 + 10);
+                    trade.id = Some(index as u64 + 1);
+                    if exact {
+                        found.extend(push(
+                            index * 20 + 10,
+                            MarketEvent::Order {
+                                sequence: index as u64 * 2 + 2,
+                                event: OrderEvent::Execute {
+                                    id: index as u64 + 1,
+                                    size: 10.0,
+                                    trade: Some(trade.clone()),
+                                },
+                            },
+                        ));
+                        // The tape repeats the carried execution; it must never count twice.
+                        found.extend(push(index * 20 + 10, MarketEvent::Trade(trade)));
+                        if !consumed || index < 1 {
+                            found.extend(push(
+                                index * 20 + 20,
+                                MarketEvent::Order {
+                                    sequence: index as u64 * 2 + 3,
+                                    event: OrderEvent::Add(RestingOrder::new(
+                                        index as u64 + 2,
+                                        OrderSide::Sell,
+                                        100.0,
+                                        10.0,
+                                    )),
+                                },
+                            ));
+                        } else {
+                            break;
+                        }
+                    } else {
+                        assert!(
+                            push(index * 20 + 10, MarketEvent::Trade(trade)).is_empty(),
+                            "wait for depth confirmation"
+                        );
+                        found.extend(push(
+                            index * 20 + 20,
+                            MarketEvent::DepthDelta {
+                                sequence: index as u64 + 2,
+                                book: depth_book(
+                                    &[],
+                                    &[(100.0, if consumed && index == 2 { 0.0 } else { 10.0 })],
+                                ),
+                            },
+                        ));
+                    }
+                }
+                if consumed {
+                    assert!(found.is_empty(), "consumed exact={exact}");
+                } else {
+                    assert_eq!(found.len(), if exact { 2 } else { 1 });
+                    assert!(found.iter().all(|signal| signal.id == found[0].id));
+                    assert_eq!(
+                        found.last().unwrap().tooltip.as_deref(),
+                        Some(if exact {
+                            "3 refills, executed 30, shown 10; order-level refills"
+                        } else {
+                            "2 refills, executed 30, shown 10; estimate from aggregated depth"
+                        })
+                    );
+                }
+            }
+        }
+
+        // 0.3 / 0.1 rounds just below three in binary floating point.
+        let host = Host::new(Some(1_000.0));
+        let mut settings = host.detectors.settings();
+        settings.icebergs.enabled = true;
+        host.detectors.set_settings(settings);
+        host.push(MarketEvent::DepthSnapshot {
+            sequence: 1,
+            book: depth_book(&[], &[(100.0, 0.1)]),
+        });
+        host.push(MarketEvent::Trade(fill(
+            0,
+            100.0,
+            0.3,
+            OrderSide::Buy,
+            None,
+        )));
+        let signals = of_kind(
+            host.push(MarketEvent::DepthDelta {
+                sequence: 2,
+                book: depth_book(&[], &[(100.0, 0.1)]),
+            }),
+            "Icebergs",
+        );
+        assert_eq!(signals.len(), 1);
+        assert!(
+            signals[0]
+                .tooltip
+                .as_deref()
+                .unwrap()
+                .starts_with("2 refills")
+        );
+
+        let host = Host::new(Some(1_000.0));
+        let mut settings = host.detectors.settings();
+        settings.icebergs.enabled = true;
+        host.detectors.set_settings(settings);
+        host.push(MarketEvent::OrderSnapshot {
+            sequence: 1,
+            orders: vec![
+                RestingOrder::new(1, OrderSide::Sell, 100.0, 10.0),
+                RestingOrder::new(2, OrderSide::Sell, 100.0, 10.0),
+                RestingOrder::new(3, OrderSide::Sell, 100.0, 1.0),
+            ],
+        });
+        for (sequence, event) in [
+            (
+                2,
+                OrderEvent::Execute {
+                    id: 1,
+                    size: 10.0,
+                    trade: None,
+                },
+            ),
+            (
+                3,
+                OrderEvent::Execute {
+                    id: 2,
+                    size: 10.0,
+                    trade: None,
+                },
+            ),
+            (4, OrderEvent::Cancel { id: 3 }),
+            (
+                5,
+                OrderEvent::Add(RestingOrder::new(4, OrderSide::Sell, 100.0, 7.0)),
+            ),
+            (
+                6,
+                OrderEvent::Add(RestingOrder::new(5, OrderSide::Sell, 100.0, 10.0)),
+            ),
+            (
+                7,
+                OrderEvent::Add(RestingOrder::new(6, OrderSide::Sell, 100.0, 10.0)),
+            ),
+        ] {
+            host.detectors
+                .push("ES", time(0), &MarketEvent::Order { sequence, event });
+        }
+        let signals = of_kind(host.events(), "Icebergs");
+        assert_eq!(
+            signals.len(),
+            1,
+            "both depletions survive unrelated orders at the same price"
+        );
+        assert_eq!(
+            signals[0].tooltip.as_deref(),
+            Some("2 refills, executed 20, shown 10; order-level refills")
+        );
+
+        let host = Host::new(Some(1_000.0));
+        let mut settings = host.detectors.settings();
+        settings.icebergs.enabled = true;
+        host.detectors.set_settings(settings);
+        host.push(MarketEvent::OrderSnapshot {
+            sequence: 1,
+            orders: vec![RestingOrder::new(1, OrderSide::Sell, 100.0, 0.3)],
+        });
+        for i in 0..2 {
+            for (offset, size) in [(0, 0.1), (1, 0.2)] {
+                host.detectors.push(
+                    "ES",
+                    time(0),
+                    &MarketEvent::Order {
+                        sequence: 2 + i * 3 + offset,
+                        event: OrderEvent::Execute {
+                            id: 1 + i,
+                            size,
+                            trade: None,
+                        },
+                    },
+                );
+            }
+            host.detectors.push(
+                "ES",
+                time(0),
+                &MarketEvent::Order {
+                    sequence: 4 + i * 3,
+                    event: OrderEvent::Add(RestingOrder::new(2 + i, OrderSide::Sell, 100.0, 0.3)),
+                },
+            );
+        }
+        let signals = of_kind(host.events(), "Icebergs");
+        assert_eq!(
+            signals.len(),
+            1,
+            "decimal fills replenish twice without a false depth loss"
+        );
+        assert!(
+            signals[0]
+                .tooltip
+                .as_deref()
+                .unwrap()
+                .starts_with("2 refills")
+        );
+    }
+
+    #[test]
+    fn iceberg_refills_reject_late_replacements_priority_keeps_and_depth_gaps() {
+        for (name, gap, delay, keep, expected) in [
+            ("priority lost", false, 10, false, 1),
+            ("changed displayed size", false, 10, false, 1),
+            ("smaller refill clip", false, 10, false, 1),
+            ("priority retained", false, 10, true, 0),
+            ("gap", true, 10, false, 0),
+            ("replacement too late", false, 101, false, 0),
+            ("partial refill too late", false, 101, false, 0),
+        ] {
+            let host = Host::new(Some(1_000.0));
+            let mut settings = host.detectors.settings();
+            settings.icebergs.enabled = true;
+            host.detectors.set_settings(settings);
+            host.detectors.push(
+                "ES",
+                time(0),
+                &MarketEvent::OrderSnapshot {
+                    sequence: 1,
+                    orders: vec![RestingOrder::new(1, OrderSide::Buy, 100.0, 10.0)],
+                },
+            );
+            let mut found = Vec::new();
+            for i in 0..2 {
+                let seq = 2 + i * 2;
+                let at = time(0) + chrono::TimeDelta::milliseconds(i as i64 * 200);
+                host.detectors.push(
+                    "ES",
+                    at,
+                    &MarketEvent::Order {
+                        sequence: seq + u64::from(gap),
+                        event: OrderEvent::Execute {
+                            id: 1,
+                            size: if name == "replacement too late" {
+                                10.0
+                            } else {
+                                5.0
+                            },
+                            trade: None,
+                        },
+                    },
+                );
+                let event = if name == "replacement too late" {
+                    OrderEvent::Add(RestingOrder::new(1, OrderSide::Buy, 100.0, 10.0))
+                } else {
+                    OrderEvent::Modify {
+                        id: 1,
+                        price: None,
+                        size: Some(if name == "changed displayed size" {
+                            12.0 + i as f64
+                        } else if name == "smaller refill clip" {
+                            8.0 + i as f64
+                        } else {
+                            10.0
+                        }),
+                        keep_priority: keep,
+                    }
+                };
+                host.detectors.push(
+                    "ES",
+                    at + chrono::TimeDelta::milliseconds(delay),
+                    &MarketEvent::Order {
+                        sequence: seq + 1,
+                        event,
+                    },
+                );
+                found.extend(of_kind(host.events(), "Icebergs"));
+            }
+            assert_eq!(found.len(), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn absorption_requires_a_held_inside_level_and_discards_broken_or_lost_episodes() {
+        for side in [OrderSide::Buy, OrderSide::Sell] {
+            for (name, remaining, broken, gap, expected) in [
+                ("held", 5.0, false, false, true),
+                ("decimal lots", 0.15, false, false, true),
+                ("less than half remains", 4.0, false, false, false),
+                ("traded through", 10.0, true, false, false),
+                ("idle close before later break", 10.0, true, false, true),
+                ("idle close before withdrawal", 0.0, false, false, true),
+                ("gap", 10.0, false, true, false),
+            ] {
+                let host = Host::new(Some(1_000.0));
+                let mut settings = host.detectors.settings();
+                settings.absorption.enabled = true;
+                settings.absorption.rule.threshold =
+                    Threshold::Fixed(if name == "decimal lots" { 0.3 } else { 10.0 });
+                host.detectors.set_settings(settings);
+                let book = |size| {
+                    if side == OrderSide::Buy {
+                        depth_book(&[(100.0, size)], &[])
+                    } else {
+                        depth_book(&[], &[(100.0, size)])
+                    }
+                };
+                host.push(MarketEvent::DepthSnapshot {
+                    sequence: 1,
+                    book: book(if name == "decimal lots" {
+                        0.1 + 0.2
+                    } else {
+                        10.0
+                    }),
+                });
+                let aggressor = if side == OrderSide::Buy {
+                    OrderSide::Sell
+                } else {
+                    OrderSide::Buy
+                };
+                for (ms, size) in [
+                    (0, if name == "decimal lots" { 0.15 } else { 4.0 }),
+                    (200, if name == "decimal lots" { 0.15 } else { 6.0 }),
+                ] {
+                    let trade = Tick::new(
+                        time(0) + chrono::TimeDelta::milliseconds(ms),
+                        100.0,
+                        size,
+                        Some(aggressor),
+                    );
+                    host.detectors
+                        .push("ES", trade.ts, &MarketEvent::Trade(trade));
+                }
+                if broken {
+                    let price = if side == OrderSide::Buy {
+                        99.75
+                    } else {
+                        100.25
+                    };
+                    let at = time(0)
+                        + chrono::TimeDelta::milliseconds(
+                            if name == "idle close before later break" {
+                                1_500
+                            } else {
+                                500
+                            },
+                        );
+                    host.detectors.push(
+                        "ES",
+                        at,
+                        &MarketEvent::Trade(Tick::new(at, price, 1.0, None)),
+                    );
+                }
+                host.detectors.push(
+                    "ES",
+                    if name.starts_with("idle close") {
+                        time(2)
+                    } else {
+                        time(1) + chrono::TimeDelta::milliseconds(200)
+                    },
+                    &MarketEvent::DepthDelta {
+                        sequence: if gap { 3 } else { 2 },
+                        book: book(remaining),
+                    },
+                );
+                if gap {
+                    host.detectors.push(
+                        "ES",
+                        time(1) + chrono::TimeDelta::milliseconds(200),
+                        &MarketEvent::DepthSnapshot {
+                            sequence: 3,
+                            book: book(10.0),
+                        },
+                    );
+                }
+                let signals = of_kind(host.events(), "Absorption");
+                assert_eq!(signals.len(), usize::from(expected), "{name} {side:?}");
+                if expected {
+                    assert_eq!(
+                        signals[0].shape,
+                        SignalShape::PriceZone {
+                            from: time(0),
+                            to: Some(time(0) + chrono::TimeDelta::milliseconds(200)),
+                            price: 100.0,
+                            direction: stops::direction(side)
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn absorption_auto_threshold_uses_closed_episode_nearest_rank_and_order_adds_can_hold_a_level()
+    {
+        let host = Host::new(Some(1_000.0));
+        let mut settings = host.detectors.settings();
+        settings.absorption.enabled = true;
+        host.detectors.set_settings(settings);
+        host.push(MarketEvent::DepthSnapshot {
+            sequence: 1,
+            book: depth_book(&[], &[(100.0, 1.0)]),
+        });
+        for i in 0..100 {
+            host.detectors.push(
+                "ES",
+                time(i * 2),
+                &MarketEvent::Trade(fill(i * 2, 100.0, (i + 1) as f64, OrderSide::Buy, None)),
+            );
+        }
+        host.detectors.push(
+            "ES",
+            time(199),
+            &MarketEvent::DepthDelta {
+                sequence: 2,
+                book: depth_book(&[], &[]),
+            },
+        );
+        assert!(
+            of_kind(host.events(), "Absorption").is_empty(),
+            "100-episode warm-up"
+        );
+        // Sorted 1..100 has nearest-rank 99th percentile 99. The next 98 fails, then 99 passes.
+        for (at, size, expected) in [(200, 98.0, 0), (202, 99.0, 1)] {
+            host.detectors.push(
+                "ES",
+                time(at),
+                &MarketEvent::Trade(fill(at, 100.0, size, OrderSide::Buy, None)),
+            );
+            host.detectors.push(
+                "ES",
+                time(at + 1),
+                &MarketEvent::DepthDelta {
+                    sequence: (at / 2 - 97) as u64,
+                    book: depth_book(&[], &[]),
+                },
+            );
+            assert_eq!(of_kind(host.events(), "Absorption").len(), expected);
+        }
+        host.detectors.reset("ES");
+        let mut settings = host.detectors.settings();
+        settings.absorption.rule.threshold = Threshold::Fixed(10.0);
+        host.detectors.set_settings(settings);
+        host.detectors.push(
+            "ES",
+            time(300),
+            &MarketEvent::OrderSnapshot {
+                sequence: 1,
+                orders: vec![RestingOrder::new(1, OrderSide::Sell, 100.0, 10.0)],
+            },
+        );
+        host.detectors.push(
+            "ES",
+            time(300),
+            &MarketEvent::Trade(fill(300, 100.0, 10.0, OrderSide::Buy, None)),
+        );
+        host.detectors.push(
+            "ES",
+            time(300),
+            &MarketEvent::Order {
+                sequence: 2,
+                event: OrderEvent::Add(RestingOrder::new(2, OrderSide::Sell, 100.0, 1.0)),
+            },
+        );
+        host.detectors.push(
+            "ES",
+            time(300),
+            &MarketEvent::Order {
+                sequence: 3,
+                event: OrderEvent::Modify {
+                    id: 1,
+                    price: None,
+                    size: Some(2.0),
+                    keep_priority: true,
+                },
+            },
+        );
+        host.detectors.push(
+            "ES",
+            time(301),
+            &MarketEvent::Order {
+                sequence: 4,
+                event: OrderEvent::Modify {
+                    id: 1,
+                    price: None,
+                    size: Some(2.0),
+                    keep_priority: true,
+                },
+            },
+        );
+        assert_eq!(
+            of_kind(host.events(), "Absorption").len(),
+            1,
+            "added size holds despite less than half remaining"
+        );
+    }
+
+    #[test]
+    fn liquidity_zones_end_at_the_pull_or_sweep_and_walls_need_execution_and_rejection() {
+        for bid in [false, true] {
+            for outcome in [
+                "pull",
+                "sweep",
+                "sweep before depth",
+                "sweep unrelated update",
+                "pull after refill",
+                "wall",
+            ] {
+                let mut host = Host::new(Some(1_000.0));
+                let mut settings = host.detectors.settings();
+                settings.liquidity.enabled = true;
+                settings.liquidity.rule.threshold = Threshold::Fixed(50.0);
+                settings.liquidity.rule.fresh_threshold = Threshold::Fixed(50.0);
+                host.detectors.set_settings(settings);
+                let book = |rows: &[(f64, f64)]| {
+                    if bid {
+                        depth_book(rows, &[])
+                    } else {
+                        depth_book(&[], rows)
+                    }
+                };
+                let initial = host.push(MarketEvent::DepthSnapshot {
+                    sequence: 1,
+                    book: book(&[(100.0, 100.0)]),
+                });
+                let zones = of_kind(initial, "Large liquidity");
+                assert_eq!(zones.len(), 1);
+                let side = if bid { OrderSide::Sell } else { OrderSide::Buy };
+                let traded = match outcome {
+                    "sweep"
+                    | "sweep before depth"
+                    | "sweep unrelated update"
+                    | "pull after refill" => 90.0,
+                    "wall" => 10.0,
+                    _ => 0.0,
+                };
+                if traded > 0.0 {
+                    host.detectors.push(
+                        "ES",
+                        time(1),
+                        &MarketEvent::Trade(fill(1, 100.0, traded, side, None)),
+                    );
+                }
+                let interim = matches!(outcome, "sweep unrelated update" | "pull after refill");
+                if interim {
+                    host.detectors.push(
+                        "ES",
+                        time(1),
+                        &MarketEvent::DepthDelta {
+                            sequence: 2,
+                            book: if outcome == "pull after refill" {
+                                book(&[(100.0, 100.0)])
+                            } else {
+                                book(&[(if bid { 99.0 } else { 101.0 }, 1.0)])
+                            },
+                        },
+                    );
+                }
+                let away = if bid { 100.75 } else { 99.25 };
+                if outcome == "sweep before depth" {
+                    let beyond = if bid { 99.75 } else { 100.25 };
+                    host.detectors.push(
+                        "ES",
+                        time(1),
+                        &MarketEvent::Trade(fill(1, beyond, 1.0, side, None)),
+                    );
+                }
+                let rows = if outcome == "wall" {
+                    vec![(100.0, 90.0), (away, 1.0)]
+                } else {
+                    vec![(100.0, 10.0)]
+                };
+                host.detectors.push(
+                    "ES",
+                    time(2),
+                    &MarketEvent::DepthDelta {
+                        sequence: if interim { 3 } else { 2 },
+                        book: book(&rows),
+                    },
+                );
+                if matches!(outcome, "sweep" | "sweep unrelated update") {
+                    let beyond = if bid { 99.75 } else { 100.25 };
+                    host.detectors.push(
+                        "ES",
+                        time(3),
+                        &MarketEvent::Trade(fill(3, beyond, 1.0, side, None)),
+                    );
+                }
+                let events = host.events();
+                let category = match outcome {
+                    "pull" | "pull after refill" => "Pulled liquidity",
+                    "sweep" | "sweep before depth" | "sweep unrelated update" => "Liquidity sweeps",
+                    _ => "Walls",
+                };
+                assert_eq!(
+                    of_kind(events.clone(), category).len(),
+                    1,
+                    "{outcome} bid={bid}"
+                );
+                let ended = of_kind(events, "Large liquidity");
+                if outcome == "wall" {
+                    assert!(ended.is_empty());
+                } else {
+                    assert_eq!(ended.len(), 1);
+                    assert_eq!(ended[0].id, zones[0].id);
+                    assert_eq!(
+                        ended[0].shape,
+                        SignalShape::PriceZone {
+                            from: time(0),
+                            to: Some(time(
+                                if matches!(outcome, "sweep" | "sweep unrelated update") {
+                                    3
+                                } else {
+                                    2
+                                }
+                            )),
+                            price: 100.0,
+                            direction: if bid { Direction::Up } else { Direction::Down }
+                        }
+                    );
+                }
+                // Resubscribing retains the final zone and marker, including its end.
+                host.listeners.clear();
+                host.subscribe();
+                assert_eq!(of_kind(host.events(), category).len(), 1);
+            }
+        }
+
+        let host = Host::new(Some(1_000.0));
+        let mut settings = host.detectors.settings();
+        settings.liquidity.enabled = true;
+        settings.liquidity.rule.threshold = Threshold::Fixed(50.0);
+        host.detectors.set_settings(settings);
+        host.push(MarketEvent::OrderSnapshot {
+            sequence: 1,
+            orders: vec![RestingOrder::new(1, OrderSide::Buy, 100.0, 100.0)],
+        });
+        host.push(MarketEvent::Order {
+            sequence: 2,
+            event: OrderEvent::Execute {
+                id: 1,
+                size: 10.0,
+                trade: Some(Tick::new(time(0), 100.0, 10.0, None)),
+            },
+        });
+        let walls = of_kind(
+            host.push(MarketEvent::Order {
+                sequence: 3,
+                event: OrderEvent::Add(RestingOrder::new(2, OrderSide::Buy, 100.75, 1.0)),
+            }),
+            "Walls",
+        );
+        assert_eq!(
+            walls.len(),
+            1,
+            "order-level execution needs no tape aggressor inference"
+        );
+        assert!(walls[0].tooltip.as_deref().unwrap().contains("executed 10"));
+    }
+
+    #[test]
+    fn fresh_liquidity_uses_the_nearby_median_and_spoofing_requires_an_individual_order() {
+        for (name, size, milliseconds, execute, expected) in [
+            ("qualifies", 100.0, 2_000, 9.0, true),
+            ("too old", 100.0, 2_001, 9.0, false),
+            ("ten percent executed", 100.0, 1_000, 10.0, false),
+            ("too small", 3.0, 1_000, 0.0, false),
+        ] {
+            let host = Host::new(Some(1_000.0));
+            let mut settings = host.detectors.settings();
+            settings.liquidity.enabled = true;
+            host.detectors.set_settings(settings);
+            host.detectors.push(
+                "ES",
+                time(0),
+                &MarketEvent::OrderSnapshot {
+                    sequence: 1,
+                    orders: vec![
+                        RestingOrder::new(1, OrderSide::Buy, 99.0, 1.0),
+                        RestingOrder::new(2, OrderSide::Sell, 101.0, 1.0),
+                    ],
+                },
+            );
+            host.detectors.push(
+                "ES",
+                time(0),
+                &MarketEvent::Order {
+                    sequence: 2,
+                    event: OrderEvent::Add(RestingOrder::new(3, OrderSide::Buy, 99.25, size)),
+                },
+            );
+            let fresh = of_kind(host.events(), "Fresh liquidity");
+            // Median [1, 1, size] is 1, threshold 4. The aggregate size cannot identify a spoof.
+            assert_eq!(fresh.len(), usize::from(size >= 4.0), "{name}");
+            if let Some(signal) = fresh.first() {
+                assert!(
+                    signal
+                        .tooltip
+                        .as_deref()
+                        .unwrap()
+                        .contains("largest resting order 3")
+                );
+            }
+            let mut seq = 3;
+            if execute > 0.0 {
+                host.detectors.push(
+                    "ES",
+                    time(0),
+                    &MarketEvent::Order {
+                        sequence: seq,
+                        event: OrderEvent::Execute {
+                            id: 3,
+                            size: execute,
+                            trade: None,
+                        },
+                    },
+                );
+                seq += 1;
+            }
+            host.detectors.push(
+                "ES",
+                time(0) + chrono::TimeDelta::milliseconds(milliseconds),
+                &MarketEvent::Order {
+                    sequence: seq,
+                    event: OrderEvent::Cancel { id: 3 },
+                },
+            );
+            let events = host.events();
+            assert_eq!(
+                of_kind(events.clone(), "Spoofing").len(),
+                usize::from(expected),
+                "{name}"
+            );
+            if expected {
+                let pulls = of_kind(events, "Pulled liquidity");
+                assert_eq!(pulls.len(), 1);
+                assert_eq!(
+                    pulls[0].label, None,
+                    "the coincident spoof supplies the label"
+                );
+            }
+        }
+        let host = Host::new(Some(1_000.0));
+        let mut settings = host.detectors.settings();
+        settings.liquidity.enabled = true;
+        host.detectors.set_settings(settings);
+        host.push(MarketEvent::DepthSnapshot {
+            sequence: 1,
+            book: depth_book(&[(99.0, 1.0)], &[(101.0, 1.0)]),
+        });
+        let added = host.push(MarketEvent::DepthDelta {
+            sequence: 2,
+            book: depth_book(&[(99.25, 100.0)], &[]),
+        });
+        assert_eq!(of_kind(added, "Fresh liquidity").len(), 1);
+        let removed = host.push(MarketEvent::DepthDelta {
+            sequence: 3,
+            book: depth_book(&[(99.25, 0.0)], &[]),
+        });
+        assert!(of_kind(removed.clone(), "Spoofing").is_empty());
+        assert_eq!(of_kind(removed, "Pulled liquidity").len(), 1);
     }
 }

@@ -188,6 +188,37 @@ impl HistoryService {
         self.push_command(DrawingCommand::Add(drawing));
     }
 
+    /// Removes the newest undo step if it added drawing `id`, returning whether it did.
+    pub(crate) fn pop_add(&mut self, id: usize) -> bool {
+        let last = matches!(self.undo_stack.last(), Some(DrawingCommand::Add(d)) if d.id == id);
+        if last {
+            self.undo_stack.pop();
+        }
+        last
+    }
+
+    /// Folds a text placement's lone edit or deletion into its original add, if both are still
+    /// the most recent commands. Other intervening operations retain their own undo steps.
+    pub(crate) fn merge_text_placement(
+        &mut self,
+        id: usize,
+        edit: &mut Self,
+        drawing: Option<&Drawing>,
+    ) -> bool {
+        let added = matches!(self.undo_stack.as_slice(), [DrawingCommand::Add(d)] if d.id == id);
+        let edited = matches!(edit.undo_stack.as_slice(), [DrawingCommand::Modify { id: changed, .. }] if *changed == id)
+            || matches!(edit.undo_stack.as_slice(), [DrawingCommand::Delete { drawing, .. }] if drawing.id == id);
+        if !added || !edited {
+            return false;
+        }
+        self.clear();
+        if let Some(drawing) = drawing {
+            self.push_add(drawing.clone());
+        }
+        edit.clear();
+        true
+    }
+
     /// Record that a drawing was deleted from list index `index`
     pub fn push_delete(&mut self, drawing: Drawing, index: usize) {
         self.push_command(DrawingCommand::Delete { drawing, index });

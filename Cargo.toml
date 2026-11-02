@@ -141,6 +141,8 @@ required-features = ["widget"]
 
 [features]
 default = ["ui", "locales", "timezones"]
+## HTTP history, symbol search and live bar refresh through `data::http::HttpDatafeed`.
+http = ["dep:ehttp", "dep:wasm-bindgen", "dep:web-sys"]
 ## The egui chart widget: `Chart`, `ChartBuilder`, configuration,
 ## theme and the `Indicator` extension point.  Without it the crate is the
 ## headless engine (`model`, `scales`, `data`, `services`, `tokens` and the
@@ -211,10 +213,13 @@ rand = "0.10.0"
 # `examples/bare_chart.rs` starts its web runner from the page.
 wasm-bindgen-futures = "0.4.79"
 wasm-bindgen-test = "0.3.79"
-# `examples/network_feed.rs` fetches history and streams trades in the browser.
-web-sys = { version = "0.3.106", features = ["EventSource", "Headers", "MessageEvent", "Response", "Window"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2.129", optional = true }
+web-sys = { version = "0.3.106", features = ["Window"], optional = true }
 
 [dependencies]
+ehttp = { version = "0.7.2", optional = true }
 # theme::apply_to_egui installs the bundled Roboto face.
 egui = { version = "0.37.0", default-features = false, features = ["serde"], optional = true }
 # The engine names colours as `egui::Color32`; without `widget` that path

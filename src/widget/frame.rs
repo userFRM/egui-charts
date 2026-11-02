@@ -1156,6 +1156,7 @@ impl Chart {
 
         // Get visible range
         let (start_idx, end_idx) = self.state.visible_range();
+        let cutoff = self.replay_time();
         let (registry, bars) = if self.chart_type.is_time_independent() {
             (
                 &mut self.element_studies.studies,
@@ -1176,12 +1177,9 @@ impl Chart {
                 .iter()
                 .flat_map(|study| study.data_requests())
                 .collect();
-            let sources = self.study_data.data(
-                requests,
-                &self.symbol,
-                self.timeframe,
-                self.replay.as_ref().map(|replay| replay.time),
-            );
+            let sources = self
+                .study_data
+                .data(requests, &self.symbol, self.timeframe, cutoff);
             for at in super::studies::order(registry.indicators(), &self.study_ids) {
                 if let Some(crate::studies::StudySource::Study { id, .. }) =
                     registry.indicators()[at].source()
@@ -1954,10 +1952,8 @@ impl Chart {
                     }
                     #[cfg(feature = "studies")]
                     if session_profiles
-                        && let Some(ranges) = session_ranges(
-                            bars,
+                        && let Some(ranges) = self.execution_profile_ranges(
                             start_idx + candles..start_idx + visible_data.len(),
-                            &bar_clock,
                         )
                     {
                         let profiles = crate::studies::trade_profiles(flow, &ranges);
@@ -1968,6 +1964,7 @@ impl Chart {
                             &profiles,
                             flow.price_step(),
                             flow.tick_size(),
+                            self.trade_profile_settings(),
                         );
                     }
                 }
@@ -2289,7 +2286,7 @@ impl Chart {
         }
 
         let style = &self.main_series_style;
-        if let Some(line) = super::price_series::base_line(&price_map)
+        if let Some(line) = super::series::base_line(&price_map)
             .filter(|_| self.main_series_visible && style.base_line_visible)
         {
             rendering::render_price_line(
@@ -3439,7 +3436,7 @@ impl Chart {
 /// The sessions of `clock` that the bars `shown` of `bars` belong to, each from the open of its
 /// first bar to the next session's.
 #[cfg(feature = "studies")]
-fn session_ranges(
+pub(super) fn session_ranges(
     bars: &[crate::model::Bar],
     shown: std::ops::Range<usize>,
     clock: &crate::model::BarClock,
@@ -3468,12 +3465,17 @@ fn session_ranges(
         });
     let close = bars
         .get(end)
-        .map_or(chrono::DateTime::<chrono::Utc>::MAX_UTC, |bar| bar.time);
-    let ends = starts.iter().skip(1).map(|&next| bars[next].time);
+        .map_or(chrono::DateTime::<chrono::Utc>::MAX_UTC, |bar| {
+            clock.bar_open(bar.time)
+        });
+    let ends = starts
+        .iter()
+        .skip(1)
+        .map(|&next| clock.bar_open(bars[next].time));
     let ranges = starts
         .iter()
         .zip(ends.chain([close]))
-        .map(|(&start, end)| bars[start].time..end)
+        .map(|(&start, end)| clock.bar_open(bars[start].time)..end)
         .collect();
     crate::studies::TradeProfileRanges::new(ranges).ok()
 }
@@ -3769,13 +3771,13 @@ mod tests {
             };
             // First bar: 13 buys, 3 sells, volume 16, delta 10, delta share 62.5%.
             for expected in [
-                "Vol 16",
-                "Bid 3",
-                "Ask 13",
-                "Delta 10",
-                "Delta % 62.5",
-                "Min -1",
-                "Max 10",
+                "16",
+                "3",
+                "13",
+                "10",
+                "62.5%",
+                "-1",
+                "4.33:1",
                 "Cluster",
                 "Single",
                 "Delta POC",
@@ -3786,10 +3788,18 @@ mod tests {
                 );
             }
             assert!(
-                text("Vol 16").unwrap().pos.y >= map.rect.bottom(),
+                text("16").unwrap().pos.y >= map.rect.bottom(),
                 "table overlaps prices"
             );
-            assert!(text(if revisited { "CVD 10" } else { "CVD 12" }).is_some());
+            assert!(
+                shapes
+                    .iter()
+                    .any(|shape| matches!(&shape.shape, Shape::Text(t)
+                if t.galley.text() == if revisited { "10" } else { "12" }
+                    && (t.pos.x + t.galley.size().x * 0.5 - map.idx_to_x(2)).abs() < 0.01
+                    && (t.pos.y - map.rect.bottom() - 72.0).abs() < 0.01)),
+                "cumulative delta updates in its row under the last bar"
+            );
             let stack_color = if revisited {
                 config.ask_color.gamma_multiply(0.45)
             } else {
@@ -5270,6 +5280,8 @@ mod tests {
             })
             .collect();
         let config = FootprintConfig {
+            // Keep price spines out of the candle-only geometry check.
+            ask_color: egui::Color32::from_rgb(12, 87, 104),
             color_by: FootprintColor::Volume,
             neutral_color: egui::Color32::from_rgb(21, 45, 78),
             ..Default::default()
