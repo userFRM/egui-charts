@@ -24,6 +24,7 @@ Builder API,Builder integration,Full trading-terminal UI around the chart,partia
 Builder API,Builder integration,Minimal embedding,done,library,src/widget/builder.rs;src/widget/frame.rs
 Builder API,Builder integration,Pluggable formatters and session rules,done,library,src/widget/frame.rs;src/widget/builder.rs;src/model/session/mod.rs
 Builder API,Builder integration,Public API surface and structure,done,library,src/prelude.rs;src/lib.rs;src/widget/mod.rs;src/model/mod.rs;src/widget/pan_zoom.rs;src/widget/interaction.rs;src/widget/builder.rs;src/styles/mod.rs
+Builder API,Builder integration,Responsive landing chart sample,done,library,examples/demo/landing.rs;docs/site/src/components/LiveChart.astro;docs/site/src/styles/custom.css
 Builder API,Builder integration,Threading model for feeding data,done,library,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Builder API,Builder integration,WebAssembly target,done,library,src/data/mod.rs
 Builder API,Datafeed API,"Option expiries and chain snapshots with open interest, quotes, implied volatility and Greeks",done,host,src/data/mod.rs;src/data/option_chain.rs;src/data/options_volume.rs;src/model/instrument.rs
@@ -473,6 +474,7 @@ Order flow,Order flow,Stacked imbalances shown as zones,done,library,src/data/fo
 Order flow,Order flow,Stop spotter,done,library,src/services/detectors/stops.rs;src/services/detectors/mod.rs;src/data/footprint.rs;
 Order flow,Order flow,Stop-run detection from bursts of same-side market orders within milliseconds,done,library,src/services/detectors/stops.rs;src/services/detectors/mod.rs;
 Order flow,Order flow,TPO initial balance period and extension levels,done,library,src/model/tpo.rs;src/model/chart_type.rs;src/chart/rendering/candles/tpo.rs;src/ui/dialogs/series_settings/tabs/symbol.rs
+Order flow,Order flow,TPO level captions and price readouts at the plot edge,done,library,src/chart/rendering/candles/tpo.rs
 Order flow,Order flow,TPO poor high and poor low marks,done,library,src/model/tpo.rs;src/model/chart_type.rs;src/chart/rendering/candles/tpo.rs;src/ui/dialogs/series_settings/tabs/symbol.rs
 Order flow,Order flow,Tape reconstruction and passive fill details,done,library,src/data/trades.rs;src/data/orders.rs;src/model/quote.rs;src/widget/feed/mod.rs;src/ui/widget_bar/panels/time_and_sales.rs
 Order flow,Order flow,Tick-by-tick trade replay with speed control and multi-symbol sessions,done,library,src/data/replay.rs;src/data/mod.rs;src/widget/replay.rs;examples/demo/replay.rs
@@ -827,10 +829,10 @@ Terminal,Alerts,Alert manager panel,done,library,src/ui/widget_bar/panels/alerts
 Terminal,Alerts,"Alert name, custom message and placeholders",partial,library,src/ui/dialogs/alert_dialog/dialog.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/model/alert.rs
 Terminal,Alerts,Alert presets and per-alert notification schedule,done,library,src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs;src/services/alert_engine.rs
 Terminal,Alerts,Alerts tab in series settings,done,library,src/model/series_style.rs;src/chart/series/settings.rs;src/ui/dialogs/series_settings/tabs/scales.rs;src/widget/mod.rs;src/widget/snapshot.rs;src/widget/history.rs;terminal/src/alerts.rs
-Terminal,Alerts,"Channel operators: entering, exiting, inside, outside a channel",done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs
+Terminal,Alerts,"Channel operators: entering, exiting, inside, outside a channel",done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/drawings/domain/alert_levels.rs;src/widget/alerts.rs
 Terminal,Alerts,Create a price alert from the toolbar bell,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;terminal/src/alerts.rs
 Terminal,Alerts,Demo alert sound playback,done,host,examples/demo/controller.rs;examples/demo/audio.rs;terminal/src/alerts.rs;terminal/src/core.rs;terminal/src/services.rs
-Terminal,Alerts,Drawing alerts,done,library,src/ui/context_menu/drawing.rs;src/drawings/domain/drawing.rs;src/services/alert_engine.rs;terminal/src/alerts.rs
+Terminal,Alerts,Drawing alerts,done,library,src/ui/context_menu/drawing.rs;src/drawings/domain/drawing.rs;src/services/alert_engine.rs;terminal/src/alerts.rs;src/drawings/domain/alert_levels.rs;src/model/alert.rs;src/widget/alerts.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs
 Terminal,Alerts,Indicator alerts on study plots,done,library,src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs;terminal/src/alerts.rs
 Terminal,Alerts,Inline alert creation forms in the alerts panel,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs;src/services/alerts.rs;terminal/src/alerts.rs
 Terminal,Alerts,Moving up / moving down operators,done,library,src/ui/dialogs/alert_dialog/dialog.rs
