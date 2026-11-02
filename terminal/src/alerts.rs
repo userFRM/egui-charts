@@ -42,11 +42,6 @@ impl Terminal {
         let Some(service) = self.services.alerts.clone() else {
             return;
         };
-        // Read current lists through the panel group even without a settings store.
-        let mut settings = UserSettings::default();
-        self.alerts_settings(&mut settings, Direction::Save);
-        self.panels_settings(&mut settings, Direction::Save);
-        self.alerts_settings(&mut settings, Direction::Load);
         let settings = &self.studies.settings.alerts;
         self.alerts.panel.set_sound(settings.play_sound.then(|| {
             if settings.sound.is_empty() {
@@ -175,12 +170,10 @@ impl Terminal {
         } else {
             let chart = self.chart();
             let symbol = chart.symbol().to_owned();
-            let price = chart
-                .bars(SeriesId::MAIN)
-                .last()
-                .map_or(0.0, |bar| bar.close);
-            self.alerts.dialog.open(symbol, price);
-            self.charts[self.active].prepare_alert(&mut self.alerts.dialog.alert);
+            if let Some(bar) = chart.bars(SeriesId::MAIN).last() {
+                self.alerts.dialog.open(symbol, bar.close);
+                self.charts[self.active].prepare_alert(&mut self.alerts.dialog.alert);
+            }
         }
     }
 
