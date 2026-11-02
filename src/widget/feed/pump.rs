@@ -33,9 +33,14 @@ impl Chart {
         false
     }
 
-    /// Issues what the feed must be asked and applies what it sent since the last call. Called
-    /// first in [`show`](Self::show); does nothing without a feed.
+    /// Refreshes the instrument grid, issues what the feed must be asked and applies its answers.
+    /// Called first in [`show`](Self::show).
     pub(crate) fn pump(&mut self, ctx: &egui::Context) {
+        // A restored scale still takes its default grid from the current instrument.
+        let tick_size = self
+            .instrument()
+            .and_then(|instrument| instrument.tick_size);
+        self.state.price_scale_mut().set_tick_size(tick_size);
         // Profile drawings read held trades on every time-based chart type.
         let executions = self
             .timeframe
@@ -409,6 +414,7 @@ impl Chart {
             .take()
             .filter(|instrument| instrument.symbol == self.symbol);
         self.state.price_scale_mut().set_price_precision(None);
+        self.state.price_scale_mut().set_tick_size(None);
         link.trades = Trades::new(TRADE_CAPACITY);
         for study in self.studies.indicators() {
             for input in study.order_flow_inputs() {
@@ -485,6 +491,9 @@ impl Chart {
         self.state
             .price_scale_mut()
             .set_price_precision(crate::scales::instrument_price_precision(&instrument));
+        self.state
+            .price_scale_mut()
+            .set_tick_size(instrument.tick_size);
         let timeframe = self.timeframe.unwrap_or_default();
         let withheld = !supports(self.legend_instrument.as_ref(), timeframe);
         link.instrument = Some(instrument);

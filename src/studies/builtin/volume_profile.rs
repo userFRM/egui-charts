@@ -10,6 +10,9 @@
 //! [`ProfileInput`] tells how much of a profile the finer bars cover.
 //! The chart notes each profile "Estimated from bars", also when finer bars cover all of it:
 //! they narrow the estimate without making it exact.
+//!
+//! Row fills stay at or below 35% opacity so price bars remain readable. The point of control
+//! and value-area guides keep their line colours and widths.
 
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};

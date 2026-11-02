@@ -56,6 +56,9 @@ pub struct TimeAndSalesPanel {
     /// the same exchange timestamp and known side. Off by default; raw fills stay retained.
     /// Size filters then apply to the combined row.
     pub combine_fills: bool,
+    /// Show three fractional-second digits in the time column. Off by default.
+    /// Every row's hover retains the full timestamp regardless of this setting.
+    pub show_milliseconds: bool,
     trades: VecDeque<Tick>,
     /// Retained size of the current consecutive run.
     run_size: f64,
@@ -91,6 +94,7 @@ impl TimeAndSalesPanel {
             config,
             filters: Vec::new(),
             combine_fills: false,
+            show_milliseconds: false,
             trades: VecDeque::new(),
             run_size: 0.0,
             run_max_size: 0.0,
@@ -182,6 +186,10 @@ impl TimeAndSalesPanel {
                 l10n::text(ui.ctx(), "Combine fills"),
             );
         });
+        ui.checkbox(
+            &mut self.show_milliseconds,
+            l10n::text(ui.ctx(), "Milliseconds"),
+        );
         let mut removed = None;
         egui::ScrollArea::vertical()
             .id_salt("size_filters")
@@ -217,20 +225,45 @@ impl TimeAndSalesPanel {
         let font = TextStyle::Monospace.resolve(ui.style());
         let small = TextStyle::Small.resolve(ui.style());
         let column_count = if self.combine_fills { 4 } else { 3 };
+        let time_format = if self.show_milliseconds {
+            "%H:%M:%S%.3f"
+        } else {
+            "%H:%M:%S"
+        };
+        let time_width = if self.show_milliseconds {
+            ui.painter()
+                .layout_no_wrap("00:00:00.000".into(), font.clone(), theme.ui.text_secondary)
+                .size()
+                .x
+                .ceil()
+                + 4.0
+        } else {
+            0.0
+        };
         let columns = |rect: egui::Rect| {
             let right = rect.right() - 8.0;
             let width = (rect.width() - 16.0).max(0.0);
             let left = rect.left() + 8.0;
+            let time_width = time_width
+                .max(width * if self.combine_fills { 0.3 } else { 0.34 })
+                .min(width);
+            let remaining = width - time_width;
             let edges = if self.combine_fills {
                 [
                     left,
-                    left + width * 0.3,
-                    left + width * 0.57,
-                    left + width * 0.83,
+                    left + time_width,
+                    left + time_width + remaining * (27.0 / 70.0),
+                    right - remaining * (17.0 / 70.0),
                     right,
                 ]
             } else {
-                [left, left + width * 0.34, right - width * 0.3, right, right]
+                [
+                    left,
+                    left + time_width,
+                    right - remaining * (30.0 / 66.0),
+                    right,
+                    right,
+                ]
             };
             std::array::from_fn::<_, 4, _>(|i| {
                 egui::Rect::from_min_max(
@@ -317,7 +350,7 @@ impl TimeAndSalesPanel {
                     for (column, text, color) in [
                         (
                             0,
-                            time.format("%H:%M:%S").to_string(),
+                            time.format(time_format).to_string(),
                             theme.ui.text_secondary,
                         ),
                         (
@@ -353,9 +386,25 @@ impl TimeAndSalesPanel {
                             .selectable(false),
                         );
                     }
-                    if self.combine_fills || first.aggressor_order_id.is_some() {
-                        response.on_hover_ui(|ui| self.show_breakdown(ui, row.fills.clone()));
-                    }
+                    response.on_hover_ui(|ui| {
+                        ui.label(time.format("%Y-%m-%d %H:%M:%S%.f %::z").to_string());
+                        if first.ts != last.ts {
+                            ui.label(l10n::format_text(
+                                ui.ctx(),
+                                "Last execution: {0}",
+                                &[(
+                                    "0",
+                                    last.ts
+                                        .with_timezone(&self.config.timezone)
+                                        .format("%Y-%m-%d %H:%M:%S%.f %::z")
+                                        .to_string(),
+                                )],
+                            ));
+                        }
+                        if self.combine_fills || first.aggressor_order_id.is_some() {
+                            self.show_breakdown(ui, row.fills.clone());
+                        }
+                    });
                 }
             });
     }
@@ -469,6 +518,152 @@ mod tests {
     }
 
     #[test]
+    fn milliseconds_distinguish_executions_and_keep_filtered_columns_aligned() {
+        use crate::theme::{Theme, apply_to_egui};
+        use chrono::{DateTime, TimeDelta, Utc};
+
+        let start = "2024-03-15T04:15:00.000000001Z"
+            .parse::<DateTime<Utc>>()
+            .unwrap();
+        let times = [
+            "10:00:00.100",
+            "10:00:00.250",
+            "10:00:00.500",
+            "10:00:00.900",
+            "10:00:01.000",
+            "10:00:01.125",
+        ];
+        for theme in [Theme::light(), Theme::dark()] {
+            for width in [300.0, 360.0] {
+                for combine in [false, true] {
+                    let mut panel = TimeAndSalesPanel::new(TimeAndSalesConfig {
+                        price_decimals: Some(2),
+                        size_decimals: Some(0),
+                        timezone: "+05:45".parse().unwrap(),
+                    });
+                    panel.combine_fills = combine;
+                    let sizes = [2.0, 20.0, 3.0, 40.0, 5.0, 60.0];
+                    for (i, ms) in [100, 250, 500, 900, 1000, 1125].into_iter().enumerate() {
+                        let mut trade = Tick::new(
+                            start + TimeDelta::milliseconds(ms),
+                            6100.0 + i as f64 * 0.25,
+                            sizes[i],
+                            Some(OrderSide::Buy),
+                        );
+                        trade.aggressor_order_id = (i % 2 == 0).then_some(i as u64);
+                        panel.push(trade);
+                    }
+                    let theme = theme.clone();
+                    let mut h = Harness::builder()
+                        .with_size(vec2(width, 500.0))
+                        .with_context_setup(move |ctx| {
+                            crate::icons::install_loader(ctx);
+                            apply_to_egui(ctx, &theme);
+                        })
+                        .build_ui_state(|ui, panel: &mut TimeAndSalesPanel| panel.show(ui), panel);
+                    h.run();
+                    assert_eq!(h.query_all_by_label("10:00:00").count(), 4);
+                    h.get_by_label("Milliseconds").click();
+                    h.run();
+                    let bounds = |h: &Harness<'_, TimeAndSalesPanel>, label: &str| {
+                        let text = h.output().shapes.iter().find_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape
+                                && text.galley.text() == label
+                            {
+                                assert!(!text.galley.elided, "{width}: truncated {label}");
+                                return Some(
+                                    text.galley
+                                        .rect
+                                        .translate(text.pos.to_vec2())
+                                        .intersect(shape.clip_rect),
+                                );
+                            }
+                            None
+                        });
+                        text.unwrap_or_else(|| panic!("{width}: missing visible {label}"))
+                    };
+                    let mut previous_y = f32::INFINITY;
+                    let price_right = bounds(&h, "6100.00").right();
+                    let size_right = bounds(&h, "20").right();
+                    for filter in [false, true] {
+                        if filter {
+                            h.state_mut().filters.push(TradeSizeFilter {
+                                min_size: 10.0,
+                                sound: false,
+                            });
+                            h.run();
+                        }
+                        for (i, time) in times.iter().enumerate() {
+                            if filter && sizes[i] < 10.0 {
+                                assert!(h.query_by_label(time).is_none());
+                                continue;
+                            }
+                            let time = bounds(&h, time);
+                            let price = bounds(&h, &format!("{:.2}", 6100.0 + i as f64 * 0.25));
+                            let size = bounds(&h, &(sizes[i] as u32).to_string());
+                            assert!(time.center().y < previous_y, "newest first");
+                            previous_y = time.center().y;
+                            assert!((time.center().y - price.center().y).abs() < 1.0);
+                            assert!((size.center().y - price.center().y).abs() < 1.0);
+                            assert!(time.right() < price.left() && price.right() < size.left());
+                            assert!((price.right() - price_right).abs() < 1.0);
+                            assert!(
+                                (size.right() - size_right).abs() < 1.0,
+                                "{width}, combine={combine}, filter={filter}, row={i}: {size:?}, column right={size_right}"
+                            );
+                        }
+                        previous_y = f32::INFINITY;
+                    }
+                    h.get_by_label("Milliseconds").click();
+                    h.run();
+                    assert_eq!(h.query_all_by_label("10:00:00").count(), 2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_execution_hover_keeps_the_full_local_timestamp_and_order_breakdown() {
+        for (zone, local) in [
+            ("UTC", "2024-03-15 23:59:59.123456789 +00:00:00"),
+            ("+05:45", "2024-03-16 05:44:59.123456789 +05:45:00"),
+            ("-03:30", "2024-03-15 20:29:59.123456789 -03:30:00"),
+            ("+00:19:32", "2024-03-16 00:19:31.123456789 +00:19:32"),
+        ] {
+            for id in [None, Some(7)] {
+                let mut panel = TimeAndSalesPanel::new(TimeAndSalesConfig {
+                    timezone: zone.parse().unwrap(),
+                    price_decimals: Some(2),
+                    size_decimals: Some(0),
+                });
+                let mut trade = Tick::new(
+                    "2024-03-15T23:59:59.123456789Z".parse().unwrap(),
+                    6100.25,
+                    20.0,
+                    Some(OrderSide::Buy),
+                );
+                trade.aggressor_order_id = id;
+                trade.resting_order_id = Some(9);
+                panel.push(trade);
+                let mut h = Harness::builder()
+                    .with_size(vec2(300.0, 400.0))
+                    .with_context_setup(crate::icons::install_loader)
+                    .build_ui_state(|ui, panel: &mut TimeAndSalesPanel| panel.show(ui), panel);
+                h.run();
+                h.hover_at(h.get_by_label("6100.25").rect().center());
+                h.run_steps(90);
+                h.get_by_label(local);
+                if id.is_some() {
+                    h.get_by_label("Order 7: 20 in 1 fills");
+                    h.get_by_label("Order 9: 20 at 6100.25");
+                } else {
+                    assert!(h.query_by_label("20 in 1 fills").is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn combine_fills_groups_only_consecutive_matches_and_restores_raw_fills() {
         use chrono::{DateTime, TimeDelta, Utc};
         let start = "2024-03-15T10:00:00.100Z".parse::<DateTime<Utc>>().unwrap();
@@ -553,6 +748,15 @@ mod tests {
                     |id| format!("Order {id}: {size} in {count} fills"),
                 );
                 h.get_by_label(&summary);
+                let timestamp = |index: usize| {
+                    (start + TimeDelta::milliseconds(inputs[index].0))
+                        .format("%Y-%m-%d %H:%M:%S%.f %::z")
+                        .to_string()
+                };
+                h.get_by_label(&timestamp(first));
+                if inputs[first].0 != inputs[last].0 {
+                    h.get_by_label(&format!("Last execution: {}", timestamp(last)));
+                }
                 for (index, input) in inputs.iter().enumerate().take(last + 1).skip(first) {
                     h.get_by_label(&format!(
                         "Order {}: {} at {:.2}",
