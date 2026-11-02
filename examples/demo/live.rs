@@ -287,10 +287,23 @@ impl LiveFeed {
         clock: BarClock,
         extended_hours: bool,
     ) -> Vec<Bar> {
+        self.snapshot_before(timeframe, clock, extended_hours, None)
+    }
+
+    /// History at an exclusive replay cutoff, or the full live source when it is absent.
+    pub(super) fn snapshot_before(
+        &self,
+        timeframe: Timeframe,
+        clock: BarClock,
+        extended_hours: bool,
+        before: Option<DateTime<Utc>>,
+    ) -> Vec<Bar> {
         let sim = self.state();
+        let now = before.map_or(sim.now, |time| time.min(sim.now));
         let trades: Vec<_> = sim
             .trades
             .iter()
+            .take_while(|trade| before.is_none_or(|time| trade.ts < time))
             .filter_map(|trade| sim.shown_trade(trade, extended_hours))
             .collect();
         let mut bars = if timeframe.duration_ms() < 60_000 || timeframe.duration_ms() % 60_000 != 0
@@ -303,15 +316,18 @@ impl LiveFeed {
             .expect("generated executions")
         } else {
             let mut minutes = sim.shown_history(extended_hours);
+            if let Some(time) = before {
+                minutes.retain(|bar| bar.time + TimeDelta::minutes(1) <= time);
+            }
             minutes
                 .extend(aggregate_trades(&trades, Timeframe::Min1).expect("generated executions"));
             resample(&minutes, Timeframe::Min1, clock.clone()).expect("nested minute history")
         };
-        let open = clock.bar_open(sim.now);
+        let open = clock.bar_open(now);
         if timeframe.duration_ms() > 0
             && sim
                 .shown_trade(
-                    &Tick::new(sim.now, sim.price_ticks as f64 * sim.tick_size, 0.0, None),
+                    &Tick::new(now, sim.price_ticks as f64 * sim.tick_size, 0.0, None),
                     extended_hours,
                 )
                 .is_some()
