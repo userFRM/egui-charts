@@ -23,7 +23,7 @@ use egui_charts::widget::{SeriesId, ShortcutRequest, VisibleTimeRange};
 const ZONES: [&str; 2] = ["UTC", "America/New_York"];
 
 pub(super) struct State {
-    bar: TimeframeToolbar,
+    pub(super) bar: TimeframeToolbar,
     picker: DatePicker,
     /// The text of the interval entry dialog while it is open.
     entry: Option<String>,
@@ -35,8 +35,6 @@ impl Default for State {
     fn default() -> Self {
         let mut bar = TimeframeToolbar::default();
         bar.config.active_bg = egui::Color32::TRANSPARENT;
-        // The dividend adjustment belongs to the feed request, which another group owns.
-        bar.set_control_visible(Control::DividendAdjustment, false);
         Self {
             bar,
             picker: DatePicker::new(),
@@ -58,6 +56,7 @@ impl Terminal {
         let has_session = has_session(chart);
         let state = &mut self.time.bar.state;
         state.timeframe = chart.timeframe().unwrap_or_default();
+        state.adjust_for_dividends = chart.dividend_adjusted();
         state.timezone = zone_name(chart);
         state.session_type = match (has_session, chart.extended_hours()) {
             (false, _) => SessionType::Full24x7,
@@ -537,6 +536,68 @@ mod tests {
             frame(&mut terminal, SIZE, vec![]);
         }
         terminal
+    }
+
+    /// The bottom bar follows the chart's adjustment choice and the feed's capability,
+    /// while the comparison group handles its clicks and the host can hide it.
+    #[test]
+    fn dividend_button_uses_chart_state_and_feed_capability() {
+        use egui_charts::data::{HistoryPage, HistoryRequest, Reply};
+        use egui_charts::model::Instrument;
+
+        struct Feed;
+        impl Datafeed for Feed {
+            fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+                reply.send(Ok(
+                    Instrument::new(symbol).with_dividend_adjustment(symbol == "AAPL")
+                ));
+            }
+
+            fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+                TestFeed.history(request, reply);
+            }
+        }
+
+        for dark in [false, true] {
+            for hidden in [false, true] {
+                let mut terminal = Terminal::new(Arc::new(Feed)).with_symbol("AAPL");
+                if hidden {
+                    terminal = terminal.hide(Control::DividendAdjustment);
+                }
+                for _ in 0..3 {
+                    frame(&mut terminal, SIZE, vec![]);
+                }
+                if dark {
+                    terminal.run(Action::TopToolbar(TopToolbarAction::ThemeToggle));
+                }
+                let shown = frame(&mut terminal, SIZE, vec![]);
+                assert_eq!(shown.text_at("Dividend adjustment: off").is_some(), !hidden);
+                if !hidden {
+                    for (label, adjusted) in [
+                        ("Dividend adjustment: off", true),
+                        ("Dividend adjustment: on", false),
+                    ] {
+                        let button = frame(&mut terminal, SIZE, vec![]).text_at(label).unwrap();
+                        assert!(click(&mut terminal, SIZE, button).is_empty());
+                        assert_eq!(terminal.chart().dividend_adjusted(), adjusted);
+                    }
+                }
+                terminal.chart_mut().set_dividend_adjusted(true);
+                let shown = frame(&mut terminal, SIZE, vec![]);
+                assert_eq!(shown.text_at("Dividend adjustment: on").is_some(), !hidden);
+                for symbol in ["BTCUSD", "AAPL"] {
+                    terminal.switch_symbol(symbol);
+                    for _ in 0..3 {
+                        frame(&mut terminal, SIZE, vec![]);
+                    }
+                    let shown = frame(&mut terminal, SIZE, vec![]);
+                    assert_eq!(
+                        shown.text_at("Dividend adjustment: on").is_some(),
+                        !hidden && symbol == "AAPL"
+                    );
+                }
+            }
+        }
     }
 
     /// Opens the time zone menu from the bottom bar and picks `name`.
