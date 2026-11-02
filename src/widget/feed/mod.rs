@@ -62,6 +62,7 @@ pub(crate) struct FeedLink {
     pub(super) trades: Trades,
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
+    pub(super) bubbles_config: VolumeBubblesConfig,
     /// The trades as a footprint on the instrument's tick, while the chart type or a volume
     /// profile drawing reads them, within [`FOOTPRINT_BARS`] and [`FOOTPRINT_ROWS`].
     pub(super) footprint: Option<Footprint>,
@@ -90,6 +91,8 @@ pub(crate) struct FeedLink {
     heatmap_config: crate::chart::overlays::LiquidityHeatmapConfig,
     /// How the live book is shown by the heatmap's profile and the depth ladder.
     book_view: crate::chart::overlays::OrderBookView,
+    /// None keeps the profile following the heatmap for existing setter callers.
+    pub(super) book_visible: Option<bool>,
     study_inputs: Vec<(crate::data::OrderFlowInput, u64)>,
     time: Option<chrono::DateTime<chrono::Utc>>,
     /// A permanent history or resolve failure stops paging until the next reload.
@@ -171,6 +174,8 @@ impl FeedLink {
             heatmap: self.heatmap.is_some().then(Default::default),
             heatmap_config: self.heatmap_config,
             book_view: self.book_view.clone(),
+            book_visible: self.book_visible,
+            bubbles_config: self.bubbles_config.clone(),
             study_inputs: Vec::new(),
             time: self.time,
             paging_stopped: true,
@@ -267,6 +272,8 @@ impl Chart {
             heatmap: None,
             heatmap_config: Default::default(),
             book_view: Default::default(),
+            book_visible: None,
+            bubbles_config: Default::default(),
             study_inputs: Vec::new(),
             time: None,
             paging_stopped: false,
@@ -565,6 +572,9 @@ impl Chart {
     /// when the settings change, not every frame.
     pub fn set_volume_bubbles(&mut self, config: Option<VolumeBubblesConfig>) {
         if let Some(link) = &mut self.feed_link {
+            if let Some(config) = &config {
+                link.bubbles_config = config.clone();
+            }
             link.bubbles = config.map(|config| link.bubbles(config));
         }
     }
@@ -602,6 +612,15 @@ impl Chart {
     pub fn set_order_book_view(&mut self, view: crate::chart::overlays::OrderBookView) {
         if let Some(link) = &mut self.feed_link {
             link.book_view = view;
+        }
+    }
+
+    /// Show the live book profile at the right edge of the pane, independently of the heatmap.
+    /// Until explicitly set, the profile follows the heatmap for existing setter callers.
+    /// Requires a feed and the instrument's tick size; does nothing without a feed.
+    pub fn set_order_book_visible(&mut self, visible: bool) {
+        if let Some(link) = &mut self.feed_link {
+            link.book_visible = Some(visible);
         }
     }
 
@@ -694,38 +713,38 @@ impl Chart {
             return;
         }
         let Some(link) = &self.feed_link else { return };
-        let (Some(heatmap), Some(history), Some(tick)) = (
-            &link.heatmap,
-            &link.depth_history,
-            self.instrument().and_then(|i| i.tick_size),
-        ) else {
+        let Some(tick) = self.instrument().and_then(|i| i.tick_size) else {
             return;
         };
-        let mut heatmap = heatmap.borrow_mut();
-        heatmap.config = link.heatmap_config;
-        heatmap.render(
-            painter,
-            mapping,
-            history,
-            tick * history.config().ticks_per_row as f64,
-            |time| self.time_to_index(time).and_then(|i| self.index_to_x(i)),
-            &link.book_view,
-            [self.config.bullish_color, self.config.bearish_color],
-        );
-        let shown = crate::chart::overlays::render_book_profile(
-            painter,
-            mapping,
-            link.order_book.as_ref(),
-            link.order_queue.as_ref(),
-            tick,
-            &link.book_view,
-            [self.config.bullish_color, self.config.bearish_color],
-        );
-        // A heatmap of individual orders has no columns without them either.
-        let unavailable = shown.err().or_else(|| {
-            (history.config().orders.is_some() && link.order_queue.is_none())
-                .then_some(crate::data::OrderFilterUnavailable::AggregateDepth)
-        });
+        let mut unavailable = None;
+        if let (Some(heatmap), Some(history)) = (&link.heatmap, &link.depth_history) {
+            let mut heatmap = heatmap.borrow_mut();
+            heatmap.config = link.heatmap_config;
+            heatmap.render(
+                painter,
+                mapping,
+                history,
+                tick * history.config().ticks_per_row as f64,
+                |time| self.time_to_index(time).and_then(|i| self.index_to_x(i)),
+                &link.book_view,
+                [self.config.bullish_color, self.config.bearish_color],
+            );
+            unavailable = (history.config().orders.is_some() && link.order_queue.is_none())
+                .then_some(crate::data::OrderFilterUnavailable::AggregateDepth);
+        }
+        if link.book_visible.unwrap_or(link.heatmap.is_some()) {
+            unavailable = crate::chart::overlays::render_book_profile(
+                painter,
+                mapping,
+                link.order_book.as_ref(),
+                link.order_queue.as_ref(),
+                tick,
+                &link.book_view,
+                [self.config.bullish_color, self.config.bearish_color],
+            )
+            .err()
+            .or(unavailable);
+        }
         if let Some(reason) = unavailable {
             painter.text(
                 mapping.rect.right_top() + egui::vec2(-8.0, 8.0),

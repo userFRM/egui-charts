@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 /// Configuration for volume bubbles overlay. Serializable, so a host can keep it with its chart
 /// settings; fields missing from older documents take their defaults.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VolumeBubblesConfig {
     /// Minimum bubble diameter, reduced in crowded automatic views.
