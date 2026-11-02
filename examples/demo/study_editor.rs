@@ -76,7 +76,7 @@ impl DemoApp {
         let mut action = StudyEditorAction::None;
         let mut load = None;
         egui::Panel::bottom("sample_study_editor").resizable(true).default_size(250.0)
-            .height_range(180.0..=450.0).show(ui, |ui| {
+            .size_range(180.0..=450.0).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("Sample study editor");
                     if ui.button("Reload saved").clicked() {
