@@ -35,14 +35,12 @@ pub fn render_markers<'a>(
                 continue;
             }
 
-            let y = match marker.position {
-                MarkerPos::Top => context.rect.top() + 20.0 * marker.size,
-                MarkerPos::Bottom => context.rect.bottom() - 20.0 * marker.size,
-                _ => {
-                    let (price, offset) =
-                        marker_anchor(marker, bar, price_scale).expect("a price-relative marker");
-                    price_scale.price_to_y(price) + offset
+            let y = match marker_anchor(marker, bar, price_scale) {
+                Some((price, offset)) => price_scale.price_to_y(price) + offset,
+                None if marker.position == MarkerPos::Top => {
+                    context.rect.top() + 20.0 * marker.size
                 }
+                None => context.rect.bottom() - 20.0 * marker.size,
             };
             if !y.is_finite() {
                 continue;
