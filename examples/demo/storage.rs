@@ -40,6 +40,14 @@ impl super::DemoApp {
     }
 
     pub(super) fn restore_workspace(&mut self) {
+        let mut name = "Unnamed".to_owned();
+        let mut suffix = 2;
+        while self.layout_is_saved(&name) {
+            name = format!("Unnamed {suffix}");
+            suffix += 1;
+        }
+        self.layout_tabs[self.layout_tab].name = name.clone();
+        self.refresh_layout_menu();
         let json = self
             .storage
             .documents
@@ -65,12 +73,6 @@ impl super::DemoApp {
         })();
         match saved {
             Ok(saved) => {
-                let mut name = "Unnamed".to_owned();
-                let mut suffix = 2;
-                while self.layout_is_saved(&name) {
-                    name = format!("Unnamed {suffix}");
-                    suffix += 1;
-                }
                 if self.restore_layout(name, saved.layout, Ok(saved.comparisons)) {
                     let restore_view = |chart: &mut egui_charts::widget::Chart,
                                         live: &super::LiveFeed,

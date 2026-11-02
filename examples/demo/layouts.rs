@@ -714,10 +714,8 @@ impl DemoApp {
         settings.drawing_favorites_hidden = !toolbar.floating_visible;
         settings.drawing_favorites_pos = toolbar.floating_pos.map(|pos| (pos.x, pos.y));
         settings.magnet_hint_dismissed = toolbar.magnet_hint_dismissed;
-        settings.layout = menu
-            .curr_layout
-            .clone()
-            .filter(|name| menu.layouts.contains(name));
+        settings.layout = Some(self.layout_tabs[self.layout_tab].name.clone())
+            .filter(|name| self.layout_is_saved(name));
         settings.layout_autosave = menu.autosave;
         settings.layout_favorites = menu.favorites.clone();
         settings.indicator_favorites = self
