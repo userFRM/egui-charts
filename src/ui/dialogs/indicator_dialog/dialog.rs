@@ -38,8 +38,9 @@ const SIDEBAR_WIDTH: f32 = 200.0;
 
 /// Indicator Dialog
 ///
-/// Modal dialog for searching and adding indicators. It lists every study its
-/// [`IndicatorFactory`] registers; a click or Enter on a row adds that study with its
+/// Modal dialog for searching and adding indicators. It lists studies from its
+/// [`IndicatorFactory`], filtered by the supplied source and feed capabilities;
+/// a click or Enter on a row adds that study with its
 /// default inputs and leaves the dialog open for the next one. Edit the inputs of an added
 /// study with [`IndicatorSettingsDialog`](super::IndicatorSettingsDialog).
 pub struct IndicatorDialog {
@@ -68,7 +69,7 @@ pub struct IndicatorDialog {
     source: Option<StudySource>,
     source_error: Option<StudyError>,
     full: bool,
-    /// Available indicators, one per factory name
+    /// Catalogue entries, one per factory name
     indicators: Vec<IndicatorInfo>,
     /// Configuration
     config: IndicatorDialogConfig,
@@ -241,7 +242,8 @@ impl IndicatorDialog {
         }
     }
 
-    /// The studies the dialog lists, sorted by display name, including the feed's metrics.
+    /// The catalogue sorted by display name, including the feed's metrics. Entries hidden by
+    /// source or feed capability filters remain in this list.
     pub fn indicators(&self) -> &[IndicatorInfo] {
         &self.indicators
     }
