@@ -14,8 +14,8 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Line, line with markers, step line, area, HLC area, baseline, columns and high-low charts; line and area charts accept a `PriceSource`.
 - [x] Heikin-Ashi, Renko, Kagi, line break, point and figure, and range-bar transformations and rendering.
 - [x] Renko box sizing and wicks, line-break lookback, and price-based chart parameters are configurable.
-- [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles.
-- [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time-based intervals with an instrument tick size; unsupported intervals and bars without retained trades use candles. Session profiles require `studies`.
+- [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles; autoscale fits the full displayed distributions and cropped profiles retain their session and central-level readouts.
+- [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time-based intervals with an instrument tick size; unsupported intervals and bars without retained trades use candles. Session profiles require `studies`; autoscale includes their full price rows after range edits, and manual crops retain session and POC/value-area readouts.
 - [ ] Change Kagi line thickness at shoulder and waist crossings within a continuing leg.
 - [ ] Expose the standalone point-and-figure close-only source in chart parameters and settings.
 - [x] Range charts build their bars from the supplied executions, falling back to the OHLC approximation while the chart holds none; `Chart::range_bar_source` reports which one is shown.
@@ -41,7 +41,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 - [x] Linear, logarithmic, percentage, indexed-to-100 and inverted price scales, autoscale, manual ranges and scale options.
 - [x] Time-axis tick hierarchy, price marks that default to the instrument tick grid with host overrides, exchange time zones, session breaks and extended-hours shading.
-- [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters.
+- [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters. Drawing prices and price changes use their pane's raw-price formatter, including measurements, forecasts, projections, position levels and rectangle heights.
 - [x] Locale-aware date names and configurable date patterns.
 - [x] Chart-owned panes share the time axis and support resizing, reordering, stretch sizing, collapse and maximise controls.
 - [x] Studies and added series can use separate panes and independent scales.
@@ -148,7 +148,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ### Footprints, Delta and Profiles
 
 - [x] `Footprint` aggregates bid, ask and unknown volume by bar and integer tick row, with execution-size filtering.
-- [x] Footprint cells support bid/ask, total volume, delta and delta-plus-volume modes, up to four columns per bar, profile or boxed rendering, automatic row grouping and opening/closing price ticks in a separate gutter.
+- [x] Footprint cells support bid/ask, total volume, delta and delta-plus-volume modes, up to four columns per bar, profile or boxed rendering, automatic row grouping and opening/closing price ticks in a separate gutter; their values have clearance from underlying price guides.
 - [x] Per-bar point of control, value area and horizontal/diagonal imbalance highlighting; compact values fit detail columns and POC outlines recede in the overview.
 - [x] Public calculations and renderers expose stacked diagonal imbalance zones, unrevisited POC levels, volume clusters and per-bar statistics; annotation captions avoid footprint values, with compact overview marks and hover details. Statistics use shared row labels, aligned compact values, explicit percentages and ratios, and a zoom-in or resize notice when detail cannot fit.
 - [x] Execution-based delta histograms and cumulative-delta candles, including intrabar extremes and configurable reset boundaries, render in a supplied pane mapping. The cumulative execution study offers optional confirmed divergence and exhaustion price markers, with study outputs for bar-close alerts.
@@ -168,7 +168,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Sequenced aggregated-depth snapshots/deltas and per-order add, modify, cancel and execute events, with gap detection and resynchronisation.
 - [x] Public order book and order queue retain tick-aware prices, best quotes and queue priority.
 - [x] `DepthHistory` retains sampled resting-size columns in bounded tiers; the heatmap uses retained texture tiles and partial updates.
-- [x] Heatmap best bid/ask paths and a side profile of total resting size. The Order flow settings tab saves independent heatmap, book profile and volume bubble visibility and appearance; declared feed services and instrument tick size determine its controls.
+- [x] Heatmap best bid/ask paths and a compact current-book profile of total or largest-order resting size, with host-supplied quantity units, a maximum-size key including offscreen levels and exact price, side and size on hover. The Order flow settings tab saves independent heatmap, book profile and volume bubble visibility and appearance; declared feed services and instrument tick size determine its controls.
 - [x] Volume bubbles aggregate by chart bar and price, adapt automatic grouping, sizing and borders to screen density, and offer side/delta colours, linear/square-root/logarithmic scaling and outlier limits.
 - [x] Time-and-sales panel with aggressor colours, size filters, sound intents, selectable milliseconds and full execution timestamps on hover.
 - [x] Explicit aggressor identifiers combine split fills into parent orders with total size, price span and fill count.
@@ -196,6 +196,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] `StrategyTester` selects factory strategies, reuses the study input editor, edits account and execution settings, requests history from the host and displays runs with labelled fill signals. Edits mark the report stale.
 - [x] Parameter optimisation previews bounded numeric grids, yields between execution batches, sorts trial results and applies selected inputs on native and web builds.
 - [x] `StrategyFactory` lists and creates built-in and host strategies with editable study inputs, defaults and bounds.
+- [x] `strategies::optimise` lazily runs every input combination on a fresh strategy with the same bars and settings, yielding its inputs and report performance; dropping the iterator stops further trials.
 - [x] Ten price-action strategies trade gaps, consecutive closes, inside/outside bars, channels, confirmed pivots and ATR expansion, with fill-relative tick brackets where needed.
 - [x] Twelve study strategies use public indicator values for bands, momentum, averages, oscillators, trend flips and technical ratings; every built-in preserves its trades on historical prefixes.
 - [ ] Extend risk-percent sizing to limit, stop and stop-limit tickets.
@@ -294,6 +295,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Accessibility roles/states, keyboard focus and a textual bar/study readout.
 - [x] Reusable `ui_kit` buttons, inputs, colour pickers, dialogs, lists, tabs, panels, command palette and toast components.
 - [x] Native and browser examples and CI checks cover library, feature combinations and demo builds.
+- [x] The guide and site landing page share light and dark navigation, a working first-chart example and a live sample chart; the full demo stays at `/demo/`.
 - [ ] Route remaining direct English UI labels through the translation lookup.
 - [ ] Make session-quote/volume tags and marker outlines fully theme-configurable.
 - [ ] Add a runnable desktop-webview integration example.
@@ -302,7 +304,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 The crate renders supplied data and exposes interfaces for application services. The application supplies market data, broker execution, accounts and durable storage. These interfaces also allow services to run remotely.
 
-- `Datafeed`, `SymbolSearch`, `Quotes` and `Marks` connect instrument discovery, history, live prices, executions, depth and chart events. Feed queries also supply metrics, options volume, analyst targets, symbol details, news, calendars, screeners, hotlists and market heatmaps.
+- `Datafeed`, `SymbolSearch`, `Quotes` and `Marks` connect instrument discovery, history, live prices, executions, depth and chart events. Feed queries also supply metrics, options volume, listed option expiries and live or historical option chains with quotes, open interest, implied volatility and Greeks, analyst targets, symbol details, news, calendars, screeners, hotlists and market heatmaps. The headless `OptionChain` handle retains the latest validated snapshot and error; the host supplies all option data.
 - `Broker` supplies real or paper-account state, trading rules, execution and account updates. Trading components submit actions and render the reported orders, positions, fills and history.
 - `Storage` supplies layouts, drawings, settings and template documents; an application may use local or remote storage and manage accounts, synchronisation and sharing.
 - `Alerts` stores and evaluates alert conditions and reports changes and triggers. The crate edits models and draws levels, dialogs, logs and toasts; the application supplies sound, schedules and external delivery.
