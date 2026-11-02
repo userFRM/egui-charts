@@ -4904,7 +4904,10 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
-            if query == "RSI" {
+            if matches!(
+                query,
+                "RSI" | "Volatility smile" | "Yield curve" | "Primitives and custom series"
+            ) {
                 app.chart.user_action(|chart| {
                     let dm = chart.drawings_mut();
                     let tool = egui_charts::drawings::DrawingToolType::TrendLine;
@@ -5039,6 +5042,7 @@ mod tests {
                     let bars = app.chart.bars(SeriesId::MAIN).to_vec();
                     let studies: Vec<_> = app.chart.indicators().map(|(id, _)| id).collect();
                     let range = app.chart.get_time_scale_state();
+                    let can_undo = app.chart.can_undo();
                     let mut found = false;
                     for _ in 0..3 {
                         let output = ctx.run_ui(
@@ -5175,6 +5179,8 @@ mod tests {
                             studies
                         );
                         assert_eq!(app.chart.get_time_scale_state(), range);
+                        assert_eq!(app.chart.drawings().drawings.len(), 1);
+                        assert_eq!(app.chart.can_undo(), can_undo);
                     }
                 }
                 _ => assert!(app.settings_dialog.is_open),
