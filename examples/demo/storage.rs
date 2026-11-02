@@ -279,7 +279,21 @@ mod tests {
     fn restart(ctx: &egui::Context, storage: &AppStorage) -> DemoApp {
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(storage);
-        DemoApp::new_at(&cc, "2026-10-27T19:29:50Z".parse().unwrap(), true)
+        let mut app = DemoApp::new_at(&cc, "2026-10-27T19:29:50Z".parse().unwrap(), true);
+        show_charts(&mut app, ctx);
+        app
+    }
+
+    fn show_charts(app: &mut DemoApp, ctx: &egui::Context) {
+        for _ in 0..3 {
+            ctx.run_ui(Default::default(), |ui| {
+                app.chart.show(ui);
+                for extra in &mut app.extra_charts {
+                    extra.chart.show(ui);
+                }
+            })
+            .drop_without_applying_deltas();
+        }
     }
 
     #[test]
@@ -332,6 +346,7 @@ mod tests {
             let mut app = restart(&ctx, &storage);
             app.ensure_chart_slots(mode);
             app.activate_chart_slot(mode.chart_count() - 1);
+            show_charts(&mut app, &ctx);
             app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
             app.chart
                 .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
@@ -452,6 +467,7 @@ mod tests {
             );
             app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Area));
             for _ in 0..2 {
+                show_charts(&mut app, &ctx);
                 app.save(&mut storage);
                 app = restart(&ctx, &storage);
                 app.poll_storage(&ctx);
