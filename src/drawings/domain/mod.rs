@@ -4,6 +4,7 @@
 //! For persistence across history or interval changes, use timestamp anchors through
 //! [`persistence`](super::persistence) or the chart's drawing APIs.
 
+mod alert_levels;
 mod bars_pattern;
 mod coordinates;
 mod drawing;

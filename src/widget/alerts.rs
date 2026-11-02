@@ -120,7 +120,7 @@ impl Chart {
                 let scale = self.config().right_axis_scale_mode;
                 self.drawings().drawings.iter().find_map(|d| {
                     let level = d.alert_level(source)?;
-                    d.alert_levels(bar as f64, scale)
+                    d.alert_levels_with_bars(bar as f64, scale, self.bars(SeriesId::MAIN))
                         .into_iter()
                         .find(|(index, ..)| *index == level)
                         .map(|(.., price)| price)
@@ -156,7 +156,7 @@ impl Chart {
             .iter()
             .filter(|d| d.completed)
             .flat_map(|d| {
-                let levels = d.alert_levels(bar, scale);
+                let levels = d.alert_levels_with_bars(bar, scale, self.bars(SeriesId::MAIN));
                 let single = levels.len() == 1;
                 levels.into_iter().map(move |(level, name, _)| {
                     let drawing = format!("{} {}", d.tool_type.as_str(), d.id);
@@ -244,6 +244,183 @@ mod tests {
                 (average, "SMA: SMA(2)".to_owned()),
                 (trend, "Trend Line 7".to_owned())
             ]
+        );
+    }
+    /// Fork medians and tines use anchor construction, and regression fits the supplied closes.
+    #[test]
+    fn fork_and_regression_sources_follow_edits_and_saved_geometry() {
+        let bars = [100.0, 104.0, 102.0, 108.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, close)| {
+                Bar::new(
+                    DateTime::from_timestamp(i as i64 * 60, 0).unwrap(),
+                    close,
+                    close,
+                    close,
+                    close,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_symbol("SAMPLE");
+        // A=(0,100), B=(1,200), C=(2,50), midpoint BC=(1.5,125).
+        // Standard slope=50/3, Schiff=-50/3, modified Schiff=-25, inside=-200/3.
+        for (tool, expected) in [
+            (
+                DrawingToolType::Pitchfork,
+                [150.0, 700.0 / 3.0, 200.0 / 3.0],
+            ),
+            (
+                DrawingToolType::SchiffPitchfork,
+                [100.0, 500.0 / 3.0, 100.0 / 3.0],
+            ),
+            (
+                DrawingToolType::ModifiedSchiffPitchfork,
+                [87.5, 150.0, 25.0],
+            ),
+            (
+                DrawingToolType::InsidePitchfork,
+                [25.0, 200.0 / 3.0, -50.0 / 3.0],
+            ),
+            (DrawingToolType::Pitchfan, [150.0, 400.0, 25.0]),
+        ] {
+            for scale in [
+                crate::scales::PriceScaleMode::Normal,
+                crate::scales::PriceScaleMode::Logarithmic,
+            ] {
+                chart.config_mut().right_axis_scale_mode = scale;
+                let log = scale == crate::scales::PriceScaleMode::Logarithmic;
+                let expected = expected.map(|v| if log { (v / 100.0_f64).exp() } else { v });
+                let mut drawing = Drawing::new(7, tool);
+                drawing.stored_id = Some("fork#saved".into());
+                drawing.chart_points = vec![
+                    ChartPoint::new(0.0, 100.0),
+                    ChartPoint::new(1.0, 200.0),
+                    ChartPoint::new(2.0, 50.0),
+                ];
+                if log {
+                    for point in &mut drawing.chart_points {
+                        point.price = (point.price / 100.0).exp();
+                    }
+                }
+                drawing.pitchfork = None;
+                drawing.completed = true;
+                chart.drawings_mut().drawings = vec![drawing];
+                let drawing = &chart.drawings().drawings[0];
+                // Legacy levels are 0, 0.5, 1, 1.5. Each setting owns two stable slots.
+                let sources = [
+                    drawing.alert_source(0),
+                    drawing.alert_source(4),
+                    drawing.alert_source(5),
+                ];
+                for (source, expected) in sources.iter().zip(expected) {
+                    let got = chart.alert_value(source, 3).unwrap();
+                    assert!(
+                        (got - expected).abs() < 1e-9,
+                        "{tool:?}: {source:?}: {got} != {expected}"
+                    );
+                    assert!(chart.alert_sources().iter().any(|(s, _)| s == source));
+                }
+                #[cfg(feature = "ui")]
+                {
+                    #[cfg(feature = "ui")]
+                    {
+                        let mut menu = crate::ui::context_menu::drawing::DrawingContextMenu::new();
+                        menu.open_on(&egui::Context::default(), &chart, egui::Pos2::ZERO, 7);
+                        assert_eq!(
+                            menu.alert.unwrap().condition,
+                            crate::model::AlertCondition::Compare {
+                                other: sources[0].clone(),
+                                comparison: crate::model::AlertComparison::Crossing
+                            }
+                        );
+                    }
+                    let mut config = crate::drawings::PitchforkConfig::legacy();
+                    config.levels[0].visible = false;
+                    chart.drawings_mut().drawings[0].pitchfork = Some(config);
+                    assert_eq!(chart.alert_value(&sources[0], 3), None);
+                    assert!(
+                        (chart.alert_value(&sources[1], 3).unwrap() - expected[1]).abs() < 1e-9
+                    );
+                    chart.drawings_mut().drawings[0].pitchfork = None;
+                    let stored = crate::drawings::persistence::drawing_to_stored(
+                        &chart.drawings().drawings[0],
+                        |i| (i * 60_000.0) as i64,
+                    );
+                    let saved = serde_json::to_string(&stored).unwrap();
+                    let restored = serde_json::from_str(&saved).unwrap();
+                    chart.drawings_mut().drawings[0] =
+                        crate::drawings::persistence::stored_to_drawing(
+                            &restored,
+                            |t| t as f32 / 60_000.0,
+                            99,
+                        );
+                    assert!(chart.alert_value(&sources[0], 3).is_some());
+                    chart.drawings_mut().drawings[0].chart_points[0].price += 10.0;
+                    assert_ne!(chart.alert_value(&sources[0], 3).unwrap(), expected[0]);
+                    for point in &mut chart.drawings_mut().drawings[0].chart_points {
+                        point.bar_idx = 0.0;
+                    }
+                    assert_eq!(chart.alert_value(&sources[0], 3), None);
+                    chart.drawings_mut().drawings.clear();
+                    assert_eq!(chart.alert_value(&sources[0], 3), None);
+                }
+            }
+            chart.config_mut().right_axis_scale_mode = crate::scales::PriceScaleMode::Normal;
+            // y=[100,104,102,108], x=[0,1,2,3]: mean=103.5, Sxx=5, Sxy=11.
+            // slope=2.2, intercept=100.2, residual SS=10.8, sigma=sqrt(10.8/3).
+            let mut regression = Drawing::new(8, DrawingToolType::RegressionTrend);
+            regression.chart_points = vec![ChartPoint::new(0.0, 999.0), ChartPoint::new(3.0, 1.0)];
+            regression.completed = true;
+            chart.drawings_mut().drawings = vec![regression];
+            let drawing = &chart.drawings().drawings[0];
+            for (level, expected) in [
+                (0, 106.8),
+                (1, 106.8 + 2.0 * 3.6_f64.sqrt()),
+                (2, 106.8 - 2.0 * 3.6_f64.sqrt()),
+            ] {
+                let got = chart.alert_value(&drawing.alert_source(level), 3).unwrap();
+                assert!(
+                    (got - expected).abs() < 1e-9,
+                    "regression {level}: {got} != {expected}"
+                );
+            }
+            let mut menu = crate::ui::context_menu::drawing::DrawingContextMenu::new();
+            menu.open_on(&egui::Context::default(), &chart, egui::Pos2::ZERO, 8);
+            assert_eq!(
+                menu.alert.unwrap().condition,
+                crate::model::AlertCondition::Compare {
+                    other: AlertSource::Drawing("8".into()),
+                    comparison: crate::model::AlertComparison::Crossing
+                }
+            );
+        }
+        chart.drawings_mut().drawings[0].chart_points[1].bar_idx = 2.0;
+        assert!(
+            (chart
+                .alert_value(&AlertSource::Drawing("8".into()), 3)
+                .unwrap()
+                - 104.0)
+                .abs()
+                < 1e-9
+        );
+        chart.drawings_mut().drawings[0].chart_points[1].bar_idx = 3.0;
+        chart.config_mut().right_axis_scale_mode = crate::scales::PriceScaleMode::Logarithmic;
+        let got = chart
+            .alert_value(&AlertSource::Drawing("8".into()), 1)
+            .unwrap();
+        let expected = (100.2_f64.powi(2) * 106.8).cbrt();
+        assert!(
+            (got - expected).abs() < 1e-9,
+            "log regression interpolates its painted endpoints"
+        );
+        let drawing = &mut chart.drawings_mut().drawings[0];
+        drawing.chart_points[1].bar_idx = 0.0;
+        assert_eq!(
+            chart.alert_value(&AlertSource::Drawing("8".into()), 1),
+            None
         );
     }
 }
