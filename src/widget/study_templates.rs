@@ -251,7 +251,7 @@ mod tests {
         twice.price_pane = vec![0, 1];
         let refused = "Study template panes name a missing or repeated study";
         for (set, limit, error) in [
-            (unknown, None, "Unknown study: Missing"),
+            (unknown, None, "unknown study \"Missing\""),
             (past_end, None, refused),
             (twice, None, refused),
             (saved, Some(1), "Study limit reached"),
