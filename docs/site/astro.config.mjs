@@ -6,7 +6,8 @@ import remarkDocs from './remark-docs.mjs';
 export default defineConfig({
   site: 'https://userfrm.github.io',
   base: '/egui-charts/docs/',
-  trailingSlash: 'always',
+  // Sidebar topic links already include a slash before their fragment.
+  trailingSlash: 'ignore',
   markdown: { processor: unified({ remarkPlugins: [remarkDocs] }) },
   integrations: [
     starlight({
@@ -32,19 +33,32 @@ export default defineConfig({
         { slug: 'index', label: 'Introduction' },
         { label: 'Status', link: '/progress/' },
         {
-          label: 'Getting started',
-          items: ['installation', 'first-chart', 'data-model', 'data'],
+          label: 'Learning',
+          items: ['installation', 'first-chart', { slug: 'builder-guide', label: 'Builder tutorial' }, 'data-model', 'data'],
         },
         {
-          label: 'Features',
+          label: 'Chart concepts',
           items: [
-            'chart-types', 'scales',
-            { label: 'Studies', items: ['studies', 'study-data'] },
-            'drawings', 'order-flow', 'replay', 'strategy-report', 'host-services',
-            'theming', 'application-ui', 'performance',
+            'chart-types',
+            { label: 'Price scale', link: '/scales/#choose-a-price-scale' },
+            { label: 'Time scale and whitespace', link: '/scales/#exchange-time-not-bar-indices' },
+            { label: 'Panes', link: '/api-reference/#panes' },
+            { label: 'Markers', link: '/api-reference/#markers' },
+            { slug: 'scales', label: 'Scales and interaction overview' },
           ],
         },
-        { label: 'Integration reference', items: ['builder-guide', 'api-reference'] },
+        {
+          label: 'Studies and extensions',
+          items: ['studies', 'study-data', 'drawings', 'order-flow', 'theming', { label: 'Extensions', link: '/api-reference/#extensions' }],
+        },
+        {
+          label: 'Recipes',
+          items: [
+            { label: 'Integration recipes', link: '/api-reference/#recipes' },
+            'application-ui', 'replay', 'strategy-report', 'host-services', 'performance',
+          ],
+        },
+        { label: 'API', items: ['api-reference'] },
       ],
     }),
   ],
