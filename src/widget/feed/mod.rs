@@ -597,7 +597,10 @@ impl Chart {
     /// count, what a bar measures and which orders are highlighted. Its size tiers also mark the
     /// heatmap's cells whose largest recorded order reaches one; the orders the heatmap records are
     /// those of [`DepthHistoryConfig::orders`](crate::data::DepthHistoryConfig::orders). Applies
-    /// from the next frame.
+    /// from the next frame. The profile key names its measure and maximum across all supplied
+    /// levels, including offscreen prices, after filtering; hovering the strip shows the row's
+    /// exact price, side and size. Set [`OrderBookView::quantity_unit`](crate::chart::overlays::OrderBookView::quantity_unit)
+    /// to describe the feed's quantities; without it the key says "feed units".
     /// A view that needs individual orders on an aggregate feed draws an explicit notice in the
     /// pane and an empty ladder, rather than aggregate sizes.
     pub fn set_order_book_view(&mut self, view: crate::chart::overlays::OrderBookView) {
