@@ -42,9 +42,11 @@ impl<T> Snapshot<T> {
         read(&self.values.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
-    pub(super) fn update<R>(&self, update: impl FnOnce(&mut T) -> R) -> R {
+    pub(super) fn update<R>(&self, update: impl FnOnce(&mut T) -> Option<R>) -> Option<R> {
         let result = update(&mut self.values.lock().unwrap_or_else(PoisonError::into_inner));
-        (self.wake)();
+        if result.is_some() {
+            (self.wake)();
+        }
         result
     }
 }
@@ -59,7 +61,10 @@ impl OptionsVolumeSink {
     /// Pushes after the last consumer is dropped are ignored.
     pub fn push(&self, values: Vec<OptionsVolume>) {
         if let Some(snapshot) = self.0.upgrade() {
-            snapshot.update(|latest| *latest = values.into());
+            snapshot.update(|latest| {
+                *latest = values.into();
+                Some(())
+            });
         }
     }
 

@@ -174,9 +174,9 @@ impl OptionChainSink {
         let Some(snapshot) = self.0.upgrade() else {
             return Ok(());
         };
-        snapshot.update(|state| {
+        let result = snapshot.update(|state| {
             if state.finished {
-                return Ok(());
+                return None;
             }
             let result = if rows.len() > 100_000 {
                 Err(FeedError::InvalidData(format!(
@@ -186,7 +186,7 @@ impl OptionChainSink {
             } else {
                 rows.iter().try_for_each(|row| row.validate(&state.query))
             };
-            match result {
+            Some(match result {
                 Ok(()) => {
                     state.rows = rows.into();
                     state.error = None;
@@ -197,8 +197,9 @@ impl OptionChainSink {
                     state.error = Some(error.clone());
                     Err(error)
                 }
-            }
-        })
+            })
+        });
+        result.unwrap_or(Ok(()))
     }
 
     /// Report a feed failure and wake the host, retaining the last accepted rows.
@@ -206,10 +207,12 @@ impl OptionChainSink {
     pub fn report_error(&self, error: FeedError) {
         if let Some(snapshot) = self.0.upgrade() {
             snapshot.update(|state| {
-                if !state.finished {
-                    state.error = Some(error);
-                    state.finished = state.query.as_of.is_some();
+                if state.finished {
+                    return None;
                 }
+                state.error = Some(error);
+                state.finished = state.query.as_of.is_some();
+                Some(())
             });
         }
     }
@@ -409,7 +412,10 @@ mod tests {
             if historical {
                 assert!(!sink.is_active());
                 sink.push(vec![quote("LATE")]).unwrap();
+                sink.report_error(FeedError::NotSupported);
                 assert!(chain.rows().is_empty());
+                assert_eq!(chain.error(), Some(FeedError::Network("offline".into())));
+                assert_eq!(wakes.load(Ordering::Relaxed), 1);
                 continue;
             }
             for interest in [0.0, 1200.0] {
@@ -455,7 +461,12 @@ mod tests {
         let feed = Feed::default();
         let mut query = query();
         query.as_of = Some(quote("CALL").time);
-        let chain = OptionChain::new(&feed, query, || {}).unwrap();
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&wakes);
+        let chain = OptionChain::new(&feed, query, move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
         let (_, sink) = feed.0.lock().unwrap().clone().unwrap();
         sink.push(vec![quote("CALL")]).unwrap();
         let held = chain.rows();
@@ -464,6 +475,7 @@ mod tests {
         sink.report_error(FeedError::NotSupported);
         assert!(Arc::ptr_eq(&chain.rows(), &held));
         assert_eq!(chain.error(), None);
+        assert_eq!(wakes.load(Ordering::Relaxed), 1);
     }
 
     #[test]
