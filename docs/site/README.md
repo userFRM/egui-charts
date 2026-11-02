@@ -42,3 +42,22 @@ python3 -m http.server --bind 127.0.0.1 --directory "$preview_root"
 Open `http://localhost:8000/egui-charts/docs/`.
 Starlight provides system theme detection, its theme picker and Pagefind search.
 All assets are local.
+
+## Running guide examples
+
+`examples/docs/` is an unpublished widget-only application, separate from the
+full demo. Build it with the same pinned Trunk version as Pages:
+
+```sh
+trunk build --release --locked --public-url /egui-charts/docs/examples/widget/ --config examples/docs/Trunk.toml
+```
+
+Pages serves it at `/egui-charts/docs/examples/widget/?scene=first-chart`.
+The scene uses fixed synthetic bars and needs no data service.
+
+Measured on 2026-11-02 with Trunk 0.21.14, Rust 1.99.1, the committed lockfile and
+the command above: the optimized WebAssembly file is **4,763,509 bytes**
+(4.54 MiB), or **1,980,772 bytes** (1.89 MiB) with gzip level 9. These sizes
+exclude the JavaScript loader; gzip is a transfer-size measurement, and actual
+compression depends on the server. The build uses the `wasm-release` profile
+and `wasm-opt -Oz` declared in `examples/docs/`.
