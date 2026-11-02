@@ -866,6 +866,9 @@ mod tests {
     fn replay_closes_price_the_ticket_below_the_notices() {
         let mut terminal = paper_terminal();
         settle(&mut terminal);
+        // The watchlist opens beside the chart; closed, a 640 point window keeps room for the
+        // quote buttons beside the ticket.
+        terminal.panel = None;
         let start = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
         let bars = [100.0, 80.0, 110.0]
             .into_iter()
@@ -971,6 +974,8 @@ mod tests {
                         Ok(())
                     });
                 frame(&mut terminal, size, vec![]);
+                // Closed, the watchlist leaves both chart slots room for the fills and markers.
+                terminal.panel = None;
                 if dark {
                     terminal.run(Action::TopToolbar(TopToolbarAction::ThemeToggle));
                 }
