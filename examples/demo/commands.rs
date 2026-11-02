@@ -264,3 +264,188 @@ impl DemoApp {
         true
     }
 }
+
+impl DemoApp {
+    pub(super) fn export_image_bytes(
+        &self,
+        ctx: &egui::Context,
+        options: &egui_charts::widget::ImageExportOptions,
+        format: super::ExportFormat,
+        arrangement: bool,
+    ) -> Result<Vec<u8>, egui_charts::widget::ExportError> {
+        if !arrangement {
+            return if format == super::ExportFormat::Svg {
+                self.trading
+                    .export_svg(&self.chart, ctx, options)
+                    .map(String::into_bytes)
+            } else {
+                self.trading.export_png(&self.chart, ctx, options)
+            };
+        }
+        let mut extra: Vec<_> = self
+            .extra_charts
+            .iter()
+            .map(|slot| slot.chart.export_snapshot(ctx, options))
+            .collect();
+        let draw = |ui: &mut egui::Ui, active: &mut egui_charts::Chart| {
+            let mut charts: Vec<_> = extra.iter_mut().collect();
+            charts.insert(self.layout_slot, active);
+            for (slot, rect) in self
+                .layout
+                .visible_chart_rects(ui.available_rect_before_wrap(), charts.len())
+            {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+                    self.trading.draw_export(ui, charts[slot]);
+                });
+            }
+        };
+        if format == super::ExportFormat::Svg {
+            self.chart
+                .export_layout_svg(ctx, options, draw)
+                .map(String::into_bytes)
+        } else {
+            self.chart.export_layout_png(ctx, options, draw)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, RawInput};
+    use egui_charts::widget::{Chart, ChartLayoutMode, ImageExportOptions};
+
+    fn choose_scope(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
+        let mut point = None;
+        for _ in 0..3 {
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.show_dialogs(ui.ctx()),
+            );
+            point = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+        }
+        let point = point.expect("image scope must be selectable in the export dialog");
+        ctx.run_ui(
+            RawInput {
+                events: vec![
+                    Event::PointerMoved(point),
+                    Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| app.show_dialogs(ui.ctx()),
+        )
+        .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn arrangement_exports_keep_slot_order_backgrounds_and_the_active_chart_scope() {
+        for (mode, count) in [
+            (ChartLayoutMode::TwoHorizontal, 2),
+            (ChartLayoutMode::Four, 4),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            app.ensure_chart_slots(mode);
+            app.activate_chart_slot(count - 1);
+            let colors = [[30, 50, 70], [60, 80, 100], [90, 110, 130], [120, 140, 160]];
+            {
+                let mut charts: Vec<_> = app
+                    .extra_charts
+                    .iter_mut()
+                    .map(|slot| &mut slot.chart)
+                    .collect();
+                charts.insert(app.layout_slot, &mut app.chart);
+                for (slot, chart) in charts.into_iter().enumerate().take(count) {
+                    *chart = Chart::new(Default::default());
+                    chart.set_symbol(format!("SLOT{}", slot + 1));
+                    let mut theme = app.theme.clone();
+                    let [r, g, b] = colors[slot];
+                    theme.chart.bg = egui::Color32::from_rgb(r, g, b);
+                    chart.set_theme(&ctx, &theme);
+                    chart.config_mut().show_volume = false;
+                }
+            }
+            app.execute_search_command(&ctx, "export");
+            choose_scope(&mut app, &ctx, "Visible arrangement");
+            let before = app.chart.get_time_scale_state();
+            for transparent in [false, true] {
+                let mut options = ImageExportOptions::default();
+                options.size = [640, 400];
+                options.include_timestamp = false;
+                options.transparent_background = transparent;
+                let svg_path = std::env::temp_dir()
+                    .join(format!("demo-arrangement-{count}-{transparent}.svg"));
+                app.export_svg(&ctx, &options, Some(svg_path.clone()));
+                let svg = std::fs::read_to_string(&svg_path).unwrap();
+                for slot in 1..=count {
+                    assert!(svg.contains(&format!("SLOT{slot}")), "missing slot {slot}");
+                }
+                for chrome in ["Export chart", "Image scope", "Samples"] {
+                    assert!(!svg.contains(chrome));
+                }
+                let png_path = std::env::temp_dir()
+                    .join(format!("demo-arrangement-{count}-{transparent}.png"));
+                app.run_export(
+                    &ctx,
+                    egui_charts::ui::export::ExportConfig {
+                        format: super::super::ExportFormat::Png,
+                        image: options,
+                    },
+                    Some(png_path.clone()),
+                );
+                app.handle_screenshot(&ctx);
+                let image = image::open(&png_path).unwrap().into_rgba8();
+                assert_eq!(image.dimensions(), (640, 400));
+                for (slot, color) in colors.iter().enumerate().take(count) {
+                    let (column, row) = (slot % 2, slot / 2);
+                    let pixel = image
+                        .get_pixel(5 + column as u32 * 320, 150 + row as u32 * 200)
+                        .0;
+                    if transparent {
+                        assert_eq!(pixel[3], 0);
+                    } else {
+                        assert_eq!(&pixel[..3], color);
+                    }
+                }
+                std::fs::remove_file(svg_path).unwrap();
+                std::fs::remove_file(png_path).unwrap();
+            }
+            assert_eq!(app.chart.get_time_scale_state(), before);
+            choose_scope(&mut app, &ctx, "Active chart");
+            let path = std::env::temp_dir().join(format!("demo-active-{count}.svg"));
+            app.export_svg(&ctx, &ImageExportOptions::default(), Some(path.clone()));
+            let svg = std::fs::read_to_string(&path).unwrap();
+            assert!(svg.contains(&format!("SLOT{count}")));
+            for slot in 1..count {
+                assert!(!svg.contains(&format!("SLOT{slot}")));
+            }
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+}

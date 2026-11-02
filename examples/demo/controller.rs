@@ -415,6 +415,7 @@ pub struct DemoApp {
     // A study copied in this session, kept across symbols and intervals.
     copied_study: Option<String>,
     export_dialog: ExportDialog,
+    export_arrangement: bool,
     date_picker: DatePicker,
 
     // A finished host-run sample, independent of subsequent chart navigation.
@@ -693,6 +694,7 @@ impl DemoApp {
             copied_drawing: None,
             copied_study: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
+            export_arrangement: false,
             date_picker: DatePicker::new(),
             strategy_report: Default::default(),
             live_strategy: None,
@@ -1224,7 +1226,15 @@ impl DemoApp {
         }
 
         // Export dialog (screenshot / CSV).
-        match self.export_dialog.show(ctx) {
+        match self.export_dialog.show_with(ctx, |ui, format| {
+            if !format.is_data_format() {
+                ui.horizontal(|ui| {
+                    ui.label("Image scope");
+                    ui.radio_value(&mut self.export_arrangement, false, "Active chart");
+                    ui.radio_value(&mut self.export_arrangement, true, "Visible arrangement");
+                });
+            }
+        }) {
             ExportResponse::Export { config, save_path } => self.run_export(ctx, config, save_path),
             ExportResponse::Closed | ExportResponse::None => {}
         }
@@ -1334,8 +1344,8 @@ impl DemoApp {
         image: &egui_charts::widget::ImageExportOptions,
         save_path: Option<std::path::PathBuf>,
     ) {
-        match self.chart.export_svg(ctx, image) {
-            Ok(svg) => self.write_export(save_path, "svg", svg.as_bytes()),
+        match self.export_image_bytes(ctx, image, ExportFormat::Svg, self.export_arrangement) {
+            Ok(svg) => self.write_export(save_path, "svg", &svg),
             Err(error) => self.export_failed(save_path.is_some(), error.to_string()),
         }
     }
@@ -3447,8 +3457,12 @@ impl DemoApp {
             return;
         };
         let result = self
-            .trading
-            .export_png(&self.chart, ctx, &options)
+            .export_image_bytes(
+                ctx,
+                &options,
+                ExportFormat::Png,
+                self.export_dialog.is_open() && self.export_arrangement,
+            )
             .map_err(|error| error.to_string())
             .and_then(|png| match target {
                 ScreenshotTarget::File(path) => self.save_screenshot(&png, path),
