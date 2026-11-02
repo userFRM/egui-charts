@@ -144,3 +144,59 @@ fn equity_curve_uses_the_full_width_at_every_time_resolution() {
         assert!(points[1].x - points[0].x > 200.0, "{step}");
     }
 }
+
+#[test]
+fn report_signals_preserve_valid_fill_times_prices_indices_and_sides() {
+    use crate::model::{Direction, SignalShape};
+    let start = DateTime::UNIX_EPOCH + chrono::TimeDelta::nanoseconds(123);
+    let mut report = StrategyReport::new("Fills", "TEST", Timeframe::Min1, 1000.0);
+    for (side, exit) in [
+        (OrderSide::Buy, true),
+        (OrderSide::Sell, true),
+        (OrderSide::Sell, false),
+    ] {
+        let mut trade = StrategyTrade::new(side, 2.0, start, -0.00001234);
+        trade.label = Some("Rule / close".into());
+        if exit {
+            trade.exit = Some(StrategyExit::new(
+                start + chrono::TimeDelta::milliseconds(250),
+                0.25,
+                0.0,
+            ));
+        }
+        report.trades.push(trade);
+    }
+    let mut invalid = report.trades[0].clone();
+    invalid.quantity = 0.0;
+    report.trades.insert(1, invalid);
+    let signals = report.signals();
+    assert_eq!(signals.len(), 5);
+    for (index, (signal, direction)) in signals
+        .iter()
+        .zip([
+            Direction::Up,
+            Direction::Down,
+            Direction::Down,
+            Direction::Up,
+            Direction::Down,
+        ])
+        .enumerate()
+    {
+        let entry = index == 0 || index == 2 || index == 4;
+        assert_eq!(
+            signal.shape,
+            SignalShape::Marker {
+                time: if entry {
+                    start
+                } else {
+                    start + chrono::TimeDelta::milliseconds(250)
+                },
+                price: Some(if entry { -0.00001234 } else { 0.25 }),
+                direction,
+            }
+        );
+        assert!(signal.tooltip.as_ref().unwrap().contains("Rule / close"));
+    }
+    assert_eq!(signals.last().unwrap().label.as_deref(), Some("Entry 4"));
+    assert_eq!(signals, report.signals(), "stable marker ids");
+}

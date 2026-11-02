@@ -268,6 +268,63 @@ pub struct StrategyExcursion {
 }
 
 impl StrategyReport {
+    /// Labelled entry and exit markers for the host's signals service. Invalid trades are skipped;
+    /// open trades have only an entry. Directions describe the fill side, including short exits.
+    /// Ids remain stable for this report's original trade indices. When replacing a run, remove
+    /// its old signals before publishing the replacement, including when it has no trades.
+    pub fn signals(&self) -> Vec<super::Signal> {
+        use super::{Direction, Signal, SignalId, SignalShape};
+        let mut signals = Vec::new();
+        for (index, trade) in self
+            .trades
+            .iter()
+            .enumerate()
+            .filter(|(_, trade)| trade.is_valid())
+        {
+            let entry = match trade.side {
+                OrderSide::Buy => Direction::Up,
+                OrderSide::Sell => Direction::Down,
+            };
+            let exit = match trade.side {
+                OrderSide::Buy => Direction::Down,
+                OrderSide::Sell => Direction::Up,
+            };
+            for (fill, time, price, direction) in
+                std::iter::once(("Entry", trade.entry_time, trade.entry_price, entry)).chain(
+                    trade
+                        .exit
+                        .as_ref()
+                        .map(|value| ("Exit", value.time, value.price, exit)),
+                )
+            {
+                let label = format!("{fill} {}", index + 1);
+                signals.push(Signal {
+                    id: SignalId(format!(
+                        "strategy:{}:{}:{}:{index}:{fill}",
+                        self.symbol, self.timeframe, self.name
+                    )),
+                    shape: SignalShape::Marker {
+                        time,
+                        price: Some(price),
+                        direction,
+                    },
+                    category: "Strategy trades".into(),
+                    label: Some(label.clone()),
+                    tooltip: Some(format!(
+                        "{} · {label} · {} units @ {price}{}",
+                        self.name,
+                        trade.quantity,
+                        trade
+                            .label
+                            .as_ref()
+                            .map_or_else(String::new, |label| format!(" · {label}"))
+                    )),
+                });
+            }
+        }
+        signals
+    }
+
     /// A report with no trades, no equity, no properties, no currency and a risk-free rate of 0.
     pub fn new(
         name: impl Into<String>,

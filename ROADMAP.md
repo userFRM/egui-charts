@@ -193,6 +193,8 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Account summary, positions, orders, history, executions, balance and journal tables, with CSV export.
 - [x] Execution markers, rejection/fill notifications and execution sound intents.
 - [x] `StrategyReportPanel` accepts `StrategyReport` data and shows trade lists, equity/drawdown plots, performance metrics, supplied properties and chart navigation; trades export as CSV.
+- [x] `StrategyTester` selects factory strategies, reuses the study input editor, edits account and execution settings, requests history from the host and displays runs with labelled fill signals. Edits mark the report stale.
+- [x] Parameter optimisation previews bounded numeric grids, yields between execution batches, sorts trial results and applies selected inputs on native and web builds.
 - [x] `StrategyFactory` lists and creates built-in and host strategies with editable study inputs, defaults and bounds.
 - [x] Ten price-action strategies trade gaps, consecutive closes, inside/outside bars, channels, confirmed pivots and ATR expansion, with fill-relative tick brackets where needed.
 - [x] Twelve study strategies use public indicator values for bands, momentum, averages, oscillators, trend flips and technical ratings; every built-in preserves its trades on historical prefixes.

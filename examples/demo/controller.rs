@@ -406,7 +406,7 @@ pub struct DemoApp {
     date_picker: DatePicker,
 
     // A finished host-run sample, independent of subsequent chart navigation.
-    strategy_report: egui_charts::ui::strategy_report::StrategyReportPanel,
+    strategy_report: egui_charts::ui::strategy_report::StrategyTester,
     strategy_trade: Option<usize>,
     strategy_session: SessionType,
 
