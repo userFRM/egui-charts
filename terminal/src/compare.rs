@@ -10,7 +10,6 @@ use egui_charts::studies::StudyTemplateSet;
 use egui_charts::ui::Control;
 use egui_charts::ui::dialogs::templates::TemplateDialog;
 use egui_charts::ui::top_toolbar::TopToolbarAction;
-use egui_charts::ui::top_toolbar::components::settings_menu::SettingsAction;
 
 pub(super) struct State {
     study_templates: TemplateDialog<StudyTemplateSet>,
@@ -51,13 +50,6 @@ impl Terminal {
             .keys()
             .map(|name| (name.clone(), name.clone()))
             .collect();
-        let dialog = &self.studies.indicators;
-        self.top_toolbar.favorite_indicators = dialog
-            .indicators()
-            .iter()
-            .filter(|info| dialog.favorites.contains(&info.id))
-            .map(|info| (info.id.clone(), info.name.clone()))
-            .collect();
     }
 
     pub(super) fn compare_perform(&mut self, action: Action) -> Option<Action> {
@@ -77,9 +69,6 @@ impl Terminal {
                 {
                     self.load_study_template(&template);
                 }
-            }
-            // The settings dialog keeps its templates itself.
-            Action::Settings(SettingsAction::SaveTemplate(_) | SettingsAction::LoadTemplate(_)) => {
             }
             action => return Some(action),
         }

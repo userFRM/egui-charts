@@ -150,7 +150,13 @@ impl Terminal {
             Action::Settings(SettingsAction::PreviewSound { name, volume }) => {
                 self.play_sound(&name, volume);
             }
-            Action::Settings(SettingsAction::Cancel | SettingsAction::None) => {}
+            // The settings dialog keeps its templates itself.
+            Action::Settings(
+                SettingsAction::Cancel
+                | SettingsAction::None
+                | SettingsAction::SaveTemplate(_)
+                | SettingsAction::LoadTemplate(_),
+            ) => {}
             Action::ChartMenu(ChartContextAction::Chart(menu)) => {
                 return self.perform_chart_menu(menu);
             }
@@ -411,6 +417,13 @@ impl Terminal {
             emitted.push(Action::SymbolPicked(Box::new(instrument)));
         }
         let _ = state.shortcuts.show_with_shortcuts(ctx, chart.shortcuts());
+        self.top_toolbar.favorite_indicators = state
+            .indicators
+            .indicators()
+            .iter()
+            .filter(|info| state.indicators.favorites.contains(&info.id))
+            .map(|info| (info.id.clone(), info.name.clone()))
+            .collect();
 
         if let Some(edit) = edit {
             self.apply_study_edit(edit);
