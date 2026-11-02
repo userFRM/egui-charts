@@ -103,6 +103,7 @@ impl DemoApp {
             ui.horizontal_wrapped(|ui| {
                 self.show_readout_controls(ui);
                 self.show_appearance_controls(ui);
+                self.show_formatting_controls(ui);
                 ui.menu_button("Showcase", |ui| {
                     ui.set_max_width(360.0);
                     ui.label("Explore the demo's synthetic data");

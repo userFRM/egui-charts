@@ -45,6 +45,22 @@ impl LayoutTab {
 }
 
 impl DemoApp {
+    pub(super) fn apply_formatting(&mut self) {
+        let saved = self
+            .layout_tabs
+            .iter_mut()
+            .filter_map(|tab| tab.workspace.as_mut());
+        for chart in std::iter::once(&mut self.chart)
+            .chain(self.extra_charts.iter_mut().map(|c| &mut c.chart))
+            .chain(saved.flat_map(|workspace| {
+                std::iter::once(&mut workspace.chart)
+                    .chain(workspace.extra.iter_mut().map(|c| &mut c.chart))
+            }))
+        {
+            self.formatting.apply(chart);
+        }
+    }
+
     pub(super) fn toggle_theme(&mut self, ctx: &egui::Context) {
         self.theme_choice = Some(if self.theme.dark { "light" } else { "dark" }.into());
         self.update_theme(ctx);
@@ -118,6 +134,7 @@ impl DemoApp {
             .with_drawing_registry(source.drawings().registry.clone())
             .with_visible_candles(0)
             .build();
+        self.formatting.apply(&mut chart);
         chart.set_main_series_visible(source.is_main_series_visible());
         chart.set_price_targets_visible(source.price_targets_visible());
         chart.set_signal_source(Some(if self.api_samples {
@@ -689,6 +706,7 @@ impl DemoApp {
             }
         }
         self.refresh_active_chart();
+        self.apply_formatting();
         self.settings_state = egui_charts::widget::settings::ChartSettingsState {
             alerts: self.settings_state.alerts.clone(),
             trading: self.trading.display.clone(),

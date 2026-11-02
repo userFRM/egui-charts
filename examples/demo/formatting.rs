@@ -55,3 +55,61 @@ impl DemoApp {
     }
 }
 
+#[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(super) struct Formatting {
+    locale: Option<String>,
+    price: bool,
+    percentage: bool,
+    volume: bool,
+}
+
+impl Formatting {
+    pub(super) fn apply(&self, chart: &mut egui_charts::Chart) {
+        use egui_charts::scales::{CustomPriceFormatter, PriceFormatter};
+        use std::sync::Arc;
+        chart.set_locale(self.locale.clone());
+        chart.set_price_formatter(self.price.then(|| {
+            Arc::new(CustomPriceFormatter::new(|value| format!("{value:.3} u")))
+                as Arc<dyn PriceFormatter>
+        }));
+        chart.set_percentage_formatter(self.percentage.then(|| {
+            Arc::new(CustomPriceFormatter::new(|value| {
+                format!("{value:+.2} pct")
+            })) as Arc<dyn PriceFormatter>
+        }));
+        chart.set_volume_formatter(self.volume.then(|| {
+            Arc::new(CustomPriceFormatter::new(|value| {
+                format!("{value:.0} units")
+            })) as Arc<dyn PriceFormatter>
+        }));
+    }
+}
+
+impl DemoApp {
+    pub(super) fn show_formatting_controls(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Formatting", |ui| {
+            let previous = self.formatting.clone();
+            ui.label("Date label language");
+            for (locale, name) in [
+                (None, "English (default)"),
+                (Some("de-DE"), "Deutsch"),
+                (Some("fr-FR"), "Français"),
+            ] {
+                ui.radio_value(&mut self.formatting.locale, locale.map(str::to_owned), name);
+            }
+            ui.small("Time zone is independent: use the zone selector below the chart.");
+            ui.separator();
+            ui.checkbox(&mut self.formatting.price, "Price: 123.456 u");
+            ui.checkbox(&mut self.formatting.percentage, "Percentage: +12.34 pct");
+            ui.checkbox(&mut self.formatting.volume, "Volume: 123456 units");
+            ui.small("Use the % scale button to see percentage axis labels.");
+            if ui.button("Restore default formatting").clicked() {
+                self.formatting = Formatting::default();
+            }
+            if self.formatting != previous {
+                self.apply_formatting();
+            }
+        });
+    }
+}

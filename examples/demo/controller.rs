@@ -374,6 +374,7 @@ pub struct DemoApp {
     pub theme: Theme,
     /// No explicit choice follows the system appearance without saving its current value.
     theme_choice: Option<String>,
+    formatting: formatting::Formatting,
 
     // Persistent toolbars.
     pub(crate) top_toolbar: TopToolbar,
@@ -644,6 +645,10 @@ impl DemoApp {
             bars: Vec::new(),
             theme,
             theme_choice,
+            formatting: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "demo_formatting"))
+                .unwrap_or_default(),
             top_toolbar,
             drawing_toolbar: DrawingToolbar::default(),
             selection_toolbar: FloatingSelectionToolbar::new(),
@@ -798,6 +803,7 @@ impl DemoApp {
         app.study_templates
             .templates
             .set_storage(app.storage.clone());
+        app.apply_formatting();
         app.drawing_templates
             .templates
             .set_storage(app.storage.clone());
@@ -1369,6 +1375,7 @@ impl eframe::App for DemoApp {
             "theme_choice",
             &self.theme_choice.as_deref().unwrap_or("system"),
         );
+        eframe::set_value(storage, "demo_formatting", &self.formatting);
         let current = self.user_settings();
         self.settings.flush(&current);
         eframe::set_value(
@@ -1546,6 +1553,13 @@ impl eframe::App for DemoApp {
                 "theme_choice",
                 &self.theme_choice.as_deref().unwrap_or("system"),
             );
+            storage.flush();
+        }
+        if let Some(storage) = frame.storage_mut()
+            && eframe::get_value::<formatting::Formatting>(storage, "demo_formatting").as_ref()
+                != Some(&self.formatting)
+        {
+            eframe::set_value(storage, "demo_formatting", &self.formatting);
             storage.flush();
         }
         self.storage.flush(frame.storage_mut());
@@ -2276,7 +2290,7 @@ impl DemoApp {
             .with_timestamp(self.chart.format_time(bar.time))
             .with_prev_close(pointer.previous_close.unwrap_or(bar.open));
         info.studies = pointer.studies.iter().map(|(_, row)| row.clone()).collect();
-        info
+        info.with_chart_formatters(&self.chart)
     }
 
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {

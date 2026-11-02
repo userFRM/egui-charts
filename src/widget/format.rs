@@ -286,7 +286,7 @@ impl Chart {
             .map(|formatter| formatter.as_ref())
     }
 
-    pub(super) fn value_formatters(&self) -> rendering::ValueFormatters<'_> {
+    pub(crate) fn value_formatters(&self) -> rendering::ValueFormatters<'_> {
         rendering::ValueFormatters {
             price: self.series_price_formatter(super::SeriesId::MAIN),
             volume: self.volume_formatter.as_deref(),
