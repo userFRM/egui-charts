@@ -164,16 +164,21 @@ impl AlertFeed {
     }
 
     #[cfg(feature = "studies")]
-    pub(super) fn follow(&mut self, live: &[AlertData<'_>]) -> Option<usize> {
-        let found = live.iter().position(|data| {
-            self.metric.is_none()
+    pub(super) fn matches(&self, data: &AlertData<'_>) -> bool {
+        self.metric.is_none()
+            && self.instrument.is_some()
+            && data.request.symbol == self.request.symbol
+            && data.request.timeframe == self.request.timeframe
+            && data.request.clock == self.request.clock
+            && data.request.extended_hours == self.request.extended_hours
+            && data.request.conversion == self.request.conversion
+    }
+
+    #[cfg(feature = "studies")]
+    pub(super) fn follow(&mut self, live: &[AlertData<'_>]) {
+        let found = live.iter().find(|data| {
+            self.matches(data)
                 && self.inputs.is_empty()
-                && self.instrument.is_some()
-                && data.request.symbol == self.request.symbol
-                && data.request.timeframe == self.request.timeframe
-                && data.request.clock == self.request.clock
-                && data.request.extended_hours == self.request.extended_hours
-                && data.request.conversion == self.request.conversion
                 && data.bars.first().is_some_and(|first| {
                     self.start
                         .or_else(|| self.bars.first().map(|bar| bar.time))
@@ -187,8 +192,7 @@ impl AlertFeed {
                     .last()
                     .is_none_or(|last| data.bars.last().is_some_and(|bar| bar.time >= last.time))
         });
-        if let Some(at) = found {
-            let data = &live[at];
+        if let Some(data) = found {
             if !self.live {
                 self.unsubscribe();
                 self.inbox = std::sync::Arc::default();
@@ -209,7 +213,6 @@ impl AlertFeed {
             self.bars.clear();
             self.wake.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        found
     }
 
     #[cfg(feature = "studies")]

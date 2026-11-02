@@ -1131,28 +1131,73 @@ mod tests {
                 None
             );
 
-            // A shown drawing works without storage, including edits still local to the chart.
-            let engine = Arc::new(AlertEngine::new());
-            let mut terminal = Terminal::new(feed)
-                .with_symbol("OTHER")
-                .with_timeframe(timeframe)
-                .with_alerts(engine.clone());
-            frames(&mut terminal);
-            let mut line = Drawing::new(9, DrawingToolType::HorizontalLine);
-            line.completed = true;
-            line.chart_points = vec![ChartPoint::new(0.0, 30.0)];
-            let mut alert = Alert::new("OTHER", AlertCondition::Above(25.0));
-            alert.source = line.alert_source(0);
-            terminal.chart_mut().drawings_mut().drawings.push(line);
-            terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
-                alert,
-            ))));
-            frames(&mut terminal);
-            assert_eq!(
-                engine.alerts()[0].status,
-                AlertStatus::Triggered,
-                "live drawings need no storage service"
-            );
+            // A shown drawing works without storage, including alongside independent events.
+            for events in [false, true] {
+                let engine = Arc::new(AlertEngine::new());
+                let mut terminal = Terminal::new(feed.clone())
+                    .with_symbol("OTHER")
+                    .with_timeframe(timeframe)
+                    .with_alerts(engine.clone());
+                frames(&mut terminal);
+                let mut line = Drawing::new(9, DrawingToolType::HorizontalLine);
+                line.completed = true;
+                line.chart_points = vec![ChartPoint::new(0.0, 30.0)];
+                let mut alert = Alert::new("OTHER", AlertCondition::Above(25.0));
+                alert.source = line.alert_source(0);
+                if events {
+                    let id = terminal.chart_mut().add_indicator(Box::new(
+                        egui_charts::studies::OrderFlowStudy::new(
+                            egui_charts::data::OrderFlowKind::Spread,
+                        ),
+                    ));
+                    alert
+                        .additional_conditions
+                        .push(egui_charts::model::AlertRule {
+                            source: AlertSource::Study {
+                                id: id.0.to_string(),
+                                output: 0,
+                            },
+                            condition: AlertCondition::Above(1.0),
+                        });
+                }
+                terminal.chart_mut().drawings_mut().drawings.push(line);
+                terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
+                    alert,
+                ))));
+                frames(&mut terminal);
+                if events {
+                    let last = terminal
+                        .chart()
+                        .bars(egui_charts::widget::SeriesId::MAIN)
+                        .last()
+                        .unwrap();
+                    for subscription in feed
+                        .subscriptions
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|subscription| subscription.symbol == "OTHER")
+                    {
+                        subscription.sink.push_bar(last.clone());
+                        subscription
+                            .sink
+                            .push_quote(egui_charts::model::Level1Quote {
+                                ts: last.time,
+                                symbol: "OTHER".into(),
+                                bid: 10.0,
+                                ask: 40.0,
+                                bid_size: 1.0,
+                                ask_size: 1.0,
+                            });
+                    }
+                    frames(&mut terminal);
+                }
+                assert_eq!(
+                    engine.alerts()[0].status,
+                    AlertStatus::Triggered,
+                    "live drawings need no storage service, events: {events}, interval: {timeframe}"
+                );
+            }
         }
     }
 }

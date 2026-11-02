@@ -314,16 +314,8 @@ impl AlertEvaluator {
                 reader.set_storage(storage.clone());
             }
         }
-        #[cfg(feature = "ui")]
-        let mut shown = HashMap::new();
         for (subject, reader) in &mut self.feeds {
-            let at = reader.follow(if subject.owner.is_none() { live } else { &[] });
-            #[cfg(feature = "ui")]
-            if let Some(at) = at {
-                shown.insert(subject.clone(), at);
-            }
-            #[cfg(not(feature = "ui"))]
-            let _ = at;
+            reader.follow(if subject.owner.is_none() { live } else { &[] });
             errors.extend(reader.poll(
                 #[cfg(feature = "ui")]
                 ctx,
@@ -421,11 +413,19 @@ impl AlertEvaluator {
                         } else {
                             crate::scales::PriceScaleMode::Normal
                         };
-                        match shown.get(&subject) {
-                            Some(index) => live[*index].drawings.iter().find_map(|drawing| {
+                        match live.iter().find(|data| reader.matches(data)) {
+                            Some(data) => data.drawings.iter().find_map(|drawing| {
                                 let level = drawing.alert_level(source)?;
+                                let index = crate::model::index_at_with_timeframe(
+                                    data.bars,
+                                    bars[at].time,
+                                    Some(subject.timeframe),
+                                    reader
+                                        .instrument()
+                                        .and_then(|instrument| instrument.time_zone.as_ref()),
+                                )?;
                                 drawing
-                                    .alert_levels((from + at) as f64, scale)
+                                    .alert_levels(index, scale)
                                     .into_iter()
                                     .find(|(index, ..)| *index == level)
                                     .map(|(.., value)| value)
