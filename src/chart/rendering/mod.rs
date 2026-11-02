@@ -13,21 +13,8 @@
 pub mod axes;
 pub mod candles;
 mod context;
-pub use candles::{render_candle, render_ohlc_bar, render_volume_bar};
-pub use context::{BarRenderParams, ChartMapping, RenderContext, StyleColors};
 pub mod grid;
 pub mod overlays;
-
-// Re-export rendering functions
-pub(crate) use crate::painting::dashed_line::{draw_dashed_line, draw_dashed_polyline};
-pub use axes::render_price_line;
-pub use candles::{
-    BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
-    render_chart_type,
-};
-pub use grid::{render_grid, render_vertical_grid};
-pub use overlays::render_crosshair_with_options;
-pub(crate) use overlays::{realtime_button, realtime_button_rect};
 
 mod alert_levels;
 mod indicator;
@@ -35,20 +22,39 @@ mod legend;
 mod markers;
 mod session_breaks;
 mod trading_lines;
-pub(crate) mod volume_profile;
+pub(in crate::chart) mod volume_profile;
 mod watermark;
 
+// Re-export rendering functions
+pub(crate) use crate::painting::dashed_line::{draw_dashed_line, draw_dashed_polyline};
 pub use alert_levels::{alert_shortcut_price, render_alert_levels};
-
+pub(crate) use axes::{
+    price_marks, render_study_axis, render_time_grid, study_mapping, time_axis_marks,
+};
+pub use axes::{
+    render_axis_currency, render_price_labels, render_price_labels_at_pos, render_price_line,
+    render_time_labels,
+};
+pub use candles::{
+    BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
+    render_candle, render_chart_type, render_ohlc_bar, render_volume_bar,
+};
+pub use context::{BarRenderParams, ChartMapping, RenderContext, StyleColors};
+pub use grid::{render_grid, render_vertical_grid};
 pub use indicator::IndicatorRenderer;
 pub(crate) use indicator::paint_study_plot;
 pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
 pub(crate) use legend::{SeriesAction, study_controls};
 pub(crate) use markers::{render_change_mark, render_event_badges, render_event_breaks};
 pub use markers::{render_event_band, render_markers};
-pub use overlays::render_crosshair_full;
-pub use overlays::{StudyValue, ValueFormatters, render_tooltip_with_options};
-pub(crate) use overlays::{render_crosshair_lines, render_crosshair_price_tag, snap_to_values};
+pub use overlays::{
+    StudyValue, ValueFormatters, render_crosshair_full, render_crosshair_with_options,
+    render_tooltip_with_options,
+};
+pub(crate) use overlays::{
+    realtime_button, realtime_button_rect, render_crosshair_lines, render_crosshair_price_tag,
+    snap_to_values,
+};
 pub use session_breaks::{
     SessionBackgroundRenderer, SessionBreakRenderConfig, SessionBreakRenderer,
 };
@@ -61,10 +67,3 @@ pub use trading_lines::{
 };
 pub(crate) use watermark::render_watermark;
 pub use watermark::{Watermark, WatermarkLine};
-
-pub(crate) use axes::{
-    price_marks, render_study_axis, render_time_grid, study_mapping, time_axis_marks,
-};
-pub use axes::{
-    render_axis_currency, render_price_labels, render_price_labels_at_pos, render_time_labels,
-};
