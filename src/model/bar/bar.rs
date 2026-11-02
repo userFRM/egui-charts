@@ -109,13 +109,18 @@ fn value_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::E
     Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(f64::NAN))
 }
 
+/// Midnight UTC of a calendar date, the time of a date-only bar.
+fn midnight_utc(date: NaiveDate) -> DateTime<Utc> {
+    date.and_time(NaiveTime::MIN).and_utc()
+}
+
 /// An RFC 3339 time, or a date alone for midnight UTC of that day.
 fn time_or_date<'de, D: Deserializer<'de>>(deserializer: D) -> Result<DateTime<Utc>, D::Error> {
     let text = String::deserialize(deserializer)?;
     text.parse::<DateTime<Utc>>()
         .or_else(|error| {
             NaiveDate::parse_from_str(&text, "%Y-%m-%d")
-                .map(|date| date.and_time(NaiveTime::MIN).and_utc())
+                .map(midnight_utc)
                 .map_err(|_| error)
         })
         .map_err(serde::de::Error::custom)
@@ -170,14 +175,7 @@ impl Bar {
         close: f64,
         volume: f64,
     ) -> Self {
-        Self::new(
-            date.and_time(NaiveTime::MIN).and_utc(),
-            open,
-            high,
-            low,
-            close,
-            volume,
-        )
+        Self::new(midnight_utc(date), open, high, low, close, volume)
     }
 
     /// A bar of a single value, such as a point of a line, area, baseline or column series: its
@@ -189,7 +187,7 @@ impl Bar {
     /// A [`from_value`](Self::from_value) bar on a calendar date, at midnight UTC.
     /// Date and display time zone conventions are those of [`from_date`](Self::from_date).
     pub fn from_value_on_date(date: NaiveDate, value: f64) -> Self {
-        Self::from_value(date.and_time(NaiveTime::MIN).and_utc(), value)
+        Self::from_value(midnight_utc(date), value)
     }
 
     /// A bar without a value: it holds its slot on the time axis, so a gap such as a halted
@@ -202,7 +200,7 @@ impl Bar {
     /// A [`whitespace`](Self::whitespace) bar on a calendar date, at midnight UTC.
     /// Date and display time zone conventions are those of [`from_date`](Self::from_date).
     pub fn whitespace_on_date(date: NaiveDate) -> Self {
-        Self::whitespace(date.and_time(NaiveTime::MIN).and_utc())
+        Self::whitespace(midnight_utc(date))
     }
 
     /// Whether this is a [`whitespace`](Self::whitespace) bar: open, high, low, close and volume

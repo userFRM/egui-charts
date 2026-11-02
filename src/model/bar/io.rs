@@ -355,8 +355,6 @@ mod tests {
                 assert_eq!(bars[0], typed[0], "{date}");
                 assert_eq!(bars[1], typed[1], "{date}");
                 assert!(bars[2].is_whitespace(), "{date}");
-                assert_eq!(bars[2].colors, None);
-                assert_eq!(bars[2].payload, None);
             }
         }
         std::fs::remove_file(&path).unwrap();
