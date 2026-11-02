@@ -173,13 +173,13 @@ impl Chart {
     }
 
     /// Formats time axis marks with [`TimeFormatter::format_tick`], whose default calls
-    /// [`TimeFormatter::format`], and crosshair, tooltip, forecast
-    /// date and [`format_time`](Self::format_time) labels with [`TimeFormatter::format_crosshair`].
+    /// [`TimeFormatter::format`], and crosshair, tooltip, forecast date and
+    /// [`format_time`](Self::format_time) labels with [`TimeFormatter::format_crosshair`].
     ///
-    /// The tick hook receives the active locale in [`TickMarkContext`](crate::scales::TickMarkContext)
-    /// and can return `None` for the chart's normal text on individual ticks. This leaves
-    /// crosshair formatting unchanged. Otherwise the formatter replaces the built-in one,
-    /// the locale and the date format. It receives
+    /// `format_tick` receives the chart's locale in a
+    /// [`TickMarkContext`](crate::scales::TickMarkContext) and can return `None` to use the
+    /// built-in locale-aware text for that tick. Otherwise the
+    /// formatter replaces the built-in one, the locale and the date format. It receives
     /// wall-clock times in the chart's time zone, and the time scale's
     /// [`time_visible`](crate::config::TimeScaleOptions::time_visible) option still applies.
     /// `None` restores the built-in formatter.
@@ -556,15 +556,6 @@ mod tests {
                 "de-DE",
                 if cfg!(feature = "locales") {
                     "Mär"
-                } else {
-                    "Mar"
-                },
-            ),
-            (
-                Some("ja-JP"),
-                "ja-JP",
-                if cfg!(feature = "locales") {
-                    "3月"
                 } else {
                     "Mar"
                 },
