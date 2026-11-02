@@ -52,6 +52,11 @@ pub struct SeriesOptions {
     pub down_color: Color32,
     /// Line width in logical pixels.
     pub width: f32,
+    /// Point marker radius in logical points for Line with markers, Area and Baseline.
+    /// `None` keeps the chart type's default: 3 for Line with markers, hidden for Area and
+    /// Baseline. Non-positive or non-finite radii hide markers.
+    #[serde(default)]
+    pub marker_radius: Option<f32>,
     /// Scale shared with the series carrying the same assignment in the price pane. In another
     /// pane the series uses that pane's scale.
     pub scale: SeriesScale,
@@ -72,6 +77,7 @@ impl Default for SeriesOptions {
             up_color: DESIGN_TOKENS.semantic.extended.bullish,
             down_color: DESIGN_TOKENS.semantic.extended.bearish,
             width: 2.0,
+            marker_radius: None,
             scale: SeriesScale::Right,
             columns_base: None,
             style: SeriesStyle {
@@ -112,8 +118,10 @@ impl SeriesOptions {
                 line: line(self.color),
                 step_line: line(self.color),
                 line_with_markers: line(self.color),
+                marker_radius: self.marker_radius.unwrap_or(3.0),
                 area: AreaStyle {
                     line: line(self.color),
+                    marker_radius: self.marker_radius.unwrap_or(0.0),
                     top_fill: fill(self.color, 115),
                     bottom_fill: Color32::TRANSPARENT,
                     ..Default::default()
@@ -123,6 +131,7 @@ impl SeriesOptions {
                     below: line(self.down_color),
                     above_fill: fill(self.up_color, 30),
                     below_fill: fill(self.down_color, 30),
+                    marker_radius: self.marker_radius.unwrap_or(0.0),
                 },
                 ..Default::default()
             },

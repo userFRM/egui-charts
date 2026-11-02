@@ -60,6 +60,9 @@ impl Default for LinePlotStyle {
 pub struct AreaStyle {
     /// Line drawn along the edge of the fill.
     pub line: LinePlotStyle,
+    /// Point marker radius in logical points. Non-positive or non-finite radii hide markers,
+    /// the default. Each marker takes its point's line colour.
+    pub marker_radius: f32,
     /// Fill at the top of the gradient, including opacity.
     pub top_fill: Color32,
     /// Fill at the bottom of the gradient, including opacity.
@@ -76,6 +79,7 @@ impl Default for AreaStyle {
         let color = DESIGN_TOKENS.semantic.brand.accent;
         Self {
             line: LinePlotStyle::default(),
+            marker_radius: 0.0,
             top_fill: Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 115),
             bottom_fill: Color32::TRANSPARENT,
             relative_gradient: true,
@@ -92,6 +96,9 @@ pub struct BaselineStyle {
     pub above: LinePlotStyle,
     /// Line below the base in price units.
     pub below: LinePlotStyle,
+    /// Point marker radius in logical points. Non-positive or non-finite radii hide markers,
+    /// the default. Each marker takes its point's line colour on its side of the base.
+    pub marker_radius: f32,
     /// Fill above the base, including opacity.
     pub above_fill: Color32,
     /// Fill below the base, including opacity.
@@ -111,6 +118,7 @@ impl Default for BaselineStyle {
                 color: down,
                 ..Default::default()
             },
+            marker_radius: 0.0,
             above_fill: Color32::from_rgba_unmultiplied(up.r(), up.g(), up.b(), 30),
             below_fill: Color32::from_rgba_unmultiplied(down.r(), down.g(), down.b(), 30),
         }

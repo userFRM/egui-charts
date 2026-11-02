@@ -62,6 +62,8 @@ struct SavedOptions {
     up_color: egui::Color32,
     down_color: egui::Color32,
     width: f32,
+    #[serde(default)]
+    marker_radius: Option<f32>,
     scale: SeriesScale,
     columns_base: Option<f64>,
     #[serde(with = "SavedStyle")]
