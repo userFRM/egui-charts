@@ -510,8 +510,8 @@ Order flow,Order flow data model,Streaming path that delivers trades into the ch
 Order flow,Order flow data model,Tick-size-aware integer price keys from symbol metadata,done,library,src/widget/feed/mod.rs;src/data/depth.rs;src/data/footprint.rs;src/data/orders.rs
 Order flow,Order flow data model,Top-of-book quote stream,done,library,src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/widget/frame.rs;src/data/mod.rs;src/data/inbox/sink.rs
 Order flow,Order flow data model,Trade tick record with aggressor side,done,library,src/model/quote.rs;src/data/mod.rs
-Order flow,Order flow,Cumulative delta divergence markers,missing,library,
-Order flow,Order flow,Delta exhaustion markers,missing,library,
+Order flow,Order flow,Cumulative delta divergence markers,done,library,src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs;src/widget/frame.rs
+Order flow,Order flow,Delta exhaustion markers,done,library,src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs;src/widget/frame.rs
 Order flow,Order flow,Footprint and session volume profile settings in the chart settings dialog,missing,library,
 Studies,Custom studies,Custom studies reading other symbols or timeframes,done,library,src/studies/indicator_trait.rs;src/widget/studies_data.rs;src/widget/studies.rs;src/studies/settings.rs
 Studies,Custom studies,Custom study input metadata,done,library,src/studies/inputs.rs;src/studies/custom.rs;src/ui/dialogs/indicator_dialog/settings.rs
