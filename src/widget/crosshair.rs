@@ -13,6 +13,94 @@ impl Chart {
         self.chart_options.crosshair.mode = mode;
     }
 
+    /// Resolves the shared crosshair position without changing the stored time slots.
+    pub(super) fn crosshair_position(&self, mut pos: Pos2, coords: &ChartMapping) -> Option<Pos2> {
+        let options = &self.chart_options.time_scale;
+        if !options.ignore_whitespace_indices && !options.ignore_hidden_indices {
+            return Some(pos);
+        }
+        let bars = self.state.shown();
+        let index = coords.x_to_idx_f64(pos.x);
+        if bars.is_empty() || !index.is_finite() {
+            return None;
+        }
+        let first = coords.x_to_idx_f64(coords.rect.left()).ceil().max(0.0) as isize;
+        let last = coords
+            .x_to_idx_f64(coords.rect.right())
+            .floor()
+            .min(bars.len() as f64 - 1.0) as isize;
+        if first > last {
+            return None;
+        }
+        // Pixel rounding must not bias an equal-distance tie towards an earlier slot.
+        let max_coordinate = coords.rect.left().abs().max(coords.rect.right().abs());
+        let precision = f32::EPSILON * max_coordinate.max(1.0);
+        let mut left = index.floor().clamp(first as f64 - 1.0, last as f64) as isize;
+        let mut right = left + 1;
+        while left >= first || right <= last {
+            let candidate = if right > last
+                || (left >= first
+                    && (pos.x - coords.idx_to_x(left as usize)).abs() + precision
+                        < (coords.idx_to_x(right as usize) - pos.x).abs())
+            {
+                let candidate = left as usize;
+                left -= 1;
+                candidate
+            } else {
+                let candidate = right as usize;
+                right += 1;
+                candidate
+            };
+            let x = coords.idx_to_x(candidate);
+            if self.crosshair_index_eligible(candidate) {
+                pos.x = x;
+                return Some(pos);
+            }
+        }
+        None
+    }
+
+    fn crosshair_index_eligible(&self, index: usize) -> bool {
+        let options = &self.chart_options.time_scale;
+        let bar = &self.state.shown()[index];
+        let series = self.price_series.iter().filter_map(|item| {
+            let at = item
+                .bars
+                .binary_search_by_key(&bar.time, |bar| bar.time)
+                .ok()?;
+            Some((item.visible, !item.bars[at].is_whitespace()))
+        });
+        let studies = self
+            .rendered_studies()
+            .indicators()
+            .iter()
+            .flat_map(|study| {
+                (0..study.line_count()).map(move |line| {
+                    let plot = study.plot_style(line);
+                    let valued = !matches!(
+                        plot.plot_type,
+                        crate::studies::PlotType::BarColor
+                            | crate::studies::PlotType::BackgroundColor
+                    ) && study.plot_value(line, index).is_some_and(f64::is_finite);
+                    (study.is_visible() && plot.visible, valued)
+                })
+            });
+        let mut valued = false;
+        for (visible, has_value) in
+            std::iter::once((self.main_series_visible, !bar.is_whitespace()))
+                .chain(series)
+                .chain(studies)
+        {
+            if has_value {
+                if visible || !options.ignore_hidden_indices {
+                    return true;
+                }
+                valued = true;
+            }
+        }
+        !valued && !options.ignore_whitespace_indices
+    }
+
     pub(super) fn snap_crosshair(&self, mut pos: Pos2, map: &PriceMap, index: usize) -> Pos2 {
         let mode = self.chart_options.crosshair.mode;
         if !mode.snaps() {
@@ -23,7 +111,7 @@ impl Chart {
                 .state
                 .shown()
                 .get(index)
-                .filter(|_| self.main_series_visible)
+                .filter(|bar| self.main_series_visible && !bar.is_whitespace())
             {
                 pos.y = map.price_to_y(bar.close);
             }
@@ -34,7 +122,7 @@ impl Chart {
             .state
             .shown()
             .get(index)
-            .filter(|_| self.main_series_visible)
+            .filter(|bar| self.main_series_visible && !bar.is_whitespace())
             .into_iter()
             .flat_map(|bar| [bar.open, bar.high, bar.low, bar.close])
             .map(|value| map.price_to_y(value));
