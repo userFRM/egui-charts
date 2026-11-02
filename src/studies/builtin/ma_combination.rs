@@ -346,7 +346,7 @@ impl Indicator for MACombination {
         &mut self,
         id: &str,
         value: crate::studies::InputValue,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::studies::StudyError> {
         use crate::studies::InputValue;
         if average_slot(id).is_some_and(|index| (self.lines.len()..MAX_AVERAGES).contains(&index)) {
             return Ok(());
@@ -355,9 +355,9 @@ impl Indicator for MACombination {
             .inputs()
             .into_iter()
             .find(|input| input.id == id)
-            .ok_or("unknown study input")?;
+            .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
         if !schema.accepts(&value) {
-            return Err("study input is outside its accepted values");
+            return Err(crate::studies::StudyError::invalid_input(id));
         }
         match (id, value) {
             ("average_count", InputValue::Length(count)) => {
@@ -376,9 +376,16 @@ impl Indicator for MACombination {
             ("cross_first", InputValue::Choice(pick)) => self.cross[0] = pick,
             ("cross_second", InputValue::Choice(pick)) => self.cross[1] = pick,
             (id, value) => {
-                let (field, index) = id.rsplit_once('_').ok_or("unknown study input")?;
-                let index: usize = index.parse().map_err(|_| "unknown study input")?;
-                let line = self.lines.get_mut(index).ok_or("unknown study input")?;
+                let (field, index) = id
+                    .rsplit_once('_')
+                    .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
+                let index: usize = index
+                    .parse()
+                    .map_err(|_| crate::studies::StudyError::UnknownInput(id.into()))?;
+                let line = self
+                    .lines
+                    .get_mut(index)
+                    .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
                 match (field, value) {
                     ("period", InputValue::Length(period)) => line.period = period,
                     ("kind", InputValue::Choice(kind)) => {
@@ -397,7 +404,7 @@ impl Indicator for MACombination {
                     ("source", InputValue::Choice(source)) => {
                         line.source = PriceSource::all()[source]
                     }
-                    _ => return Err("unknown study input"),
+                    _ => return Err(crate::studies::StudyError::UnknownInput(id.into())),
                 }
             }
         }
@@ -560,14 +567,14 @@ macro_rules! impl_ma_preset {
                 &mut self,
                 id: &str,
                 value: crate::studies::InputValue,
-            ) -> Result<(), &'static str> {
+            ) -> Result<(), crate::studies::StudyError> {
                 let schema = self
                     .inputs()
                     .into_iter()
                     .find(|input| input.id == id)
-                    .ok_or("unknown study input")?;
+                    .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
                 if !schema.accepts(&value) {
-                    return Err("study input is outside its accepted values");
+                    return Err(crate::studies::StudyError::invalid_input(id));
                 }
                 self.inner.set_input(id, value)
             }
