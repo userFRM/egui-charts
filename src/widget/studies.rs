@@ -1080,5 +1080,7 @@ mod tests {
         needs_error::<crate::model::ParseError>();
         needs_error::<crate::model::PnfBoxesError>();
         needs_error::<crate::widget::ExportError>();
+        #[cfg(feature = "drawings")]
+        needs_error::<crate::widget::DrawingError>();
     }
 }
