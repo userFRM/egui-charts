@@ -2038,6 +2038,18 @@ impl Chart {
             }
             _ => {}
         }
+        for study in studies
+            .indicators()
+            .iter()
+            .filter(|study| study.is_visible() && study.labels_on_price())
+        {
+            crate::chart::indicators::plots::paint_labels(
+                &clipped_painter,
+                study.as_ref(),
+                &price_map,
+                &coords,
+            );
+        }
         self.paint_signals(ui, &coords);
         let target_lines = self
             .show_price_targets

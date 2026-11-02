@@ -16,6 +16,8 @@ use crate::model::{
 /// feeds it with [`update`](Self::update), as [`PaperAccount`](super::PaperAccount) fills orders
 /// on the prices it is fed. It needs no egui, so a server can run the same code. A host that
 /// evaluates alerts on its own server implements [`Alerts`] itself instead.
+/// With `studies`, `AlertEvaluator` reads the saved source definitions from a datafeed and
+/// supplies these evaluations without constructing a chart.
 ///
 /// The host keeps the alerts: [`alerts`](Self::alerts) returns them with their status for
 /// storage, and [`with_alerts`](Self::with_alerts) restores them. Evaluation state lives in
@@ -38,7 +40,8 @@ use crate::model::{
 /// and volume the volume of a bar; the `value` function of `update` resolves the other sources.
 ///
 /// *Change.* An update whose evaluated bar, its close and volume and the value of every source
-/// equal those of the previous update does nothing, so repeated frames never fire. An update
+/// equal those of the previous update does nothing, unless a per-minute alert enters a new
+/// minute or its schedule opens. An update
 /// whose evaluated bar is older than the newest one already evaluated for the alert is ignored:
 /// reloading history, rewinding a replay or switching to a coarser timeframe never fires an
 /// alert again.
@@ -55,12 +58,10 @@ use crate::model::{
 /// holds, [`OncePerBar`](AlertFrequency::OncePerBar) at most once per bar open time, and
 /// [`OncePerBarClose`](AlertFrequency::OncePerBarClose) evaluates each completed bar once.
 /// [`OncePerMinute`](AlertFrequency::OncePerMinute) fires at most once per minute of the update
-/// time `now`.
+/// time `now`; moving the clock backwards does not repeat a minute.
 ///
-/// *Schedule.* An alert's `schedule` restricts the delivery of a trigger only: the alert is still
-/// evaluated, it still fires and pushes its [`AlertEvent::TriggeredForSymbol`], and
-/// [`on_trigger`](Self::on_trigger) is not called for a trigger whose time the schedule does not
-/// allow.
+/// *Schedule.* An alert's `schedule` restricts triggers. Outside it the engine keeps observing
+/// values for crossings, but does not fire or consume an occurrence. A once alert stays armed.
 ///
 /// *Expiry.* Every `update` and [`tick`](Self::tick) first marks active alerts whose expiry has
 /// passed as [`Expired`](AlertStatus::Expired), so an alert never fires at or after its expiry
@@ -124,6 +125,8 @@ struct Run {
 #[derive(Clone, PartialEq)]
 struct Seen {
     time: DateTime<Utc>,
+    scheduled: bool,
+    minute: Option<DateTime<Utc>>,
     /// The bits of the close and volume, so that a value that is not a number equals itself.
     bar: (u64, u64),
     rules: Vec<(Option<f64>, Option<f64>)>,
@@ -145,10 +148,10 @@ impl AlertEngine {
         }
     }
 
-    /// Calls `deliver` with the alert and its [`AlertEvent::TriggeredForSymbol`] on every trigger
-    /// the alert's schedule allows, after the event is pushed, so that the host can send it by email, push notification or web
-    /// request. The call comes from the thread that fed the engine and must return at once; it
-    /// may use the engine.
+    /// Calls `deliver` with the alert and its [`AlertEvent::TriggeredForSymbol`] on every trigger,
+    /// after the event is pushed, so the host can send email, push notifications or web requests.
+    /// The call comes from the thread that fed the engine and must return at once; it may use
+    /// the engine.
     pub fn on_trigger(
         mut self,
         deliver: impl Fn(&Alert, &AlertEvent) + MaybeSend + 'static,
@@ -182,6 +185,30 @@ impl AlertEngine {
         self.lock().alerts.clone()
     }
 
+    /// Active symbols still armed for `id`, including watchlist members. A once-per-member
+    /// alert omits symbols that already fired, so a host can release their subscriptions.
+    pub fn subjects(&self, id: &AlertId) -> Vec<String> {
+        let state = self.lock();
+        let Some(alert) = state.alerts.iter().find(|alert| {
+            alert.id.as_ref() == Some(id) && alert.status == AlertStatus::Active && alert.is_valid()
+        }) else {
+            return Vec::new();
+        };
+        let symbols = match &alert.watchlist {
+            Some(list) => state.watchlists.get(list).cloned().unwrap_or_default(),
+            None => vec![alert.symbol.clone()],
+        };
+        symbols
+            .into_iter()
+            .filter(|symbol| {
+                !state
+                    .runs
+                    .get(&(id.clone(), symbol.clone()))
+                    .is_some_and(|run| run.done)
+            })
+            .collect()
+    }
+
     /// Sets the members of the watchlist `id`, as the host's watchlist holds them. A member that
     /// leaves loses its evaluation state, so it starts afresh if it returns.
     pub fn set_watchlist(&self, id: &str, symbols: Vec<String>) {
@@ -209,6 +236,32 @@ impl AlertEngine {
         now: DateTime<Utc>,
         value: impl Fn(&AlertSource, usize) -> Option<f64>,
     ) {
+        self.update_matching(None, symbol, timeframe, bars, now, value);
+    }
+
+    /// Evaluates one alert with its retained source definitions. Other alerts may refer to
+    /// different study instances with the same chart-local identifiers.
+    pub fn update_alert(
+        &self,
+        id: &AlertId,
+        symbol: &str,
+        timeframe: Timeframe,
+        bars: &[Bar],
+        now: DateTime<Utc>,
+        value: impl Fn(&AlertSource, usize) -> Option<f64>,
+    ) {
+        self.update_matching(Some(id), symbol, timeframe, bars, now, value);
+    }
+
+    fn update_matching(
+        &self,
+        id: Option<&AlertId>,
+        symbol: &str,
+        timeframe: Timeframe,
+        bars: &[Bar],
+        now: DateTime<Utc>,
+        value: impl Fn(&AlertSource, usize) -> Option<f64>,
+    ) {
         let mut fired = Vec::new();
         let mut state = self.lock();
         state.expire(now);
@@ -219,10 +272,11 @@ impl AlertEngine {
             runs,
             ..
         } = &mut *state;
-        for alert in alerts
-            .iter_mut()
-            .filter(|alert| alert.status == AlertStatus::Active && alert.is_valid())
-        {
+        for alert in alerts.iter_mut().filter(|alert| {
+            alert.status == AlertStatus::Active
+                && alert.is_valid()
+                && id.is_none_or(|id| alert.id.as_ref() == Some(id))
+        }) {
             let Some(id) = alert.id.clone() else { continue };
             let subject = match &alert.watchlist {
                 Some(list) => watchlists
@@ -271,13 +325,7 @@ impl AlertEngine {
             if let Some(events) = events {
                 events.push(event.clone());
             }
-            if alert
-                .schedule
-                .as_ref()
-                .is_none_or(|schedule| schedule.allows(now))
-            {
-                fired.push((alert.clone(), event));
-            }
+            fired.push((alert.clone(), event));
         }
         runs.retain(|(id, _), _| {
             alerts
@@ -342,6 +390,10 @@ impl State {
 }
 
 impl Alerts for AlertEngine {
+    fn engine(&self) -> Option<&AlertEngine> {
+        Some(self)
+    }
+
     fn watch(&self, events: Events<AlertEvent>) {
         let mut state = self.lock();
         for alert in &state.alerts {
@@ -416,6 +468,12 @@ fn evaluate<'a>(
         .collect();
     let seen = Seen {
         time: bar.time,
+        scheduled: alert
+            .schedule
+            .as_ref()
+            .is_none_or(|schedule| schedule.allows(now)),
+        minute: (alert.frequency == AlertFrequency::OncePerMinute)
+            .then(|| occurrence(alert.frequency, bar, now)),
         bar: (bar.close.to_bits(), bar.volume.to_bits()),
         rules: rules
             .iter()
@@ -430,41 +488,43 @@ fn evaluate<'a>(
     if run.seen.as_ref() == Some(&seen) {
         return None;
     }
-    let holds = rules.iter().enumerate().all(|(n, (src, condition))| {
-        let (current, other) = seen.rules[n];
-        let previous = match &run.seen {
-            Some(last) => last.rules[n],
-            None => (
-                index.checked_sub(1).and_then(|at| source(src, at)),
-                partner(condition)
-                    .zip(index.checked_sub(1))
-                    .and_then(|(other, at)| source(other, at)),
-            ),
-        };
-        current.is_some_and(|current| {
-            condition_holds(
-                condition,
-                current,
-                previous,
-                other,
-                &bars[..=index],
-                |back| {
-                    index
-                        .checked_sub(back as usize)
-                        .and_then(|at| source(src, at))
-                },
-            )
-        })
-    });
+    let holds = seen.scheduled
+        && rules.iter().enumerate().all(|(n, (src, condition))| {
+            let (current, other) = seen.rules[n];
+            let previous = match &run.seen {
+                Some(last) => last.rules[n],
+                None => (
+                    index.checked_sub(1).and_then(|at| source(src, at)),
+                    partner(condition)
+                        .zip(index.checked_sub(1))
+                        .and_then(|(other, at)| source(other, at)),
+                ),
+            };
+            current.is_some_and(|current| {
+                condition_holds(
+                    condition,
+                    current,
+                    previous,
+                    other,
+                    &bars[..=index],
+                    |back| {
+                        index
+                            .checked_sub(back as usize)
+                            .and_then(|at| source(src, at))
+                    },
+                )
+            })
+        });
     run.newest = Some(bar.time);
     run.seen = Some(seen);
     let fires = holds
         && match alert.frequency {
             AlertFrequency::Once => !run.done,
             AlertFrequency::EveryTime => true,
-            AlertFrequency::OncePerBar
-            | AlertFrequency::OncePerBarClose
-            | AlertFrequency::OncePerMinute => {
+            AlertFrequency::OncePerMinute => run
+                .fired
+                .is_none_or(|last| occurrence(alert.frequency, bar, now) > last),
+            AlertFrequency::OncePerBar | AlertFrequency::OncePerBarClose => {
                 run.fired != Some(occurrence(alert.frequency, bar, now))
             }
         };
@@ -763,6 +823,28 @@ mod tests {
                 [110.0, 111.0, 105.0, 99.0].map(|c| (c, 10.0, n)).to_vec(),
                 vec![1, 3],
             ),
+            (
+                AlertCondition::InsideChannel {
+                    lower: 100.0,
+                    upper: 110.0,
+                },
+                vec![],
+                [100.0, 105.0, 110.0, 111.0, 99.0]
+                    .map(|c| (c, 10.0, n))
+                    .to_vec(),
+                vec![0, 1, 2],
+            ),
+            (
+                AlertCondition::OutsideChannel {
+                    lower: 100.0,
+                    upper: 110.0,
+                },
+                vec![],
+                [99.0, 100.0, 105.0, 110.0, 111.0]
+                    .map(|c| (c, 10.0, n))
+                    .to_vec(),
+                vec![0, 4],
+            ),
             // Moving by reads the value `bars` bars before the evaluated bar, not the previous tick.
             (
                 AlertCondition::MovingBy {
@@ -883,6 +965,109 @@ mod tests {
     }
 
     #[test]
+    fn schedules_gate_channel_states_without_consuming_occurrences() {
+        use crate::model::{AlertRule, NotificationSchedule, NotificationWindow, TimezoneId};
+        use chrono::{NaiveTime, Weekday};
+
+        for condition in [
+            AlertCondition::InsideChannel {
+                lower: 100.0,
+                upper: 110.0,
+            },
+            AlertCondition::OutsideChannel {
+                lower: 90.0,
+                upper: 99.0,
+            },
+        ] {
+            for frequency in [
+                AlertFrequency::Once,
+                AlertFrequency::EveryTime,
+                AlertFrequency::OncePerBar,
+                AlertFrequency::OncePerBarClose,
+                AlertFrequency::OncePerMinute,
+            ] {
+                let mut watching = alert(condition.clone(), frequency);
+                watching.additional_conditions.push(AlertRule {
+                    source: AlertSource::Volume,
+                    condition: AlertCondition::Above(5.0),
+                });
+                watching.schedule = Some(Box::new(NotificationSchedule {
+                    timezone: TimezoneId::utc(),
+                    days: vec![Weekday::Thu],
+                    windows: vec![NotificationWindow {
+                        start: NaiveTime::from_hms_opt(0, 1, 0).unwrap(),
+                        end: NaiveTime::from_hms_opt(0, 2, 0).unwrap(),
+                    }],
+                }));
+                let host = Host::new(vec![watching]);
+                host.events();
+                let bars = [bar(-2, 100.0, 10.0), bar(-1, 100.0, 10.0)];
+                feed(&host, &bars, &[], 59);
+                assert!(host.events().is_empty(), "{condition:?}, {frequency}");
+                assert_eq!(host.engine.alerts()[0].status, AlertStatus::Active);
+                assert!(host.delivered.lock().unwrap().is_empty());
+
+                // At the opening, the same forming bar may fire. A completed bar needs a new close.
+                let next = if frequency == AlertFrequency::OncePerBarClose {
+                    vec![bars[0].clone(), bars[1].clone(), bar(0, 100.0, 10.0)]
+                } else {
+                    bars.to_vec()
+                };
+                feed(&host, &next, &[], 60);
+                assert_eq!(host.fired(), [100.0], "{condition:?}, {frequency}");
+                feed(&host, &next, &[], 61);
+                assert!(host.fired().is_empty());
+                assert_eq!(host.delivered.lock().unwrap().len(), 1);
+
+                let closed = [bar(0, 101.0, 10.0), bar(1, 102.0, 10.0)];
+                feed(&host, &closed, &[], 120);
+                assert!(host.fired().is_empty(), "the end of a window is excluded");
+            }
+        }
+    }
+
+    #[test]
+    fn minute_frequency_uses_clock_minutes_per_watchlist_member() {
+        let mut watching = alert(
+            AlertCondition::InsideChannel {
+                lower: 100.0,
+                upper: 110.0,
+            },
+            AlertFrequency::OncePerMinute,
+        );
+        watching.watchlist = Some("list".into());
+        let host = Host::new(vec![watching]);
+        host.engine
+            .set_watchlist("list", vec!["SYM".into(), "OTHER".into()]);
+        host.events();
+        // UTC seconds -61, -60 and 0 belong to minutes 23:58, 23:59 and 00:00.
+        // The chart bar never changes; neither boundaries nor occurrence counts use its time.
+        for (now, count) in [
+            (-61, 2),
+            (-60, 2),
+            (-1, 0),
+            (0, 2),
+            (59, 0),
+            (60, 2),
+            // A corrected clock must not fire a minute a second time.
+            (0, 0),
+            (60, 0),
+            (120, 2),
+        ] {
+            for symbol in ["SYM", "OTHER"] {
+                host.engine.update(
+                    symbol,
+                    Timeframe::Min1,
+                    &[bar(-5, 100.0, 1.0)],
+                    time(now),
+                    |_, _| None,
+                );
+            }
+            assert_eq!(host.fired().len(), count, "second {now}");
+        }
+    }
+
+    #[test]
     fn a_trigger_follows_the_change_of_status_and_reloads_never_repeat_it() {
         let mut watching = alert(AlertCondition::Above(100.0), AlertFrequency::EveryTime);
         watching.timeframe = None;
@@ -916,6 +1101,44 @@ mod tests {
         host.engine
             .update("SYM", Timeframe::Min5, &bars, time(1_004), |_, _| None);
         assert!(host.events().is_empty());
+    }
+
+    #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+    #[test]
+    fn dropping_a_feed_under_the_context_lock_does_not_wake_cancelled_replies() {
+        use crate::services::AlertFeed;
+        #[derive(Default)]
+        struct Feed(Mutex<Option<Reply<crate::data::HistoryPage>>>);
+        impl crate::data::Datafeed for Feed {
+            fn history(
+                &self,
+                _: crate::data::HistoryRequest,
+                reply: Reply<crate::data::HistoryPage>,
+            ) {
+                *self.0.lock().unwrap() = Some(reply);
+            }
+            fn unsubscribe(&self, _: crate::data::SubscriptionId) {
+                drop(self.0.lock().unwrap().take());
+            }
+        }
+        let (done, finished) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let ctx = egui::Context::default();
+            let host = Arc::new(Feed::default());
+            let mut feed = AlertFeed::new(
+                host.clone(),
+                AlertFeed::history_request("SYM", Timeframe::Min1),
+                None,
+            );
+            assert!(feed.poll(&ctx, time(1000)).is_empty());
+            assert!(host.0.lock().unwrap().is_some());
+            ctx.input(|_| drop(feed));
+            done.send(()).unwrap();
+        });
+        finished
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("dropping cancelled replies must not wait for the context lock");
+        worker.join().unwrap();
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! speed fan, spiral, wedge, and trend-based fib time.
 
 use super::ChartView;
-use super::style::circle_sides;
+use super::style::{Acceleration, ellipse_arc, ellipse_point, sample_curve, smooth_path};
 use crate::drawings::domain::{Drawing, DrawingToolType as Tool, FibonacciConfig, FibonacciLevel};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
@@ -250,37 +250,38 @@ impl Drawing {
             if !radius.is_finite() {
                 continue;
             }
-            let segments = circle_sides(radius * painter.pixels_per_point()).div_ceil(2);
-            let points: Vec<_> = (0..=segments)
-                .map(|i| {
-                    speed_arc_point(
-                        start,
-                        end,
-                        radius,
-                        std::f32::consts::PI * i as f32 / segments as f32,
-                    )
-                })
-                .collect();
-            if config.show_background
+            let axes = egui::vec2(radius, if end.y >= start.y { radius } else { -radius });
+            let angles = [0.0, std::f64::consts::PI];
+            let clip = painter.clip_rect().expand(level_width(&config) + 2.0);
+            let ppp = painter.pixels_per_point();
+            let points = if config.show_background
                 && let Some(inner_radius) = previous
             {
-                let inner: Vec<_> = (0..=segments)
-                    .map(|i| {
-                        speed_arc_point(
-                            start,
-                            end,
-                            inner_radius,
-                            std::f32::consts::PI * i as f32 / segments as f32,
-                        )
-                    })
-                    .collect();
+                let (inner, outer) = sampled_band(
+                    start,
+                    egui::vec2(
+                        inner_radius,
+                        if end.y >= start.y {
+                            inner_radius
+                        } else {
+                            -inner_radius
+                        },
+                    ),
+                    axes,
+                    angles,
+                    clip,
+                    ppp,
+                );
                 paint_band(
                     painter,
                     &inner,
-                    &points,
+                    &outer,
                     band_color(level, config.background_opacity),
                 );
-            }
+                outer
+            } else {
+                ellipse_arc(start, axes, angles, clip, ppp)
+            };
             previous = Some(radius);
             paint_level_path(painter, points, &config, level);
             let at = speed_arc_point(start, end, radius, std::f32::consts::FRAC_PI_2);
@@ -432,31 +433,28 @@ impl Drawing {
             if !radii.is_finite() {
                 continue;
             }
-            let segments = circle_sides(radii.max_elem() * painter.pixels_per_point());
-            if config.show_background
+            let clip = painter.clip_rect().expand(level_width(&config) + 2.0);
+            let ppp = painter.pixels_per_point();
+            let angles = [0.0, std::f64::consts::TAU];
+            let mut points = if config.show_background
                 && let Some(inner_radii) = previous
             {
-                let (inner, outer): (Vec<_>, Vec<_>) = (0..=segments)
-                    .map(|i| {
-                        let theta = std::f32::consts::TAU * i as f32 / segments as f32;
-                        let direction = egui::vec2(theta.cos(), theta.sin());
-                        (center + inner_radii * direction, center + radii * direction)
-                    })
-                    .unzip();
+                let (inner, outer) = sampled_band(center, inner_radii, radii, angles, clip, ppp);
                 paint_band(
                     painter,
                     &inner,
                     &outer,
                     band_color(level, config.background_opacity),
                 );
-            }
+                outer
+            } else {
+                ellipse_arc(center, radii, angles, clip, ppp)
+            };
             previous = Some(radii);
-            let mut points: Vec<_> = (0..segments)
-                .map(|i| {
-                    let theta = std::f32::consts::TAU * i as f32 / segments as f32;
-                    center + radii * egui::vec2(theta.cos(), theta.sin())
-                })
-                .collect();
+            if points.is_empty() {
+                continue;
+            }
+            points.pop();
             if config.level_style.dash_pattern().is_none() {
                 painter.add(egui::Shape::closed_line(
                     points,
@@ -562,9 +560,28 @@ impl Drawing {
             Stroke::new(self.stroke_width, color),
         );
         // Two turns inside the second anchor, down to 1/47 of its distance, and one turn outside.
-        let points = (-80..=40)
-            .map(|i| fib_spiral_point(center, edge, i as f32 * 0.05 * std::f32::consts::PI))
-            .collect();
+        let growth = std::f64::consts::GOLDEN_RATIO.ln() / std::f64::consts::FRAC_PI_2;
+        let dx = f64::from(edge.x) - f64::from(center.x);
+        let dy = f64::from(edge.y) - f64::from(center.y);
+        let radius = dx.hypot(dy);
+        let mut points = Vec::new();
+        for quarter in -8..4 {
+            let from = f64::from(quarter) * std::f64::consts::FRAC_PI_2;
+            let to = f64::from(quarter + 1) * std::f64::consts::FRAC_PI_2;
+            let bound = radius * (growth * to).exp() * (1.0 + growth * growth);
+            let span = smooth_path(
+                [from, to],
+                Acceleration {
+                    x: bound,
+                    y: bound,
+                    length: bound,
+                },
+                painter.clip_rect().expand(2.0),
+                painter.pixels_per_point(),
+                |theta| fib_spiral_point(center, edge, theta),
+            );
+            points.extend(span.into_iter().skip(usize::from(quarter != -8)));
+        }
         painter.add(egui::Shape::line(
             points,
             Stroke::new(stroke::HAIRLINE, color),
@@ -582,24 +599,45 @@ impl Drawing {
             .filter(|l| l.value >= 0.0 && l.value.is_finite())
             .collect();
         levels.sort_by(|a, b| a.value.total_cmp(&b.value));
-        let mut previous: Option<Vec<Pos2>> = None;
+        let mut previous: Option<f32> = None;
         let mut ends = None;
         for level in levels {
-            let points = wedge_arc_points(start, edge, boundary, level.value);
-            if config.show_background
-                && let Some(inner) = previous.as_ref()
+            let angles = wedge_angles(start, edge, boundary);
+            let clip = painter.clip_rect().expand(level_width(&config) + 2.0);
+            let ppp = painter.pixels_per_point();
+            let radius = start.distance(edge);
+            let points = if config.show_background
+                && let Some(inner) = previous
             {
+                let (inside, outside) = sampled_band(
+                    start,
+                    egui::Vec2::splat(radius * inner),
+                    egui::Vec2::splat(radius * level.value),
+                    angles,
+                    clip,
+                    ppp,
+                );
                 paint_band(
                     &painter,
-                    inner,
-                    &points,
+                    &inside,
+                    &outside,
                     band_color(level, config.background_opacity),
                 );
+                outside
+            } else {
+                wedge_arc_points(start, edge, boundary, level.value, clip, ppp)
+            };
+            if points.is_empty() {
+                continue;
             }
-            let mid = points[points.len() / 2];
+            let mid = ellipse_point(
+                start,
+                egui::Vec2::splat(radius * level.value),
+                (angles[0] + angles[1]) / 2.0,
+            );
             paint_ratio_label(&painter, &config, level, mid, egui::Align2::CENTER_BOTTOM);
             ends = Some([points[0], *points.last().unwrap()]);
-            previous = config.show_background.then(|| points.clone());
+            previous = Some(level.value);
             paint_level_path(&painter, points, &config, level);
         }
         if let Some(ends) = ends {
@@ -614,7 +652,7 @@ impl Drawing {
         }
     }
 
-    pub(super) fn fibonacci_wedge_outline(&self) -> Option<super::Outline> {
+    pub(super) fn fibonacci_wedge_outline(&self, clip: Rect) -> Option<super::Outline> {
         let &[start, edge, boundary, ..] = self.points.as_slice() else {
             return None;
         };
@@ -625,16 +663,16 @@ impl Drawing {
             .visible_levels()
             .filter(|l| l.value.is_finite() && l.value >= 0.0)
         {
-            let points = wedge_arc_points(start, edge, boundary, level.value);
+            let points = wedge_arc_points(start, edge, boundary, level.value, clip, 1.0);
             outline
                 .lines
                 .extend(points.windows(2).map(|w| [w[0], w[1]]));
             outer = outer.max(level.value);
         }
-        let outer = wedge_arc_points(start, edge, boundary, outer);
+        let outer = wedge_arc_points(start, edge, boundary, outer, clip, 1.0);
         outline
             .lines
-            .extend([[start, outer[0]], [start, *outer.last()?]]);
+            .extend([[start, *outer.first()?], [start, *outer.last()?]]);
         Some(outline)
     }
 }
@@ -907,17 +945,59 @@ pub(super) fn add_band(mesh: &mut egui::Mesh, inner: &[Pos2], outer: &[Pos2], co
 }
 
 /// Circular ratio arcs between the two trend rays, following their shorter signed sweep.
-fn wedge_arc_points(start: Pos2, edge: Pos2, boundary: Pos2, ratio: f32) -> Vec<Pos2> {
+fn wedge_angles(start: Pos2, edge: Pos2, boundary: Pos2) -> [f64; 2] {
     let a = edge - start;
     let b = boundary - start;
-    let angle = a.y.atan2(a.x);
-    let sweep = (a.x * b.y - a.y * b.x).atan2(a.dot(b));
-    (0..=64)
-        .map(|i| {
-            let theta = angle + sweep * i as f32 / 64.0;
-            start + a.length() * ratio * egui::vec2(theta.cos(), theta.sin())
+    let angle = f64::from(a.y.atan2(a.x));
+    let sweep = f64::from((a.x * b.y - a.y * b.x).atan2(a.dot(b)));
+    [angle, angle + sweep]
+}
+
+fn wedge_arc_points(
+    start: Pos2,
+    edge: Pos2,
+    boundary: Pos2,
+    ratio: f32,
+    clip: Rect,
+    ppp: f32,
+) -> Vec<Pos2> {
+    ellipse_arc(
+        start,
+        egui::Vec2::splat(start.distance(edge) * ratio),
+        wedge_angles(start, edge, boundary),
+        clip,
+        ppp,
+    )
+}
+
+/// Both band edges share angles; each edge refines only where its own curvature reaches the view.
+fn sampled_band(
+    center: Pos2,
+    inner: egui::Vec2,
+    outer: egui::Vec2,
+    angles: [f64; 2],
+    clip: Rect,
+    ppp: f32,
+) -> (Vec<Pos2>, Vec<Pos2>) {
+    let at = |angle: f64| {
+        let (sin, cos) = angle.sin_cos();
+        [inner, outer].map(|axes| {
+            Pos2::new(
+                (f64::from(center.x) + f64::from(axes.x) * cos) as f32,
+                (f64::from(center.y) + f64::from(axes.y) * sin) as f32,
+            )
         })
-        .collect()
+    };
+    sample_curve(
+        angles,
+        [Acceleration::ellipse(inner), Acceleration::ellipse(outer)],
+        clip,
+        ppp,
+        at,
+    )
+    .into_iter()
+    .map(|(_, [a, b])| (a, b))
+    .unzip()
 }
 
 /// A half-circle around the first anchor, on the second anchor's price side.
@@ -943,11 +1023,19 @@ fn speed_fan_line_end(start: Pos2, end: Pos2, ratio: f32, chart_rect: Rect) -> P
 
 /// The point of the golden spiral around `center` that passes through `edge`,
 /// `theta` radians past it: the radius grows by the golden ratio every quarter turn.
-fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f32) -> Pos2 {
-    let d = edge - center;
-    let r = d.length() * std::f32::consts::GOLDEN_RATIO.powf(theta / std::f32::consts::FRAC_PI_2);
-    let angle = d.y.atan2(d.x) + theta;
-    center + r * egui::vec2(angle.cos(), angle.sin())
+fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f64) -> Pos2 {
+    if theta == 0.0 {
+        return edge;
+    }
+    let growth = std::f64::consts::GOLDEN_RATIO.ln() / std::f64::consts::FRAC_PI_2;
+    let factor = (growth * theta).exp();
+    let (s, c) = theta.sin_cos();
+    let dx = f64::from(edge.x) - f64::from(center.x);
+    let dy = f64::from(edge.y) - f64::from(center.y);
+    Pos2::new(
+        (f64::from(center.x) + factor * (dx * c - dy * s)) as f32,
+        (f64::from(center.y) + factor * (dx * s + dy * c)) as f32,
+    )
 }
 
 #[cfg(test)]
@@ -1000,25 +1088,39 @@ mod tests {
     #[test]
     fn fibonacci_bands_keep_both_sampled_edges() {
         for tool in [Tool::FibonacciCircles, Tool::FibonacciSpeedResistanceArcs] {
-            for end in [Pos2::new(150.0, 120.0), Pos2::new(150.0, 80.0)] {
-                let start = Pos2::new(100.0, 100.0);
+            for (start, end, inner_ratio) in [
+                (Pos2::new(100.0, 100.0), Pos2::new(150.0, 120.0), 0.25),
+                (Pos2::new(100.0, 100.0), Pos2::new(150.0, 80.0), 0.25),
+                (
+                    Pos2::new(-999600.0, -999700.0),
+                    Pos2::new(1000400.0, 1000300.0),
+                    0.0,
+                ),
+            ] {
                 let mut drawing = Drawing::new(0, tool);
                 drawing.points = vec![start, end];
                 drawing.fib_config = Some(FibonacciConfig {
                     levels: vec![
-                        FibonacciLevel::new(0.25, "", [255; 4]),
+                        FibonacciLevel::new(inner_ratio, "", [255; 4]),
                         FibonacciLevel::new(1.0, "", [255; 4]),
                     ],
                     show_background: true,
                     ..Default::default()
                 });
-                let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
-                    if tool == Tool::FibonacciCircles {
-                        drawing.render_fibonacci_circles(ui.painter());
-                    } else {
-                        drawing.render_fibonacci_arc(ui.painter());
-                    }
-                });
+                let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+                let mut output = egui::Context::default().run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(pane),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        if tool == Tool::FibonacciCircles {
+                            drawing.render_fibonacci_circles(ui.painter());
+                        } else {
+                            drawing.render_fibonacci_arc(ui.painter());
+                        }
+                    },
+                );
                 output.textures_delta.clear();
                 let mesh = output
                     .shapes
@@ -1028,29 +1130,58 @@ mod tests {
                         _ => None,
                     })
                     .unwrap();
-                let radius = start.distance(end);
-                let segments = if tool == Tool::FibonacciCircles {
-                    circle_sides((end - start).abs().max_elem() * 0.5)
+                let pairs = mesh.vertices.as_chunks::<2>().0;
+                assert!(pairs.len() >= 3);
+                assert!(
+                    mesh.vertices.len() < 2048,
+                    "{tool:?}: oversized band has {} vertices",
+                    mesh.vertices.len()
+                );
+                assert_eq!(mesh.indices.len(), 6 * (pairs.len() - 1));
+                let center = if tool == Tool::FibonacciCircles {
+                    start.lerp(end, 0.5)
                 } else {
-                    circle_sides(radius).div_ceil(2)
+                    start
                 };
-                assert_eq!(mesh.vertices.len(), 2 * (segments + 1));
-                assert_eq!(mesh.indices.len(), 6 * segments);
-                for (i, pair) in mesh.vertices.as_chunks::<2>().0.iter().enumerate() {
-                    for (vertex, ratio) in pair.iter().zip([0.25, 1.0]) {
-                        let expected = if tool == Tool::FibonacciCircles {
-                            let angle = std::f32::consts::TAU * i as f32 / segments as f32;
-                            start.lerp(end, 0.5)
-                                + (end - start).abs()
-                                    * 0.5
-                                    * ratio
-                                    * egui::vec2(angle.cos(), angle.sin())
+                let axes = if tool == Tool::FibonacciCircles {
+                    (end - start).abs() * 0.5
+                } else {
+                    egui::Vec2::splat(start.distance(end))
+                };
+                let first = center + egui::vec2(axes.x, 0.0);
+                let last = center
+                    + egui::vec2(
+                        if tool == Tool::FibonacciCircles {
+                            axes.x
                         } else {
-                            let angle = std::f32::consts::PI * i as f32 / segments as f32;
-                            speed_arc_point(start, end, radius * ratio, angle)
-                        };
-                        assert_eq!(vertex.pos, expected, "{tool:?}, sample {i}, ratio {ratio}");
-                    }
+                            -axes.x
+                        },
+                        0.0,
+                    );
+                assert!(pairs.first().unwrap()[1].pos.distance(first) < 1e-3);
+                assert!(pairs.last().unwrap()[1].pos.distance(last) < 1e-3);
+                let side = if tool == Tool::FibonacciCircles || end.y >= start.y {
+                    1.0
+                } else {
+                    -1.0
+                };
+                let apex = center + egui::vec2(0.0, axes.y * side);
+                if pane.contains(apex) {
+                    assert!(pairs.windows(2).any(|w| {
+                        let (a, b) = (w[0][1].pos, w[1][1].pos);
+                        let chord = b - a;
+                        let t = ((apex - a).dot(chord) / chord.length_sq()).clamp(0.0, 1.0);
+                        apex.distance(a + chord * t) <= 0.25
+                    }));
+                }
+                for pair in pairs {
+                    assert!(
+                        pair[0]
+                            .pos
+                            .distance(center + (pair[1].pos - center) * inner_ratio)
+                            < 1e-3
+                    );
+                    assert!((((pair[1].pos - center) / axes).length() - 1.0).abs() < 1e-5);
                 }
                 output.drop_without_applying_deltas();
             }
@@ -1721,7 +1852,7 @@ mod tests {
             ((100.0, 0.0), -FRAC_PI_2, (0.0, -61.8034)),
             ((0.0, 100.0), 0.0, (0.0, 100.0)),
         ] {
-            let got = fib_spiral_point(Pos2::ZERO, Pos2::from(edge), theta);
+            let got = fib_spiral_point(Pos2::ZERO, Pos2::from(edge), f64::from(theta));
             if !near(got, Pos2::from(want)) {
                 wrong.push(format!(
                     "spiral edge {edge:?} theta {theta}: got {got:?}, want {want:?}"
@@ -1751,16 +1882,18 @@ mod tests {
         wedge.points = vec![Pos2::ZERO, Pos2::new(100.0, 0.0), Pos2::new(0.0, 200.0)];
         let outline = wedge.outline(rect).unwrap();
         // A quarter circle at level 0.5: (50,0) through (sqrt(1250),sqrt(1250)) to (0,50).
-        for want in [
-            Pos2::new(50.0, 0.0),
-            Pos2::new(35.35534, 35.35534),
-            Pos2::new(0.0, 50.0),
-        ] {
+        for want in [Pos2::new(50.0, 0.0), Pos2::new(0.0, 50.0)] {
             assert!(
                 outline.lines.iter().flatten().any(|p| near(*p, want)),
                 "missing wedge point {want:?}"
             );
         }
+        let mid = Pos2::new(35.35534, 35.35534);
+        assert!(outline.lines.iter().any(|[a, b]| {
+            let chord = *b - *a;
+            let t = ((mid - *a).dot(chord) / chord.length_sq()).clamp(0.0, 1.0);
+            mid.distance(*a + chord * t) <= 0.25
+        }));
 
         assert!(
             wedge
