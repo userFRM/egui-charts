@@ -8,11 +8,31 @@ use crate::model::{
 };
 use crate::scales::StudyFormat;
 use crate::scales::{PriceMap, PriceScale, PriceScaleMode};
-use crate::studies::{Indicator, IndicatorValues, PlotStyle, PlotType};
+use crate::services::SymbolExpression;
+use crate::studies::{Indicator, IndicatorValues, PlotStyle, PlotType, StudyDataRequest};
 use crate::tokens::DESIGN_TOKENS;
 use crate::widget::{Chart, ChartElementId, PaneId, SeriesId};
 use egui::Color32;
 use serde::{Deserialize, Serialize};
+
+/// The spread a series name spells, such as `AAPL-MSFT`; `None` for a plain symbol.
+fn spread_of(name: &str) -> Option<SymbolExpression> {
+    SymbolExpression::parse(name)
+        .ok()
+        .filter(SymbolExpression::is_spread)
+}
+
+/// The symbols the feed supplies for a series name: the symbol itself, or a spread's legs.
+fn fed_symbols(name: &str) -> Vec<String> {
+    match SymbolExpression::parse(name) {
+        Ok(expression) => expression
+            .symbols()
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        Err(_) => vec![name.to_owned()],
+    }
+}
 
 /// Display settings of a host-fed bar series.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,6 +151,8 @@ pub(in crate::widget) struct PriceSeries {
     pub id: SeriesId,
     pub options: SeriesOptions,
     pub visible: bool,
+    /// Feed ownership travels with the series through undo and redo.
+    pub fed: bool,
     pub bars: Vec<Bar>,
     /// Changes when bars other than the last one change, as the main bars' revision does.
     pub revision: u64,
@@ -275,6 +297,7 @@ impl Chart {
             id,
             options,
             visible: true,
+            fed: false,
             bars: Vec::new(),
             revision: crate::model::next_revision(),
             heikin_ashi: Default::default(),
@@ -302,9 +325,87 @@ impl Chart {
         };
         let options = options.sanitized();
         self.ensure_series_scale(options.scale);
+        let renamed = self.price_series[at].options.name != options.name;
         self.price_series[at].options = options;
+        if renamed && self.is_fed(id) {
+            self.set_data(id, Vec::new());
+            self.fill_fed_series();
+        }
         self.prune_series_scales();
         true
+    }
+
+    /// Whether the chart's feed supplies the bars of a series, as for
+    /// [`add_feed_series`](Self::add_feed_series).
+    pub fn is_fed(&self, id: SeriesId) -> bool {
+        self.feed_link.is_some()
+            && self
+                .price_series
+                .iter()
+                .any(|item| item.id == id && item.fed)
+    }
+
+    /// The fed series that are still present, with the names they are fed for.
+    pub(in crate::widget) fn fed_series(&self) -> Vec<(SeriesId, String)> {
+        self.price_series
+            .iter()
+            .filter(|item| self.is_fed(item.id))
+            .map(|item| (item.id, item.options.name.clone()))
+            .collect()
+    }
+
+    /// The histories the feed supplies for the fed series, at the chart's interval.
+    pub(in crate::widget) fn fed_requests(&self) -> Vec<StudyDataRequest> {
+        let mut requests = Vec::new();
+        for (_, name) in self.fed_series() {
+            for symbol in fed_symbols(&name) {
+                let request = StudyDataRequest {
+                    symbol,
+                    timeframe: Some(self.timeframe().unwrap_or_default()),
+                    metric: None,
+                };
+                if !requests.contains(&request) {
+                    requests.push(request);
+                }
+            }
+        }
+        requests
+    }
+
+    /// Replaces the bars of the fed series with what the feed supplied for their symbols.
+    pub(in crate::widget) fn fill_fed_series(&mut self) {
+        let fed = self.fed_series();
+        if fed.is_empty() {
+            return;
+        }
+        let updates: Vec<_> = {
+            let data =
+                self.study_data
+                    .data(self.fed_requests(), self.symbol(), self.timeframe(), None);
+            let history = |symbol: &str| {
+                data.iter()
+                    .find(|data| data.request.symbol == symbol)
+                    .map(|data| data.bars)
+            };
+            fed.iter()
+                .map(|(id, name)| {
+                    let bars = match spread_of(name) {
+                        Some(spread) => spread.bars(history).unwrap_or_default(),
+                        None => fed_symbols(name)
+                            .first()
+                            .and_then(|symbol| history(symbol))
+                            .unwrap_or_default()
+                            .to_vec(),
+                    };
+                    (*id, bars)
+                })
+                .collect()
+        };
+        for (id, bars) in updates {
+            if self.bars(id) != bars.as_slice() {
+                self.set_data(id, bars);
+            }
+        }
     }
 
     /// The position of an added bar series in the draw order, which [`series`](Self::series)
@@ -324,6 +425,20 @@ impl Chart {
         self.price_series
             .insert(order.min(self.price_series.len()), item);
         true
+    }
+
+    /// Adds a bar series like [`add_series`](Self::add_series) whose bars the chart's feed
+    /// supplies: the history and live updates of the symbol in `options.name`, at the chart's
+    /// interval, or of a spread such as `AAPL-MSFT` (see
+    /// [`SymbolExpression`]), computed from the history of each
+    /// of its symbols. The series pages back as far as the main series, and a new name is a new
+    /// symbol. A chart without a feed adds a plain series, which the host supplies through
+    /// [`set_data`](Self::set_data); a symbol that contains an operator sign cannot be named.
+    pub fn add_feed_series(&mut self, options: SeriesOptions) -> SeriesId {
+        let id = self.add_series(options);
+        self.price_series.last_mut().expect("added series").fed = self.feed_link.is_some();
+        self.fill_fed_series();
+        id
     }
 
     /// Adds a comparison line on the main series' scale and switches that scale to percent.

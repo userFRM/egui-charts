@@ -552,6 +552,7 @@ impl Chart {
                 id: series.id,
                 options: series.options.clone(),
                 visible: series.visible,
+                fed: series.fed,
                 bars: series.bars.clone(),
                 revision: series.revision,
                 heikin_ashi: Default::default(),

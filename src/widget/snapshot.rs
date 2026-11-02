@@ -37,7 +37,8 @@ pub struct SavedAnnotations {
 
 /// One bar series added with [`Chart::add_series`] to a [`ChartSnapshot`], without its bars.
 /// [`Chart::restore`] adds it again with a new id: supply its bars through
-/// [`Chart::set_data`] on [`Chart::restored_series_id`] of [`id`](Self::id).
+/// [`Chart::set_data`] on [`Chart::restored_series_id`] of [`id`](Self::id), or set
+/// [`fed`](Self::fed) to reconnect its symbol or spread to the chart feed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedSeries {
     /// The series' id when saved, which [`SavedPane::members`] and drawings in its pane use.
@@ -47,6 +48,13 @@ pub struct SavedSeries {
     pub options: SeriesOptions,
     /// Whether it is shown.
     pub visible: bool,
+    /// Reconnect the symbol or spread in `options.name` to the chart feed on restore.
+    /// Older layouts leave series host-fed.
+    #[serde(default)]
+    pub fed: bool,
+    /// Its price scale, including options and a manual range; absent in older layouts.
+    #[serde(default)]
+    pub price_scale: Option<crate::scales::PriceScale>,
     /// The position of its pane in [`ChartSnapshot::panes`].
     pub pane: usize,
     /// Its markers and price lines.
@@ -219,6 +227,8 @@ impl Chart {
                 id: item.id.0,
                 options: item.options.clone(),
                 visible: item.visible,
+                fed: self.is_fed(item.id),
+                price_scale: self.series_price_scale(item.id).cloned(),
                 pane: pane_of(item.id),
                 annotations: SavedAnnotations {
                     markers: item.markers.to_vec(),
@@ -236,7 +246,11 @@ impl Chart {
             chart_type_params: self.chart_type_params.clone(),
             main_series_visible: self.main_series_visible,
             main_series_alerts: self.main_series_style.alerts,
-            settings: ChartSettingsState::from_chart(self),
+            settings: {
+                let mut settings = ChartSettingsState::from_chart(self);
+                settings.adjust_for_dividends = self.dividend_adjusted();
+                settings
+            },
             config: Some(self.config.clone()),
             palette: Some(self.followed_palette()),
             options: Some(self.chart_options.clone()),
@@ -295,7 +309,7 @@ impl Chart {
     /// The added series of the chart are replaced by those of the snapshot, which come back
     /// without bars and under new ids: look each up with
     /// [`restored_series_id`](Self::restored_series_id) and supply its bars with
-    /// [`set_data`](Self::set_data), as for the chart's own feed.
+    /// [`set_data`](Self::set_data). Feed-backed series reconnect automatically.
     ///
     /// Errors distinguish a saved [`RestoreError::Study`], invalid [`RestoreError::Settings`],
     /// [`RestoreError::Layout`] geometry and unreadable [`RestoreError::Drawings`].
@@ -323,6 +337,7 @@ impl Chart {
             self.drawings.curr_timeframe.clear();
         }
         self.set_extended_hours(snapshot.extended_hours);
+        self.set_dividend_adjusted(snapshot.settings.adjust_for_dividends);
         self.set_chart_type(snapshot.chart_type);
         self.set_chart_type_params(snapshot.chart_type_params.clone());
         self.set_main_series_visible(snapshot.main_series_visible);
@@ -378,11 +393,18 @@ impl Chart {
             self.move_series_to_pane(id, panes[&saved.pane]);
         }
         for saved in snapshot.series.iter().flatten() {
-            let id = self.add_series(saved.options.clone());
+            let id = if saved.fed {
+                self.add_feed_series(saved.options.clone())
+            } else {
+                self.add_series(saved.options.clone())
+            };
             self.set_series_visible(id, saved.visible);
             self.restore_annotations(id, &saved.annotations);
             self.restored_studies.insert(saved.id, id.0);
             self.move_series_to_pane(id, panes[&saved.pane]);
+            if let Some(scale) = &saved.price_scale {
+                *self.series_price_scale_mut(id).expect("restored series") = scale.clone();
+            }
         }
         if let Some(main) = &snapshot.main_annotations {
             self.restore_annotations(super::SeriesId::MAIN, main);
@@ -524,6 +546,7 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
             .panes
             .iter()
             .filter_map(|pane| pane.scale.as_ref())
+            .chain(snapshot.series.iter().flatten().filter_map(|series| series.price_scale.as_ref()))
             .any(|scale| !valid_scale(scale))
         || snapshot
             .studies
