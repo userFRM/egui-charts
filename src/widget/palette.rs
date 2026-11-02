@@ -31,8 +31,8 @@ impl Chart {
     }
 
     /// Lets the colours of a restored configuration that still match the palette they were saved
-    /// with follow the active theme from the next frame. Layouts saved without that palette are
-    /// compared with both built-in themes.
+    /// with follow the known theme immediately, or the active theme on the next frame. Layouts
+    /// saved without that palette are compared with both built-in themes.
     #[cfg(feature = "ui")]
     pub(super) fn follow_restored_palette(&mut self, saved: Option<&ChartConfig>) {
         self.restored_palettes = saved.map_or_else(
@@ -44,6 +44,14 @@ impl Chart {
             },
             |saved| vec![saved.clone()],
         );
+        if let Some(theme) = self
+            .theme_override
+            .as_ref()
+            .or(self.inherited_theme.as_ref())
+            .cloned()
+        {
+            self.follow_chart_theme(&theme);
+        }
     }
 }
 

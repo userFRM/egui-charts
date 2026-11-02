@@ -431,6 +431,8 @@ mod tests {
             app.chart.set_pane_stretch_factor(pane, 2.25);
             app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
             app.chart.price_scale_mut().options_mut().mode = PriceScaleMode::Logarithmic;
+            app.chart.price_scale_mut().reset();
+            show_charts(&mut app, &ctx);
             app.chart.price_scale_mut().set_range(2.0, 6.0);
             app.chart
                 .set_crosshair_style(egui_charts::config::CrosshairStyle::Dot);
