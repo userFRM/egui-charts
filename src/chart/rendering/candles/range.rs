@@ -6,7 +6,7 @@ use crate::scales::PriceMap;
 use egui::{Color32, Painter, Pos2, Rect, Shape};
 
 use super::volume::render_volume_bars;
-use crate::chart::renderers::{RenderContext, StyleColors};
+use crate::chart::rendering::{RenderContext, StyleColors};
 use crate::model::Bar;
 
 use super::japanese::calc_brick_rect;

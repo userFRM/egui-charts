@@ -5,8 +5,8 @@
 //! - Tracking: Fixed horizontal bar at top of chart showing OHLC data
 //! - Magnifier: Circular zoom lens for detailed data inspection
 
-use super::context::{ChartMapping, RenderContext, StyleColors};
 use super::labels::semibold;
+use super::{ChartMapping, RenderContext, StyleColors};
 use crate::config::{TooltipMode, TooltipOptions};
 use crate::localization as l10n;
 use crate::model::{Bar, Instrument, percent_change};

@@ -1,4 +1,4 @@
-use super::context::{ChartMapping, RenderContext, StyleColors};
+use super::{ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering::axes::{PRICE_LABEL_GAP, axis_font};
 use crate::config::{PriceAxisOptions, TimeScaleOptions};
 use crate::model::Bar;

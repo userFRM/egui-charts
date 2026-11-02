@@ -9,9 +9,6 @@
 
 mod alert_levels;
 mod axis_currency;
-mod bar;
-mod candle;
-mod context;
 mod crosshair;
 mod indicator;
 mod study_scale;
@@ -22,15 +19,12 @@ mod markers;
 mod session_breaks;
 mod tooltip;
 mod trading_lines;
-mod volume;
 pub(crate) mod volume_profile;
 mod watermark;
 
+pub use super::rendering::{ChartMapping, RenderContext, StyleColors};
 pub use alert_levels::{alert_shortcut_price, render_alert_levels};
 pub use axis_currency::render_axis_currency;
-pub use bar::render_ohlc_bar;
-pub use candle::render_candle;
-pub use context::{BarRenderParams, ChartMapping, RenderContext, StyleColors};
 
 pub use crosshair::{render_crosshair_full, render_crosshair_with_options};
 pub(crate) use crosshair::{render_crosshair_lines, render_crosshair_price_tag, snap_to_values};
@@ -53,6 +47,5 @@ pub use trading_lines::{
     PnlUnit, TradingLabelAlignment, TradingLineAction, TradingLineOptions, TradingLines,
     render_trading_lines,
 };
-pub use volume::render_volume_bar;
 pub(crate) use watermark::render_watermark;
 pub use watermark::{Watermark, WatermarkLine};

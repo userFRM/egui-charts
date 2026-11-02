@@ -6,6 +6,9 @@
 
 pub mod axes;
 pub mod candles;
+mod context;
+pub use candles::{render_candle, render_ohlc_bar, render_volume_bar};
+pub use context::{BarRenderParams, ChartMapping, RenderContext, StyleColors};
 pub mod grid;
 pub mod overlays;
 

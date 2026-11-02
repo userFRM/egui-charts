@@ -13,7 +13,7 @@
 //! they track the bars exactly under pan and zoom and never duplicate the
 //! coordinate math used by the candles.
 
-use super::context::{ChartMapping, RenderContext};
+use super::{ChartMapping, RenderContext};
 use crate::model::LineStyle;
 use crate::model::{Bar, SessionBreakType, SessionProvider, Timeframe, find_session_breaks};
 use crate::painting::dashed_line::draw_dashed_line;
