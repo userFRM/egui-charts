@@ -17,6 +17,8 @@ pub mod market_heatmap;
 pub mod news;
 pub mod notifications;
 pub mod object_tree;
+#[cfg(feature = "detectors")]
+pub mod order_flow;
 pub mod products;
 pub mod screener;
 pub mod symbol_details;
@@ -32,6 +34,8 @@ pub use market_heatmap::*;
 pub use news::*;
 pub use notifications::*;
 pub use object_tree::*;
+#[cfg(feature = "detectors")]
+pub use order_flow::*;
 pub use products::*;
 pub use screener::*;
 pub use symbol_details::*;
