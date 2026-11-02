@@ -63,7 +63,7 @@ pub struct IndicatorDialog {
     metric_names: Vec<String>,
     metric_error: Option<FeedError>,
     source: Option<StudySource>,
-    source_error: Option<&'static str>,
+    source_error: Option<StudyError>,
     full: bool,
     /// Available indicators, one per factory name
     indicators: Vec<IndicatorInfo>,
@@ -315,8 +315,8 @@ impl IndicatorDialog {
                 &[("error", format!("{}", error))],
             ));
         }
-        if let Some(error) = self.source_error {
-            ui.colored_label(theme.ui.error, l10n::text(ui.ctx(), error));
+        if let Some(error) = &self.source_error {
+            ui.colored_label(theme.ui.error, l10n::text(ui.ctx(), error.to_string()));
         }
         if self.full {
             ui.colored_label(

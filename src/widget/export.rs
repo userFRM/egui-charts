@@ -1160,6 +1160,9 @@ mod tests {
         let error = chart
             .export_layout_svg(&ctx, &additive, host_texture)
             .unwrap_err();
+        let ExportError::Unsupported(error) = error else {
+            panic!("expected an unsupported texture")
+        };
         assert!(error.contains("Additive texture User(7)"), "{error}");
         let layout = |ui: &mut egui::Ui, chart: &mut Chart| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(128.0, 32.0), egui::Sense::hover());

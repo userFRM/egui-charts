@@ -1119,9 +1119,11 @@ impl DemoApp {
             let result = self
                 .chart
                 .indicator_mut(edit.id)
-                .ok_or("Study was removed")
+                .ok_or_else(|| "Study was removed".to_owned())
                 .and_then(|study| {
-                    study.apply_settings(&edit.inputs, edit.settings)?;
+                    study
+                        .apply_settings(&edit.inputs, edit.settings)
+                        .map_err(|error| format!("Study settings not applied: {error}"))?;
                     Ok(study_input_summary(study))
                 });
             match result {

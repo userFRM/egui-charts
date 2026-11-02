@@ -2,7 +2,7 @@
 
 use super::{Chart, ChartElementId, SeriesId};
 use crate::model::Bar;
-use crate::studies::{Indicator, InputValue, StudySource};
+use crate::studies::{Indicator, InputValue, RefusedStudy, StudyError, StudySource};
 use web_time::Instant;
 
 impl Chart {
@@ -27,18 +27,16 @@ impl Chart {
 
     /// Adds a study like [`add_indicator`](Self::add_indicator), unless the chart already holds
     /// as many as [`study_limit`](Self::study_limit) allows. A refused study leaves the chart
-    /// unchanged.
+    /// unchanged and comes back in [`StudyError::StudyLimitReached`].
     pub fn try_add_indicator(
         &mut self,
         indicator: Box<dyn Indicator>,
-    ) -> Result<SeriesId, &'static str> {
+    ) -> Result<SeriesId, StudyError> {
         if self.study_limit_reached() {
-            return Err(Self::STUDY_LIMIT_REACHED);
+            return Err(StudyError::StudyLimitReached(RefusedStudy::new(indicator)));
         }
         Ok(self.add_indicator(indicator))
     }
-
-    pub(crate) const STUDY_LIMIT_REACHED: &'static str = "Study limit reached";
 
     /// Adds a study, computed at once from the bars, which [`show`](Self::show) draws: on the
     /// main pane if [`Indicator::is_overlay`], otherwise in a new pane at the bottom. Returns the
@@ -290,20 +288,20 @@ impl Chart {
         &mut self,
         id: SeriesId,
         source: StudySource,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), StudyError> {
         let at = self
             .study_ids
             .iter()
             .position(|candidate| *candidate == id)
-            .ok_or("unknown study")?;
+            .ok_or(StudyError::UnknownStudyId(id.0))?;
         if let StudySource::Study { id: parent, plot } = source {
             let parent_at = self
                 .study_ids
                 .iter()
                 .position(|candidate| candidate.0 == parent)
-                .ok_or("unknown source study")?;
+                .ok_or(StudyError::UnknownSourceStudy(parent))?;
             if plot >= self.studies.indicators()[parent_at].line_count() {
-                return Err("unknown source plot");
+                return Err(StudyError::UnknownSourcePlot { id: parent, plot });
             }
             let mut next = Some(parent);
             for _ in 0..=self.study_ids.len() {
@@ -311,20 +309,20 @@ impl Chart {
                     break;
                 };
                 if parent == id.0 {
-                    return Err("cyclic study source");
+                    return Err(StudyError::CyclicSource);
                 }
                 let index = self
                     .study_ids
                     .iter()
                     .position(|candidate| candidate.0 == parent)
-                    .ok_or("unknown source study")?;
+                    .ok_or(StudyError::UnknownSourceStudy(parent))?;
                 next = match self.studies.indicators()[index].source() {
                     Some(StudySource::Study { id, .. }) => Some(id),
                     _ => None,
                 };
             }
             if next.is_some() {
-                return Err("cyclic study source");
+                return Err(StudyError::CyclicSource);
             }
         }
         let mut edited = self.studies.indicators()[at].clone_box();
@@ -543,7 +541,7 @@ const REFRESH_INTERVAL: f64 = 0.25;
 mod tests {
     use crate::model::{Bar, BarData, PriceSource};
     use crate::studies::Indicator;
-    use crate::studies::{InputValue, RSI, SMA, StudySource};
+    use crate::studies::{InputValue, RSI, SMA, StudyError, StudySource};
     use crate::widget::test_frames::frame;
     use crate::widget::{Chart, SeriesId, test_frames::shapes};
     use chrono::{DateTime, Duration, TimeDelta, Utc};
@@ -798,17 +796,16 @@ mod tests {
         settle(&mut chart);
         // Wilder averages after +1, -1, -0.5 are gain=0.25, loss=0.5: RSI=100/3.
         assert!((output(&chart, 3).unwrap() - (50.0 + 100.0 / 3.0) / 2.0).abs() < 1e-8);
-        assert!(
-            chart
-                .set_indicator_source(
-                    rsi,
-                    crate::studies::StudySource::Study {
-                        id: mean.0,
-                        plot: 0
-                    }
-                )
-                .is_err()
-        );
+        assert!(matches!(
+            chart.set_indicator_source(
+                rsi,
+                StudySource::Study {
+                    id: mean.0,
+                    plot: 0
+                }
+            ),
+            Err(StudyError::CyclicSource)
+        ));
         let csv = chart.export_csv().unwrap();
         assert!(csv.contains(",41.67"), "{csv}");
         chart.user_action(|chart| chart.remove_series(rsi));
@@ -1061,12 +1058,25 @@ mod tests {
             assert!(chart.try_add_indicator(Box::new(SMA::new(period))).is_ok());
         }
         let undoable = chart.can_undo();
-        assert!(chart.try_add_indicator(Box::new(SMA::new(7))).is_err());
-        assert!(
-            chart
-                .paste_indicator(&copied, &crate::studies::IndicatorFactory::new())
-                .is_err()
-        );
+        let period = |study: Box<dyn crate::studies::Indicator>| {
+            study
+                .inputs()
+                .into_iter()
+                .find(|input| input.id == "period")
+                .map(|input| input.value)
+        };
+        let Err(StudyError::StudyLimitReached(refused)) =
+            chart.try_add_indicator(Box::new(SMA::new(7)))
+        else {
+            panic!("the cap refuses a third study");
+        };
+        assert_eq!(period(refused.into_inner()), Some(InputValue::Length(7)));
+        let Err(StudyError::StudyLimitReached(refused)) =
+            chart.paste_indicator(&copied, &crate::studies::IndicatorFactory::new())
+        else {
+            panic!("the cap refuses a pasted study");
+        };
+        assert_eq!(period(refused.into_inner()), Some(InputValue::Length(9)));
         assert_eq!(chart.indicators().count(), 2);
         assert_eq!(chart.can_undo(), undoable);
         chart.add_indicator(Box::new(SMA::new(7)));
@@ -1080,6 +1090,10 @@ mod tests {
         needs_error::<crate::model::ParseError>();
         needs_error::<crate::model::PnfBoxesError>();
         needs_error::<crate::widget::ExportError>();
+        needs_error::<crate::studies::StudyError>();
+        needs_error::<crate::widget::settings::ChartSettingsError>();
+        #[cfg(feature = "ui")]
+        needs_error::<crate::widget::RestoreError>();
         #[cfg(feature = "drawings")]
         needs_error::<crate::widget::DrawingError>();
     }

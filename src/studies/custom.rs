@@ -113,18 +113,27 @@ impl CustomIndicator {
         mut self,
         inputs: Vec<super::StudyInput>,
         calculate: F,
-    ) -> Result<Self, &'static str>
+    ) -> Result<Self, super::StudyError>
     where
         F: Fn(&[Bar], &[super::StudyInput]) -> Vec<IndicatorValue> + Send + Sync + 'static,
     {
         for (at, input) in inputs.iter().enumerate() {
-            if input.id.is_empty()
-                || inputs[..at].iter().any(|other| other.id == input.id)
-                || !input.accepts(&input.value)
-                || !input.accepts(&input.default)
-            {
-                return Err("invalid custom study input schema");
+            if input.id.is_empty() {
+                return Err(super::StudyError::EmptyInputId { index: at });
             }
+            let reason = if inputs[..at].iter().any(|other| other.id == input.id) {
+                "is declared twice"
+            } else if !input.accepts(&input.value) {
+                "has a value outside its accepted values"
+            } else if !input.accepts(&input.default) {
+                "has a default outside its accepted values"
+            } else {
+                continue;
+            };
+            return Err(super::StudyError::InvalidInput {
+                id: input.id.clone(),
+                reason,
+            });
         }
         self.inputs = inputs;
         self.input_calculate_fn = Some(Arc::new(calculate));
@@ -214,14 +223,18 @@ impl Indicator for CustomIndicator {
         self.inputs.clone()
     }
 
-    fn set_input(&mut self, id: &str, value: super::InputValue) -> Result<(), &'static str> {
+    fn set_input(
+        &mut self,
+        id: &str,
+        value: super::InputValue,
+    ) -> Result<(), crate::studies::StudyError> {
         let input = self
             .inputs
             .iter_mut()
             .find(|input| input.id == id)
-            .ok_or("unknown study input")?;
+            .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
         if !input.accepts(&value) {
-            return Err("study input is outside its accepted values");
+            return Err(crate::studies::StudyError::invalid_input(id));
         }
         input.value = value;
         self.values.clear();
@@ -406,6 +419,36 @@ mod tests {
         assert_eq!(cloned.values().value(0, 0), Some(12.0));
         cloned.update_source(&[bar], 0, &[5.0]);
         assert_eq!(cloned.values().value(0, 0), Some(20.0));
+        let length = |value| StudyInput::new("length", "Length", value, InputKind::Length(1, 10));
+        for (schema, expected) in [
+            (
+                vec![StudyInput::new(
+                    "",
+                    "Length",
+                    InputValue::Length(2),
+                    InputKind::Length(1, 10),
+                )],
+                "study input 0 has an empty id",
+            ),
+            (
+                vec![length(InputValue::Length(2)), length(InputValue::Length(3))],
+                "study input \"length\" is declared twice",
+            ),
+            (
+                vec![length(InputValue::Length(0))],
+                "study input \"length\" has a value outside its accepted values",
+            ),
+            (
+                vec![length(InputValue::Length(2)).with_default(InputValue::Length(11))],
+                "study input \"length\" has a default outside its accepted values",
+            ),
+        ] {
+            let error = CustomIndicator::new("Inputs", |_| Vec::new())
+                .with_inputs(schema, |_, _| Vec::new())
+                .err()
+                .unwrap();
+            assert_eq!(error.to_string(), expected);
+        }
     }
 
     #[test]

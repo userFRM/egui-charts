@@ -4,6 +4,7 @@
 //! the chart settings dialog without depending on application UI components.
 
 mod apply;
+pub use apply::ChartSettingsError;
 mod data;
 mod types;
 

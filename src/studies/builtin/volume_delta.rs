@@ -81,13 +81,13 @@ impl DeltaCandles {
         inputs
     }
 
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         match (id, value) {
             ("lower_interval", InputValue::Timeframe(chosen)) => self.lower_interval = chosen,
             ("anchor", InputValue::Choice(at)) if self.anchor.is_some() && at < PERIODS.len() => {
                 self.anchor = Some(PERIODS[at]);
             }
-            _ => return Err("invalid volume delta input"),
+            _ => return Err(crate::studies::StudyError::rejected(&self.inputs(), id)),
         }
         self.refresh(&[], 0, &[]);
         Ok(())
@@ -203,7 +203,7 @@ macro_rules! delta_study {
             fn inputs(&self) -> Vec<StudyInput> {
                 self.core.inputs()
             }
-            fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+            fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
                 self.core.set_input(id, value)
             }
             fn data_requests(&self) -> Vec<StudyDataRequest> {

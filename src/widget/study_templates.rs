@@ -100,7 +100,7 @@ impl Chart {
             .study_limit
             .is_some_and(|limit| set.studies.len() > limit)
         {
-            return Err(Self::STUDY_LIMIT_REACHED.into());
+            return Err("Study limit reached".into());
         }
         let mut placed = vec![false; set.studies.len()];
         for &at in set.price_pane.iter().chain(set.panes.iter().flatten()) {
@@ -112,7 +112,11 @@ impl Chart {
         let studies = set
             .studies
             .iter()
-            .map(|template| template.create_with(factory))
+            .map(|template| {
+                template
+                    .create_with(factory)
+                    .map_err(|error| error.to_string())
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
         for id in replaced {

@@ -99,7 +99,8 @@ impl Chart {
 
     /// Paste study clipboard text from [`Self::copy_indicator`], on this chart or another, as
     /// one undoable addition, and return the new study's id. `factory` creates the study by its
-    /// name. Rejects a paste beyond the [study cap](Self::set_study_limit), other text, a name
+    /// name. Hands a study pasted beyond the [study cap](Self::set_study_limit) back in
+    /// [`crate::studies::StudyError::StudyLimitReached`]. Rejects other text, a name
     /// `factory` does not know, and inputs or styles the study does not accept, before changing
     /// the chart. Study output references need host remapping and are rejected; hosts restore
     /// those inputs through [`Self::add_indicator`].
@@ -109,37 +110,36 @@ impl Chart {
         &mut self,
         text: &str,
         factory: &crate::studies::IndicatorFactory,
-    ) -> Result<SeriesId, serde_json::Error> {
-        use crate::studies::Indicator;
-        use serde::de::Error;
-        if self.study_limit_reached() {
-            return Err(serde_json::Error::custom(Self::STUDY_LIMIT_REACHED));
-        }
+    ) -> Result<SeriesId, crate::studies::StudyError> {
+        use crate::studies::{Indicator, RefusedStudy, StudyError};
         let json = text
             .strip_prefix(STUDY_PREFIX)
-            .ok_or_else(|| serde_json::Error::custom("not a study clipboard"))?;
-        let copied: CopiedStudy = serde_json::from_str(json)?;
-        if copied.inputs.iter().any(|(_, value)| {
+            .ok_or(StudyError::NotClipboard)?;
+        let copied: CopiedStudy = serde_json::from_str(json).map_err(StudyError::Clipboard)?;
+        if let Some((id, _)) = copied.inputs.iter().find(|(_, value)| {
             matches!(
                 value,
                 InputValue::Source(crate::studies::StudySource::Study { .. })
             )
         }) {
-            return Err(serde_json::Error::custom(
-                "study output references need host remapping before paste",
-            ));
+            return Err(StudyError::InvalidInput {
+                id: id.clone(),
+                reason: "reads another study's output, which needs remapping before paste",
+            });
         }
         let mut study = crate::studies::ConfiguredStudy::new(
             factory
                 .create(&copied.name)
-                .ok_or_else(|| serde_json::Error::custom("unknown study"))?,
+                .ok_or_else(|| StudyError::UnknownStudy(copied.name.clone()))?,
         );
-        study
-            .apply_settings(&copied.inputs, copied.settings)
-            .map_err(serde_json::Error::custom)?;
+        study.apply_settings(&copied.inputs, copied.settings)?;
         study.set_overlay(copied.overlay);
         study.set_scale(copied.scale);
-        Ok(self.user_action(|chart| chart.add_indicator(Box::new(study))))
+        let study: Box<dyn Indicator> = Box::new(study);
+        if self.study_limit_reached() {
+            return Err(StudyError::StudyLimitReached(RefusedStudy::new(study)));
+        }
+        Ok(self.user_action(|chart| chart.add_indicator(study)))
     }
 }
 

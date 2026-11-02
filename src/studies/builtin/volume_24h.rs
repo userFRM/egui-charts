@@ -242,12 +242,12 @@ impl Indicator for Volume24h {
         ]
     }
 
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         if id != "units" {
-            return Err("unknown study input");
+            return Err(crate::studies::StudyError::UnknownInput(id.into()));
         }
         let InputValue::Choice(units @ 0..=1) = value else {
-            return Err("study input is outside its accepted values");
+            return Err(crate::studies::StudyError::invalid_input(id));
         };
         self.quote_units = units == 1;
         self.clear();
