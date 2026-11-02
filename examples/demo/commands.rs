@@ -389,6 +389,7 @@ mod tests {
                     theme.chart.bg = egui::Color32::from_rgb(r, g, b);
                     chart.set_theme_override(Some(theme));
                     chart.config_mut().show_volume = false;
+                    chart.config_mut().show_grid = false;
                 }
             }
             app.execute_search_command(&ctx, "export");

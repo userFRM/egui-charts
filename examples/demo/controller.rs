@@ -5058,6 +5058,83 @@ mod tests {
                         output.drop_without_applying_deltas();
                     }
                     assert!(found, "{query} must show {label}");
+                    if query == "Primitives and custom series" {
+                        let frame = |app: &mut DemoApp, events| {
+                            ctx.run_ui(
+                                RawInput {
+                                    events,
+                                    ..Default::default()
+                                },
+                                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                            )
+                        };
+                        let output = frame(&mut app, Vec::new());
+                        let head = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Circle(circle)
+                                    if circle.fill == egui::Color32::from_rgb(255, 152, 0) =>
+                                {
+                                    Some(circle.center)
+                                }
+                                _ => None,
+                            })
+                            .expect("custom range heads are visible");
+                        output.drop_without_applying_deltas();
+                        let output = frame(&mut app, vec![Event::PointerMoved(head)]);
+                        assert_eq!(
+                            output.platform_output.cursor_icon,
+                            egui::CursorIcon::PointingHand
+                        );
+                        output.drop_without_applying_deltas();
+                        for enabled in [false, true] {
+                            for control in ["Session background", "Custom range series"] {
+                                let output = frame(&mut app, Vec::new());
+                                let point = output
+                                    .shapes
+                                    .iter()
+                                    .find_map(|shape| match &shape.shape {
+                                        egui::Shape::Text(text)
+                                            if text.galley.text() == control =>
+                                        {
+                                            Some(text.pos + text.galley.size() / 2.0)
+                                        }
+                                        _ => None,
+                                    })
+                                    .unwrap();
+                                output.drop_without_applying_deltas();
+                                frame(
+                                    &mut app,
+                                    vec![
+                                        Event::PointerMoved(point),
+                                        Event::PointerButton {
+                                            pos: point,
+                                            button: egui::PointerButton::Primary,
+                                            pressed: true,
+                                            modifiers: Modifiers::NONE,
+                                        },
+                                        Event::PointerButton {
+                                            pos: point,
+                                            button: egui::PointerButton::Primary,
+                                            pressed: false,
+                                            modifiers: Modifiers::NONE,
+                                        },
+                                    ],
+                                )
+                                .drop_without_applying_deltas();
+                            }
+                            let output = frame(&mut app, Vec::new());
+                            for needle in ["Open ", "Bar range, price units"] {
+                                let visible = output.shapes.iter().any(|shape| {
+                                    matches!(&shape.shape,
+                                    egui::Shape::Text(text) if text.galley.text().contains(needle))
+                                });
+                                assert_eq!(visible, enabled, "{needle}");
+                            }
+                            output.drop_without_applying_deltas();
+                        }
+                    }
                     if query != "Sample study editor" {
                         app.execute_search_command(&ctx, "price-workspace");
                         assert_eq!(app.chart.bars(SeriesId::MAIN), bars);
