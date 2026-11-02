@@ -601,10 +601,16 @@ mod tests {
         let mut chart = Chart::new(BarData::new());
         chart.set_timeframe(Timeframe::Min1);
         let id = chart.add_comparison("AAPL-MSFT", egui::Color32::BLUE);
-        let mut spreads = vec![Spread::new(
-            SymbolExpression::parse("AAPL-MSFT").unwrap(),
+        let now = "2026-10-23T14:30:00Z".parse().unwrap();
+        let mut spreads = vec![Spread {
+            expression: SymbolExpression::parse("AAPL-MSFT").unwrap(),
             id,
-        )];
+            feeds: ["AAPL", "MSFT"]
+                .into_iter()
+                .map(|symbol| Arc::new(LiveFeed::new(symbol, now)))
+                .collect(),
+            snapshot: None,
+        }];
         refresh_spreads(&mut chart, &mut spreads, true);
         assert!(!chart.bars(id).is_empty());
         for sessions in [false, true] {
